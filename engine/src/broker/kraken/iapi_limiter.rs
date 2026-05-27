@@ -183,6 +183,12 @@ struct PersistedState {
     /// carry a tuned value and the new session ramps from scratch.
     #[serde(default)]
     tuned_rate: f64,
+    /// Latest non-converged AIMD checkpoint (req/s), written during clean
+    /// increases and after 429 decreases so restarts do not throw away the
+    /// current learning run. Unlike `tuned_rate`, restoring this keeps AIMD
+    /// active instead of marking the limiter converged.
+    #[serde(default)]
+    checkpoint_rate: f64,
     /// ssthresh observed ceiling from the last session, or 0.0 when no
     /// 429 has been seen yet. Restored on startup so the next ramp
     /// caps at the same value instead of climbing back into the
@@ -272,54 +278,58 @@ impl IapiLimiter {
             .as_ref()
             .and_then(|p| load_persisted(p));
         let now_unix = chrono::Utc::now().timestamp();
-        let (cooldown_until, escalation, tuned_rate, persisted_ceiling) = match &persisted {
-            Some(state) if state.cooldown_until_unix > now_unix => {
-                // Reconstruct an Instant for the persisted `last_arm` so the
-                // escalation window keeps decaying after a restart.
-                let last_arm = if state.last_arm_unix > 0 && state.last_arm_unix <= now_unix {
-                    let delta = (now_unix - state.last_arm_unix) as u64;
-                    Instant::now().checked_sub(Duration::from_secs(delta))
-                } else {
-                    None
-                };
-                (
-                    state.cooldown_until_unix,
-                    EscalationState {
-                        consecutive: state.consecutive,
-                        last_arm,
-                    },
-                    state.tuned_rate,
+        let (cooldown_until, escalation, restored_rate, restored_converged, persisted_ceiling) =
+            match &persisted {
+                Some(state) if state.cooldown_until_unix > now_unix => {
+                    // Reconstruct an Instant for the persisted `last_arm` so the
+                    // escalation window keeps decaying after a restart.
+                    let last_arm = if state.last_arm_unix > 0 && state.last_arm_unix <= now_unix {
+                        let delta = (now_unix - state.last_arm_unix) as u64;
+                        Instant::now().checked_sub(Duration::from_secs(delta))
+                    } else {
+                        None
+                    };
+                    (
+                        state.cooldown_until_unix,
+                        EscalationState {
+                            consecutive: state.consecutive,
+                            last_arm,
+                        },
+                        restored_aimd_rate(state),
+                        state.tuned_rate > 0.0,
+                        state.discovered_ceiling,
+                    )
+                }
+                Some(state) => (
+                    0,
+                    EscalationState::default(),
+                    restored_aimd_rate(state),
+                    state.tuned_rate > 0.0,
                     state.discovered_ceiling,
-                )
-            }
-            Some(state) => (
-                0,
-                EscalationState::default(),
-                state.tuned_rate,
-                state.discovered_ceiling,
-            ),
-            None => (0, EscalationState::default(), 0.0, 0.0),
-        };
+                ),
+                None => (0, EscalationState::default(), 0.0, false, 0.0),
+            };
         let starting_tokens = if cooldown_until > now_unix {
             // Already in cooldown — start drained so resume traffic ramps.
             0.0
         } else {
             config.capacity
         };
-        // Prefer a persisted tuned rate over the cold config default —
-        // skip the AIMD ramp-up if the previous session already
-        // discovered the ceiling. Then clamp into the configured band
-        // so a stale or corrupt persisted value doesn't drive us out
-        // of bounds.
-        let raw_starting_rate = if tuned_rate > 0.0 {
-            tuned_rate
+        // Prefer a persisted AIMD rate over the cold config default. A
+        // converged tuned rate resumes as converged; a checkpoint resumes at
+        // the learned rate but keeps AIMD active so the new process continues
+        // probing instead of pretending it found a final ceiling. Clamp into
+        // the configured band so a stale/corrupt persisted value cannot drive
+        // us out of bounds.
+        let raw_starting_rate = if restored_rate > 0.0 {
+            restored_rate
         } else {
             config.refill_per_sec
         };
         let starting_rate = raw_starting_rate
             .max(config.aimd_min_rate)
             .min(config.aimd_max_rate);
-        let starts_converged = tuned_rate > 0.0;
+        let starts_converged = restored_converged;
         let starting_ceiling = if persisted_ceiling > 0.0 {
             Some(
                 persisted_ceiling
@@ -332,6 +342,11 @@ impl IapiLimiter {
         if starts_converged {
             tracing::info!(
                 "iapi AIMD: restored tuned rate {:.2} req/s from persisted state",
+                starting_rate
+            );
+        } else if restored_rate > 0.0 {
+            tracing::info!(
+                "iapi AIMD: restored checkpoint rate {:.2} req/s from persisted state — AIMD still active",
                 starting_rate
             );
         }
@@ -386,6 +401,7 @@ impl IapiLimiter {
         }
         loop {
             let mut converged_now: Option<f64> = None;
+            let mut checkpoint_now: Option<f64> = None;
             let wait = {
                 let mut bucket = self.bucket.lock().await;
                 let now = Instant::now();
@@ -422,6 +438,7 @@ impl IapiLimiter {
                         );
                         bucket.current_rate = new_rate;
                         bucket.last_rate_change = now;
+                        checkpoint_now = Some(new_rate);
                     }
                 }
                 // Convergence check: rate has been steady (no AIMD bump,
@@ -457,25 +474,9 @@ impl IapiLimiter {
             // std::sync::MutexGuard is provably dropped before any
             // `.await` — required for this future to be `Send`.
             if let Some(tuned_rate) = converged_now {
-                let (last_arm_unix, consecutive) = {
-                    let escalation = self.escalation.lock().expect("escalation mutex poisoned");
-                    let last_arm_unix = match escalation.last_arm {
-                        Some(t) => {
-                            chrono::Utc::now().timestamp()
-                                - Instant::now().saturating_duration_since(t).as_secs() as i64
-                        }
-                        None => 0,
-                    };
-                    (last_arm_unix, escalation.consecutive)
-                };
-                let ceiling = self.bucket.lock().await.discovered_ceiling.unwrap_or(0.0);
-                self.persist_with_rate(
-                    self.cooldown_until_unix.load(Ordering::Relaxed),
-                    consecutive,
-                    last_arm_unix,
-                    tuned_rate,
-                    ceiling,
-                );
+                self.persist_aimd_state(tuned_rate, 0.0).await;
+            } else if let Some(checkpoint_rate) = checkpoint_now {
+                self.persist_aimd_state(0.0, checkpoint_rate).await;
             }
             // A cooldown may have been armed while we were waiting on the
             // bucket — re-check before sleeping or returning success.
@@ -611,15 +612,15 @@ impl IapiLimiter {
                 bucket.discovered_ceiling.unwrap_or(0.0),
             )
         };
-        // Persist the post-429 rate AND the freshly-updated ceiling so a
-        // restart mid-throttle resumes at the same conservative rate
-        // AND already knows where the ban-zone starts. tuned_rate zero
-        // would mean "no record", so we always write the live value
-        // here even though we just cleared `converged`.
-        self.persist_with_rate(
+        // Persist the post-429 rate as a checkpoint AND the freshly-updated
+        // ceiling so a restart mid-throttle resumes conservatively but keeps
+        // AIMD active. `tuned_rate` deliberately stays zero here because the
+        // 429 proved the prior rate was not converged.
+        self.persist_with_explicit_state(
             self.cooldown_until_unix.load(Ordering::Relaxed),
             consecutive,
             now_unix,
+            0.0,
             post_rate,
             post_ceiling,
         );
@@ -648,12 +649,38 @@ impl IapiLimiter {
         }
     }
 
-    fn persist_with_rate(
+    async fn persist_aimd_state(&self, tuned_rate: f64, checkpoint_rate: f64) {
+        let (last_arm_unix, consecutive) = self.escalation_snapshot();
+        let ceiling = self.bucket.lock().await.discovered_ceiling.unwrap_or(0.0);
+        self.persist_with_explicit_state(
+            self.cooldown_until_unix.load(Ordering::Relaxed),
+            consecutive,
+            last_arm_unix,
+            tuned_rate,
+            checkpoint_rate,
+            ceiling,
+        );
+    }
+
+    fn escalation_snapshot(&self) -> (i64, u32) {
+        let escalation = self.escalation.lock().expect("escalation mutex poisoned");
+        let last_arm_unix = match escalation.last_arm {
+            Some(t) => {
+                chrono::Utc::now().timestamp()
+                    - Instant::now().saturating_duration_since(t).as_secs() as i64
+            }
+            None => 0,
+        };
+        (last_arm_unix, escalation.consecutive)
+    }
+
+    fn persist_with_explicit_state(
         &self,
         until_unix: i64,
         consecutive: u32,
         last_arm_unix: i64,
         tuned_rate: f64,
+        checkpoint_rate: f64,
         discovered_ceiling: f64,
     ) {
         let Some(path) = self.config.persistence_path.clone() else {
@@ -664,6 +691,7 @@ impl IapiLimiter {
             consecutive,
             last_arm_unix,
             tuned_rate,
+            checkpoint_rate,
             discovered_ceiling,
         };
         if let Ok(json) = serde_json::to_string(&state) {
@@ -742,6 +770,14 @@ fn interval_precision_ceiling_candidate(
         return 0.0;
     }
     interval_to_rate(failed_interval + interval_step_secs.max(0.001))
+}
+
+fn restored_aimd_rate(state: &PersistedState) -> f64 {
+    if state.tuned_rate > 0.0 {
+        state.tuned_rate
+    } else {
+        state.checkpoint_rate
+    }
 }
 
 fn load_persisted(path: &std::path::Path) -> Option<PersistedState> {
@@ -884,6 +920,7 @@ mod tests {
             consecutive: 3,
             last_arm_unix: 1_699_999_000,
             tuned_rate: 0.0,
+            checkpoint_rate: 0.0,
             discovered_ceiling: 0.0,
         };
         std::fs::write(tmp.path(), serde_json::to_string(&state).unwrap()).unwrap();
@@ -902,6 +939,7 @@ mod tests {
             consecutive: 2,
             last_arm_unix: now_unix - 5,
             tuned_rate: 0.0,
+            checkpoint_rate: 0.0,
             discovered_ceiling: 0.0,
         };
         std::fs::write(tmp.path(), serde_json::to_string(&state).unwrap()).unwrap();
@@ -924,6 +962,7 @@ mod tests {
             consecutive: 1,
             last_arm_unix: now_unix - 100,
             tuned_rate: 0.0,
+            checkpoint_rate: 0.0,
             discovered_ceiling: 0.0,
         };
         std::fs::write(tmp.path(), serde_json::to_string(&state).unwrap()).unwrap();
@@ -1113,6 +1152,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aimd_checkpoint_persists_on_clean_increase_without_tuned_rate() {
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let cfg = IapiLimiterConfig {
+            persistence_path: Some(tmp.path().to_path_buf()),
+            ..aimd_config()
+        };
+        let lim = IapiLimiter::new(cfg);
+        lim.acquire(1.0).await.expect("free");
+        tokio::time::sleep(StdDuration::from_millis(25)).await;
+        lim.acquire(1.0).await.expect("free");
+        let live = lim.current_rate_per_sec().await;
+        let raw = std::fs::read_to_string(tmp.path()).expect("persisted checkpoint");
+        let persisted: PersistedState = serde_json::from_str(&raw).expect("decode");
+        assert_eq!(
+            persisted.tuned_rate, 0.0,
+            "clean increase is only a checkpoint"
+        );
+        assert!(
+            (persisted.checkpoint_rate - live).abs() < 1e-6,
+            "checkpoint {} should match live {}",
+            persisted.checkpoint_rate,
+            live
+        );
+    }
+
+    #[tokio::test]
+    async fn aimd_restores_checkpoint_rate_without_converging() {
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let persisted = PersistedState {
+            cooldown_until_unix: 0,
+            consecutive: 0,
+            last_arm_unix: 0,
+            tuned_rate: 0.0,
+            checkpoint_rate: 2.25,
+            discovered_ceiling: 0.0,
+        };
+        std::fs::write(tmp.path(), serde_json::to_string(&persisted).unwrap()).unwrap();
+        let cfg = IapiLimiterConfig {
+            persistence_path: Some(tmp.path().to_path_buf()),
+            refill_per_sec: 1.0,
+            ..convergence_config()
+        };
+        let lim = IapiLimiter::new(cfg);
+        let rate = lim.current_rate_per_sec().await;
+        assert!(
+            (rate - 2.25).abs() < 1e-6,
+            "expected 2.25 restored, got {rate}"
+        );
+        let bucket = lim.bucket.lock().await;
+        assert!(
+            !bucket.converged,
+            "checkpoint restore must keep AIMD active"
+        );
+    }
+
+    #[tokio::test]
     async fn aimd_restores_tuned_rate_on_construction() {
         let tmp = tempfile::NamedTempFile::new().expect("tempfile");
         // Pre-seed a persisted tuned rate of 3.5.
@@ -1121,6 +1216,7 @@ mod tests {
             consecutive: 0,
             last_arm_unix: 0,
             tuned_rate: 3.5,
+            checkpoint_rate: 0.0,
             discovered_ceiling: 0.0,
         };
         std::fs::write(tmp.path(), serde_json::to_string(&persisted).unwrap()).unwrap();
@@ -1159,14 +1255,18 @@ mod tests {
             post < pre,
             "rate should decrease after 429: pre={pre} post={post}"
         );
-        // Persisted state should reflect the post-429 rate, not the
-        // pre-429 tuned value.
+        // Persisted state should reflect the post-429 rate as a checkpoint,
+        // not as a converged/tuned value.
         let raw = std::fs::read_to_string(tmp.path()).expect("persisted file");
         let persisted: PersistedState = serde_json::from_str(&raw).expect("decode");
+        assert_eq!(
+            persisted.tuned_rate, 0.0,
+            "429 must clear tuned/converged state"
+        );
         assert!(
-            (persisted.tuned_rate - post).abs() < 1e-6,
-            "post-429 persisted rate {} should match live {}",
-            persisted.tuned_rate,
+            (persisted.checkpoint_rate - post).abs() < 1e-6,
+            "post-429 checkpoint rate {} should match live {}",
+            persisted.checkpoint_rate,
             post
         );
     }
@@ -1180,6 +1280,7 @@ mod tests {
         let s: PersistedState = serde_json::from_str(legacy).expect("legacy decode");
         assert_eq!(s.cooldown_until_unix, 1_700_000_000);
         assert_eq!(s.tuned_rate, 0.0);
+        assert_eq!(s.checkpoint_rate, 0.0);
         assert_eq!(s.discovered_ceiling, 0.0);
     }
 
