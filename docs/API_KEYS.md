@@ -41,13 +41,13 @@ Optional API keys and broker credentials that unlock additional features.
 
 ## Kraken (Primary Market Data + Trading)
 
-**Used for:** Public Spot/xStocks market data, public Kraken Futures instrument/candle data, public tradeable-pair discovery, and authenticated crypto/xStocks balances, open orders, open positions, order placement, amend/edit, cancel-all, and batch orders.
+**Used for:** Public Spot and Kraken Equities/xStocks market data, public Kraken Futures instrument/candle data, public tradeable-pair discovery, and authenticated crypto/xStocks balances, open orders, open positions, order placement, amend/edit, cancel-all, and batch orders.
 
 - **Sign up:** https://pro.kraken.com/
 - **Cost:** Free API keys; trading fees apply on filled orders
 - **Key format:** API key + base64 API secret
 - **Required permissions:** Balance/positions for account display; order create/modify and cancel/close for trading
-- **Note:** Public Spot/xStocks OHLCV, Spot/xStocks pair discovery, Kraken Futures instrument discovery, and Kraken Futures chart candles do not require credentials. The terminal syncs these bars asynchronously but paces Spot OHLC requests to Kraken's documented public limits; authenticated keys are only needed for trading/account features.
+- **Note:** Public Spot OHLCV, Kraken Equities/xStocks iapi market data, Kraken Futures instrument discovery, and Kraken Futures chart candles do not require credentials. The terminal syncs these bars asynchronously but paces Spot OHLC requests to Kraken's documented public limits and Kraken iapi requests through the AIMD limiter; authenticated keys are only needed for trading/account features. Kraken market-data credentials do not expand news coverage — news comes from the separate multi-source research pipeline in ADR-078.
 
 ## Anthropic (Claude AI)
 

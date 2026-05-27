@@ -958,6 +958,24 @@ pub fn get_news_by_symbol(
 ) -> Result<Vec<NewsArticle>, String> {
     let _ = create_news_tables(conn);
     let sym = symbol.to_uppercase();
+    let requested_symbols: Vec<String> = sym
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    if requested_symbols.len() > 1 {
+        let mut by_hash = std::collections::BTreeMap::new();
+        for requested in &requested_symbols {
+            for article in get_news_by_symbol(conn, requested, limit)? {
+                by_hash.entry(article.url_hash.clone()).or_insert(article);
+            }
+        }
+        let mut out: Vec<NewsArticle> = by_hash.into_values().collect();
+        out.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+        out.truncate(limit);
+        return Ok(out);
+    }
     let sql = if sym.is_empty() {
         "SELECT url_hash, symbol, source, provider, headline, summary, url, published_at,
                 image_url, sentiment, sentiment_score, tickers_json, categories_json, body,

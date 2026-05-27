@@ -46,7 +46,7 @@ use typhoon_engine::broker::alpaca::{
 };
 use typhoon_engine::broker::tastytrade::TastyBalances;
 use typhoon_engine::core::backtest;
-use typhoon_engine::core::cache::SqliteCache;
+use typhoon_engine::core::cache::{BgConnection, SqliteCache};
 use typhoon_engine::core::darwin;
 use typhoon_engine::core::darwin_ftp;
 use typhoon_engine::core::fundamentals;
@@ -2162,6 +2162,49 @@ fn cache_source_from_key(key: &str) -> &'static str {
     } else {
         ""
     }
+}
+
+fn news_symbol_from_market_data_cache_key(key: &str, prefix: &str) -> Option<String> {
+    let rest = key.strip_prefix(prefix)?.strip_prefix(':')?;
+    let (raw_symbol, tf) = rest.rsplit_once(':')?;
+    if raw_symbol.is_empty() || tf.is_empty() || raw_symbol.starts_with("__") {
+        return None;
+    }
+    let mut symbol = normalize_market_data_symbol(raw_symbol)
+        .replace('/', "")
+        .to_uppercase();
+    if let Some(stripped) = symbol.strip_suffix(".EQ") {
+        symbol = stripped.to_string();
+    }
+    if symbol.is_empty() || symbol.starts_with("__") {
+        None
+    } else {
+        Some(symbol)
+    }
+}
+
+fn extract_news_symbols_from_market_data_cache(
+    conn: &BgConnection,
+    prefixes: &[&str],
+) -> Result<Vec<String>, String> {
+    let mut symbols = std::collections::BTreeSet::new();
+    for prefix in prefixes {
+        let like = format!("{}:%", prefix);
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT key FROM bar_cache WHERE key LIKE ?1")
+            .map_err(|e| format!("prepare {prefix} bar-cache news symbols: {e}"))?;
+        let rows = stmt
+            .query_map([like.as_str()], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("query {prefix} bar-cache news symbols: {e}"))?;
+        for row in rows {
+            if let Ok(key) = row {
+                if let Some(symbol) = news_symbol_from_market_data_cache_key(&key, prefix) {
+                    symbols.insert(symbol);
+                }
+            }
+        }
+    }
+    Ok(symbols.into_iter().collect())
 }
 
 const CHART_SOURCE_ORDER: [(&str, &str); 7] = [
@@ -9169,12 +9212,13 @@ enum BrokerCmd {
         query: String,
         limit: usize,
     },
-    /// Scrape news across all MT5/Alpaca/TastyTrade universe symbols.
+    /// Scrape news across all enabled source-universe symbols.
     /// Long-running: hits 3-6 APIs per symbol with rate-limiting sleeps.
     NewsScrapeAll {
         use_mt5: bool,
         use_alpaca: bool,
         use_tastytrade: bool,
+        use_kraken: bool,
         marketaux_key: String,
         alpha_vantage_key: String,
         fmp_key: String,
@@ -10964,6 +11008,8 @@ pub struct TyphooNApp {
     news_symbol_filter: String,
     /// Full-text search query for the news reader.
     news_search_query: String,
+    /// URL hash of the article selected before the most recent reload/session restore.
+    news_selected_url_hash: String,
     /// UI state flag while a fetch/cached-load is in flight.
     news_loading: bool,
     /// Latches once the News window has triggered its initial
@@ -24804,7 +24850,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             });
                     }
                     BrokerCmd::NewsScrapeAll {
-                        use_mt5, use_alpaca, use_tastytrade,
+                        use_mt5, use_alpaca, use_tastytrade, use_kraken,
                         marketaux_key, alpha_vantage_key, fmp_key,
                         finnhub_key, cryptopanic_key,
                     } => {
@@ -24841,7 +24887,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     let _ = msg_tx.send(BrokerMsg::Error("NewsScrapeAll: cache not ready".into()));
                                     return;
                                 };
-                                // Gather MT5 tickers from cache.
+                                // Gather enabled source-universe tickers from cache/brokers.
                                 let mut all_tickers: std::collections::HashSet<String> = std::collections::HashSet::new();
                                 all_tickers.extend(extra_tickers);
                                 if use_mt5 {
@@ -24850,6 +24896,24 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                             let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
                                                 format!("News scrape: {} MT5 tickers", mt5_tickers.len())));
                                             all_tickers.extend(mt5_tickers);
+                                        }
+                                    }
+                                }
+                                if use_kraken {
+                                    if let Ok(conn) = cache.connection() {
+                                        match extract_news_symbols_from_market_data_cache(
+                                            &conn,
+                                            &["kraken", "kraken-equities", "kraken-futures"],
+                                        ) {
+                                            Ok(kraken_tickers) => {
+                                                let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
+                                                    format!("News scrape: {} Kraken market-data symbols", kraken_tickers.len())));
+                                                all_tickers.extend(kraken_tickers);
+                                            }
+                                            Err(e) => {
+                                                let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
+                                                    format!("News scrape: Kraken symbols failed: {e}")));
+                                            }
                                         }
                                     }
                                 }
@@ -27554,6 +27618,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             news_selected: None,
             news_symbol_filter: String::new(),
             news_search_query: String::new(),
+            news_selected_url_hash: String::new(),
             news_loading: false,
             news_initial_load_done: false,
             news_db_total: None,

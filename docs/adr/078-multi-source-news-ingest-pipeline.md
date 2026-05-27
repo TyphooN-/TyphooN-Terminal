@@ -20,8 +20,9 @@ The requirement is:
    so the LAN sync server can replicate it to clients.
 3. Replace the flat headline list with a two-pane reader (list → body) that
    mirrors the existing SEC filing viewer pattern.
-4. Make it practical to bulk-scrape the entire configured universe in a single
-   background operation.
+4. Make it practical to bulk-scrape the configured source news universe in a
+   single background operation, including Kraken market-data symbols when that
+   source is enabled.
 
 ## Decision
 
@@ -35,16 +36,17 @@ All free tier, selected for non-overlapping coverage:
 
 | Source             | Key? | Limit     | Coverage notes                           |
 |--------------------|------|-----------|------------------------------------------|
-| GDELT 2.0 Doc API  | No   | Unlimited | Global, 24h window, 15-min latency       |
-| Yahoo Finance RSS  | No   | Unlimited | Per-symbol feed, US + major international |
-| SEC EDGAR Atom     | No   | Unlimited | US issuer filings (news proxy)           |
+| GDELT 2.0 Doc API  | No   | Unkeyed / cooldown-gated | Global web/news search by ticker or crypto asset name |
+| Yahoo Finance RSS  | No   | Unkeyed   | Per-symbol feed, US + major international; returns zero for many wrappers/thin names |
 | Marketaux          | Yes  | 100/day   | Finance-focused, API-supplied sentiment  |
 | Alpha Vantage      | Yes  | 25/day    | Ticker-resolved sentiment + topic tags   |
 | FMP stock_news     | Yes  | 250/day   | Clean normalized shape, images, summary  |
+| Finnhub            | Yes  | 60/min free tier | Legacy single-symbol equity fetch plus crypto news when explicitly configured |
 
-GDELT + Yahoo + SEC EDGAR give a working baseline with zero API keys. The
-paid-but-free-tier sources stack on top when the user configures them, without
-altering the window behavior.
+GDELT + Yahoo give the zero-key baseline. The paid-but-free-tier sources stack
+on top when the user configures them, without altering the window behavior.
+SEC EDGAR is intentionally not part of the general news pane anymore: filings
+belong in the SEC/filings/research surfaces, not mixed into market headlines.
 
 ### Data Model
 
@@ -52,7 +54,7 @@ altering the window behavior.
 pub struct NewsArticle {
     pub url_hash: String,        // SHA-256 of lowercased URL (PK — dedups cross-source)
     pub symbol: String,          // primary ticker this row is associated with
-    pub source: String,          // "GDELT" | "YahooRSS" | "SEC" | "Marketaux" | …
+    pub source: String,          // "GDELT" | "YahooRSS" | "Marketaux" | "AlphaVantage" | …
     pub provider: String,        // original publisher ("Reuters", "Bloomberg")
     pub headline: String,
     pub summary: String,
@@ -137,14 +139,20 @@ fresh news mirror whenever the server runs a fresh scrape.
 
 ### Broker channel
 
-Three new `BrokerCmd` variants:
+Implemented `BrokerCmd` variants:
 
-- `FetchNewsMulti { symbol, marketaux_key, alpha_vantage_key, fmp_key }` —
+- `FetchNewsMulti { symbol, marketaux_key, alpha_vantage_key, fmp_key, finnhub_key, cryptopanic_key }` —
   on-demand single-symbol fetch from the reader window
-- `LoadCachedNews { symbol, limit }` — cache-only read, no network
+- `LoadCachedNews { symbol, limit }` — cache-only read, no network; `symbol`
+  may be empty for latest global rows, a single ticker, or symbol CSV such as
+  `WOK,TNDM` for direct per-symbol reload after restart
 - `SearchNews { query, limit }` — FTS5 search across the full cache
-- `NewsScrapeAll { use_mt5, use_alpaca, use_tastytrade, …keys }` — bulk loop
-  over the entire configured universe
+- `NewsScrapeAll { use_mt5, use_alpaca, use_tastytrade, use_kraken, …keys }` —
+  bulk loop over the configured source news universe. Kraken symbols are
+  derived from `kraken:*`, `kraken-equities:*`, and `kraken-futures:*` bar-cache
+  keys and deduped before network fetch.
+- `NewsScrapeSymbols { symbols, …keys }` — explicit deduped symbol list from
+  MTF Grid / focused chart contexts
 
 One new `BrokerMsg` variant: `NewsArticlesLoaded { symbol, articles }`.
 
@@ -162,17 +170,70 @@ layout:
 Controls above the panes:
 
 - Symbol input (defaults to the active chart's ticker via a "Use Chart" button)
-- "Load Cached" — pure cache read
+- "Load Cached" — pure cache read. With an empty Search field this loads the
+  latest global rows; with symbol CSV in Search (`WOK,TNDM`) it loads those
+  symbols directly from SQLite so older symbol-specific articles do not depend
+  on being present in the latest global page.
 - "Fetch All Sources" — single-symbol on-demand fetch
-- "Scrape All (MT5+Alpaca+TT)" — bulk universe scrape
+- "Scrape Scope" / "Scrape All" — bulk scrape for the configured/current
+  source universe
+- Right-panel "Fetch News (N MTF)" — deduped fetch over currently visible MTF
+  Grid symbols only
 - Search box — FTS5 query across all cached news
 - Collapsible "API Keys (free tier)" section for Marketaux/Alpha Vantage/FMP
+
+### Kraken equities / xStocks scope
+
+Kraken equities/xStocks market-data coverage and news coverage are separate
+measurements. The Sync Status total is a sum of `(symbol, timeframe)` cache
+entries, not a unique-symbol count. For example, ~49k Kraken sync entries can be
+only ~13k unique symbols once `M1`, `M5`, `M15`, `M30`, `H1`, `H4`, `D1`, `W1`,
+and `MN1` rows are deduped.
+
+The news bulk path now includes Kraken when `use_kraken` is enabled. It derives
+candidate symbols from cached market-data keys under `kraken:*`,
+`kraken-equities:*`, and `kraken-futures:*`, strips Kraken equity suffixes such
+as `.EQ`, then dedupes with the MT5/Alpaca/tastytrade sets before network fetch.
+This makes the scrape denominator a unique news-symbol count, not the bar-sync
+entry count.
+
+Current network news entry points are:
+
+1. **Single active symbol** — the News & Research window / right panel fetches
+   the current symbol.
+2. **MTF Grid symbols** — when MTF Grid is active, the right-panel button calls
+   `NewsScrapeSymbols` for the unique visible chart tickers. In the screenshot
+   case that means names like `TNMD` and `WOK`; it does not mean all Kraken
+   equities.
+3. **Bulk scrape** — `NewsScrapeAll` gathers MT5 tickers, Alpaca tradable
+   equities, tastytrade equity positions, and Kraken market-data cache symbols
+   when those source checkboxes are enabled.
+
+So log lines like `news/ACSV: 0 articles fetched` mean "the selected/focused
+news symbol was queried and the enabled providers returned no headline rows."
+They do **not** mean Kraken equities bar sync is only covering that subset.
+The Sync Status window measures bar-cache coverage; the News pane measures
+cached article rows for the active/focused symbols.
+
+This partial coverage is expected with free providers. Many Kraken equities are
+xStock wrappers, foreign wrappers, very thin tickers, or symbols with sparse
+Yahoo/GDELT/Marketaux/AlphaVantage/FMP coverage. `research_news_scrape_index`
+records the last scrape and article count per ticker; the UI skips a fresh
+symbol only when the recent scrape produced at least one non-SEC article, so a
+zero-result ticker can be retried manually without being hidden behind a stale
+"fresh" marker.
+
+Even with Kraken included, "all Kraken equities have article rows" is not a
+provider guarantee. It only means every deduped Kraken candidate symbol is
+attempted subject to freshness/rate gates. Full article coverage still depends
+on the external providers resolving the ticker/wrapper name and returning rows;
+that may require a paid/provider-specific policy later.
 
 ## Alternatives considered
 
 - **Paid Bloomberg/Refinitiv/Benzinga feed.** Out of scope for a free terminal.
 - **Single "best" source.** No free provider covers MT5/Darwinex symbols well.
-  The union of GDELT + Yahoo + SEC EDGAR is the minimum that works.
+  The union of GDELT + Yahoo plus optional keyed providers is the minimum that works.
 - **Hold `&Connection` across await with `LocalSet`.** Workable but more
   complex than splitting fetch/persist, and it couples the module to a
   specific runtime topology.
@@ -186,8 +247,8 @@ Controls above the panes:
 
 **Positive:**
 
-- Every MT5/Darwinex symbol can now get real news via GDELT + Yahoo RSS +
-  SEC EDGAR with zero API keys, breaking the Finnhub US-equity ceiling.
+- Every MT5/Darwinex symbol can now attempt real news via GDELT + Yahoo RSS
+  with optional keyed providers, breaking the Finnhub-only US-equity ceiling.
 - Dedup-by-url means syndicated stories collapse to one row in the viewer.
 - FTS5 search makes the whole cache queryable — the reader becomes a research
   tool, not just a latest-N feed.
@@ -231,7 +292,7 @@ Controls above the panes:
 - Timestamp parsing (GDELT yyyymmddTHHMMSS, Alpha Vantage, RFC3339, RFC2822)
 - HTML stripping + entity decoding
 - RSS item and Atom entry extraction
-- US-symbol heuristic (for SEC EDGAR eligibility)
+- Symbol/news cache freshness gating
 - Batch upsert counts
 
 Engine test suite now at **577 passing** (was 565).

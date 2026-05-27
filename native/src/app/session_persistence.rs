@@ -652,6 +652,11 @@ impl TyphooNApp {
             "right_risk_open": self.right_risk_open,
             "right_recent_fills_open": self.right_recent_fills_open,
             "right_news_open": self.right_news_open,
+            "news_search_query": self.news_search_query,
+            "news_selected_url_hash": self.news_selected
+                .and_then(|idx| self.news_full_articles.get(idx))
+                .map(|a| a.url_hash.clone())
+                .unwrap_or_else(|| self.news_selected_url_hash.clone()),
             "right_mtf_grid_open": self.right_mtf_grid_open,
             "right_panel_order": self.right_panel_order.iter()
                 .map(|section| serde_json::json!(section.as_str()))
@@ -3246,6 +3251,12 @@ impl TyphooNApp {
                 }
                 if let Some(b) = v["right_news_open"].as_bool() {
                     self.right_news_open = b;
+                }
+                if let Some(s) = v["news_search_query"].as_str() {
+                    self.news_search_query = s.to_string();
+                }
+                if let Some(s) = v["news_selected_url_hash"].as_str() {
+                    self.news_selected_url_hash = s.to_string();
                 }
                 if let Some(b) = v["right_mtf_grid_open"].as_bool() {
                     self.right_mtf_grid_open = b;

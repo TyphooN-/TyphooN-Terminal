@@ -4560,22 +4560,18 @@ impl TyphooNApp {
             {
                 self.news_initial_load_done = true;
                 self.news_loading = true;
+                let load_symbol = match SearchFilterMode::parse(&self.news_search_query) {
+                    SearchFilterMode::Symbols(syms) if !syms.is_empty() => syms.join(","),
+                    _ => String::new(),
+                };
                 let _ = self.broker_tx.send(BrokerCmd::LoadCachedNews {
-                    symbol: String::new(),
+                    symbol: load_symbol,
                     limit: 500,
                 });
             }
             let news_scope_label = self.broker_scope_label().to_string();
             let mut scoped_news_symbols: Vec<String> =
-                if let Some(set) = self.broker_scope_symbols() {
-                    set.into_iter().collect()
-                } else {
-                    self.bg
-                        .all_fundamentals
-                        .iter()
-                        .map(|f| f.symbol.clone())
-                        .collect()
-                };
+                self.enabled_news_scope_symbols().into_iter().collect();
             scoped_news_symbols.sort();
             scoped_news_symbols.dedup();
             if scoped_news_symbols.is_empty() && !chart_symbol.trim().is_empty() {
@@ -4613,10 +4609,13 @@ impl TyphooNApp {
                     // was redundant once the search field took over filtering.
                     ui.horizontal(|ui| {
                         if ui.add_enabled(!self.news_loading, egui::Button::new("Load Cached").fill(BTN_GREEN))
-                            .on_hover_text("Read all cached articles from SQLite (no fetch). Use Search to filter the result by symbol(s) or regex.").clicked() {
+                            .on_hover_text("Read cached articles from SQLite (no fetch). If Search contains symbol CSV, load those symbols directly instead of only the latest global rows.").clicked() {
                             self.news_loading = true;
-                            // Empty symbol = "all symbols" on the broker side.
-                            let _ = self.broker_tx.send(BrokerCmd::LoadCachedNews { symbol: String::new(), limit: 500 });
+                            let load_symbol = match SearchFilterMode::parse(&self.news_search_query) {
+                                SearchFilterMode::Symbols(syms) if !syms.is_empty() => syms.join(","),
+                                _ => String::new(),
+                            };
+                            let _ = self.broker_tx.send(BrokerCmd::LoadCachedNews { symbol: load_symbol, limit: 500 });
                         }
                         if ui.add_enabled(!self.news_loading, egui::Button::new("Fetch All Sources").fill(BTN_BLUE))
                             .on_hover_text("Fetch fresh news for the active chart symbol from every configured provider (GDELT, Yahoo, Marketaux, Alpha Vantage, FMP, Finnhub, CryptoPanic, CoinDesk).").clicked() {
@@ -4685,17 +4684,31 @@ impl TyphooNApp {
                                 .desired_width(360.0)
                                 .hint_text("symbol(s) e.g. TNDM, GDC  ·  /regex/  ·  keyword… (FTS5)"),
                         );
-                        let do_search = (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                            || ui.button("FTS Search").clicked();
+                        let enter_pressed = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let fts_clicked = ui.button("FTS Search").clicked();
+                        let do_search = enter_pressed || fts_clicked;
                         // FTS button explicitly forces a broker keyword search
                         // even when the field LOOKS like a symbol or regex —
                         // useful when you actually want to search article
-                        // bodies for the literal text "TNDM".
+                        // bodies for the literal text "TNDM". Pressing Enter
+                        // on a symbol CSV loads those symbols directly from
+                        // SQLite, so older WOK/TNDM articles don't disappear
+                        // just because they fell outside the latest global 500.
                         if do_search {
                             let q = self.news_search_query.trim().to_string();
                             if !q.is_empty() {
                                 self.news_loading = true;
-                                let _ = self.broker_tx.send(BrokerCmd::SearchNews { query: q, limit: 200 });
+                                match SearchFilterMode::parse(&q) {
+                                    SearchFilterMode::Symbols(syms) if !fts_clicked && !syms.is_empty() => {
+                                        let _ = self.broker_tx.send(BrokerCmd::LoadCachedNews {
+                                            symbol: syms.join(","),
+                                            limit: 500,
+                                        });
+                                    }
+                                    _ => {
+                                        let _ = self.broker_tx.send(BrokerCmd::SearchNews { query: q, limit: 200 });
+                                    }
+                                }
                             } else {
                                 // Empty query → reload everything cached.
                                 self.news_loading = true;
@@ -4946,6 +4959,7 @@ impl TyphooNApp {
                                                 // "body unavailable" and the user has the
                                                 // Open Source button.
                                                 if let Some(article) = self.news_full_articles.get(i) {
+                                                    self.news_selected_url_hash = article.url_hash.clone();
                                                     if article.body.is_empty()
                                                         && !article.url.is_empty()
                                                         && article.body_fetch_attempts
@@ -5013,6 +5027,7 @@ impl TyphooNApp {
                                                     .selected(is_selected);
                                                     if ui.add(btn).clicked() {
                                                         self.news_selected = Some(src_idx);
+                                                        self.news_selected_url_hash = src_a.url_hash.clone();
                                                     }
                                                 }
                                             });

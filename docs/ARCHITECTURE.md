@@ -21,7 +21,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  │ - Risk calculator, VaR, Margin monitor      ││
 │  │ - DARWIN analytics (80+ engine functions)   ││
 │  │ - SEC Filing Scanner + Insider Trades       ││
-│  │ - Finnhub News + Market Data APIs           ││
+│  │ - Multi-source News & Research cache        ││
 │  │ - Fundamentals (21 data sources)             ││
 │  │ - Research packet (TA-Lib + Godel parity)   ││
 │  │ - AI sessions (Claude / Gemini / Codex)     ││
@@ -68,6 +68,8 @@ No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
 | 6 | Alpaca | US equities + crypto, free IEX or paid SIP. Tier-autotuned sync (ADR-087). |
 
 MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade execution flows through Alpaca / tastytrade / Kraken with MT5 EA semantics (partial close, close-all, cancel-exits-before-close — see ADR-085). DARWIN account analytics are imported via XLSX trade history exports. Alpaca auto-connects on startup if credentials are saved in the system keyring. tastytrade fully integrated: REST API (auth, positions, orders, quotes, market metrics, option chains) + DXLink WebSocket (historical bars). See ADR-018. Kraken supports public-OHLCV-only mode and authenticated Spot REST trading with full AddOrder parameters, batch orders, amend/edit, dead-man cancel, cancel-all, balances, orders, trades, ledgers, positions, and private WebSocket `ownTrades`/`openOrders` with reconnect/resubscribe (ADR-051). Kraken public bar sync is fully async at the task level: direct Spot/Futures fetches spawn per-timeframe tasks, Kraken Spot can opportunistically prepend CryptoCompare deep crypto backfill for enabled USD crypto symbols, and all Kraken HTTP work runs under bounded queue/semaphore control (ADR-094). Spot OHLC HTTP calls are paced to Kraken's documented public limit with cooldown on throttles (ADR-095). See ADR-021 for cross-source priority hierarchy; chart source order includes the implementation-specific `kraken-equities` and `default` fallbacks around the table above.
+
+News is a separate research cache, not a market-data universe mirror. Sync Status totals count `(symbol, timeframe)` bar-cache entries, while news scrapes count deduped symbols, so the numbers will not match one-for-one. The News & Research window fetches the active symbol, currently visible MTF Grid symbols, or the configured source bulk news universe; Kraken bulk news candidates are derived from cached `kraken:*`, `kraken-equities:*`, and `kraken-futures:*` market-data keys when Kraken is enabled. `news/SYM: 0 articles fetched` means the enabled news providers returned no rows for that selected symbol, not that Kraken equities bar sync skipped the rest of the catalog. See ADR-078.
 
 ## Technology Stack
 

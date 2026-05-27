@@ -7257,6 +7257,13 @@ impl eframe::App for TyphooNApp {
                             (a.headline.clone(), source, dt)
                         })
                         .collect();
+                    // Restore selection by stable URL hash after reload/session restore.
+                    if !self.news_selected_url_hash.is_empty() {
+                        self.news_selected = self
+                            .news_full_articles
+                            .iter()
+                            .position(|a| a.url_hash == self.news_selected_url_hash);
+                    }
                     // Clear selection if the selected index is now out of range.
                     if let Some(idx) = self.news_selected {
                         if idx >= self.news_full_articles.len() {
@@ -7265,6 +7272,11 @@ impl eframe::App for TyphooNApp {
                     }
                     if self.news_selected.is_none() && !self.news_full_articles.is_empty() {
                         self.news_selected = Some(0);
+                    }
+                    if let Some(idx) = self.news_selected {
+                        if let Some(article) = self.news_full_articles.get(idx) {
+                            self.news_selected_url_hash = article.url_hash.clone();
+                        }
                     }
                     let label = if symbol.is_empty() {
                         "all".to_string()
