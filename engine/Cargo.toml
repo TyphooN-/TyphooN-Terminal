@@ -3,7 +3,7 @@ name = "typhoon-engine"
 version = "0.1.0"
 edition = "2024"
 description = "TyphooN Terminal Engine — broker, cache, risk, analytics (pure Rust, no UI framework)"
-license = "LicenseRef-BSL-1.1"
+license = "BUSL-1.1"
 
 [lib]
 name = "typhoon_engine"

@@ -2,7 +2,7 @@
 
 A native desktop trading terminal + TUI CLI with full risk management, multi-timeframe charting, and hedged martingale support — built in pure Rust with native GPU rendering (egui + wgpu) for MT5/Darwinex, Alpaca, tastytrade, Kraken, and CryptoCompare-backed market data.
 
-**License:** [BSL 1.1](LICENSE) ([Commercial](LICENSE-COMMERCIAL))
+**License:** [BUSL 1.1](LICENSE) ([Commercial](COMMERCIAL.md))
 
 ## At a Glance
 
@@ -20,7 +20,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
 | **Data Sources** | MT5 (Darwinex), Alpaca, tastytrade, Kraken Spot/xStocks, Kraken Futures, CryptoCompare |
 | **DARWIN Analytics** | 88 functions wired (VaR, correlation, equity, streaks, Monte Carlo, stress tests, rebalance, floating equity, D-Score, tax lots, CAGR, recovery factor, divergence index, risk budget, replication quality, performance attribution) |
-| **Cost** | Free for personal use ([commercial licensing](LICENSE-COMMERCIAL) available) |
+| **Cost** | Free for personal use ([commercial licensing](COMMERCIAL.md) available) |
 
 ---
 
@@ -284,7 +284,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | **Weekend Crypto Live** | Yes (60s polling) | No | No | No | Yes |
 | **Anomaly Scanner** | 4-dim (VaR+EV+ATR+SEC) | No | No | Options only | No |
 | **Storage Cost** | Free (local SQLite) | Free | $80-118/mo | $30-60/mo | $0-60/mo |
-| **Open Source** | BSL 1.1 | AGPL | No | No | No |
+| **Open Source** | BUSL 1.1 | AGPL | No | No | No |
 
 ---
 

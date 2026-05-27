@@ -42,7 +42,7 @@ FROM debian:bookworm-slim AS runtime
 LABEL org.opencontainers.image.title="TyphooN Terminal CLI/LAN Server" \
       org.opencontainers.image.description="TUI trading terminal and LAN cache sync server/client" \
       org.opencontainers.image.vendor="TyphooN" \
-      org.opencontainers.image.licenses="BSL-1.1" \
+      org.opencontainers.image.licenses="BUSL-1.1" \
       org.opencontainers.image.source="https://github.com/TyphooN-/TyphooN-Terminal"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

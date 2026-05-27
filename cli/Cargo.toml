@@ -3,7 +3,7 @@ name = "typhoon-cli"
 version = "0.1.0"
 edition = "2024"
 description = "TyphooN Terminal CLI — lean TUI/headless interface for trading, cache access, and ops"
-license = "LicenseRef-BSL-1.1"
+license = "BUSL-1.1"
 
 [[bin]]
 name = "typhoon-cli"

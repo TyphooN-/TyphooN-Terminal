@@ -3,7 +3,7 @@ name = "mql5-compiler"
 version = "0.1.0"
 edition = "2024"
 description = "MQL5 and PineScript to WASM compiler for TyphooN Terminal"
-license = "LicenseRef-BSL-1.1"
+license = "BUSL-1.1"
 
 [dependencies]
 pest = "2.8"
