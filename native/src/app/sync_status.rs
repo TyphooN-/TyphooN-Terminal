@@ -9,7 +9,8 @@ impl TyphooNApp {
         {
             return self.cached_bar_sync_rows.clone();
         }
-        let backfill_lookup = |key: &str| -> bool {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let checked_or_complete_lookup = |key: &str| -> bool {
             let mut parts = key.splitn(3, ':');
             let Some(prefix) = parts.next() else {
                 return false;
@@ -20,6 +21,16 @@ impl TyphooNApp {
             let Some(tf) = parts.next() else {
                 return false;
             };
+            // Kraken Spot WS OHLC snapshots/updates are authoritative liveness checks for
+            // subscribed low-timeframe pairs. Illiquid pairs may have an old last trade,
+            // but if WS just delivered the recent-window snapshot/update, the cache is in
+            // sync; counting that row stale keeps auto full-tilt pinned forever and wastes
+            // REST budget chasing bars the market has not printed.
+            if prefix == "kraken"
+                && Self::kraken_ws_pair_is_fresh_at(&self.kraken_ws_fresh_until, symbol, tf, now_ms)
+            {
+                return true;
+            }
             let fetch_key = alpaca_fetch_key(symbol, tf);
             match prefix {
                 "alpaca" => self.alpaca_backfill_complete_pairs.contains_key(&fetch_key),
@@ -38,7 +49,7 @@ impl TyphooNApp {
         let mut rows = compute_bar_sync_stats(
             &self.bg.detailed_stats,
             &self.bg.bar_ts_cache,
-            &backfill_lookup,
+            &checked_or_complete_lookup,
         );
         self.add_expected_kraken_sync_rows(&mut rows);
         sort_sync_stats_rows(&mut rows);

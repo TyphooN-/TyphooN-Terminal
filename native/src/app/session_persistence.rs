@@ -2,9 +2,15 @@ use super::*;
 
 impl TyphooNApp {
     pub(super) fn refill_market_data_sync_slots(&mut self) {
-        if self.total_pending_market_data_fetches()
-            > KRAKEN_SPOT_QUEUE_WINDOW + KRAKEN_FUTURES_QUEUE_WINDOW + 64
-        {
+        let pending_cap = if self.full_tilt_sync_enabled() {
+            KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW
+                + KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW
+                + ALPACA_FULL_TILT_QUEUE_WINDOW
+                + TASTYTRADE_FULL_TILT_QUEUE_WINDOW
+        } else {
+            KRAKEN_SPOT_QUEUE_WINDOW + KRAKEN_FUTURES_QUEUE_WINDOW + 64
+        };
+        if self.total_pending_market_data_fetches() > pending_cap {
             return;
         }
         if self.lan_sync_mode == "client" || !self.cache_loaded {
