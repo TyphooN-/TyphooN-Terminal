@@ -217,6 +217,8 @@ impl TyphooNApp {
                     self.queue_kraken_equity_fetch(&source_symbol, tf_key)
                 }
                 "kraken-futures" => self.queue_kraken_futures_fetch(&source_symbol, tf_key),
+                "yahoo-chart" => self.queue_yahoo_chart_fetch(&source_symbol, tf_key),
+                "stooq" => self.queue_stooq_fetch(&source_symbol, tf_key),
                 _ => false,
             };
         }
@@ -300,6 +302,8 @@ impl TyphooNApp {
                             self.queue_kraken_equity_fetch(&source_symbol, tf_key)
                         }
                         "kraken-futures" => self.queue_kraken_futures_fetch(&source_symbol, tf_key),
+                        "yahoo-chart" => self.queue_yahoo_chart_fetch(&source_symbol, tf_key),
+                        "stooq" => self.queue_stooq_fetch(&source_symbol, tf_key),
                         _ => false,
                     };
                     if queued {

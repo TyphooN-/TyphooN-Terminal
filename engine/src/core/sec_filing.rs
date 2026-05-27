@@ -11,7 +11,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-const USER_AGENT: &str = "TyphooN-Terminal/0.1 (contact: TyphooN)";
+/// SEC EDGAR blocks generic/anonymous user agents with 403s. Keep this
+/// descriptive and email-shaped; callers outside this module should reuse this
+/// constant instead of inventing their own SEC header.
+pub const SEC_EDGAR_USER_AGENT: &str = "TyphooN-Terminal/1.0 typhoon-terminal@example.invalid";
 
 /// Rate limit sleep between SEC requests (200ms = 5 req/sec, well under 10/sec limit).
 const RATE_LIMIT_MS: u64 = 250; // SEC EDGAR fair use: max 10 req/sec, use 4/sec for safety
@@ -279,7 +282,7 @@ fn categorize_form(form_type: &str) -> &'static str {
 async fn lookup_cik_online(client: &reqwest::Client, ticker: &str) -> Result<String, String> {
     let resp = client
         .get("https://www.sec.gov/files/company_tickers.json")
-        .header("User-Agent", USER_AGENT)
+        .header("User-Agent", SEC_EDGAR_USER_AGENT)
         .send()
         .await
         .map_err(|e| format!("SEC ticker map request failed: {e}"))?;
@@ -399,7 +402,7 @@ pub async fn scrape_filings_for_ticker(
     let url = format!("https://data.sec.gov/submissions/CIK{cik}.json");
     let resp = client
         .get(&url)
-        .header("User-Agent", USER_AGENT)
+        .header("User-Agent", SEC_EDGAR_USER_AGENT)
         .send()
         .await
         .map_err(|e| format!("SEC submissions fetch failed for {ticker}: {e}"))?;
@@ -642,7 +645,7 @@ async fn fetch_and_parse_form4(
     for attempt in 0..3u32 {
         let resp = client
             .get(url)
-            .header("User-Agent", USER_AGENT)
+            .header("User-Agent", SEC_EDGAR_USER_AGENT)
             .send()
             .await
             .map_err(|e| format!("Form 4 fetch failed: {e}"))?;
@@ -817,12 +820,26 @@ fn extract_xml_value(body: &str, tag: &str) -> Option<String> {
 
 /// Scrape SEC filings for all portfolio symbols (from darwin_deals + kv_cache).
 /// All DB access happens in spawn_blocking; HTTP is async.
-pub async fn scrape_all_portfolio_symbols(db_path: PathBuf) -> Result<ScrapeStats, String> {
+pub async fn scrape_all_portfolio_symbols(
+    db_path: PathBuf,
+    scoped_symbols: Option<Vec<String>>,
+) -> Result<ScrapeStats, String> {
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
-    // Step 1: Collect portfolio symbols (blocking)
-    let db = db_path.clone();
-    let symbols: Vec<String> =
+    // Step 1: collect caller-provided scope symbols, or fall back to the legacy
+    // self-discovery path for non-UI callers/tests. UI-triggered scrapes must pass
+    // the top-level broker Scope explicitly.
+    let symbols: Vec<String> = if let Some(symbols) = scoped_symbols {
+        let mut symbols: Vec<String> = symbols
+            .into_iter()
+            .map(|sym| sym.trim().to_uppercase())
+            .filter(|sym| is_equity_symbol(sym))
+            .collect();
+        symbols.sort_unstable();
+        symbols.dedup();
+        symbols
+    } else {
+        let db = db_path.clone();
         tokio::task::spawn_blocking(move || {
             let conn = open_conn(&db)?;
             let mut sym_set: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -839,48 +856,66 @@ pub async fn scrape_all_portfolio_symbols(db_path: PathBuf) -> Result<ScrapeStat
             }
         }
 
-            // From bar_cache mt5 keys. BarCacheWriter has always produced 3-part
-            // keys `mt5:{SYM}:{TF}`; metadata lives under `mt5:__NAME__[:…]` and
-            // gets filtered out by the `__` guard below. Fixed-shape parse, no
-            // legacy 4-part arm.
+            // From legacy/current full-symbol imports. Do not treat every
+            // `kraken-equities:*` bar-cache key as a SEC target: the Kraken cache
+            // can contain the broad exchange universe, which would turn "Scrape
+            // Now" into a quota-burning crawl. User/broker symbols come from
+            // kv_cache below; bar_cache is retained here only for legacy MT5 DBs.
             if let Ok(mut stmt) =
                 conn.prepare("SELECT DISTINCT key FROM bar_cache WHERE key LIKE 'mt5:%'")
             {
                 if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
                     for row in rows.flatten() {
-                        let rest = match row.strip_prefix("mt5:") {
-                            Some(r) => r,
-                            None => continue,
-                        };
-                        if rest.starts_with("__") {
-                            continue;
-                        }
-                        let mut it = rest.split(':');
-                        let sym = match it.next() {
-                            Some(s) if !s.is_empty() => s,
-                            _ => continue,
-                        };
-                        let tf = match it.next() {
-                            Some(s) if !s.is_empty() => s,
-                            _ => continue,
-                        };
-                        if it.next().is_some() {
-                            continue;
-                        }
-                        let _ = tf;
-                        let sym = sym.to_uppercase();
-                        if is_equity_symbol(&sym) {
+                        if let Some(sym) = equity_symbol_from_bar_cache_key(&row) {
                             sym_set.insert(sym);
                         }
                     }
                 }
             }
-            let syms: Vec<String> = sym_set.into_iter().collect();
+
+            // From compressed broker/user state: watchlist, positions, Kraken
+            // positions. These are the symbols the user actually cares about in a
+            // Kraken-equities-only session, and they are much smaller than the
+            // broad cached equities universe.
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT value FROM kv_cache
+                 WHERE key IN ('broker:watchlist', 'broker:positions', 'broker:kr_positions', 'darwin:open_positions')",
+            ) {
+                if let Ok(rows) = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0)) {
+                    for row in rows.flatten() {
+                        collect_equity_symbols_from_kv_blob(&row, &mut sym_set);
+                    }
+                }
+            }
+
+            // If the live/current universe sources are empty, keep the existing SEC
+            // database warm by falling back to tickers we already know how to scrape.
+            // Without this, Kraken-only / no-MT5 sessions return "0 tickers" and the
+            // filings database silently freezes even though `sec_scrape_index` has a
+            // valid tracked universe from previous scrapes.
+            if sym_set.is_empty() {
+                if let Ok(mut stmt) = conn.prepare(
+                    "SELECT DISTINCT ticker FROM sec_scrape_index
+                     WHERE ticker != '' AND ticker IS NOT NULL",
+                ) {
+                    if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                        for row in rows.flatten() {
+                            let sym = row.trim().to_uppercase();
+                            if is_equity_symbol(&sym) {
+                                sym_set.insert(sym);
+                            }
+                        }
+                    }
+                }
+            }
+            let mut syms: Vec<String> = sym_set.into_iter().collect();
+            syms.sort_unstable();
 
             Ok::<_, String>(syms)
         })
         .await
-        .map_err(|e| format!("spawn_blocking: {e}"))??;
+        .map_err(|e| format!("spawn_blocking: {e}"))??
+    };
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
@@ -959,6 +994,77 @@ fn is_equity_symbol(sym: &str) -> bool {
         && !sym.starts_with("XTI")
         && sym.len() <= 5
         && sym.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+fn equity_symbol_from_bar_cache_key(key: &str) -> Option<String> {
+    let mut parts = key.splitn(3, ':');
+    let source = parts.next()?;
+    if source != "mt5" {
+        return None;
+    }
+    let raw_symbol = parts.next()?.trim();
+    let _tf = parts.next()?;
+    if raw_symbol.is_empty() || raw_symbol.starts_with("__") {
+        return None;
+    }
+    let mut sym = raw_symbol.to_uppercase();
+    if let Some(stripped) = sym.strip_suffix(".EQ") {
+        sym = stripped.to_string();
+    }
+    if sym.contains('/') {
+        return None;
+    }
+    if is_equity_symbol(&sym) {
+        Some(sym)
+    } else {
+        None
+    }
+}
+
+fn collect_equity_symbols_from_kv_blob(
+    compressed: &[u8],
+    out: &mut std::collections::HashSet<String>,
+) {
+    let Ok(decompressed) = zstd::decode_all(compressed) else {
+        return;
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&decompressed) else {
+        return;
+    };
+    collect_equity_symbols_from_json(&value, false, out);
+}
+
+fn collect_equity_symbols_from_json(
+    value: &serde_json::Value,
+    symbol_context: bool,
+    out: &mut std::collections::HashSet<String>,
+) {
+    match value {
+        serde_json::Value::String(raw) => {
+            if !symbol_context {
+                return;
+            }
+            let sym = raw.trim().to_uppercase();
+            if is_equity_symbol(&sym) {
+                out.insert(sym);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_equity_symbols_from_json(item, true, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for (key, child) in map {
+                let is_symbol_field = matches!(
+                    key.as_str(),
+                    "symbol" | "ticker" | "sym" | "asset" | "underlying_symbol"
+                );
+                collect_equity_symbols_from_json(child, is_symbol_field, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 // ── Query Functions (synchronous — called from spawn_blocking in commands) ──
@@ -1516,7 +1622,7 @@ pub fn get_unfetched_filings(conn: &Connection, limit: usize) -> Result<Vec<SecF
            AND COALESCE(f.content_fetched, FALSE) = FALSE
            AND COALESCE(f.content_fetch_attempts, 0) < ?2
            AND COALESCE(f.content_last_attempt_at, 0) <= ?3
-         ORDER BY f.importance_score DESC, f.filing_date DESC
+         ORDER BY f.filing_date DESC, f.importance_score DESC, f.created_at DESC
          LIMIT ?1"
     ).map_err(|e| format!("Prepare unfetched failed: {e}"))?;
 
@@ -2239,6 +2345,49 @@ mod tests {
         assert!(!is_equity_symbol("15MIN"));
     }
 
+    #[test]
+    fn equity_symbol_from_bar_cache_key_handles_legacy_mt5_only() {
+        assert_eq!(
+            equity_symbol_from_bar_cache_key("mt5:MSFT:1Day"),
+            Some("MSFT".to_string())
+        );
+        assert_eq!(
+            equity_symbol_from_bar_cache_key("kraken-equities:TNDM:1Day"),
+            None
+        );
+        assert_eq!(
+            equity_symbol_from_bar_cache_key("yahoo-chart:ARAY:15Min"),
+            None
+        );
+        assert_eq!(equity_symbol_from_bar_cache_key("stooq:POM:1Day"), None);
+        assert_eq!(
+            equity_symbol_from_bar_cache_key("kraken:BTC/USD:1Day"),
+            None
+        );
+        assert_eq!(equity_symbol_from_bar_cache_key("mt5:__META__:1Day"), None);
+    }
+
+    #[test]
+    fn collect_equity_symbols_from_kv_blob_extracts_watchlist_and_positions() {
+        let json = serde_json::json!([
+            "TNDM",
+            {"symbol": "wok"},
+            {"ticker": "POM"},
+            {"side": "BUY"},
+            {"symbol": "BTC/USD"},
+            {"underlying_symbol": "ARAY"}
+        ]);
+        let compressed = zstd::encode_all(json.to_string().as_bytes(), 3).unwrap();
+        let mut symbols = std::collections::HashSet::new();
+        collect_equity_symbols_from_kv_blob(&compressed, &mut symbols);
+        assert!(symbols.contains("TNDM"));
+        assert!(symbols.contains("WOK"));
+        assert!(symbols.contains("POM"));
+        assert!(symbols.contains("ARAY"));
+        assert!(!symbols.contains("BUY"));
+        assert!(!symbols.contains("BTC/USD"));
+    }
+
     // ── extract_xml_value ──────────────────────────────────────────
 
     #[test]
@@ -2402,6 +2551,38 @@ mod tests {
         let filings = get_unfetched_filings(&conn, 10).unwrap();
         assert_eq!(filings.len(), 1);
         assert_eq!(filings[0].accession_number, "acc-ok");
+    }
+
+    #[test]
+    fn get_unfetched_filings_stops_after_attempt_cap() {
+        let conn = setup_test_db();
+        insert_filing(&conn, "AAPL", "10-Q", "acc-ok", "2024-06-01");
+        insert_filing(&conn, "MSFT", "10-Q", "acc-capped", "2024-06-02");
+        let old_attempt = chrono::Utc::now().timestamp() - 7 * 60 * 60;
+        conn.execute(
+            "UPDATE sec_filings
+             SET content_fetch_attempts = 3,
+                 content_last_attempt_at = ?2,
+                 content_last_error = 'HTTP 403 Forbidden'
+             WHERE accession_number = ?1",
+            params!["acc-capped", old_attempt],
+        )
+        .unwrap();
+
+        let filings = get_unfetched_filings(&conn, 10).unwrap();
+        assert_eq!(filings.len(), 1);
+        assert_eq!(filings[0].accession_number, "acc-ok");
+    }
+
+    #[test]
+    fn get_unfetched_filings_prioritizes_recent_filings_before_old_high_importance() {
+        let conn = setup_test_db();
+        insert_filing(&conn, "OLD", "10-K/A", "acc-old", "2016-11-07");
+        insert_filing(&conn, "NEW", "8-K", "acc-new", "2024-06-02");
+
+        let filings = get_unfetched_filings(&conn, 2).unwrap();
+        assert_eq!(filings[0].accession_number, "acc-new");
+        assert_eq!(filings[1].accession_number, "acc-old");
     }
 
     #[test]

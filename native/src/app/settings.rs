@@ -412,6 +412,63 @@ impl TyphooNApp {
                             self.pending_kraken_futures_fetches.clear();
                         }
                     }
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new("Backfill providers")
+                            .color(AXIS_TEXT)
+                            .small()
+                            .strong(),
+                    );
+                    let mut backfill_changed = false;
+                    ui.horizontal_wrapped(|ui| {
+                        backfill_changed |= ui
+                            .checkbox(
+                                &mut self.backfill_cryptocompare_enabled,
+                                "CryptoCompare deep crypto history",
+                            )
+                            .on_hover_text(
+                                "Targeted Kraken Spot crypto USD/stablecoin prepend only. Does not scan CryptoCompare as its own universe and skips FX/xStocks.",
+                            )
+                            .changed();
+                        backfill_changed |= ui
+                            .checkbox(
+                                &mut self.backfill_alpaca_kraken_equities_enabled,
+                                "Alpaca for all Kraken equities",
+                            )
+                            .on_hover_text(
+                                "When enabled, every Kraken equities/xStocks candidate may use Alpaca as provenance-tagged gap-fill. This is assist-only fallback, not broad Alpaca universe sync.",
+                            )
+                            .changed();
+                        backfill_changed |= ui
+                            .checkbox(
+                                &mut self.backfill_yahoo_chart_enabled,
+                                "Yahoo Chart fallback",
+                            )
+                            .on_hover_text(
+                                "Best-effort unkeyed equity/ETF chart fallback. Use only as lower-trust gap fill with provenance, never as authoritative broker data.",
+                            )
+                            .changed();
+                        backfill_changed |= ui
+                            .checkbox(
+                                &mut self.backfill_stooq_daily_enabled,
+                                "Stooq daily fallback",
+                            )
+                            .on_hover_text(
+                                "Optional daily equity/ETF fallback for long-range D1/W1/MN1 gaps where symbols resolve cleanly.",
+                            )
+                            .changed();
+                    });
+                    if backfill_changed {
+                        settings_save_after = true;
+                        self.pending_kraken_fetches.clear();
+                    }
+                    ui.label(
+                        egui::RichText::new(
+                            "Backfill providers supplement native broker bars. They must preserve source provenance; enabling Alpaca here means Kraken-equity assist, not a full Alpaca universe pull.",
+                        )
+                        .color(AXIS_TEXT)
+                        .small(),
+                    );
                     ui.label(
                         egui::RichText::new(
                             "These category and quote filters control automated broker public scraping. Kraken uses them now; future crypto brokers should call the same quote filter instead of adding broker-specific assumptions.",

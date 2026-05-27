@@ -192,7 +192,7 @@ fn foreground_sync_write_cooldown_secs(period_s: i64) -> i64 {
     (period_s / 2).clamp(30, 300)
 }
 
-fn classify_alpaca_sync_candidate(
+pub(super) fn classify_alpaca_sync_candidate(
     now_s: i64,
     symbol: &str,
     timeframe: &str,

@@ -116,6 +116,52 @@ impl TyphooNApp {
         }
     }
 
+    pub(super) fn sec_scrape_scope_symbols(&self) -> Vec<String> {
+        let mut syms = match self.broker_scope_symbols() {
+            Some(scope) => scope,
+            None => {
+                let mut syms = std::collections::HashSet::new();
+                if self.fund_source_mt5 && self.darwinex_enabled {
+                    if self.darwinex_radar_data.is_empty() {
+                        syms.extend(self.bg.all_fundamentals.iter().map(|f| f.symbol.clone()));
+                    } else {
+                        syms.extend(
+                            self.darwinex_radar_data
+                                .iter()
+                                .filter(|(_, _, _, trade_mode, _, _, _, _, _)| *trade_mode != 0)
+                                .map(|(sym, _, _, _, _, _, _, _, _)| {
+                                    sym.split('.').next().unwrap_or(sym.as_str()).to_uppercase()
+                                }),
+                        );
+                    }
+                }
+                if self.fund_source_alpaca && self.alpaca_enabled {
+                    syms.extend(
+                        self.live_positions
+                            .iter()
+                            .map(|p| p.symbol.replace('/', "").to_uppercase()),
+                    );
+                }
+                if self.fund_source_tastytrade && self.tastytrade_enabled {
+                    syms.extend(
+                        self.tt_positions
+                            .iter()
+                            .map(|p| p.symbol.replace('/', "").to_uppercase()),
+                    );
+                }
+                if self.fund_source_kraken && self.kraken_enabled {
+                    syms.extend(self.kraken_scope_symbols());
+                }
+                syms
+            }
+        };
+        syms.retain(|sym| sec_scrape_scope_symbol_allowed(sym));
+        let mut syms: Vec<String> = syms.into_iter().collect();
+        syms.sort_unstable();
+        syms.dedup();
+        syms
+    }
+
     pub(super) fn enabled_news_scope_symbols(&self) -> std::collections::HashSet<String> {
         if let Some(scope) = self.broker_scope_symbols() {
             return scope;
@@ -907,4 +953,13 @@ impl TyphooNApp {
         self.screenshots_list = found;
         self.screenshots_last_refresh = chrono::Utc::now().timestamp();
     }
+}
+
+fn sec_scrape_scope_symbol_allowed(sym: &str) -> bool {
+    let sym = sym.trim();
+    !sym.is_empty()
+        && sym.len() <= 5
+        && !sym.starts_with("__")
+        && !sym.contains('/')
+        && sym.chars().all(|c| c.is_ascii_alphabetic())
 }

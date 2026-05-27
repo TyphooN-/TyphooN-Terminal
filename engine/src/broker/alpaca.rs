@@ -34,7 +34,10 @@ async fn get_sec_ticker_map() -> Result<&'static serde_json::Value, String> {
             let client = sec_client();
             let resp = client
                 .get("https://www.sec.gov/files/company_tickers.json")
-                .header("User-Agent", "TyphooN-Terminal/0.1 (contact: TyphooN)")
+                .header(
+                    "User-Agent",
+                    "TyphooN-Terminal/1.0 typhoon-terminal@example.invalid",
+                )
                 .send()
                 .await
                 .map_err(|_| "SEC ticker map request failed".to_string())?;
@@ -1573,7 +1576,7 @@ impl AlpacaBroker {
             return Err("Invalid filing type".to_string());
         }
         let client = sec_client();
-        let ua = "TyphooN-Terminal/0.1 (contact: TyphooN)";
+        let ua = "TyphooN-Terminal/1.0 typhoon-terminal@example.invalid";
 
         // Step 1: Resolve ticker → CIK via SEC company tickers JSON
         let tickers_resp = client
@@ -1707,7 +1710,10 @@ impl AlpacaBroker {
                 "https://data.sec.gov/api/xbrl/companyfacts/{}.json",
                 cik_padded
             ))
-            .header("User-Agent", "TyphooN-Terminal/0.1 (contact: TyphooN)")
+            .header(
+                "User-Agent",
+                "TyphooN-Terminal/1.0 typhoon-terminal@example.invalid",
+            )
             .send()
             .await
             .map_err(|e| format!("SEC company facts failed: {e}"))?;
@@ -2560,7 +2566,10 @@ impl AlpacaBroker {
                 "https://data.sec.gov/api/xbrl/companyfacts/{}.json",
                 cik_padded
             ))
-            .header("User-Agent", "TyphooN-Terminal/0.1 (contact: TyphooN)")
+            .header(
+                "User-Agent",
+                "TyphooN-Terminal/1.0 typhoon-terminal@example.invalid",
+            )
             .send()
             .await
             .map_err(|e| format!("SEC company facts failed: {e}"))?;
@@ -2652,7 +2661,10 @@ impl AlpacaBroker {
                 "https://data.sec.gov/submissions/CIK{}.json",
                 cik_padded
             ))
-            .header("User-Agent", "TyphooN-Terminal/0.1 (contact: TyphooN)")
+            .header(
+                "User-Agent",
+                "TyphooN-Terminal/1.0 typhoon-terminal@example.invalid",
+            )
             .send()
             .await
             .map_err(|e| format!("SEC submissions request failed: {e}"))?;
@@ -3129,7 +3141,10 @@ impl AlpacaBroker {
                 "https://data.sec.gov/submissions/CIK{}.json",
                 cik_padded
             ))
-            .header("User-Agent", "TyphooN-Terminal/0.1 (contact: TyphooN)")
+            .header(
+                "User-Agent",
+                "TyphooN-Terminal/1.0 typhoon-terminal@example.invalid",
+            )
             .send()
             .await
             .map_err(|e| format!("SEC submissions fetch failed: {e}"))?;

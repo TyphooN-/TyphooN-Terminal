@@ -1,3 +1,4 @@
+use super::market_data_sync::kraken_equity_symbols_for_timeframe;
 use super::*;
 
 impl TyphooNApp {
@@ -52,9 +53,11 @@ impl TyphooNApp {
             &checked_or_complete_lookup,
         );
         self.add_expected_kraken_sync_rows(&mut rows);
+        self.add_kraken_equities_merged_rows(&mut rows, &checked_or_complete_lookup);
         sort_sync_stats_rows(&mut rows);
         let (total, healthy) = rows
             .iter()
+            .filter(|row| row.broker != "Merged")
             .fold((0u64, 0u64), |(t, h), row| (t + row.total, h + row.healthy));
         self.cached_bar_sync_overall_pct = if total == 0 {
             100.0
@@ -135,6 +138,9 @@ impl TyphooNApp {
                                 "Alpaca"        => egui::Color32::from_rgb(52, 152, 219),
                                 "Tastytrade"    => egui::Color32::from_rgb(170, 100, 220),
                                 "Kraken"        => egui::Color32::from_rgb(255, 130, 60),
+                                "Merged"        => egui::Color32::from_rgb(0, 220, 220),
+                                "Yahoo"         => egui::Color32::from_rgb(155, 89, 182),
+                                "Stooq"         => egui::Color32::from_rgb(46, 204, 113),
                                 _ => AXIS_TEXT,
                             };
                             ui.label(egui::RichText::new(&row.broker).color(broker_color).small().monospace().strong());
@@ -164,6 +170,155 @@ impl TyphooNApp {
         }
     }
 
+    fn add_kraken_equities_merged_rows(
+        &self,
+        rows: &mut Vec<SyncStatsRow>,
+        checked_or_complete_lookup: &dyn Fn(&str) -> bool,
+    ) {
+        let timeframes = self.enabled_standard_sync_timeframes();
+        if timeframes.is_empty() {
+            return;
+        }
+        let catalog_symbols = self.kraken_equity_catalog_symbols();
+        let demand_symbols = self.kraken_equity_demand_symbols();
+        if catalog_symbols.is_empty() && demand_symbols.is_empty() {
+            return;
+        }
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let mut detailed: std::collections::HashMap<&str, (i64, i64)> =
+            std::collections::HashMap::with_capacity(self.bg.detailed_stats.len());
+        for (key, bar_count, write_ts_s) in &self.bg.detailed_stats {
+            detailed.insert(key.as_str(), (*bar_count, *write_ts_s));
+        }
+
+        for raw_tf in timeframes {
+            let Some(tf) = normalize_sync_timeframe_key(&raw_tf) else {
+                continue;
+            };
+            if !self.kraken_equities_merged_source_supported(tf) {
+                continue;
+            }
+            let symbols =
+                kraken_equity_symbols_for_timeframe(&catalog_symbols, &demand_symbols, tf);
+            if symbols.is_empty() {
+                continue;
+            }
+            let mut healthy = 0u64;
+            let mut stale = 0u64;
+            let mut empty = 0u64;
+            for symbol in &symbols {
+                let symbol = normalize_market_data_symbol(symbol)
+                    .replace('/', "")
+                    .trim_end_matches(".EQ")
+                    .to_ascii_uppercase();
+                if symbol.is_empty() {
+                    continue;
+                }
+                let status = self.kraken_equities_merged_symbol_status(
+                    &symbol,
+                    tf,
+                    now_ms,
+                    &detailed,
+                    checked_or_complete_lookup,
+                );
+                match status {
+                    MergedSyncStatus::Healthy => healthy += 1,
+                    MergedSyncStatus::Stale => stale += 1,
+                    MergedSyncStatus::Empty => empty += 1,
+                }
+            }
+            let total = healthy + stale + empty;
+            let pct_healthy = if total == 0 {
+                0.0
+            } else {
+                (healthy as f32 / total as f32) * 100.0
+            };
+            rows.push(SyncStatsRow {
+                broker: "Merged".to_string(),
+                tf: tf.to_string(),
+                total,
+                healthy,
+                stale,
+                empty,
+                pct_healthy,
+            });
+        }
+    }
+
+    fn kraken_equities_merged_source_supported(&self, tf: &str) -> bool {
+        kraken_equity_full_universe_timeframe(tf)
+            || (self.backfill_alpaca_kraken_equities_enabled
+                && alpaca_sync_target_bars(tf).is_some())
+            || (self.backfill_yahoo_chart_enabled && yahoo_chart_supports_timeframe(tf))
+            || (self.backfill_stooq_daily_enabled && stooq_supports_timeframe(tf))
+    }
+
+    fn kraken_equities_merged_symbol_status(
+        &self,
+        symbol: &str,
+        tf: &str,
+        now_ms: i64,
+        detailed: &std::collections::HashMap<&str, (i64, i64)>,
+        checked_or_complete_lookup: &dyn Fn(&str) -> bool,
+    ) -> MergedSyncStatus {
+        let mut saw_stale = false;
+        for source in ["kraken-equities", "alpaca", "yahoo-chart", "stooq"] {
+            if source == "kraken-equities" && !kraken_equity_full_universe_timeframe(tf) {
+                continue;
+            }
+            if source == "alpaca"
+                && (!self.backfill_alpaca_kraken_equities_enabled
+                    || alpaca_sync_target_bars(tf).is_none())
+            {
+                continue;
+            }
+            if source == "yahoo-chart"
+                && (!self.backfill_yahoo_chart_enabled || !yahoo_chart_supports_timeframe(tf))
+            {
+                continue;
+            }
+            if source == "stooq"
+                && (!self.backfill_stooq_daily_enabled || !stooq_supports_timeframe(tf))
+            {
+                continue;
+            }
+            let key = format!("{source}:{symbol}:{tf}");
+            let Some((bar_count, write_ts_s)) = detailed.get(key.as_str()).copied() else {
+                continue;
+            };
+            if bar_count <= 0 {
+                continue;
+            }
+            let last_ms = self
+                .bg
+                .bar_ts_cache
+                .get(&key)
+                .map(|(_, last_ms, _)| *last_ms)
+                .filter(|last_ms| *last_ms > 0)
+                .unwrap_or_else(|| write_ts_s.saturating_mul(1000));
+            if last_ms <= 0 {
+                continue;
+            }
+            let Some(period_ms) = merged_sync_period_ms(tf) else {
+                saw_stale = true;
+                continue;
+            };
+            let write_ms = write_ts_s.saturating_mul(1000);
+            let recently_checked = write_ms > 0 && now_ms - write_ms <= period_ms * 24;
+            let bar_aged_out = now_ms - last_ms > period_ms * 24;
+            if bar_aged_out && !recently_checked && !checked_or_complete_lookup(&key) {
+                saw_stale = true;
+            } else {
+                return MergedSyncStatus::Healthy;
+            }
+        }
+        if saw_stale {
+            MergedSyncStatus::Stale
+        } else {
+            MergedSyncStatus::Empty
+        }
+    }
+
     fn add_expected_kraken_sync_rows(&self, rows: &mut Vec<SyncStatsRow>) {
         let timeframes = self.enabled_standard_sync_timeframes();
         if timeframes.is_empty() {
@@ -180,32 +335,65 @@ impl TyphooNApp {
             .into_iter()
             .flatten()
             .collect();
-        let expected_sources = [
-            ("kraken", spot_symbols),
-            ("kraken-equities", self.kraken_equity_sync_symbols()),
-            ("kraken-futures", self.kraken_futures_sync_symbols()),
+        let futures_symbols = self.kraken_futures_sync_symbols();
+        let kraken_equity_catalog_symbols = self.kraken_equity_catalog_symbols();
+        let kraken_equity_demand_symbols = self.kraken_equity_demand_symbols();
+        let mut expected_sources: Vec<(&str, &str)> = vec![
+            ("kraken", "Kraken"),
+            ("kraken-equities", "Kraken"),
+            ("kraken-futures", "Kraken"),
         ];
+        if self.backfill_alpaca_kraken_equities_enabled {
+            expected_sources.push(("alpaca", "Alpaca"));
+        }
+        if self.backfill_yahoo_chart_enabled {
+            expected_sources.push(("yahoo-chart", "Yahoo"));
+        }
+        if self.backfill_stooq_daily_enabled {
+            expected_sources.push(("stooq", "Stooq"));
+        }
 
-        for (source, symbols) in expected_sources {
-            for symbol in symbols {
-                for tf in &timeframes {
-                    let Some(tf) = normalize_sync_timeframe_key(tf) else {
-                        continue;
-                    };
-                    // Equities/iapi is the rate-limit bottleneck. The broad
-                    // universe lane only targets D1/W1/MN1; intraday history
-                    // remains demand/focus-driven so the sync grid does not
-                    // manufacture tens of thousands of slow, low-value expected
-                    // rows and hold full-tilt open for days.
-                    if source == "kraken-equities" && !kraken_equity_full_universe_timeframe(tf) {
-                        continue;
+        for (source, broker) in expected_sources {
+            for tf in &timeframes {
+                let Some(tf) = normalize_sync_timeframe_key(tf) else {
+                    continue;
+                };
+                // Equities/iapi is the rate-limit bottleneck. The broad
+                // universe lane targets the full catalog only on durable high
+                // TFs; intraday rows stay demand/focus scoped so Sync Status
+                // does not manufacture tens of thousands of impossible iapi
+                // requests.
+                if source == "kraken-equities" && !kraken_equity_full_universe_timeframe(tf) {
+                    continue;
+                }
+                if source == "alpaca" && alpaca_sync_target_bars(tf).is_none() {
+                    continue;
+                }
+                if source == "stooq" && tf != "1Day" {
+                    continue;
+                }
+                if source == "yahoo-chart" && !yahoo_chart_supports_timeframe(tf) {
+                    continue;
+                }
+                let symbols: Vec<String> = match source {
+                    "kraken" => spot_symbols.clone(),
+                    "kraken-futures" => futures_symbols.clone(),
+                    "kraken-equities" | "alpaca" | "yahoo-chart" | "stooq" => {
+                        kraken_equity_symbols_for_timeframe(
+                            &kraken_equity_catalog_symbols,
+                            &kraken_equity_demand_symbols,
+                            tf,
+                        )
                     }
+                    _ => Vec::new(),
+                };
+                for symbol in symbols {
                     if existing.contains(&format!("{source}:{symbol}:{tf}")) {
                         continue;
                     }
                     if let Some(row) = rows
                         .iter_mut()
-                        .find(|row| row.broker == "Kraken" && row.tf == tf)
+                        .find(|row| row.broker == broker && row.tf == tf)
                     {
                         row.total += 1;
                         row.empty += 1;
@@ -216,7 +404,7 @@ impl TyphooNApp {
                         };
                     } else {
                         rows.push(SyncStatsRow {
-                            broker: "Kraken".to_string(),
+                            broker: broker.to_string(),
                             tf: tf.to_string(),
                             total: 1,
                             healthy: 0,
@@ -228,5 +416,27 @@ impl TyphooNApp {
                 }
             }
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MergedSyncStatus {
+    Healthy,
+    Stale,
+    Empty,
+}
+
+fn merged_sync_period_ms(tf: &str) -> Option<i64> {
+    match normalize_sync_timeframe_key(tf)? {
+        "1Min" => Some(60_000),
+        "5Min" => Some(300_000),
+        "15Min" => Some(900_000),
+        "30Min" => Some(1_800_000),
+        "1Hour" => Some(3_600_000),
+        "4Hour" => Some(14_400_000),
+        "1Day" => Some(86_400_000),
+        "1Week" => Some(604_800_000),
+        "1Month" => Some(2_592_000_000),
+        _ => None,
     }
 }

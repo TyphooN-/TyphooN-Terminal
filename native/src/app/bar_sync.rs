@@ -58,6 +58,8 @@ pub(super) fn compute_bar_sync_stats(
             "alpaca" => Some("Alpaca"),
             "tastytrade" => Some("Tastytrade"),
             "kraken" | "kraken-futures" | "kraken-equities" => Some("Kraken"),
+            "yahoo-chart" => Some("Yahoo"),
+            "stooq" => Some("Stooq"),
             _ => None,
         }
     };
@@ -157,7 +159,24 @@ pub(super) fn sort_sync_stats_rows(rows: &mut [SyncStatsRow]) {
     let tf_order = [
         "1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week", "1Month",
     ];
+    let broker_order = [
+        "Kraken",
+        "Merged",
+        "Alpaca",
+        "Yahoo",
+        "Stooq",
+        "Tastytrade",
+        "MT5",
+    ];
     rows.sort_by(|a, b| {
+        let ab = broker_order
+            .iter()
+            .position(|broker| *broker == a.broker)
+            .unwrap_or(usize::MAX);
+        let bb = broker_order
+            .iter()
+            .position(|broker| *broker == b.broker)
+            .unwrap_or(usize::MAX);
         let ai = tf_order
             .iter()
             .position(|tf| *tf == a.tf)
@@ -166,7 +185,7 @@ pub(super) fn sort_sync_stats_rows(rows: &mut [SyncStatsRow]) {
             .iter()
             .position(|tf| *tf == b.tf)
             .unwrap_or(usize::MAX);
-        a.broker.cmp(&b.broker).then(ai.cmp(&bi))
+        ab.cmp(&bb).then(ai.cmp(&bi)).then(a.broker.cmp(&b.broker))
     });
 }
 
@@ -185,7 +204,15 @@ pub(super) fn compute_bar_sync_broker_totals(
         entry.1 += row.healthy;
     }
 
-    let order = ["Kraken", "Alpaca", "Tastytrade", "MT5"];
+    let order = [
+        "Kraken",
+        "Merged",
+        "Alpaca",
+        "Yahoo",
+        "Stooq",
+        "Tastytrade",
+        "MT5",
+    ];
     let mut out = Vec::new();
     for name in order {
         if let Some((total, healthy)) = totals.remove(name) {
@@ -317,6 +344,72 @@ mod tests {
             .expect("missing 1Hour row");
         assert_eq!(healthy_row.healthy, 1);
         assert_eq!(healthy_row.stale, 0);
+    }
+
+    #[test]
+    fn compute_bar_sync_stats_exposes_fallback_provider_rows() {
+        let now_s = chrono::Utc::now().timestamp();
+        let rows = compute_bar_sync_stats(
+            &[
+                ("yahoo-chart:TNDM:1Day".into(), 10, now_s),
+                ("stooq:TNDM:1Day".into(), 10, now_s),
+            ],
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
+
+        let yahoo = rows
+            .iter()
+            .find(|row| row.broker == "Yahoo" && row.tf == "1Day")
+            .expect("missing Yahoo fallback row");
+        assert_eq!(yahoo.total, 1);
+        assert_eq!(yahoo.healthy, 1);
+
+        let stooq = rows
+            .iter()
+            .find(|row| row.broker == "Stooq" && row.tf == "1Day")
+            .expect("missing Stooq fallback row");
+        assert_eq!(stooq.total, 1);
+        assert_eq!(stooq.healthy, 1);
+    }
+
+    #[test]
+    fn broker_totals_orders_merged_before_fallback_sources() {
+        let totals = compute_bar_sync_broker_totals(&[
+            SyncStatsRow {
+                broker: "Yahoo".into(),
+                tf: "1Day".into(),
+                total: 1,
+                healthy: 1,
+                stale: 0,
+                empty: 0,
+                pct_healthy: 100.0,
+            },
+            SyncStatsRow {
+                broker: "Merged".into(),
+                tf: "1Day".into(),
+                total: 2,
+                healthy: 2,
+                stale: 0,
+                empty: 0,
+                pct_healthy: 100.0,
+            },
+            SyncStatsRow {
+                broker: "Kraken".into(),
+                tf: "1Day".into(),
+                total: 2,
+                healthy: 1,
+                stale: 1,
+                empty: 0,
+                pct_healthy: 50.0,
+            },
+        ]);
+
+        let names: Vec<&str> = totals
+            .iter()
+            .map(|(broker, _, _, _)| broker.as_str())
+            .collect();
+        assert_eq!(names, vec!["Kraken", "Merged", "Yahoo"]);
     }
 
     #[test]

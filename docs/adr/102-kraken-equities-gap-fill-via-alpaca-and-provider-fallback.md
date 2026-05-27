@@ -30,11 +30,46 @@ Using them as silent replacement data would be wrong.
 Use Alpaca and later provider fallbacks as **provenance-tagged gap-fill bars** for
 Kraken equities, not as a silent overwrite of Kraken data.
 
-Alpaca fallback must have an explicit **assist-only mode**. Connecting Alpaca for
-Kraken gap fill must not automatically enable the normal broad Alpaca universe
-sync. The terminal needs a settings-level switch that lets the user connect
-Alpaca credentials while restricting Alpaca bar requests to Kraken fallback jobs
-only.
+Make this the general broker-data policy, not a Kraken-only exception:
+
+- Any enabled broker/source may assist another enabled broker/source when an
+  explicit instrument-identity mapping says the histories are economically
+  comparable enough for chart/research gap fill.
+- The chart's selected broker remains authoritative for execution prices,
+  account state, quote labels, order controls, and native-cache health.
+- Assisted history is merged at read/render/research time with source provenance;
+  it is never written into another source's native cache namespace.
+- Same visible symbol text is only a candidate match, not proof of equivalence.
+  The mapping layer must distinguish wrappers, CFDs, ADRs, FX suffixes, delayed
+  feeds, quote currencies, and exchange-specific session calendars.
+- New brokers should first reuse compatible existing history through this
+  identity/provenance layer, then sync only genuinely missing/unsupported
+  symbols and newer/older windows. That keeps broker onboarding from creating a
+  massive avoidable sync-debt cliff.
+
+Fallbacks must be controlled by an explicit **Settings → Backfill providers**
+section. These switches are source-specific assist toggles, not broad broker
+universe toggles:
+
+- `CryptoCompare deep crypto history` — targeted Kraken Spot crypto prepend for
+  USD/stablecoin-style pairs only; does not scan CryptoCompare as a universe.
+- `Alpaca for all Kraken equities` — when enabled, every Kraken equities/xStocks
+  candidate selected by the Kraken scheduler may also queue an Alpaca fetch for
+  the same symbol/timeframe. This applies to the Kraken equities universe, not
+  only held, charted, or watchlisted names, but it still follows Kraken's
+  selected equity workset and must not trigger broad Alpaca-universe rotation.
+- `Yahoo Chart fallback` — unkeyed equity/ETF fallback stored under
+  `yahoo-chart:SYMBOL:TF`. Supports `1Min`, `5Min`, `15Min`, `30Min`, `1Hour`,
+  `1Day`, `1Week`, and `1Month`, subject to Yahoo's range limits.
+- `Stooq daily fallback` — unkeyed daily equity fallback stored under
+  `stooq:SYMBOL:1Day`. It is daily-only by design; it must not fabricate
+  intraday coverage.
+
+Alpaca fallback must also have an explicit **assist-only mode**. Connecting Alpaca
+for Kraken gap fill must not automatically enable the normal broad Alpaca
+universe sync. The terminal needs a settings-level switch that lets the user
+connect Alpaca credentials while restricting Alpaca bar requests to Kraken
+fallback jobs only.
 
 ### Source priority
 
@@ -44,13 +79,12 @@ For `kraken-equities:*` chart loads:
 2. If a selected timeframe in `15Min`, `30Min`, `1Hour`, or `4Hour` is empty or
    stale beyond the configured threshold, enqueue fallback fetch for the mapped
    underlying ticker.
-3. Store fallback bars under a separate source namespace, for example:
-   - `kraken-equities-fill:SYMBOL:TF` for materialized fallback bars tied to the
-     Kraken chart symbol; or
-   - `alpaca-fill:SYMBOL:TF` if the same fallback should be shared outside Kraken
-     chart routing.
-4. Build the chart series by merging native Kraken spans first, then filling only
-   missing intervals from fallback spans.
+3. Store fallback bars under separate source namespaces:
+   - `alpaca:SYMBOL:TF`
+   - `yahoo-chart:SYMBOL:TF`
+   - `stooq:SYMBOL:1Day`
+4. Build the chart series by loading the selected/authoritative source first,
+   then gap-filling missing timestamps from alternate fallback namespaces.
 5. Preserve a provenance mask/span list so UI, indicators, exports, and research
    packets can tell native Kraken bars from fallback underlying-equity bars.
 
@@ -60,12 +94,17 @@ prices and underlying-market prices.
 
 ## Timeframe policy
 
-Initial fallback scope should be limited to the timeframes the user called out:
+Fallback providers are source-specific:
 
-- `15Min`
-- `30Min`
-- `1Hour`
-- `4Hour`
+- Alpaca may fetch all standard enabled timeframes through the existing Alpaca
+  bar path, subject to Alpaca feed/rate-limit/depth constraints.
+- Yahoo Chart may fetch all standard enabled timeframes, but Yahoo applies hard
+  history windows: `1Min` is freshness-only, lower intraday is limited, and
+  higher timeframes are the useful deep-history lane.
+- Stooq is `1Day` only. Do not use it for `1Week`/`1Month` unless a separate
+  aggregation/provenance step is added, and never use it for intraday.
+- Kraken equities still never fetch `M1`/`M5` from iapi because the feed is
+  delayed and those bars imply false precision.
 
 Implementation detail:
 
@@ -116,10 +155,18 @@ Implementation gates:
 
 - Broad Alpaca sync queue checks `alpaca_full_universe_sync_enabled` before
   enumerating all assets.
-- Kraken fallback queue checks `alpaca_kraken_assist_enabled` and only requests
-  symbols produced by the Kraken mapping table.
-- UI copy must be blunt: `Assist Kraken only: use Alpaca to fill Kraken equity
-  chart gaps; do not sync the Alpaca universe.`
+- Kraken fallback queue checks `backfill_alpaca_kraken_equities_enabled` and only
+  requests symbols produced by the Kraken equities scheduler.
+- Yahoo fallback queue checks `backfill_yahoo_chart_enabled`, stores only under
+  `yahoo-chart:*`, and uses independent pending/cooldown/tombstone state.
+- Stooq fallback queue checks `backfill_stooq_daily_enabled`, only accepts
+  `1Day`, stores only under `stooq:*`, and uses independent pending/cooldown/
+  tombstone state.
+- If multiple fallback toggles are enabled, they may fetch the same
+  symbol/timeframe in tandem. This is intentional for deep-history fill: dedup is
+  done at chart merge time by timestamp while source provenance remains intact.
+- UI copy must be blunt: `Alpaca for all Kraken equities: use Alpaca to fill
+  Kraken equity chart gaps; do not sync the Alpaca universe.`
 - Logs should show the mode on connect, e.g. `Alpaca connected (Kraken assist
   only — broad Alpaca sync disabled)`.
 - LAN/server startup must preserve the setting so a headless restart does not
@@ -148,8 +195,28 @@ Users need to see that the chart is partially synthetic/fallback-filled.
 
 Required indicators:
 
-- Sync Status separates native Kraken coverage from fallback-filled coverage.
-  Example columns: `Native`, `Fallback`, `Merged`, `Stale`.
+- Sync Status separates native Kraken coverage from fallback provider coverage.
+  Alpaca, Yahoo, and Stooq appear as their own rows/totals when their assist
+  toggles are enabled or when their cache namespaces contain bars. They must not
+  be folded into the Kraken native percentage.
+- Sync Status also shows `Merged` Kraken-equity rows/totals. `Merged` is the
+  chart-usable coverage number: a symbol/timeframe is Healthy if any eligible
+  source namespace has a healthy bar window (`kraken-equities`, Alpaca assist,
+  Yahoo Chart, or Stooq daily). It is a derived coverage view, not a cache source,
+  and is excluded from the auto-full-tilt native/provider aggregate to avoid
+  double-counting.
+- The denominator is timeframe-specific and must stay explicit:
+  - `1Day`, `1Week`, and `1Month` use the full loaded Kraken equities catalog.
+    Missing catalog symbols appear as empty expected rows so the window cannot
+    claim full high-timeframe coverage while hundreds of catalog symbols are
+    absent.
+  - Intraday rows use the demand set only: positions, watchlist, open/visible
+    charts, and legacy xStock-looking Kraken symbols. The app must not fabricate
+    a 12k-symbol native iapi intraday backlog.
+  - Fallback provider rows follow the same denominator rule: full catalog for
+    durable high timeframes, demand set for intraday provider work.
+- Native `kraken-equities:*` rows remain separate from fallback rows; `Merged`
+  only answers “is this chart-usable from any allowed source?”
 - Chart status line shows a concise source badge, e.g. `Data: Kraken Equities +
   Alpaca gap-fill`.
 - Optional subtle span coloring or hover metadata for fallback regions.
@@ -193,33 +260,38 @@ Default policy:
 - Incorrect symbol mapping can produce dangerous charts; mappings need validation
   and tombstones.
 
-## Implementation plan
+## Current implementation notes
 
-1. Add a normalized Kraken-equity-to-underlying mapper with unit tests for `.EQ`,
-   pair-name, display-name, and quote-wrapper cases.
-2. Add a fallback cache namespace and metadata schema:
-   - source provider;
-   - underlying symbol;
-   - original Kraken symbol;
-   - timeframe;
-   - fetch timestamp;
-   - no-data/permission tombstones.
-3. Add a merge reader that returns `(bars, provenance_spans)` without changing
-   the existing raw `kraken-equities:*` cache contract.
-4. Add scheduler tasks only for `15Min`, `30Min`, `1Hour`, and `4Hour`.
-5. Wire Alpaca as provider 1, using existing ADR-087 rate/tier logic and
-   no-data tombstones. Gate this behind the Alpaca assist-only/full-sync setting
-   so connecting Alpaca for Kraken help does not start the broad Alpaca universe
-   pull.
-6. Update Sync Status to show native/fallback/merged coverage separately.
-7. Update chart status/source badges and research packet disclosure.
-8. Add tests:
-   - mapping tests;
-   - merge precedence tests;
-   - no overwrite of native Kraken keys;
-   - fallback bars fill only missing intervals;
-   - no-data tombstone suppresses repeated fetches;
-   - chart load prefers native bars when both exist.
+- The Kraken equities catalog (`kraken_equity_universe_symbols`) is the authority
+  for broad durable coverage on `1Day`, `1Week`, and `1Month`.
+- The demand set is separate and intentionally narrower: held `.EQ` balances,
+  watchlist `.EQ` entries, open/visible Kraken-equity charts, and legacy
+  xStock-looking Kraken symbols.
+- `schedule_kraken_equities_universe` uses the catalog set only for durable high
+  timeframes. Demand/focus paths may still queue intraday fetches when a user
+  opens a chart or watches/holds a symbol.
+- Sync Status expected rows and `Merged` rows use the same timeframe policy, so
+  the visible denominator matches the scheduler contract.
+
+## Implementation plan / reopen criteria
+
+The current implementation covers the native/full-catalog denominator and the
+Sync Status separation. Reopen this ADR for code work when adding a new fallback
+provider, provenance-span rendering, or strategy/backtest policy hooks. Any
+future change must keep the invariant above: high-TF full catalog, intraday
+demand-scoped unless an explicit provider policy says otherwise.
+
+Historical implementation items that remain relevant as regression checks:
+
+1. Normalized Kraken-equity-to-underlying mapping must handle `.EQ`, pair-name,
+   display-name, and quote-wrapper cases.
+2. Fallback cache namespaces must not overwrite native `kraken-equities:*` keys.
+3. Provider no-data/permission results need tombstones so the broad scheduler does
+   not hammer symbols a provider cannot serve.
+4. Chart/research outputs must disclose fallback provenance when merged bars are
+   used.
+5. Tests should cover mapping, merge precedence, provider tombstones, and the
+   high-TF catalog vs intraday demand denominator rule.
 
 ## Open questions
 

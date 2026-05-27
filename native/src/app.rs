@@ -69,6 +69,7 @@ mod chart_ops;
 mod command_palette;
 mod darwin_universe;
 mod export_nav;
+mod fallback_bars;
 mod floating_windows;
 mod kraken_ohlc_ws;
 mod kraken_sync;
@@ -91,6 +92,7 @@ mod trade_ops;
 use self::alpaca_sync::*;
 use self::bar_sync::*;
 use self::broker_fetch::*;
+use self::fallback_bars::*;
 use self::kraken_sync::*;
 use self::sync_config::*;
 use self::sync_workset::*;
@@ -2157,6 +2159,10 @@ fn cache_source_from_key(key: &str) -> &'static str {
         "kraken-futures"
     } else if key.starts_with("kraken:") {
         "kraken"
+    } else if key.starts_with("yahoo-chart:") {
+        "yahoo-chart"
+    } else if key.starts_with("stooq:") {
+        "stooq"
     } else if key.starts_with("default:") {
         "default"
     } else {
@@ -2207,13 +2213,15 @@ fn extract_news_symbols_from_market_data_cache(
     Ok(symbols.into_iter().collect())
 }
 
-const CHART_SOURCE_ORDER: [(&str, &str); 7] = [
+const CHART_SOURCE_ORDER: [(&str, &str); 9] = [
     ("mt5", "MT5"),
     ("kraken", "Kraken"),
     ("kraken-equities", "Kraken Equities"),
     ("kraken-futures", "Kraken Futures"),
     ("tastytrade", "tastytrade"),
     ("alpaca", "Alpaca"),
+    ("yahoo-chart", "Yahoo Chart"),
+    ("stooq", "Stooq"),
     ("default", "Default"),
 ];
 
@@ -2326,7 +2334,7 @@ fn preferred_chart_symbol_for_source(source: &str, symbol: &str) -> String {
         }
         "kraken-futures" => typhoon_engine::core::kraken_futures::normalize_futures_symbol(&norm),
         "kraken-equities" => no_slash.trim_end_matches(".EQ").to_string(),
-        "alpaca" | "tastytrade" | "mt5" => no_slash,
+        "alpaca" | "tastytrade" | "mt5" | "yahoo-chart" | "stooq" => no_slash,
         _ => norm,
     }
 }
@@ -2538,6 +2546,11 @@ impl ChartState {
         }
         if let Some(selected_source) = self.source_override.as_deref() {
             return selected_source.eq_ignore_ascii_case(source);
+        }
+        if matches!(source, "alpaca" | "yahoo-chart" | "stooq")
+            && self.primary_source.eq_ignore_ascii_case("kraken-equities")
+        {
+            return true;
         }
         self.bars.is_empty()
             || self.primary_source.is_empty()
@@ -2899,6 +2912,8 @@ impl ChartState {
             format!("kraken-futures:{}:{}", sym, tf),
             format!("tastytrade:{}:{}", sym, tf),
             format!("alpaca:{}:{}", sym, tf),
+            format!("yahoo-chart:{}:{}", sym, tf),
+            format!("stooq:{}:{}", sym, tf),
         ];
         if sym_norm != sym {
             keys_to_try.extend([
@@ -2908,6 +2923,8 @@ impl ChartState {
                 format!("kraken-futures:{}:{}", sym_norm, tf),
                 format!("tastytrade:{}:{}", sym_norm, tf),
                 format!("alpaca:{}:{}", sym_norm, tf),
+                format!("yahoo-chart:{}:{}", sym_norm, tf),
+                format!("stooq:{}:{}", sym_norm, tf),
             ]);
         }
         if let Some(source) = self.source_override.as_deref() {
@@ -3023,7 +3040,14 @@ impl ChartState {
                         })
                         .unwrap_or_default()
                 };
-                let gap_prefixes = ["kraken", "kraken-futures", "alpaca", "tastytrade"];
+                let gap_prefixes = [
+                    "kraken",
+                    "kraken-futures",
+                    "alpaca",
+                    "tastytrade",
+                    "yahoo-chart",
+                    "stooq",
+                ];
                 for prefix in &gap_prefixes {
                     // Try both SOLUSD and SOL/USD key forms
                     let keys_to_try: Vec<String> = if sym_slash.is_empty() {
@@ -6861,6 +6885,8 @@ enum BrokerCmd {
     /// Scrape SEC EDGAR filings for all portfolio symbols.
     SecScrape {
         db_path: PathBuf,
+        /// Uppercase equity tickers derived from the current top-level Scope.
+        symbols: Vec<String>,
     },
     // scrape_filings_for_ticker available via scrape_all_portfolio_symbols
     /// Fetch Finnhub news for a symbol.
@@ -6952,6 +6978,7 @@ enum BrokerCmd {
         timeframes: Vec<String>,
         db_path: std::path::PathBuf,
         backfill_complete: bool,
+        cryptocompare_backfill_enabled: bool,
     },
     /// Kraken Futures public chart backfill via the public charts API.
     KrakenFuturesBackfill {
@@ -9276,6 +9303,14 @@ enum BrokerCmd {
         symbol: String,
         timeframe: String,
     },
+    YahooChartFetchBars {
+        symbol: String,
+        timeframe: String,
+    },
+    StooqDailyFetchBars {
+        symbol: String,
+        timeframe: String,
+    },
     KrakenFetchEquityUniverse,
     KrakenStartPrivateWs,
     /// Start the Kraken WS v2 OHLC streamers (one task per interval,
@@ -10867,6 +10902,13 @@ pub struct TyphooNApp {
     kraken_scrape_fiat_crypto: bool,
     kraken_scrape_crypto_crosses: bool,
     kraken_scrape_futures: bool,
+    /// Backfill provider switches. These are source-specific fallbacks, not
+    /// broker universe toggles: they supplement native broker bars without
+    /// changing broker/account connectivity.
+    backfill_cryptocompare_enabled: bool,
+    backfill_alpaca_kraken_equities_enabled: bool,
+    backfill_yahoo_chart_enabled: bool,
+    backfill_stooq_daily_enabled: bool,
     /// Stream Kraken bar updates via WS v2 in addition to the REST scheduler.
     /// Subscribes to every spot pair across 1Min/5Min/15Min/30Min/1Hour/4Hour/
     /// 1Day/1Week so low-timeframe bars stay current without burning REST
@@ -11374,6 +11416,8 @@ pub struct TyphooNApp {
     pending_kraken_fetches: std::collections::HashSet<String>,
     pending_kraken_futures_fetches: std::collections::HashSet<String>,
     pending_tastytrade_fetches: std::collections::HashSet<String>,
+    pending_yahoo_chart_fetches: std::collections::HashSet<String>,
+    pending_stooq_fetches: std::collections::HashSet<String>,
     /// Per-key cooldown for broker bar re-queues. The in-flight HashSet only
     /// dedups while a fetch is pending; once it completes we'd previously
     /// re-queue immediately on the next sync tick, which (during a closed
@@ -13967,12 +14011,25 @@ impl TyphooNApp {
             if let Some(parent) = backoff_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            let _ = typhoon_engine::broker::kraken::iapi_limiter_init(
-                typhoon_engine::broker::kraken::IapiLimiterConfig {
-                    persistence_path: Some(backoff_path),
-                    ..Default::default()
-                },
-            );
+            let mut config = typhoon_engine::broker::kraken::IapiLimiterConfig {
+                persistence_path: Some(backoff_path),
+                ..Default::default()
+            };
+            if let Ok(raw_max_rate) = std::env::var("TYPHOON_KRAKEN_IAPI_AIMD_MAX_RATE") {
+                match raw_max_rate.trim().parse::<f64>() {
+                    Ok(rate) if rate.is_finite() && rate >= config.aimd_min_rate => {
+                        config.aimd_max_rate = rate;
+                        tracing::info!(
+                            "Kraken iapi AIMD max-rate override: {:.2} req/s",
+                            config.aimd_max_rate
+                        );
+                    }
+                    _ => tracing::warn!(
+                        "Ignoring invalid TYPHOON_KRAKEN_IAPI_AIMD_MAX_RATE={raw_max_rate:?}"
+                    ),
+                }
+            }
+            let _ = typhoon_engine::broker::kraken::iapi_limiter_init(config);
         }
 
         // ── SQLite cache opened ASYNCHRONOUSLY ────────────────────────────
@@ -14108,6 +14165,12 @@ impl TyphooNApp {
             let kraken_public_client = reqwest::Client::builder()
                 .user_agent("TyphooN-Terminal/1.0")
                 .pool_max_idle_per_host(KRAKEN_PUBLIC_FETCH_PERMITS * 2)
+                .build()
+                .unwrap_or_default();
+            let fallback_bar_client = reqwest::Client::builder()
+                .user_agent("TyphooN-Terminal/1.0")
+                .pool_max_idle_per_host(8)
+                .timeout(std::time::Duration::from_secs(20))
                 .build()
                 .unwrap_or_default();
             let tastytrade_fetch_permits = Arc::new(tokio::sync::Semaphore::new(2));
@@ -14287,13 +14350,13 @@ impl TyphooNApp {
                             }
                         }
                     }
-                    BrokerCmd::SecScrape { db_path } => {
+                    BrokerCmd::SecScrape { db_path, symbols } => {
                         // Spawn as independent task — SEC scraping can take 10-60s and must not
                         // block the broker command loop (would freeze trading, data fetch, etc.)
                         let msg_tx = broker_msg_tx_clone.clone();
                         tokio::spawn(async move {
                             let _ = msg_tx.send(BrokerMsg::OrderResult("SEC scrape started...".into()));
-                            match sec_filing::scrape_all_portfolio_symbols(db_path).await {
+                            match sec_filing::scrape_all_portfolio_symbols(db_path, Some(symbols)).await {
                                 Ok(stats) => {
                                     let _ = msg_tx.send(BrokerMsg::SecScrapeResult(
                                         format!("SEC scrape complete: {} tickers, {} filings, {} insider trades, {} alerts", stats.tickers_scanned, stats.new_filings, stats.new_insider_trades, stats.new_alerts)
@@ -25324,6 +25387,92 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             }
                         }
                     }
+                    BrokerCmd::YahooChartFetchBars { symbol, timeframe } => {
+                        let source = "yahoo-chart".to_string();
+                        let result = async {
+                            let bars = fetch_yahoo_chart_bars(&fallback_bar_client, &symbol, &timeframe).await?;
+                            let count = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                store_fallback_bars(&cache, &source, &symbol, &timeframe, &bars)?
+                            } else {
+                                return Err("cache unavailable".to_string());
+                            };
+                            Ok::<usize, String>(count)
+                        }
+                        .await;
+                        match result {
+                            Ok(count) => {
+                                if count == 0 {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Unresolvable {
+                                        broker: source.clone(),
+                                        symbol: symbol.clone(),
+                                        timeframe: timeframe.clone(),
+                                        reason: "provider returned no bars".to_string(),
+                                    });
+                                }
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::BarsFetched {
+                                    source,
+                                    symbol,
+                                    timeframe,
+                                    count,
+                                });
+                            }
+                            Err(error) => {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
+                                    "Yahoo Chart fallback failed for {} {}: {}",
+                                    symbol, timeframe, error
+                                )));
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::BarsFetched {
+                                    source,
+                                    symbol,
+                                    timeframe,
+                                    count: 0,
+                                });
+                            }
+                        }
+                    }
+                    BrokerCmd::StooqDailyFetchBars { symbol, timeframe } => {
+                        let source = "stooq".to_string();
+                        let result = async {
+                            let bars = fetch_stooq_daily_bars(&fallback_bar_client, &symbol, &timeframe).await?;
+                            let count = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                store_fallback_bars(&cache, &source, &symbol, &timeframe, &bars)?
+                            } else {
+                                return Err("cache unavailable".to_string());
+                            };
+                            Ok::<usize, String>(count)
+                        }
+                        .await;
+                        match result {
+                            Ok(count) => {
+                                if count == 0 {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Unresolvable {
+                                        broker: source.clone(),
+                                        symbol: symbol.clone(),
+                                        timeframe: timeframe.clone(),
+                                        reason: "provider returned no bars".to_string(),
+                                    });
+                                }
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::BarsFetched {
+                                    source,
+                                    symbol,
+                                    timeframe,
+                                    count,
+                                });
+                            }
+                            Err(error) => {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
+                                    "Stooq fallback failed for {} {}: {}",
+                                    symbol, timeframe, error
+                                )));
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::BarsFetched {
+                                    source,
+                                    symbol,
+                                    timeframe,
+                                    count: 0,
+                                });
+                            }
+                        }
+                    }
                     BrokerCmd::KrakenFetchEquityUniverse => {
                         let result = if let Some(ref kb) = kraken_broker {
                             kb.get_equity_markets().await
@@ -26802,7 +26951,13 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = broker_msg_tx_clone.send(BrokerMsg::Error("Connect Alpaca first for BARDATA".into()));
                         }
                     }
-                    BrokerCmd::KrakenBackfill { symbol, timeframes, db_path: _, backfill_complete } => {
+                    BrokerCmd::KrakenBackfill {
+                        symbol,
+                        timeframes,
+                        db_path: _,
+                        backfill_complete,
+                        cryptocompare_backfill_enabled,
+                    } => {
                         let msg_tx = broker_msg_tx_clone.clone();
                         let shared_cache = shared_cache_broker.clone();
                         let permits = kraken_fetch_permits.clone();
@@ -26824,6 +26979,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     symbol,
                                     timeframe,
                                     backfill_complete,
+                                    cryptocompare_backfill_enabled,
                                 )
                                 .await;
                             });
@@ -26861,16 +27017,26 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         let shared_cache_fetch = shared_cache_broker.clone();
                         // SEC EDGAR requires a descriptive User-Agent.
                         let client = reqwest::Client::builder()
-                            .user_agent("TyphooN-Terminal/1.0 (contact: TyphooN)")
+                            .user_agent(sec_filing::SEC_EDGAR_USER_AGENT)
                             .timeout(std::time::Duration::from_secs(15))
                             .build().unwrap_or_default();
                         // Rate limit: SEC allows 10 req/sec, we do 1
                         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                        match client.get(&url)
+                        match client
+                            .get(&url)
                             .header("Accept", "text/html,application/xhtml+xml,application/xml")
                             .header("Accept-Encoding", "identity")
-                            .send().await {
+                            .send()
+                            .await
+                        {
                             Ok(resp) => {
+                                let status = resp.status();
+                                if !status.is_success() {
+                                    let _ = msg_tx.send(BrokerMsg::Error(format!(
+                                        "Fetch filing failed: HTTP {status}"
+                                    )));
+                                    continue;
+                                }
                                 if let Ok(html) = resp.text().await {
                                     let result = sec_filing::strip_html_to_text(&html);
                                     // Store content in DB for FTS indexing (growing database)
@@ -27855,6 +28021,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
             pending_kraken_fetches: std::collections::HashSet::new(),
             pending_kraken_futures_fetches: std::collections::HashSet::new(),
             pending_tastytrade_fetches: std::collections::HashSet::new(),
+            pending_yahoo_chart_fetches: std::collections::HashSet::new(),
+            pending_stooq_fetches: std::collections::HashSet::new(),
             fetch_last_queued_ts: std::collections::HashMap::new(),
             alpaca_sync_cursor: 0,
             kraken_spot_sync_cursors: [0; 4],
@@ -29973,6 +30141,10 @@ When the question touches recent news, sentiment, or prices, combine the researc
             kraken_scrape_fiat_crypto: false,
             kraken_scrape_crypto_crosses: false,
             kraken_scrape_futures: false,
+            backfill_cryptocompare_enabled: true,
+            backfill_alpaca_kraken_equities_enabled: false,
+            backfill_yahoo_chart_enabled: false,
+            backfill_stooq_daily_enabled: false,
             kraken_ws_ohlc_enabled: true,
             kraken_ws_ohlc_started: false,
             crypto_fiat_quote_usd: true,
@@ -30522,12 +30694,13 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                         };
                                                     rt.block_on(async {
                                                         let client = reqwest::Client::builder()
-                                                            .user_agent("TyphooN-Terminal/0.1 (contact: TyphooN)")
+                                                            .user_agent(sec_filing::SEC_EDGAR_USER_AGENT)
                                                             .timeout(std::time::Duration::from_secs(10))
                                                             .build()
                                                             .unwrap_or_default();
                                                         let mut fetched = 0usize;
                                                         let mut failed = 0usize;
+                                                        let mut consecutive_forbidden = 0usize;
 
                                                         let wr_conn = match wr_cache.connection() {
                                                             Ok(conn) => conn,
@@ -30550,7 +30723,16 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                                 continue;
                                                             }
                                                             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                                                            let resp = match client.get(&filing.url).send().await {
+                                                            let resp = match client
+                                                                .get(&filing.url)
+                                                                .header(
+                                                                    "Accept",
+                                                                    "text/html,application/xhtml+xml,application/xml",
+                                                                )
+                                                                .header("Accept-Encoding", "identity")
+                                                                .send()
+                                                                .await
+                                                            {
                                                                 Ok(resp) => resp,
                                                                 Err(e) => {
                                                                     let _ = sec_filing::mark_filing_content_fetch_failed(
@@ -30570,8 +30752,21 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                                     &format!("HTTP {status}"),
                                                                 );
                                                                 failed += 1;
+                                                                if status == reqwest::StatusCode::FORBIDDEN {
+                                                                    consecutive_forbidden += 1;
+                                                                    if consecutive_forbidden >= 3 {
+                                                                        tracing::warn!(
+                                                                            "SEC content backfill paused: {} consecutive HTTP 403 responses; check EDGAR User-Agent / block status",
+                                                                            consecutive_forbidden
+                                                                        );
+                                                                        break;
+                                                                    }
+                                                                } else {
+                                                                    consecutive_forbidden = 0;
+                                                                }
                                                                 continue;
                                                             }
+                                                            consecutive_forbidden = 0;
                                                             let html = match resp.text().await {
                                                                 Ok(html) => html,
                                                                 Err(e) => {
@@ -32179,6 +32374,12 @@ mod tests {
 
         assert!(chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "mt5"));
         assert!(!chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "alpaca"));
+
+        chart.primary_source = "kraken-equities";
+        assert!(chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "alpaca"));
+        assert!(chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "yahoo-chart"));
+        assert!(chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "stooq"));
+        assert!(!chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "tastytrade"));
     }
 
     #[test]

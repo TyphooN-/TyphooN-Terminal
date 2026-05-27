@@ -14,7 +14,7 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-const SEC_USER_AGENT: &str = "TyphooN-Terminal/0.1 (contact: TyphooN)";
+const SEC_USER_AGENT: &str = "TyphooN-Terminal/1.0 typhoon-terminal@example.invalid";
 const SEC_RATE_LIMIT_MS: u64 = 200;
 const YAHOO_RATE_LIMIT_MS: u64 = 300;
 

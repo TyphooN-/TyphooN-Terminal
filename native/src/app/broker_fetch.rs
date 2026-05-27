@@ -347,6 +347,7 @@ pub(super) async fn run_kraken_fetch_task(
     symbol: String,
     timeframe: String,
     backfill_already_complete: bool,
+    cryptocompare_backfill_enabled: bool,
 ) {
     let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(&symbol);
     let timeframe = normalize_sync_timeframe_key(&timeframe)
@@ -404,7 +405,7 @@ pub(super) async fn run_kraken_fetch_task(
     };
     let _ = broker_msg_tx.send(BrokerMsg::OrderResult(log_msg));
     let mut cryptocompare_backfill = Vec::new();
-    if after_ts.is_none() {
+    if after_ts.is_none() && cryptocompare_backfill_enabled {
         if let Some(cc_symbol) = cryptocompare_backfill_symbol(&symbol) {
             if let Some(secs) = typhoon_engine::core::cryptocompare::rate_limited_for_secs() {
                 let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(

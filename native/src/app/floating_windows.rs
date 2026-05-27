@@ -53614,6 +53614,7 @@ impl TyphooNApp {
             // search query, or sort direction change.
             self.rebuild_sec_caches();
             let sec_scope_label = self.broker_scope_label();
+            let sec_scrape_scope_symbols = self.sec_scrape_scope_symbols();
             let mut sec_pending_action = SymbolAction::None;
             egui::Window::new("SEC Filing Scanner")
                 .open(&mut self.show_sec)
@@ -53644,9 +53645,22 @@ impl TyphooNApp {
                         }
                         ui.separator();
                         if ui.small_button(egui::RichText::new("Scrape Now").color(BTN_GREEN_TEXT)).clicked() {
-                            let db_path = cache_db_path();
-                            let _ = self.broker_tx.send(BrokerCmd::SecScrape { db_path });
-                            self.log.push_back(LogEntry::info("SEC EDGAR scrape initiated..."));
+                            let symbols = sec_scrape_scope_symbols.clone();
+                            let symbol_count = symbols.len();
+                            if symbol_count > 0 {
+                                let db_path = cache_db_path();
+                                let _ = self.broker_tx.send(BrokerCmd::SecScrape { db_path, symbols });
+                                self.log.push_back(LogEntry::info(format!(
+                                    "SEC EDGAR scrape initiated for Scope {} ({} symbols)...",
+                                    sec_scope_label,
+                                    symbol_count
+                                )));
+                            } else {
+                                self.log.push_back(LogEntry::warn(format!(
+                                    "SEC EDGAR scrape skipped: Scope {} has no symbols",
+                                    sec_scope_label
+                                )));
+                            }
                         }
                         ui.separator();
                         let (total_filings, indexed_content) = self.bg.sec_content_stats;
@@ -55464,6 +55478,8 @@ impl TyphooNApp {
 
         // ── Scrape Status Dashboard ──
         if self.show_scrape_status {
+            let scrape_status_sec_scope_symbols = self.sec_scrape_scope_symbols();
+            let scrape_status_sec_scope_label = self.broker_scope_label();
             egui::Window::new("Scrape Status Dashboard")
                 .open(&mut self.show_scrape_status)
                 .resizable(true)
@@ -55625,9 +55641,19 @@ impl TyphooNApp {
                                     )
                                     .clicked()
                                 {
-                                    let db_path = cache_db_path();
-                                    let _ = self.broker_tx.send(BrokerCmd::SecScrape { db_path });
-                                    self.scrape_sec_running = true;
+                                    let symbols = scrape_status_sec_scope_symbols.clone();
+                                    if symbols.is_empty() {
+                                        self.scrape_sec_last_msg = format!(
+                                            "skipped: Scope {} has no symbols",
+                                            scrape_status_sec_scope_label
+                                        );
+                                    } else {
+                                        let db_path = cache_db_path();
+                                        let _ = self
+                                            .broker_tx
+                                            .send(BrokerCmd::SecScrape { db_path, symbols });
+                                        self.scrape_sec_running = true;
+                                    }
                                 }
                             } else {
                                 ui.label(

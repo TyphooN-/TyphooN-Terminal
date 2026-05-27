@@ -1,5 +1,36 @@
 use super::*;
 
+pub(super) fn normalize_kraken_equity_symbol_list<'a, I>(symbols: I) -> Vec<String>
+where
+    I: IntoIterator<Item = &'a String>,
+{
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for source in symbols {
+        let symbol = normalize_market_data_symbol(source)
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .to_ascii_uppercase();
+        if !symbol.is_empty() && seen.insert(symbol.clone()) {
+            out.push(symbol);
+        }
+    }
+    out.sort();
+    out
+}
+
+pub(super) fn kraken_equity_symbols_for_timeframe(
+    catalog_symbols: &[String],
+    demand_symbols: &[String],
+    timeframe: &str,
+) -> Vec<String> {
+    if kraken_equity_full_universe_timeframe(timeframe) {
+        normalize_kraken_equity_symbol_list(catalog_symbols.iter())
+    } else {
+        normalize_kraken_equity_symbol_list(demand_symbols.iter())
+    }
+}
+
 impl TyphooNApp {
     pub(super) fn full_tilt_sync_enabled(&self) -> bool {
         match std::env::var("TYPHOON_SYNC_FULL_TILT") {
@@ -457,6 +488,8 @@ impl TyphooNApp {
             "kraken" => &mut self.pending_kraken_fetches,
             "kraken-futures" => &mut self.pending_kraken_futures_fetches,
             "tastytrade" => &mut self.pending_tastytrade_fetches,
+            "yahoo-chart" => &mut self.pending_yahoo_chart_fetches,
+            "stooq" => &mut self.pending_stooq_fetches,
             _ => &mut self.pending_alpaca_fetches,
         }
     }
@@ -466,6 +499,8 @@ impl TyphooNApp {
             + self.pending_kraken_fetches.len()
             + self.pending_kraken_futures_fetches.len()
             + self.pending_tastytrade_fetches.len()
+            + self.pending_yahoo_chart_fetches.len()
+            + self.pending_stooq_fetches.len()
     }
 
     pub(super) fn note_cached_sync_success(
@@ -739,52 +774,41 @@ impl TyphooNApp {
         out
     }
 
-    pub(super) fn kraken_equity_sync_symbols(&self) -> Vec<String> {
+    pub(super) fn kraken_equity_catalog_symbols(&self) -> Vec<String> {
         if !self.kraken_enabled || !self.kraken_scrape_xstocks {
             return Vec::new();
         }
-        let mut seen = std::collections::HashSet::new();
-        let mut out = Vec::new();
-        let mut push_symbol = |source: &str| {
-            let symbol = normalize_market_data_symbol(source)
-                .replace('/', "")
-                .trim_end_matches(".EQ")
-                .to_ascii_uppercase();
-            if !symbol.is_empty() && seen.insert(symbol.clone()) {
-                out.push(symbol);
-            }
-        };
+        normalize_kraken_equity_symbol_list(self.kraken_equity_universe_symbols.iter())
+    }
 
-        // The full Kraken Securities catalog is metadata/search space, not a
-        // historical-sync target. At the current iapi ceiling, syncing every
-        // tradable equity/ETF across every enabled timeframe turns into a
-        // multi-day backlog and starves the held/charted names the user
-        // actually needs. Keep automated bar sync demand-driven: owned,
-        // charted, watched, plus any legacy Spot xStock-looking pairs.
+    pub(super) fn kraken_equity_demand_symbols(&self) -> Vec<String> {
+        if !self.kraken_enabled || !self.kraken_scrape_xstocks {
+            return Vec::new();
+        }
+        let mut raw = Vec::new();
         for (pair_name, display_name) in &self.kraken_pairs {
             if let Some(symbol) = kraken_xstock_fundamental_symbol(pair_name, display_name) {
-                push_symbol(&symbol);
+                raw.push(symbol);
             }
         }
         for (asset, qty) in &self.kraken_balances {
             if qty.is_finite() && *qty > 0.0 && Self::kraken_display_asset(asset).ends_with(".EQ") {
-                push_symbol(&Self::kraken_display_asset(asset));
+                raw.push(Self::kraken_display_asset(asset));
             }
         }
         for chart in &self.charts {
             let source = cache_source_from_key(&chart.symbol);
             let bare = bare_symbol_from_key(&chart.symbol);
             if source == "kraken-equities" || bare.to_ascii_uppercase().ends_with(".EQ") {
-                push_symbol(&bare);
+                raw.push(bare);
             }
         }
         for symbol in &self.user_watchlist {
             if symbol.to_ascii_uppercase().ends_with(".EQ") {
-                push_symbol(symbol);
+                raw.push(symbol.clone());
             }
         }
-        out.sort();
-        out
+        normalize_kraken_equity_symbol_list(raw.iter())
     }
 
     pub(super) fn kraken_futures_symbol_sector(symbol: &str) -> usize {
@@ -836,7 +860,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn schedule_kraken_equities_universe(&mut self) -> usize {
-        let symbols = self.kraken_equity_sync_symbols();
+        let symbols = self.kraken_equity_catalog_symbols();
         if !self.kraken_enabled || symbols.is_empty() {
             return 0;
         }
@@ -934,8 +958,76 @@ impl TyphooNApp {
         self.kraken_equities_sync_cursor = cursor;
         let mut dispatched = 0usize;
         for candidate in candidates {
-            if self.queue_kraken_equity_fetch(&candidate.symbol, &candidate.timeframe) {
+            let native_queued =
+                self.queue_kraken_equity_fetch(&candidate.symbol, &candidate.timeframe);
+            let fallback_queued =
+                self.queue_kraken_equity_fallback_fetches(&candidate.symbol, &candidate.timeframe);
+            if native_queued || fallback_queued {
                 dispatched += 1;
+            }
+        }
+        if self.backfill_yahoo_chart_enabled {
+            let state = self.build_source_cache_state_map("yahoo-chart:");
+            let no_data = self
+                .unresolvable_fetch_keys_by_broker
+                .get("yahoo-chart")
+                .cloned()
+                .unwrap_or_default();
+            let backfill_complete = std::collections::HashMap::new();
+            let mut cursor = self.kraken_equities_sync_cursor;
+            let candidates = select_alpaca_sync_workset_rotating(
+                &symbols,
+                &timeframes,
+                &state,
+                &focus_symbols,
+                &no_data,
+                &backfill_complete,
+                &self.pending_yahoo_chart_fetches,
+                available_slots,
+                foreground_slots,
+                if full_tilt { 192 } else { 96 },
+                &mut cursor,
+                chrono::Utc::now().timestamp(),
+                alpaca_sync_target_bars,
+            );
+            self.kraken_equities_sync_cursor = cursor;
+            for candidate in candidates {
+                if self.queue_yahoo_chart_fetch(&candidate.symbol, &candidate.timeframe) {
+                    dispatched += 1;
+                }
+            }
+        }
+        if self.backfill_stooq_daily_enabled && self.sync_timeframe_enabled("1Day") {
+            let state = self.build_source_cache_state_map("stooq:");
+            let no_data = self
+                .unresolvable_fetch_keys_by_broker
+                .get("stooq")
+                .cloned()
+                .unwrap_or_default();
+            let backfill_complete = std::collections::HashMap::new();
+            let pending = self.pending_stooq_fetches.clone();
+            let mut cursor = self.kraken_equities_sync_cursor;
+            let stooq_timeframes = vec!["1Day".to_string()];
+            let candidates = select_alpaca_sync_workset_rotating(
+                &symbols,
+                &stooq_timeframes,
+                &state,
+                &focus_symbols,
+                &no_data,
+                &backfill_complete,
+                &pending,
+                available_slots,
+                foreground_slots.min(available_slots),
+                if full_tilt { 192 } else { 96 },
+                &mut cursor,
+                chrono::Utc::now().timestamp(),
+                alpaca_sync_target_bars,
+            );
+            self.kraken_equities_sync_cursor = cursor;
+            for candidate in candidates {
+                if self.queue_stooq_fetch(&candidate.symbol, &candidate.timeframe) {
+                    dispatched += 1;
+                }
             }
         }
         dispatched
@@ -1115,6 +1207,33 @@ impl TyphooNApp {
         if self.is_fetch_on_cooldown("alpaca", &symbol, tf) {
             return false;
         }
+        if self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
+            let previous = self.cached_alpaca_sync_state.clone();
+            let mut rebuilt = self.build_alpaca_cache_state_map();
+            merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
+            self.cached_alpaca_sync_state = rebuilt;
+            self.cached_alpaca_sync_state_rev = Some(self.bg_rev);
+        }
+        let now_s = chrono::Utc::now().timestamp();
+        let state = self
+            .cached_alpaca_sync_state
+            .get(&(symbol.clone(), tf.to_string()))
+            .copied();
+        let focus = self.cached_active_symbols.iter().any(|candidate| {
+            normalize_market_data_symbol(candidate)
+                .replace('/', "")
+                .eq_ignore_ascii_case(&symbol)
+        });
+        let Some(_) = classify_alpaca_sync_candidate(
+            now_s,
+            &symbol,
+            tf,
+            state,
+            focus,
+            alpaca_sync_target_bars,
+        ) else {
+            return false;
+        };
         let fetch_key = alpaca_fetch_key(&symbol, tf);
         let backfill_complete = self.alpaca_backfill_complete_pairs.contains_key(&fetch_key);
         if !self.pending_alpaca_fetches.insert(fetch_key) {
@@ -1205,6 +1324,7 @@ impl TyphooNApp {
             timeframes: vec![tf.to_string()],
             db_path: cache_db_path(),
             backfill_complete,
+            cryptocompare_backfill_enabled: self.backfill_cryptocompare_enabled,
         });
         true
     }
@@ -1222,6 +1342,95 @@ impl TyphooNApp {
             symbol: symbol.to_string(),
         });
         true
+    }
+
+    pub(super) fn queue_yahoo_chart_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
+        let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
+            return false;
+        };
+        if !self.backfill_yahoo_chart_enabled || !self.sync_timeframe_enabled(tf) {
+            return false;
+        }
+        if !yahoo_chart_supports_timeframe(tf) {
+            return false;
+        }
+        let symbol = normalize_market_data_symbol(symbol)
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .to_ascii_uppercase();
+        if symbol.is_empty()
+            || self.is_unresolvable_fetch_key("yahoo-chart", &symbol, tf)
+            || self.is_fetch_on_cooldown("yahoo-chart", &symbol, tf)
+        {
+            return false;
+        }
+        let fetch_key = alpaca_fetch_key(&symbol, tf);
+        if !self.pending_yahoo_chart_fetches.insert(fetch_key) {
+            return false;
+        }
+        self.mark_fetch_queued("yahoo-chart", &symbol, tf);
+        let _ = self.broker_tx.send(BrokerCmd::YahooChartFetchBars {
+            symbol,
+            timeframe: tf.to_string(),
+        });
+        true
+    }
+
+    pub(super) fn queue_stooq_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
+        let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
+            return false;
+        };
+        if !self.backfill_stooq_daily_enabled || !self.sync_timeframe_enabled(tf) {
+            return false;
+        }
+        if !stooq_supports_timeframe(tf) {
+            return false;
+        }
+        let symbol = normalize_market_data_symbol(symbol)
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .to_ascii_uppercase();
+        if symbol.is_empty()
+            || self.is_unresolvable_fetch_key("stooq", &symbol, tf)
+            || self.is_fetch_on_cooldown("stooq", &symbol, tf)
+        {
+            return false;
+        }
+        let fetch_key = alpaca_fetch_key(&symbol, tf);
+        if !self.pending_stooq_fetches.insert(fetch_key) {
+            return false;
+        }
+        self.mark_fetch_queued("stooq", &symbol, tf);
+        let _ = self.broker_tx.send(BrokerCmd::StooqDailyFetchBars {
+            symbol,
+            timeframe: tf.to_string(),
+        });
+        true
+    }
+
+    pub(super) fn queue_kraken_equity_fallback_fetches(
+        &mut self,
+        symbol: &str,
+        timeframe: &str,
+    ) -> bool {
+        let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
+            return false;
+        };
+        let symbol = normalize_market_data_symbol(symbol)
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .to_ascii_uppercase();
+        if symbol.is_empty() {
+            return false;
+        }
+        let alpaca_queued = if self.backfill_alpaca_kraken_equities_enabled {
+            self.queue_alpaca_fetch(&symbol, tf)
+        } else {
+            false
+        };
+        let yahoo_queued = self.queue_yahoo_chart_fetch(&symbol, tf);
+        let stooq_queued = self.queue_stooq_fetch(&symbol, tf);
+        alpaca_queued || yahoo_queued || stooq_queued
     }
 
     pub(super) fn queue_kraken_equity_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
@@ -1270,6 +1479,17 @@ impl TyphooNApp {
             symbol: symbol.clone(),
             timeframe: tf.to_string(),
         });
+        let alpaca_assist_queued = if self.backfill_alpaca_kraken_equities_enabled {
+            // Assist-only path: queue the same Kraken-equity symbol/timeframe into
+            // Alpaca as provenance-tagged fallback data. This deliberately does
+            // not enumerate the Alpaca universe; it only follows Kraken equity
+            // candidates that the Kraken scheduler already selected.
+            self.queue_alpaca_fetch(&symbol, tf)
+        } else {
+            false
+        };
+        let yahoo_assist_queued = self.queue_yahoo_chart_fetch(&symbol, tf);
+        let stooq_assist_queued = self.queue_stooq_fetch(&symbol, tf);
         let chart_or_owned = self.charts.iter().any(|chart| {
             normalize_market_data_symbol(&chart.symbol)
                 .replace('/', "")
@@ -1285,7 +1505,14 @@ impl TyphooNApp {
             // (1Hour + 30Min + 15Min + 5Min, etc.). Visible in tracing for
             // diagnostics but no longer stacking four user-log entries per
             // symbol refresh.
-            tracing::debug!("Kraken equities sync queued {} {}", symbol, tf);
+            tracing::debug!(
+                "Kraken equities sync queued {} {} (alpaca_assist={} yahoo_assist={} stooq_assist={})",
+                symbol,
+                tf,
+                alpaca_assist_queued,
+                yahoo_assist_queued,
+                stooq_assist_queued
+            );
         }
         true
     }
@@ -1845,5 +2072,47 @@ impl TyphooNApp {
         }
         equity_syms.sort();
         equity_syms
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kraken_equity_symbols_for_timeframe_uses_catalog_only_for_high_tfs() {
+        let catalog = vec!["TNDM.EQ".to_string(), "wok".to_string(), "TNDM".to_string()];
+        let demand = vec!["POM.EQ".to_string(), "array".to_string()];
+
+        assert_eq!(
+            kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Day"),
+            vec!["TNDM".to_string(), "WOK".to_string()]
+        );
+        assert_eq!(
+            kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Week"),
+            vec!["TNDM".to_string(), "WOK".to_string()]
+        );
+        assert_eq!(
+            kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Month"),
+            vec!["TNDM".to_string(), "WOK".to_string()]
+        );
+        assert_eq!(
+            kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Hour"),
+            vec!["ARRAY".to_string(), "POM".to_string()]
+        );
+    }
+
+    #[test]
+    fn normalize_kraken_equity_symbol_list_strips_wrappers_and_dedupes() {
+        let raw = vec![
+            "tndm.eq".to_string(),
+            "TNDM".to_string(),
+            "".to_string(),
+            "w/ok.EQ".to_string(),
+        ];
+        assert_eq!(
+            normalize_kraken_equity_symbol_list(raw.iter()),
+            vec!["TNDM".to_string(), "WOK".to_string()]
+        );
     }
 }

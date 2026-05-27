@@ -17,7 +17,9 @@ SEC filing database comparable to Godel terminal's functionality.
 - `sec_filing_content` table: indefinite plain-text storage of stripped HTML filings
 - `sec_fts` FTS5 virtual table: full-text search with porter stemming + unicode tokenizer
 - `sec_keyword_watchlist` table: user-defined keywords for proactive filing alerts
-- `content_fetched` column on `sec_filings`: tracks which filings have stored content
+- `content_fetched`, `content_fetch_attempts`, `content_last_attempt_at`, and
+  `content_last_error` columns on `sec_filings`: track stored content and retry
+  state
 
 ### Engine Functions (sec_filing.rs)
 - `get_all_filings()` / `get_all_insider_trades()`: unlimited queries for growing database
@@ -30,12 +32,39 @@ SEC filing database comparable to Godel terminal's functionality.
 - `find_previous_filing()`: locate prior filing of same type for diff
 - `get_filing_content()`: retrieve stored content for display/diff
 
+### SEC Scrape Universe
+- UI-triggered SEC scrapes are scope-derived. The top-bar `Scope` control is the
+  authority: `ALL` means the currently enabled broker sources, and a broker scope
+  means only that selected broker subset.
+- Native code resolves the current scope to an explicit, sorted ticker list and
+  passes it into `BrokerCmd::SecScrape`; the engine scrapes exactly that list
+  after validating US-equity-looking symbols.
+- The engine keeps its legacy self-discovery fallback only for non-UI callers.
+  The UI path must not infer scope from stale `sec_scrape_index` history or broad
+  bar-cache namespaces.
+- `kraken-equities:*` bar-cache keys are intentionally not used as SEC scrape
+  targets. They may represent the broad exchange cache, not user intent.
+
 ### Background Content Backfill
-- BG thread spawns a low-priority thread every ~30s (10th BG cycle)
-- Fetches 5 unfetched filings per batch at 250ms rate limit (~4 req/sec)
-- Strips HTML, stores to `sec_filing_content`, populates FTS5 index
-- Checks keyword watchlist during backfill, creates KEYWORD_MATCH alerts
-- Over time, entire filing database becomes full-text indexed
+- BG thread spawns a low-priority worker on server/non-LAN-client sessions every
+  10th lightweight BG cycle.
+- Fetches up to 15 eligible filings per batch at 250ms/request (~4 req/sec), with
+  EDGAR requests using the shared email-shaped `SEC_EDGAR_USER_AGENT`.
+- Eligibility excludes filings with stored content, recently failed fetches
+  (6-hour cooldown), and rows that reached the permanent attempt cap (3 failed
+  attempts).
+- Selection is newest filing date first, then importance. Do not let old
+  high-importance amendments monopolize the backfill queue ahead of current
+  filings.
+- The worker logs `stored` and `failed` separately. If it sees 3 consecutive HTTP
+  403 responses, it pauses the current batch instead of burning through 15 rows
+  every cycle; this usually means EDGAR rejected the User-Agent or temporarily
+  blocked the app.
+- Successful storage clears retry state, strips HTML, stores to
+  `sec_filing_content`, populates FTS5, and checks keyword watchlists for
+  KEYWORD_MATCH alerts.
+- Over time, the filing database becomes full-text indexed without turning
+  provider-blocked rows into front-of-line retry spam.
 
 ### SEC Scanner UI (4 tabs)
 1. **Filings**: broker_scope filtering (replaces Active Only), instant text search box,
