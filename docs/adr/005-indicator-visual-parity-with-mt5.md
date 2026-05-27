@@ -1,0 +1,61 @@
+# ADR-005: Indicator Visual Parity with MT5
+
+**Status:** Completed
+**Date:** 2026-03-15
+**Context:** TyphooN-Terminal must look identical to the MT5 NNFX setup for manual trading decisions.
+
+## Visual Requirements
+
+| Element | MT5 Default | TyphooN-Terminal | Status |
+|---|---|---|---|
+| Background | Black (#000000) | #000000 | ✓ |
+| Candles up | Filled green | Filled #00FF00 | ✓ |
+| Candles down | Filled red | Filled #FF0000 | ✓ |
+| Grid | Dotted gray | Dotted #333, style 3 | ✓ |
+| KAMA | White, width 2, PRICE_OPEN | #FFFFFF, w2, open | ✓ |
+| 200 SMA | Yellow, width 1 | #FFFF00, w1 | ✓ |
+| ATR Projection | Yellow, solid, width 2 | #FFFF00, solid, w2 | ✓ |
+| Prev Candle H1/H4 | White, solid, width 2 | #FFFFFF, solid, w2 | ✓ |
+| Prev Candle D1/W1 | Magenta, solid, width 2 | #FF00FF, solid, w2 | ✓ |
+| Fisher bullish | MediumSeaGreen (#3CB371) | #3CB371 | ✓ |
+| Fisher bearish | OrangeRed (#FF4500) | #FF4500 | ✓ |
+| Fisher signal | DarkGray (#A9A9A9) | #A9A9A9 | ✓ |
+| MTF H1 MA | Tomato (#FF6347) | #FF6347 | ✓ |
+| MTF H4+ MA | Magenta (#FF00FF) | #FF00FF | ✓ |
+| S/D demand | Filled green rectangle | Baseline series green fill | ✓ |
+| S/D supply | Filled red rectangle | Baseline series red fill | ✓ |
+| BetterVolume | Colored histogram (G/R/C/M/Y) | Separate pane, colored | ✓ |
+| Fisher pane | Separate window | Separate chart instance | ✓ |
+
+## Lessons Learned
+
+Implementation details now live in the current indicator docs and ADRs:
+[INDICATORS.md](../INDICATORS.md), [ADR-010](010-indicator-system-32-indicators.md),
+[ADR-019](019-ehlers-dsp-indicators.md), [ADR-041](041-gpu-cpu-indicator-audit-parity-verification.md),
+and [ADR-079](079-godel-ta-lib-parity-program.md).
+
+## Key Decisions
+
+1. **Fisher color segments**: Split into contiguous same-color line series (transition bar shared)
+2. **S/D zones**: Baseline series with `baseValue` for bounded fill
+3. **Sub-panes**: Separate chart instances with synced time scales
+4. **All indicator axis labels disabled**: Prevents price axis clutter
+5. **Indicators clip to last candle**: No drawing into future empty space
+
+## Comprehensive Indicator Audit (2026-03-23)
+
+A full audit of all indicator calculations was performed, fixing bootstrap/seed/edge-case issues across pure Rust indicator implementations:
+
+- **EMA/SMA bootstrap**: Correct SMA seed for initial EMA value
+- **KAMA seed fix**: Proper initialization of Kaufman Adaptive Moving Average
+- **Fisher median prices**: Use median (HL/2) prices instead of close
+- **MACD signal bootstrap**: Signal line EMA seeded from first MACD value
+- **BetterVolume 2-bar analysis**: Correct lookback for volume color classification
+- **Ichimoku Chikou fix**: Lagging span aligned to correct offset
+- **Alligator duplicate-timestamp fix**: Prevent duplicate data points at shifted positions
+- **Bollinger/StdDev NaN guard**: Handle insufficient data gracefully
+- **ATR initial value**: First ATR uses simple average of true ranges
+- **minBars off-by-one**: Correct minimum bar count for indicator warm-up
+- **ForceIndex EMA bootstrap**: Proper EMA seed for Force Index
+
+All fixes ensure pixel-level parity with MT5 across every indicator in the registry. Multi-timeframe display coverage is tracked by [ADR-004](004-multi-timeframe-indicator-support.md) and [ADR-017](017-multi-timeframe-grid.md).

@@ -61,13 +61,13 @@ No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
 | Priority | Source | Coverage |
 |----------|--------|----------|
 | 1 | MT5 via BarCacheWriter v1.435 | 895 symbols × 9 TFs, weekday authority (Darwinex). TF gating, 16MB cache, /dev/shm ramdisk. |
-| 2 | Kraken Spot/xStocks | Crypto/xStocks trading (full Spot REST order surface + private WS ownTrades/openOrders) + public OHLCV recent/provider-window gap-fill. Async queueing with Spot public pacing/cooldown per ADR-211. |
+| 2 | Kraken Spot/xStocks | Crypto/xStocks trading (full Spot REST order surface + private WS ownTrades/openOrders) + public OHLCV recent/provider-window gap-fill. Async queueing with Spot public pacing/cooldown per ADR-095. |
 | 3 | Kraken Futures | Public futures instrument discovery and full chart-candle sync under `kraken-futures:SYMBOL:TF` using explicit from/to ranges. |
 | 4 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request, hourly+ TFs. |
 | 5 | tastytrade DXLink | Real-time historical bars + quotes for funded accounts. |
-| 6 | Alpaca | US equities + crypto, free IEX or paid SIP. Tier-autotuned sync (ADR-203). |
+| 6 | Alpaca | US equities + crypto, free IEX or paid SIP. Tier-autotuned sync (ADR-087). |
 
-MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade execution flows through Alpaca / tastytrade / Kraken with MT5 EA semantics (partial close, close-all, cancel-exits-before-close — see ADR-201). DARWIN account analytics are imported via XLSX trade history exports. Alpaca auto-connects on startup if credentials are saved in the system keyring. tastytrade fully integrated: REST API (auth, positions, orders, quotes, market metrics, option chains) + DXLink WebSocket (historical bars). See ADR-022. Kraken supports public-OHLCV-only mode and authenticated Spot REST trading with full AddOrder parameters, batch orders, amend/edit, dead-man cancel, cancel-all, balances, orders, trades, ledgers, positions, and private WebSocket `ownTrades`/`openOrders` with reconnect/resubscribe (ADR-072). Kraken public bar sync is fully async at the task level: direct Spot/Futures fetches spawn per-timeframe tasks, Kraken Spot can opportunistically prepend CryptoCompare deep crypto backfill for enabled USD crypto symbols, and all Kraken HTTP work runs under bounded queue/semaphore control (ADR-210). Spot OHLC HTTP calls are paced to Kraken's documented public limit with cooldown on throttles (ADR-211). See ADR-037 for cross-source priority hierarchy; chart source order includes the implementation-specific `kraken-equities` and `default` fallbacks around the table above.
+MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade execution flows through Alpaca / tastytrade / Kraken with MT5 EA semantics (partial close, close-all, cancel-exits-before-close — see ADR-085). DARWIN account analytics are imported via XLSX trade history exports. Alpaca auto-connects on startup if credentials are saved in the system keyring. tastytrade fully integrated: REST API (auth, positions, orders, quotes, market metrics, option chains) + DXLink WebSocket (historical bars). See ADR-018. Kraken supports public-OHLCV-only mode and authenticated Spot REST trading with full AddOrder parameters, batch orders, amend/edit, dead-man cancel, cancel-all, balances, orders, trades, ledgers, positions, and private WebSocket `ownTrades`/`openOrders` with reconnect/resubscribe (ADR-051). Kraken public bar sync is fully async at the task level: direct Spot/Futures fetches spawn per-timeframe tasks, Kraken Spot can opportunistically prepend CryptoCompare deep crypto backfill for enabled USD crypto symbols, and all Kraken HTTP work runs under bounded queue/semaphore control (ADR-094). Spot OHLC HTTP calls are paced to Kraken's documented public limit with cooldown on throttles (ADR-095). See ADR-021 for cross-source priority hierarchy; chart source order includes the implementation-specific `kraken-equities` and `default` fallbacks around the table above.
 
 ## Technology Stack
 
@@ -91,11 +91,11 @@ TyphooN-Terminal/
 │   ├── src/
 │   │   ├── main.rs         # eframe init, wgpu renderer selection
 │   │   ├── app.rs          # TyphooNApp, chart pane, palette, dispatch
-│   │   ├── app/            # Window renderers (ADR-202 split)
+│   │   ├── app/            # Window renderers (ADR-086 split)
 │   │   │   ├── ai.rs               # AI Chat / Claude / Gemini /
 │   │   │   │                       # Codex / Sessions / Response Cache
 │   │   │   ├── alpaca_sync.rs      # Broker sync capacities, TF filters, no-data marks
-│   │   │   ├── auto_compact.rs     # Legacy/raw-row zstd-22 compact gate (ADR-205)
+│   │   │   ├── auto_compact.rs     # Legacy/raw-row zstd-22 compact gate (ADR-089)
 │   │   │   ├── bar_sync.rs         # Bar sync health rows for Sync Status / Storage
 │   │   │   ├── settings.rs         # Settings window
 │   │   │   ├── storage.rs          # Storage Manager
@@ -121,26 +121,26 @@ TyphooN-Terminal/
 │   │   │   ├── cryptocompare.rs # CryptoCompare deep history
 │   │   │   ├── kraken.rs        # Kraken Spot/xStocks public OHLCV
 │   │   │   ├── kraken_futures.rs # Kraken Futures public candles
-│   │   │   ├── ai_sessions.rs # ADR-157 chat persistence
-│   │   │   ├── ai_response_cache.rs # ADR-162 cross-client cache
-│   │   │   └── lan_sync.rs    # TLS + PBKDF2 LAN sync (ADR-065)
+│   │   │   ├── ai_sessions.rs # ADR-082 chat persistence
+│   │   │   ├── ai_response_cache.rs # ADR-083 cross-client cache
+│   │   │   └── lan_sync.rs    # TLS + PBKDF2 LAN sync (ADR-045)
 │   │   └── broker/
-│   │       ├── alpaca.rs       # REST + WebSocket (ADR-203 autotune)
-│   │       ├── tastytrade.rs   # REST + DXLink (ADR-022)
-│   │       ├── kraken_broker.rs # Kraken Spot REST trading (ADR-072)
+│   │       ├── alpaca.rs       # REST + WebSocket (ADR-087 autotune)
+│   │       ├── tastytrade.rs   # REST + DXLink (ADR-018)
+│   │       ├── kraken_broker.rs # Kraken Spot REST trading (ADR-051)
 │   │       └── dxlink.rs       # DXLink WebSocket
 │   └── Cargo.toml
 ├── cli/                    # TUI plus headless LAN server/client
 │   ├── src/main.rs         # --lan-server / --lan-client, shared cache dir
 │   └── Cargo.toml
 ├── deploy/                 # Docker, Kubernetes, Terraform, Ansible, Grafana/Prometheus/Kafka assets
-│   ├── ansible/            # LAN host role with optional observability + Kafka (ADR-209)
+│   ├── ansible/            # LAN host role with optional observability + Kafka (ADR-093)
 │   ├── grafana/            # Provisioned datasource + LAN server dashboard
 │   ├── kubernetes/         # lan-server + observability-kafka manifests
 │   ├── prometheus/         # Prometheus scrape config for /metrics
 │   └── terraform/          # Kubernetes module incl. observability + Kafka resources
 ├── mql5-compiler/          # MQL5 compiler plus full 10-language transpiler matrix
-├── web/                    # WASM LAN client (ADR-073)
+├── web/                    # WASM LAN client (ADR-052)
 ├── web-protocol/           # Shared web ↔ server message types
 ├── web-server/             # axum HTTPS + WebSocket relay
 └── docs/
@@ -192,7 +192,7 @@ The right panel sections (Trade, Positions, Orders, Watchlist, Risk) are individ
 
 ### GPU Indicator Compute
 
-40+ indicators run on GPU (wgpu compute shaders) with CPU fallback for compatibility. GPU/CPU parity is mandatory — GPU shaders must produce identical output to CPU implementations. BetterVolume GPU uses the full Emini-Watch algorithm with OHLCV interleaved input (5 floats/bar). VWAP GPU uses per-day dispatch via anchored compute calls per trading day. Supply/Demand Zones: GPU does fractal detection (parallel), CPU does zone testing/merging/break detection. Recent chart-parity rounds (CMO, QStick, Disparity, BOP, StdDev — see ADR-200) follow the same GPU-first / CPU-fallback pattern.
+40+ indicators run on GPU (wgpu compute shaders) with CPU fallback for compatibility. GPU/CPU parity is mandatory — GPU shaders must produce identical output to CPU implementations. BetterVolume GPU uses the full Emini-Watch algorithm with OHLCV interleaved input (5 floats/bar). VWAP GPU uses per-day dispatch via anchored compute calls per trading day. Supply/Demand Zones: GPU does fractal detection (parallel), CPU does zone testing/merging/break detection. Recent chart-parity rounds (CMO, QStick, Disparity, BOP, StdDev — see ADR-079) follow the same GPU-first / CPU-fallback pattern.
 
 ### DARWIN Trade Overlay
 
@@ -204,12 +204,12 @@ Right-aligned numeric columns (Last, Chg, Chg%, Vol) with painter-based renderin
 
 ### AI Sessions
 
-Four AI surfaces with persistent, resumable sessions (ADR-157): Claude Code (`claude --resume <uuid>`), Gemini CLI, Codex CLI, and a generic AI Chat (Claude / OpenAI / Gemini / Grok / Mistral / Perplexity / Local). Sessions auto-save to the SqliteCache `kv_cache` (zstd-compressed, level 3 on hot mutable KV writes) on every reply. Cross-client AI response cache (ADR-162) deduplicates identical hosted-AI prompts across LAN clients so the same prompt issued from server + phone hits the cache once. Slash commands (`RESUMECLAUDE`, `RESUMEGEMINI`, `RESUMECODEX`, `RESUMEAI`) re-enter prior sessions; the AI Sessions browser window shows history with subject lines and last-touched timestamps. If a built-in AI reply includes an ADR-130 `===TYPHOON_INGEST===` Return Path block, ADR-212 queues the existing research-ingest broker path automatically.
+Four AI surfaces with persistent, resumable sessions (ADR-082): Claude Code (`claude --resume <uuid>`), Gemini CLI, Codex CLI, and a generic AI Chat (Claude / OpenAI / Gemini / Grok / Mistral / Perplexity / Local). Sessions auto-save to the SqliteCache `kv_cache` (zstd-compressed, level 3 on hot mutable KV writes) on every reply. Cross-client AI response cache (ADR-083) deduplicates identical hosted-AI prompts across LAN clients so the same prompt issued from server + phone hits the cache once. Slash commands (`RESUMECLAUDE`, `RESUMEGEMINI`, `RESUMECODEX`, `RESUMEAI`) re-enter prior sessions; the AI Sessions browser window shows history with subject lines and last-touched timestamps. If a built-in AI reply includes an ADR-080 `===TYPHOON_INGEST===` Return Path block, ADR-212 queues the existing research-ingest broker path automatically.
 
 ### Research Packet (TA-Lib + Godel Parity)
 
-The research packet is an AI-agent-readable markdown bundle emitted on demand via `RESEARCH_PACKET`. It carries every cached signal: ~375 TA-Lib primitives (indicators + candlestick patterns), Godel-Terminal-documented features (options chain, expirations calendar, earnings whispers, institutional ownership, insider transactions, etc.), and the user's open positions per symbol. Each surface flows through the same pipeline (snapshot struct → SQLite table → LAN-sync whitelist → BrokerCmd/Msg → packet emitter → egui popup) — see ADR-188. Chart-drawing parity for these signals is deferred (ADR-188); the agent reads the markdown directly.
+The research packet is an AI-agent-readable markdown bundle emitted on demand via `RESEARCH_PACKET`. It carries every cached signal: ~375 TA-Lib primitives (indicators + candlestick patterns), Godel-Terminal-documented features (options chain, expirations calendar, earnings whispers, institutional ownership, insider transactions, etc.), and the user's open positions per symbol. Each surface flows through the same pipeline (snapshot struct → SQLite table → LAN-sync whitelist → BrokerCmd/Msg → packet emitter → egui popup) — see ADR-079. Chart-drawing parity for these signals is deferred (ADR-079); the agent reads the markdown directly.
 
 ### Web LAN Client (WASM)
 
-A standalone WASM client built with `eframe`/`glow` (ADR-073) connects to the native `web-server` over HTTPS + WebSocket (PBKDF2 passphrase). Read-only chart, watchlist, positions/orders display — trading and analytics computation stay on the server. Built separately via `trunk`. See `web/`, `web-protocol/`, `web-server/` workspace members.
+A standalone WASM client built with `eframe`/`glow` (ADR-052) connects to the native `web-server` over HTTPS + WebSocket (PBKDF2 passphrase). Read-only chart, watchlist, positions/orders display — trading and analytics computation stay on the server. Built separately via `trunk`. See `web/`, `web-protocol/`, `web-server/` workspace members.

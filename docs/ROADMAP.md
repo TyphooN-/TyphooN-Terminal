@@ -18,7 +18,7 @@
 - [x] SL/TP planning lines
 
 ### Phase 3: Indicators
-- [x] 46+ chart indicators: SMA, EMA, KAMA, WMA, HMA, Bollinger, Ichimoku, Parabolic SAR, ATR Projection, RSI, Fisher(32), MACD, Stochastic, ADX, CCI, Williams %R, OBV, Momentum, Better Volume, Volume, ATR, Ehlers (8 DSP indicators), CMO, QStick, Disparity, BOP, StdDev (ADR-200)
+- [x] 46+ chart indicators: SMA, EMA, KAMA, WMA, HMA, Bollinger, Ichimoku, Parabolic SAR, ATR Projection, RSI, Fisher(32), MACD, Stochastic, ADX, CCI, Williams %R, OBV, Momentum, Better Volume, Volume, ATR, Ehlers (8 DSP indicators), CMO, QStick, Disparity, BOP, StdDev (ADR-079)
 - [x] Sub-pane rendering with MT5-matching histogram/line coloring
 - [x] NNFX default preset (SMA200 + KAMA + Fisher + ATR Proj + BetterVol + PrevLevels + S/D Zones)
 
@@ -125,73 +125,73 @@
 
 ### Phase 13: Kraken Broker
 - [x] Public OHLCV ingest (gap-fill source)
-- [x] Async Kraken bar sync acceleration: bounded public task queue, documented Spot OHLC pacing/cooldown, background CryptoCompare + Kraken union work, non-blocking cache writes (ADR-210, ADR-211)
-- [x] HMAC-SHA512 signed REST trading (ADR-072)
+- [x] Async Kraken bar sync acceleration: bounded public task queue, documented Spot OHLC pacing/cooldown, background CryptoCompare + Kraken union work, non-blocking cache writes (ADR-094, ADR-095)
+- [x] HMAC-SHA512 signed REST trading (ADR-051)
 - [x] Full Spot REST AddOrder parameters: stop/take-profit/trailing variants, price2, displayvol iceberg, settle-position, margin/reduce-only, flags, TIF, client IDs, STP, validate-only, conditional close
 - [x] Batch orders, order amend/edit, batch cancel, cancel-all, dead-man cancel
 - [x] LAN web/mobile order, cancel, and close routing for Kraken
-- [x] Position summaries unified into PositionInfo shape (ADR-201)
+- [x] Position summaries unified into PositionInfo shape (ADR-085)
 - [x] Display-pair normalization (XBTUSD → BTCUSD)
 
 ### Phase 14: LAN Sync v2
-- [x] TLS-encrypted (wss://) WebSocket sync, ephemeral self-signed certs (ADR-065)
+- [x] TLS-encrypted (wss://) WebSocket sync, ephemeral self-signed certs (ADR-045)
 - [x] PBKDF2 passphrase auth, constant-time HMAC-SHA256
-- [x] 15 remote commands (SEC_SCRAPE, DARWIN_IMPORT, FETCH_BARS, INGEST_RESEARCH, etc.) — ADR-066
-- [x] Bandwidth-tuned sync, full data + KV cache (ADR-079)
+- [x] 15 remote commands (SEC_SCRAPE, DARWIN_IMPORT, FETCH_BARS, INGEST_RESEARCH, etc.) — ADR-046
+- [x] Bandwidth-tuned sync, full data + KV cache (ADR-058)
 
 ### Phase 15: Web LAN Client
-- [x] WASM client (eframe/glow), built via trunk (ADR-073)
+- [x] WASM client (eframe/glow), built via trunk (ADR-052)
 - [x] HTTPS + WebSocket relay (axum, axum-server)
 - [x] Read-only chart, watchlist, positions/orders display
 - [x] PBKDF2 passphrase auth shared with native LAN sync
 
 ### Phase 16: Fundamentals & Research
-- [x] Fundamentals engine across 21 sources (Alpaca, Finnhub, FMP, Alpha Vantage, FRED, SEC EDGAR, Yahoo, etc.) — ADR-054
+- [x] Fundamentals engine across 21 sources (Alpaca, Finnhub, FMP, Alpha Vantage, FRED, SEC EDGAR, Yahoo, etc.) — ADR-034
 - [x] Fundamentals research packet (markdown bundle for AI agents)
-- [x] AI Return Path web-research auto-ingest from built-in AI replies (ADR-212)
-- [x] News earnings dividends pipeline (ADR-012, ADR-107)
-- [x] Notification system: Discord webhook, Pushover, ntfy.sh, Matrix (ADR-074)
+- [x] AI Return Path web-research auto-ingest from built-in AI replies (ADR-096)
+- [x] News earnings dividends pipeline (ADR-011, ADR-078)
+- [x] Notification system: Discord webhook, Pushover, ntfy.sh, Matrix (ADR-053)
 
 ### Phase 17: AI Sessions
-- [x] Persistent AI sessions: Claude Code, Gemini CLI, Codex CLI, generic AI Chat (ADR-157)
-- [x] Cross-client AI response cache, dedup across LAN clients (ADR-162)
+- [x] Persistent AI sessions: Claude Code, Gemini CLI, Codex CLI, generic AI Chat (ADR-082)
+- [x] Cross-client AI response cache, dedup across LAN clients (ADR-083)
 - [x] Slash commands: RESUMECLAUDE / RESUMEGEMINI / RESUMECODEX / RESUMEAI
 - [x] Ask Codex reasoning effort control
 
 ### Phase 18: TA-Lib + Godel Parity
 - [x] ~375 TA-Lib primitives (indicators + candlestick patterns) across 75+ rounds
 - [x] Godel-Terminal-documented features (options chain, expirations calendar, earnings whispers, institutional ownership, insider transactions)
-- [x] Research-packet pipeline as the AI-agent-readable surface (ADR-188)
-- [x] Chart-parity reopened for chartable oscillator/stat bundles (ADR-200)
-- Deferred: chart-overlay candlestick pattern marks remain intentionally research-packet-first per ADR-188.
+- [x] Research-packet pipeline as the AI-agent-readable surface (ADR-079)
+- [x] Chart-parity reopened for chartable oscillator/stat bundles (ADR-079)
+- Deferred: chart-overlay candlestick pattern marks remain intentionally research-packet-first per ADR-079.
 
 ### Phase 19: MT5 EA Trading-Flow Alignment
-- [x] One net position per symbol across Alpaca / tastytrade / Kraken (ADR-201)
+- [x] One net position per symbol across Alpaca / tastytrade / Kraken (ADR-085)
 - [x] Partial close + close-all on every broker
 - [x] Cancel-pending-exit-orders-before-close (no more `insufficient qty` rejects)
 - [x] Display-symbol normalization to EA's symbol table
 
 ### Phase 20: Performance & Compile-Speed
-- [x] native/app.rs split into submodules: ai, settings, storage, sync_status, tool_windows, strategy_windows, alpaca_sync, bar_sync, auto_compact (ADR-202)
-- [x] Alpaca sync autotuning by data tier (ADR-203)
-- [x] Kraken public bar sync no longer blocked behind CryptoCompare deep-history work; cache merge/write moved off async workers (ADR-210)
+- [x] native/app.rs split into submodules: ai, settings, storage, sync_status, tool_windows, strategy_windows, alpaca_sync, bar_sync, auto_compact (ADR-086)
+- [x] Alpaca sync autotuning by data tier (ADR-087)
+- [x] Kraken public bar sync no longer blocked behind CryptoCompare deep-history work; cache merge/write moved off async workers (ADR-094)
 - [x] Documented Kraken Spot public/private rate-limit pacing, cache-depth-aware window sizing
 - [x] No-data symbol skip set
-- [x] Dependency audit + RustSec advisory closure (ADR-204)
+- [x] Dependency audit + RustSec advisory closure (ADR-088)
 
 ### Phase 21: Headless LAN & Observability
-- [x] CLI `--lan-server` / `--lan-client` headless mode reusing GUI keyring/KV passphrase (ADR-206)
-- [x] `--lan-passphrase` / `TYPHOON_LAN_PASSPHRASE` bootstrap for fresh caches (ADR-206)
-- [x] Docker, Docker Compose, Kubernetes (envsubst + hostPath PV), Terraform module, Ansible role (ADR-206)
-- [x] CLI `--metrics-port` Prometheus text endpoint with cache size, row counts, per-series bar counts, liveness, uptime (ADR-209)
-- [x] Compose `observability` profile + Ansible/Kubernetes/Terraform Prometheus + Grafana with provisioned LAN dashboard (ADR-209)
-- [x] Compose `kafka` profile + Ansible/Kubernetes/Terraform single-node Apache Kafka KRaft broker (ADR-209)
+- [x] CLI `--lan-server` / `--lan-client` headless mode reusing GUI keyring/KV passphrase (ADR-090)
+- [x] `--lan-passphrase` / `TYPHOON_LAN_PASSPHRASE` bootstrap for fresh caches (ADR-090)
+- [x] Docker, Docker Compose, Kubernetes (envsubst + hostPath PV), Terraform module, Ansible role (ADR-090)
+- [x] CLI `--metrics-port` Prometheus text endpoint with cache size, row counts, per-series bar counts, liveness, uptime (ADR-093)
+- [x] Compose `observability` profile + Ansible/Kubernetes/Terraform Prometheus + Grafana with provisioned LAN dashboard (ADR-093)
+- [x] Compose `kafka` profile + Ansible/Kubernetes/Terraform single-node Apache Kafka KRaft broker (ADR-093)
 
 ## Deferred / Data-Gated
 
 ### Bookmap / L2
 - Current status: Bookmap supports multiple per-symbol windows, `/bookmap SYMBOL` routing, orderbook DOM, Alpaca crypto orderbook snapshots, symbol-filtered live L2 rendering, and Kraken spot depth streaming only for symbols that map to known Kraken spot pairs.
-- Deferred: retained streaming L2 history with a dedicated wgpu compute texture remains data-entitlement and scope gated (ADR-048).
+- Deferred: retained streaming L2 history with a dedicated wgpu compute texture remains data-entitlement and scope gated (ADR-027).
 
 ### Pattern Recognition
 - Current status: harmonic pattern auto-detection is implemented and chart drawing tools include manual pattern annotations.

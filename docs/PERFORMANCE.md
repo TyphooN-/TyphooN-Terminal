@@ -49,7 +49,7 @@ WebSocket trade streams build 1-minute OHLCV bars in-process. Completed bars use
    replace linear `iter().any` audits (Kraken pairs lookup), index-aligned
    data is paired by `zip()` not by key search, fixed-cardinality enums use
    bitset membership, and per-frame `trade_overlay` borrows use
-   `std::mem::take` + restore instead of `Clone`. See ADR-213.
+   `std::mem::take` + restore instead of `Clone`. See ADR-098.
 
 ### GPU DarwinIA Scan
 

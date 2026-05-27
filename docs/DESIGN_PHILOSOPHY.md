@@ -35,7 +35,7 @@ egui's immediate mode paradigm means the entire UI is a function of state — no
 
 ### 7. Engine as Library
 
-The `typhoon-engine` crate exports all broker, cache, risk, analytics, and backtest functionality as a Rust library. The native GUI, CLI/TUI, and the WASM web LAN client (ADR-073) all consume the same engine with zero duplication.
+The `typhoon-engine` crate exports all broker, cache, risk, analytics, and backtest functionality as a Rust library. The native GUI, CLI/TUI, and the WASM web LAN client (ADR-052) all consume the same engine with zero duplication.
 
 ### 8. Darwinex VaR Corridor Compliance
 
