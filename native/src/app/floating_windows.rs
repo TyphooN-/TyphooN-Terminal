@@ -53644,23 +53644,51 @@ impl TyphooNApp {
                             if self.sec_filters[i] != prev { self.sec_page = 0; self.sec_selected_filing = None; }
                         }
                         ui.separator();
-                        if ui.small_button(egui::RichText::new("Scrape Now").color(BTN_GREEN_TEXT)).clicked() {
+                        if ui
+                            .add_enabled(
+                                !self.scrape_sec_running,
+                                egui::Button::new(
+                                    egui::RichText::new(if self.scrape_sec_running {
+                                        "Scraping..."
+                                    } else {
+                                        "Scrape Now"
+                                    })
+                                    .color(BTN_GREEN_TEXT)
+                                    .small(),
+                                )
+                                .fill(BTN_GREEN),
+                            )
+                            .on_hover_text("Scrape SEC EDGAR filings for the current Scope")
+                            .clicked()
+                        {
                             let symbols = sec_scrape_scope_symbols.clone();
                             let symbol_count = symbols.len();
                             if symbol_count > 0 {
                                 let db_path = cache_db_path();
                                 let _ = self.broker_tx.send(BrokerCmd::SecScrape { db_path, symbols });
+                                self.scrape_sec_running = true;
+                                self.scrape_sec_last_msg = format!(
+                                    "scraping Scope {} ({} symbols)...",
+                                    sec_scope_label, symbol_count
+                                );
                                 self.log.push_back(LogEntry::info(format!(
                                     "SEC EDGAR scrape initiated for Scope {} ({} symbols)...",
                                     sec_scope_label,
                                     symbol_count
                                 )));
                             } else {
+                                self.scrape_sec_last_msg = format!(
+                                    "skipped: Scope {} has no symbols",
+                                    sec_scope_label
+                                );
                                 self.log.push_back(LogEntry::warn(format!(
                                     "SEC EDGAR scrape skipped: Scope {} has no symbols",
                                     sec_scope_label
                                 )));
                             }
+                        }
+                        if self.scrape_sec_running {
+                            ui.spinner();
                         }
                         ui.separator();
                         let (total_filings, indexed_content) = self.bg.sec_content_stats;
@@ -55648,19 +55676,27 @@ impl TyphooNApp {
                                             scrape_status_sec_scope_label
                                         );
                                     } else {
+                                        let symbol_count = symbols.len();
                                         let db_path = cache_db_path();
                                         let _ = self
                                             .broker_tx
                                             .send(BrokerCmd::SecScrape { db_path, symbols });
                                         self.scrape_sec_running = true;
+                                        self.scrape_sec_last_msg = format!(
+                                            "scraping Scope {} ({} symbols)...",
+                                            scrape_status_sec_scope_label, symbol_count
+                                        );
                                     }
                                 }
                             } else {
-                                ui.label(
-                                    egui::RichText::new("running...")
-                                        .color(egui::Color32::YELLOW)
-                                        .small(),
-                                );
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label(
+                                        egui::RichText::new("running...")
+                                            .color(egui::Color32::YELLOW)
+                                            .small(),
+                                    );
+                                });
                             }
                             ui.end_row();
 

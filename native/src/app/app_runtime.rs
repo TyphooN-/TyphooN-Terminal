@@ -819,6 +819,12 @@ impl eframe::App for TyphooNApp {
                             let _ = self
                                 .broker_tx
                                 .send(BrokerCmd::SecScrape { db_path, symbols });
+                            self.scrape_sec_running = true;
+                            self.scrape_sec_last_msg = format!(
+                                "scraping Scope {} ({} symbols)...",
+                                self.broker_scope_label(),
+                                symbol_count
+                            );
                             self.log.push_back(LogEntry::info(format!(
                                 "SEC EDGAR scrape started for Scope {} ({} symbols)...",
                                 self.broker_scope_label(),

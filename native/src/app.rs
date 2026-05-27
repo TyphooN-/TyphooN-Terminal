@@ -14362,7 +14362,12 @@ impl TyphooNApp {
                                         format!("SEC scrape complete: {} tickers, {} filings, {} insider trades, {} alerts", stats.tickers_scanned, stats.new_filings, stats.new_insider_trades, stats.new_alerts)
                                     ));
                                 }
-                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("SEC scrape error: {}", e))); }
+                                Err(e) => {
+                                    let _ = msg_tx.send(BrokerMsg::SecScrapeResult(format!(
+                                        "SEC scrape error: {}",
+                                        e
+                                    )));
+                                }
                             }
                         });
                     }
