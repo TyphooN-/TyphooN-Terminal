@@ -11,4 +11,5 @@ Alert manager panel. Set alerts at any price with custom labels. Triggered when 
 ## Consequences
 - Pro: Works offline (from cached bar data)
 - Pro: Session persistent across restarts
-- Con: No push notifications yet (requires broker WebSocket for real-time)
+- Pro: Indicator-alert triggers request OS attention, add a toast/log entry, update the top-bar breach badge, and send Discord/Pushover/ntfy notifications when configured in Settings.
+- Trade-off: simple price-level alerts remain cache/chart driven; provider-push latency depends on whichever broker/WebSocket/feed path updates the active chart data.

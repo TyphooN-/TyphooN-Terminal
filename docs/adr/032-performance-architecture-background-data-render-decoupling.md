@@ -74,4 +74,4 @@ Stay on latest stable versions of all crates. Do not wait for upstream to mark r
 - **Pro:** try_lock() never blocks render thread
 - **Pro:** Background thread handles all expensive computation
 - **Con:** DARWIN data may be up to 5 seconds stale (acceptable for analytics)
-- **Con:** ~114 render-thread queries remain in less-used views (negligible impact)
+- **Historical con:** this audit originally left a set of less-used render-thread queries. Follow-up passes moved the critical chart/background-data surfaces to cached/background paths; see ADR-033, ADR-075, and ADR-098 for the current O(1)/zero-hot-path-query posture.

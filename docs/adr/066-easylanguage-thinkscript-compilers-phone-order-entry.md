@@ -58,6 +58,8 @@ Parallel structure to EL, but case-sensitive per thinkScript convention.
 - `def name = expression;`
 - `plot name = expression;` — the `name` becomes the plot label
 - `declare lower;` / `declare upper;` — toggle the `separate_window` metadata flag
+- Static color metadata from `Plot.SetDefaultColor(Color.X)`, `Plot.AssignValueColor(Color.X)`, and bare `AssignValueColor(Color.X)`; the first static `Color.*` token updates `PlotDef.color`
+- Single-line ternary expressions: `if condition then a else b`
 - `# ...` line comments (thinkScript uses hash)
 - Built-in series (case-sensitive: `close`, `open`, `high`, `low`, `volume`)
 - Built-in functions (case-sensitive, documented spellings):
@@ -74,12 +76,12 @@ Parallel structure to EL, but case-sensitive per thinkScript convention.
 - Arithmetic + comparison operators
 
 **Deferred:**
-- `plot.Color` / `AssignValueColor` (colors default to blue)
+- Dynamic conditional plot coloring; metadata has one static color slot per plot, so conditional colors are intentionally reduced to the first static `Color.*` token
 - Multi-line `if then else`
 - Arrays / reference arrays
 - `script` function definitions
 
-**12 tests** cover: simple MA, multi-input, multi-plot, `declare lower`, comment stripping, `ExpAverage` → `ta_ema` mapping, bool input (`yes`/`no`), float input, arithmetic expressions, def-then-plot sequencing, empty source, comparison-in-assignment (`x = close == high` shouldn't trip on the `==`).
+Tests cover: simple MA, multi-input, multi-plot, `declare lower`, comment stripping, `ExpAverage` → `ta_ema` mapping, bool input (`yes`/`no`), float input, arithmetic expressions, def-then-plot sequencing, empty source, comparison-in-assignment (`x = close == high` shouldn't trip on the `==`), static color hints, and single-line ternary expressions.
 
 ### 3. UI integration (Indicator Compiler window)
 
@@ -154,9 +156,9 @@ Every dispatch replies via `web_msg_tx` with a `WebMsg::OrderResult { ok, messag
 
 **Trade-offs:**
 - EasyLanguage and thinkScript frontends are line-based scanners, not full AST parsers. They handle the common community-indicator cases but will misparse anything exotic (nested if blocks, anonymous functions, multi-line conditional expressions). A future hard requirement for one of these would justify a proper pest grammar.
-- Phone order entry trusts the web-server's passphrase + TLS for auth. There is no additional per-order confirmation step. If a phone is stolen with an active session, an attacker could place orders. Mitigation: the passphrase should be strong, and the user can reset it via Settings which invalidates existing sessions.
-- ~~Tastytrade cancel is not yet wired~~ **Wired in ADR-071.** `TastytradeBroker::cancel_order()` sends DELETE to `/accounts/{id}/orders/{order_id}`. `BrokerCmd::TastytradeCancelOrder` dispatched from web and native.
-- ~~Phone UI does not yet expose the order entry form — only the protocol exists.~~ **Landed in follow-up.** `web/src/app.rs` now has a `Trade` tab (broker dropdown, symbol, side, type, qty, conditional limit/stop price), two-step review-then-send confirm so a stray tap can't fire an order, inline validation mirroring the server whitelist, and an `OrderResult` toast banner. The Positions tab has a per-row `Close` button; the Orders tab has a per-row `Cancel` button. Both use the broker currently selected in the Trade tab.
+- Phone order entry trusts the web-server's passphrase + TLS for auth. The WASM UI adds a two-step review/send confirmation, but the protocol/server still accept valid authenticated order commands without a second server-side challenge. If a phone is stolen with an active session, an attacker could place orders. Mitigation: the passphrase should be strong, and the user can reset it via Settings which invalidates existing sessions.
+- **Tastytrade cancel is wired.** `TastytradeBroker::cancel_order()` sends DELETE to `/accounts/{id}/orders/{order_id}`. `BrokerCmd::TastytradeCancelOrder` is dispatched from web and native.
+- **Phone order UI is wired.** `web/src/app.rs` has a `Trade` tab (broker dropdown, symbol, side, type, qty, conditional limit/stop price), two-step review-then-send confirm so a stray tap can't fire an order, inline validation mirroring the server whitelist, and an `OrderResult` toast banner. The Positions tab has a per-row `Close` button; the Orders tab has a per-row `Cancel` button. Both use the broker currently selected in the Trade tab.
 - No new audio/sound library was added. Alert attention uses `ViewportCommand::RequestUserAttention` (from ADR-047) which is sufficient.
 
 ## Deferred / Out of Scope

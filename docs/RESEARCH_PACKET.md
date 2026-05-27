@@ -64,8 +64,9 @@ Scope: <broker scope label> | Generated: 2026-04-14T14:22:07Z
 Symbols: CC, NCLH
 ```
 
-- **Scope** comes from `self.broker_scope_label()` — reflects which brokers
-  (MT5, Alpaca, TastyTrade) were active when the packet was built.
+- **Scope** comes from `self.broker_scope_label()` — reflects the active
+  event/data scope (`ALL`, `ALPACA`, `DARWINEX`, `TASTY`, `KRAKEN`, or
+  `POSITIONS`) when the packet was built.
 - **Generated** is a UTC ISO-8601 timestamp taken at packet-build time.
 - **Symbols** is the joined list the user passed.
 
