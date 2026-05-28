@@ -7,6 +7,7 @@
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
+use chrono::Datelike;
 use rusqlite::{Connection, OpenFlags, params};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -161,19 +162,47 @@ fn maybe_decompress(data: Vec<u8>) -> Result<Vec<u8>, String> {
 /// Bars with unparseable timestamps or invalid OHLC (non-positive, NaN, high<low) are
 /// silently dropped — corrupt rows that previously defaulted to epoch 0 polluted charts
 /// with a phantom flat line at the far left.
+fn bar_timeframe_from_key(key: &str) -> Option<&str> {
+    key.rsplit(':').next()
+}
+
+fn normalized_bar_timestamp_ms(key: &str, ts_ms: i64) -> Option<i64> {
+    let dt = chrono::DateTime::from_timestamp_millis(ts_ms)?.with_timezone(&chrono::Utc);
+    match bar_timeframe_from_key(key) {
+        Some("1Day") => chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), dt.day())?
+            .and_hms_opt(0, 0, 0)
+            .map(|ndt| ndt.and_utc().timestamp_millis()),
+        Some("1Week") => {
+            let monday = dt.date_naive().week(chrono::Weekday::Mon).first_day();
+            monday
+                .and_hms_opt(0, 0, 0)
+                .map(|ndt| ndt.and_utc().timestamp_millis())
+        }
+        Some("1Month") => chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1)?
+            .and_hms_opt(0, 0, 0)
+            .map(|ndt| ndt.and_utc().timestamp_millis()),
+        _ => Some(ts_ms),
+    }
+}
+
+#[cfg(test)]
 fn pack_bars(json_data: &str) -> Result<Vec<u8>, String> {
+    pack_bars_for_key("", json_data)
+}
+
+fn pack_bars_for_key(key: &str, json_data: &str) -> Result<Vec<u8>, String> {
     let bars: Vec<serde_json::Value> =
         serde_json::from_str(json_data).map_err(|e| format!("JSON parse failed: {e}"))?;
-    let mut buf = Vec::with_capacity(4 + 4 + bars.len() * BYTES_PER_BAR);
-    buf.extend_from_slice(BAR_BINARY_MAGIC);
-    // Reserve the count slot; overwrite once we know how many bars survived.
-    buf.extend_from_slice(&0u32.to_le_bytes());
-    let mut kept: u32 = 0;
+    let mut by_bucket: std::collections::BTreeMap<i64, (f64, f64, f64, f64, f64)> =
+        std::collections::BTreeMap::new();
     for bar in &bars {
         let ts_str = bar["timestamp"].as_str().unwrap_or("");
         let ts_ms = match chrono::DateTime::parse_from_rfc3339(ts_str) {
             Ok(dt) => dt.timestamp_millis(),
             Err(_) => continue,
+        };
+        let Some(ts_ms) = normalized_bar_timestamp_ms(key, ts_ms) else {
+            continue;
         };
         if ts_ms <= 0 {
             continue;
@@ -192,15 +221,23 @@ fn pack_bars(json_data: &str) -> Result<Vec<u8>, String> {
         if h < l {
             continue;
         }
+        // Later bars for the same merge bucket win. This handles provider
+        // refreshes that return an early partial D/W/M candle and then a
+        // finalized candle with the same session key.
+        by_bucket.insert(ts_ms, (o, h, l, c, v));
+    }
+
+    let mut buf = Vec::with_capacity(4 + 4 + by_bucket.len() * BYTES_PER_BAR);
+    buf.extend_from_slice(BAR_BINARY_MAGIC);
+    buf.extend_from_slice(&(by_bucket.len() as u32).to_le_bytes());
+    for (ts_ms, (o, h, l, c, v)) in by_bucket {
         buf.extend_from_slice(&ts_ms.to_le_bytes());
         buf.extend_from_slice(&o.to_le_bytes());
         buf.extend_from_slice(&h.to_le_bytes());
         buf.extend_from_slice(&l.to_le_bytes());
         buf.extend_from_slice(&c.to_le_bytes());
         buf.extend_from_slice(&v.to_le_bytes());
-        kept += 1;
     }
-    buf[4..8].copy_from_slice(&kept.to_le_bytes());
     Ok(buf)
 }
 
@@ -721,7 +758,7 @@ impl SqliteCache {
     /// Uses zstd-22 immediately for bar blobs. Writes happen off the render hot path;
     /// reads pay the same zstd decompression path regardless of source compression level.
     pub fn put_bars(&self, key: &str, json_data: &str) -> Result<(), String> {
-        let binary = pack_bars(json_data)?;
+        let binary = pack_bars_for_key(key, json_data)?;
         let bar_count = u32::from_le_bytes(
             binary[4..8]
                 .try_into()
@@ -1336,29 +1373,40 @@ impl SqliteCache {
             None => Vec::new(),
         };
 
-        // Merge and deduplicate by numeric epoch-ms. Parse each timestamp once; the old
-        // sort/dedup path reparsed RFC3339 strings during every comparator/key call.
+        // Merge and deduplicate by timeframe-aware epoch bucket. D/W/M bars
+        // from Yahoo/Alpaca/Kraken can represent the same candle at 00:00,
+        // 04:00, 05:00, or a live-close timestamp; keep one canonical bucket
+        // and let the newer incoming/refetched bar replace older cache content.
         all_bars.extend(new_bars);
-        let mut keyed_bars: Vec<(i64, serde_json::Value)> = all_bars
-            .into_iter()
-            .filter_map(|bar| {
-                let ts_ms = bar["timestamp"]
-                    .as_str()
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                    .map(|dt| dt.timestamp_millis())?;
-                (ts_ms > 0).then_some((ts_ms, bar))
-            })
-            .collect();
-        keyed_bars.sort_by_key(|(ts_ms, _)| *ts_ms);
-        keyed_bars.dedup_by_key(|(ts_ms, _)| *ts_ms);
+        let mut keyed_bars: std::collections::BTreeMap<i64, serde_json::Value> =
+            std::collections::BTreeMap::new();
+        for mut bar in all_bars {
+            let Some(ts_ms) = bar["timestamp"]
+                .as_str()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .and_then(|dt| normalized_bar_timestamp_ms(key, dt.timestamp_millis()))
+            else {
+                continue;
+            };
+            if ts_ms <= 0 {
+                continue;
+            }
+            if let Some(dt) = chrono::DateTime::from_timestamp_millis(ts_ms) {
+                bar["timestamp"] = serde_json::Value::String(dt.to_rfc3339());
+            }
+            keyed_bars.insert(ts_ms, bar);
+        }
 
         // Trim only when a bounded caller explicitly requests it. Full-depth sync passes 0.
         if max_bars > 0 && keyed_bars.len() > max_bars {
-            let skip = keyed_bars.len() - max_bars;
-            keyed_bars.drain(..skip);
+            let remove = keyed_bars.len() - max_bars;
+            let stale_keys: Vec<i64> = keyed_bars.keys().copied().take(remove).collect();
+            for stale_key in stale_keys {
+                keyed_bars.remove(&stale_key);
+            }
         }
 
-        let all_bars: Vec<serde_json::Value> = keyed_bars.into_iter().map(|(_, bar)| bar).collect();
+        let all_bars: Vec<serde_json::Value> = keyed_bars.into_values().collect();
         let merged_json =
             serde_json::to_string(&all_bars).map_err(|e| format!("JSON serialize failed: {e}"))?;
         self.put_bars_with_level(key, &merged_json, zstd_level)?;
@@ -1375,7 +1423,7 @@ impl SqliteCache {
         json_data: &str,
         zstd_level: i32,
     ) -> Result<(), String> {
-        let binary = pack_bars(json_data)?;
+        let binary = pack_bars_for_key(key, json_data)?;
         let bar_count = u32::from_le_bytes(
             binary[4..8]
                 .try_into()
@@ -2900,6 +2948,32 @@ mod tests {
     }
 
     // ---- unpack_bars tests ----
+
+    #[test]
+    fn pack_bars_for_key_normalizes_daily_weekly_monthly_sessions() {
+        let daily = r#"[
+            {"timestamp":"2026-05-28T04:00:00+00:00","open":14.0,"high":15.0,"low":13.0,"close":14.5,"volume":100.0},
+            {"timestamp":"2026-05-28T20:00:00+00:00","open":14.1,"high":15.5,"low":13.5,"close":15.0,"volume":200.0}
+        ]"#;
+        let raw = unpack_bars_raw(&pack_bars_for_key("alpaca:TNDM:1Day", daily).unwrap()).unwrap();
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0].0, 1_779_926_400_000);
+        assert_eq!(raw[0].4, 15.0);
+
+        let weekly = r#"[
+            {"timestamp":"2026-05-25T04:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}
+        ]"#;
+        let raw =
+            unpack_bars_raw(&pack_bars_for_key("alpaca:TNDM:1Week", weekly).unwrap()).unwrap();
+        assert_eq!(raw[0].0, 1_779_667_200_000);
+
+        let monthly = r#"[
+            {"timestamp":"2026-05-04T04:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}
+        ]"#;
+        let raw =
+            unpack_bars_raw(&pack_bars_for_key("alpaca:TNDM:1Month", monthly).unwrap()).unwrap();
+        assert_eq!(raw[0].0, 1_777_593_600_000);
+    }
 
     #[test]
     fn unpack_bars_wrong_magic() {

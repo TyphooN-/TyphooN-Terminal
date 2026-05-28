@@ -409,22 +409,6 @@ pub(super) async fn run_alpaca_fetch_task(
     });
 }
 
-fn raw_bars_to_json_values(raw: Vec<(i64, f64, f64, f64, f64, f64)>) -> Vec<serde_json::Value> {
-    raw.into_iter()
-        .map(|(ts_ms, o, h, l, c, v)| {
-            let dt = chrono::DateTime::from_timestamp_millis(ts_ms).unwrap_or_default();
-            serde_json::json!({
-                "timestamp": dt.to_rfc3339(),
-                "open": o,
-                "high": h,
-                "low": l,
-                "close": c,
-                "volume": v,
-            })
-        })
-        .collect()
-}
-
 fn merge_json_bars(
     mut existing: Vec<serde_json::Value>,
     mut incoming: Vec<serde_json::Value>,
@@ -488,21 +472,22 @@ async fn store_json_bars_in_cache(
         return Ok(0);
     };
     tokio::task::spawn_blocking(move || {
-        let merged = if merge_existing {
-            match cache.get_bars_raw(&cache_key) {
-                Ok(Some(existing_raw)) => {
-                    merge_json_bars(raw_bars_to_json_values(existing_raw), bars)
-                }
-                _ => bars,
-            }
+        let count = if merge_existing {
+            let json = serde_json::to_string(&bars).unwrap_or_default();
+            let merged_json = cache.merge_bars(&cache_key, &json, 0)?;
+            serde_json::from_str::<Vec<serde_json::Value>>(&merged_json)
+                .map(|merged| merged.len())
+                .unwrap_or(0)
         } else {
-            bars
-        };
-        let count = merged.len();
-        if count > 0 {
-            let json = serde_json::to_string(&merged).unwrap_or_default();
+            let json = serde_json::to_string(&bars).unwrap_or_default();
             cache.put_bars(&cache_key, &json)?;
-        }
+            cache
+                .get_bars_raw(&cache_key)
+                .ok()
+                .flatten()
+                .map(|raw| raw.len())
+                .unwrap_or(0)
+        };
         Ok::<usize, String>(count)
     })
     .await

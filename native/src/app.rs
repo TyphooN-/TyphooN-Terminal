@@ -2990,14 +2990,14 @@ impl ChartState {
 
             let mut gap_filled = 0usize;
             if self.source_override.is_none() {
-                // Merge Kraken bars for weekend gap-fill.
-                // For D1+ timeframes, MT5 uses UTC+2 and Kraken uses UTC.
-                // A 2-hour offset means same-day bars have different timestamps.
-                // Snap to day boundary for dedup to avoid doubled daily bars.
+                // Merge provenance-tagged alternate-source bars without duplicating
+                // the same D/W/M session. Providers do not agree on candle
+                // timestamps: Kraken often uses 00:00 UTC, Alpaca/Yahoo US
+                // equities use 04:00/05:00 UTC, and live daily candles can
+                // arrive at close time. Use calendar buckets for higher
+                // timeframes and offset aliases for intraday MT5 UTC+2/US
+                // market-time variants.
                 let tf_ms = match tf {
-                    "1Day" => 86_400_000i64,
-                    "1Week" => 7 * 86_400_000,
-                    "1Month" => 30 * 86_400_000,
                     "4Hour" => 4 * 3_600_000,
                     "1Hour" => 3_600_000,
                     "30Min" => 1_800_000,
@@ -3005,19 +3005,60 @@ impl ChartState {
                     "5Min" => 300_000,
                     _ => 60_000,
                 };
-                // Dedup: snap to TF boundary for collision detection.
-                // MT5 uses UTC+2, Kraken uses UTC — 2-hour offset on sub-daily TFs.
-                // We insert BOTH the raw snap AND the +2h offset snap into the set,
-                // so a Kraken bar at 00:00 UTC deduplicates against an MT5 bar at 02:00 UTC
-                // (which is 00:00 UTC+2 = the same H4 bar in MT5's view).
-                let snap = |ts: i64| -> i64 { ts / tf_ms * tf_ms };
-                let utc2_offset_ms: i64 = 2 * 3_600_000; // MT5 Darwinex server offset
+                let snap = |ts: i64| -> i64 {
+                    match tf {
+                        "1Month" => {
+                            use chrono::Datelike;
+                            chrono::DateTime::from_timestamp_millis(ts)
+                                .and_then(|dt| {
+                                    chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1)
+                                        .and_then(|d| d.and_hms_opt(0, 0, 0))
+                                })
+                                .map(|ndt| ndt.and_utc().timestamp_millis())
+                                .unwrap_or(ts)
+                        }
+                        "1Week" => {
+                            use chrono::Datelike;
+                            chrono::DateTime::from_timestamp_millis(ts)
+                                .and_then(|dt| {
+                                    let days_since_mon = dt.weekday().num_days_from_monday() as i64;
+                                    (dt.date_naive() - chrono::Duration::days(days_since_mon))
+                                        .and_hms_opt(0, 0, 0)
+                                })
+                                .map(|ndt| ndt.and_utc().timestamp_millis())
+                                .unwrap_or(ts)
+                        }
+                        "1Day" => {
+                            use chrono::Datelike;
+                            chrono::DateTime::from_timestamp_millis(ts)
+                                .and_then(|dt| {
+                                    chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), dt.day())
+                                        .and_then(|d| d.and_hms_opt(0, 0, 0))
+                                })
+                                .map(|ndt| ndt.and_utc().timestamp_millis())
+                                .unwrap_or(ts)
+                        }
+                        _ => ts / tf_ms * tf_ms,
+                    }
+                };
+                let alias_offsets_ms: &[i64] = if matches!(tf, "1Day" | "1Week" | "1Month") {
+                    &[0]
+                } else {
+                    &[
+                        0,
+                        2 * 3_600_000,
+                        -2 * 3_600_000,
+                        4 * 3_600_000,
+                        -4 * 3_600_000,
+                        5 * 3_600_000,
+                        -5 * 3_600_000,
+                    ]
+                };
                 let mut occupied: std::collections::HashSet<i64> = std::collections::HashSet::new();
                 for b in self.bars.iter() {
-                    occupied.insert(snap(b.ts_ms));
-                    // Also mark the UTC+2 equivalent so CC bars dedup against MT5 bars
-                    occupied.insert(snap(b.ts_ms - utc2_offset_ms));
-                    occupied.insert(snap(b.ts_ms + utc2_offset_ms));
+                    for offset in alias_offsets_ms {
+                        occupied.insert(snap(b.ts_ms.saturating_add(*offset)));
+                    }
                 }
                 self.gap_fill_timestamps.clear();
                 // Try all alternate source prefixes for gap-fill (crypto slash variants too)
@@ -3064,9 +3105,9 @@ impl ChartState {
                             for (ts, o, h, l, c, v) in gap_raw {
                                 let snapped = snap(ts);
                                 if !occupied.contains(&snapped) {
-                                    occupied.insert(snapped);
-                                    occupied.insert(snap(ts - utc2_offset_ms));
-                                    occupied.insert(snap(ts + utc2_offset_ms));
+                                    for offset in alias_offsets_ms {
+                                        occupied.insert(snap(ts.saturating_add(*offset)));
+                                    }
                                     self.bars.push(Bar {
                                         ts_ms: ts,
                                         open: o,
