@@ -990,7 +990,7 @@ impl TyphooNApp {
                 .filter_map(|key| key.strip_prefix("equity:").map(str::to_string))
                 .collect();
             let mut cursor = self.kraken_equities_sync_cursor;
-            let candidates = select_alpaca_sync_workset_rotating(
+            let candidates = select_alpaca_sync_workset_rotating_with_stale_multiplier(
                 &symbols,
                 &native_timeframes,
                 &self.cached_kraken_equities_sync_state,
@@ -1003,6 +1003,7 @@ impl TyphooNApp {
                 scan_limit,
                 &mut cursor,
                 now_s,
+                1,
                 kraken_equities_sync_target_bars,
             );
             self.kraken_equities_sync_cursor = cursor;

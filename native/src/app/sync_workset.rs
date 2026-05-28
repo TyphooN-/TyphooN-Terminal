@@ -200,6 +200,26 @@ pub(super) fn classify_alpaca_sync_candidate(
     focus: bool,
     target_bars_for_tf: fn(&str) -> Option<u32>,
 ) -> Option<AlpacaSyncCandidate> {
+    classify_alpaca_sync_candidate_with_stale_multiplier(
+        now_s,
+        symbol,
+        timeframe,
+        state,
+        focus,
+        24,
+        target_bars_for_tf,
+    )
+}
+
+pub(super) fn classify_alpaca_sync_candidate_with_stale_multiplier(
+    now_s: i64,
+    symbol: &str,
+    timeframe: &str,
+    state: Option<SyncCacheState>,
+    focus: bool,
+    background_stale_periods: i64,
+    target_bars_for_tf: fn(&str) -> Option<u32>,
+) -> Option<AlpacaSyncCandidate> {
     let timeframe = normalize_sync_timeframe_key(timeframe)?;
     let symbol = normalize_market_data_symbol(symbol).replace('/', "");
     let state = state.unwrap_or_default();
@@ -230,7 +250,8 @@ pub(super) fn classify_alpaca_sync_candidate(
         let stale_due = if focus {
             age_s >= period_s && write_age_s >= foreground_sync_write_cooldown_secs(period_s)
         } else {
-            age_s >= period_s.saturating_mul(24)
+            let stale_periods = background_stale_periods.max(1);
+            age_s >= period_s.saturating_mul(stale_periods)
         };
         if stale_due {
             return Some(AlpacaSyncCandidate {
@@ -550,10 +571,44 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     backfill_complete_pairs: &HashMap<String, AlpacaBackfillCompletePair>,
     pending_fetches: &HashSet<String>,
     batch_size: usize,
+    foreground_slots: usize,
+    background_scan_limit: usize,
+    cursor: &mut usize,
+    now_s: i64,
+    target_bars_for_tf: fn(&str) -> Option<u32>,
+) -> Vec<AlpacaSyncCandidate> {
+    select_alpaca_sync_workset_rotating_with_stale_multiplier(
+        symbols,
+        timeframes,
+        state_map,
+        focus_symbols,
+        no_data_keys,
+        backfill_complete_pairs,
+        pending_fetches,
+        batch_size,
+        foreground_slots,
+        background_scan_limit,
+        cursor,
+        now_s,
+        24,
+        target_bars_for_tf,
+    )
+}
+
+pub(super) fn select_alpaca_sync_workset_rotating_with_stale_multiplier(
+    symbols: &[String],
+    timeframes: &[String],
+    state_map: &HashMap<(String, String), SyncCacheState>,
+    focus_symbols: &HashSet<String>,
+    no_data_keys: &HashSet<String>,
+    backfill_complete_pairs: &HashMap<String, AlpacaBackfillCompletePair>,
+    pending_fetches: &HashSet<String>,
+    batch_size: usize,
     _foreground_slots: usize,
     background_scan_limit: usize,
     cursor: &mut usize,
     now_s: i64,
+    background_stale_periods: i64,
     target_bars_for_tf: fn(&str) -> Option<u32>,
 ) -> Vec<AlpacaSyncCandidate> {
     if batch_size == 0 || symbols.is_empty() || timeframes.is_empty() {
@@ -646,12 +701,13 @@ pub(super) fn select_alpaca_sync_workset_rotating(
         let state = state_map
             .get(&(symbol_key.clone(), tf.to_string()))
             .copied();
-        let Some(candidate) = classify_alpaca_sync_candidate(
+        let Some(candidate) = classify_alpaca_sync_candidate_with_stale_multiplier(
             now_s,
             &symbol_key,
             tf,
             state,
             focus_symbols.contains(&symbol_key),
+            background_stale_periods,
             target_bars_for_tf,
         ) else {
             continue;
@@ -724,6 +780,45 @@ mod tests {
 
     fn alpaca_sync_target_bars(tf: &str) -> Option<u32> {
         normalize_sync_timeframe_key(tf).map(|_| u32::MAX)
+    }
+
+    fn provider_window_target_bars(tf: &str) -> Option<u32> {
+        normalize_sync_timeframe_key(tf)?;
+        None
+    }
+
+    #[test]
+    fn provider_window_native_lane_can_refresh_after_one_period() {
+        let now_s = 1_700_000_000i64;
+        let state = Some(SyncCacheState {
+            last_bar_ts_s: now_s - 2 * 86_400,
+            write_ts_s: now_s - 3600,
+            bar_count: 40,
+        });
+
+        assert!(
+            classify_alpaca_sync_candidate(
+                now_s,
+                "TNDM",
+                "1Day",
+                state,
+                false,
+                provider_window_target_bars,
+            )
+            .is_none()
+        );
+
+        let candidate = classify_alpaca_sync_candidate_with_stale_multiplier(
+            now_s,
+            "TNDM",
+            "1Day",
+            state,
+            false,
+            1,
+            provider_window_target_bars,
+        )
+        .expect("one-period native provider-window refresh should be due");
+        assert_eq!(candidate.bucket, AlpacaSyncBucket::Stale);
     }
 
     #[test]
