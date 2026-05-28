@@ -593,7 +593,10 @@ impl TyphooNApp {
             self.alpaca_retry_save();
         }
 
-        if !self.broker_connected || self.alpaca_retry_queue.is_empty() {
+        if !self.broker_connected
+            || !self.alpaca_full_bar_sync_enabled
+            || self.alpaca_retry_queue.is_empty()
+        {
             return;
         }
 
@@ -722,6 +725,13 @@ impl TyphooNApp {
         }
         for p in &self.kr_positions {
             add(&p.symbol, &mut syms, &mut seen);
+        }
+        // Open orders are live exposure even before a fill creates a position.
+        for o in &self.live_orders {
+            add(&o.symbol, &mut syms, &mut seen);
+        }
+        for o in &self.kraken_open_orders {
+            add(&o.pair, &mut syms, &mut seen);
         }
         // Watchlist
         for s in &self.user_watchlist {

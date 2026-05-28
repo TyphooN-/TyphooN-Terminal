@@ -51,8 +51,24 @@ impl TyphooNApp {
                             self.live_positions.clear();
                             self.live_orders.clear();
                             self.pending_alpaca_fetches.clear();
+                            self.alpaca_full_bar_sync_enabled = false;
                             self.log.push_back(LogEntry::info("Alpaca disabled — no login/sync/position/order activity. Cache data preserved."));
                         }
+                    }
+                    if ui
+                        .add_enabled(
+                            self.alpaca_enabled,
+                            egui::Checkbox::new(
+                                &mut self.alpaca_full_bar_sync_enabled,
+                                "Sync Alpaca universe bars",
+                            ),
+                        )
+                        .on_hover_text("Explicit opt-in for broad Alpaca asset-universe bar sync. Leave off for Kraken-equities assist only.")
+                        .changed()
+                    {
+                        settings_save_after = true;
+                        self.all_broker_assets_fetched = false;
+                        self.pending_alpaca_fetches.clear();
                     }
                 });
                 let connect_label = if self.broker_connected {

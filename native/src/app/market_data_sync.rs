@@ -562,6 +562,45 @@ impl TyphooNApp {
             .collect()
     }
 
+    pub(super) fn schedule_light_market_data_targets(&mut self) -> usize {
+        let symbols: Vec<String> = self.market_data_focus_symbols().into_iter().collect();
+        if symbols.is_empty() {
+            return 0;
+        }
+        let timeframes = self.enabled_standard_sync_timeframes();
+        if timeframes.is_empty() {
+            return 0;
+        }
+        let max_dispatch = if self.full_tilt_sync_enabled() {
+            96
+        } else {
+            32
+        };
+        let mut dispatched = 0usize;
+        for symbol in symbols {
+            for tf in &timeframes {
+                let mut queued = false;
+                if self.kraken_enabled {
+                    queued |= self.queue_kraken_fetch(&symbol, tf);
+                    queued |= self.queue_kraken_equity_fetch(&symbol, tf);
+                }
+                if self.tt_connected {
+                    queued |= self.queue_tastytrade_fetch(&symbol, tf);
+                }
+                if self.broker_connected {
+                    queued |= self.queue_alpaca_fetch(&symbol, tf);
+                }
+                if queued {
+                    dispatched += 1;
+                    if dispatched >= max_dispatch {
+                        return dispatched;
+                    }
+                }
+            }
+        }
+        dispatched
+    }
+
     pub(super) fn kraken_symbol_quote(symbol: &str) -> Option<&'static str> {
         let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
         const QUOTES: [&str; 12] = [
@@ -837,7 +876,10 @@ impl TyphooNApp {
     }
 
     pub(super) fn schedule_kraken_universe_sectors(&mut self) -> usize {
-        if !self.kraken_enabled || !self.kraken_any_spot_scrape_enabled() {
+        if !self.kraken_enabled
+            || !self.kraken_full_bar_sync_enabled
+            || !self.kraken_any_spot_scrape_enabled()
+        {
             return 0;
         }
         let sectors = self.kraken_sync_symbol_sectors();
@@ -861,7 +903,7 @@ impl TyphooNApp {
 
     pub(super) fn schedule_kraken_equities_universe(&mut self) -> usize {
         let symbols = self.kraken_equity_catalog_symbols();
-        if !self.kraken_enabled || symbols.is_empty() {
+        if !self.kraken_enabled || !self.kraken_full_bar_sync_enabled || symbols.is_empty() {
             return 0;
         }
         if self.kraken_equities_sync_pause_until_ts > chrono::Utc::now().timestamp() {
@@ -1037,7 +1079,8 @@ impl TyphooNApp {
     }
 
     pub(super) fn schedule_kraken_futures_universe_sectors(&mut self) -> usize {
-        if !self.kraken_enabled || !self.kraken_scrape_futures {
+        if !self.kraken_enabled || !self.kraken_full_bar_sync_enabled || !self.kraken_scrape_futures
+        {
             return 0;
         }
         let sectors = self.kraken_futures_sync_symbol_sectors();
@@ -1186,7 +1229,7 @@ impl TyphooNApp {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
         };
-        if !self.alpaca_enabled || !self.sync_timeframe_enabled(tf) {
+        if !self.alpaca_enabled || !self.broker_connected || !self.sync_timeframe_enabled(tf) {
             return false;
         }
         let symbol = normalize_market_data_symbol(symbol).replace('/', "");
@@ -1591,7 +1634,7 @@ impl TyphooNApp {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
         };
-        if !self.tastytrade_enabled || !self.sync_timeframe_enabled(tf) {
+        if !self.tastytrade_enabled || !self.tt_connected || !self.sync_timeframe_enabled(tf) {
             return false;
         }
         let symbol = normalize_market_data_symbol(symbol);
@@ -1670,7 +1713,11 @@ impl TyphooNApp {
     }
 
     pub(super) fn schedule_alpaca_pairs(&mut self, symbols: &[String]) -> usize {
-        if !self.alpaca_enabled || !self.broker_connected || symbols.is_empty() {
+        if !self.alpaca_enabled
+            || !self.broker_connected
+            || !self.alpaca_full_bar_sync_enabled
+            || symbols.is_empty()
+        {
             return 0;
         }
 
@@ -2024,7 +2071,11 @@ impl TyphooNApp {
     }
 
     pub(super) fn maybe_request_alpaca_asset_universe(&mut self) {
-        if self.alpaca_enabled && !self.all_broker_assets_fetched && self.broker_connected {
+        if self.alpaca_enabled
+            && self.alpaca_full_bar_sync_enabled
+            && !self.all_broker_assets_fetched
+            && self.broker_connected
+        {
             let _ = self.broker_tx.send(BrokerCmd::GetAllAssets);
             self.all_broker_assets_fetched = true;
         }

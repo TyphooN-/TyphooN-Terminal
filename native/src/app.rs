@@ -10849,6 +10849,10 @@ pub struct TyphooNApp {
     broker_api_key: String,
     broker_secret: String,
     broker_paper: bool,
+    /// Full bar-sync controls are deliberately separate from broker login.
+    /// Off = light mode: account/trading plus targeted fetches for open charts,
+    /// owned positions, open-order symbols, and the user's watchlist.
+    alpaca_full_bar_sync_enabled: bool,
     alpaca_enabled: bool,
     darwinex_enabled: bool,
 
@@ -10856,9 +10860,11 @@ pub struct TyphooNApp {
     tt_username: String,
     tt_password: String,
     tt_sandbox: bool,
+    tastytrade_full_bar_sync_enabled: bool,
     tastytrade_enabled: bool,
 
     /// Broker connection fields (Kraken).
+    kraken_full_bar_sync_enabled: bool,
     kraken_api_key: String,
     kraken_api_secret: String,
     kraken_ws_api_key: String,
@@ -27715,12 +27721,15 @@ When the question touches recent news, sentiment, or prices, combine the researc
             broker_api_key: String::new(),
             broker_secret: String::new(),
             broker_paper: true,
+            alpaca_full_bar_sync_enabled: false,
             alpaca_enabled: true,
             darwinex_enabled: true,
             tt_username: String::new(),
             tt_password: String::new(),
             tt_sandbox: false, // Default to Production (sandbox requires separate dev credentials)
+            tastytrade_full_bar_sync_enabled: false,
             tastytrade_enabled: true,
+            kraken_full_bar_sync_enabled: false,
             finnhub_key: String::new(),
             fred_key: String::new(),
             discord_webhook: String::new(),

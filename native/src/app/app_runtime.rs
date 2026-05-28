@@ -284,6 +284,7 @@ impl eframe::App for TyphooNApp {
             && self.cache_loaded
             && self.lan_sync_mode != "client"
             && self.kraken_enabled
+            && self.kraken_full_bar_sync_enabled
             && (self.kraken_any_spot_scrape_enabled()
                 || (self.kraken_scrape_xstocks && !self.kraken_equity_universe_symbols.is_empty()))
         {
@@ -1216,6 +1217,19 @@ impl eframe::App for TyphooNApp {
                             continue;
                         }
                         self.broker_connected = true;
+                        if self.alpaca_full_bar_sync_enabled {
+                            self.log.push_back(LogEntry::info(
+                                "Alpaca connected — broad Alpaca universe bar sync enabled.",
+                            ));
+                        } else if self.backfill_alpaca_kraken_equities_enabled {
+                            self.log.push_back(LogEntry::info(
+                                "Alpaca connected — Kraken assist only; broad Alpaca universe sync disabled.",
+                            ));
+                        } else {
+                            self.log.push_back(LogEntry::info(
+                                "Alpaca connected — account/trading only; broad Alpaca universe sync disabled.",
+                            ));
+                        }
                         // Auto-fetch positions, orders, and recent fills (Alpaca)
                         let _ = self.broker_tx.send(BrokerCmd::GetPositions);
                         let _ = self.broker_tx.send(BrokerCmd::GetOrders);

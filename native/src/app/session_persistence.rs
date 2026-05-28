@@ -16,15 +16,18 @@ impl TyphooNApp {
         if self.lan_sync_mode == "client" || !self.cache_loaded {
             return;
         }
-        if !self.kraken_pairs.is_empty() {
+        let _ = self.schedule_light_market_data_targets();
+        if self.kraken_full_bar_sync_enabled && !self.kraken_pairs.is_empty() {
             let _ = self.schedule_kraken_universe_sectors();
         }
-        let _ = self.schedule_kraken_futures_universe_sectors();
-        if self.tt_connected {
+        if self.kraken_full_bar_sync_enabled {
+            let _ = self.schedule_kraken_futures_universe_sectors();
+        }
+        if self.tt_connected && self.tastytrade_full_bar_sync_enabled {
             let symbols = self.tastytrade_sync_symbols();
             let _ = self.schedule_tastytrade_symbols(&symbols);
         }
-        if self.broker_connected {
+        if self.broker_connected && self.alpaca_full_bar_sync_enabled {
             self.maybe_request_alpaca_asset_universe();
             let equity_syms = self.alpaca_equity_rotation_symbols();
             let _ = self.schedule_alpaca_pairs(&equity_syms);
@@ -296,9 +299,12 @@ impl TyphooNApp {
         serde_json::json!({
             "kraken_scrape_schema": 3,
             "alpaca_enabled": self.alpaca_enabled,
+            "alpaca_full_bar_sync_enabled": self.alpaca_full_bar_sync_enabled,
             "darwinex_enabled": self.darwinex_enabled,
             "tastytrade_enabled": self.tastytrade_enabled,
+            "tastytrade_full_bar_sync_enabled": self.tastytrade_full_bar_sync_enabled,
             "kraken_enabled": self.kraken_enabled,
+            "kraken_full_bar_sync_enabled": self.kraken_full_bar_sync_enabled,
             "kraken_scrape_xstocks": self.kraken_scrape_xstocks,
             "kraken_scrape_usd_crypto": self.kraken_scrape_usd_crypto,
             "kraken_scrape_fiat_crypto": self.kraken_scrape_fiat_crypto,
@@ -341,6 +347,15 @@ impl TyphooNApp {
         let kraken_scrape_schema = value["kraken_scrape_schema"].as_u64().unwrap_or(1);
         if let Some(enabled) = value["alpaca_enabled"].as_bool() {
             self.alpaca_enabled = enabled;
+        }
+        if let Some(enabled) = value["alpaca_full_bar_sync_enabled"].as_bool() {
+            self.alpaca_full_bar_sync_enabled = enabled;
+        }
+        if let Some(enabled) = value["tastytrade_full_bar_sync_enabled"].as_bool() {
+            self.tastytrade_full_bar_sync_enabled = enabled;
+        }
+        if let Some(enabled) = value["kraken_full_bar_sync_enabled"].as_bool() {
+            self.kraken_full_bar_sync_enabled = enabled;
         }
         if let Some(enabled) = value["darwinex_enabled"].as_bool() {
             self.darwinex_enabled = enabled;
@@ -618,6 +633,9 @@ impl TyphooNApp {
             "kraken_scrape_fiat_crypto": self.kraken_scrape_fiat_crypto,
             "kraken_scrape_crypto_crosses": self.kraken_scrape_crypto_crosses,
             "kraken_scrape_futures": self.kraken_scrape_futures,
+            "alpaca_full_bar_sync_enabled": self.alpaca_full_bar_sync_enabled,
+            "tastytrade_full_bar_sync_enabled": self.tastytrade_full_bar_sync_enabled,
+            "kraken_full_bar_sync_enabled": self.kraken_full_bar_sync_enabled,
             "backfill_cryptocompare_enabled": self.backfill_cryptocompare_enabled,
             "backfill_alpaca_kraken_equities_enabled": self.backfill_alpaca_kraken_equities_enabled,
             "backfill_yahoo_chart_enabled": self.backfill_yahoo_chart_enabled,
@@ -712,9 +730,12 @@ impl TyphooNApp {
             "hermes_provider": self.hermes_provider,
             // Credentials: keyring-only (secure OS storage). Session stores non-secret config.
             "alpaca_enabled": self.alpaca_enabled,
+            "alpaca_full_bar_sync_enabled": self.alpaca_full_bar_sync_enabled,
             "darwinex_enabled": self.darwinex_enabled,
             "tastytrade_enabled": self.tastytrade_enabled,
+            "tastytrade_full_bar_sync_enabled": self.tastytrade_full_bar_sync_enabled,
             "kraken_enabled": self.kraken_enabled,
+            "kraken_full_bar_sync_enabled": self.kraken_full_bar_sync_enabled,
             "broker_paper": self.broker_paper,
             "tt_sandbox": self.tt_sandbox,
             "sl_enabled": self.sl_enabled,
@@ -3357,6 +3378,15 @@ impl TyphooNApp {
                 }
                 if let Some(enabled) = v["alpaca_enabled"].as_bool() {
                     self.alpaca_enabled = enabled;
+                }
+                if let Some(enabled) = v["alpaca_full_bar_sync_enabled"].as_bool() {
+                    self.alpaca_full_bar_sync_enabled = enabled;
+                }
+                if let Some(enabled) = v["tastytrade_full_bar_sync_enabled"].as_bool() {
+                    self.tastytrade_full_bar_sync_enabled = enabled;
+                }
+                if let Some(enabled) = v["kraken_full_bar_sync_enabled"].as_bool() {
+                    self.kraken_full_bar_sync_enabled = enabled;
                 }
                 if let Some(enabled) = v["darwinex_enabled"].as_bool() {
                     self.darwinex_enabled = enabled;

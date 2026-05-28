@@ -76,6 +76,12 @@ universe sync. The terminal needs a settings-level switch that lets the user
 connect Alpaca credentials while restricting Alpaca bar requests to Kraken
 fallback jobs only.
 
+Broker connectivity and bar-universe sync are separate controls. `Enable Alpaca`
+plus `Connect Alpaca` authorizes account/trading calls and targeted fallback
+fetches. The separate `Sync Alpaca universe bars` control is the only switch that
+allows the scheduler to request the Alpaca asset catalog and rotate through the
+full Alpaca equity bar universe. Leave it off for Kraken-equities assist.
+
 ### Source priority
 
 For `kraken-equities:*` chart loads:
@@ -156,6 +162,10 @@ Add a settings checkbox/radio option under the Alpaca/data-source settings:
   Alpaca bar sync. Alpaca bar requests may only be emitted by the Kraken equities
   fallback scheduler for mapped Kraken symbols/timeframes.
 - `Alpaca disabled` — no Alpaca connection or bar requests.
+- `Sync Alpaca universe bars` — explicit opt-in for normal broad Alpaca equity
+  bar rotation. Off means Alpaca may still connect and serve targeted fallback
+  requests, but the app must not fetch `GetAllAssets` for background Alpaca
+  universe work or schedule `schedule_alpaca_pairs`.
 
 The safe default for a newly connected Alpaca account should be **assist-only**
 when the user enabled it from the Kraken gap-fill flow. Do not surprise the user
@@ -163,7 +173,7 @@ by starting a 100% Alpaca universe pull just because credentials became valid.
 
 Implementation gates:
 
-- Broad Alpaca sync queue checks `alpaca_full_universe_sync_enabled` before
+- Broad Alpaca sync queue checks `alpaca_full_bar_sync_enabled` before
   enumerating all assets.
 - Kraken fallback queue checks `backfill_alpaca_kraken_equities_enabled` and only
   requests symbols produced by the Kraken equities scheduler.

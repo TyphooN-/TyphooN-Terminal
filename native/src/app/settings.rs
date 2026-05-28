@@ -99,7 +99,7 @@ impl TyphooNApp {
                 ui.label(egui::RichText::new("Broker modules").color(AXIS_TEXT).small().strong());
                 ui.horizontal_wrapped(|ui| {
                     let alpaca_before = self.alpaca_enabled;
-                    if ui.checkbox(&mut self.alpaca_enabled, "Enable Alpaca").on_hover_text("When off: no startup login, no account/position/order requests, no Alpaca bar sync, and Alpaca order buttons stay inactive. Stored bar data is left untouched.").changed() {
+                    if ui.checkbox(&mut self.alpaca_enabled, "Enable Alpaca").on_hover_text("When off: no startup login, account/position/order requests, targeted Alpaca fallback, or Alpaca order buttons. Stored bar data is left untouched. Broad Alpaca universe bar sync is controlled separately below.").changed() {
                         settings_save_after = true;
                         if alpaca_before && !self.alpaca_enabled {
                             self.broker_connected = false;
@@ -107,6 +107,7 @@ impl TyphooNApp {
                             self.live_positions.clear();
                             self.live_orders.clear();
                             self.pending_alpaca_fetches.clear();
+                            self.alpaca_full_bar_sync_enabled = false;
                             self.log.push_back(LogEntry::info("Alpaca disabled — stopped UI-side login/sync/position/order activity. Existing cache data was not deleted."));
                         }
                     }
@@ -124,6 +125,7 @@ impl TyphooNApp {
                             self.tt_positions.clear();
                             self.tt_balances = None;
                             self.pending_tastytrade_fetches.clear();
+                            self.tastytrade_full_bar_sync_enabled = false;
                             self.log.push_back(LogEntry::info("tastytrade disabled — stopped UI-side broker activity. Existing cache data was not deleted."));
                         }
                     }
@@ -137,6 +139,7 @@ impl TyphooNApp {
                             self.kraken_open_orders.clear();
                             self.pending_kraken_fetches.clear();
                             self.pending_kraken_futures_fetches.clear();
+                            self.kraken_full_bar_sync_enabled = false;
                             self.log.push_back(LogEntry::info("Kraken disabled — stopped UI-side login/sync/position/order activity. Existing cache data was not deleted."));
                         }
                     }
@@ -318,15 +321,32 @@ impl TyphooNApp {
                 }
                 if self.alpaca_enabled {
                     let alpaca_status = if self.broker_connected { "Connected" } else { "Disconnected" };
-                    ui.label(format!("Alpaca: REST API + WebSocket — {}", alpaca_status));
+                    let alpaca_mode = if self.alpaca_full_bar_sync_enabled {
+                        "full Alpaca universe bar sync enabled"
+                    } else if self.backfill_alpaca_kraken_equities_enabled {
+                        "Kraken-equities assist only; broad Alpaca universe sync off"
+                    } else {
+                        "account/trading only; broad Alpaca universe sync off"
+                    };
+                    ui.label(format!("Alpaca: REST API + WebSocket — {} ({})", alpaca_status, alpaca_mode));
                 }
                 if self.tastytrade_enabled {
                     let tt_status = if self.tt_connected { "Connected" } else { "Disconnected" };
-                    ui.label(format!("tastytrade: REST API — {}", tt_status));
+                    let tt_mode = if self.tastytrade_full_bar_sync_enabled {
+                        "full tastytrade universe bar sync enabled"
+                    } else {
+                        "light sync: open charts/positions/orders/watchlist only"
+                    };
+                    ui.label(format!("tastytrade: REST API — {} ({})", tt_status, tt_mode));
                 }
                 if self.kraken_enabled {
                     let kraken_status = if self.kraken_connected { "Connected" } else { "Disconnected" };
-                    ui.label(format!("Kraken: REST API + WebSocket — {}", kraken_status));
+                    let kraken_mode = if self.kraken_full_bar_sync_enabled {
+                        "full Kraken selected-universe bar sync enabled"
+                    } else {
+                        "light sync: open charts/positions/orders/watchlist only"
+                    };
+                    ui.label(format!("Kraken: REST API + WebSocket — {} ({})", kraken_status, kraken_mode));
                 }
                 if self.kraken_enabled {
                     ui.add_space(4.0);
@@ -412,9 +432,80 @@ impl TyphooNApp {
                             self.pending_kraken_futures_fetches.clear();
                         }
                     }
-                    ui.add_space(6.0);
+                }
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Full broker bar sync")
+                        .color(AXIS_TEXT)
+                        .small()
+                        .strong(),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    let kraken_resp = ui
+                        .add_enabled(
+                            self.kraken_enabled,
+                            egui::Checkbox::new(
+                                &mut self.kraken_full_bar_sync_enabled,
+                                "Kraken full bar sync",
+                            ),
+                        )
+                        .on_hover_text(
+                            "Explicit opt-in for rotating through selected Kraken Spot/Equities/Futures universes. Off keeps light sync: open charts, positions, open orders, and watchlist only.",
+                        );
+                    if kraken_resp.changed() {
+                        settings_save_after = true;
+                        self.pending_kraken_fetches.clear();
+                        self.pending_kraken_futures_fetches.clear();
+                    }
+
+                    let alpaca_resp = ui
+                        .add_enabled(
+                            self.alpaca_enabled,
+                            egui::Checkbox::new(
+                                &mut self.alpaca_full_bar_sync_enabled,
+                                "Alpaca full bar sync",
+                            ),
+                        )
+                        .on_hover_text(
+                            "Explicit opt-in for broad Alpaca equity-universe historical bar rotation. Off still allows account/trading, light sync, and targeted Kraken-equities fallback assist.",
+                        );
+                    if alpaca_resp.changed() {
+                        settings_save_after = true;
+                        self.all_broker_assets_fetched = false;
+                        self.pending_alpaca_fetches.clear();
+                    }
+
+                    let tt_resp = ui
+                        .add_enabled(
+                            self.tastytrade_enabled,
+                            egui::Checkbox::new(
+                                &mut self.tastytrade_full_bar_sync_enabled,
+                                "tastytrade full bar sync",
+                            ),
+                        )
+                        .on_hover_text(
+                            "Explicit opt-in for rotating through the tastytrade universe. Off keeps light sync: open charts, positions, open orders, and watchlist only.",
+                        );
+                    if tt_resp.changed() {
+                        settings_save_after = true;
+                        self.pending_tastytrade_fetches.clear();
+                    }
+                });
+                ui.label(
+                    egui::RichText::new("Default light sync still refreshes manually opened symbols, broker positions/open orders, and watchlist symbols.")
+                        .color(AXIS_TEXT)
+                        .small(),
+                );
+                if self.backfill_alpaca_kraken_equities_enabled && !self.alpaca_full_bar_sync_enabled {
                     ui.label(
-                        egui::RichText::new("Backfill providers")
+                        egui::RichText::new("Kraken assist uses targeted Alpaca fetches only")
+                            .color(AXIS_TEXT)
+                            .small(),
+                    );
+                }
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new("Backfill providers")
                             .color(AXIS_TEXT)
                             .small()
                             .strong(),
@@ -483,14 +574,13 @@ impl TyphooNApp {
                         .color(AXIS_TEXT)
                         .small(),
                     );
-                    ui.label(
-                        egui::RichText::new(
-                            "These category and quote filters control automated broker public scraping. Kraken uses them now; future crypto brokers should call the same quote filter instead of adding broker-specific assumptions.",
-                        )
-                        .color(AXIS_TEXT)
-                        .small(),
-                    );
-                }
+                ui.label(
+                    egui::RichText::new(
+                        "These category and quote filters control automated broker public scraping. Kraken uses them now; future crypto brokers should call the same quote filter instead of adding broker-specific assumptions.",
+                    )
+                    .color(AXIS_TEXT)
+                    .small(),
+                );
                 ui.label("Finnhub: News, Analyst, Insider Sentiment, Short Interest");
                 ui.label("SEC EDGAR: Filing scraper + Form 4 insider trades");
                 ui.add_space(6.0);

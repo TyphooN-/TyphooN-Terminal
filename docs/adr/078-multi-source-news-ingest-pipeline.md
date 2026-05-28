@@ -203,7 +203,7 @@ Current network news entry points are:
    the current symbol.
 2. **MTF Grid symbols** — when MTF Grid is active, the right-panel button calls
    `NewsScrapeSymbols` for the unique visible chart tickers. In the screenshot
-   case that means names like `TNMD` and `WOK`; it does not mean all Kraken
+   case that means names like `TNDM` and `WOK`; it does not mean all Kraken
    equities.
 3. **Bulk scrape** — `NewsScrapeAll` gathers MT5 tickers, Alpaca tradable
    equities, tastytrade equity positions, and Kraken market-data cache symbols
