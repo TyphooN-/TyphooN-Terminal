@@ -1461,10 +1461,14 @@ impl eframe::App for TyphooNApp {
                         self.stooq_sync_pause_until_ts = now + 6 * 60 * 60;
                         self.stooq_sync_pause_reason = e.clone();
                         if !was_paused {
-                            self.log.push_back(LogEntry::warn(format!(
-                                "Stooq daily fallback paused for 6h: {}",
+                            tracing::info!(
+                                "Stooq daily fallback paused for 6h after provider/transport failure: {}",
                                 e
-                            )));
+                            );
+                            self.log.push_back(LogEntry::info(
+                                "Stooq daily fallback paused for 6h after provider/transport failure"
+                                    .to_string(),
+                            ));
                         } else {
                             tracing::debug!("Stooq daily fallback still paused: {}", e);
                         }
@@ -7524,6 +7528,13 @@ impl eframe::App for TyphooNApp {
                     if label == "Kraken WS" {
                         tracing::debug!(
                             "Suppressed raw Kraken private WebSocket payload from UI log ({} bytes)",
+                            text.len()
+                        );
+                        continue;
+                    }
+                    if label == "Account Activities" {
+                        tracing::debug!(
+                            "Suppressed raw account activities from UI log ({} bytes)",
                             text.len()
                         );
                         continue;

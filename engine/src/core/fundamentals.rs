@@ -368,10 +368,7 @@ impl YahooSession {
             });
         }
 
-        tracing::info!(
-            "Yahoo session established (crumb: {}...)",
-            &crumb[..crumb.len().min(6)]
-        );
+        tracing::debug!("Yahoo session established (crumb acquired)");
         Ok(Self { client, crumb })
     }
 }

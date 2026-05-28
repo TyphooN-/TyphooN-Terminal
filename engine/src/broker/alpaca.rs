@@ -1970,7 +1970,7 @@ impl AlpacaBroker {
                 } else {
                     FetchOutcome::Complete
                 };
-                tracing::info!(
+                tracing::debug!(
                     "{} {}: get_all_bars {} — {} bars in {}s",
                     symbol,
                     timeframe,
