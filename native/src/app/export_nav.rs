@@ -130,16 +130,35 @@ impl TyphooNApp {
         chart.visible_bars = new_vis;
     }
 
-    pub(super) fn handle_pan_h(chart: &mut ChartState, dx: f32, rect_width: f32) {
-        if chart.bars.is_empty() {
+    pub(super) fn handle_chart_body_drag_from_start(
+        chart: &mut ChartState,
+        drag_delta: egui::Vec2,
+        rect_width: f32,
+        rect_height: f32,
+    ) {
+        if chart.bars.is_empty() || rect_width <= 1.0 || rect_height <= 1.0 {
             return;
         }
-        let bar_w = rect_width / chart.visible_bars as f32;
-        let delta_bars = (dx / bar_w) as isize;
-        let new_offset = (chart.view_offset as isize - delta_bars)
+
+        let bar_w = rect_width / chart.visible_bars.max(1) as f32;
+        let delta_bars = (drag_delta.x / bar_w).round() as isize;
+        chart.view_offset = (chart.drag_start_offset as isize - delta_bars)
             .clamp(0, (chart.bars.len() + CHART_RIGHT_MARGIN) as isize - 1)
             as usize;
-        chart.view_offset = new_offset;
+
+        if drag_delta.y.abs() > 0.5 {
+            let (si, ei) = chart.visible_range();
+            if ei > si {
+                let slice = &chart.bars[si..ei];
+                let hi = slice.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+                let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+                let range = (hi - lo).max(f64::EPSILON);
+                chart.price_pan =
+                    chart.drag_start_ppan + drag_delta.y as f64 * range / rect_height as f64;
+            }
+        } else {
+            chart.price_pan = chart.drag_start_ppan;
+        }
     }
 
     // ── floating window rendering ────────────────────────────────────────────

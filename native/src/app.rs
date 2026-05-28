@@ -32518,6 +32518,52 @@ mod tests {
     }
 
     #[test]
+    fn chart_body_drag_from_start_pans_time_and_price() {
+        let mut chart = ChartState::new("TEST", Timeframe::H4);
+        chart.bars = make_bars(500);
+        chart.visible_bars = 100;
+        chart.view_offset = 499;
+        chart.drag_start_offset = chart.view_offset;
+        chart.drag_start_ppan = 0.0;
+
+        TyphooNApp::handle_chart_body_drag_from_start(
+            &mut chart,
+            egui::vec2(80.0, 120.0),
+            800.0,
+            400.0,
+        );
+
+        assert_eq!(chart.view_offset, 489);
+        assert!(
+            chart.price_pan > 0.0,
+            "dragging downward should move the series downward"
+        );
+    }
+
+    #[test]
+    fn chart_body_drag_from_start_accumulates_sub_bar_motion() {
+        let mut chart = ChartState::new("TEST", Timeframe::H4);
+        chart.bars = make_bars(500);
+        chart.visible_bars = 100;
+        chart.view_offset = 300;
+        chart.drag_start_offset = chart.view_offset;
+        chart.drag_start_ppan = 2.0;
+
+        // 4px is only half a bar at this zoom.  The old per-frame integer
+        // truncation path would lose this every frame; the from-start path
+        // rounds accumulated movement once the gesture crosses the half-bar.
+        TyphooNApp::handle_chart_body_drag_from_start(
+            &mut chart,
+            egui::vec2(4.0, 0.0),
+            800.0,
+            400.0,
+        );
+
+        assert_eq!(chart.view_offset, 299);
+        assert_eq!(chart.price_pan, 2.0);
+    }
+
+    #[test]
     fn test_chart_state_reload_match_requires_source_for_loaded_chart() {
         let mut chart = ChartState::new("BTC/USD", Timeframe::H2);
         chart.bars = make_bars(20);

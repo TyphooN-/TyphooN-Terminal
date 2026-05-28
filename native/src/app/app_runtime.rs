@@ -15015,22 +15015,22 @@ impl eframe::App for TyphooNApp {
                     }
                 }
 
-                // Normal chart body drag → pan
-                if chart.is_dragging && (drag_delta.x.abs() > 0.0 || drag_delta.y.abs() > 0.0) {
-                    Self::handle_pan_h(chart, drag_delta.x, available.width());
-                    if drag_delta.y.abs() > 0.5 {
-                        let range = {
-                            let bars = &chart.bars;
-                            if bars.is_empty() { 1.0 }
-                            else {
-                                let (si, ei) = chart.visible_range();
-                                let slice = &bars[si..ei];
-                                let hi = slice.iter().map(|b| b.high).fold(0.0_f64, f64::max);
-                                let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
-                                hi - lo
-                            }
-                        };
-                        chart.price_pan += drag_delta.y as f64 * range / available.height() as f64;
+                // Normal chart body drag → TradingView-style free pan. Use total
+                // movement from the press origin instead of per-frame deltas so
+                // slow drags accumulate sub-bar movement instead of truncating to
+                // zero every frame.
+                if chart.is_dragging {
+                    let total_drag = chart
+                        .drag_start
+                        .and_then(|start| pointer.hover_pos().map(|pos| pos - start))
+                        .unwrap_or(drag_delta);
+                    if total_drag.x.abs() > 0.0 || total_drag.y.abs() > 0.0 {
+                        Self::handle_chart_body_drag_from_start(
+                            chart,
+                            total_drag,
+                            chart_body_rect.width(),
+                            chart_body_rect.height(),
+                        );
                     }
                 }
             }
@@ -15170,19 +15170,52 @@ impl eframe::App for TyphooNApp {
                         chart.price_pan = 0.0;
                     }
 
+                    let cell_chart_body_rect = egui::Rect::from_min_max(
+                        cell_rect.min,
+                        egui::pos2(cell_rect.right() - cell_price_axis_w, cell_rect.bottom()),
+                    );
+                    let cell_body_resp = ui
+                        .interact(
+                            cell_chart_body_rect,
+                            ui.id().with(("mtf_cell_chart_body", vi)),
+                            egui::Sense::click_and_drag(),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::Grab);
+                    if cell_body_resp.drag_started() && !scaling_this_cell && self.draw_mode == DrawMode::None {
+                        chart.is_dragging = true;
+                        chart.is_drawing_drag = false;
+                        chart.is_scaling_price = false;
+                        chart.drag_start = cell_body_resp.interact_pointer_pos();
+                        chart.drag_start_offset = chart.view_offset;
+                        chart.drag_start_ppan = chart.price_pan;
+                        self.user_interacting = true;
+                    }
+                    if cell_body_resp.dragged()
+                        && chart.is_dragging
+                        && !scaling_this_cell
+                        && self.draw_mode == DrawMode::None
+                    {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+                        Self::handle_chart_body_drag_from_start(
+                            chart,
+                            cell_body_resp.drag_delta(),
+                            cell_chart_body_rect.width(),
+                            cell_chart_body_rect.height(),
+                        );
+                        self.user_interacting = true;
+                    }
+                    if cell_body_resp.drag_stopped() && chart.is_dragging {
+                        chart.is_dragging = false;
+                        chart.drag_start = None;
+                    }
+
                     // Zoom when pointer is in this cell (no focus-click required) — but
                     // skip while the user is actively dragging the price scale so the
-                    // scroll-zoom and horizontal-pan don't fight the vertical scaling.
+                    // scroll-zoom and body pan don't fight the vertical scaling.
                     if ptr_in_cell && !scaling_this_cell {
                         let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
                         if scroll != 0.0 {
                             Self::handle_zoom(chart, scroll);
-                        }
-                        // Drag pan for this cell — guard against accidental triggers
-                        // when the press originated on the price axis strip.
-                        let drag = ctx.input(|i| i.pointer.delta());
-                        if ctx.input(|i| i.pointer.primary_down()) && drag.x.abs() > 0.5 {
-                            Self::handle_pan_h(chart, drag.x, cell_rect.width());
                         }
                     }
 
@@ -15272,6 +15305,37 @@ impl eframe::App for TyphooNApp {
                     if price_axis_resp.double_clicked() {
                         chart.price_zoom = 1.0;
                         chart.price_pan = 0.0;
+                    }
+
+                    if resp.hovered() && self.draw_mode == DrawMode::None && !scale_press {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
+                    }
+                    if resp.drag_started() && self.draw_mode == DrawMode::None && !scale_press {
+                        chart.is_dragging = true;
+                        chart.is_drawing_drag = false;
+                        chart.is_scaling_price = false;
+                        chart.drag_start = resp.interact_pointer_pos();
+                        chart.drag_start_offset = chart.view_offset;
+                        chart.drag_start_ppan = chart.price_pan;
+                        self.user_interacting = true;
+                    }
+                    if resp.dragged()
+                        && chart.is_dragging
+                        && self.draw_mode == DrawMode::None
+                        && !chart.is_scaling_price
+                    {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+                        Self::handle_chart_body_drag_from_start(
+                            chart,
+                            resp.drag_delta(),
+                            chart_body_interact_rect.width(),
+                            chart_body_interact_rect.height(),
+                        );
+                        self.user_interacting = true;
+                    }
+                    if resp.drag_stopped() && chart.is_dragging {
+                        chart.is_dragging = false;
+                        chart.drag_start = None;
                     }
                 }
 
