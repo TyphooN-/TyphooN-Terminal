@@ -363,6 +363,7 @@ impl TyphooNApp {
                 ),
             ];
             let mut kr_ok = true;
+            let mut saved_credentials: Vec<&'static str> = Vec::new();
             for (key, val) in &creds {
                 if let Err(e) = keyring::store(key, val) {
                     kr_ok = false;
@@ -370,6 +371,8 @@ impl TyphooNApp {
                         "Keyring store '{}' failed: {}",
                         key, e
                     )));
+                } else {
+                    saved_credentials.push(*key);
                 }
                 // Always write SQLite fallback
                 if let Some(ref cache) = self.cache {
@@ -381,8 +384,13 @@ impl TyphooNApp {
             } else {
                 "SQLite fallback (keyring unavailable)"
             };
-            self.log
-                .push_back(LogEntry::info(format!("Credentials saved to {}", dest)));
+            if !saved_credentials.is_empty() {
+                self.log.push_back(LogEntry::info(format!(
+                    "Credentials saved to {}: {}",
+                    dest,
+                    saved_credentials.join(", ")
+                )));
+            }
             // Also save session to persist non-credential settings (tt_sandbox, broker_paper, etc.)
             self.save_session();
         }

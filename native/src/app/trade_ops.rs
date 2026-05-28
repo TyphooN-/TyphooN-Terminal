@@ -714,17 +714,24 @@ impl TyphooNApp {
         for c in &self.charts {
             add(&c.symbol, &mut syms, &mut seen);
         }
-        // Broker positions are foreground sync targets even when their table is
-        // collapsed/hidden. Visibility toggles should not decide whether owned
-        // risk gets fresh bars.
-        for p in &self.live_positions {
-            add(&p.symbol, &mut syms, &mut seen);
+        // Broker positions are foreground sync targets only while that broker's
+        // positions are displayed. If the navbar hides Alpaca/Tasty/Kraken
+        // positions, those symbols should stop consuming update slots unless
+        // they are also open chart tabs, open orders, or watchlist entries.
+        if self.show_alpaca_positions {
+            for p in &self.live_positions {
+                add(&p.symbol, &mut syms, &mut seen);
+            }
         }
-        for p in &self.tt_positions {
-            add(&p.symbol, &mut syms, &mut seen);
+        if self.show_tt_positions {
+            for p in &self.tt_positions {
+                add(&p.symbol, &mut syms, &mut seen);
+            }
         }
-        for p in &self.kr_positions {
-            add(&p.symbol, &mut syms, &mut seen);
+        if self.show_kr_positions {
+            for p in &self.kr_positions {
+                add(&p.symbol, &mut syms, &mut seen);
+            }
         }
         // Open orders are live exposure even before a fill creates a position.
         for o in &self.live_orders {

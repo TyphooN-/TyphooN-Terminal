@@ -153,37 +153,57 @@ impl TyphooNApp {
                     };
                     if ui.add_enabled(self.alpaca_enabled, egui::Button::new(connect_label)).clicked() && !self.broker_connected {
                         if !self.broker_api_key.is_empty() && !self.broker_secret.is_empty() {
-                            // Save all credentials to system keyring
+                            // Save credentials to system keyring and log the saved credential names only.
+                            let mut saved_credentials: Vec<&'static str> = Vec::new();
                             if let Err(e) = keyring::store(keyring::keys::ALPACA_API_KEY, &self.broker_api_key) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store alpaca_api_key failed: {}", e)));
+                            } else {
+                                saved_credentials.push("alpaca_api_key");
                             }
                             if let Err(e) = keyring::store(keyring::keys::ALPACA_SECRET, &self.broker_secret) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store alpaca_secret failed: {}", e)));
+                            } else {
+                                saved_credentials.push("alpaca_secret");
                             }
                             if !self.finnhub_key.is_empty() {
                                 if let Err(e) = keyring::store(keyring::keys::FINNHUB_KEY, &self.finnhub_key) {
                                     self.log.push_back(LogEntry::warn(format!("Keyring store finnhub_key failed: {}", e)));
+                                } else {
+                                    saved_credentials.push("finnhub_key");
                                 }
                             }
                             if !self.cryptopanic_key.is_empty() {
                                 if let Err(e) = keyring::store(keyring::keys::CRYPTOPANIC_KEY, &self.cryptopanic_key) {
                                     self.log.push_back(LogEntry::warn(format!("Keyring store cryptopanic_key failed: {}", e)));
+                                } else {
+                                    saved_credentials.push("cryptopanic_key");
                                 }
                             }
                             if !self.fred_key.is_empty() {
                                 if let Err(e) = keyring::store(keyring::keys::FRED_KEY, &self.fred_key) {
                                     self.log.push_back(LogEntry::warn(format!("Keyring store fred_key failed: {}", e)));
+                                } else {
+                                    saved_credentials.push("fred_key");
                                 }
                             }
                             if !self.tt_username.is_empty() {
                                 if let Err(e) = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username) {
                                     self.log.push_back(LogEntry::warn(format!("Keyring store tt_username failed: {}", e)));
+                                } else {
+                                    saved_credentials.push("tt_username");
                                 }
                                 if let Err(e) = keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password) {
                                     self.log.push_back(LogEntry::warn(format!("Keyring store tt_password failed: {}", e)));
+                                } else {
+                                    saved_credentials.push("tt_password");
                                 }
                             }
-                            self.log.push_back(LogEntry::info("Credentials saved to system keyring"));
+                            if !saved_credentials.is_empty() {
+                                self.log.push_back(LogEntry::info(format!(
+                                    "Credentials saved to keyring: {}",
+                                    saved_credentials.join(", ")
+                                )));
+                            }
                             let capacity = self.alpaca_sync_capacity();
                             let _ = self.broker_tx.send(BrokerCmd::Connect {
                                 api_key: self.broker_api_key.clone(),
@@ -202,11 +222,22 @@ impl TyphooNApp {
                             egui::RichText::new("Connect tastytrade")
                         };
                         if ui.add_enabled(self.tastytrade_enabled, egui::Button::new(tt_label)).clicked() && !self.tt_connected {
+                            let mut saved_credentials: Vec<&'static str> = Vec::new();
                             if let Err(e) = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store tt_username failed: {}", e)));
+                            } else {
+                                saved_credentials.push("tt_username");
                             }
                             if let Err(e) = keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store tt_password failed: {}", e)));
+                            } else {
+                                saved_credentials.push("tt_password");
+                            }
+                            if !saved_credentials.is_empty() {
+                                self.log.push_back(LogEntry::info(format!(
+                                    "Credentials saved to keyring: {}",
+                                    saved_credentials.join(", ")
+                                )));
                             }
                             let _ = self.broker_tx.send(BrokerCmd::TastytradeConnect {
                                 username: self.tt_username.clone(),
@@ -230,17 +261,32 @@ impl TyphooNApp {
                             egui::RichText::new("Connect Kraken")
                         };
                         if ui.add_enabled(self.kraken_enabled, egui::Button::new(kraken_label)).clicked() && !self.kraken_connected {
+                            let mut saved_credentials: Vec<&'static str> = Vec::new();
                             if let Err(e) = keyring::store(keyring::keys::KRAKEN_API_KEY, &self.kraken_api_key) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store kraken_api_key failed: {}", e)));
+                            } else {
+                                saved_credentials.push("kraken_api_key");
                             }
                             if let Err(e) = keyring::store(keyring::keys::KRAKEN_API_SECRET, &self.kraken_api_secret) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store kraken_api_secret failed: {}", e)));
+                            } else {
+                                saved_credentials.push("kraken_api_secret");
                             }
                             if let Err(e) = keyring::store(keyring::keys::KRAKEN_WS_API_KEY, &self.kraken_ws_api_key) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store kraken_ws_api_key failed: {}", e)));
+                            } else {
+                                saved_credentials.push("kraken_ws_api_key");
                             }
                             if let Err(e) = keyring::store(keyring::keys::KRAKEN_WS_API_SECRET, &self.kraken_ws_api_secret) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store kraken_ws_api_secret failed: {}", e)));
+                            } else {
+                                saved_credentials.push("kraken_ws_api_secret");
+                            }
+                            if !saved_credentials.is_empty() {
+                                self.log.push_back(LogEntry::info(format!(
+                                    "Credentials saved to keyring: {}",
+                                    saved_credentials.join(", ")
+                                )));
                             }
                             let _ = self.broker_tx.send(BrokerCmd::KrakenConnect {
                                 api_key: self.kraken_api_key.clone(),
@@ -262,11 +308,25 @@ impl TyphooNApp {
                             egui::RichText::new("Save Matrix Token")
                         };
                         if ui.button(matrix_label).clicked() {
-                            let _ = keyring::store(keyring::keys::MATRIX_ACCESS_TOKEN, &self.matrix_access_token);
-                            if !self.matrix_user_id.is_empty() {
-                                let _ = keyring::store(keyring::keys::MATRIX_USER_ID, &self.matrix_user_id);
+                            let mut saved_credentials: Vec<&'static str> = Vec::new();
+                            if let Err(e) = keyring::store(keyring::keys::MATRIX_ACCESS_TOKEN, &self.matrix_access_token) {
+                                self.log.push_back(LogEntry::warn(format!("Keyring store matrix_access_token failed: {}", e)));
+                            } else {
+                                saved_credentials.push("matrix_access_token");
                             }
-                            self.log.push_back(LogEntry::info("Matrix token saved to keyring"));
+                            if !self.matrix_user_id.is_empty() {
+                                if let Err(e) = keyring::store(keyring::keys::MATRIX_USER_ID, &self.matrix_user_id) {
+                                    self.log.push_back(LogEntry::warn(format!("Keyring store matrix_user_id failed: {}", e)));
+                                } else {
+                                    saved_credentials.push("matrix_user_id");
+                                }
+                            }
+                            if !saved_credentials.is_empty() {
+                                self.log.push_back(LogEntry::info(format!(
+                                    "Credentials saved to keyring: {}",
+                                    saved_credentials.join(", ")
+                                )));
+                            }
                             // Join room + fetch messages
                             let _ = self.broker_tx.send(BrokerCmd::MatrixJoinRoom {
                                 room_id: self.matrix_room.clone(),

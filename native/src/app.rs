@@ -11506,8 +11506,14 @@ pub struct TyphooNApp {
     scrape_fund_skipped: usize,
     scrape_fund_total: usize,
     scrape_fund_last_msg: String,
+    /// Startup auto fundamentals was deferred because selected source universes
+    /// were not loaded yet. Re-fired once the universe symbols arrive.
+    auto_fundamentals_deferred: bool,
+    auto_fundamentals_started: bool,
     scrape_sec_running: bool,
     scrape_sec_last_msg: String,
+    /// Startup auto SEC scrape was deferred because Scope had no symbols yet.
+    auto_sec_scrape_deferred: bool,
     scrape_darwin_running: bool,
     scrape_darwin_last_msg: String,
     // Web server (phone access over LAN)
@@ -25576,7 +25582,22 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                     continue;
                                                 }
                                             }
-                                            let _ = value.send(BrokerMsg::JsonResult("Kraken WS".to_string(), msg));
+                                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg) {
+                                                let kind = parsed
+                                                    .get("event")
+                                                    .or_else(|| parsed.get("channelName"))
+                                                    .or_else(|| parsed.get("channel"))
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("private-update");
+                                                tracing::debug!(
+                                                    "Unhandled Kraken private WebSocket message suppressed from UI log: {}",
+                                                    kind
+                                                );
+                                            } else {
+                                                tracing::debug!(
+                                                    "Unhandled non-JSON Kraken private WebSocket message suppressed from UI log"
+                                                );
+                                            }
                                         }
                                     });
                                     let _ = msg_tx.send(BrokerMsg::OrderResult("Kraken private WebSocket started".into()));
@@ -28104,8 +28125,11 @@ When the question touches recent news, sentiment, or prices, combine the researc
             scrape_fund_skipped: 0,
             scrape_fund_total: 0,
             scrape_fund_last_msg: String::new(),
+            auto_fundamentals_deferred: false,
+            auto_fundamentals_started: false,
             scrape_sec_running: false,
             scrape_sec_last_msg: String::new(),
+            auto_sec_scrape_deferred: false,
             scrape_darwin_running: false,
             scrape_darwin_last_msg: String::new(),
             web_server_running: false,

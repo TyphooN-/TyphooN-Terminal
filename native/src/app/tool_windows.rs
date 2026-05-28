@@ -130,6 +130,7 @@ impl TyphooNApp {
                         self.log
                             .push_back(LogEntry::warn("Enter tastytrade username and password"));
                     } else {
+                        let mut saved_credentials: Vec<&'static str> = Vec::new();
                         if let Err(e) =
                             keyring::store(keyring::keys::TT_USERNAME, &self.tt_username)
                         {
@@ -137,6 +138,8 @@ impl TyphooNApp {
                                 "Keyring store tt_username failed: {}",
                                 e
                             )));
+                        } else {
+                            saved_credentials.push("tt_username");
                         }
                         if let Err(e) =
                             keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password)
@@ -144,6 +147,14 @@ impl TyphooNApp {
                             self.log.push_back(LogEntry::warn(format!(
                                 "Keyring store tt_password failed: {}",
                                 e
+                            )));
+                        } else {
+                            saved_credentials.push("tt_password");
+                        }
+                        if !saved_credentials.is_empty() {
+                            self.log.push_back(LogEntry::info(format!(
+                                "Credentials saved to keyring: {}",
+                                saved_credentials.join(", ")
                             )));
                         }
                         let _ = self.broker_tx.send(BrokerCmd::TastytradeConnect {

@@ -811,7 +811,8 @@ impl eframe::App for TyphooNApp {
                     }
                     // Auto SEC scrape on startup. Scope-derived universes may still
                     // be empty while broker/universe startup tasks are loading; do
-                    // not send a misleading 0-symbol scrape.
+                    // not send a misleading 0-symbol scrape. The universe-loaded
+                    // BrokerMsg handler retries this once symbols arrive.
                     {
                         let symbols = self.sec_scrape_scope_symbols();
                         let symbol_count = symbols.len();
@@ -832,26 +833,42 @@ impl eframe::App for TyphooNApp {
                                 symbol_count
                             )));
                         } else {
+                            self.auto_sec_scrape_deferred = true;
                             self.log.push_back(LogEntry::info(format!(
                                 "SEC EDGAR auto-scrape deferred: Scope {} has no symbols yet",
                                 self.broker_scope_label()
                             )));
                         }
                     }
-                    // Auto EVSCRAPE on startup (fundamentals, skips if updated <24h)
+                    // Auto EVSCRAPE on startup (fundamentals, skips if updated <24h).
+                    // Kraken equities arrive asynchronously, so do not launch a
+                    // misleading MT5-only scrape when Kraken is selected but the
+                    // xStocks universe has not landed yet.
                     {
-                        let db_path = cache_db_path();
-                        let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
-                            db_path,
-                            use_mt5: self.fund_source_mt5,
-                            use_alpaca: self.fund_source_alpaca,
-                            use_tastytrade: self.fund_source_tastytrade,
-                            use_kraken: self.fund_source_kraken,
-                            force: false,
-                        });
-                        self.log.push_back(LogEntry::info(
-                            "Fundamentals scrape started for all MT5 symbols...",
-                        ));
+                        let needs_kraken_universe = self.fund_source_kraken
+                            && self.kraken_enabled
+                            && self.kraken_scrape_xstocks
+                            && self.kraken_equity_universe_symbols.is_empty();
+                        if needs_kraken_universe {
+                            self.auto_fundamentals_deferred = true;
+                            self.log.push_back(LogEntry::info(
+                                "Fundamentals auto-scrape deferred: waiting for Kraken equities universe",
+                            ));
+                        } else {
+                            let db_path = cache_db_path();
+                            let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
+                                db_path,
+                                use_mt5: self.fund_source_mt5,
+                                use_alpaca: self.fund_source_alpaca,
+                                use_tastytrade: self.fund_source_tastytrade,
+                                use_kraken: self.fund_source_kraken,
+                                force: false,
+                            });
+                            self.auto_fundamentals_started = true;
+                            self.log.push_back(LogEntry::info(
+                                "Fundamentals scrape started for selected source universes...",
+                            ));
+                        }
                     }
                 } else {
                     self.log.push_back(LogEntry::info(
@@ -1831,6 +1848,46 @@ impl eframe::App for TyphooNApp {
                         "Kraken equities universe loaded: {} tradable symbols",
                         self.kraken_equity_universe_symbols.len()
                     )));
+
+                    if self.auto_sec_scrape_deferred && !self.scrape_sec_running {
+                        let symbols = self.sec_scrape_scope_symbols();
+                        let symbol_count = symbols.len();
+                        if symbol_count > 0 {
+                            let db_path = cache_db_path();
+                            let _ = self
+                                .broker_tx
+                                .send(BrokerCmd::SecScrape { db_path, symbols });
+                            self.auto_sec_scrape_deferred = false;
+                            self.scrape_sec_running = true;
+                            self.scrape_sec_last_msg = format!(
+                                "scraping Scope {} ({} symbols)...",
+                                self.broker_scope_label(),
+                                symbol_count
+                            );
+                            self.log.push_back(LogEntry::info(format!(
+                                "SEC EDGAR deferred scrape started for Scope {} ({} symbols)...",
+                                self.broker_scope_label(),
+                                symbol_count
+                            )));
+                        }
+                    }
+
+                    if self.auto_fundamentals_deferred && !self.auto_fundamentals_started {
+                        let db_path = cache_db_path();
+                        let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
+                            db_path,
+                            use_mt5: self.fund_source_mt5,
+                            use_alpaca: self.fund_source_alpaca,
+                            use_tastytrade: self.fund_source_tastytrade,
+                            use_kraken: self.fund_source_kraken,
+                            force: false,
+                        });
+                        self.auto_fundamentals_deferred = false;
+                        self.auto_fundamentals_started = true;
+                        self.log.push_back(LogEntry::info(
+                            "Fundamentals deferred scrape started for selected source universes...",
+                        ));
+                    }
                 }
                 BrokerMsg::KrakenEquityQuote(ticker) => {
                     if !self.kraken_enabled {
@@ -7447,6 +7504,13 @@ impl eframe::App for TyphooNApp {
                     }
                 }
                 BrokerMsg::JsonResult(label, text) => {
+                    if label == "Kraken WS" {
+                        tracing::debug!(
+                            "Suppressed raw Kraken private WebSocket payload from UI log ({} bytes)",
+                            text.len()
+                        );
+                        continue;
+                    }
                     // Route structured results to their windows; log everything
                     if label.starts_with("Analyst:") {
                         self.analyst_result = text.clone();
