@@ -2128,9 +2128,16 @@ impl AlpacaBroker {
         // Strip the FetchOutcome here so this trait-exposed method keeps its
         // existing signature. The retry queue runs off direct get_bars_after
         // callers that care about partial/rate-limited results.
-        self.get_bars_window(symbol, timeframe, limit, None, BarsLookbackMode::Targeted)
-            .await
-            .map(|(bars, _)| bars)
+        self.get_bars_window(
+            symbol,
+            timeframe,
+            limit,
+            None,
+            BarsLookbackMode::Targeted,
+            None,
+        )
+        .await
+        .map(|(bars, _)| bars)
     }
 
     /// Fetch up to `limit` bars using a wider lookback window sized for the
@@ -2142,8 +2149,15 @@ impl AlpacaBroker {
         timeframe: &str,
         limit: u32,
     ) -> Result<(Vec<Bar>, FetchOutcome), String> {
-        self.get_bars_window(symbol, timeframe, limit, None, BarsLookbackMode::Targeted)
-            .await
+        self.get_bars_window(
+            symbol,
+            timeframe,
+            limit,
+            None,
+            BarsLookbackMode::Targeted,
+            None,
+        )
+        .await
     }
 
     /// Fetch bars, optionally starting after a given timestamp (for incremental fetching).
@@ -2162,6 +2176,7 @@ impl AlpacaBroker {
             limit,
             after_timestamp,
             BarsLookbackMode::Incremental,
+            None,
         )
         .await
     }
@@ -2173,6 +2188,7 @@ impl AlpacaBroker {
         limit: u32,
         after_timestamp: Option<&str>,
         lookback_mode: BarsLookbackMode,
+        display_timeframe: Option<&str>,
     ) -> Result<(Vec<Bar>, FetchOutcome), String> {
         let is_crypto = symbol.contains('/');
 
@@ -2185,6 +2201,7 @@ impl AlpacaBroker {
                 (limit * 5).max(1000),
                 after_timestamp,
                 lookback_mode,
+                Some("1Month"),
             ))
             .await?;
             let monthly = Self::aggregate_weekly_to_monthly(&weekly);
@@ -2197,6 +2214,12 @@ impl AlpacaBroker {
         }
 
         let actual_tf = timeframe;
+        let log_tf = display_timeframe.unwrap_or(actual_tf);
+        let aggregation_suffix = if display_timeframe == Some("1Month") && actual_tf == "1Week" {
+            " via 1Week aggregation"
+        } else {
+            ""
+        };
         let actual_limit = limit;
 
         // Try multiple feeds in order: sip (paid) → iex (free) for stocks
@@ -2221,9 +2244,10 @@ impl AlpacaBroker {
             if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(after_ts) {
                 let cached_start = parsed.with_timezone(&chrono::Utc);
                 tracing::info!(
-                    "{} @ {}: incremental fetch from {} (cache hit)",
+                    "{} @ {}{}: incremental fetch from {} (cache hit)",
                     symbol,
-                    actual_tf,
+                    log_tf,
+                    aggregation_suffix,
                     &after_ts[..19.min(after_ts.len())]
                 );
                 cached_start

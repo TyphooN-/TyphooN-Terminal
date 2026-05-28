@@ -94,6 +94,7 @@ use self::bar_sync::*;
 use self::broker_fetch::*;
 use self::fallback_bars::*;
 use self::kraken_sync::*;
+use self::market_data_sync::normalize_kraken_equity_symbol_list;
 use self::sync_config::*;
 use self::sync_workset::*;
 use self::tastytrade_sync::*;
@@ -7017,6 +7018,7 @@ enum BrokerCmd {
         use_alpaca: bool,
         use_tastytrade: bool,
         use_kraken: bool,
+        kraken_equity_symbols: Vec<String>,
         force: bool,
     },
     /// Scrape fundamentals for a single ticker.
@@ -25459,7 +25461,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     });
                                 }
                                 Err(error) => {
-                                    let provider_no_data = error.contains("HTTP 404")
+                                    let provider_no_data = error.contains("HTTP 400")
+                                        || error.contains("HTTP 404")
                                         || error.contains("empty result")
                                         || error.contains("missing quote arrays");
                                     if provider_no_data {
@@ -25906,6 +25909,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         use_alpaca,
                         use_tastytrade,
                         use_kraken,
+                        kraken_equity_symbols,
                         force,
                     } => {
                         // Gather symbols from brokers BEFORE spawning thread (broker vars are in scope here)
@@ -25943,39 +25947,21 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             }
                         }
                         if use_kraken {
-                            let pairs_result = if let Some(ref kb) = kraken_broker {
-                                kb.get_tradeable_pairs().await
-                            } else {
-                                let tmp = typhoon_engine::broker::kraken::KrakenBroker::new(
-                                    String::new(),
-                                    String::new(),
+                            let syms = normalize_kraken_equity_symbol_list(kraken_equity_symbols.iter());
+                            if syms.is_empty() {
+                                let _ = broker_msg_tx_clone.send(
+                                    BrokerMsg::FundamentalsProgress(
+                                        "Kraken equities catalog not loaded — fundamentals scrape skipped for Kraken".into(),
+                                    ),
                                 );
-                                tmp.get_tradeable_pairs().await
-                            };
-                            match pairs_result {
-                                Ok(pairs) => {
-                                    let syms: Vec<String> = pairs
-                                        .iter()
-                                        .filter_map(|(pair, display)| {
-                                            kraken_xstock_fundamental_symbol(pair, display)
-                                        })
-                                        .collect();
-                                    let _ = broker_msg_tx_clone.send(
-                                        BrokerMsg::FundamentalsProgress(format!(
-                                            "Kraken: {} xStocks/ETF tickers",
-                                            syms.len()
-                                        )),
-                                    );
-                                    extra_tickers.extend(syms);
-                                }
-                                Err(e) => {
-                                    let _ = broker_msg_tx_clone.send(
-                                        BrokerMsg::FundamentalsProgress(format!(
-                                            "Kraken symbols failed: {}",
-                                            e
-                                        )),
-                                    );
-                                }
+                            } else {
+                                let _ = broker_msg_tx_clone.send(
+                                    BrokerMsg::FundamentalsProgress(format!(
+                                        "Kraken equities: {} catalog tickers",
+                                        syms.len()
+                                    )),
+                                );
+                                extra_tickers.extend(syms);
                             }
                         }
                         let msg_tx = broker_msg_tx_clone.clone();

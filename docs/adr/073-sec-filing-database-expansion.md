@@ -50,6 +50,14 @@ SEC filing database comparable to Godel terminal's functionality.
   10th lightweight BG cycle.
 - Fetches up to 15 eligible filings per batch at 250ms/request (~4 req/sec), with
   EDGAR requests using the shared email-shaped `SEC_EDGAR_USER_AGENT`.
+- Backfill priority is active-context first: symbols from active positions, open
+  orders, watchlist rows, focused/open charts, and explicit user scopes are served
+  before broad catalog/backlog filings. Treat active positions, orders, and
+  watchlist as the same top-priority class; only ordering inside that class should
+  be newest/importance-based.
+- SEC filing and news/article sync budgets sit ahead of lower-priority bar/catalog
+  backlog work. Historical bars may keep trickling, but not by starving currently
+  held, ordered, watched, or charted symbols of filings/news.
 - Eligibility excludes filings with stored content, recently failed fetches
   (6-hour cooldown), and rows that reached the permanent attempt cap (3 failed
   attempts).

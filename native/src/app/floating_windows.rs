@@ -55625,6 +55625,9 @@ impl TyphooNApp {
                                         use_alpaca: self.fund_source_alpaca,
                                         use_tastytrade: self.fund_source_tastytrade,
                                         use_kraken: self.fund_source_kraken,
+                                        kraken_equity_symbols: self
+                                            .kraken_equity_universe_symbols
+                                            .clone(),
                                         force: false,
                                     });
                                     self.scrape_fund_running = true;
@@ -55789,6 +55792,9 @@ impl TyphooNApp {
                                     use_alpaca: false,
                                     use_tastytrade: false,
                                     use_kraken: false,
+                                    kraken_equity_symbols: self
+                                        .kraken_equity_universe_symbols
+                                        .clone(),
                                     force: false,
                                 });
                                 self.scrape_fund_running = true;
@@ -55810,6 +55816,9 @@ impl TyphooNApp {
                                     use_alpaca: true,
                                     use_tastytrade: false,
                                     use_kraken: false,
+                                    kraken_equity_symbols: self
+                                        .kraken_equity_universe_symbols
+                                        .clone(),
                                     force: false,
                                 });
                                 self.scrape_fund_running = true;
@@ -55833,6 +55842,9 @@ impl TyphooNApp {
                                     use_alpaca: false,
                                     use_tastytrade: true,
                                     use_kraken: false,
+                                    kraken_equity_symbols: self
+                                        .kraken_equity_universe_symbols
+                                        .clone(),
                                     force: false,
                                 });
                                 self.scrape_fund_running = true;
@@ -55854,6 +55866,9 @@ impl TyphooNApp {
                                     use_alpaca: false,
                                     use_tastytrade: false,
                                     use_kraken: true,
+                                    kraken_equity_symbols: self
+                                        .kraken_equity_universe_symbols
+                                        .clone(),
                                     force: false,
                                 });
                                 self.scrape_fund_running = true;
@@ -55875,6 +55890,9 @@ impl TyphooNApp {
                                     use_alpaca: true,
                                     use_tastytrade: true,
                                     use_kraken: true,
+                                    kraken_equity_symbols: self
+                                        .kraken_equity_universe_symbols
+                                        .clone(),
                                     force: false,
                                 });
                                 self.scrape_fund_running = true;
@@ -56526,6 +56544,7 @@ impl TyphooNApp {
                                 use_alpaca: self.fund_source_alpaca,
                                 use_tastytrade: self.fund_source_tastytrade,
                                 use_kraken: self.fund_source_kraken,
+                                kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
                                 force: false,
                             });
                             self.log.push_back(LogEntry::info(

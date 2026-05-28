@@ -59,22 +59,24 @@ pub(super) async fn run_alpaca_batch_fetch_task(
             for symbol in &symbols {
                 let new_bars = bars_by_symbol.get(symbol).cloned().unwrap_or_default();
                 if new_bars.is_empty() {
-                    if matches!(
+                    // Alpaca's multi-symbol endpoint may omit a symbol from an otherwise
+                    // successful batch even when the symbol is valid/tradable. Treat that
+                    // as inconclusive and let the retry queue perform a targeted
+                    // single-symbol probe before any persistent no-data tombstone is
+                    // written. Targeted fetches still own the real no-data decision.
+                    let reason = if matches!(
                         outcome,
                         typhoon_engine::broker::alpaca::FetchOutcome::Complete
                     ) {
-                        let _ = broker_msg_tx.send(BrokerMsg::AlpacaNoData {
-                            symbol: symbol.clone(),
-                            timeframe: timeframe.clone(),
-                            reason: "Alpaca batch returned no bars for symbol".to_string(),
-                        });
+                        "batch_symbol_omitted_probe_required"
                     } else {
-                        let _ = broker_msg_tx.send(BrokerMsg::AlpacaRetryEnqueue {
-                            symbol: symbol.clone(),
-                            timeframe: timeframe.clone(),
-                            reason: "batch_rate_limited_partial".into(),
-                        });
-                    }
+                        "batch_rate_limited_partial"
+                    };
+                    let _ = broker_msg_tx.send(BrokerMsg::AlpacaRetryEnqueue {
+                        symbol: symbol.clone(),
+                        timeframe: timeframe.clone(),
+                        reason: reason.into(),
+                    });
                     let _ = broker_msg_tx.send(BrokerMsg::AlpacaFetchSettled {
                         symbol: symbol.clone(),
                         timeframe: timeframe.clone(),

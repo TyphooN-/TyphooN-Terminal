@@ -184,6 +184,10 @@ normalizer:
 ## Scheduler behavior
 
 Fallback work is lower priority than user-visible Kraken chart freshness.
+It is also lower priority than active-context SEC filing and news/article sync:
+positions, orders, watchlist symbols, focused/open charts, and explicit user
+scopes get research/event data before the broad Kraken equities fallback backlog
+consumes provider budget.
 
 ### Alpaca assist-only setting
 

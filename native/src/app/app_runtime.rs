@@ -862,6 +862,7 @@ impl eframe::App for TyphooNApp {
                                 use_alpaca: self.fund_source_alpaca,
                                 use_tastytrade: self.fund_source_tastytrade,
                                 use_kraken: self.fund_source_kraken,
+                                kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
                                 force: false,
                             });
                             self.auto_fundamentals_started = true;
@@ -1880,6 +1881,7 @@ impl eframe::App for TyphooNApp {
                             use_alpaca: self.fund_source_alpaca,
                             use_tastytrade: self.fund_source_tastytrade,
                             use_kraken: self.fund_source_kraken,
+                            kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
                             force: false,
                         });
                         self.auto_fundamentals_deferred = false;
@@ -7853,10 +7855,19 @@ impl eframe::App for TyphooNApp {
                     } else {
                         "still no-data"
                     };
-                    self.log.push_back(LogEntry::warn(format!(
+                    tracing::debug!(
                         "Alpaca {} {}: {} — automated sync will skip it ({} marked)",
-                        symbol, timeframe, prefix, marker_count
-                    )));
+                        symbol,
+                        timeframe,
+                        prefix,
+                        marker_count
+                    );
+                    if changed && marker_count.is_multiple_of(100) {
+                        self.log.push_back(LogEntry::warn(format!(
+                            "Alpaca no-data milestone: {} provider-unavailable pairs tombstoned",
+                            marker_count
+                        )));
+                    }
                 }
                 BrokerMsg::AlpacaBackfillComplete {
                     symbol,
@@ -7872,10 +7883,20 @@ impl eframe::App for TyphooNApp {
                     );
                     if changed {
                         let marker_count = self.alpaca_backfill_complete_pairs.len();
-                        self.log.push_back(LogEntry::info(format!(
-                            "Alpaca {} {}: marked backfill-complete at {}/{} bars — full history exhausted; automated sync will keep it current ({} marked)",
-                            symbol, timeframe, bar_count, target_bars, marker_count
-                        )));
+                        tracing::debug!(
+                            "Alpaca {} {}: marked backfill-complete at {}/{} bars ({} marked)",
+                            symbol,
+                            timeframe,
+                            bar_count,
+                            target_bars,
+                            marker_count
+                        );
+                        if marker_count.is_multiple_of(100) {
+                            self.log.push_back(LogEntry::info(format!(
+                                "Alpaca backfill milestone: {} pairs at provider-window saturation",
+                                marker_count
+                            )));
+                        }
                     }
                 }
                 BrokerMsg::DarwinFtpReturns(returns_data) => {
@@ -16866,6 +16887,9 @@ impl eframe::App for TyphooNApp {
                                                 use_alpaca: self.fund_source_alpaca,
                                                 use_tastytrade: self.fund_source_tastytrade,
                                                 use_kraken: self.fund_source_kraken,
+                                                kraken_equity_symbols: self
+                                                    .kraken_equity_universe_symbols
+                                                    .clone(),
                                                 force,
                                             });
                                         let label = if force {
@@ -17047,6 +17071,9 @@ impl eframe::App for TyphooNApp {
                                                 use_alpaca: self.fund_source_alpaca,
                                                 use_tastytrade: self.fund_source_tastytrade,
                                                 use_kraken: self.fund_source_kraken,
+                                                kraken_equity_symbols: self
+                                                    .kraken_equity_universe_symbols
+                                                    .clone(),
                                                 force,
                                             });
                                         let label = if force {

@@ -14206,6 +14206,7 @@ impl TyphooNApp {
                     use_alpaca,
                     use_tastytrade: use_tasty,
                     use_kraken,
+                    kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
                     force,
                 });
                 self.scrape_fund_running = true;

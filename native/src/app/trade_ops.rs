@@ -594,7 +594,7 @@ impl TyphooNApp {
         }
 
         if !self.broker_connected
-            || !self.alpaca_full_bar_sync_enabled
+            || (!self.alpaca_full_bar_sync_enabled && !self.backfill_alpaca_kraken_equities_enabled)
             || self.alpaca_retry_queue.is_empty()
         {
             return;
