@@ -8019,11 +8019,9 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                     typhoon_web_protocol::WebCmd::GetWatchlistQuotes { symbols } => {
-                        if self.alpaca_enabled {
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::GetWatchlistQuotes { symbols });
-                        }
+                        let _ = self
+                            .broker_tx
+                            .send(BrokerCmd::GetWatchlistQuotes { symbols });
                     }
                     typhoon_web_protocol::WebCmd::GetMarketClock => {
                         if self.alpaca_enabled {
@@ -17327,13 +17325,12 @@ impl eframe::App for TyphooNApp {
         // Poll watchlist quotes every ~15 seconds at 60fps (900 frames). Disabled for LAN client.
         // Uses the best available stack: broker snapshots when connected, Yahoo quote enrichment,
         // and cached bars as a weekend/off-hours fallback.
-        if now_instant.duration_since(self.watchlist_quotes_last_poll)
-            >= std::time::Duration::from_secs(15)
-            && !self.user_watchlist.is_empty()
-            && !self.lan_client_enabled
-            && self.cache_loaded
-            && !self.alpaca_bar_backlog_active()
-        {
+        if watchlist_quote_poll_ready(
+            now_instant.duration_since(self.watchlist_quotes_last_poll),
+            !self.user_watchlist.is_empty(),
+            self.lan_client_enabled,
+            self.cache_loaded,
+        ) {
             self.watchlist_quotes_last_poll = now_instant;
             let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes {
                 symbols: self.user_watchlist.clone(),

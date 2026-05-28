@@ -1251,10 +1251,6 @@ impl TyphooNApp {
             .collect()
     }
 
-    pub(super) fn alpaca_bar_backlog_active(&self) -> bool {
-        !self.pending_alpaca_fetches.is_empty() || !self.alpaca_retry_queue.is_empty()
-    }
-
     pub(super) fn alpaca_effective_historical_rpm(&self) -> u32 {
         alpaca_effective_historical_rpm(
             self.alpaca_historical_rpm_hint,

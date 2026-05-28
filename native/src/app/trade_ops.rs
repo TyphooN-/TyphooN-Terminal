@@ -1494,6 +1494,11 @@ impl TyphooNApp {
     }
 
     pub(super) fn latest_cached_equity_price_for_symbol(&self, symbol: &str) -> Option<f64> {
+        if let Some(meta) = self.kraken_equity_quote_meta_for_symbol(symbol) {
+            if meta.price > 0.0 && meta.price.is_finite() {
+                return Some(meta.price);
+            }
+        }
         let cache = self.cache.as_ref()?;
         let timeframes = [
             "quote", "1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day",

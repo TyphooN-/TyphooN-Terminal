@@ -6551,6 +6551,38 @@ fn empty_watchlist_row(symbol: &str) -> WatchlistRow {
     }
 }
 
+fn watchlist_quote_poll_ready(
+    elapsed: std::time::Duration,
+    has_symbols: bool,
+    lan_client_enabled: bool,
+    cache_loaded: bool,
+) -> bool {
+    elapsed >= std::time::Duration::from_secs(15)
+        && has_symbols
+        && !lan_client_enabled
+        && cache_loaded
+}
+
+fn watchlist_cache_fallback_sources(symbol: &str) -> &'static [&'static str] {
+    let symbol = symbol.trim().replace('/', "").to_ascii_uppercase();
+    let equity_like = !symbol.contains('/')
+        && !(symbol.ends_with("USD") && symbol.len() > 5)
+        && !symbol.ends_with("USDT")
+        && !symbol.ends_with("USDC");
+    if equity_like {
+        &[
+            "kraken-equities",
+            "alpaca",
+            "tastytrade",
+            "mt5",
+            "mt5:Darwinex",
+            "default",
+        ]
+    } else {
+        &["kraken", "kraken-futures", "default"]
+    }
+}
+
 fn yahoo_market_state_allows_extended_quote(market_state: &str) -> bool {
     matches!(
         market_state.trim().to_ascii_uppercase().as_str(),
@@ -14629,6 +14661,36 @@ impl TyphooNApp {
                                             }
                                         }
                                     }
+                                }
+                            }
+                        }
+                        if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                            for row in &mut rows {
+                                if row.last > 0.0 && row.last.is_finite() {
+                                    continue;
+                                }
+                                let mut filled = false;
+                                'cache_fallback: for tf in ["quote", "1Day", "4Hour", "1Hour", "30Min", "15Min"] {
+                                    for source in watchlist_cache_fallback_sources(&row.symbol) {
+                                        for key in chart_source_cache_keys(source, &row.symbol, tf) {
+                                            let Ok(Some(raw)) = cache.get_bars_raw(&key) else {
+                                                continue;
+                                            };
+                                            if let Some(cached) =
+                                                watchlist_row_from_raw_bars(&row.symbol, &key, &raw)
+                                            {
+                                                *row = cached;
+                                                filled = true;
+                                                break 'cache_fallback;
+                                            }
+                                        }
+                                    }
+                                }
+                                if !filled {
+                                    tracing::debug!(
+                                        "watchlist: no broker/Yahoo/cache quote for {}",
+                                        row.symbol
+                                    );
                                 }
                             }
                         }
@@ -31710,6 +31772,47 @@ mod tests {
         assert!(!yahoo_market_state_allows_extended_quote("REGULAR"));
         assert!(!yahoo_market_state_allows_extended_quote("CLOSED"));
         assert!(!yahoo_market_state_allows_extended_quote(""));
+    }
+
+    #[test]
+    fn watchlist_poll_is_not_blocked_by_background_backfill() {
+        assert!(watchlist_quote_poll_ready(
+            std::time::Duration::from_secs(15),
+            true,
+            false,
+            true,
+        ));
+        assert!(!watchlist_quote_poll_ready(
+            std::time::Duration::from_secs(14),
+            true,
+            false,
+            true,
+        ));
+        assert!(!watchlist_quote_poll_ready(
+            std::time::Duration::from_secs(15),
+            false,
+            false,
+            true,
+        ));
+        assert!(!watchlist_quote_poll_ready(
+            std::time::Duration::from_secs(15),
+            true,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn watchlist_cache_fallback_prioritizes_kraken_equities_for_stocks() {
+        assert_eq!(
+            watchlist_cache_fallback_sources("WOK")[0],
+            "kraken-equities"
+        );
+        assert_eq!(
+            watchlist_cache_fallback_sources("TNDM")[0],
+            "kraken-equities"
+        );
+        assert_eq!(watchlist_cache_fallback_sources("BTCUSD")[0], "kraken");
     }
 
     #[test]
