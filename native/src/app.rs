@@ -2169,6 +2169,58 @@ fn cache_source_from_key(key: &str) -> &'static str {
     }
 }
 
+fn chart_source_bars_match_timeframe(
+    source: &str,
+    timeframe: &str,
+    bars: &[(i64, f64, f64, f64, f64, f64)],
+) -> bool {
+    if !matches!(source, "yahoo-chart" | "stooq") || bars.len() < 20 {
+        return true;
+    }
+    let Some((min_delta_ms, max_median_delta_ms)) = chart_timeframe_cadence_bounds(timeframe)
+    else {
+        return true;
+    };
+    let mut timestamps: Vec<i64> = bars
+        .iter()
+        .map(|(ts, _, _, _, _, _)| *ts)
+        .filter(|ts| *ts > 0)
+        .collect();
+    timestamps.sort_unstable();
+    timestamps.dedup();
+    if timestamps.len() < 20 {
+        return true;
+    }
+    let mut deltas: Vec<i64> = timestamps
+        .windows(2)
+        .filter_map(|w| w[1].checked_sub(w[0]))
+        .filter(|delta| *delta > 0)
+        .collect();
+    if deltas.len() < 10 {
+        return true;
+    }
+    deltas.sort_unstable();
+    let median = deltas[deltas.len() / 2];
+    median >= min_delta_ms && median <= max_median_delta_ms
+}
+
+fn chart_timeframe_cadence_bounds(timeframe: &str) -> Option<(i64, i64)> {
+    let hour = 3_600_000i64;
+    let day = 24 * hour;
+    match timeframe {
+        "1Min" => Some((30_000, 5 * 60_000)),
+        "5Min" => Some((2 * 60_000, 20 * 60_000)),
+        "15Min" => Some((5 * 60_000, 60 * 60_000)),
+        "30Min" => Some((10 * 60_000, 2 * hour)),
+        "1Hour" => Some((20 * 60_000, 4 * hour)),
+        "4Hour" => Some((hour, 16 * hour)),
+        "1Day" => Some((12 * hour, 5 * day)),
+        "1Week" => Some((3 * day, 10 * day)),
+        "1Month" => Some((20 * day, 45 * day)),
+        _ => None,
+    }
+}
+
 fn news_symbol_from_market_data_cache_key(key: &str, prefix: &str) -> Option<String> {
     let rest = key.strip_prefix(prefix)?.strip_prefix(':')?;
     let (raw_symbol, tf) = rest.rsplit_once(':')?;
@@ -2884,7 +2936,14 @@ impl ChartState {
         let mut result: Option<(Vec<(i64, f64, f64, f64, f64, f64)>, bool, &'static str)> = None;
         for k in &keys_to_try {
             match cache.get_bars_raw(k) {
-                Ok(Some(raw)) if !raw.is_empty() => {
+                Ok(Some(raw))
+                    if !raw.is_empty()
+                        && chart_source_bars_match_timeframe(
+                            cache_source_from_key(k),
+                            tf,
+                            &raw,
+                        ) =>
+                {
                     let is_gap_fill = k.starts_with("kraken:") || k.starts_with("kraken-futures:");
                     result = Some((raw, is_gap_fill, cache_source_from_key(k)));
                     break;
@@ -3052,6 +3111,13 @@ impl ChartState {
                     };
                     for gap_key in &keys_to_try {
                         if let Ok(Some(gap_raw)) = cache.get_bars_raw(gap_key) {
+                            if !chart_source_bars_match_timeframe(
+                                cache_source_from_key(gap_key),
+                                tf,
+                                &gap_raw,
+                            ) {
+                                continue;
+                            }
                             for (ts, o, h, l, c, v) in gap_raw {
                                 let snapped = snap(ts);
                                 if !occupied.contains(&snapped) {
@@ -31732,6 +31798,42 @@ pub fn cache_db_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_bar(ts_ms: i64) -> (i64, f64, f64, f64, f64, f64) {
+        (ts_ms, 10.0, 11.0, 9.0, 10.5, 1000.0)
+    }
+
+    #[test]
+    fn chart_source_cadence_rejects_monthly_bars_mislabeled_as_daily() {
+        let day = 86_400_000i64;
+        let monthly_as_daily: Vec<_> = (0..36).map(|i| test_bar(i * 30 * day)).collect();
+        assert!(!chart_source_bars_match_timeframe(
+            "yahoo-chart",
+            "1Day",
+            &monthly_as_daily
+        ));
+        assert!(chart_source_bars_match_timeframe(
+            "alpaca",
+            "1Day",
+            &monthly_as_daily
+        ));
+    }
+
+    #[test]
+    fn chart_source_cadence_accepts_market_daily_bars() {
+        let day = 86_400_000i64;
+        let mut ts = 0i64;
+        let mut bars = Vec::new();
+        for i in 0..60 {
+            bars.push(test_bar(ts));
+            ts += if i % 5 == 4 { 3 * day } else { day };
+        }
+        assert!(chart_source_bars_match_timeframe(
+            "yahoo-chart",
+            "1Day",
+            &bars
+        ));
+    }
 
     #[test]
     fn fundamentals_scrape_progress_log_is_milestoned() {
