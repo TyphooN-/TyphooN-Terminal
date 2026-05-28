@@ -292,7 +292,9 @@ Do not let a cheap provider create a new unbounded universe-sync cliff.
 
 Historical candle source and live quote/depth source are independent:
 
-- Candle panel can show `Data: Kraken Equities + Yahoo gap-fill`.
+- Candle panel shows the auto-resolved candle source, e.g. `Data: Auto → Kraken
+  Equities`; source forcing is not exposed in the chart toolbar. Mixed/provider
+  provenance should be visible through Sync Status and future per-span metadata.
 - Bid/ask lines can show `Quote: Alpaca IEX WS age 320ms`.
 - L2 panel can show `Depth: Kraken WS` or `Depth: unavailable`.
 - Order ticket should show:

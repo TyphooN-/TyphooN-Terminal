@@ -591,7 +591,6 @@ impl TyphooNApp {
                 "log_scale": c.log_scale,
                 "visible_bars": c.visible_bars,
                 "view_offset": c.view_offset,
-                "source": c.source_override.clone(),
             })).collect::<Vec<_>>(),
             "indicators": {
                 "sma200": self.show_sma200, "sma100": self.show_sma100,
@@ -2001,10 +2000,6 @@ impl TyphooNApp {
                             let mut chart = ChartState::new(&sym, tf);
                             chart.chart_type = ct;
                             chart.log_scale = tab["log_scale"].as_bool().unwrap_or(false);
-                            chart.source_override = tab["source"]
-                                .as_str()
-                                .filter(|source| !source.trim().is_empty())
-                                .map(|source| source.to_string());
                             if let Some(visible_bars) = tab["visible_bars"].as_u64() {
                                 chart.visible_bars = visible_bars as usize;
                             }

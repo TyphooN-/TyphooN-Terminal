@@ -9870,57 +9870,20 @@ impl eframe::App for TyphooNApp {
                 let source_state = self
                     .charts
                     .get(self.active_tab)
-                    .map(|c| {
-                        (
-                            c.symbol.clone(),
-                            c.primary_source,
-                            c.source_override.clone(),
-                        )
-                    })
-                    .unwrap_or_else(|| (self.symbol_input.trim().to_string(), "", None));
-                let cached_sources = self.chart_source_options(&source_state.0, cur_tf);
-                let old_source = source_state.2.clone().unwrap_or_else(|| "auto".to_string());
-                let mut new_source = old_source.clone();
-                let auto_label = if source_state.1.is_empty() {
+                    .map(|c| (c.symbol.clone(), c.primary_source))
+                    .unwrap_or_else(|| (self.symbol_input.trim().to_string(), ""));
+                let source_label = if source_state.1.is_empty() {
                     "Auto".to_string()
                 } else {
-                    format!("Auto ({})", cache_source_label(source_state.1))
+                    format!("Auto → {}", cache_source_label(source_state.1))
                 };
-                let selected_source_label = if old_source == "auto" {
-                    auto_label.as_str()
-                } else {
-                    cache_source_label(&old_source)
-                };
-                egui::ComboBox::from_id_salt("source_combo")
-                    .selected_text(
-                        egui::RichText::new(selected_source_label)
-                            .color(ACCENT)
-                            .strong()
-                            .small(),
-                    )
-                    .width(125.0)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut new_source, "auto".to_string(), auto_label);
-                        ui.separator();
-                        for (source, label) in CHART_SOURCE_ORDER {
-                            let has_cached_bars = cached_sources
-                                .iter()
-                                .any(|(cached, _)| cached.eq_ignore_ascii_case(source));
-                            if !has_cached_bars && source != "kraken" {
-                                continue;
-                            }
-                            let label = if has_cached_bars {
-                                format!("{label} ✓")
-                            } else {
-                                label.to_string()
-                            };
-                            ui.selectable_value(&mut new_source, source.to_string(), label);
-                        }
-                    });
-                if new_source != old_source {
-                    let source_override = (new_source != "auto").then_some(new_source);
-                    self.reload_symbol_with_source(&source_state.0, cur_tf, source_override);
-                }
+                ui.label(
+                    egui::RichText::new(source_label)
+                        .color(AXIS_TEXT)
+                        .monospace()
+                        .small(),
+                )
+                .on_hover_text("Chart data source is auto-detected from broker/source priority and available cache coverage");
 
                 let orderbook_symbol = bare_symbol_from_key(&source_state.0)
                     .trim_end_matches(".EQ")
@@ -10135,11 +10098,7 @@ impl eframe::App for TyphooNApp {
                                 .small(),
                         );
                         let active_session = self.charts.get(self.active_tab).and_then(|chart| {
-                            let chart_source = chart
-                                .source_override
-                                .as_deref()
-                                .filter(|s| !s.trim().is_empty())
-                                .unwrap_or(chart.primary_source);
+                            let chart_source = chart.primary_source;
                             let symbol = chart.symbol.split(':').next_back().unwrap_or("");
                             let normalized_symbol = normalize_market_data_symbol(symbol);
                             let kraken_crypto_pair = chart_source == "kraken"
@@ -10905,12 +10864,10 @@ impl eframe::App for TyphooNApp {
                     let data_source = self
                         .charts
                         .first()
-                        .map(|c| match c.source_override.as_deref() {
-                            Some(source) => {
-                                format!("Data: {} (selected)", cache_source_label(source))
-                            }
-                            None if c.primary_source.is_empty() => "Data: unresolved".to_string(),
-                            None => {
+                        .map(|c| {
+                            if c.primary_source.is_empty() {
+                                "Data: unresolved".to_string()
+                            } else {
                                 format!("Data: Auto → {}", cache_source_label(c.primary_source))
                             }
                         })

@@ -1784,8 +1784,6 @@ struct ChartState {
     timeframe: Timeframe,
     /// Cache source that most recently populated `bars` ("mt5", "alpaca", etc).
     primary_source: &'static str,
-    /// Explicit user-selected cache source for this chart, if any.
-    source_override: Option<String>,
     /// Chart rendering style.
     chart_type: ChartType,
     /// Logarithmic price scale (vs linear).
@@ -2314,39 +2312,12 @@ fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &str) -> Vec<S
     keys
 }
 
-fn preferred_chart_symbol_for_source(source: &str, symbol: &str) -> String {
-    let norm = normalize_market_data_symbol(symbol);
-    let no_slash = norm.replace('/', "");
-    match source {
-        "kraken" => {
-            let upper = no_slash.to_ascii_uppercase();
-            let known_crypto_base = [
-                "BTC", "XBT", "ETH", "XMR", "DOGE", "XDG", "BABY", "SOL", "ADA", "DOT", "LINK",
-                "LTC", "BCH", "XRP", "AVAX", "MATIC", "POL", "ATOM", "TRX", "UNI", "AAVE", "PEPE",
-                "SHIB",
-            ]
-            .iter()
-            .any(|base| upper == *base);
-            if known_crypto_base {
-                typhoon_engine::core::kraken::normalize_pair_symbol(&format!("{upper}USD"))
-            } else {
-                typhoon_engine::core::kraken::normalize_pair_symbol(&norm)
-            }
-        }
-        "kraken-futures" => typhoon_engine::core::kraken_futures::normalize_futures_symbol(&norm),
-        "kraken-equities" => no_slash.trim_end_matches(".EQ").to_string(),
-        "alpaca" | "tastytrade" | "mt5" | "yahoo-chart" | "stooq" => no_slash,
-        _ => norm,
-    }
-}
-
 impl ChartState {
     fn new(symbol: impl Into<String>, tf: Timeframe) -> Self {
         Self {
             symbol: symbol.into(),
             timeframe: tf,
             primary_source: "",
-            source_override: None,
             chart_type: ChartType::Candle,
             log_scale: false,
             sma_slow_period: 200,
@@ -2544,9 +2515,6 @@ impl ChartState {
                 .eq_ignore_ascii_case(timeframe)
         {
             return false;
-        }
-        if let Some(selected_source) = self.source_override.as_deref() {
-            return selected_source.eq_ignore_ascii_case(source);
         }
         if matches!(source, "alpaca" | "yahoo-chart" | "stooq")
             && self.primary_source.eq_ignore_ascii_case("kraken-equities")
@@ -2802,21 +2770,6 @@ impl ChartState {
                 .unwrap_or_default()
         };
 
-        if let Some(source) = self.source_override.as_deref() {
-            let override_keys = chart_source_cache_keys(source, &sym, tf);
-            for key in &override_keys {
-                if let Ok(Some(raw)) = cache.get_bars_raw(key) {
-                    if !raw.is_empty() {
-                        return key.clone();
-                    }
-                }
-            }
-            return override_keys
-                .into_iter()
-                .next()
-                .unwrap_or_else(|| format!("{}:{}:{}", source, sym.to_uppercase(), tf));
-        }
-
         // ADR-038 Phase 2: Use DataSourceManager for priority-ordered candidates
         let mut candidates = dsm.resolve_candidates(&sym, tf);
         if sym_norm != sym {
@@ -2928,9 +2881,6 @@ impl ChartState {
                 format!("stooq:{}:{}", sym_norm, tf),
             ]);
         }
-        if let Some(source) = self.source_override.as_deref() {
-            keys_to_try = chart_source_cache_keys(source, &sym, tf);
-        }
         let mut result: Option<(Vec<(i64, f64, f64, f64, f64, f64)>, bool, &'static str)> = None;
         for k in &keys_to_try {
             match cache.get_bars_raw(k) {
@@ -2989,7 +2939,7 @@ impl ChartState {
             };
 
             let mut gap_filled = 0usize;
-            if self.source_override.is_none() {
+            {
                 // Merge provenance-tagged alternate-source bars without duplicating
                 // the same D/W/M session. Providers do not agree on candle
                 // timestamps: Kraken often uses 00:00 UTC, Alpaca/Yahoo US
@@ -3296,7 +3246,7 @@ impl ChartState {
             .iter()
             .any(|b| sym_upper.starts_with(b) && sym_upper.ends_with("USD"));
 
-        if is_crypto && self.source_override.is_none() {
+        if is_crypto {
             self.gap_fill_timestamps.clear();
             // Snap timestamps to TF boundary for dedup (handles MT5 UTC+2 vs CC/Kraken UTC)
             // Weekly: snap to Monday 00:00 UTC. Monthly: snap to 1st of month 00:00 UTC.

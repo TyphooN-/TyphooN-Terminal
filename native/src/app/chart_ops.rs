@@ -168,13 +168,7 @@ impl TyphooNApp {
         // chart.apply_forming_bar_update() + chart.mark_structural_change()
         // over a full reload to hit the draw_chart early-out.
         // Full reloads should only happen on closed bars or user-initiated symbol change.
-        let source_override = self.charts.get(self.active_tab).and_then(|chart| {
-            chart
-                .symbol_matches(symbol)
-                .then(|| chart.source_override.clone())
-                .flatten()
-        });
-        self.reload_symbol_with_source(symbol, tf, source_override);
+        self.reload_symbol_auto(symbol, tf);
         self.queue_open_symbol_sync_all_timeframes(symbol);
     }
 
@@ -183,46 +177,20 @@ impl TyphooNApp {
         if symbol.is_empty() {
             return 0;
         }
-        let source_override = self
-            .charts
-            .get(self.active_tab)
-            .and_then(|chart| chart.source_override.clone());
         let timeframes = self.enabled_standard_sync_timeframes();
         let mut queued = 0usize;
         for tf in timeframes {
-            if self.queue_symbol_fetch_for_source(symbol, &tf, source_override.as_deref()) {
+            if self.queue_symbol_fetch_for_source(symbol, &tf) {
                 queued += 1;
             }
         }
         queued
     }
 
-    fn queue_symbol_fetch_for_source(
-        &mut self,
-        symbol: &str,
-        tf_key: &str,
-        source_override: Option<&str>,
-    ) -> bool {
+    fn queue_symbol_fetch_for_source(&mut self, symbol: &str, tf_key: &str) -> bool {
         if !self.sync_timeframe_enabled(tf_key) {
             return false;
         }
-        if let Some(source) = source_override.filter(|s| !s.trim().is_empty() && *s != "auto") {
-            let source_symbol = preferred_chart_symbol_for_source(source, symbol);
-            return match source {
-                "alpaca" => self.queue_alpaca_fetch(&source_symbol, tf_key),
-                "tastytrade" => self.queue_tastytrade_fetch(&source_symbol, tf_key),
-                "kraken" => self.queue_kraken_fetch(&source_symbol, tf_key),
-                "kraken-equities" => {
-                    self.dispatch_kraken_equity_ticker(&source_symbol);
-                    self.queue_kraken_equity_fetch(&source_symbol, tf_key)
-                }
-                "kraken-futures" => self.queue_kraken_futures_fetch(&source_symbol, tf_key),
-                "yahoo-chart" => self.queue_yahoo_chart_fetch(&source_symbol, tf_key),
-                "stooq" => self.queue_stooq_fetch(&source_symbol, tf_key),
-                _ => false,
-            };
-        }
-
         let kraken_symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
         if !kraken_symbol.is_empty()
             && typhoon_engine::core::kraken::to_kraken_pair_lossy(&kraken_symbol).is_some()
@@ -255,12 +223,7 @@ impl TyphooNApp {
         self.queue_alpaca_fetch(symbol, tf_key)
     }
 
-    pub(super) fn reload_symbol_with_source(
-        &mut self,
-        symbol: &str,
-        tf: Timeframe,
-        source_override: Option<String>,
-    ) {
+    pub(super) fn reload_symbol_auto(&mut self, symbol: &str, tf: Timeframe) {
         if let Some(ref cache) = self.cache {
             let chart_type = self
                 .charts
@@ -269,7 +232,6 @@ impl TyphooNApp {
                 .unwrap_or(ChartType::Candle);
             let mut chart = ChartState::new(symbol, tf);
             chart.chart_type = chart_type;
-            chart.source_override = source_override.filter(|s| !s.trim().is_empty());
             let cache_ref = Arc::as_ref(cache);
             let mut gpu = self.gpu_indicators.take();
             let load_succeeded = chart.try_load(cache_ref, &mut self.log, gpu.as_mut());
@@ -291,36 +253,6 @@ impl TyphooNApp {
                         tf.label(),
                         sync_timeframe_short_label(tf_key)
                     )));
-                } else if let Some(source) = chart.source_override.clone() {
-                    let source_symbol = preferred_chart_symbol_for_source(&source, symbol);
-                    let queued = match source.as_str() {
-                        "alpaca" => self.queue_alpaca_fetch(&source_symbol, tf_key),
-                        "tastytrade" => self.queue_tastytrade_fetch(&source_symbol, tf_key),
-                        "kraken" => self.queue_kraken_fetch(&source_symbol, tf_key),
-                        "kraken-equities" => {
-                            self.dispatch_kraken_equity_ticker(&source_symbol);
-                            self.queue_kraken_equity_fetch(&source_symbol, tf_key)
-                        }
-                        "kraken-futures" => self.queue_kraken_futures_fetch(&source_symbol, tf_key),
-                        "yahoo-chart" => self.queue_yahoo_chart_fetch(&source_symbol, tf_key),
-                        "stooq" => self.queue_stooq_fetch(&source_symbol, tf_key),
-                        _ => false,
-                    };
-                    if queued {
-                        self.log.push_back(LogEntry::info(format!(
-                            "No cached data for {} {} from {} — fetching...",
-                            symbol,
-                            tf.label(),
-                            cache_source_label(&source)
-                        )));
-                    } else {
-                        self.log.push_back(LogEntry::warn(format!(
-                            "No cached data for {} {} from {}",
-                            symbol,
-                            tf.label(),
-                            cache_source_label(&source)
-                        )));
-                    }
                 } else if kraken_supported {
                     let queued = self.queue_kraken_fetch(&kraken_symbol, tf_key);
                     if queued {
@@ -456,8 +388,7 @@ impl TyphooNApp {
             *visible = true;
         }
         self.mtf_enabled = true;
-        let queued =
-            self.queue_symbol_fetch_for_source(&symbol, Timeframe::D1.cache_suffix(), None);
+        let queued = self.queue_symbol_fetch_for_source(&symbol, Timeframe::D1.cache_suffix());
         self.compute_mtf_grid_status();
         self.log.push_back(LogEntry::info(if queued {
             format!("News: opened {} D1 chart tab and queued data fetch", symbol)
@@ -465,32 +396,6 @@ impl TyphooNApp {
             format!("News: opened {} D1 chart tab", symbol)
         }));
         true
-    }
-
-    pub(super) fn chart_source_options(
-        &self,
-        symbol: &str,
-        tf: Timeframe,
-    ) -> Vec<(String, &'static str)> {
-        let Some(cache) = self.cache.as_ref() else {
-            return Vec::new();
-        };
-        let tf_key = tf.cache_suffix();
-        CHART_SOURCE_ORDER
-            .iter()
-            .filter_map(|(source, label)| {
-                let has_bars = chart_source_cache_keys(source, symbol, tf_key)
-                    .iter()
-                    .chain(
-                        (source == &"kraken-equities")
-                            .then(|| chart_source_cache_keys(source, symbol, "quote"))
-                            .unwrap_or_default()
-                            .iter(),
-                    )
-                    .any(|key| matches!(cache.get_incremental_start(key), Ok(Some(_))));
-                has_bars.then(|| ((*source).to_string(), *label))
-            })
-            .collect()
     }
 
     /// Compute MTF Grid indicator status for all timeframes from cache.
@@ -505,11 +410,6 @@ impl TyphooNApp {
         if sym.is_empty() {
             return;
         }
-        let source_override = self
-            .charts
-            .get(self.active_tab)
-            .and_then(|chart| chart.source_override.clone());
-
         let all_tfs: &[(&'static str, Timeframe)] = &MTF_GRID_TIMEFRAMES;
 
         // Collect results from already-loaded charts (no thread needed)
@@ -564,7 +464,6 @@ impl TyphooNApp {
                 let mut results: Vec<_> = Vec::new();
                 for (label, tf) in need_load_owned {
                     let mut temp = ChartState::new(&sym, tf);
-                    temp.source_override = source_override.clone();
                     let dsm = typhoon_engine::core::data_source::DataSourceManager::default();
                     temp.load(&cache, &mut std::collections::VecDeque::new(), None, &dsm);
                     if temp.bars.is_empty() {
@@ -642,15 +541,10 @@ impl TyphooNApp {
     pub(super) fn setup_mtf_grid(&mut self, cols: usize, target: usize) {
         let all_tfs = MTF_GRID_TIMEFRAMES.map(|(_, tf)| tf);
         let sym = self.symbol_input.trim().to_string();
-        let source_override = self
-            .charts
-            .get(self.active_tab)
-            .and_then(|chart| chart.source_override.clone());
         // Grow charts to target count
         while self.charts.len() < target {
             let tf_idx = self.charts.len() % all_tfs.len();
             let mut chart = ChartState::new(&sym, all_tfs[tf_idx]);
-            chart.source_override = source_override.clone();
             if let Some(ref cache) = self.cache {
                 {
                     let mut gpu = self.gpu_indicators.take();

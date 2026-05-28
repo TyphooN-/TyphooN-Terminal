@@ -297,8 +297,11 @@ Required indicators:
     proves broad low-timeframe coverage is viable.
 - Native `kraken-equities:*` rows remain separate from fallback rows; `Merged`
   only answers “is this chart-usable from any allowed source?”
-- Chart status line shows a concise source badge, e.g. `Data: Kraken Equities +
-  Alpaca gap-fill`.
+- Chart status line shows the auto-resolved source, e.g. `Data: Auto → Kraken
+  Equities`. Provider/fallback provenance belongs in Sync Status and future
+  provenance-span metadata, not as a user-selectable chart-source picker. Auto
+  detection should pick the best available source from broker/source priority and
+  cache coverage.
 - Optional subtle span coloring or hover metadata for fallback regions.
 - Logs should say `Kraken gap-fill AAPL 1Hour via Alpaca: 240 bars` rather than
   pretending it was a Kraken fetch.
