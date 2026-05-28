@@ -10562,6 +10562,14 @@ fn should_emit_fundamentals_scrape_progress(processed: usize, total: usize) -> b
     processed <= 10 || processed == total || processed.is_multiple_of(100)
 }
 
+fn is_fundamentals_provider_coverage_gap(error: &str) -> bool {
+    error.contains("404")
+        || error.contains("Not Found")
+        || error.contains("No Yahoo data")
+        || error.contains("Yahoo returned 400")
+        || error.contains("HTTP 400")
+}
+
 /// Reusable sort state for clickable column headers.
 #[derive(Clone, Default)]
 struct SortState {
@@ -26048,7 +26056,9 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                             if let Ok(conn) = cache.connection() {
                                                 let _ = fundamentals::create_fundamentals_tables(&conn);
                                                 if let Ok(mt5_tickers) = fundamentals::extract_stock_tickers_from_cache(&conn) {
-                                                    let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("MT5: {} stock tickers", mt5_tickers.len())));
+                                                    if !mt5_tickers.is_empty() {
+                                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("MT5: {} stock tickers", mt5_tickers.len())));
+                                                    }
                                                     all_tickers.extend(mt5_tickers);
                                                 }
                                             }
@@ -26173,8 +26183,10 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                                 }
                                                             }
                                                         } else {
-                                                            // Record 404s as permanent failures
-                                                            if e.contains("404") || e.contains("Not Found") || e.contains("No Yahoo data") {
+                                                            // Record terminal provider coverage gaps so routine Yahoo 400/404 misses
+                                                            // stop resurfacing as actionable scrape failures.
+                                                            let provider_coverage_gap = is_fundamentals_provider_coverage_gap(&e);
+                                                            if provider_coverage_gap {
                                                                 if let Ok(conn) = cache.connection() {
                                                                     let _ = conn.execute(
                                                                         "INSERT OR REPLACE INTO scrape_failures (symbol, reason, failed_at) VALUES (?1, ?2, datetime('now'))",
@@ -26184,7 +26196,17 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                             }
                                                             fail += 1;
                                                             consecutive_fail += 1;
-                                                            let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: FAIL — {} ({}/{})", ticker, e, ok + fail + skipped, tickers.len())));
+                                                            if provider_coverage_gap {
+                                                                tracing::debug!(
+                                                                    "Fundamentals provider coverage gap for {}: {} ({}/{})",
+                                                                    ticker,
+                                                                    e,
+                                                                    ok + fail + skipped,
+                                                                    tickers.len()
+                                                                );
+                                                            } else {
+                                                                let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: FAIL — {} ({}/{})", ticker, e, ok + fail + skipped, tickers.len())));
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -31022,8 +31044,14 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                                 }
                                                             }
                                                         }
-                                                        if fetched > 0 || failed > 0 {
+                                                        if fetched > 0 {
                                                             tracing::info!(
+                                                                "BG: SEC content backfill: {} stored, {} failed",
+                                                                fetched,
+                                                                failed
+                                                            );
+                                                        } else if failed > 0 {
+                                                            tracing::debug!(
                                                                 "BG: SEC content backfill: {} stored, {} failed",
                                                                 fetched,
                                                                 failed
@@ -31713,6 +31741,20 @@ mod tests {
         assert!(!should_emit_fundamentals_scrape_progress(99, 12_187));
         assert!(should_emit_fundamentals_scrape_progress(100, 12_187));
         assert!(should_emit_fundamentals_scrape_progress(12_187, 12_187));
+    }
+
+    #[test]
+    fn fundamentals_provider_coverage_gaps_are_non_actionable() {
+        assert!(is_fundamentals_provider_coverage_gap(
+            "Yahoo returned 404 Not Found for TRAD.U"
+        ));
+        assert!(is_fundamentals_provider_coverage_gap(
+            "Yahoo returned 400 Bad Request for BAD"
+        ));
+        assert!(is_fundamentals_provider_coverage_gap(
+            "No Yahoo data for SPAC.U"
+        ));
+        assert!(!is_fundamentals_provider_coverage_gap("DB lock failed"));
     }
 
     #[test]

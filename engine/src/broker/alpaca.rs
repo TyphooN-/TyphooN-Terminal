@@ -2243,7 +2243,7 @@ impl AlpacaBroker {
         let earliest_start = if let Some(after_ts) = after_timestamp {
             if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(after_ts) {
                 let cached_start = parsed.with_timezone(&chrono::Utc);
-                tracing::info!(
+                tracing::debug!(
                     "{} @ {}{}: incremental fetch from {} (cache hit)",
                     symbol,
                     log_tf,
@@ -2399,10 +2399,10 @@ impl AlpacaBroker {
                         .ceil() as usize;
                         let bars_target = expected_bars.min(actual_limit as usize).max(1);
                         let pct = (total * 100) / bars_target;
-                        tracing::info!(
+                        tracing::debug!(
                             "{} @ {}: chunk #{} +{} bars ({} → {}), total {} ({}%, {}s elapsed, {:.0}ms/chunk)",
                             symbol,
-                            actual_tf,
+                            log_tf,
                             chunk_count,
                             bars_in_chunk,
                             first_date,
@@ -2461,11 +2461,12 @@ impl AlpacaBroker {
                     None => "crypto",
                 };
                 let elapsed_secs = fetch_start.elapsed().as_secs();
-                tracing::info!(
-                    "Loaded {} bars for {} @ {} (feed={}, {} chunks, {}s total)",
+                tracing::debug!(
+                    "Loaded {} bars for {} @ {}{} (feed={}, {} chunks, {}s total)",
                     all_bars.len(),
                     symbol,
-                    actual_tf,
+                    log_tf,
+                    aggregation_suffix,
                     feed_label,
                     chunk_count,
                     elapsed_secs

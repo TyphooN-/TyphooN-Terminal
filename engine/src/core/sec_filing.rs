@@ -596,7 +596,7 @@ pub async fn scrape_filings_for_ticker(
                 total_alerts += alerts;
             }
             Err(e) => {
-                tracing::warn!(
+                tracing::debug!(
                     "Form 4 parse failed for {} {}: {e}",
                     f.ticker,
                     f.accession_number
