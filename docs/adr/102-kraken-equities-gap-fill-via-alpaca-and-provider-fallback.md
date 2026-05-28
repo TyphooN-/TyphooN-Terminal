@@ -242,6 +242,28 @@ The fallback scheduler must be bounded:
   thousands of symbols first;
 - backpressure when the app is under heavy sync/render load.
 
+Provider-assist throughput policy:
+
+- Yahoo Chart uses the shared fallback HTTP client but is no longer executed
+  inline in the broker command loop. Each Yahoo Chart request is spawned behind
+  a small semaphore so a slow Yahoo response cannot block Kraken/Alpaca/Stooq
+  command handling, while the semaphore prevents unbounded full-catalog fanout.
+- Alpaca broad stock assist should prefer `/v2/stocks/bars?symbols=...` batches
+  for non-focused `15Min`, `30Min`, `1Hour`, `4Hour`, `1Day`, and `1Week`
+  work. These are the Kraken-equities/provider-assist lanes where one request
+  can resolve many symbols and materially improves catalog catch-up speed.
+- Focused/visible symbols stay on the single-symbol Alpaca lane. Foreground work
+  should not sit behind a large background batch, and single-symbol handling
+  preserves the more careful incremental/backfill behavior used by active
+  charts.
+- `1Month` remains single-symbol/fallback-provider specific until an explicit
+  monthly aggregation/provenance path exists. `1Min` and `5Min` remain demand
+  scoped by policy; do not batch-broaden them just because an endpoint accepts
+  the request.
+- Batch results still write the `alpaca:*` cache namespace and emit per-symbol
+  settlement/no-data/retry events. A batch transport optimization must not blur
+  provenance or hide symbol-level failures.
+
 ## UI / observability
 
 Users need to see that the chart is partially synthetic/fallback-filled.
@@ -330,13 +352,14 @@ Default policy:
 
 ## Implementation plan / reopen criteria
 
-The current implementation covers the native/full-catalog denominator, Sync
-Status separation, Yahoo/Stooq fallback fetchers, and assist-only controls. Reopen
-this ADR for code work when adding a new fallback provider, provenance-span
-rendering, strategy/backtest policy hooks, or the full depth/freshness merge
-policy described above. Any future change must keep the invariant above: high-TF
-full catalog, intraday demand-scoped unless an explicit provider policy says
-otherwise.
+- The current implementation covers the native/full-catalog denominator, Sync
+  Status separation, bounded-concurrent Yahoo Chart fetches, Alpaca multi-symbol
+  stock batches for broad non-focused assist work, Yahoo/Stooq fallback fetchers,
+  and assist-only controls. Reopen this ADR for code work when adding a new
+  fallback provider, provenance-span rendering, strategy/backtest policy hooks,
+  or the full depth/freshness merge policy described above. Any future change
+  must keep the invariant above: high-TF full catalog, intraday demand-scoped
+  unless an explicit provider policy says otherwise.
 
 Historical implementation items that remain relevant as regression checks:
 

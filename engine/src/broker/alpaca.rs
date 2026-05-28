@@ -1996,6 +1996,129 @@ impl AlpacaBroker {
         }
     }
 
+    /// Fetch stock bars for multiple symbols with Alpaca's `/v2/stocks/bars`
+    /// endpoint. This is intentionally stock-only and targeted at high-timeframe
+    /// Kraken-equities assist work where one request can return many symbols
+    /// without collapsing provenance into the Kraken cache namespace.
+    pub async fn get_stock_bars_batch_targeted(
+        &self,
+        symbols: &[String],
+        timeframe: &str,
+        limit: u32,
+    ) -> Result<(HashMap<String, Vec<Bar>>, FetchOutcome), String> {
+        let symbols: Vec<String> = symbols
+            .iter()
+            .map(|symbol| symbol.trim().to_ascii_uppercase())
+            .filter(|symbol| !symbol.is_empty() && !symbol.contains('/'))
+            .collect();
+        if symbols.is_empty() {
+            return Ok((HashMap::new(), FetchOutcome::Complete));
+        }
+        if timeframe == "1Month" {
+            return Err("Alpaca batch bars do not support 1Month aggregation".to_string());
+        }
+
+        let start = chrono::Utc::now()
+            - chrono::Duration::days(lookback_days_for_request(
+                false,
+                timeframe,
+                limit,
+                BarsLookbackMode::Targeted,
+            ));
+        let symbol_csv = symbols.join(",");
+        let mut last_error = String::new();
+
+        for feed in self.stock_bar_feeds() {
+            let mut out: HashMap<String, Vec<Bar>> = HashMap::new();
+            let mut next_page_token: Option<String> = None;
+            let mut rate_limited = false;
+            loop {
+                self.bar_rate_limiter.wait().await;
+                let mut params = vec![
+                    ("symbols", symbol_csv.clone()),
+                    ("timeframe", timeframe.to_string()),
+                    ("limit", limit.min(10_000).max(1).to_string()),
+                    ("sort", "asc".to_string()),
+                    ("adjustment", "all".to_string()),
+                ];
+                if let Some(ref token) = next_page_token {
+                    params.push(("page_token", token.clone()));
+                } else {
+                    params.push(("start", start.format("%Y-%m-%dT00:00:00Z").to_string()));
+                }
+                if let Some(feed) = feed {
+                    params.push(("feed", feed.to_string()));
+                }
+
+                let resp = self
+                    .client
+                    .get(format!("{}/v2/stocks/bars", DATA_BASE))
+                    .headers(self.headers())
+                    .query(&params)
+                    .send()
+                    .await
+                    .map_err(|e| format!("Batch bars request failed: {e}"))?;
+                let _ = self
+                    .bar_rate_limiter
+                    .observe_rate_limit_headers(resp.headers())
+                    .await;
+                if resp.status().as_u16() == 429 {
+                    self.bar_rate_limiter.trigger_cooldown().await;
+                    rate_limited = true;
+                    break;
+                }
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    if matches!(feed, Some("sip")) {
+                        let _ = self.note_sip_bar_entitlement_failure(status, &body);
+                    }
+                    last_error = format!("HTTP {} (feed={:?})", status, feed);
+                    break;
+                }
+                let json: serde_json::Value = resp
+                    .json()
+                    .await
+                    .map_err(|e| format!("Batch bars parse failed: {e}"))?;
+                for (symbol, mut bars) in Self::parse_stock_bars_by_symbol(&json, &symbols) {
+                    out.entry(symbol).or_default().append(&mut bars);
+                }
+                next_page_token = json
+                    .get("next_page_token")
+                    .and_then(|t| t.as_str())
+                    .filter(|token| !token.is_empty())
+                    .map(|token| token.to_string());
+                if next_page_token.is_none() {
+                    break;
+                }
+            }
+
+            if !out.is_empty() {
+                for bars in out.values_mut() {
+                    bars.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+                    bars.dedup_by(|a, b| a.timestamp == b.timestamp);
+                }
+                return Ok((
+                    out,
+                    if rate_limited {
+                        FetchOutcome::RateLimitedPartial
+                    } else {
+                        FetchOutcome::Complete
+                    },
+                ));
+            }
+            if rate_limited {
+                return Ok((HashMap::new(), FetchOutcome::RateLimitedEmpty));
+            }
+        }
+
+        if last_error.is_empty() {
+            Ok((HashMap::new(), FetchOutcome::Complete))
+        } else {
+            Err(last_error)
+        }
+    }
+
     pub async fn get_bars(
         &self,
         symbol: &str,
@@ -2438,6 +2561,23 @@ impl AlpacaBroker {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    fn parse_stock_bars_by_symbol(
+        json: &serde_json::Value,
+        symbols: &[String],
+    ) -> HashMap<String, Vec<Bar>> {
+        let mut out = HashMap::new();
+        let Some(bars_by_symbol) = json["bars"].as_object() else {
+            return out;
+        };
+        for symbol in symbols {
+            if let Some(bars) = bars_by_symbol.get(symbol) {
+                let wrapped = serde_json::json!({ "bars": bars });
+                out.insert(symbol.clone(), Self::parse_bars(&wrapped, symbol, false));
+            }
+        }
+        out
     }
 
     // ── Options Chain ───────────────────────────────────────────────
@@ -3837,6 +3977,26 @@ mod tests {
     }
 
     // ── parse_bars (mock JSON) ──────────────────────────────────────
+
+    #[test]
+    fn parse_stock_bars_by_symbol_batch_valid() {
+        let json = json!({
+            "bars": {
+                "AAPL": [{"t":"2024-01-02T00:00:00Z","o":100.0,"h":110.0,"l":99.0,"c":105.0,"v":1000.0}],
+                "MSFT": [{"t":"2024-01-02T00:00:00Z","o":200.0,"h":220.0,"l":190.0,"c":210.0,"v":2000.0}]
+            }
+        });
+        let symbols = vec![
+            "AAPL".to_string(),
+            "MSFT".to_string(),
+            "MISSING".to_string(),
+        ];
+        let bars = AlpacaBroker::parse_stock_bars_by_symbol(&json, &symbols);
+        assert_eq!(bars["AAPL"].len(), 1);
+        assert_eq!(bars["AAPL"][0].close, 105.0);
+        assert_eq!(bars["MSFT"].len(), 1);
+        assert!(!bars.contains_key("MISSING"));
+    }
 
     #[test]
     fn parse_bars_stock_valid() {

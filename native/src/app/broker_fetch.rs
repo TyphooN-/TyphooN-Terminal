@@ -1,5 +1,172 @@
 use super::*;
 
+pub(super) async fn run_alpaca_batch_fetch_task(
+    broker: AlpacaBroker,
+    shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
+    broker_msg_tx: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
+    symbols: Vec<String>,
+    timeframe: String,
+) {
+    let Some(tf) = normalize_sync_timeframe_key(&timeframe) else {
+        return;
+    };
+    let timeframe = tf.to_string();
+    let tf_alpaca = match timeframe.as_str() {
+        "1Min" | "M1" => "1Min",
+        "5Min" | "M5" => "5Min",
+        "15Min" | "M15" => "15Min",
+        "30Min" | "M30" => "30Min",
+        "1Hour" | "H1" => "1Hour",
+        "4Hour" | "H4" => "4Hour",
+        "1Day" | "D1" => "1Day",
+        "1Week" | "W1" => "1Week",
+        _ => "1Day",
+    };
+    let symbols: Vec<String> = symbols
+        .into_iter()
+        .map(|symbol| normalize_market_data_symbol(&symbol).replace('/', ""))
+        .filter(|symbol| !symbol.is_empty())
+        .collect();
+    if symbols.is_empty() {
+        return;
+    }
+    let limit = alpaca_sync_target_bars(&timeframe)
+        .unwrap_or(1500)
+        .min(10_000);
+    let result = broker
+        .get_stock_bars_batch_targeted(&symbols, tf_alpaca, limit)
+        .await;
+    match result {
+        Ok((bars_by_symbol, outcome)) => {
+            if matches!(
+                outcome,
+                typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedEmpty
+            ) {
+                for symbol in symbols {
+                    let _ = broker_msg_tx.send(BrokerMsg::AlpacaRetryEnqueue {
+                        symbol: symbol.clone(),
+                        timeframe: timeframe.clone(),
+                        reason: "batch_rate_limited_empty".into(),
+                    });
+                    let _ = broker_msg_tx.send(BrokerMsg::AlpacaFetchSettled {
+                        symbol,
+                        timeframe: timeframe.clone(),
+                        success: false,
+                    });
+                }
+                return;
+            }
+            for symbol in &symbols {
+                let new_bars = bars_by_symbol.get(symbol).cloned().unwrap_or_default();
+                if new_bars.is_empty() {
+                    if matches!(
+                        outcome,
+                        typhoon_engine::broker::alpaca::FetchOutcome::Complete
+                    ) {
+                        let _ = broker_msg_tx.send(BrokerMsg::AlpacaNoData {
+                            symbol: symbol.clone(),
+                            timeframe: timeframe.clone(),
+                            reason: "Alpaca batch returned no bars for symbol".to_string(),
+                        });
+                    } else {
+                        let _ = broker_msg_tx.send(BrokerMsg::AlpacaRetryEnqueue {
+                            symbol: symbol.clone(),
+                            timeframe: timeframe.clone(),
+                            reason: "batch_rate_limited_partial".into(),
+                        });
+                    }
+                    let _ = broker_msg_tx.send(BrokerMsg::AlpacaFetchSettled {
+                        symbol: symbol.clone(),
+                        timeframe: timeframe.clone(),
+                        success: false,
+                    });
+                    continue;
+                }
+                let cache_key = format!("alpaca:{symbol}:{timeframe}");
+                let bars: Vec<serde_json::Value> = new_bars
+                    .into_iter()
+                    .filter_map(|bar| serde_json::to_value(bar).ok())
+                    .collect();
+                match store_json_bars_in_cache(
+                    shared_cache.read().ok().and_then(|g| g.clone()),
+                    cache_key,
+                    bars,
+                    true,
+                )
+                .await
+                {
+                    Ok(count) if count > 0 => {
+                        if matches!(
+                            outcome,
+                            typhoon_engine::broker::alpaca::FetchOutcome::Complete
+                        ) {
+                            let _ = broker_msg_tx.send(BrokerMsg::AlpacaBackfillComplete {
+                                symbol: symbol.clone(),
+                                timeframe: timeframe.clone(),
+                                bar_count: count,
+                                target_bars: count,
+                            });
+                        }
+                        let _ = broker_msg_tx.send(BrokerMsg::BarsFetched {
+                            source: "alpaca".into(),
+                            symbol: symbol.clone(),
+                            timeframe: timeframe.clone(),
+                            count,
+                        });
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                            "Alpaca batch cache write failed for {} {}: {}",
+                            symbol, timeframe, e
+                        )));
+                    }
+                }
+                if matches!(
+                    outcome,
+                    typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedPartial
+                ) {
+                    let _ = broker_msg_tx.send(BrokerMsg::AlpacaRetryEnqueue {
+                        symbol: symbol.clone(),
+                        timeframe: timeframe.clone(),
+                        reason: "batch_rate_limited_partial".into(),
+                    });
+                }
+                let _ = broker_msg_tx.send(BrokerMsg::AlpacaFetchSettled {
+                    symbol: symbol.clone(),
+                    timeframe: timeframe.clone(),
+                    success: matches!(
+                        outcome,
+                        typhoon_engine::broker::alpaca::FetchOutcome::Complete
+                    ),
+                });
+            }
+        }
+        Err(e) => {
+            let is_rate = e.contains("429") || e.to_lowercase().contains("rate limit");
+            for symbol in symbols {
+                if is_rate {
+                    let _ = broker_msg_tx.send(BrokerMsg::AlpacaRetryEnqueue {
+                        symbol: symbol.clone(),
+                        timeframe: timeframe.clone(),
+                        reason: format!("batch_err:{e}"),
+                    });
+                } else {
+                    let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                        "Alpaca batch fetch failed for {} {}: {}",
+                        symbol, timeframe, e
+                    )));
+                }
+                let _ = broker_msg_tx.send(BrokerMsg::AlpacaFetchSettled {
+                    symbol,
+                    timeframe: timeframe.clone(),
+                    success: false,
+                });
+            }
+        }
+    }
+}
+
 pub(super) async fn run_alpaca_fetch_task(
     broker: AlpacaBroker,
     shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,

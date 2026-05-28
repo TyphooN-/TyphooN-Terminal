@@ -6972,6 +6972,11 @@ enum BrokerCmd {
         db_path: std::path::PathBuf,
         backfill_complete: bool,
     },
+    /// Fetch bars for several stock symbols through Alpaca's batch bars endpoint.
+    AlpacaFetchBarsBatch {
+        symbols: Vec<String>,
+        timeframe: String,
+    },
     /// Kraken public Spot/xStocks backfill via the public OHLC API.
     KrakenBackfill {
         symbol: String,
@@ -14177,6 +14182,7 @@ impl TyphooNApp {
             let lan_remote_tx_ref = lan_remote_tx.clone();
             let mut lan_reconnect_handle: Option<tokio::task::AbortHandle> = None;
             let mut alpaca_fetch_permits = Arc::new(tokio::sync::Semaphore::new(4));
+            let yahoo_chart_fetch_permits = Arc::new(tokio::sync::Semaphore::new(4));
             let kraken_fetch_permits =
                 Arc::new(tokio::sync::Semaphore::new(KRAKEN_PUBLIC_FETCH_PERMITS));
             let kraken_public_client = reqwest::Client::builder()
@@ -25411,58 +25417,73 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     }
                     BrokerCmd::YahooChartFetchBars { symbol, timeframe } => {
                         let source = "yahoo-chart".to_string();
-                        let result = async {
-                            let bars = fetch_yahoo_chart_bars(&fallback_bar_client, &symbol, &timeframe).await?;
-                            let count = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                                store_fallback_bars(&cache, &source, &symbol, &timeframe, &bars)?
-                            } else {
-                                return Err("cache unavailable".to_string());
-                            };
-                            Ok::<usize, String>(count)
-                        }
-                        .await;
-                        match result {
-                            Ok(count) => {
-                                if count == 0 {
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Unresolvable {
-                                        broker: source.clone(),
-                                        symbol: symbol.clone(),
-                                        timeframe: timeframe.clone(),
-                                        reason: "provider returned no bars".to_string(),
-                                    });
-                                }
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::BarsFetched {
-                                    source,
-                                    symbol,
-                                    timeframe,
-                                    count,
-                                });
-                            }
-                            Err(error) => {
-                                let provider_no_data = error.contains("HTTP 404")
-                                    || error.contains("empty result")
-                                    || error.contains("missing quote arrays");
-                                if provider_no_data {
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Unresolvable {
-                                        broker: source.clone(),
-                                        symbol: symbol.clone(),
-                                        timeframe: timeframe.clone(),
-                                        reason: error.clone(),
-                                    });
-                                } else {
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                        "Yahoo Chart fallback failed for {} {}: {}",
-                                        symbol, timeframe, error
-                                    )));
-                                }
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::BarsFetched {
+                        let client = fallback_bar_client.clone();
+                        let shared_cache = shared_cache_broker.clone();
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let permits = yahoo_chart_fetch_permits.clone();
+                        tokio::spawn(async move {
+                            let Ok(_permit) = permits.acquire_owned().await else {
+                                let _ = msg_tx.send(BrokerMsg::BarsFetched {
                                     source,
                                     symbol,
                                     timeframe,
                                     count: 0,
                                 });
+                                return;
+                            };
+                            let result = async {
+                                let bars = fetch_yahoo_chart_bars(&client, &symbol, &timeframe).await?;
+                                let count = if let Some(cache) = shared_cache.read().ok().and_then(|g| g.clone()) {
+                                    store_fallback_bars(&cache, &source, &symbol, &timeframe, &bars)?
+                                } else {
+                                    return Err("cache unavailable".to_string());
+                                };
+                                Ok::<usize, String>(count)
                             }
-                        }
+                            .await;
+                            match result {
+                                Ok(count) => {
+                                    if count == 0 {
+                                        let _ = msg_tx.send(BrokerMsg::Unresolvable {
+                                            broker: source.clone(),
+                                            symbol: symbol.clone(),
+                                            timeframe: timeframe.clone(),
+                                            reason: "provider returned no bars".to_string(),
+                                        });
+                                    }
+                                    let _ = msg_tx.send(BrokerMsg::BarsFetched {
+                                        source,
+                                        symbol,
+                                        timeframe,
+                                        count,
+                                    });
+                                }
+                                Err(error) => {
+                                    let provider_no_data = error.contains("HTTP 404")
+                                        || error.contains("empty result")
+                                        || error.contains("missing quote arrays");
+                                    if provider_no_data {
+                                        let _ = msg_tx.send(BrokerMsg::Unresolvable {
+                                            broker: source.clone(),
+                                            symbol: symbol.clone(),
+                                            timeframe: timeframe.clone(),
+                                            reason: error.clone(),
+                                        });
+                                    } else {
+                                        let _ = msg_tx.send(BrokerMsg::Error(format!(
+                                            "Yahoo Chart fallback failed for {} {}: {}",
+                                            symbol, timeframe, error
+                                        )));
+                                    }
+                                    let _ = msg_tx.send(BrokerMsg::BarsFetched {
+                                        source,
+                                        symbol,
+                                        timeframe,
+                                        count: 0,
+                                    });
+                                }
+                            }
+                        });
                     }
                     BrokerCmd::StooqDailyFetchBars { symbol, timeframe } => {
                         let source = "stooq".to_string();
@@ -26940,6 +26961,45 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 timeframe,
                                 success: false,
                             });
+                        }
+                    }
+                    BrokerCmd::AlpacaFetchBarsBatch { symbols, timeframe } => {
+                        if let Some(ref b) = broker {
+                            let broker = b.clone();
+                            let msg_tx = broker_msg_tx_clone.clone();
+                            let shared_cache = shared_cache_broker.clone();
+                            let permits = alpaca_fetch_permits.clone();
+                            tokio::spawn(async move {
+                                let Ok(_permit) = permits.acquire_owned().await else {
+                                    for symbol in symbols {
+                                        let _ = msg_tx.send(BrokerMsg::AlpacaFetchSettled {
+                                            symbol,
+                                            timeframe: timeframe.clone(),
+                                            success: false,
+                                        });
+                                    }
+                                    return;
+                                };
+                                run_alpaca_batch_fetch_task(
+                                    broker,
+                                    shared_cache,
+                                    msg_tx,
+                                    symbols,
+                                    timeframe,
+                                )
+                                .await;
+                            });
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
+                                "Broker not connected — connect Alpaca first".into(),
+                            ));
+                            for symbol in symbols {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::AlpacaFetchSettled {
+                                    symbol,
+                                    timeframe: timeframe.clone(),
+                                    success: false,
+                                });
+                            }
                         }
                     }
                     BrokerCmd::FetchAllBars { symbol, timeframe } => {

@@ -1,5 +1,7 @@
 use super::*;
 
+const ALPACA_BATCH_FETCH_MAX_SYMBOLS: usize = 50;
+
 pub(super) fn normalize_kraken_equity_symbol_list<'a, I>(symbols: I) -> Vec<String>
 where
     I: IntoIterator<Item = &'a String>,
@@ -1062,11 +1064,7 @@ impl TyphooNApp {
                     alpaca_sync_target_bars,
                 );
                 self.kraken_equities_sync_cursor = cursor;
-                for candidate in candidates {
-                    if self.queue_alpaca_fetch(&candidate.symbol, &candidate.timeframe) {
-                        dispatched += 1;
-                    }
-                }
+                dispatched += self.queue_alpaca_batch_fetches_from_candidates(candidates);
             }
         }
 
@@ -1293,6 +1291,53 @@ impl TyphooNApp {
             bar_requests_per_minute: self.alpaca_effective_historical_rpm(),
             fetch_permits: capacity.fetch_permits,
         });
+    }
+
+    fn alpaca_batch_fetch_supported(timeframe: &str) -> bool {
+        matches!(
+            normalize_sync_timeframe_key(timeframe),
+            Some("15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week")
+        )
+    }
+
+    fn queue_alpaca_batch_fetches_from_candidates(
+        &mut self,
+        candidates: Vec<AlpacaSyncCandidate>,
+    ) -> usize {
+        let mut by_tf: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        let mut dispatched = 0usize;
+        for candidate in candidates {
+            if candidate.focus || !Self::alpaca_batch_fetch_supported(&candidate.timeframe) {
+                if self.queue_alpaca_fetch(&candidate.symbol, &candidate.timeframe) {
+                    dispatched += 1;
+                }
+                continue;
+            }
+            let Some(tf) = normalize_sync_timeframe_key(&candidate.timeframe) else {
+                continue;
+            };
+            let symbol = normalize_market_data_symbol(&candidate.symbol).replace('/', "");
+            let fetch_key = alpaca_fetch_key(&symbol, tf);
+            if self.is_fetch_on_cooldown("alpaca", &symbol, tf) {
+                continue;
+            }
+            if !self.pending_alpaca_fetches.insert(fetch_key) {
+                continue;
+            }
+            self.mark_fetch_queued("alpaca", &symbol, tf);
+            by_tf.entry(tf.to_string()).or_default().push(symbol);
+            dispatched += 1;
+        }
+        for (timeframe, symbols) in by_tf {
+            for chunk in symbols.chunks(ALPACA_BATCH_FETCH_MAX_SYMBOLS) {
+                let _ = self.broker_tx.send(BrokerCmd::AlpacaFetchBarsBatch {
+                    symbols: chunk.to_vec(),
+                    timeframe: timeframe.clone(),
+                });
+            }
+        }
+        dispatched
     }
 
     pub(super) fn queue_alpaca_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
@@ -1829,11 +1874,7 @@ impl TyphooNApp {
         self.alpaca_sync_cursor = cursor;
 
         let mut dispatched = 0usize;
-        for candidate in candidates {
-            if self.queue_alpaca_fetch(&candidate.symbol, &candidate.timeframe) {
-                dispatched += 1;
-            }
-        }
+        dispatched += self.queue_alpaca_batch_fetches_from_candidates(candidates);
         dispatched
     }
 
