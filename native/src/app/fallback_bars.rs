@@ -77,17 +77,40 @@ fn yahoo_chart_request_symbol(symbol: &str) -> String {
     symbol
 }
 
-fn yahoo_interval_and_range(timeframe: &str) -> Option<(&'static str, &'static str)> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum YahooChartWindow {
+    Range(&'static str),
+    PeriodFromUnixEpoch,
+}
+
+fn yahoo_interval_and_window(timeframe: &str) -> Option<(&'static str, YahooChartWindow)> {
     match normalize_sync_timeframe_key(timeframe)? {
         // Yahoo hard-limits 1m history. Keep this as freshness assist only.
-        "1Min" => Some(("1m", "7d")),
-        "5Min" => Some(("5m", "60d")),
-        "15Min" => Some(("15m", "60d")),
-        "30Min" => Some(("30m", "60d")),
-        "1Hour" => Some(("1h", "2y")),
-        "1Day" => Some(("1d", "max")),
-        "1Week" => Some(("1wk", "max")),
-        "1Month" => Some(("1mo", "max")),
+        "1Min" => Some(("1m", YahooChartWindow::Range("7d"))),
+        "5Min" => Some(("5m", YahooChartWindow::Range("60d"))),
+        "15Min" => Some(("15m", YahooChartWindow::Range("60d"))),
+        "30Min" => Some(("30m", YahooChartWindow::Range("60d"))),
+        "1Hour" => Some(("1h", YahooChartWindow::Range("2y"))),
+        // Yahoo silently down-samples range=max daily/weekly requests for some
+        // equities (TNDM reproduced this) to monthly bars while returning 200.
+        // Use explicit period bounds so the requested granularity is honored.
+        "1Day" => Some(("1d", YahooChartWindow::PeriodFromUnixEpoch)),
+        "1Week" => Some(("1wk", YahooChartWindow::PeriodFromUnixEpoch)),
+        "1Month" => Some(("1mo", YahooChartWindow::Range("max"))),
+        _ => None,
+    }
+}
+
+fn yahoo_expected_granularity(timeframe: &str) -> Option<&'static str> {
+    match normalize_sync_timeframe_key(timeframe)? {
+        "1Min" => Some("1m"),
+        "5Min" => Some("5m"),
+        "15Min" => Some("15m"),
+        "30Min" => Some("30m"),
+        "1Hour" => Some("1h"),
+        "1Day" => Some("1d"),
+        "1Week" => Some("1wk"),
+        "1Month" => Some("1mo"),
         _ => None,
     }
 }
@@ -97,15 +120,25 @@ pub(super) async fn fetch_yahoo_chart_bars(
     symbol: &str,
     timeframe: &str,
 ) -> Result<Vec<FallbackBar>, String> {
-    let (interval, range) = yahoo_interval_and_range(timeframe)
+    let (interval, window) = yahoo_interval_and_window(timeframe)
+        .ok_or_else(|| format!("Yahoo Chart unsupported timeframe {timeframe}"))?;
+    let expected_granularity = yahoo_expected_granularity(timeframe)
         .ok_or_else(|| format!("Yahoo Chart unsupported timeframe {timeframe}"))?;
     let symbol = yahoo_chart_request_symbol(symbol);
     if symbol.is_empty() {
         return Err("Yahoo Chart empty symbol".to_string());
     }
-    let url = format!(
-        "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={range}&interval={interval}&events=history&includePrePost=false"
-    );
+    let url = match window {
+        YahooChartWindow::Range(range) => format!(
+            "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={range}&interval={interval}&events=history&includePrePost=false"
+        ),
+        YahooChartWindow::PeriodFromUnixEpoch => {
+            let period2 = chrono::Utc::now().timestamp().saturating_add(86_400);
+            format!(
+                "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?period1=0&period2={period2}&interval={interval}&events=history&includePrePost=false"
+            )
+        }
+    };
     let resp = client
         .get(&url)
         .header("User-Agent", "TyphooN-Terminal/1.0")
@@ -132,6 +165,12 @@ pub(super) async fn fetch_yahoo_chart_bars(
         .as_array()
         .and_then(|arr| arr.first())
         .ok_or_else(|| format!("Yahoo Chart empty result for {symbol} {timeframe}"))?;
+    let actual_granularity = result["meta"]["dataGranularity"].as_str().unwrap_or("");
+    if actual_granularity != expected_granularity {
+        return Err(format!(
+            "Yahoo Chart returned {actual_granularity} bars for {symbol} {timeframe}; expected {expected_granularity}"
+        ));
+    }
     let Some(ts) = result["timestamp"].as_array() else {
         return Ok(Vec::new());
     };
@@ -293,5 +332,27 @@ mod tests {
     fn yahoo_chart_request_symbol_keeps_non_class_dot_symbols() {
         assert_eq!(yahoo_chart_request_symbol("DGAC.U"), "DGAC.U");
         assert_eq!(yahoo_chart_request_symbol("BIII.U"), "BIII.U");
+    }
+
+    #[test]
+    fn yahoo_chart_daily_and_weekly_use_period_bounds_to_avoid_monthly_downsample() {
+        assert_eq!(
+            yahoo_interval_and_window("1Day"),
+            Some(("1d", YahooChartWindow::PeriodFromUnixEpoch))
+        );
+        assert_eq!(
+            yahoo_interval_and_window("D1"),
+            Some(("1d", YahooChartWindow::PeriodFromUnixEpoch))
+        );
+        assert_eq!(
+            yahoo_interval_and_window("1Week"),
+            Some(("1wk", YahooChartWindow::PeriodFromUnixEpoch))
+        );
+        assert_eq!(yahoo_expected_granularity("1Day"), Some("1d"));
+        assert_eq!(yahoo_expected_granularity("1Week"), Some("1wk"));
+        assert_eq!(
+            yahoo_interval_and_window("1Month"),
+            Some(("1mo", YahooChartWindow::Range("max")))
+        );
     }
 }
