@@ -354,7 +354,7 @@ Default policy:
 - Sync Status expected rows and `Merged` rows use the same timeframe policy, so
   the visible denominator matches the scheduler contract.
 
-## Implementation plan / reopen criteria
+## Implementation status / reopen criteria
 
 - The current implementation covers the native/full-catalog denominator, Sync
   Status separation, bounded-concurrent Yahoo Chart fetches, Alpaca multi-symbol
@@ -377,7 +377,7 @@ Historical implementation items that remain relevant as regression checks:
 5. Tests should cover mapping, merge precedence, provider tombstones, and the
    high-TF catalog vs intraday demand denominator rule.
 
-## Current policy / remaining reopen questions
+## Current policy / provider-gated design questions
 
 Resolved policy:
 
@@ -392,7 +392,7 @@ Resolved policy:
   counted as weekly/monthly coverage until a separate aggregation/provenance pass
   exists.
 
-Remaining reopen questions:
+Provider-gated questions:
 
 - Which additional provider should be the first dedicated front-fill lane for
   `1Min` -> `4Hour` when both Kraken and Alpaca are delayed/gated? Yahoo Chart is

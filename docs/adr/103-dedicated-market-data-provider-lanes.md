@@ -1,6 +1,6 @@
 # ADR-103: Dedicated Market-Data Provider Lanes for Deep/Fresh Bars
 
-**Status:** Proposed | **Date:** 2026-05-28
+**Status:** Accepted / roadmap | **Date:** 2026-05-28
 
 ## Context
 
@@ -26,7 +26,7 @@ The goal is not to turn TyphooN into a data-vendor product. The goal is:
 Pricing and plan details below are a point-in-time investigation from 2026-05-28.
 Provider plans change. Treat this as implementation guidance, not a contract.
 
-## Decision direction
+## Decision
 
 Use a layered provider model:
 
@@ -163,6 +163,18 @@ For a low-resource user base, the honest baseline is:
 3. add one or two cheap paid lanes for users who want reliability;
 4. never require a paid provider for core charting.
 
+## Current implementation
+
+The implemented baseline is intentionally narrower than the full provider matrix:
+
+- Yahoo Chart and Stooq are the zero-key fallback lanes currently wired. Yahoo stores bars under `yahoo-chart:SYMBOL:TF`; Stooq stores daily-only bars under `stooq:SYMBOL:1Day`. Stooq is not weekly/monthly coverage unless a separate aggregation/provenance pass lands.
+- Alpaca remains the implemented user-key broker/data lane. The current settings split broad Alpaca universe sync from Kraken-equities assist, so connecting Alpaca for Kraken help does not automatically pull the full Alpaca asset universe.
+- Kraken-equities Sync Status shows native Kraken, fallback provider, and derived `Merged` rows separately. `Merged` is chart-usable coverage, not a cache source and not raw provider workload.
+- Provider fallback is opt-in and scheduler-bounded. Broad fallback starts at `15Min`+ where provider cost/depth is plausible; `1Min`/`5Min` stay demand/focus scoped until a provider proves broad low-timeframe viability.
+- Live quote/depth overlays are still independent from historical candle source. A chart may use Yahoo/Alpaca/Stooq bars while order-entry still needs a fresh broker/native quote and stale/delayed warnings.
+
+The rest of this ADR is retained as the provider-lane contract and evaluation map for future optional lanes. Do not treat every provider below as an active implementation item.
+
 ## Recommended implementation priority
 
 ### Phase 1 — Hardening the free baseline
@@ -263,20 +275,28 @@ For market orders, stale/delayed quote warnings matter more than candle freshnes
 A chart can be visually useful from Yahoo/Polygon/Alpaca bars while the order
 button still needs broker-native/current quote state.
 
-## Open questions / verification tasks
+## Reopen criteria / provider-gated verification
 
-1. Verify Yahoo Chart intraday freshness during live market hours for a sample of
-   Kraken equities (`AAPL`, `TNDM`, `WOK`, thin/SPAC/unit symbols).
-2. Verify MarketData.app actual candlestick freshness and whether its cheap plans
+These are not current implementation blockers. Reopen this ADR when adding another
+provider lane, changing default provider policy, or promoting a fallback source
+from best-effort to preferred:
+
+1. Measure Yahoo Chart intraday freshness during live market hours for Kraken
+   equities including `AAPL`, `TNDM`, `WOK`, thin names, and SPAC/unit symbols.
+   Current policy treats Yahoo as opportunistic/unofficial, not contracted
+   realtime.
+2. Measure MarketData.app actual candlestick freshness and whether its cheap plans
    are delayed enough to make it deep-history-only.
 3. Verify Tiingo IEX historical intraday depth and license terms for a desktop app
    with user-supplied keys.
 4. Verify Twelve Data historical depth per interval using its earliest-timestamp
    endpoint before integrating it.
-5. Decide whether unofficial zero-key sources default on, default off, or default
-   on only after a disclaimer acknowledgement.
-6. Decide if Polygon/Massive should be the recommended paid lane despite not being
-   low-resource friendly for everyone.
+5. Revisit whether unofficial zero-key sources should default on, default off, or
+   require acknowledgement if the app becomes packaged/distributed beyond personal
+   use.
+6. Revisit whether Polygon/Massive should be the recommended paid lane if users
+   want a cleaner paid bar source despite the cost not being low-resource friendly
+   for everyone.
 
 ## References checked
 

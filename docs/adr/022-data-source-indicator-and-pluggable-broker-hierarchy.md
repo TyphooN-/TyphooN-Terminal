@@ -83,11 +83,11 @@ DataSourceManager {
 - `DataSourceEntry` struct: id, cache_prefix, label, priority, healthy, last_success_ts, asset_classes
 - `SymbolOverride` struct: pattern (supports `*` wildcard), ordered source IDs
 - `DataSourceManager`: resolve_candidates(), mark_success/failure(), update_health(), add_override()
-- Default 6 sources: MT5 (prio 1), Alpaca (2), tastytrade (3), CryptoCompare (4), Kraken (5), Kraken Futures (6)
+- Default broker-source manager entries remain MT5, Alpaca, tastytrade, CryptoCompare, Kraken Spot, and Kraken Futures; chart loading extends that with implementation-specific Kraken Securities/xStocks and provider-assist namespaces documented in ADR-102/ADR-103.
 - `SOURCES` console command shows health dashboard with result card
-- `find_cache_key()` uses `DataSourceManager::resolve_candidates()` for priority-ordered lookup
+- `find_cache_key()` uses `DataSourceManager::resolve_candidates()` for priority-ordered lookup where the legacy manager applies; chart-cache lookup may add source-specific fallbacks around it.
 - 17 unit tests (roundtrip, health, overrides, deny_unknown_fields, source ordering)
-- Vec<DataSourceEntry> (not HashMap) — 6 entries fits L1 cache, no hash overhead
+- Vec<DataSourceEntry> (not HashMap) — the small source list fits L1 cache, no hash overhead
 
 ## Consequences
 

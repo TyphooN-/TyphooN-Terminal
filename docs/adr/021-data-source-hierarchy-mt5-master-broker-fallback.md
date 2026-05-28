@@ -24,11 +24,12 @@ Previously, the system treated the connected broker (Alpaca) as the primary data
 2. Alpaca (alpaca: prefix) — US equities/crypto broker feed
 3. tastytrade (tastytrade: prefix) — DXLink bars and options market context
 4. CryptoCompare (cryptocompare: prefix) — deep crypto history
-5. Kraken Spot/xStocks (kraken: prefix) — public recent/gap-fill bars + authenticated Spot trading
-6. Kraken Futures (kraken-futures: prefix) — public futures chart candles
+5. Kraken Spot (kraken: prefix) — crypto public recent/gap-fill bars + authenticated Spot trading
+6. Kraken Securities / xStocks (kraken-equities: prefix) — tokenized-equity bars via iapi, with separate provider-assist namespaces
+7. Kraken Futures (kraken-futures: prefix) — public futures chart candles
 ```
 
-`engine/src/core/data_source.rs::DataSourceManager` formalizes this order, with per-symbol overrides and health-based fallback. Fast chart reloads in `native/src/app.rs::ChartState::try_load` use the same six-source order.
+`engine/src/core/data_source.rs::DataSourceManager` formalizes the legacy broker-source order, with per-symbol overrides and health-based fallback. Fast chart reloads use the current chart-source order, including the implementation-specific `kraken-equities` and provider-assist fallbacks documented in `docs/ARCHITECTURE.md` and ADR-102.
 
 ### MT5 Coverage via BarCacheWriter
 
@@ -65,7 +66,7 @@ The old terminal-side 10K/20K/50K per-timeframe table is obsolete. Current MT5 s
 
 ### Crypto-Specific Hierarchy (ADR-023)
 
-Crypto symbols still prefer MT5 when Darwinex data exists, but non-primary crypto bars are no longer a weekend-only special case. CryptoCompare provides deep history, Kraken Spot/xStocks provides recent public OHLCV under `kraken:SYMBOL:TF`, and Kraken Futures syncs independently under `kraken-futures:SYMBOL:TF`. Non-primary merged bars are tracked as gap-fill timestamps and rendered magenta on charts.
+Crypto symbols still prefer MT5 when Darwinex data exists, but non-primary crypto bars are no longer a weekend-only special case. CryptoCompare provides deep history, Kraken Spot provides recent public OHLCV under `kraken:SYMBOL:TF`, and Kraken Futures syncs independently under `kraken-futures:SYMBOL:TF`. Non-primary merged bars are tracked as gap-fill timestamps and rendered magenta on charts.
 
 ## Consequences
 

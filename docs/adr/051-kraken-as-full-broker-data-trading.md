@@ -7,7 +7,7 @@
 Kraken is the terminal's crypto exchange integration. TyphooN uses it in two
 separate ways:
 
-- `engine/src/core/kraken.rs` fetches public Spot/xStocks OHLCV bars.
+- `engine/src/core/kraken.rs` fetches public Spot OHLCV bars.
 - `engine/src/core/kraken_futures.rs` fetches public Futures instruments and
   chart candles.
 - `engine/src/broker/kraken_broker.rs` owns authenticated account and order
@@ -76,7 +76,7 @@ surface:
 - Trading: `AddOrder`, `AddOrderBatch`, `AmendOrder`, `EditOrder`,
   `CancelOrder`, `CancelOrderBatch`, `CancelAll`, `CancelAllOrdersAfter`,
   `GetWebSocketsToken`.
-- Public: `AssetPairs` for Spot/xStocks pair discovery; Spot/xStocks OHLC
+- Public: `AssetPairs` for Spot pair discovery; Spot OHLC
   remains in `core/kraken.rs`; Kraken Futures instruments and chart candles
   remain in `core/kraken_futures.rs`.
 
@@ -87,10 +87,10 @@ to be added without copying authentication code.
 
 ## Public Bar Sync
 
-Kraken Spot/xStocks and Kraken Futures public market-data fetches are
+Kraken Spot and Kraken Futures public market-data fetches are
 asynchronous and bounded by a shared public semaphore. As of ADR-094 and
 ADR-095, the terminal still queues public Kraken tasks concurrently, but
-Spot/xStocks OHLC HTTP calls are paced at Kraken's documented public level
+Spot OHLC HTTP calls are paced at Kraken's documented public level
 (about one request per second, process-wide and per pair) and enter cooldown on
 rate-limit responses. Kraken Futures public candles remain under the shared
 semaphore because Kraken's Futures REST budget assigns no request cost to

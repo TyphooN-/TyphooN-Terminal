@@ -31,7 +31,7 @@ Priority 1: MT5 (Darwinex)      — authority where BarCacheWriter has data
 Priority 2: Alpaca              — broker bars for non-MT5 symbols
 Priority 3: tastytrade          — DXLink bars for funded accounts
 Priority 4: CryptoCompare       — deep crypto history backfill
-Priority 5: Kraken Spot/xStocks — recent public OHLCV + gap-fill
+Priority 5: Kraken Spot — recent public OHLCV + gap-fill
 Priority 6: Kraken Futures      — public futures chart candles
 ```
 

@@ -4,7 +4,7 @@
 
 ## Context
 
-Kraken Spot/xStocks OHLCV and Kraken Futures candles are public, no-key market
+Kraken Spot OHLCV and Kraken Futures candles are public, no-key market
 data paths. The terminal uses them for immediate crypto chart catch-up,
 weekend/recent gap-fill, and broad Kraken universe rotation across the complete
 Spot AssetPairs catalog.
@@ -14,7 +14,7 @@ Spot AssetPairs catalog.
 Kraken public bar sync now follows a fully async, queue-friendly model:
 
 - Public Kraken tasks are still queued behind a shared 16-permit semaphore, but
-  Spot/xStocks OHLC HTTP calls are now additionally paced by ADR-095: one
+  Spot OHLC HTTP calls are now additionally paced by ADR-095: one
   request about every 1.1 seconds process-wide and per pair, with cooldown on
   Kraken rate-limit responses.
 - Spot and Futures queue windows are enlarged so refill scheduling can keep the
@@ -33,16 +33,16 @@ Kraken public bar sync now follows a fully async, queue-friendly model:
   `spawn_blocking`, keeping tokio workers focused on network I/O.
 - CryptoCompare remains a targeted deep-history helper for crypto broker
   backfill. It is not scheduled as an independent full CryptoCompare universe;
-  Kraken Spot/xStocks can combine CryptoCompare deep history with Kraken's
+  Kraken Spot can combine CryptoCompare deep history with Kraken's
   provider-window OHLC for enabled crypto symbols.
 
 - The shared candidate selector is the same O(1)-membership path used by Alpaca:
   pending work, unresolvable symbols, and limited-history/backfill-complete markers are checked by normalized `SYMBOL:Timeframe` hash keys before dispatch.
-- Spot/xStocks sectors use independent rotating cursors so a large USD-crypto sector cannot starve xStocks, fiat-quoted crypto, spot FX, or crypto crosses.
+- Spot sectors use independent rotating cursors so a large USD-crypto sector cannot starve fiat-quoted crypto, spot FX, or crypto crosses. Kraken Securities/xStocks scheduling is separate under the iapi/provider-assist lanes documented in ADR-101 through ADR-103.
 - Spot fiat/crypto inclusion is controlled by global broker quote filters. New sessions default to USD and USD stablecoin quotes (`USD`, `USDT`, `USDC`, `USDG`) instead of assuming every fiat-quoted crypto pair is wanted. Existing session schema v2 settings are migrated into the new per-quote schema v3; future crypto brokers should reuse the same quote filter rather than adding broker-local defaults.
 - The bounded background scan borrows symbol names from the source universe instead of cloning each scanned slice; queue pressure is controlled by sector-specific batch/window limits and interaction-aware clamps.
 - Coverage-first priority is shared with Alpaca: never-cached symbol/timeframe pairs are scheduled before stale refresh or provider-history backfill, ordered from `1Month` down to `1Min` within the scanned sector/window.
-- `BarsFetched` is an intermediate UI/cache freshness signal for Kraken Spot/xStocks and Kraken Futures. Pending scheduler slots are released only by `KrakenFetchSettled` / `KrakenFuturesFetchSettled`, so zero-bar, failure, unresolvable, and backfill-complete paths cannot leak or prematurely recycle pending keys.
+- `BarsFetched` is an intermediate UI/cache freshness signal for Kraken Spot and Kraken Futures. Pending scheduler slots are released only by `KrakenFetchSettled` / `KrakenFuturesFetchSettled`, so zero-bar, failure, unresolvable, and backfill-complete paths cannot leak or prematurely recycle pending keys.
 - Kraken Spot emits provider-window completion when its bounded public OHLC response returns less than the requested recent window. Kraken Futures emits full-history completion after a successful provider-maximum range traversal; its marker stores the actual cached count rather than an old fixed local target.
 
 ## Consequences

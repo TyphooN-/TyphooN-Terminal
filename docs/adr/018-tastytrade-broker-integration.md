@@ -56,7 +56,7 @@ Fully implemented. Connect button active. All REST + DXLink WebSocket endpoints 
 - `fetch_candles()` — full protocol: SETUP→AUTH→CHANNEL_REQUEST→FEED_SETUP→FEED_SUBSCRIPTION
 - Historical bars for all intervals (1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w, 1mo)
 - `BrokerCmd::TastytradeFetchBars` wired to broker loop, stores as `tastytrade:SYM:TF`
-- `try_load()` includes `tastytrade:` in the 6-source priority lookup (after Alpaca, before CryptoCompare; Kraken Futures remains last)
+- Chart loading includes `tastytrade:` in the source priority lookup after Alpaca and before CryptoCompare; later Kraken Spot, Kraken Securities/xStocks, provider-assist, and Futures lanes extend that lookup without changing tastytrade provenance.
 
 **Note:** tastytrade has no REST endpoint for historical OHLCV bars — DXLink WebSocket is the only way.
 Alpaca free tier provides 15-min delayed bars; tastytrade DXLink provides real-time bars for funded accounts.

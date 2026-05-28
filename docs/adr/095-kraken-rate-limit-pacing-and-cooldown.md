@@ -4,7 +4,7 @@
 
 ## Context
 
-ADR-094 made Kraken public bar sync queue-friendly by letting Spot/xStocks and
+ADR-094 made Kraken public bar sync queue-friendly by letting Spot and
 Futures fetches run on async tasks behind a shared semaphore. That improved
 chart catch-up, but Spot OHLC requests for one pair could still burst across
 timeframes. Kraken's current Spot public-market-data guidance says OHLC and

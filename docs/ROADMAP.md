@@ -88,14 +88,14 @@
 - [x] Multi-signal Anomaly Scanner (VaR + EV + ATR + SEC with tradability indicators)
 - [x] MTF Grid tab visibility checkboxes
 - [x] Storage Manager pagination
-- [x] Data hierarchy: MT5 > Kraken Spot/xStocks > Kraken Futures > CryptoCompare > tastytrade > Alpaca
+- [x] Data hierarchy: MT5 > Kraken Spot > Kraken Securities/xStocks > Kraken Futures > CryptoCompare > tastytrade > Alpaca
 
 ### Phase 9: tastytrade Integration
 - [x] tastytrade REST API client (session-based login, balances, positions, orders)
 - [x] Market data via DXLink WebSocket (historical bars: SETUP→AUTH→FEED protocol)
 - [x] Option chains + Greeks (nested expiration/strike, IV rank/percentile via market metrics)
 - [x] Quote snapshots + market metrics (bid/ask, IV rank, IV percentile, beta)
-- [x] 6-source bar priority: MT5 → Kraken Spot/xStocks → Kraken Futures → CryptoCompare → tastytrade → Alpaca
+- [x] 7-source bar priority: MT5 → Kraken Spot → Kraken Securities/xStocks → Kraken Futures → CryptoCompare → tastytrade → Alpaca
 
 ### Phase 10: Advanced Features
 - [x] More drawing tools (pitchfork, Elliott, Gann — all implemented, 89 total)
@@ -124,8 +124,8 @@
 - Deferred: hot-reload custom indicators from file and an indicator marketplace/import UI remain outside the current native parity target.
 
 ### Phase 13: Kraken Broker
-- [x] Public OHLCV ingest (gap-fill source)
-- [x] Async Kraken bar sync acceleration: bounded public task queue, documented Spot OHLC pacing/cooldown, background CryptoCompare + Kraken union work, non-blocking cache writes (ADR-094, ADR-095)
+- [x] Public OHLCV ingest: Spot REST recent-window bars, Spot full-catalog OHLC WebSocket forward freshness, Securities/xStocks iapi high-timeframe catalog sync, and Futures explicit range sync
+- [x] Async Kraken bar sync acceleration: bounded public task queue, documented Spot OHLC pacing/cooldown, full-catalog Spot WS write-path controls, iapi AIMD rate discovery, background CryptoCompare + Kraken union work, non-blocking cache writes (ADR-094, ADR-095, ADR-099, ADR-101)
 - [x] HMAC-SHA512 signed REST trading (ADR-051)
 - [x] Full Spot REST AddOrder parameters: stop/take-profit/trailing variants, price2, displayvol iceberg, settle-position, margin/reduce-only, flags, TIF, client IDs, STP, validate-only, conditional close
 - [x] Batch orders, order amend/edit, batch cancel, cancel-all, dead-man cancel

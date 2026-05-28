@@ -4,7 +4,7 @@
 **Date:** 2026-03-22 | **Updated:** 2026-05-04
 
 > 2026-05-01 update: CryptoCompare remains the deep-history extension for
-> crypto before or beyond exchange-listed history. Kraken Spot/xStocks is now
+> crypto before or beyond exchange-listed history. Kraken Spot is now
 > also synchronized as its own primary public market-data source under
 > `kraken:SYMBOL:TF`; it is no longer only a weekend gap-fill source.
 > Kraken Futures uses a separate public charts path and cache prefix:
@@ -34,22 +34,22 @@ CryptoCompare provides the deepest free crypto history with proper pagination:
 - **Endpoints**: `histoday`, `histohour`, `histominute`
 - **OHLCV data**: open, high, low, close, volumefrom, volumeto
 
-### Kraken Spot/xStocks (Primary Recent Public Sync + Complementary Gap-Fill)
-Kraken provides recent public OHLCV without an API key. It is stored independently under `kraken:SYMBOL:TF` and participates in the normal six-source chart lookup after CryptoCompare. CryptoCompare remains the deep-history source; Kraken extends recent coverage, sub-hourly lookback, weekend continuity, and xStocks coverage.
+### Kraken Spot (Primary Recent Public Sync + Complementary Gap-Fill)
+Kraken Spot provides recent public OHLCV without an API key. It is stored independently under `kraken:SYMBOL:TF` and participates in the chart lookup after CryptoCompare. CryptoCompare remains the deep-history source; Kraken Spot extends recent crypto coverage, sub-hourly lookback, and weekend continuity. Kraken Securities/xStocks is now a separate iapi-backed lane under `kraken-equities:SYMBOL:TF`; see ADR-102 and ADR-103.
 
 ### Crypto Backfill Flow (updated 2026-05-04)
 The "Backfill ALL Crypto" button fetches 10 symbols × 8 TFs:
 1. CryptoCompare: all 8 TFs (1Day through 5Min). Deep history for hourly+; 7-day limit for sub-hourly.
 2. Kraken: launched immediately as the recent/gap-fill leg of the same background backfill task. It no longer waits behind CryptoCompare pagination, but Spot OHLC HTTP calls are paced by ADR-095 to Kraken's documented public rate-limit level.
 
-### Data Hierarchy (6-tier)
+### Crypto Data Hierarchy
 
 ```
 Priority 1: MT5 (Darwinex)      — authority where BarCacheWriter has data
 Priority 2: Alpaca              — broker bars for non-MT5 symbols
 Priority 3: tastytrade          — DXLink bars for funded accounts
 Priority 4: CryptoCompare       — deep crypto history backfill (2010+)
-Priority 5: Kraken Spot/xStocks — public recent/gap-fill OHLCV
+Priority 5: Kraken Spot — public recent/gap-fill OHLCV
 Priority 6: Kraken Futures      — public futures chart candles
 ```
 
@@ -59,12 +59,12 @@ Priority 6: Kraken Futures      — public futures chart candles
 mt5:SYMBOL:TF           — MT5 BarCacheWriter data (authoritative)
 alpaca:SYMBOL:TF         — Live Alpaca bar fetch
 cryptocompare:SYMBOL:TF  — CryptoCompare deep history
-kraken:SYMBOL:TF         — Kraken Spot/xStocks public recent + gap-fill bars
+kraken:SYMBOL:TF         — Kraken Spot public recent + gap-fill bars
 kraken-futures:SYMBOL:TF — Kraken Futures public chart candles
 ```
 
 ### Independent Prefixes
-CryptoCompare, Kraken Spot/xStocks, and Kraken Futures rows are kept under separate prefixes. Chart lookup and merge logic decide which rows to use; the CryptoCompare backfill path does not delete Kraken rows.
+CryptoCompare, Kraken Spot, and Kraken Futures rows are kept under separate prefixes. Chart lookup and merge logic decide which rows to use; the CryptoCompare backfill path does not delete Kraken rows.
 
 ### Symbol Handling
 CryptoCompare uses standard symbols: `fsym=BTC&tsym=USD`. The module normalizes TyphooN symbols: `BTCUSD` → `BTC`, `SOL/USD` → `SOL`.
