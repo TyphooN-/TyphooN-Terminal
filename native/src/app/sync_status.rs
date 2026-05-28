@@ -248,6 +248,7 @@ impl TyphooNApp {
     fn kraken_equities_merged_source_supported(&self, tf: &str) -> bool {
         kraken_equity_full_universe_timeframe(tf)
             || (self.backfill_alpaca_kraken_equities_enabled
+                && kraken_equity_broad_fallback_timeframe(tf)
                 && alpaca_sync_target_bars(tf).is_some())
             || (self.backfill_yahoo_chart_enabled && yahoo_chart_supports_timeframe(tf))
             || (self.backfill_stooq_daily_enabled && stooq_supports_timeframe(tf))
@@ -268,6 +269,7 @@ impl TyphooNApp {
             }
             if source == "alpaca"
                 && (!self.backfill_alpaca_kraken_equities_enabled
+                    || !kraken_equity_broad_fallback_timeframe(tf)
                     || alpaca_sync_target_bars(tf).is_none())
             {
                 continue;
@@ -358,15 +360,17 @@ impl TyphooNApp {
                 let Some(tf) = normalize_sync_timeframe_key(tf) else {
                     continue;
                 };
-                // Equities/iapi is the rate-limit bottleneck. The broad
-                // universe lane targets the full catalog only on durable high
-                // TFs; intraday rows stay demand/focus scoped so Sync Status
-                // does not manufacture tens of thousands of impossible iapi
-                // requests.
+                // Equities/iapi is the rate-limit bottleneck. Native Kraken
+                // rows remain high-TF only, while Alpaca/Yahoo assist rows can
+                // represent broad 15Min+ catalog coverage where those provider
+                // lanes are enabled.
                 if source == "kraken-equities" && !kraken_equity_full_universe_timeframe(tf) {
                     continue;
                 }
-                if source == "alpaca" && alpaca_sync_target_bars(tf).is_none() {
+                if source == "alpaca"
+                    && (!kraken_equity_broad_fallback_timeframe(tf)
+                        || alpaca_sync_target_bars(tf).is_none())
+                {
                     continue;
                 }
                 if source == "stooq" && tf != "1Day" {

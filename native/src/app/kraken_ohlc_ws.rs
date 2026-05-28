@@ -117,7 +117,10 @@ fn kraken_ws_scope_key(symbol: &str) -> String {
         .filter(|ch| ch.is_ascii_alphanumeric())
         .flat_map(|ch| ch.to_uppercase())
         .collect();
-    let key = key.strip_prefix("XBT").map(|rest| format!("BTC{rest}")).unwrap_or(key);
+    let key = key
+        .strip_prefix("XBT")
+        .map(|rest| format!("BTC{rest}"))
+        .unwrap_or(key);
     key.strip_suffix("XBT")
         .map(|base| format!("{base}BTC"))
         .unwrap_or(key)
@@ -237,7 +240,11 @@ mod tests {
             "ETH/USD".to_string(),
             "SOL/USD".to_string(),
         ];
-        let active = vec!["BTCUSD".to_string(), "SOL/USD".to_string(), "WOK.EQ".to_string()];
+        let active = vec![
+            "BTCUSD".to_string(),
+            "SOL/USD".to_string(),
+            "WOK.EQ".to_string(),
+        ];
         assert_eq!(
             filter_kraken_ws_symbols_for_active_scope(&all_pairs, &active),
             vec!["XBT/USD".to_string(), "SOL/USD".to_string()]

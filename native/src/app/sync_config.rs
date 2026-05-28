@@ -55,15 +55,24 @@ pub(super) const MT5_PROVIDER_MAX_BARS: u32 = i32::MAX as u32;
 pub(super) const KRAKEN_SPOT_PROVIDER_WINDOW_BARS: u32 = 720;
 pub(super) const KRAKEN_SPOT_MONTH_PROVIDER_WINDOW_BARS: u32 = 24;
 
-/// Kraken Securities/iapi is the bottleneck in full-universe sync: the safe
-/// discovered ceiling is often below 1 req/s, and history is one symbol × one
-/// timeframe per request. Syncing ~12.6k equities across every intraday TF would
-/// take days and starve charts/owned positions. The broad universe lane therefore
-/// keeps only the durable higher-TF bars current; focused/owned/chart-triggered
-/// fetches can still request 15Min/30Min/1Hour/4Hour through
-/// `queue_kraken_equity_fetch`.
+/// Kraken Securities/iapi is the native/authoritative lane but provider pressure
+/// is empirical, session/IP dependent, and AIMD-controlled. Keep native iapi
+/// broad-universe pressure on durable higher-TF bars for now; use provider
+/// assist lanes for broad 15Min+ coverage where those sources can supply it.
 pub(super) fn kraken_equity_full_universe_timeframe(tf: &str) -> bool {
     matches!(tf, "1Day" | "1Week" | "1Month")
+}
+
+/// Broad Kraken-equity coverage target for non-native assist sources. 1Min/5Min
+/// are kept demand/focus scoped because provider access/window limits make them
+/// freshness assists, not realistic 13k-symbol backlog-fill lanes. 15Min+ should
+/// rotate over the whole Kraken equity catalog when Alpaca/Yahoo/Stooq are
+/// enabled so Sync Status does not stay permanently bare below D1.
+pub(super) fn kraken_equity_broad_fallback_timeframe(tf: &str) -> bool {
+    matches!(
+        tf,
+        "15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week" | "1Month"
+    )
 }
 
 #[cfg(test)]
@@ -88,11 +97,20 @@ mod tests {
     }
 
     #[test]
-    fn kraken_equity_full_universe_sync_is_high_timeframe_only() {
+    fn kraken_equity_full_universe_sync_is_native_high_timeframe_only() {
         assert!(!kraken_equity_full_universe_timeframe("15Min"));
         assert!(!kraken_equity_full_universe_timeframe("4Hour"));
         assert!(kraken_equity_full_universe_timeframe("1Day"));
         assert!(kraken_equity_full_universe_timeframe("1Week"));
         assert!(kraken_equity_full_universe_timeframe("1Month"));
+    }
+
+    #[test]
+    fn kraken_equity_broad_fallback_sync_starts_at_15min() {
+        assert!(!kraken_equity_broad_fallback_timeframe("1Min"));
+        assert!(!kraken_equity_broad_fallback_timeframe("5Min"));
+        assert!(kraken_equity_broad_fallback_timeframe("15Min"));
+        assert!(kraken_equity_broad_fallback_timeframe("4Hour"));
+        assert!(kraken_equity_broad_fallback_timeframe("1Day"));
     }
 }

@@ -37,7 +37,10 @@ AIMD means Additive Increase / Multiplicative Decrease:
   rate (`aimd_decrease_factor`, currently 0.5), drains tokens, and arms a
   cooldown;
 - the live rate is clamped by configured floor/ceiling bounds so it cannot fall
-  to zero or ramp without limit.
+  to zero or ramp without limit. The default ceiling is intentionally a safety
+  cap, not a statement of the provider's maximum; clean sessions may need to
+  probe beyond 5 req/s, and `TYPHOON_KRAKEN_IAPI_AIMD_MAX_RATE` can raise or
+  lower the cap for controlled experiments.
 
 The limiter persists three separate concepts:
 

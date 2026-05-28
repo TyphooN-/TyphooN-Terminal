@@ -96,9 +96,9 @@ pub(super) fn compute_bar_sync_stats(
             continue;
         };
         // Stale Kraken-equities intraday rows are historical byproducts / demand
-        // fetches, not part of the full-universe contract. Counting them in the
-        // aggregate makes the Sync Status window report an impossible backlog:
-        // iapi safely serves well under 1 req/s and each symbol×TF is a request.
+        // fetches, not part of the native full-universe iapi contract. Counting
+        // them in the native aggregate makes Sync Status report a misleading
+        // native backlog; provider-assist rows carry broad 15Min+ coverage.
         if prefix == "kraken-equities" && !super::kraken_equity_full_universe_timeframe(tf) {
             continue;
         }

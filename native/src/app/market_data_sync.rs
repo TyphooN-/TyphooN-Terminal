@@ -24,7 +24,7 @@ pub(super) fn kraken_equity_symbols_for_timeframe(
     demand_symbols: &[String],
     timeframe: &str,
 ) -> Vec<String> {
-    if kraken_equity_full_universe_timeframe(timeframe) {
+    if kraken_equity_broad_fallback_timeframe(timeframe) {
         normalize_kraken_equity_symbol_list(catalog_symbols.iter())
     } else {
         normalize_kraken_equity_symbol_list(demand_symbols.iter())
@@ -909,17 +909,21 @@ impl TyphooNApp {
         if self.kraken_equities_sync_pause_until_ts > chrono::Utc::now().timestamp() {
             return 0;
         }
-        // iapi is the slow lane. M1/M5 are fake fidelity on a 15-min delayed
-        // feed, and broad 15Min/30Min/1Hour/4Hour coverage for ~12.6k symbols
-        // would consume the whole limiter for days. Keep the universe lane on
-        // durable high TFs; focused/owned/charted symbols can still fetch
-        // intraday via queue_kraken_equity_fetch.
-        let timeframes: Vec<String> = self
-            .enabled_standard_sync_timeframes()
-            .into_iter()
+        let enabled_timeframes = self.enabled_standard_sync_timeframes();
+        // Native iapi stays on the high-TF full-catalog lane. 15Min+ broad
+        // coverage is still a product goal, but it must come from assist
+        // providers where possible instead of consuming the entire iapi limiter.
+        let native_timeframes: Vec<String> = enabled_timeframes
+            .iter()
             .filter(|tf| kraken_equity_full_universe_timeframe(tf))
+            .cloned()
             .collect();
-        if timeframes.is_empty() {
+        let fallback_timeframes: Vec<String> = enabled_timeframes
+            .iter()
+            .filter(|tf| kraken_equity_broad_fallback_timeframe(tf))
+            .cloned()
+            .collect();
+        if native_timeframes.is_empty() && fallback_timeframes.is_empty() {
             return 0;
         }
         let full_tilt = self.full_tilt_sync_enabled();
@@ -944,17 +948,13 @@ impl TyphooNApp {
         } else {
             4
         };
-        let available_slots = queue_window
-            .saturating_sub(
-                self.pending_kraken_fetches
-                    .iter()
-                    .filter(|key| key.starts_with("equity:"))
-                    .count(),
-            )
-            .min(batch_limit);
-        if available_slots == 0 {
-            return 0;
-        }
+        let scan_limit = if self.user_interacting && !full_tilt {
+            24
+        } else if full_tilt {
+            KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT
+        } else {
+            96
+        };
         if self.cached_kraken_equities_sync_state_rev != Some(self.bg_rev) {
             let previous = self.cached_kraken_equities_sync_state.clone();
             let mut rebuilt = self.build_source_cache_state_map("kraken-equities:");
@@ -965,77 +965,143 @@ impl TyphooNApp {
         self.ensure_unresolvable_fetch_key_index();
         let focus_symbols = self.market_data_focus_symbols();
         let empty_no_data_keys = std::collections::HashSet::new();
-        let no_data_keys = self
-            .unresolvable_fetch_keys_by_broker
-            .get("kraken-equities")
-            .unwrap_or(&empty_no_data_keys);
         let empty_backfill = std::collections::HashMap::new();
-        let pending_equities: std::collections::HashSet<String> = self
-            .pending_kraken_fetches
-            .iter()
-            .filter_map(|key| key.strip_prefix("equity:").map(str::to_string))
-            .collect();
-        let mut cursor = self.kraken_equities_sync_cursor;
-        let candidates = select_alpaca_sync_workset_rotating(
-            &symbols,
-            &timeframes,
-            &self.cached_kraken_equities_sync_state,
-            &focus_symbols,
-            no_data_keys,
-            &empty_backfill,
-            &pending_equities,
-            available_slots,
-            foreground_slots,
-            if self.user_interacting && !full_tilt {
-                24
-            } else if full_tilt {
-                KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT
-            } else {
-                96
-            },
-            &mut cursor,
-            chrono::Utc::now().timestamp(),
-            kraken_equities_sync_target_bars,
-        );
-        self.kraken_equities_sync_cursor = cursor;
         let mut dispatched = 0usize;
-        for candidate in candidates {
-            let native_queued =
-                self.queue_kraken_equity_fetch(&candidate.symbol, &candidate.timeframe);
-            let fallback_queued =
-                self.queue_kraken_equity_fallback_fetches(&candidate.symbol, &candidate.timeframe);
-            if native_queued || fallback_queued {
-                dispatched += 1;
-            }
-        }
-        if self.backfill_yahoo_chart_enabled {
-            let state = self.build_source_cache_state_map("yahoo-chart:");
-            let no_data = self
+        let now_s = chrono::Utc::now().timestamp();
+
+        let native_available_slots = queue_window
+            .saturating_sub(
+                self.pending_kraken_fetches
+                    .iter()
+                    .filter(|key| key.starts_with("equity:"))
+                    .count(),
+            )
+            .min(batch_limit);
+        if native_available_slots > 0 && !native_timeframes.is_empty() {
+            let no_data_keys = self
                 .unresolvable_fetch_keys_by_broker
-                .get("yahoo-chart")
-                .cloned()
-                .unwrap_or_default();
-            let backfill_complete = std::collections::HashMap::new();
+                .get("kraken-equities")
+                .unwrap_or(&empty_no_data_keys);
+            let pending_equities: std::collections::HashSet<String> = self
+                .pending_kraken_fetches
+                .iter()
+                .filter_map(|key| key.strip_prefix("equity:").map(str::to_string))
+                .collect();
             let mut cursor = self.kraken_equities_sync_cursor;
             let candidates = select_alpaca_sync_workset_rotating(
                 &symbols,
-                &timeframes,
-                &state,
+                &native_timeframes,
+                &self.cached_kraken_equities_sync_state,
                 &focus_symbols,
-                &no_data,
-                &backfill_complete,
-                &self.pending_yahoo_chart_fetches,
-                available_slots,
+                no_data_keys,
+                &empty_backfill,
+                &pending_equities,
+                native_available_slots,
                 foreground_slots,
-                if full_tilt { 192 } else { 96 },
+                scan_limit,
                 &mut cursor,
-                chrono::Utc::now().timestamp(),
-                alpaca_sync_target_bars,
+                now_s,
+                kraken_equities_sync_target_bars,
             );
             self.kraken_equities_sync_cursor = cursor;
             for candidate in candidates {
-                if self.queue_yahoo_chart_fetch(&candidate.symbol, &candidate.timeframe) {
+                if self.queue_kraken_equity_fetch(&candidate.symbol, &candidate.timeframe) {
                     dispatched += 1;
+                }
+            }
+        }
+
+        if self.backfill_alpaca_kraken_equities_enabled && !fallback_timeframes.is_empty() {
+            if self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
+                let previous = self.cached_alpaca_sync_state.clone();
+                let mut rebuilt = self.build_alpaca_cache_state_map();
+                merge_recent_sync_overrides(&mut rebuilt, &previous, now_s);
+                self.cached_alpaca_sync_state = rebuilt;
+                self.cached_alpaca_sync_state_rev = Some(self.bg_rev);
+            }
+            if !self.alpaca_no_data_loaded {
+                self.alpaca_no_data_load();
+            }
+            if !self.alpaca_backfill_complete_loaded {
+                self.alpaca_backfill_complete_load();
+            }
+            let capacity = self.alpaca_sync_capacity();
+            let available_slots = capacity
+                .queue_window
+                .saturating_sub(self.pending_alpaca_fetches.len())
+                .min(capacity.batch_size);
+            if available_slots > 0 {
+                let mut no_data: std::collections::HashSet<String> =
+                    self.alpaca_no_data_pairs.keys().cloned().collect();
+                if let Some(unresolvable) = self.unresolvable_fetch_keys_by_broker.get("alpaca") {
+                    no_data.extend(unresolvable.iter().cloned());
+                }
+                no_data.extend(
+                    self.alpaca_retry_queue
+                        .iter()
+                        .map(|retry| alpaca_fetch_key(&retry.symbol, &retry.timeframe)),
+                );
+                let mut cursor = self.kraken_equities_sync_cursor;
+                let candidates = select_alpaca_sync_workset_rotating(
+                    &symbols,
+                    &fallback_timeframes,
+                    &self.cached_alpaca_sync_state,
+                    &focus_symbols,
+                    &no_data,
+                    &self.alpaca_backfill_complete_pairs,
+                    &self.pending_alpaca_fetches,
+                    available_slots,
+                    capacity.foreground_reserve,
+                    if full_tilt {
+                        ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT
+                    } else {
+                        ALPACA_BACKGROUND_SCAN_LIMIT
+                    },
+                    &mut cursor,
+                    now_s,
+                    alpaca_sync_target_bars,
+                );
+                self.kraken_equities_sync_cursor = cursor;
+                for candidate in candidates {
+                    if self.queue_alpaca_fetch(&candidate.symbol, &candidate.timeframe) {
+                        dispatched += 1;
+                    }
+                }
+            }
+        }
+
+        if self.backfill_yahoo_chart_enabled && !fallback_timeframes.is_empty() {
+            let available_slots = queue_window
+                .saturating_sub(self.pending_yahoo_chart_fetches.len())
+                .min(batch_limit);
+            if available_slots > 0 {
+                let state = self.build_source_cache_state_map("yahoo-chart:");
+                let no_data = self
+                    .unresolvable_fetch_keys_by_broker
+                    .get("yahoo-chart")
+                    .cloned()
+                    .unwrap_or_default();
+                let mut cursor = self.kraken_equities_sync_cursor;
+                let candidates = select_alpaca_sync_workset_rotating(
+                    &symbols,
+                    &fallback_timeframes,
+                    &state,
+                    &focus_symbols,
+                    &no_data,
+                    &empty_backfill,
+                    &self.pending_yahoo_chart_fetches,
+                    available_slots,
+                    foreground_slots,
+                    scan_limit,
+                    &mut cursor,
+                    now_s,
+                    alpaca_sync_target_bars,
+                );
+                self.kraken_equities_sync_cursor = cursor;
+                for candidate in candidates {
+                    if self.queue_yahoo_chart_fetch(&candidate.symbol, &candidate.timeframe) {
+                        dispatched += 1;
+                    }
                 }
             }
         }
@@ -1051,6 +1117,10 @@ impl TyphooNApp {
                 .unwrap_or_default();
             let backfill_complete = std::collections::HashMap::new();
             let pending = self.pending_stooq_fetches.clone();
+            let available_slots = queue_window.saturating_sub(pending.len()).min(batch_limit);
+            if available_slots == 0 {
+                return dispatched;
+            }
             let mut cursor = self.kraken_equities_sync_cursor;
             let stooq_timeframes = vec!["1Day".to_string()];
             let candidates = select_alpaca_sync_workset_rotating(
@@ -1455,31 +1525,6 @@ impl TyphooNApp {
             timeframe: tf.to_string(),
         });
         true
-    }
-
-    pub(super) fn queue_kraken_equity_fallback_fetches(
-        &mut self,
-        symbol: &str,
-        timeframe: &str,
-    ) -> bool {
-        let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
-            return false;
-        };
-        let symbol = normalize_market_data_symbol(symbol)
-            .replace('/', "")
-            .trim_end_matches(".EQ")
-            .to_ascii_uppercase();
-        if symbol.is_empty() {
-            return false;
-        }
-        let alpaca_queued = if self.backfill_alpaca_kraken_equities_enabled {
-            self.queue_alpaca_fetch(&symbol, tf)
-        } else {
-            false
-        };
-        let yahoo_queued = self.queue_yahoo_chart_fetch(&symbol, tf);
-        let stooq_queued = self.queue_stooq_fetch(&symbol, tf);
-        alpaca_queued || yahoo_queued || stooq_queued
     }
 
     pub(super) fn queue_kraken_equity_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
@@ -2137,10 +2182,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kraken_equity_symbols_for_timeframe_uses_catalog_only_for_high_tfs() {
+    fn kraken_equity_symbols_for_timeframe_uses_catalog_for_broad_fallback_tfs() {
         let catalog = vec!["TNDM.EQ".to_string(), "wok".to_string(), "TNDM".to_string()];
         let demand = vec!["POM.EQ".to_string(), "array".to_string()];
 
+        assert_eq!(
+            kraken_equity_symbols_for_timeframe(&catalog, &demand, "15Min"),
+            vec!["TNDM".to_string(), "WOK".to_string()]
+        );
         assert_eq!(
             kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Day"),
             vec!["TNDM".to_string(), "WOK".to_string()]
@@ -2154,7 +2203,7 @@ mod tests {
             vec!["TNDM".to_string(), "WOK".to_string()]
         );
         assert_eq!(
-            kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Hour"),
+            kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Min"),
             vec!["ARRAY".to_string(), "POM".to_string()]
         );
     }

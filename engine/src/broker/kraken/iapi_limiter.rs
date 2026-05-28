@@ -7,10 +7,11 @@
 //!
 //! Design choices forced by the failure mode we were seeing in production:
 //!   * **Sustained rate over burst tolerance.** A 260 ms inter-call spacer
-//!     (3.8 req/s) triggered a Cloudflare 1015 ban every 2–3 minutes. The
-//!     observed ceiling is closer to 0.5–1 req/s averaged over ~10 min,
-//!     so the bucket refills at 0.67 tokens/s (one call per ~1.5 s) with a
-//!     small capacity for interactive bursts.
+//!     (3.8 req/s) previously triggered a Cloudflare 1015 ban every 2–3
+//!     minutes on one route/IP mix, but later clean sessions have reached the
+//!     former 5 req/s cap. Start conservatively, then let AIMD discover the
+//!     current ceiling instead of baking one historical observation into the
+//!     scheduler.
 //!   * **Exponential backoff escalation.** A flat 600 s window after each
 //!     1015 left us tripping the ban immediately on every reopen because
 //!     Cloudflare's tracking memory is longer than 600 s. We now double the
@@ -66,9 +67,10 @@ pub struct IapiLimiterConfig {
     /// catch up on a small backlog, conservative enough that Cloudflare
     /// shouldn't 1015 us at this rate.
     pub aimd_min_rate: f64,
-    /// Ceiling for the AIMD rate. The limiter will not climb above this
-    /// even on a long clean run. Default 5.0 req/s: ~2× the observed
-    /// pre-ban burst rate, deliberately not raw uncapped.
+    /// Ceiling for the AIMD rate. The limiter will not climb above this even
+    /// on a long clean run. Default 20.0 req/s: high enough that a clean
+    /// session can probe beyond the old 5 req/s cap, still bounded so a bad
+    /// config cannot become raw uncapped hammering.
     pub aimd_max_rate: f64,
     /// How often (during clean traffic) to tighten request pacing by one
     /// `aimd_resolution` interval step. The legacy field name is rate-shaped,
@@ -116,7 +118,7 @@ impl Default for IapiLimiterConfig {
             persistence_path: None,
             aimd_enabled: true,
             aimd_min_rate: 0.5,
-            aimd_max_rate: 5.0,
+            aimd_max_rate: 20.0,
             aimd_increase_interval: Duration::from_secs(10),
             aimd_increment_per_step: 0.01,
             aimd_decrease_factor: 0.5,

@@ -259,15 +259,16 @@ Required indicators:
   and is excluded from the auto-full-tilt native/provider aggregate to avoid
   double-counting.
 - The denominator is timeframe-specific and must stay explicit:
-  - `1Day`, `1Week`, and `1Month` use the full loaded Kraken equities catalog.
-    Missing catalog symbols appear as empty expected rows so the window cannot
-    claim full high-timeframe coverage while hundreds of catalog symbols are
-    absent.
-  - Intraday rows use the demand set only: positions, watchlist, open/visible
-    charts, and legacy xStock-looking Kraken symbols. The app must not fabricate
-    a 12k-symbol native iapi intraday backlog.
-  - Fallback provider rows follow the same denominator rule: full catalog for
-    durable high timeframes, demand set for intraday provider work.
+  - `1Day`, `1Week`, and `1Month` native Kraken rows use the full loaded
+    Kraken equities catalog. Missing catalog symbols appear as empty expected
+    rows so the window cannot claim full high-timeframe coverage while hundreds
+    of catalog symbols are absent.
+  - Native Kraken intraday rows remain demand-scoped unless/until iapi throughput
+    and endpoint behavior prove that broader native intraday is safe.
+  - Fallback provider rows use the full catalog for `15Min`, `30Min`, `1Hour`,
+    `4Hour`, `1Day`, `1Week`, and `1Month` when that provider supports the
+    timeframe. `1Min`/`5Min` stay demand/focus scoped until an explicit provider
+    proves broad low-timeframe coverage is viable.
 - Native `kraken-equities:*` rows remain separate from fallback rows; `Merged`
   only answers “is this chart-usable from any allowed source?”
 - Chart status line shows a concise source badge, e.g. `Data: Kraken Equities +
@@ -316,13 +317,14 @@ Default policy:
 ## Current implementation notes
 
 - The Kraken equities catalog (`kraken_equity_universe_symbols`) is the authority
-  for broad durable coverage on `1Day`, `1Week`, and `1Month`.
+  for broad catalog coverage.
 - The demand set is separate and intentionally narrower: held `.EQ` balances,
   watchlist `.EQ` entries, open/visible Kraken-equity charts, and legacy
   xStock-looking Kraken symbols.
-- `schedule_kraken_equities_universe` uses the catalog set only for durable high
-  timeframes. Demand/focus paths may still queue intraday fetches when a user
-  opens a chart or watches/holds a symbol.
+- `schedule_kraken_equities_universe` uses the catalog set for native durable
+  high timeframes and for fallback/provider-assist `15Min`+. Demand/focus paths
+  may still queue lower-timeframe or native intraday fetches when a user opens a
+  chart or watches/holds a symbol.
 - Sync Status expected rows and `Merged` rows use the same timeframe policy, so
   the visible denominator matches the scheduler contract.
 
