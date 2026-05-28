@@ -1,12 +1,17 @@
 use super::*;
 
 fn is_routine_market_data_status(msg: &str) -> bool {
-    (msg.starts_with("Kraken ")
-        && (msg.contains(": fetching recent window...")
-            || msg.contains(": provider-window cache ")
-            || msg.contains(" delta since ")
-            || msg.contains(" already up to date")
-            || msg.contains(": no bars returned")))
+    let routine_progress = msg.contains(": fetching recent window...")
+        || msg.contains(": provider-window cache ")
+        || msg.contains(": fetching full server history")
+        || msg.contains(": cache has ") && msg.contains(" — syncing full server history")
+        || msg.contains(" delta since ")
+        || msg.contains(" already up to date")
+        || msg.contains(": no bars returned")
+        || msg.contains(": MT5/Darwinex has this symbol — skipping")
+        || msg.contains(": tastytrade has this symbol — skipping");
+
+    (msg.starts_with("Kraken ") || msg.starts_with("Alpaca ")) && routine_progress
         || msg.starts_with("CryptoCompare backfill ")
         // Once the iapi back-off is armed, late-arriving dispatches that
         // race the gate come back with this prefix. The first arm already
@@ -17512,3 +17517,31 @@ impl eframe::App for TyphooNApp {
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn routine_market_data_status_filters_alpaca_progress_noise() {
+        assert!(is_routine_market_data_status(
+            "Alpaca GOOGL 1Week: fetching full server history (first sync)..."
+        ));
+        assert!(is_routine_market_data_status(
+            "Alpaca TNDM 1Hour delta since 2022-09-16T17:00:00 (limit 1000)..."
+        ));
+        assert!(is_routine_market_data_status(
+            "Alpaca AAPL 1Day: cache has 10 bars — syncing full server history..."
+        ));
+    }
+
+    #[test]
+    fn routine_market_data_status_keeps_actionable_alpaca_messages_visible() {
+        assert!(!is_routine_market_data_status(
+            "Alpaca fetched 554 bars for WOK 4Hour — queued active chart reload"
+        ));
+        assert!(!is_routine_market_data_status(
+            "Alpaca retry: re-dispatched 205 symbol(s) (205 in queue)"
+        ));
+    }
+}
