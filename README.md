@@ -319,6 +319,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [100](docs/adr/100-news-article-rendering-dom-aware-extractor-hero-images-commonmark-viewer.md) | News Article Rendering: DOM-aware extractor, hero images, CommonMark viewer; NO HTML/JS renderer |
 | [101](docs/adr/101-kraken-iapi-aimd-rate-discovery-and-persistence.md) | Kraken iapi AIMD Rate Discovery and Persistence |
 | [102](docs/adr/102-kraken-equities-gap-fill-via-alpaca-and-provider-fallback.md) | Kraken Equities Gap Fill via Alpaca and Provider Fallback |
+| [103](docs/adr/103-dedicated-market-data-provider-lanes.md) | Dedicated Market-Data Provider Lanes for Deep/Fresh Bars |
 
 ---
 
