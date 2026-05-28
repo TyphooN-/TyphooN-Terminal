@@ -1,5 +1,37 @@
 use super::*;
 
+fn kraken_equity_quote_meta_candidates(symbol: &str) -> Vec<String> {
+    let raw = symbol.trim();
+    let symbol_part = {
+        let parts: Vec<&str> = raw.split(':').collect();
+        if parts.len() >= 3 {
+            parts[parts.len() - 2]
+        } else {
+            raw.rsplit(':').next().unwrap_or(raw)
+        }
+    };
+    let normalized = typhoon_engine::core::kraken::normalize_pair_symbol(symbol_part)
+        .replace('/', "")
+        .to_ascii_uppercase();
+    let no_eq = normalized.strip_suffix(".EQ").unwrap_or(&normalized);
+    let mut candidates = Vec::new();
+    for candidate in [no_eq, normalized.as_str()] {
+        let candidate = candidate
+            .trim()
+            .trim_end_matches(".EQ")
+            .to_ascii_uppercase();
+        if !candidate.is_empty() && !candidates.iter().any(|existing| existing == &candidate) {
+            candidates.push(candidate.clone());
+        }
+        if let Some(stripped) = candidate.strip_suffix("USD") {
+            if !stripped.is_empty() && !candidates.iter().any(|existing| existing == stripped) {
+                candidates.push(stripped.to_string());
+            }
+        }
+    }
+    candidates
+}
+
 pub(super) fn build_unresolvable_fetch_key_index(
     pairs: &std::collections::HashMap<String, UnresolvablePair>,
 ) -> std::collections::HashMap<String, std::collections::HashSet<String>> {
@@ -1449,6 +1481,18 @@ impl TyphooNApp {
         )
     }
 
+    pub(super) fn kraken_equity_quote_meta_for_symbol(
+        &self,
+        symbol: &str,
+    ) -> Option<&crate::app::KrakenEquityQuoteMeta> {
+        for candidate in kraken_equity_quote_meta_candidates(symbol) {
+            if let Some(meta) = self.kraken_equity_quote_meta.get(&candidate) {
+                return Some(meta);
+            }
+        }
+        None
+    }
+
     pub(super) fn latest_cached_equity_price_for_symbol(&self, symbol: &str) -> Option<f64> {
         let cache = self.cache.as_ref()?;
         let timeframes = [
@@ -2281,5 +2325,24 @@ impl TyphooNApp {
             return;
         }
         self.sync_current_position_exits("Set TP");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kraken_equity_quote_meta_candidates;
+
+    #[test]
+    fn kraken_equity_quote_meta_candidates_normalize_wrappers_and_pairs() {
+        assert_eq!(kraken_equity_quote_meta_candidates("WOK"), vec!["WOK"]);
+        assert_eq!(kraken_equity_quote_meta_candidates("WOK.EQ"), vec!["WOK"]);
+        assert_eq!(
+            kraken_equity_quote_meta_candidates("kraken-equities:TNDM:1Day"),
+            vec!["TNDM"]
+        );
+        assert_eq!(
+            kraken_equity_quote_meta_candidates("WOKUSD"),
+            vec!["WOKUSD", "WOK"]
+        );
     }
 }

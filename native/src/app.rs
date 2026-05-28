@@ -6433,6 +6433,14 @@ fn fuzzy_score(q: &str, t: &str) -> Option<i32> {
 
 /// Watchlist row data (TradingView-style).
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct KrakenEquityQuoteMeta {
+    received_at_ms: i64,
+    quote_time_ms: i64,
+    delayed: bool,
+    price: f64,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct WatchlistRow {
     /// Display symbol name (e.g. "BTCUSD", "SLV", "CC").
     symbol: String,
@@ -13872,6 +13880,7 @@ pub struct TyphooNApp {
     tt_positions: Vec<PositionInfo>,
     tt_balances: Option<TastyBalances>,
     kr_positions: Vec<PositionInfo>,
+    kraken_equity_quote_meta: std::collections::BTreeMap<String, KrakenEquityQuoteMeta>,
     /// Position visibility toggles (still synced, just hidden in UI)
     show_darwin_positions: bool,
     show_alpaca_positions: bool,
@@ -30304,6 +30313,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             tt_positions: Vec::new(),
             tt_balances: None,
             kr_positions: Vec::new(),
+            kraken_equity_quote_meta: std::collections::BTreeMap::new(),
             show_darwin_positions: true,
             show_alpaca_positions: true,
             show_tt_positions: true,

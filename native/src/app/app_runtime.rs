@@ -1903,6 +1903,16 @@ impl eframe::App for TyphooNApp {
                     let symbol = ticker.symbol.to_ascii_uppercase();
                     let last = ticker.price;
                     if last > 0.0 && last.is_finite() {
+                        let received_at_ms = chrono::Utc::now().timestamp_millis();
+                        self.kraken_equity_quote_meta.insert(
+                            symbol.clone(),
+                            KrakenEquityQuoteMeta {
+                                received_at_ms,
+                                quote_time_ms: ticker.time_ms,
+                                delayed: ticker.delayed,
+                                price: last,
+                            },
+                        );
                         if let Some(cache) = self.cache.as_ref() {
                             let ts_ms = if ticker.time_ms > 0 {
                                 ticker.time_ms
@@ -11977,6 +11987,27 @@ impl eframe::App for TyphooNApp {
                                     } else {
                                         self.latest_cached_price_for_symbol(&pos.symbol)
                                     };
+                                    let quote_meta = self.kraken_equity_quote_meta_for_symbol(&pos.symbol);
+                                    let now_ms = chrono::Utc::now().timestamp_millis();
+                                    let (quote_label, quote_color) = if let Some(meta) = quote_meta {
+                                        let age_secs = ((now_ms - meta.received_at_ms).max(0) / 1000) as i64;
+                                        let delayed = if meta.delayed { " delayed" } else { "" };
+                                        let label = if age_secs < 60 {
+                                            format!("q {}s{}", age_secs, delayed)
+                                        } else {
+                                            format!("STALE q {}m{}", age_secs / 60, delayed)
+                                        };
+                                        let color = if age_secs <= 30 {
+                                            UP
+                                        } else if age_secs <= 60 {
+                                            egui::Color32::from_rgb(255, 200, 50)
+                                        } else {
+                                            DOWN
+                                        };
+                                        (label, color)
+                                    } else {
+                                        ("NO QUOTE".to_string(), DOWN)
+                                    };
                                     let derived_unrealized_pl = avg_entry.zip(current_price).map(|(avg, cur)| {
                                         let dir = if pos.side == "short" { -1.0 } else { 1.0 };
                                         (cur - avg) * pos.qty * dir
@@ -12018,6 +12049,31 @@ impl eframe::App for TyphooNApp {
                                             .color(AXIS_TEXT)
                                             .small(),
                                         );
+                                        ui.label(
+                                            egui::RichText::new(&quote_label)
+                                                .color(quote_color)
+                                                .small(),
+                                        )
+                                        .on_hover_text(if let Some(meta) = quote_meta {
+                                            let quote_ts = chrono::DateTime::from_timestamp_millis(
+                                                meta.quote_time_ms,
+                                            )
+                                            .map(|dt| dt.to_rfc3339())
+                                            .unwrap_or_else(|| "unknown".to_string());
+                                            format!(
+                                                "Kraken equity quote overlay: last={} quote_ts={} received_ts={}{}",
+                                                format_price(meta.price),
+                                                quote_ts,
+                                                chrono::DateTime::from_timestamp_millis(
+                                                    meta.received_at_ms,
+                                                )
+                                                .map(|dt| dt.to_rfc3339())
+                                                .unwrap_or_else(|| "unknown".to_string()),
+                                                if meta.delayed { " delayed" } else { "" }
+                                            )
+                                        } else {
+                                            "No Kraken equity quote has landed for this open position yet".to_string()
+                                        });
                                         if ui
                                             .small_button("Close")
                                             .on_hover_text(format!(
