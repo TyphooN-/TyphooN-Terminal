@@ -19,6 +19,13 @@ mapped to the underlying US ticker by stripping Kraken wrapper suffixes such as
 for chart continuity, especially for `15Min` through `4Hour` where Kraken gaps
 visibly damage MTF Grid charts and indicators.
 
+The product goal is stricter than “fill the most obvious holes”: for Kraken
+equities/xStocks, the terminal should build the deepest and freshest chart-usable
+series it can for every enabled timeframe. Native Kraken remains authoritative,
+but any compatible provider may prepend older bars or append fresher bars when
+Kraken is empty, stale, shallow, or delayed. This is still provenance-tagged
+assist data, not a rewrite of Kraken history.
+
 The important caveat: Alpaca bars are not Kraken xStock bars. They represent the
 underlying equity venue/feed, not the tokenized wrapper's actual Kraken trading
 microstructure, weekend/holiday behavior, liquidity, or possible premium/discount.
@@ -87,9 +94,9 @@ full Alpaca equity bar universe. Leave it off for Kraken-equities assist.
 For `kraken-equities:*` chart loads:
 
 1. Native Kraken equity/iapi bars remain authoritative when present and fresh.
-2. If a selected timeframe in `15Min`, `30Min`, `1Hour`, or `4Hour` is empty or
-   stale beyond the configured threshold, enqueue fallback fetch for the mapped
-   underlying ticker.
+2. If an enabled timeframe from `1Min` through `4Hour` is empty, stale beyond the
+   configured threshold, or shallower than a compatible fallback provider,
+   enqueue fallback fetch for the mapped underlying ticker.
 3. Store fallback bars under separate source namespaces:
    - `alpaca:SYMBOL:TF`
    - `yahoo-chart:SYMBOL:TF`
@@ -103,34 +110,60 @@ Do not write Alpaca fallback bars into `kraken-equities:SYMBOL:TF`. That would
 make the Sync Status lie and would erase the distinction between wrapper-market
 prices and underlying-market prices.
 
-## Timeframe policy
+## Timeframe and depth policy
 
-Fallback providers are source-specific:
+Fallback providers are source-specific, but the merge objective is common:
+
+- `front-fill`/freshness fill: append newer compatible bars when the native
+  Kraken or Alpaca lane is delayed/gated. Both Kraken equities and the available
+  Alpaca feed can be delayed; an additional source may still help if it is less
+  stale for the symbol/timeframe, but it must be measured per response and shown
+  as fallback provenance.
+- `prepend`/deep-history fill: keep older compatible provider bars when the
+  fallback source has more history than Kraken. Do not truncate the chart to the
+  selected broker's native depth if an allowed fallback has earlier bars.
+- `gap fill`: fill missing timestamps between native bars only when the fallback
+  bar aligns to the same normalized timeframe/session policy.
+
+Provider capabilities:
 
 - Alpaca may fetch all standard enabled timeframes through the existing Alpaca
-  bar path, subject to Alpaca feed/rate-limit/depth constraints.
+  bar path, subject to Alpaca feed/rate-limit/depth constraints. In the current
+  account/feed posture it should be treated as delayed, not true real-time.
 - Yahoo Chart may fetch all standard enabled timeframes, but Yahoo applies hard
-  history windows: `1Min` is freshness-only, lower intraday is limited, and
-  higher timeframes are the useful deep-history lane. Yahoo coverage is not the
-  Kraken equities catalog: many Kraken Securities symbols, especially SPAC/unit
-  style tickers such as `.U`, may return HTTP 404 from Yahoo and must be treated
-  as provider no-data.
+  history windows: `1Min` is freshness-only, `5Min`/`15Min`/`30Min` are limited
+  intraday history lanes, `1Hour` is a mid-depth lane, and daily/weekly/monthly
+  are the useful deep-history lanes. Yahoo may be fresher than Kraken/Alpaca for
+  some symbols, but it is not guaranteed real-time; compare latest bar timestamp
+  before using it as front-fill. Yahoo coverage is not the Kraken equities
+  catalog: many Kraken Securities symbols, especially SPAC/unit style tickers
+  such as `.U`, may return HTTP 404 from Yahoo and must be treated as provider
+  no-data.
 - Stooq is `1Day` only. Do not use it for `1Week`/`1Month` unless a separate
   aggregation/provenance step is added, and never use it for intraday. Treat
   connection failures as provider unavailable from this machine; pause the Stooq
   lane and show degraded assist state instead of continuing a broad retry storm.
-- Kraken equities still never fetch `M1`/`M5` from iapi because the feed is
-  delayed and those bars imply false precision.
+- Kraken equities should not fetch `M1`/`M5` from iapi unless Kraken exposes a
+  trustworthy lane for them. `M1`/`M5` chart usability should come from explicit
+  fallback providers with provenance and timestamp freshness checks.
 
 Implementation detail:
 
-- Prefer direct Alpaca bars for timeframes Alpaca natively supports.
-- Materialize `4Hour` from lower-timeframe Alpaca bars if Alpaca does not expose
-  a direct 4h endpoint shape compatible with the current cache writer.
-- Do not use fallback for `M1`/`M5` until the app has an explicit low-timeframe
-  policy. Those are high-volume, tier-sensitive, and prone to false precision.
+- Prefer direct provider bars for timeframes the provider natively supports.
+- Materialize `4Hour` from `1Hour` bars by default when a provider lacks native
+  `4Hour`; use `15Min` only if the aggregation code is session-aware and bounded.
+- Allow fallback for `M1`/`M5` only through explicit provider toggles, per-source
+  rate limits, no-data tombstones, and a freshness/depth comparison. These bars
+  are high-volume, tier-sensitive, and prone to false precision, so they must
+  stay out of native Kraken health totals.
 - Daily/weekly/monthly should continue to prefer native Kraken iapi and existing
-  high-timeframe sources unless there is a separate history-depth decision.
+  high-timeframe sources, while retaining any older compatible fallback bars for
+  chart/research history depth.
+
+Merge selection rule: for each timestamp bucket, prefer native Kraken when
+present. Outside native Kraken's covered window, include the deepest older and
+freshest newer allowed fallback bars in provider-priority order. Never delete an
+older fallback span merely because a shallower native source is selected.
 
 ## Symbol mapping
 
@@ -195,8 +228,8 @@ Implementation gates:
 Recommended queue order:
 
 1. Open/focused MTF Grid Kraken symbols and visible timeframes.
-2. Stale/empty `15Min` -> `4Hour` Kraken equity symbols currently visible or in
-   watchlist/positions.
+2. Stale, empty, shallow, or delayed `1Min` -> `4Hour` Kraken equity symbols
+   currently visible or in watchlist/positions.
 3. Broad Kraken equities fallback backlog.
 4. Non-visible universe backfill.
 
@@ -295,11 +328,13 @@ Default policy:
 
 ## Implementation plan / reopen criteria
 
-The current implementation covers the native/full-catalog denominator and the
-Sync Status separation. Reopen this ADR for code work when adding a new fallback
-provider, provenance-span rendering, or strategy/backtest policy hooks. Any
-future change must keep the invariant above: high-TF full catalog, intraday
-demand-scoped unless an explicit provider policy says otherwise.
+The current implementation covers the native/full-catalog denominator, Sync
+Status separation, Yahoo/Stooq fallback fetchers, and assist-only controls. Reopen
+this ADR for code work when adding a new fallback provider, provenance-span
+rendering, strategy/backtest policy hooks, or the full depth/freshness merge
+policy described above. Any future change must keep the invariant above: high-TF
+full catalog, intraday demand-scoped unless an explicit provider policy says
+otherwise.
 
 Historical implementation items that remain relevant as regression checks:
 
@@ -330,7 +365,9 @@ Resolved policy:
 
 Remaining reopen questions:
 
-- Should `4Hour` be materialized from `1Hour` bars or from `15Min` bars for
-  better session-boundary control?
+- Which additional provider should be the first dedicated front-fill lane for
+  `1Min` -> `4Hour` when both Kraken and Alpaca are delayed/gated? Yahoo Chart is
+  already available as an opportunistic lane, but it is not a contracted realtime
+  feed.
 - How visually loud should fallback spans be on charts? Too subtle hides risk;
   too loud makes charts unreadable.
