@@ -2221,6 +2221,27 @@ fn chart_timeframe_cadence_bounds(timeframe: &str) -> Option<(i64, i64)> {
     }
 }
 
+fn chart_gap_fill_bar_allowed(
+    primary_source: &str,
+    gap_source: &str,
+    snapped: i64,
+    primary_min_snapped: Option<i64>,
+    primary_max_snapped: Option<i64>,
+) -> bool {
+    if !matches!(
+        primary_source,
+        "kraken-equities" | "tastytrade" | "alpaca" | "yahoo-chart" | "stooq"
+    ) || !matches!(gap_source, "alpaca" | "yahoo-chart" | "stooq")
+    {
+        return true;
+    }
+
+    match (primary_min_snapped, primary_max_snapped) {
+        (Some(min), Some(max)) => snapped < min || snapped > max,
+        _ => true,
+    }
+}
+
 fn news_symbol_from_market_data_cache_key(key: &str, prefix: &str) -> Option<String> {
     let rest = key.strip_prefix(prefix)?.strip_prefix(':')?;
     let (raw_symbol, tf) = rest.rsplit_once(':')?;
@@ -3064,7 +3085,14 @@ impl ChartState {
                     ]
                 };
                 let mut occupied: std::collections::HashSet<i64> = std::collections::HashSet::new();
+                let mut primary_min_snapped: Option<i64> = None;
+                let mut primary_max_snapped: Option<i64> = None;
                 for b in self.bars.iter() {
+                    let snapped = snap(b.ts_ms);
+                    primary_min_snapped =
+                        Some(primary_min_snapped.map_or(snapped, |min| min.min(snapped)));
+                    primary_max_snapped =
+                        Some(primary_max_snapped.map_or(snapped, |max| max.max(snapped)));
                     for offset in alias_offsets_ms {
                         occupied.insert(snap(b.ts_ms.saturating_add(*offset)));
                     }
@@ -3120,7 +3148,15 @@ impl ChartState {
                             }
                             for (ts, o, h, l, c, v) in gap_raw {
                                 let snapped = snap(ts);
-                                if !occupied.contains(&snapped) {
+                                if !occupied.contains(&snapped)
+                                    && chart_gap_fill_bar_allowed(
+                                        primary_source,
+                                        cache_source_from_key(gap_key),
+                                        snapped,
+                                        primary_min_snapped,
+                                        primary_max_snapped,
+                                    )
+                                {
                                     for offset in alias_offsets_ms {
                                         occupied.insert(snap(ts.saturating_add(*offset)));
                                     }
@@ -31832,6 +31868,31 @@ mod tests {
             "yahoo-chart",
             "1Day",
             &bars
+        ));
+    }
+
+    #[test]
+    fn chart_gap_fill_rejects_equity_fallback_inside_primary_span() {
+        assert!(!chart_gap_fill_bar_allowed(
+            "kraken-equities",
+            "yahoo-chart",
+            5,
+            Some(1),
+            Some(10)
+        ));
+        assert!(chart_gap_fill_bar_allowed(
+            "kraken-equities",
+            "alpaca",
+            11,
+            Some(1),
+            Some(10)
+        ));
+        assert!(chart_gap_fill_bar_allowed(
+            "kraken",
+            "yahoo-chart",
+            5,
+            Some(1),
+            Some(10)
         ));
     }
 
