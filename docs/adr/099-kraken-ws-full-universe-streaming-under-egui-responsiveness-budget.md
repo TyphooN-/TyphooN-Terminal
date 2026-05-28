@@ -53,7 +53,7 @@ The deferred-write gate drops the steady-state write rate by ~60× while
 preserving freshness semantics: `kraken_ws_fresh_until` updates only on
 close, which is exactly when the staleness check cares.
 
-`WS_BAR_FLUSH_INTERVAL = 5s` is the flush cadence. `partition_closed_bars`
+`WS_BAR_FLUSH_INTERVAL = 1s` is the flush cadence. `partition_closed_bars`
 is unit-tested in the same module for the snapshot and steady-state
 cases.
 
@@ -141,7 +141,7 @@ open-orders refresh) drifts back onto the egui frame.
 - Until the next compaction, WS-written rows take ~15–20% more disk
   than equivalent REST rows. Auto-compact closes the gap.
 - An open 1Min bar can lag the WS feed by up to `WS_BAR_FLUSH_INTERVAL`
-  (5s) before the close-value reaches the cache. Live trade-prints and
+  (1s) before the close-value reaches the cache. Live trade-prints and
   ownTrades are not affected — they go through a separate ticker path.
 - The `user_interacting` reset uses `primary_down || secondary_down ||
   smooth_scroll_delta.y.abs() > 0.0` as the "still interacting" gate.

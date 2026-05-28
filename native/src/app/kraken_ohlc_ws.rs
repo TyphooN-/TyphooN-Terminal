@@ -28,15 +28,15 @@ use typhoon_engine::core::cache::SqliteCache;
 use super::{BrokerCmd, LogEntry, TyphooNApp};
 
 impl TyphooNApp {
-    /// Kick off the Kraken WS OHLC pipeline for user-active Spot pairs only.
+    /// Kick off the Kraken WS OHLC pipeline for every Kraken Spot pair that can
+    /// be represented on Kraken's public OHLC WebSocket.
     ///
-    /// A previous version subscribed the full Kraken Spot catalog across every
-    /// interval. That is 1.5k+ pairs × 8 intervals, which creates thousands of
-    /// subscriptions and repeatedly trips Kraken/public-network WS resets. The
-    /// foreground WS path should follow the same intent model as light sync:
-    /// open charts, watchlist entries, open orders, and navbar-visible broker
-    /// positions. Broad universe freshness belongs behind REST/backfill rotation,
-    /// not live WebSocket pressure.
+    /// Kraken REST is still the deep-history/backfill source, but the public WS
+    /// can deliver far more fresh bars per second than the paced REST endpoint.
+    /// Do not narrow this to active/watchlist symbols: the product goal is a
+    /// fully synced Kraken Spot dataset wherever Kraken exposes the pair on WS.
+    /// The writer side gates cache persistence to closed bars and uses the fast
+    /// zstd path so full-catalog snapshots/fresh closes do not block egui.
     ///
     /// Idempotent: `kraken_ws_ohlc_started` guards against re-spawning
     /// when KrakenPairs lands again or the caller fires this from
@@ -49,24 +49,18 @@ impl TyphooNApp {
         {
             return false;
         }
-        let all_pairs = build_kraken_ws_subscribe_symbols(&self.kraken_pairs);
-        if all_pairs.is_empty() {
-            return false;
-        }
-        let active = self.active_symbols();
-        let pairs = filter_kraken_ws_symbols_for_active_scope(&all_pairs, &active);
+        let pairs = build_kraken_ws_subscribe_symbols(&self.kraken_pairs);
         if pairs.is_empty() {
-            tracing::debug!("Kraken WS OHLC deferred: no active/watchlist Kraken Spot pairs");
+            tracing::debug!("Kraken WS OHLC deferred: no WS-mappable Kraken Spot pairs");
             return false;
         }
         let count = pairs.len();
-        let total = all_pairs.len();
         let _ = self
             .broker_tx
             .send(BrokerCmd::KrakenStartOhlcStreamers { pairs });
         self.kraken_ws_ohlc_started = true;
         self.log.push_back(LogEntry::info(format!(
-            "Kraken WS OHLC: streaming {count}/{total} active pairs × 8 intervals",
+            "Kraken WS OHLC: streaming full Spot catalog: {count} pairs × 8 intervals",
         )));
         true
     }
@@ -86,42 +80,6 @@ pub(super) fn build_kraken_ws_subscribe_symbols(pairs: &[(String, String)]) -> V
         }
     }
     out.into_iter().collect()
-}
-
-pub(super) fn filter_kraken_ws_symbols_for_active_scope(
-    all_pairs: &[String],
-    active_symbols: &[String],
-) -> Vec<String> {
-    if all_pairs.is_empty() || active_symbols.is_empty() {
-        return Vec::new();
-    }
-    let active_keys: std::collections::BTreeSet<String> = active_symbols
-        .iter()
-        .map(|s| kraken_ws_scope_key(s))
-        .filter(|s| !s.is_empty())
-        .collect();
-    all_pairs
-        .iter()
-        .filter(|pair| active_keys.contains(&kraken_ws_scope_key(pair)))
-        .cloned()
-        .collect()
-}
-
-fn kraken_ws_scope_key(symbol: &str) -> String {
-    let key: String = symbol
-        .trim()
-        .trim_end_matches(".EQ")
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .flat_map(|ch| ch.to_uppercase())
-        .collect();
-    let key = key
-        .strip_prefix("XBT")
-        .map(|rest| format!("BTC{rest}"))
-        .unwrap_or(key);
-    key.strip_suffix("XBT")
-        .map(|base| format!("{base}BTC"))
-        .unwrap_or(key)
 }
 
 fn format_ws_symbol(pair_name: &str, display: &str) -> Option<String> {
@@ -229,31 +187,6 @@ mod tests {
         ];
         let symbols = build_kraken_ws_subscribe_symbols(&pairs);
         assert!(symbols.iter().all(|s| s.contains('/')));
-    }
-
-    #[test]
-    fn active_scope_filter_keeps_only_requested_spot_pairs() {
-        let all_pairs = vec![
-            "XBT/USD".to_string(),
-            "ETH/USD".to_string(),
-            "SOL/USD".to_string(),
-        ];
-        let active = vec![
-            "BTCUSD".to_string(),
-            "SOL/USD".to_string(),
-            "WOK.EQ".to_string(),
-        ];
-        assert_eq!(
-            filter_kraken_ws_symbols_for_active_scope(&all_pairs, &active),
-            vec!["XBT/USD".to_string(), "SOL/USD".to_string()]
-        );
-    }
-
-    #[test]
-    fn active_scope_filter_returns_empty_without_active_pairs() {
-        let all_pairs = vec!["BTC/USD".to_string(), "ETH/USD".to_string()];
-        let active = vec!["WOK.EQ".to_string(), "TNDM".to_string()];
-        assert!(filter_kraken_ws_symbols_for_active_scope(&all_pairs, &active).is_empty());
     }
 
     fn mk_bar(interval_min: u32, interval_begin_ms: i64) -> KrakenWsOhlcBar {
