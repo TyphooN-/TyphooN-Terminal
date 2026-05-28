@@ -12725,14 +12725,19 @@ impl eframe::App for TyphooNApp {
 
                                     // Last / Change / Change% — show extended hours price if available
                                     let (disp_last, disp_chg, disp_pct, disp_color) =
-                                        if wl.ext_change_pct.abs() > 0.001 && wl.prev_close > 0.0 {
-                                            // Extended hours: derive price from prev_close + ext%
-                                            let ext_price =
-                                                wl.prev_close * (1.0 + wl.ext_change_pct / 100.0);
-                                            let ext_chg = ext_price - wl.prev_close;
-                                            let c =
-                                                if wl.ext_change_pct >= 0.0 { UP } else { DOWN };
-                                            (ext_price, ext_chg, wl.ext_change_pct, c)
+                                        if wl.ext_change_pct.abs() > 0.001
+                                            && wl.prev_close > 0.0
+                                            && wl.last > 0.0
+                                        {
+                                            // row.last is already the actual extended-hours
+                                            // price when ext_change_pct is populated. Do not
+                                            // reconstruct it from prev_close: Yahoo reports
+                                            // ext_change_pct versus the regular close/price,
+                                            // not necessarily versus previous close.
+                                            let ext_chg = wl.last - wl.prev_close;
+                                            let ext_pct = (wl.last / wl.prev_close - 1.0) * 100.0;
+                                            let c = if ext_chg >= 0.0 { UP } else { DOWN };
+                                            (wl.last, ext_chg, ext_pct, c)
                                         } else {
                                             (wl.last, wl.change, wl.change_pct, chg_color)
                                         };

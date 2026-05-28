@@ -2242,6 +2242,18 @@ fn chart_gap_fill_bar_allowed(
     }
 }
 
+fn chart_quote_overlay_allowed(quote_ts_ms: i64, last_bar_ts_ms: i64) -> bool {
+    quote_ts_ms >= last_bar_ts_ms
+}
+
+fn chart_forming_bar_allowed(last_bar_ts_ms: i64, now_ms: i64, tf_ms: i64) -> bool {
+    if last_bar_ts_ms <= 0 || now_ms <= 0 || tf_ms <= 0 {
+        return false;
+    }
+    let current_bucket = now_ms / tf_ms * tf_ms;
+    current_bucket > last_bar_ts_ms && current_bucket.saturating_sub(last_bar_ts_ms) <= tf_ms
+}
+
 fn news_symbol_from_market_data_cache_key(key: &str, prefix: &str) -> Option<String> {
     let rest = key.strip_prefix(prefix)?.strip_prefix(':')?;
     let (raw_symbol, tf) = rest.rsplit_once(':')?;
@@ -2761,17 +2773,11 @@ impl ChartState {
         let Some(last) = self.bars.last_mut() else {
             return false;
         };
-        if quote.ts_ms < last.ts_ms {
-            // Quotes are still authoritative for the visible current price.  Do not let a
-            // stale HTF candle leave the chart at a different price than lower TFs/positions.
-            last.close = quote.close;
-            last.high = last.high.max(quote.high).max(quote.close);
-            last.low = if last.low > 0.0 {
-                last.low.min(quote.low).min(quote.close)
-            } else {
-                quote.low.min(quote.close)
-            };
-            return true;
+        if !chart_quote_overlay_allowed(quote.ts_ms, last.ts_ms) {
+            // Do not let an older quote mutate a newer candle. This was corrupting
+            // Kraken-equities D1 charts after Alpaca/Yahoo appended fresher daily
+            // bars while Kraken's quote cache still lagged by a session.
+            return false;
         }
         if quote.ts_ms < last.ts_ms.saturating_add(tf_ms) {
             last.close = quote.close;
@@ -3478,21 +3484,23 @@ impl ChartState {
             }
         }
 
-        // Synthesize forming bar from lower-timeframe data if last bar is stale
-        // This allows HTF charts (H1, H4, D1) to show partial/forming bars while the period is still open
+        // Synthesize a current forming bar from lower-timeframe data only when
+        // the existing HTF series is caught up through the previous bucket. If
+        // the primary source is several sessions stale, aggregating every newer
+        // LTF candle into one bar creates a fake multi-day monster candle.
         if !self.bars.is_empty() && self.timeframe.minutes() > 5 {
             let last_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
             let tf_ms = self.timeframe.minutes() as i64 * 60 * 1000;
             let now_ms = chrono::Utc::now().timestamp_millis();
-            // Only synthesize if the last bar is older than one period
-            if now_ms - last_ts > tf_ms {
+            if chart_forming_bar_allowed(last_ts, now_ms, tf_ms) {
+                let current_bucket = now_ms / tf_ms * tf_ms;
                 // Try M5 first, then M1
                 // Cascade through all lower timeframes from all sources for best resolution
                 let src = self.symbol.split(':').next().unwrap_or("mt5");
                 let ltf_suffixes = [
                     "1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week",
                 ];
-                let sources = ["kraken", "kraken-futures", src, "alpaca"];
+                let sources = ["kraken", "kraken-futures", src, "kraken-equities", "alpaca"];
                 let mut ltf_keys = Vec::new();
                 for ltf in &ltf_suffixes {
                     let ltf_min: u32 = match *ltf {
@@ -3513,11 +3521,12 @@ impl ChartState {
                 }
                 for ltf_key in &ltf_keys {
                     if let Ok(Some(ltf_raw)) = cache.get_bars_raw(ltf_key) {
-                        // Find LTF bars newer than the last HTF bar
-                        let forming_start = (last_ts / tf_ms + 1) * tf_ms; // next HTF period boundary
+                        // Find LTF bars inside the current HTF bucket only.
+                        let forming_start = current_bucket;
+                        let forming_end = forming_start.saturating_add(tf_ms);
                         let newer: Vec<_> = ltf_raw
                             .iter()
-                            .filter(|(ts, _, _, _, _, _)| *ts >= forming_start)
+                            .filter(|(ts, _, _, _, _, _)| *ts >= forming_start && *ts < forming_end)
                             .collect();
                         if !newer.is_empty() {
                             let open = newer.first().map(|(_, o, _, _, _, _)| *o).unwrap_or(0.0);
@@ -31894,6 +31903,27 @@ mod tests {
             Some(1),
             Some(10)
         ));
+    }
+
+    #[test]
+    fn chart_quote_overlay_rejects_stale_quote_for_newer_bar() {
+        let day = 86_400_000i64;
+        assert!(!chart_quote_overlay_allowed(
+            10 * day + 13 * 3_600_000,
+            11 * day
+        ));
+        assert!(chart_quote_overlay_allowed(
+            11 * day + 13 * 3_600_000,
+            11 * day
+        ));
+    }
+
+    #[test]
+    fn chart_forming_bar_requires_caught_up_previous_bucket() {
+        let day = 86_400_000i64;
+        let now = 20 * day + 23 * 3_600_000;
+        assert!(chart_forming_bar_allowed(19 * day, now, day));
+        assert!(!chart_forming_bar_allowed(14 * day, now, day));
     }
 
     #[test]
