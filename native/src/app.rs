@@ -10527,6 +10527,10 @@ enum BrokerMsg {
     },
 }
 
+fn should_emit_fundamentals_scrape_progress(processed: usize, total: usize) -> bool {
+    processed <= 10 || processed == total || processed.is_multiple_of(100)
+}
+
 /// Reusable sort state for clickable column headers.
 #[derive(Clone, Default)]
 struct SortState {
@@ -26046,7 +26050,24 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                     Ok(_f) => {
                                                         ok += 1;
                                                         consecutive_fail = 0;
-                                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: OK ({}/{})", ticker, ok + skipped, tickers.len())));
+                                                        let processed = ok + fail + skipped;
+                                                        tracing::debug!(
+                                                            "Scraped {}: OK ({}/{})",
+                                                            ticker,
+                                                            processed,
+                                                            tickers.len()
+                                                        );
+                                                        if should_emit_fundamentals_scrape_progress(processed, tickers.len()) {
+                                                            let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
+                                                                "Fundamentals progress: {} OK, {} failed, {} skipped ({}/{}) latest {}",
+                                                                ok,
+                                                                fail,
+                                                                skipped,
+                                                                processed,
+                                                                tickers.len(),
+                                                                ticker
+                                                            )));
+                                                        }
                                                     }
                                                     Err(e) => {
                                                         // Rate limit: cooldown and retry
@@ -26063,7 +26084,24 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                                 Ok(_) => {
                                                                     ok += 1;
                                                                     consecutive_fail = 0;
-                                                                    let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: OK (retry) ({}/{})", ticker, ok + skipped, tickers.len())));
+                                                                    let processed = ok + fail + skipped;
+                                                                    tracing::debug!(
+                                                                        "Scraped {}: OK (retry) ({}/{})",
+                                                                        ticker,
+                                                                        processed,
+                                                                        tickers.len()
+                                                                    );
+                                                                    if should_emit_fundamentals_scrape_progress(processed, tickers.len()) {
+                                                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
+                                                                            "Fundamentals progress: {} OK, {} failed, {} skipped ({}/{}) latest {} retry",
+                                                                            ok,
+                                                                            fail,
+                                                                            skipped,
+                                                                            processed,
+                                                                            tickers.len(),
+                                                                            ticker
+                                                                        )));
+                                                                    }
                                                                 }
                                                                 Err(e2) => {
                                                                     fail += 1;
@@ -31600,6 +31638,16 @@ pub fn cache_db_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fundamentals_scrape_progress_log_is_milestoned() {
+        assert!(should_emit_fundamentals_scrape_progress(1, 12_187));
+        assert!(should_emit_fundamentals_scrape_progress(10, 12_187));
+        assert!(!should_emit_fundamentals_scrape_progress(11, 12_187));
+        assert!(!should_emit_fundamentals_scrape_progress(99, 12_187));
+        assert!(should_emit_fundamentals_scrape_progress(100, 12_187));
+        assert!(should_emit_fundamentals_scrape_progress(12_187, 12_187));
+    }
 
     #[test]
     fn yahoo_extended_quote_state_filter_blocks_regular_session() {

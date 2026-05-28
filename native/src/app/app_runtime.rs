@@ -7584,9 +7584,14 @@ impl eframe::App for TyphooNApp {
                         self.scrape_fund_ok += 1;
                     } else if msg.contains(": FAIL") {
                         self.scrape_fund_fail += 1;
-                    } else if msg.contains("complete") || msg.contains("Aborting") {
-                        self.scrape_fund_running = false;
-                        // Parse final counts from "X OK, Y failed, Z skipped ... out of N"
+                    } else if msg.contains("complete")
+                        || msg.contains("Aborting")
+                        || msg.starts_with("Fundamentals progress:")
+                    {
+                        if !msg.starts_with("Fundamentals progress:") {
+                            self.scrape_fund_running = false;
+                        }
+                        // Parse final/progress counts from "X OK, Y failed, Z skipped ... out of N"
                         let parts: Vec<&str> = msg.split_whitespace().collect();
                         for (i, w) in parts.iter().enumerate() {
                             if *w == "OK," {
@@ -7834,13 +7839,20 @@ impl eframe::App for TyphooNApp {
                     reason,
                 } => {
                     self.alpaca_retry_enqueue(&symbol, &timeframe, &reason);
-                    self.log.push_back(LogEntry::warn(format!(
+                    let queue_len = self.alpaca_retry_queue.len();
+                    tracing::debug!(
                         "Alpaca {} {}: queued for retry ({}) — {} in queue",
                         symbol,
                         timeframe,
                         reason,
-                        self.alpaca_retry_queue.len()
-                    )));
+                        queue_len
+                    );
+                    if queue_len == 1 || queue_len.is_multiple_of(100) {
+                        self.log.push_back(LogEntry::warn(format!(
+                            "Alpaca retry queue: {} symbols awaiting targeted probes (latest: {} {} — {})",
+                            queue_len, symbol, timeframe, reason
+                        )));
+                    }
                 }
                 BrokerMsg::AlpacaNoData {
                     symbol,

@@ -56,9 +56,7 @@ impl TyphooNApp {
         let active = self.active_symbols();
         let pairs = filter_kraken_ws_symbols_for_active_scope(&all_pairs, &active);
         if pairs.is_empty() {
-            self.log.push_back(LogEntry::info(
-                "Kraken WS OHLC deferred: no active/watchlist Kraken Spot pairs",
-            ));
+            tracing::debug!("Kraken WS OHLC deferred: no active/watchlist Kraken Spot pairs");
             return false;
         }
         let count = pairs.len();
