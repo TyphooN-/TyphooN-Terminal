@@ -21,6 +21,10 @@ fn is_routine_market_data_status(msg: &str) -> bool {
         || msg.starts_with(typhoon_engine::broker::kraken::IAPI_RATE_LIMITED_ERR_PREFIX)
 }
 
+fn should_emit_alpaca_retry_queue_log(queue_len: usize) -> bool {
+    queue_len > 0 && queue_len.is_multiple_of(100)
+}
+
 // egui 0.34: Panel::show(ctx) deprecated in favor of show_inside(ui).
 // Full migration to ui() pattern is deferred while this runtime pass focuses on module boundaries.
 #[allow(deprecated)]
@@ -1461,7 +1465,7 @@ impl eframe::App for TyphooNApp {
                         self.stooq_sync_pause_until_ts = now + 6 * 60 * 60;
                         self.stooq_sync_pause_reason = e.clone();
                         if !was_paused {
-                            tracing::info!(
+                            tracing::debug!(
                                 "Stooq daily fallback paused for 6h after provider/transport failure: {}",
                                 e
                             );
@@ -7873,8 +7877,8 @@ impl eframe::App for TyphooNApp {
                         reason,
                         queue_len
                     );
-                    if queue_len == 1 || queue_len.is_multiple_of(100) {
-                        self.log.push_back(LogEntry::warn(format!(
+                    if should_emit_alpaca_retry_queue_log(queue_len) {
+                        self.log.push_back(LogEntry::info(format!(
                             "Alpaca retry queue: {} symbols awaiting targeted probes (latest: {} {} — {})",
                             queue_len, symbol, timeframe, reason
                         )));
@@ -17661,5 +17665,14 @@ mod tests {
         assert!(!is_routine_market_data_status(
             "Alpaca retry: re-dispatched 205 symbol(s) (205 in queue)"
         ));
+    }
+
+    #[test]
+    fn alpaca_retry_queue_log_is_milestoned() {
+        assert!(!should_emit_alpaca_retry_queue_log(0));
+        assert!(!should_emit_alpaca_retry_queue_log(1));
+        assert!(!should_emit_alpaca_retry_queue_log(99));
+        assert!(should_emit_alpaca_retry_queue_log(100));
+        assert!(should_emit_alpaca_retry_queue_log(200));
     }
 }

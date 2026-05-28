@@ -246,6 +246,9 @@ impl TyphooNApp {
     }
 
     fn kraken_equities_merged_source_supported(&self, tf: &str) -> bool {
+        if !kraken_equities_merged_timeframe_supported(tf) {
+            return false;
+        }
         kraken_equity_full_universe_timeframe(tf)
             || (self.backfill_alpaca_kraken_equities_enabled
                 && kraken_equity_broad_fallback_timeframe(tf)
@@ -442,5 +445,23 @@ fn merged_sync_period_ms(tf: &str) -> Option<i64> {
         "1Week" => Some(604_800_000),
         "1Month" => Some(2_592_000_000),
         _ => None,
+    }
+}
+
+fn kraken_equities_merged_timeframe_supported(tf: &str) -> bool {
+    kraken_equity_full_universe_timeframe(tf) || kraken_equity_broad_fallback_timeframe(tf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merged_sync_rows_skip_demand_only_low_timeframes() {
+        assert!(!kraken_equities_merged_timeframe_supported("1Min"));
+        assert!(!kraken_equities_merged_timeframe_supported("5Min"));
+        assert!(kraken_equities_merged_timeframe_supported("15Min"));
+        assert!(kraken_equities_merged_timeframe_supported("1Day"));
+        assert!(kraken_equities_merged_timeframe_supported("1Month"));
     }
 }

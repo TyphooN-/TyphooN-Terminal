@@ -31045,7 +31045,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                             }
                                                         }
                                                         if fetched > 0 {
-                                                            tracing::info!(
+                                                            tracing::debug!(
                                                                 "BG: SEC content backfill: {} stored, {} failed",
                                                                 fetched,
                                                                 failed
