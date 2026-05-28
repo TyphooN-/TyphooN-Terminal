@@ -62,7 +62,7 @@ No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
 |----------|--------|----------|
 | 1 | MT5 via BarCacheWriter v1.435 | 895 symbols × 9 TFs, weekday authority (Darwinex). TF gating, 16MB cache, /dev/shm ramdisk. |
 | 2 | Kraken Spot | Crypto trading (full Spot REST order surface + private WS ownTrades/openOrders), recent REST OHLCV, and full-catalog public OHLC WebSocket forward freshness under `kraken:SYMBOL:TF`. Async queueing with Spot public pacing/cooldown per ADR-095 and WS write-path controls per ADR-099. |
-| 3 | Kraken Securities / xStocks | Tokenized-equity bars under `kraken-equities:SYMBOL:TF` via iapi AIMD. Native high timeframes are full-catalog; native intraday stays demand/focus scoped; enabled provider-assist rows provide separate chart-usable fallback coverage. |
+| 3 | Kraken Securities / xStocks | Tokenized-equity bars under `kraken-equities:SYMBOL:TF` via iapi AIMD. Native high timeframes are full-catalog; native intraday stays demand/focus scoped; enabled provider-assist rows provide separate chart-usable fallback coverage. Open-position quotes are foreground safety data: they must refresh ahead of broad history/research work, target sub-minute freshness, and use enabled quote WebSockets where available; Kraken Spot public WS is not xStocks realtime coverage. |
 | 4 | Kraken Futures | Public futures instrument discovery and full chart-candle sync under `kraken-futures:SYMBOL:TF` using explicit from/to ranges. |
 | 5 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request, hourly+ TFs. |
 | 6 | tastytrade DXLink | Real-time historical bars + quotes for funded accounts. |

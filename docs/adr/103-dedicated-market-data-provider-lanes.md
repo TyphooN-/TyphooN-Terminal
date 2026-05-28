@@ -75,6 +75,10 @@ source. That does **not** eliminate broker/native responsibilities:
   account state, and order status.
 - The chart still needs native broker overlays: fills, positions, average price,
   P/L, bracket orders, stops/targets, and broker-specific trading state.
+- Live positions are a foreground safety surface, not broad backfill. An open
+  position must not wait behind full-catalog history or news/research work. Its
+  price/P&L should update within 60 seconds at worst, and preferably on every
+  subscribed quote/trade tick when a usable stream exists.
 - If bid/ask is available from a WebSocket, it should be painted onto the current
   chart regardless of which historical bar provider built the candle series.
 - Buy/sell UI should show best available bid/ask/spread/staleness before a market
@@ -85,6 +89,35 @@ source. That does **not** eliminate broker/native responsibilities:
 
 So a paid/free provider can become the primary **bar lane**, but it should not
 replace broker-native **execution state** or live quote/depth overlays.
+
+### Kraken Securities/xStocks live-position rule
+
+Kraken Securities/xStocks currently use Kraken Pro's internal iapi endpoints for
+quotes/history. That lane is delayed, AIMD-paced, and Cloudflare-sensitive, so it
+is appropriate for native provenance and higher-timeframe history but wrong as the
+only foreground P&L heartbeat for open positions.
+
+The terminal must therefore treat Kraken equity position symbols as a separate
+high-priority quote set:
+
+1. Build the set from live Kraken positions, open orders, focused/open charts, and
+   watchlist symbols.
+2. Refresh that set ahead of broad bar sync, provider assist, fundamentals, SEC,
+   and news jobs.
+3. Use WebSockets when an enabled provider has a quote stream for the normalized
+   underlying equity symbol. Existing examples are Alpaca market-data streaming
+   and tastytrade DXLink; those are quote overlays/proxy market-data lanes, not
+   Kraken execution-state replacements.
+4. Use Kraken private WebSocket for Kraken order/fill state where available. It
+   can reduce position/order-state latency after executions, but it does not solve
+   continuous equity mark-price freshness by itself.
+5. Keep a REST/iapi fallback on a hard freshness SLA: open-position quote age over
+   60 seconds is degraded state and should be visible in the trading panel.
+6. Do not claim Kraken Spot public WebSocket support for xStocks. Kraken Spot
+   public OHLC/book/ticker streams cover Spot pairs; Kraken Securities/xStocks
+   live quote streaming requires a separate verified provider or a documented,
+   maintainable Kraken Securities stream before it can be labeled native Kraken
+   realtime.
 
 ## Provider comparison
 

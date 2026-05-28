@@ -13966,6 +13966,7 @@ pub struct TyphooNApp {
     lan_remote_last_poll: std::time::Instant,
     broker_positions_last_poll: std::time::Instant,
     kraken_positions_last_poll: std::time::Instant,
+    kraken_position_quotes_last_poll: std::time::Instant,
     /// Last REST `TradesHistory` fetch. The `ownTrades` WebSocket already
     /// streams new trades live (see KrakenLiveTrade handler), so the REST
     /// pull is only needed at connect / reconnect / cold cache. A periodic
@@ -30366,6 +30367,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
                 - std::time::Duration::from_secs(60),
             kraken_positions_last_poll: std::time::Instant::now()
                 - std::time::Duration::from_secs(60),
+            kraken_position_quotes_last_poll: std::time::Instant::now()
+                - std::time::Duration::from_secs(15),
             // Initialise far enough in the past that the first
             // KrakenBalances tick after startup will be allowed to fetch.
             kraken_trades_last_fetch: std::time::Instant::now()

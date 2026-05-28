@@ -17235,6 +17235,39 @@ impl eframe::App for TyphooNApp {
             let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
         }
 
+        // Open Kraken equity positions are safety-critical foreground quotes, not
+        // broad history sync. The 60s balance/position REST poll already queues
+        // one ticker refresh, but P/L should not sit stale for a full minute when
+        // iapi is healthy. Until a verified Kraken Securities quote stream exists,
+        // refresh held xStock symbols on the same 15s cadence as watchlist quotes.
+        if now_instant.duration_since(self.kraken_position_quotes_last_poll)
+            >= std::time::Duration::from_secs(15)
+            && self.kraken_enabled
+            && self.kraken_connected
+            && !self.kr_positions.is_empty()
+            && !self.lan_client_enabled
+            && self.cache_loaded
+        {
+            self.kraken_position_quotes_last_poll = now_instant;
+            let mut symbols = std::collections::BTreeSet::new();
+            for pos in &self.kr_positions {
+                if pos.qty == 0.0 {
+                    continue;
+                }
+                let symbol = pos
+                    .symbol
+                    .replace('/', "")
+                    .trim_end_matches(".EQ")
+                    .to_ascii_uppercase();
+                if !symbol.is_empty() {
+                    symbols.insert(symbol);
+                }
+            }
+            for symbol in symbols {
+                self.dispatch_kraken_equity_ticker(&symbol);
+            }
+        }
+
         // Poll watchlist quotes every ~15 seconds at 60fps (900 frames). Disabled for LAN client.
         // Uses the best available stack: broker snapshots when connected, Yahoo quote enrichment,
         // and cached bars as a weekend/off-hours fallback.
