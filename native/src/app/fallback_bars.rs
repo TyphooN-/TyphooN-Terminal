@@ -96,7 +96,11 @@ fn yahoo_interval_and_window(timeframe: &str) -> Option<(&'static str, YahooChar
         // Use explicit period bounds so the requested granularity is honored.
         "1Day" => Some(("1d", YahooChartWindow::PeriodFromUnixEpoch)),
         "1Week" => Some(("1wk", YahooChartWindow::PeriodFromUnixEpoch)),
-        "1Month" => Some(("1mo", YahooChartWindow::Range("max"))),
+        // Yahoo also silently down-samples `range=max&interval=1mo` for long-lived
+        // and short-lived symbols: old equities can come back as 3mo bars, while
+        // young ETFs/SPACs can come back as 1wk/1d/1h bars. Period bounds preserve
+        // actual monthly granularity across both shapes.
+        "1Month" => Some(("1mo", YahooChartWindow::PeriodFromUnixEpoch)),
         _ => None,
     }
 }
@@ -113,6 +117,14 @@ fn yahoo_expected_granularity(timeframe: &str) -> Option<&'static str> {
         "1Month" => Some("1mo"),
         _ => None,
     }
+}
+
+pub(super) fn yahoo_chart_provider_no_data_error(error: &str) -> bool {
+    error.contains("HTTP 400")
+        || error.contains("HTTP 404")
+        || error.contains("empty result")
+        || error.contains("missing quote arrays")
+        || error.contains("Yahoo Chart returned")
 }
 
 pub(super) async fn fetch_yahoo_chart_bars(
@@ -335,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn yahoo_chart_daily_and_weekly_use_period_bounds_to_avoid_monthly_downsample() {
+    fn yahoo_chart_high_timeframes_use_period_bounds_to_avoid_downsample() {
         assert_eq!(
             yahoo_interval_and_window("1Day"),
             Some(("1d", YahooChartWindow::PeriodFromUnixEpoch))
@@ -352,7 +364,21 @@ mod tests {
         assert_eq!(yahoo_expected_granularity("1Week"), Some("1wk"));
         assert_eq!(
             yahoo_interval_and_window("1Month"),
-            Some(("1mo", YahooChartWindow::Range("max")))
+            Some(("1mo", YahooChartWindow::PeriodFromUnixEpoch))
         );
+        assert_eq!(yahoo_expected_granularity("1Month"), Some("1mo"));
+    }
+
+    #[test]
+    fn yahoo_chart_granularity_mismatch_is_provider_no_data() {
+        assert!(yahoo_chart_provider_no_data_error(
+            "Yahoo Chart returned 1wk bars for USSH 1Month; expected 1mo"
+        ));
+        assert!(yahoo_chart_provider_no_data_error(
+            "Yahoo Chart missing quote arrays for ABC 1Day"
+        ));
+        assert!(!yahoo_chart_provider_no_data_error(
+            "Yahoo Chart JSON parse failed for ABC 1Day: trailing characters"
+        ));
     }
 }

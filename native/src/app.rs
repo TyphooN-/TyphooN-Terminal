@@ -25677,10 +25677,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     });
                                 }
                                 Err(error) => {
-                                    let provider_no_data = error.contains("HTTP 400")
-                                        || error.contains("HTTP 404")
-                                        || error.contains("empty result")
-                                        || error.contains("missing quote arrays");
+                                    let provider_no_data = yahoo_chart_provider_no_data_error(&error);
                                     if provider_no_data {
                                         let _ = msg_tx.send(BrokerMsg::Unresolvable {
                                             broker: source.clone(),
