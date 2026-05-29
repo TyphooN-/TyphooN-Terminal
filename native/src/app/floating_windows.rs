@@ -315,16 +315,6 @@ impl TyphooNApp {
     }
 
     pub(super) fn draw_floating_windows(&mut self, ctx: &egui::Context) {
-        // Shared helper: returns true if we should do heavy rendering
-        let should_render_heavy = !self.heavy_sync_in_progress;
-
-        // During heavy bar sync, skip expensive window work to keep UI responsive.
-        // Only essential windows (or light versions) are allowed.
-        if self.heavy_sync_in_progress {
-            // For now we still draw everything, but individual windows should early-out.
-            // Future: add a global light-mode flag here.
-        }
-
         // Settings
         // Save credentials to keyring + SQLite fallback when Settings window closes
         if self.was_settings_open && !self.show_settings {
@@ -396,37 +386,11 @@ impl TyphooNApp {
         }
         self.was_settings_open = self.show_settings;
 
-        if should_render_heavy {
-            let _settings_save_after = self.render_settings_window(ctx);
-            self.render_connect_window(ctx, false);
-        }
-        if should_render_heavy {
-            self.render_indicators_window(ctx);
-        }
+        let _settings_save_after = self.render_settings_window(ctx);
+        self.render_connect_window(ctx, false);
+        self.render_indicators_window(ctx);
         self.render_kraken_spot_sell_dialog(ctx);
-
-        // News window is a known heavy renderer; during broad sync keep only a
-        // lightweight status shell visible so the render thread is not formatting
-        // and laying out hundreds of article rows.
-        if self.heavy_sync_in_progress && self.show_news {
-            let mut open = self.show_news;
-            egui::Window::new("News & Research")
-                .open(&mut open)
-                .default_size([420.0, 120.0])
-                .resizable(false)
-                .show(ctx, |ui| {
-                    ui.label("Heavy market-data sync is running.");
-                    ui.label("News rendering is paused to keep charts responsive.");
-                    ui.add_space(6.0);
-                    ui.spinner();
-                });
-            self.show_news = open;
-        }
         // ── Kraken Trade History Window ─────────────────────────────────────
-        if self.heavy_sync_in_progress && self.show_kraken_trade_history {
-            // Skip heavy trade list rendering during sync
-            self.show_kraken_trade_history = false;
-        }
         if self.show_kraken_trade_history {
             egui::Window::new("Kraken Trade History")
                 .open(&mut self.show_kraken_trade_history)
@@ -435,10 +399,6 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(format!("{} trades loaded", self.kraken_trades.len()));
-                        // The trade table is intentionally not rendered while
-                        // heavy_sync_in_progress is true; keep formatting local
-                        // here so the common non-sync path has no stale cache
-                        // invalidation surface.
                         if ui.button("Refresh").clicked() {
                             let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
                         }
@@ -4513,7 +4473,7 @@ impl TyphooNApp {
         self.render_optimizer_window(ctx);
 
         // News
-        if self.show_news && !self.heavy_sync_in_progress {
+        if self.show_news {
             // Resolve chart symbol once up front (avoid borrow conflicts inside the window closure).
             let chart_symbol = self
                 .charts
@@ -4627,9 +4587,6 @@ impl TyphooNApp {
                         }
                         if ui.add_enabled(!self.news_loading, egui::Button::new("Fetch All Sources").fill(BTN_BLUE))
                             .on_hover_text("Fetch fresh news for the active chart symbol from every configured provider (GDELT, Yahoo, Marketaux, Alpha Vantage, FMP, Finnhub, CryptoPanic, CoinDesk).").clicked() {
-                                if self.heavy_sync_in_progress {
-                                    return; // Skip heavy news rendering during sync
-                                }
                             // Falls back to the active chart's symbol so the
                             // user doesn't need a separate symbol input. To
                             // fetch for a different symbol, open that symbol

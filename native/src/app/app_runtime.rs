@@ -17676,14 +17676,7 @@ impl eframe::App for TyphooNApp {
                 .unwrap_or(0)
         });
         if self.user_interacting {
-            // Pointer/keyboard input should stay native-refresh even while background
-            // sync is heavy; this is the difference between lower idle FPS and a
-            // sluggish chart drag.
             ctx.request_repaint();
-        } else if self.heavy_sync_in_progress {
-            // During broad sync/scrape/restore work, avoid continuous idle repaint.
-            // Input still wakes immediate frames via the branch above.
-            ctx.request_repaint_after(std::time::Duration::from_millis(250));
         } else if idle_fps_cap > 0 {
             let frame_ms = (1000 / idle_fps_cap.max(1)).max(1);
             ctx.request_repaint_after(std::time::Duration::from_millis(frame_ms));
