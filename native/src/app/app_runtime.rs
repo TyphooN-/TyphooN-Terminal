@@ -25,6 +25,37 @@ fn should_emit_alpaca_retry_queue_log(queue_len: usize) -> bool {
     queue_len > 0 && queue_len.is_multiple_of(100)
 }
 
+const HEAVY_SYNC_PENDING_FETCH_THRESHOLD: usize = 32;
+const HEAVY_SYNC_DEFERRED_CHART_THRESHOLD: usize = 4;
+
+fn ui_heavy_sync_active(
+    pending_fetches: usize,
+    deferred_chart_loads: usize,
+    news_loading: bool,
+    scrape_fund_running: bool,
+    scrape_sec_running: bool,
+    auto_compact_in_progress: bool,
+) -> bool {
+    pending_fetches >= HEAVY_SYNC_PENDING_FETCH_THRESHOLD
+        || deferred_chart_loads >= HEAVY_SYNC_DEFERRED_CHART_THRESHOLD
+        || news_loading
+        || scrape_fund_running
+        || scrape_sec_running
+        || auto_compact_in_progress
+}
+
+fn deferred_chart_load_interval(
+    heavy_sync_in_progress: bool,
+    mtf_enabled: bool,
+) -> std::time::Duration {
+    match (heavy_sync_in_progress, mtf_enabled) {
+        (true, true) => std::time::Duration::from_millis(175),
+        (true, false) => std::time::Duration::from_millis(90),
+        (false, true) => std::time::Duration::from_millis(75),
+        (false, false) => std::time::Duration::from_millis(35),
+    }
+}
+
 // egui 0.34: Panel::show(ctx) deprecated in favor of show_inside(ui).
 // Full migration to ui() pattern is deferred while this runtime pass focuses on module boundaries.
 #[allow(deprecated)]
@@ -76,6 +107,19 @@ impl eframe::App for TyphooNApp {
         // Alpaca retry queue: internally throttled to 10s between ticks.
         // Loads persisted state on first call, re-dispatches due entries.
         self.poll_alpaca_retry_queue();
+        // PERF: Broad sync/scrape work must not leave egui in continuous full-rate
+        // repaint mode. The flag was previously initialized but never driven, so
+        // a 12k-symbol universe sync + news/SEC/fundamentals passes still rendered
+        // every idle frame. Input frames still request immediate repaint below.
+        let pending_market_data_fetches = self.total_pending_market_data_fetches();
+        self.heavy_sync_in_progress = ui_heavy_sync_active(
+            pending_market_data_fetches,
+            self.deferred_chart_loads.len(),
+            self.news_loading,
+            self.scrape_fund_running,
+            self.scrape_sec_running,
+            self.auto_compact_in_progress,
+        );
         // PERF: rebuild scope HashSet only when bg data loaded or scope changed,
         // not every frame. Steady state = zero work.
         let scope_key = (self.bg_rev, self.broker_scope);
@@ -1067,27 +1111,35 @@ impl eframe::App for TyphooNApp {
             }
         }
 
-        // ── deferred chart loading: non-blocking, one attempt per frame ──
+        // ── deferred chart loading: non-blocking, paced attempts ──
         // Uses try_load() which returns false if cache Mutex is contended (compaction, MT5 sync).
-        // Failed loads go back to the queue and retry next frame — UI never blocks.
-        if !self.deferred_chart_loads.is_empty() {
-            let idx = self.deferred_chart_loads[0]; // VecDeque supports indexing
-            let mut loaded = false;
-            if let Some(cache) = self.cache.clone() {
-                if let Some(chart) = self.charts.get_mut(idx) {
-                    let mut gpu = self.gpu_indicators.take();
-                    loaded = chart.try_load(&cache, &mut self.log, gpu.as_mut());
-                    self.gpu_indicators = gpu;
-                } else {
-                    loaded = true; // invalid index, skip
+        // Failed loads stay queued. The actual load is still expensive — cache read + GPU
+        // indicators + MTF overlays — so pace restored MTF grids instead of burning
+        // consecutive UI frames while broad sync/news/SEC/fundamentals are active.
+        if !self.deferred_chart_loads.is_empty() && !self.user_interacting {
+            let load_interval =
+                deferred_chart_load_interval(self.heavy_sync_in_progress, self.mtf_enabled);
+            if now_instant.duration_since(self.deferred_chart_last_load_at) >= load_interval {
+                let idx = self.deferred_chart_loads[0]; // VecDeque supports indexing
+                let mut loaded = false;
+                if let Some(cache) = self.cache.clone() {
+                    if let Some(chart) = self.charts.get_mut(idx) {
+                        let mut gpu = self.gpu_indicators.take();
+                        loaded = chart.try_load(&cache, &mut self.log, gpu.as_mut());
+                        self.gpu_indicators = gpu;
+                    } else {
+                        loaded = true; // invalid index, skip
+                    }
                 }
-            }
-            if loaded {
-                if let Some(done_idx) = self.deferred_chart_loads.pop_front() {
-                    self.deferred_chart_load_set.remove(&done_idx);
+                if loaded {
+                    self.deferred_chart_last_load_at = now_instant;
+                    if let Some(done_idx) = self.deferred_chart_loads.pop_front() {
+                        self.deferred_chart_load_set.remove(&done_idx);
+                    }
                 }
+                // If !loaded, leave in queue — will retry after the pacing interval
+                // when the Mutex is free.
             }
-            // If !loaded, leave in queue — will retry next frame when Mutex is free
         }
 
         // ── recompute indicators when periods changed in UI ──────────────
@@ -17623,10 +17675,14 @@ impl eframe::App for TyphooNApp {
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(0)
         });
-        if self.heavy_sync_in_progress {
-            // During heavy bar sync, slow down repaints significantly to keep
-            // the UI responsive. 250ms is a good balance between progress visibility
-            // and not starving the render thread.
+        if self.user_interacting {
+            // Pointer/keyboard input should stay native-refresh even while background
+            // sync is heavy; this is the difference between lower idle FPS and a
+            // sluggish chart drag.
+            ctx.request_repaint();
+        } else if self.heavy_sync_in_progress {
+            // During broad sync/scrape/restore work, avoid continuous idle repaint.
+            // Input still wakes immediate frames via the branch above.
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         } else if idle_fps_cap > 0 {
             let frame_ms = (1000 / idle_fps_cap.max(1)).max(1);
@@ -17679,5 +17735,51 @@ mod tests {
         assert!(!should_emit_alpaca_retry_queue_log(99));
         assert!(should_emit_alpaca_retry_queue_log(100));
         assert!(should_emit_alpaca_retry_queue_log(200));
+    }
+
+    #[test]
+    fn heavy_sync_gate_tracks_bulk_work_not_light_idle() {
+        assert!(!ui_heavy_sync_active(0, 0, false, false, false, false));
+        assert!(!ui_heavy_sync_active(
+            HEAVY_SYNC_PENDING_FETCH_THRESHOLD - 1,
+            HEAVY_SYNC_DEFERRED_CHART_THRESHOLD - 1,
+            false,
+            false,
+            false,
+            false
+        ));
+        assert!(ui_heavy_sync_active(
+            HEAVY_SYNC_PENDING_FETCH_THRESHOLD,
+            0,
+            false,
+            false,
+            false,
+            false
+        ));
+        assert!(ui_heavy_sync_active(
+            0,
+            HEAVY_SYNC_DEFERRED_CHART_THRESHOLD,
+            false,
+            false,
+            false,
+            false
+        ));
+        assert!(ui_heavy_sync_active(0, 0, true, false, false, false));
+        assert!(ui_heavy_sync_active(0, 0, false, true, false, false));
+        assert!(ui_heavy_sync_active(0, 0, false, false, true, false));
+        assert!(ui_heavy_sync_active(0, 0, false, false, false, true));
+    }
+
+    #[test]
+    fn deferred_chart_load_interval_paces_heavy_mtf_restores() {
+        assert!(
+            deferred_chart_load_interval(true, true) > deferred_chart_load_interval(true, false)
+        );
+        assert!(
+            deferred_chart_load_interval(true, false) > deferred_chart_load_interval(false, false)
+        );
+        assert!(
+            deferred_chart_load_interval(false, true) > deferred_chart_load_interval(false, false)
+        );
     }
 }

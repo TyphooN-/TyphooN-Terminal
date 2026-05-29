@@ -10827,6 +10827,10 @@ pub struct TyphooNApp {
     deferred_chart_loads: VecDeque<usize>,
     /// Side index for O(1) duplicate suppression in `deferred_chart_loads`.
     deferred_chart_load_set: HashSet<usize>,
+    /// Last time a deferred chart was synchronously loaded. Used to pace expensive
+    /// cache reads + indicator/MTF recomputes so restored MTF grids don't monopolize
+    /// consecutive UI frames during broad market-data sync.
+    deferred_chart_last_load_at: std::time::Instant,
 
     /// Command palette open state.
     command_open: bool,
@@ -27946,6 +27950,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
             mtf_grid_rx: None,
             deferred_chart_loads: VecDeque::new(),
             deferred_chart_load_set: HashSet::new(),
+            deferred_chart_last_load_at: std::time::Instant::now()
+                - std::time::Duration::from_secs(1),
             mtf_focused: None,
             mtf_visible: Vec::new(),
             command_open: false,
