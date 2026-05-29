@@ -2038,6 +2038,8 @@ struct ChartState {
     /// Set by Kraken WS path when only the last bar was updated.
     /// Allows skipping full indicator recompute on forming-bar ticks.
     forming_bar_dirty: bool,
+    /// Propagated from TyphooNApp during heavy backfill/sync so overlay panes can early-out.
+    heavy_sync_in_progress: bool,
     /// Timestamp of the right-most bar (used for fast-path decisions).
     last_visible_bar_ts: i64,
     last_rendered_gen: u64,
@@ -2555,6 +2557,7 @@ impl ChartState {
             scale_start_y: 0.0,
             visible_bars_gen: 0,
             forming_bar_dirty: false,
+            heavy_sync_in_progress: false,
             last_visible_bar_ts: 0,
             last_rendered_gen: 0,
             last_rendered_bar_ts: 0,
@@ -3653,6 +3656,13 @@ impl ChartState {
                         (prev * (self.sma_fast_period as f64 - 1.0) + last.close)
                             / self.sma_fast_period as f64,
                     );
+                }
+                // EMA21 fast-path last-value update (O(1) rolling)
+                let ema_p = self.ema_period as f64;
+                let k = 2.0 / (ema_p + 1.0);
+                let prev_ema = self.ema21.get(n - 2).copied().flatten();
+                if let (Some(last_ema), Some(prev)) = (self.ema21.last_mut(), prev_ema) {
+                    *last_ema = Some(last.close * k + prev * (1.0 - k));
                 }
             }
             self.forming_bar_dirty = false; // consumed
@@ -11243,6 +11253,8 @@ pub struct TyphooNApp {
     news_selected_url_hash: String,
     /// UI state flag while a fetch/cached-load is in flight.
     news_loading: bool,
+    /// Content hash of the current news_full_articles set (used for cache guard / re-filter decisions, mirroring the pattern requested for fundamentals).
+    news_input_hash: u64,
     /// Latches once the News window has triggered its initial
     /// `LoadCachedNews` for the session. Prevents auto-load from
     /// firing every frame the window stays open, while still
@@ -28147,6 +28159,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             news_search_query: String::new(),
             news_selected_url_hash: String::new(),
             news_loading: false,
+            news_input_hash: 0,
             news_initial_load_done: false,
             news_db_total: None,
             news_db_total_last_refresh: std::time::Instant::now()

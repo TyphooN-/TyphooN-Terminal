@@ -7426,6 +7426,14 @@ impl eframe::App for TyphooNApp {
                     self.news_loading = false;
                     let count = articles.len();
                     self.news_full_articles = articles;
+                    // Update content hash for news cache guard
+                    let mut h = self.news_full_articles.len() as u64;
+                    if let Some(first) = self.news_full_articles.first() {
+                        for b in first.headline.as_bytes() {
+                            h = h.wrapping_mul(31).wrapping_add(*b as u64);
+                        }
+                    }
+                    self.news_input_hash = h;
                     self.news_articles = self
                         .news_full_articles
                         .iter()
@@ -15192,7 +15200,7 @@ impl eframe::App for TyphooNApp {
                 for (grid_pos, &vi) in visible_indices.iter().enumerate() {
                 // Rebuild trade overlay every 120 frames (~30s) or on first load
                 let fc = self.frame_count;
-                if self.charts[vi].cached_trade_overlay_frame == 0 || fc.wrapping_sub(self.charts[vi].cached_trade_overlay_frame) > 120 {
+                if !self.heavy_sync_in_progress && self.charts[vi].cached_trade_overlay_frame == 0 || fc.wrapping_sub(self.charts[vi].cached_trade_overlay_frame) > 120 {
                     self.charts[vi].cached_trade_overlay = self.build_trade_overlay(&self.charts[vi]);
                     self.charts[vi].cached_trade_overlay_frame = fc;
                 }
@@ -15425,7 +15433,7 @@ impl eframe::App for TyphooNApp {
                 // Rebuild trade overlay every 120 frames (~30s) or on first load
                 let fc = self.frame_count;
                 if let Some(c) = self.charts.get(self.active_tab) {
-                    if c.cached_trade_overlay_frame == 0 || fc.wrapping_sub(c.cached_trade_overlay_frame) > 120 {
+                    if !self.heavy_sync_in_progress && c.cached_trade_overlay_frame == 0 || fc.wrapping_sub(c.cached_trade_overlay_frame) > 120 {
                         let ov = self.build_trade_overlay(c);
                         self.charts[self.active_tab].cached_trade_overlay = ov;
                         self.charts[self.active_tab].cached_trade_overlay_frame = fc;

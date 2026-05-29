@@ -3134,6 +3134,12 @@ pub(super) fn draw_chart(
     {
         return;
     }
+
+    // Heavy sync early-out: do near-O(1) work only during backfill
+    if chart.heavy_sync_in_progress {
+        painter.rect_filled(rect, 0.0, BG);
+        return;
+    }
     // Update the "last rendered" snapshot for next frame
     // (we mutate through &mut via interior mutability or by accepting &mut ChartState
     // in a real caller; for now we just document the intent).
