@@ -2170,11 +2170,11 @@ fn cache_source_from_key(key: &str) -> &'static str {
 }
 
 fn chart_source_bars_match_timeframe(
-    source: &str,
+    _source: &str,
     timeframe: &str,
     bars: &[(i64, f64, f64, f64, f64, f64)],
 ) -> bool {
-    if !matches!(source, "yahoo-chart" | "stooq") || bars.len() < 20 {
+    if bars.len() < 20 {
         return true;
     }
     let Some((min_delta_ms, max_median_delta_ms)) = chart_timeframe_cadence_bounds(timeframe)
@@ -2215,8 +2215,8 @@ fn chart_timeframe_cadence_bounds(timeframe: &str) -> Option<(i64, i64)> {
         "1Hour" => Some((20 * 60_000, 4 * hour)),
         "4Hour" => Some((hour, 16 * hour)),
         "1Day" => Some((12 * hour, 5 * day)),
-        "1Week" => Some((3 * day, 10 * day)),
-        "1Month" => Some((20 * day, 45 * day)),
+        "1Week" => Some((5 * day, 8 * day)),
+        "1Month" => Some((26 * day, 35 * day)),
         _ => None,
     }
 }
@@ -2878,8 +2878,12 @@ impl ChartState {
         }
 
         for key in &candidates {
-            if let Ok(Some(_)) = cache.get_bars_raw(key) {
-                return key.clone();
+            if let Ok(Some(raw)) = cache.get_bars_raw(key) {
+                if !raw.is_empty()
+                    && chart_source_bars_match_timeframe(cache_source_from_key(key), tf, &raw)
+                {
+                    return key.clone();
+                }
             }
         }
 
@@ -2888,7 +2892,17 @@ impl ChartState {
             let tf_lower = tf.to_lowercase();
             for key in &keys {
                 if key.to_lowercase().ends_with(&tf_lower) {
-                    return key.clone();
+                    if let Ok(Some(raw)) = cache.get_bars_raw(key) {
+                        if !raw.is_empty()
+                            && chart_source_bars_match_timeframe(
+                                cache_source_from_key(key),
+                                tf,
+                                &raw,
+                            )
+                        {
+                            return key.clone();
+                        }
+                    }
                 }
             }
         }
@@ -6649,6 +6663,10 @@ fn yahoo_market_state_allows_extended_quote(market_state: &str) -> bool {
         market_state.trim().to_ascii_uppercase().as_str(),
         "PRE" | "PREPRE" | "POST" | "POSTPOST"
     )
+}
+
+fn yahoo_extended_quote_time_is_fresh(ext_time: i64, regular_time: i64) -> bool {
+    ext_time > 0 && (regular_time <= 0 || ext_time >= regular_time)
 }
 
 /// Upcoming event source filter for the Event Calendar window.
@@ -14660,7 +14678,7 @@ impl TyphooNApp {
                                     let sym_list = equity_syms.join(",");
                                     let crumb_param = if session.crumb().is_empty() { String::new() } else { format!("&crumb={}", session.crumb()) };
                                     let url = format!(
-                                        "https://query2.finance.yahoo.com/v7/finance/quote?symbols={}&fields=regularMarketPrice,regularMarketPreviousClose,regularMarketVolume,marketState,preMarketPrice,preMarketChangePercent,postMarketPrice,postMarketChangePercent{}",
+                                        "https://query2.finance.yahoo.com/v7/finance/quote?symbols={}&fields=regularMarketPrice,regularMarketPreviousClose,regularMarketVolume,regularMarketTime,marketState,preMarketPrice,preMarketTime,preMarketChangePercent,postMarketPrice,postMarketTime,postMarketChangePercent{}",
                                         sym_list, crumb_param
                                     );
                                     if let Ok(Ok(resp)) = tokio::time::timeout(
@@ -14687,18 +14705,26 @@ impl TyphooNApp {
                                                             row.volume = yah_vol;
                                                         }
 
-                                                        // Yahoo keeps stale pre/post prices on the quote payload during
-                                                        // regular trading. Only trust them when Yahoo explicitly says
-                                                        // the symbol is in PRE/POST state; otherwise the UI keeps showing
-                                                        // bogus EXT while the market is open.
+                                                        // Yahoo keeps stale pre/post prices on the quote payload. Only trust
+                                                        // them when Yahoo says the symbol is in PRE/POST *and* the extended
+                                                        // quote timestamp is at least as fresh as the regular-market timestamp.
+                                                        // TNDM exposed the failure mode: marketState=POST, regular price was
+                                                        // current, but postMarketPrice was still yesterday's stale after-hours tick.
                                                         let market_state = q["marketState"].as_str().unwrap_or("");
                                                         let allow_ext_quote = yahoo_market_state_allows_extended_quote(market_state);
-                                                        let pre_price = if allow_ext_quote {
+                                                        let regular_time = q["regularMarketTime"].as_i64().unwrap_or(0);
+                                                        let pre_time = q["preMarketTime"].as_i64().unwrap_or(0);
+                                                        let post_time = q["postMarketTime"].as_i64().unwrap_or(0);
+                                                        let pre_price = if allow_ext_quote
+                                                            && yahoo_extended_quote_time_is_fresh(pre_time, regular_time)
+                                                        {
                                                             q["preMarketPrice"].as_f64().unwrap_or(0.0)
                                                         } else {
                                                             0.0
                                                         };
-                                                        let post_price = if allow_ext_quote {
+                                                        let post_price = if allow_ext_quote
+                                                            && yahoo_extended_quote_time_is_fresh(post_time, regular_time)
+                                                        {
                                                             q["postMarketPrice"].as_f64().unwrap_or(0.0)
                                                         } else {
                                                             0.0
@@ -31857,10 +31883,39 @@ mod tests {
             "1Day",
             &monthly_as_daily
         ));
-        assert!(chart_source_bars_match_timeframe(
+        assert!(!chart_source_bars_match_timeframe(
             "alpaca",
             "1Day",
             &monthly_as_daily
+        ));
+    }
+
+    #[test]
+    fn chart_source_cadence_rejects_kraken_equity_rolling_htf_bars() {
+        let day = 86_400_000i64;
+        let rolling_month: Vec<_> = (0..36).map(|i| test_bar(i * 43 * day)).collect();
+        assert!(!chart_source_bars_match_timeframe(
+            "kraken-equities",
+            "1Month",
+            &rolling_month
+        ));
+
+        let rolling_week: Vec<_> = (0..36).map(|i| test_bar(i * 10 * day)).collect();
+        assert!(!chart_source_bars_match_timeframe(
+            "kraken-equities",
+            "1Week",
+            &rolling_week
+        ));
+    }
+
+    #[test]
+    fn chart_source_cadence_accepts_calendar_monthly_bars() {
+        let day = 86_400_000i64;
+        let calendar_month: Vec<_> = (0..36).map(|i| test_bar(i * 31 * day)).collect();
+        assert!(chart_source_bars_match_timeframe(
+            "alpaca",
+            "1Month",
+            &calendar_month
         ));
     }
 
@@ -31957,6 +32012,14 @@ mod tests {
         assert!(!yahoo_market_state_allows_extended_quote("REGULAR"));
         assert!(!yahoo_market_state_allows_extended_quote("CLOSED"));
         assert!(!yahoo_market_state_allows_extended_quote(""));
+    }
+
+    #[test]
+    fn yahoo_extended_quote_time_filter_rejects_stale_ext_ticks() {
+        assert!(yahoo_extended_quote_time_is_fresh(200, 100));
+        assert!(yahoo_extended_quote_time_is_fresh(100, 100));
+        assert!(!yahoo_extended_quote_time_is_fresh(99, 100));
+        assert!(!yahoo_extended_quote_time_is_fresh(0, 100));
     }
 
     #[test]
