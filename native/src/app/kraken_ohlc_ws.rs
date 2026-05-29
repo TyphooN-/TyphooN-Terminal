@@ -283,12 +283,44 @@ mod tests {
         assert_eq!(to_flush.len(), 10);
         assert!(remaining.is_empty());
     }
+
+    #[test]
+    fn grouped_ws_bar_entries_chunking_is_bounded_and_lossless() {
+        let mut grouped: GroupedWsBars = HashMap::new();
+        for i in 0..10 {
+            grouped.insert((format!("PAIR{i}USD"), "1Min"), (Vec::new(), i));
+        }
+        let chunks = chunk_grouped_ws_bar_entries(grouped, 3);
+        assert_eq!(chunks.len(), 4);
+        assert!(chunks.iter().all(|chunk| chunk.len() <= 3));
+        assert_eq!(chunks.iter().map(Vec::len).sum::<usize>(), 10);
+    }
+
+    #[test]
+    fn grouped_ws_bar_entries_chunking_never_uses_zero_chunk_size() {
+        let mut grouped: GroupedWsBars = HashMap::new();
+        grouped.insert(("BTCUSD".to_string(), "1Min"), (Vec::new(), 1));
+        grouped.insert(("ETHUSD".to_string(), "1Min"), (Vec::new(), 2));
+        let chunks = chunk_grouped_ws_bar_entries(grouped, 0);
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks.iter().all(|chunk| chunk.len() == 1));
+    }
 }
 
 /// Coalesce-and-flush cadence for the WS bar writer. Keep this tight so the
 /// initial full-universe snapshots mark REST slots WS-fresh almost immediately;
 /// closed-bar gating still prevents per-tick rewrites of open buckets.
 const WS_BAR_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Bounded channel capacity between WS streamers and the writer. Startup
+/// snapshots can otherwise enqueue millions of bars while the writer is busy
+/// merging/compressing, which converts a CPU burst into unbounded memory growth.
+const WS_BAR_CHANNEL_CAPACITY: usize = 65_536;
+
+/// Maximum grouped `(symbol, timeframe)` merges to process in one blocking task.
+/// Keeps startup snapshot persistence in bounded slices so tokio can schedule
+/// other blocking work and the writer can report WS-fresh progress incrementally.
+const WS_BAR_MAX_GROUPS_PER_BLOCKING_FLUSH: usize = 256;
 
 /// Maximum bars per `merge_bars` call. The cache's merge_bars rewrites the
 /// entire compressed blob for the key, so we batch but don't try to flush
@@ -299,6 +331,27 @@ const WS_BAR_MAX_BARS_PER_KEY: usize = 0; // 0 == unbounded (full-depth merge)
 /// Triple committed after a flush: `(typhoon_symbol, tf_label, last_bar_ts_ms)`.
 /// Sent to the main loop so it can mark the (symbol, tf) WS-fresh.
 pub(super) type WsFreshEntry = (String, String, i64);
+
+type GroupedWsBarEntry = ((String, &'static str), (Vec<serde_json::Value>, i64));
+type GroupedWsBars = HashMap<(String, &'static str), (Vec<serde_json::Value>, i64)>;
+
+fn chunk_grouped_ws_bar_entries(
+    grouped: GroupedWsBars,
+    chunk_size: usize,
+) -> Vec<Vec<GroupedWsBarEntry>> {
+    let chunk_size = chunk_size.max(1);
+    let mut chunks: Vec<Vec<GroupedWsBarEntry>> = Vec::new();
+    for entry in grouped {
+        if chunks.last().is_none_or(|chunk| chunk.len() >= chunk_size) {
+            chunks.push(Vec::with_capacity(chunk_size));
+        }
+        chunks
+            .last_mut()
+            .expect("chunk should exist after push")
+            .push(entry);
+    }
+    chunks
+}
 
 /// Spawn the full WS OHLC pipeline. Drops zero streamers if `pairs` is
 /// empty (Kraken has no subscribe support for "all pairs without listing
@@ -317,7 +370,7 @@ pub(super) fn spawn_kraken_ohlc_pipeline(
     if pairs.is_empty() {
         return;
     }
-    let (bar_tx, bar_rx) = mpsc::unbounded_channel::<KrakenWsOhlcBar>();
+    let (bar_tx, bar_rx) = mpsc::channel::<KrakenWsOhlcBar>(WS_BAR_CHANNEL_CAPACITY);
     for &interval_min in KRAKEN_WS_OHLC_INTERVALS_MIN {
         let pairs = pairs.clone();
         let bar_tx = bar_tx.clone();
@@ -352,7 +405,7 @@ pub(super) fn spawn_kraken_ohlc_pipeline(
 /// (symbol, tf) on close, which is exactly when staleness checks care.
 async fn run_ws_bar_writer(
     shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
-    mut bar_rx: mpsc::UnboundedReceiver<KrakenWsOhlcBar>,
+    mut bar_rx: mpsc::Receiver<KrakenWsOhlcBar>,
     commit_tx: mpsc::UnboundedSender<Vec<WsFreshEntry>>,
 ) {
     // (symbol_cache_key, interval_min, interval_begin_ms) -> bar
@@ -435,10 +488,9 @@ async fn flush_ws_bars(
     };
 
     // Group bars by their target cache key + track the newest bucket ts so
-    // we can report it back as the WS-fresh anchor. PERF: this is O(n) over
-    // buffered bars; we expect n in the low thousands at most per flush.
-    let mut grouped: HashMap<(String, &'static str), (Vec<serde_json::Value>, i64)> =
-        HashMap::new();
+    // we can report it back as the WS-fresh anchor. Startup snapshots can
+    // produce ~12k groups; process them in bounded blocking chunks below.
+    let mut grouped: GroupedWsBars = HashMap::new();
     for ((cache_symbol, interval_min, interval_begin_ms), bar) in buffer {
         let Some(tf_label) = kraken_ws_interval_to_tf_label(interval_min) else {
             continue;
@@ -457,32 +509,37 @@ async fn flush_ws_bars(
         return;
     }
 
-    let cache_clone = cache.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let mut committed: Vec<WsFreshEntry> = Vec::with_capacity(grouped.len());
-        for ((cache_symbol, tf_label), (bars, last_bucket_ms)) in grouped {
-            if bars.is_empty() {
-                continue;
+    for chunk in chunk_grouped_ws_bar_entries(grouped, WS_BAR_MAX_GROUPS_PER_BLOCKING_FLUSH) {
+        let cache_clone = cache.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let mut committed: Vec<WsFreshEntry> = Vec::with_capacity(chunk.len());
+            for ((cache_symbol, tf_label), (bars, last_bucket_ms)) in chunk {
+                if bars.is_empty() {
+                    continue;
+                }
+                let key = format!("kraken:{cache_symbol}:{tf_label}");
+                let bars_json = match serde_json::to_string(&bars) {
+                    Ok(j) => j,
+                    Err(_) => continue,
+                };
+                if cache_clone
+                    .merge_bars_fast(&key, &bars_json, WS_BAR_MAX_BARS_PER_KEY)
+                    .is_ok()
+                {
+                    committed.push((cache_symbol, tf_label.to_string(), last_bucket_ms));
+                }
             }
-            let key = format!("kraken:{cache_symbol}:{tf_label}");
-            let bars_json = match serde_json::to_string(&bars) {
-                Ok(j) => j,
-                Err(_) => continue,
-            };
-            if cache_clone
-                .merge_bars(&key, &bars_json, WS_BAR_MAX_BARS_PER_KEY)
-                .is_ok()
-            {
-                committed.push((cache_symbol, tf_label.to_string(), last_bucket_ms));
-            }
-        }
-        committed
-    })
-    .await;
+            committed
+        })
+        .await;
 
-    if let Ok(committed) = result {
-        if !committed.is_empty() {
-            let _ = commit_tx.send(committed);
+        if let Ok(committed) = result {
+            if !committed.is_empty() {
+                let _ = commit_tx.send(committed);
+            }
         }
+        // Cooperate with the runtime between startup snapshot chunks instead
+        // of monopolizing the writer task until every key has been merged.
+        tokio::task::yield_now().await;
     }
 }

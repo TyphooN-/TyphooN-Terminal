@@ -348,7 +348,7 @@ pub enum KrakenOhlcStreamerEvent {
 pub async fn run_ohlc_streamer(
     interval_min: u32,
     pairs: Vec<String>,
-    bar_tx: mpsc::UnboundedSender<KrakenWsOhlcBar>,
+    bar_tx: mpsc::Sender<KrakenWsOhlcBar>,
     event_tx: mpsc::UnboundedSender<KrakenOhlcStreamerEvent>,
 ) {
     if pairs.is_empty() || bar_tx.is_closed() {
@@ -385,7 +385,7 @@ pub async fn run_ohlc_streamer(
 async fn run_ohlc_streamer_once(
     interval_min: u32,
     pairs: &[String],
-    bar_tx: &mpsc::UnboundedSender<KrakenWsOhlcBar>,
+    bar_tx: &mpsc::Sender<KrakenWsOhlcBar>,
     event_tx: &mpsc::UnboundedSender<KrakenOhlcStreamerEvent>,
 ) -> Result<(), String> {
     let (ws_stream, _) = connect_async(KRAKEN_WS_V2_URL)
@@ -459,7 +459,7 @@ async fn run_ohlc_streamer_once(
                             continue;
                         }
                         for bar in parse_ohlc_message(&text) {
-                            if bar_tx.send(bar).is_err() {
+                            if bar_tx.send(bar).await.is_err() {
                                 // Consumer is gone — clean shutdown.
                                 return Ok(());
                             }
@@ -737,7 +737,7 @@ mod tests {
         // Drop the receiver before spawning so bar_tx.is_closed() returns
         // true on entry; the function must exit cleanly without trying
         // to connect to Kraken (this test runs offline).
-        let (bar_tx, bar_rx) = mpsc::unbounded_channel();
+        let (bar_tx, bar_rx) = mpsc::channel(1);
         drop(bar_rx);
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
         let fut = run_ohlc_streamer(1, vec!["BTC/USD".to_string()], bar_tx, event_tx);
@@ -749,7 +749,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_ohlc_streamer_no_op_for_empty_pair_list() {
-        let (bar_tx, _bar_rx) = mpsc::unbounded_channel();
+        let (bar_tx, _bar_rx) = mpsc::channel(1);
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
         let fut = run_ohlc_streamer(1, Vec::new(), bar_tx, event_tx);
         tokio::time::timeout(Duration::from_secs(1), fut)
