@@ -27,6 +27,14 @@ pub enum Indicator {
     Cmo,
     Disparity,
     Stddev,
+    // Extended for full 3-path GPU prioritization
+    Fisher,
+    Stochastic,
+    Atr,
+    Adx,
+    Bollinger,
+    Macd,
+    Ichimoku,
 }
 
 pub struct GpuCompute {
@@ -926,7 +934,7 @@ impl GpuCompute {
     }
 
     /// Generic dispatch with OHLC input (for ATR, Stochastic, ADX)
-    fn dispatch_ohlc_indicator(
+    pub fn dispatch_ohlc_indicator(
         &self,
         pipeline: &wgpu::ComputePipeline,
         period: u32,
