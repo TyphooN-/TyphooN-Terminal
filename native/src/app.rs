@@ -4153,7 +4153,7 @@ impl ChartState {
 
                 let trix_p = 15u32;
                 let trix_sig_p = 9u32;
-                if let Some(data) = gpu.compute_trix_gpu(&closes, trix_p, trix_sig_p) {
+                if let Some(data) = gpu.compute_trix_gpu(&self.upload_closes, trix_p, trix_sig_p) {
                     let trix_line_warmup = (3 * trix_p as usize).saturating_sub(2);
                     let trix_signal_warmup = 3 * trix_p as usize + trix_sig_p as usize - 3;
                     let mut line = Vec::with_capacity(n);
@@ -4193,7 +4193,7 @@ impl ChartState {
                 let ppo_fast = 12u32;
                 let ppo_slow = 26u32;
                 let ppo_sig = 9u32;
-                if let Some(data) = gpu.compute_ppo_gpu(&closes, ppo_fast, ppo_slow, ppo_sig) {
+                if let Some(data) = gpu.compute_ppo_gpu(&self.upload_closes, ppo_fast, ppo_slow, ppo_sig) {
                     let ppo_line_warmup = ppo_slow as usize - 1;
                     let ppo_signal_warmup = ppo_slow as usize + ppo_sig as usize - 2;
                     let mut line = Vec::with_capacity(n);
@@ -4250,7 +4250,7 @@ impl ChartState {
                     self.ultosc = compute_ultosc(&self.bars);
                 }
 
-                if let Some(data) = gpu.compute_stochrsi_gpu(&closes, 14, 14, 3, 3) {
+                if let Some(data) = gpu.compute_stochrsi_gpu(&self.upload_closes, 14, 14, 3, 3) {
                     let stochrsi_k_warmup = 29usize;
                     let stochrsi_d_warmup = 31usize;
                     let mut k = Vec::with_capacity(n);
