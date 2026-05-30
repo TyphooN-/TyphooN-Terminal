@@ -1899,6 +1899,8 @@ struct ChartState {
     disparity: Vec<Option<f64>>,
     /// LINEARREG_SLOPE
     linreg_slope: Vec<Option<f64>>,
+    /// LINEARREG_INTERCEPT
+    linreg_intercept: Vec<Option<f64>>,
     /// BOP(14).
     bop: Vec<Option<f64>>,
     /// StdDev(20).
@@ -4201,6 +4203,19 @@ impl ChartState {
                                     let new_roc = ((last.close - prev_close) / prev_close) * 100.0;
                                     *last_roc = Some(new_roc);
                                 }
+                            }
+                        }
+                    }
+                }
+
+                // O(1) forming-bar update for Linear Regression Intercept
+                if self.forming_bar_dirty && n > 1 {
+                    if let Some(last_slope) = self.linreg_slope.get(n-2).copied().flatten() {
+                        if let Some(last_intercept) = self.linreg_intercept.last_mut() {
+                            if let Some(last) = self.bars.last() {
+                                // intercept = y - slope * x  (using current bar as reference)
+                                let x = (n - 1) as f64;
+                                *last_intercept = Some(last.close - last_slope * x);
                             }
                         }
                     }
