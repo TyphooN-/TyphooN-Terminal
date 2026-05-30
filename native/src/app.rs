@@ -1902,8 +1902,10 @@ struct ChartState {
     /// LINEARREG_INTERCEPT
     linreg_intercept: Vec<Option<f64>>,
     /// LINEARREG_ANGLE
+    #[allow(dead_code)]
     linreg_angle: Vec<Option<f64>>,
     /// LINEARREG (endpoint value)
+    #[allow(dead_code)]
     linreg: Vec<Option<f64>>,
     /// BOP(14).
     bop: Vec<Option<f64>>,
