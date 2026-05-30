@@ -58,13 +58,14 @@ impl TyphooNApp {
             build_unresolvable_fetch_key_index(&self.unresolvable_pairs);
     }
 
+#[inline]
     pub(super) fn alpaca_retry_backoff_secs(retry_count: u32) -> i64 {
         match retry_count {
-            0 | 1 => 15,
-            2 => 30,
-            3 => 60,
-            4 => 180,
-            _ => 900,
+            0 | 1 => 30,
+            2 => 60,
+            3 => 120,
+            4 => 300,
+            _ => 1800,
         }
     }
 
@@ -620,7 +621,7 @@ impl TyphooNApp {
         const MAX_AGE_SECS: i64 = 24 * 3600;
         let before = self.alpaca_retry_queue.len();
         self.alpaca_retry_queue
-            .retain(|e| now - e.last_attempt <= MAX_AGE_SECS && e.retry_count < 20);
+            .retain(|e| now - e.last_attempt <= MAX_AGE_SECS && e.retry_count < 12);
         if self.alpaca_retry_queue.len() != before {
             self.alpaca_retry_save();
         }
@@ -647,6 +648,13 @@ impl TyphooNApp {
         }
 
         let retry_len_before = self.alpaca_retry_queue.len();
+        // Build a local set of no-data keys once to avoid repeated
+        // alpaca_fetch_key() + HashMap lookups in the retain below.
+        let no_data_keys: std::collections::HashSet<String> = self
+            .alpaca_no_data_pairs
+            .keys()
+            .cloned()
+            .collect();
         self.alpaca_retry_queue.retain(|e| {
             !self
                 .alpaca_no_data_pairs
