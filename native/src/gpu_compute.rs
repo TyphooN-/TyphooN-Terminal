@@ -1165,7 +1165,15 @@ impl GpuCompute {
             Indicator::Cmo => &self.cmo_pipeline,
             Indicator::Disparity => &self.disparity_pipeline,
             Indicator::Stddev => &self.stddev_pipeline,
-            _ => return None, // CCI, WilliamsR, Obv need special input buffers
+            // New extended variants - fall back to dedicated methods for now
+            Indicator::Fisher |
+            Indicator::Stochastic |
+            Indicator::Atr |
+            Indicator::Adx |
+            Indicator::Bollinger |
+            Indicator::Macd |
+            Indicator::Ichimoku => return None,
+            _ => return None,
         };
         self.dispatch_indicator(pipeline, period, parallel)
     }
