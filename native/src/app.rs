@@ -4221,6 +4221,23 @@ impl ChartState {
                     }
                 }
 
+                // Simple O(1) forming-bar update for Chande Forecast Oscillator (CFO)
+                if self.forming_bar_dirty && n > 1 {
+                    if let Some(last_slope) = self.linreg_slope.get(n-2).copied().flatten() {
+                        if let Some(last_intercept) = self.linreg_intercept.get(n-2).copied().flatten() {
+                            if let Some(last_cfo) = self.cfo.last_mut() {
+                                if let Some(last) = self.bars.last() {
+                                    let x = (n - 1) as f64;
+                                    let forecast = last_slope * x + last_intercept;
+                                    if last.close != 0.0 {
+                                        *last_cfo = Some(100.0 * (last.close - forecast) / last.close);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // CMO / QStick / Disparity / BOP / StdDev — GPU with CPU fallback
                 let cmo_p = 9u32;
                 if let Some(data) = gpu.compute_cmo_gpu(cmo_p) {
