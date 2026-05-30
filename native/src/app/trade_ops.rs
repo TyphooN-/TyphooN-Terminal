@@ -59,7 +59,6 @@ impl TyphooNApp {
     }
 
 #[inline]
-#[inline]
     pub(super) fn alpaca_retry_backoff_secs(retry_count: u32) -> i64 {
         match retry_count {
             0 | 1 => 30,
