@@ -3805,7 +3805,22 @@ impl ChartState {
 
                 // RSI — sequential GPU
                 let rsi_p = self.rsi_period;
+                // Prefer dedicated RSI GPU path, then generic dispatch, then CPU
                 if let Some(data) = gpu.compute_rsi_gpu(rsi_p) {
+                    self.rsi = data
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &v)| {
+                            if i < rsi_p as usize || v == 0.0 {
+                                None
+                            } else {
+                                Some(v as f64)
+                            }
+                        })
+                        .collect();
+                } else if let Some(data) =
+                    gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Rsi, rsi_p, false)
+                {
                     self.rsi = data
                         .iter()
                         .enumerate()
