@@ -3756,6 +3756,14 @@ impl ChartState {
                         .enumerate()
                         .map(|(i, &v)| if i < 10 { None } else { Some(v as f64) })
                         .collect();
+                } else if let Some(data) =
+                    gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Kama, 10, false)
+                {
+                    self.kama = data
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &v)| if i < 10 { None } else { Some(v as f64) })
+                        .collect();
                 } else {
                     self.kama = compute_kama(&self.bars, 10, 2, 30);
                 }
