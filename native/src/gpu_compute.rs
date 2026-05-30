@@ -1165,14 +1165,13 @@ impl GpuCompute {
             Indicator::Cmo => &self.cmo_pipeline,
             Indicator::Disparity => &self.disparity_pipeline,
             Indicator::Stddev => &self.stddev_pipeline,
-            // New extended variants - fall back to dedicated methods for now
-            Indicator::Fisher |
-            Indicator::Stochastic |
-            Indicator::Atr |
-            Indicator::Adx |
-            Indicator::Bollinger |
-            Indicator::Macd |
-            Indicator::Ichimoku => return None,
+            Indicator::Fisher => &self.fisher_pipeline,
+            Indicator::Stochastic => &self.stochastic_pipeline,
+            Indicator::Atr => return None, // requires OHLC dispatch
+            Indicator::Adx => return None, // requires OHLC dispatch
+            Indicator::Bollinger => return None, // multi-output
+            Indicator::Macd => return None, // multi-output
+            Indicator::Ichimoku => return None, // complex multi-output
             _ => return None,
         };
         self.dispatch_indicator(pipeline, period, parallel)
