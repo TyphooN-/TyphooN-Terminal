@@ -1885,6 +1885,9 @@ struct ChartState {
     momentum: Vec<Option<f64>>,
     /// CMO(9).
     cmo: Vec<Option<f64>>,
+    /// Running sums for O(1) CMO forming-bar update
+    cmo_sum_up: f64,
+    cmo_sum_down: f64,
     /// QStick(14).
     qstick: Vec<Option<f64>>,
     /// Disparity Index(14).
@@ -4177,6 +4180,26 @@ impl ChartState {
                         .collect();
                 } else {
                     self.cmo = compute_cmo(&self.bars, cmo_p as usize);
+                }
+
+                // O(1) forming-bar update for CMO
+                if self.forming_bar_dirty && n > 1 && cmo_p as usize > 0 {
+                    if let Some(last) = self.bars.last() {
+                        let delta = last.close - self.bars[n-2].close;
+                        if delta > 0.0 {
+                            self.cmo_sum_up += delta;
+                        } else if delta < 0.0 {
+                            self.cmo_sum_down += -delta;
+                        }
+                        let denom = self.cmo_sum_up + self.cmo_sum_down;
+                        if let Some(last_cmo) = self.cmo.last_mut() {
+                            *last_cmo = if denom > f64::EPSILON {
+                                Some(100.0 * (self.cmo_sum_up - self.cmo_sum_down) / denom)
+                            } else {
+                                Some(0.0)
+                            };
+                        }
+                    }
                 }
 
                 let qstick_p = 14u32;
