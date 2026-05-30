@@ -4086,12 +4086,26 @@ impl ChartState {
                         .iter()
                         .map(|&v| if v == 0.0 { None } else { Some(v as f64) })
                         .collect();
+                } else if let Some(data) =
+                    gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Wma, 20, false)
+                {
+                    self.wma = data
+                        .iter()
+                        .map(|&v| if v == 0.0 { None } else { Some(v as f64) })
+                        .collect();
                 } else {
                     self.wma = compute_wma(&self.bars, 20);
                 }
 
                 // HMA — GPU (WMA composition shader)
                 if let Some(data) = gpu.compute_hma_gpu(20) {
+                    self.hma = data
+                        .iter()
+                        .map(|&v| if v == 0.0 { None } else { Some(v as f64) })
+                        .collect();
+                } else if let Some(data) =
+                    gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Hma, 20, false)
+                {
                     self.hma = data
                         .iter()
                         .map(|&v| if v == 0.0 { None } else { Some(v as f64) })
