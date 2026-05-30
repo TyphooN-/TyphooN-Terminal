@@ -14,10 +14,24 @@ We have decided **not** to pursue fully async separate task dispatch for multi-o
 ## Current Focus Areas
 
 ### 1. Widening the Forming-Bar O(1) Fast Path
-- Currently only SMA and EMA have explicit last-value mutation support.
-- Goal: Extend safe O(1) last-value mutation to as many indicators as possible without compromising correctness.
+
+**Implemented O(1) last-value mutation**:
+- SMA (200/100)
+- EMA (21)
+- Disparity (using SMA100)
+- CMO (with running sum_up/sum_down)
+- Linear Regression Slope (with running sums)
+- Momentum (simple approximate O(1))
+- Rate of Change (simple approximate O(1))
+- Linear Regression Intercept (using slope)
+- Linear Regression Angle (`atan(slope) * 180/π`)
+- Linear Regression (endpoint value)
+- Chande Forecast Oscillator (CFO)
+
+**Goal**: Extend safe O(1) last-value mutation to as many indicators as possible without compromising correctness.
 
 ### 2. Allocation Reduction and Prioritization Improvements
+
 - Reusable upload buffers for the full GPU path (implemented).
 - 3-path GPU prioritization pattern (dedicated method → generic dispatch → CPU fallback) applied to eligible indicators.
 - Further opportunities in hot paths will continue to be addressed.
@@ -34,6 +48,7 @@ All performance work must:
 - Evaluate additional indicators for safe forming-bar O(1) mutation.
 - Continue systematic GPU prioritization for indicators supported by the `Indicator` enum and dispatch methods.
 - Monitor for new allocation or prioritization opportunities after recent buffer reuse work.
+- Consider accuracy improvements or ring-buffer approach for approximate O(1) implementations (Momentum, Rate of Change, etc.).
 
 ## Related ADRs
 - ADR-104: Async Multi-Output Indicator Dispatch Decision
