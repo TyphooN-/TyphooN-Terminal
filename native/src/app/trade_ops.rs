@@ -59,6 +59,7 @@ impl TyphooNApp {
     }
 
 #[inline]
+#[inline]
     pub(super) fn alpaca_retry_backoff_secs(retry_count: u32) -> i64 {
         match retry_count {
             0 | 1 => 30,
@@ -633,7 +634,7 @@ impl TyphooNApp {
             return;
         }
 
-        let enabled_sync_timeframes = self.enabled_sync_timeframes.clone();
+        let enabled_sync_timeframes = &self.enabled_sync_timeframes;
         let retry_len_before = self.alpaca_retry_queue.len();
         self.alpaca_retry_queue.retain(|e| {
             normalize_sync_timeframe_key(&e.timeframe)
