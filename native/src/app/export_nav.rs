@@ -146,18 +146,17 @@ impl TyphooNApp {
             .clamp(0, (chart.bars.len() + CHART_RIGHT_MARGIN) as isize - 1)
             as usize;
 
-        if drag_delta.y.abs() > 0.5 {
-            let (si, ei) = chart.visible_range();
-            if ei > si {
-                let slice = &chart.bars[si..ei];
-                let hi = slice.iter().map(|b| b.high).fold(f64::MIN, f64::max);
-                let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
-                let range = (hi - lo).max(f64::EPSILON);
-                chart.price_pan =
-                    chart.drag_start_ppan + drag_delta.y as f64 * range / rect_height as f64;
-            }
-        } else {
-            chart.price_pan = chart.drag_start_ppan;
+        // Always apply vertical pan from total drag (no threshold) so slow/precise
+        // raises/lowers work like TradingView free-view drag. The y component
+        // shifts the visible price centre without snapping back.
+        let (si, ei) = chart.visible_range();
+        if ei > si {
+            let slice = &chart.bars[si..ei];
+            let hi = slice.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+            let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+            let range = (hi - lo).max(f64::EPSILON);
+            chart.price_pan =
+                chart.drag_start_ppan + drag_delta.y as f64 * range / rect_height as f64;
         }
     }
 
