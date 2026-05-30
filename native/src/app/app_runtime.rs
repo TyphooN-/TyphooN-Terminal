@@ -12293,7 +12293,7 @@ impl eframe::App for TyphooNApp {
                                             ui.label(egui::RichText::new(side).color(c).small());
                                             ui.label(
                                                 egui::RichText::new(format!(
-                                                    "{:.2}@{}",
+                                                    "{:.2} @ {}",
                                                     qty,
                                                     format_price(*price)
                                                 ))
