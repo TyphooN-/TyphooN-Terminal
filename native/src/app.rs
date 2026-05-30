@@ -2508,6 +2508,12 @@ impl ChartState {
             linreg_sum_y: 0.0,
             linreg_sum_xy: 0.0,
             linreg_sum_x2: 0.0,
+            linreg: Vec::new(),
+            linreg_angle: Vec::new(),
+            linreg_intercept: Vec::new(),
+            linreg: Vec::new(),
+            linreg_angle: Vec::new(),
+            linreg_intercept: Vec::new(),
             linreg_slope: Vec::new(),
             qstick: Vec::new(),
             disparity: Vec::new(),
@@ -4199,7 +4205,7 @@ impl ChartState {
 
                 // Simple O(1) forming-bar update for Rate of Change (approximate)
                 if self.forming_bar_dirty && n > 1 && mom_p as usize > 0 {
-                    if let Some(prev_roc) = self.momentum.get(n-2).copied().flatten() {
+                    if let Some(_prev_roc) = self.momentum.get(n-2).copied().flatten() {
                         if let Some(last_roc) = self.momentum.last_mut() {
                             if let Some(last) = self.bars.last() {
                                 let prev_close = self.bars[n-2].close;
