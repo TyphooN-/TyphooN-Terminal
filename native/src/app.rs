@@ -4178,6 +4178,19 @@ impl ChartState {
                     self.momentum = compute_momentum(&self.bars, mom_p as usize);
                 }
 
+                // Simple O(1) forming-bar update for Momentum (approximate)
+                if self.forming_bar_dirty && n > 1 && mom_p as usize > 0 {
+                    if let Some(prev_mom) = self.momentum.get(n-2).copied().flatten() {
+                        if let Some(last_mom) = self.momentum.last_mut() {
+                            if let Some(last) = self.bars.last() {
+                                // Approximate: shift by the change in close
+                                let change = last.close - self.bars[n-2].close;
+                                *last_mom = Some(prev_mom + change);
+                            }
+                        }
+                    }
+                }
+
                 // CMO / QStick / Disparity / BOP / StdDev — GPU with CPU fallback
                 let cmo_p = 9u32;
                 if let Some(data) = gpu.compute_cmo_gpu(cmo_p) {
