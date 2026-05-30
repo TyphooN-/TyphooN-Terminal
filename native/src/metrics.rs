@@ -47,6 +47,9 @@ pub struct MetricsRegistry {
     broker: GaugeVec,
     alerts: Gauge,
     uptime: Gauge,
+    // Kraken WS OHLC channel backpressure metrics (real, non-debug)
+    kraken_ws_bar_channel_capacity: Gauge,
+    kraken_ws_bar_channel_queued: Gauge,
 }
 
 impl MetricsRegistry {
@@ -114,6 +117,19 @@ impl MetricsRegistry {
         let uptime = Gauge::new("typhoon_uptime_seconds", "Application uptime in seconds")
             .map_err(|e| format!("uptime metric: {e}"))?;
 
+        // Kraken WS channel backpressure metrics
+        let kraken_ws_bar_channel_capacity = Gauge::new(
+            "typhoon_kraken_ws_bar_channel_capacity",
+            "Maximum capacity of the Kraken WS bar channel",
+        )
+        .map_err(|e| format!("kraken_ws_bar_channel_capacity metric: {e}"))?;
+
+        let kraken_ws_bar_channel_queued = Gauge::new(
+            "typhoon_kraken_ws_bar_channel_queued",
+            "Current number of bars queued in the Kraken WS channel",
+        )
+        .map_err(|e| format!("kraken_ws_bar_channel_queued metric: {e}"))?;
+
         let reg = |collector: Box<dyn prometheus::core::Collector>| {
             if let Err(e) = registry.register(collector) {
                 tracing::warn!("Metric registration failed (may be duplicate): {}", e);
@@ -130,6 +146,8 @@ impl MetricsRegistry {
         reg(Box::new(broker.clone()));
         reg(Box::new(alerts.clone()));
         reg(Box::new(uptime.clone()));
+        reg(Box::new(kraken_ws_bar_channel_capacity.clone()));
+        reg(Box::new(kraken_ws_bar_channel_queued.clone()));
 
         Ok(Self {
             registry,
@@ -144,6 +162,8 @@ impl MetricsRegistry {
             broker,
             alerts,
             uptime,
+            kraken_ws_bar_channel_capacity,
+            kraken_ws_bar_channel_queued,
         })
     }
 
@@ -172,6 +192,13 @@ impl MetricsRegistry {
         }
         self.alerts.set(snap.alerts_active);
         self.uptime.set(snap.uptime_seconds);
+    }
+
+    /// Update Kraken WS bar channel backpressure metrics.
+    /// Called from the WS writer to expose real channel saturation.
+    pub fn set_kraken_ws_bar_channel_stats(&self, capacity: f64, queued: f64) {
+        self.kraken_ws_bar_channel_capacity.set(capacity);
+        self.kraken_ws_bar_channel_queued.set(queued);
     }
 }
 

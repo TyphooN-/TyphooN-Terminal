@@ -1816,6 +1816,12 @@ struct ChartState {
     ext_active: bool, // true when ext hours data is available
     /// Raw bar data loaded from cache.
     bars: Vec<Bar>,
+    /// Reusable buffers for full GPU upload path (avoids repeated allocations).
+    upload_opens: Vec<f32>,
+    upload_closes: Vec<f32>,
+    upload_highs: Vec<f32>,
+    upload_lows: Vec<f32>,
+    upload_volumes: Vec<f32>,
     /// Pre-computed SMA(200) — indexed parallel to `bars`.
     sma200: Vec<Option<f64>>,
     /// Pre-computed SMA(100) — indexed parallel to `bars`.
@@ -2430,6 +2436,11 @@ impl ChartState {
             ext_close: 0.0,
             ext_active: false,
             bars: Vec::new(),
+            upload_opens: Vec::new(),
+            upload_closes: Vec::new(),
+            upload_highs: Vec::new(),
+            upload_lows: Vec::new(),
+            upload_volumes: Vec::new(),
             sma200: Vec::new(),
             sma100: Vec::new(),
             kama: Vec::new(),
@@ -3676,19 +3687,27 @@ impl ChartState {
         // ── GPU path: upload bars to VRAM, compute on GPU, read back ──
         if let Some(gpu) = gpu {
             if n > 0 {
-                let mut opens = Vec::with_capacity(n);
-                let mut closes = Vec::with_capacity(n);
-                let mut highs = Vec::with_capacity(n);
-                let mut lows = Vec::with_capacity(n);
-                let mut volumes = Vec::with_capacity(n);
-                for b in &self.bars {
-                    opens.push(b.open as f32);
-                    closes.push(b.close as f32);
-                    highs.push(b.high as f32);
-                    lows.push(b.low as f32);
-                    volumes.push(b.volume as f32);
+                // Reuse upload buffers to avoid repeated allocations
+                if self.upload_opens.len() < n {
+                    self.upload_opens = Vec::with_capacity(n);
+                    self.upload_closes = Vec::with_capacity(n);
+                    self.upload_highs = Vec::with_capacity(n);
+                    self.upload_lows = Vec::with_capacity(n);
+                    self.upload_volumes = Vec::with_capacity(n);
                 }
-                gpu.upload_bars_full(&opens, &closes, &highs, &lows, &volumes);
+                self.upload_opens.clear();
+                self.upload_closes.clear();
+                self.upload_highs.clear();
+                self.upload_lows.clear();
+                self.upload_volumes.clear();
+                for b in &self.bars {
+                    self.upload_opens.push(b.open as f32);
+                    self.upload_closes.push(b.close as f32);
+                    self.upload_highs.push(b.high as f32);
+                    self.upload_lows.push(b.low as f32);
+                    self.upload_volumes.push(b.volume as f32);
+                }
+                gpu.upload_bars_full(&self.upload_opens, &self.upload_closes, &self.upload_highs, &self.upload_lows, &self.upload_volumes);
 
                 // Update snapshot so the draw_chart early-out works correctly after GPU path
                 self.last_rendered_gen = self.visible_bars_gen;
