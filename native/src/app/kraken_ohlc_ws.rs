@@ -384,7 +384,7 @@ pub(super) fn spawn_kraken_ohlc_pipeline(
     // sender we held).
     drop(bar_tx);
     tokio::spawn(async move {
-        run_ws_bar_writer(shared_cache, bar_rx, commit_tx).await;
+        run_ws_bar_writer(shared_cache, bar_rx, commit_tx, None).await;
     });
 }
 
@@ -407,6 +407,7 @@ async fn run_ws_bar_writer(
     shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
     mut bar_rx: mpsc::Receiver<KrakenWsOhlcBar>,
     commit_tx: mpsc::UnboundedSender<Vec<WsFreshEntry>>,
+    metrics: Option<std::sync::Arc<crate::metrics::MetricsRegistry>>,
 ) {
     // (symbol_cache_key, interval_min, interval_begin_ms) -> bar
     // Last-write-wins for the same bucket, which is exactly the semantic
@@ -437,7 +438,7 @@ async fn run_ws_bar_writer(
             }
             _ = flush_ticker.tick() => {
                 // Report real channel saturation to Prometheus
-                if let Some(metrics) = &self.metrics_registry {
+                if let Some(metrics) = &metrics {
                     metrics.set_kraken_ws_bar_channel_stats(
                         WS_BAR_CHANNEL_CAPACITY as f64,
                         bar_rx.len() as f64,
