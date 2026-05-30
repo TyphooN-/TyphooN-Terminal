@@ -3862,6 +3862,24 @@ impl ChartState {
                     }
                     self.fisher = f;
                     self.fisher_signal = fs;
+                } else if let Some(data) =
+                    gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Fisher, fisher_p, true)
+                {
+                    let mut f = Vec::with_capacity(n);
+                    let mut fs = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let fv = data.get(i * 2).copied().unwrap_or(0.0);
+                        let sv = data.get(i * 2 + 1).copied().unwrap_or(0.0);
+                        if i < fisher_p as usize || (fv == 0.0 && sv == 0.0) {
+                            f.push(None);
+                            fs.push(None);
+                        } else {
+                            f.push(Some(fv as f64));
+                            fs.push(Some(sv as f64));
+                        }
+                    }
+                    self.fisher = f;
+                    self.fisher_signal = fs;
                 } else {
                     let (f, fs) = compute_fisher(&self.bars, fisher_p as usize);
                     self.fisher = f;
@@ -3932,6 +3950,22 @@ impl ChartState {
                     }
                     self.stoch_k = sk;
                     self.stoch_d = sd;
+                } else if let Some(data) =
+                    gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Stochastic, stoch_p, true)
+                {
+                    let mut sk = Vec::with_capacity(n);
+                    let mut sd = Vec::with_capacity(n);
+                    for i in 0..n {
+                        if i < stoch_p as usize {
+                            sk.push(None);
+                            sd.push(None);
+                        } else {
+                            sk.push(Some(data.get(i * 2).copied().unwrap_or(50.0) as f64));
+                            sd.push(Some(data.get(i * 2 + 1).copied().unwrap_or(50.0) as f64));
+                        }
+                    }
+                    self.stoch_k = sk;
+                    self.stoch_d = sd;
                 } else {
                     let (sk, sd) = compute_stochastic(&self.bars, stoch_p as usize, 3, 3);
                     self.stoch_k = sk;
@@ -3948,7 +3982,37 @@ impl ChartState {
                         let a = data.get(i * 3).copied().unwrap_or(0.0);
                         let dp = data.get(i * 3 + 1).copied().unwrap_or(0.0);
                         let dm = data.get(i * 3 + 2).copied().unwrap_or(0.0);
-                        // DI+/- valid from index period; ADX valid from index period*2-1
+                        let di_warmup = adx_p as usize;
+                        let adx_warmup = (adx_p as usize * 2).saturating_sub(1);
+                        dip.push(if i < di_warmup || (dp == 0.0 && dm == 0.0) {
+                            None
+                        } else {
+                            Some(dp as f64)
+                        });
+                        dim.push(if i < di_warmup || (dp == 0.0 && dm == 0.0) {
+                            None
+                        } else {
+                            Some(dm as f64)
+                        });
+                        adx.push(if i < adx_warmup || a == 0.0 {
+                            None
+                        } else {
+                            Some(a as f64)
+                        });
+                    }
+                    self.adx = adx;
+                    self.di_plus = dip;
+                    self.di_minus = dim;
+                } else if let Some(data) =
+                    gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Adx, adx_p, true)
+                {
+                    let mut adx = Vec::with_capacity(n);
+                    let mut dip = Vec::with_capacity(n);
+                    let mut dim = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let a = data.get(i * 3).copied().unwrap_or(0.0);
+                        let dp = data.get(i * 3 + 1).copied().unwrap_or(0.0);
+                        let dm = data.get(i * 3 + 2).copied().unwrap_or(0.0);
                         let di_warmup = adx_p as usize;
                         let adx_warmup = (adx_p as usize * 2).saturating_sub(1);
                         dip.push(if i < di_warmup || (dp == 0.0 && dm == 0.0) {
