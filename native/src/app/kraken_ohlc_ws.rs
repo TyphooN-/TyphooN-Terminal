@@ -436,6 +436,14 @@ async fn run_ws_bar_writer(
                 }
             }
             _ = flush_ticker.tick() => {
+                // Report real channel saturation to Prometheus
+                if let Some(metrics) = &self.metrics_registry {
+                    metrics.set_kraken_ws_bar_channel_stats(
+                        WS_BAR_CHANNEL_CAPACITY as f64,
+                        bar_rx.len() as f64,
+                    );
+                }
+
                 if buffer.is_empty() {
                     continue;
                 }
