@@ -4213,6 +4213,20 @@ impl ChartState {
                     self.disparity = compute_disparity(&self.bars, disparity_p as usize);
                 }
 
+                // O(1) forming-bar update for Disparity (using existing SMA100)
+                if self.forming_bar_dirty && n > 1 && disparity_p as usize == 100 {
+                    if let Some(prev_sma) = self.sma100.get(n-2).copied().flatten() {
+                        if let Some(last_disp) = self.disparity.last_mut() {
+                            if let Some(last) = self.bars.last() {
+                                let new_ma = (prev_sma * 99.0 + last.close) / 100.0;
+                                if new_ma != 0.0 {
+                                    *last_disp = Some((last.close - new_ma) / new_ma);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let bop_p = 14u32;
                 if let Some(data) = gpu.compute_bop_gpu(bop_p) {
                     self.bop = data
