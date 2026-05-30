@@ -934,6 +934,25 @@ impl GpuCompute {
     }
 
     /// Generic dispatch with OHLC input (for ATR, Stochastic, ADX)
+    /// Public OHLC dispatch that accepts an Indicator variant.
+    /// Routes to the correct pipeline internally.
+    pub fn dispatch_ohlc_indicator_pub(
+        &self,
+        indicator: &Indicator,
+        period: u32,
+        out_per_bar: u32,
+    ) -> Option<Vec<f32>> {
+        let pipeline = match indicator {
+            Indicator::Atr => &self.atr_pipeline,
+            Indicator::Stochastic => &self.stochastic_pipeline,
+            Indicator::Adx => &self.adx_pipeline,
+            Indicator::Bollinger => &self.bollinger_pipeline,
+            Indicator::Ichimoku => return None, // too complex for this path
+            _ => return None,
+        };
+        self.dispatch_ohlc_indicator(pipeline, period, out_per_bar)
+    }
+
     pub fn dispatch_ohlc_indicator(
         &self,
         pipeline: &wgpu::ComputePipeline,

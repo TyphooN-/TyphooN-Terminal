@@ -3893,6 +3893,13 @@ impl ChartState {
                         .iter()
                         .map(|&v| if v == 0.0 { None } else { Some(v as f64) })
                         .collect();
+                } else if let Some(data) =
+                    gpu.dispatch_ohlc_indicator_pub(&gpu_compute::Indicator::Atr, atr_p, 1)
+                {
+                    self.atr = data
+                        .iter()
+                        .map(|&v| if v == 0.0 { None } else { Some(v as f64) })
+                        .collect();
                 } else {
                     self.atr = compute_atr(&self.bars, atr_p as usize);
                 }
