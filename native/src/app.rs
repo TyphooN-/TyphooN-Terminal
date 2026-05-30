@@ -3631,14 +3631,18 @@ impl ChartState {
         // Forming-bar fast path: only update the last value of indicators
         // instead of full recompute + GPU upload. This is the key integration
         // point between our WS fast-path and the GPU compute path.
+        // O(1) path for SMA/EMA (with hoisted close); stateful indicators
+        // (KAMA, RSI, MACD, ATR, ...) intentionally fall through to the next
+        // structural change (new closed bar) for full GPU dispatch.
         if self.forming_bar_dirty && n > 1 {
             if let Some(last) = self.bars.last() {
+                let close = last.close;
                 if let Some(gpu) = gpu {
                     gpu.upload_forming_bar(
                         last.open as f32,
                         last.high as f32,
                         last.low as f32,
-                        last.close as f32,
+                        close as f32,
                         last.volume as f32,
                     );
                 }
@@ -3646,14 +3650,14 @@ impl ChartState {
                 let prev200 = self.sma200.get(n - 2).copied().flatten();
                 if let (Some(last_sma200), Some(prev)) = (self.sma200.last_mut(), prev200) {
                     *last_sma200 = Some(
-                        (prev * (self.sma_slow_period as f64 - 1.0) + last.close)
+                        (prev * (self.sma_slow_period as f64 - 1.0) + close)
                             / self.sma_slow_period as f64,
                     );
                 }
                 let prev100 = self.sma100.get(n - 2).copied().flatten();
                 if let (Some(last_sma100), Some(prev)) = (self.sma100.last_mut(), prev100) {
                     *last_sma100 = Some(
-                        (prev * (self.sma_fast_period as f64 - 1.0) + last.close)
+                        (prev * (self.sma_fast_period as f64 - 1.0) + close)
                             / self.sma_fast_period as f64,
                     );
                 }
@@ -3662,7 +3666,7 @@ impl ChartState {
                 let k = 2.0 / (ema_p + 1.0);
                 let prev_ema = self.ema21.get(n - 2).copied().flatten();
                 if let (Some(last_ema), Some(prev)) = (self.ema21.last_mut(), prev_ema) {
-                    *last_ema = Some(last.close * k + prev * (1.0 - k));
+                    *last_ema = Some(close * k + prev * (1.0 - k));
                 }
             }
             self.forming_bar_dirty = false; // consumed
