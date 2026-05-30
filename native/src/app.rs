@@ -1888,10 +1888,17 @@ struct ChartState {
     /// Running sums for O(1) CMO forming-bar update
     cmo_sum_up: f64,
     cmo_sum_down: f64,
+    /// Running sums for O(1) Linear Regression Slope
+    linreg_sum_x: f64,
+    linreg_sum_y: f64,
+    linreg_sum_xy: f64,
+    linreg_sum_x2: f64,
     /// QStick(14).
     qstick: Vec<Option<f64>>,
     /// Disparity Index(14).
     disparity: Vec<Option<f64>>,
+    /// LINEARREG_SLOPE
+    linreg_slope: Vec<Option<f64>>,
     /// BOP(14).
     bop: Vec<Option<f64>>,
     /// StdDev(20).
@@ -4198,6 +4205,28 @@ impl ChartState {
                             } else {
                                 Some(0.0)
                             };
+                        }
+                    }
+                }
+
+                // O(1) forming-bar update for Linear Regression Slope (simple incremental)
+                if self.forming_bar_dirty && n > 1 {
+                    if let Some(last) = self.bars.last() {
+                        let x = (n - 1) as f64;  // current bar index
+                        let y = last.close;
+                        self.linreg_sum_x += x;
+                        self.linreg_sum_y += y;
+                        self.linreg_sum_xy += x * y;
+                        self.linreg_sum_x2 += x * x;
+
+                        let n_f = n as f64;
+                        let denom = n_f * self.linreg_sum_x2 - self.linreg_sum_x * self.linreg_sum_x;
+                        if let Some(last_slope) = self.linreg_slope.last_mut() {
+                            if denom > f64::EPSILON {
+                                *last_slope = Some((n_f * self.linreg_sum_xy - self.linreg_sum_x * self.linreg_sum_y) / denom);
+                            } else {
+                                *last_slope = Some(0.0);
+                            }
                         }
                     }
                 }
