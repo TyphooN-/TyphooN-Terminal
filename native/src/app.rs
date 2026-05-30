@@ -4191,6 +4191,21 @@ impl ChartState {
                     }
                 }
 
+                // Simple O(1) forming-bar update for Rate of Change (approximate)
+                if self.forming_bar_dirty && n > 1 && mom_p as usize > 0 {
+                    if let Some(prev_roc) = self.momentum.get(n-2).copied().flatten() {
+                        if let Some(last_roc) = self.momentum.last_mut() {
+                            if let Some(last) = self.bars.last() {
+                                let prev_close = self.bars[n-2].close;
+                                if prev_close != 0.0 {
+                                    let new_roc = ((last.close - prev_close) / prev_close) * 100.0;
+                                    *last_roc = Some(new_roc);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // CMO / QStick / Disparity / BOP / StdDev — GPU with CPU fallback
                 let cmo_p = 9u32;
                 if let Some(data) = gpu.compute_cmo_gpu(cmo_p) {
