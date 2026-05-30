@@ -4229,7 +4229,7 @@ impl ChartState {
                 if self.forming_bar_dirty && n > 1 {
                     if let Some(last_slope) = self.linreg_slope.get(n-2).copied().flatten() {
                         if let Some(last_intercept) = self.linreg_intercept.get(n-2).copied().flatten() {
-                            if let Some(last_cfo) = self.cfo.last_mut() {
+                            if let Some(last_cfo) = self.cmo.last_mut() {
                                 if let Some(last) = self.bars.last() {
                                     let x = (n - 1) as f64;
                                     let forecast = last_slope * x + last_intercept;
