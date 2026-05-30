@@ -1817,10 +1817,15 @@ struct ChartState {
     /// Raw bar data loaded from cache.
     bars: Vec<Bar>,
     /// Reusable buffers for full GPU upload path (avoids repeated allocations).
+    #[allow(dead_code)]
     upload_opens: Vec<f32>,
+    #[allow(dead_code)]
     upload_closes: Vec<f32>,
+    #[allow(dead_code)]
     upload_highs: Vec<f32>,
+    #[allow(dead_code)]
     upload_lows: Vec<f32>,
+    #[allow(dead_code)]
     upload_volumes: Vec<f32>,
     /// Pre-computed SMA(200) — indexed parallel to `bars`.
     sma200: Vec<Option<f64>>,
