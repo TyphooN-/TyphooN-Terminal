@@ -596,7 +596,7 @@ impl TyphooNApp {
         let before = self.alpaca_retry_queue.len();
         self.alpaca_retry_queue
             .retain(|e| !(e.symbol == symbol && e.timeframe == timeframe));
-        if (before - self.alpaca_retry_queue.len()) >= 5 {
+        if (before - self.alpaca_retry_queue.len()) >= 8 {
             self.alpaca_retry_save();
         }
     }
@@ -623,7 +623,7 @@ impl TyphooNApp {
         let before = self.alpaca_retry_queue.len();
         self.alpaca_retry_queue
             .retain(|e| now - e.last_attempt <= MAX_AGE_SECS && e.retry_count < 12);
-        if (before - self.alpaca_retry_queue.len()) >= 5 {
+        if (before - self.alpaca_retry_queue.len()) >= 8 {
             self.alpaca_retry_save();
         }
 
@@ -641,7 +641,7 @@ impl TyphooNApp {
                 .map(|tf| enabled_sync_timeframes.contains(tf))
                 .unwrap_or(false)
         });
-        if (retry_len_before - self.alpaca_retry_queue.len()) >= 5 {
+        if (retry_len_before - self.alpaca_retry_queue.len()) >= 8 {
             self.alpaca_retry_save();
         }
         if self.alpaca_retry_queue.is_empty() {
@@ -661,7 +661,7 @@ impl TyphooNApp {
                 .alpaca_no_data_pairs
                 .contains_key(&alpaca_fetch_key(&e.symbol, &e.timeframe))
         });
-        if (retry_len_before - self.alpaca_retry_queue.len()) >= 5 {
+        if (retry_len_before - self.alpaca_retry_queue.len()) >= 8 {
             self.alpaca_retry_save();
         }
         if self.alpaca_retry_queue.is_empty() {
