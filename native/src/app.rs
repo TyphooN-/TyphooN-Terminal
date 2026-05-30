@@ -1901,6 +1901,8 @@ struct ChartState {
     linreg_slope: Vec<Option<f64>>,
     /// LINEARREG_INTERCEPT
     linreg_intercept: Vec<Option<f64>>,
+    /// LINEARREG_ANGLE
+    linreg_angle: Vec<Option<f64>>,
     /// BOP(14).
     bop: Vec<Option<f64>>,
     /// StdDev(20).
