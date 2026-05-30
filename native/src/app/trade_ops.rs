@@ -650,7 +650,7 @@ impl TyphooNApp {
         let retry_len_before = self.alpaca_retry_queue.len();
         // Build a local set of no-data keys once to avoid repeated
         // alpaca_fetch_key() + HashMap lookups in the retain below.
-        let no_data_keys: std::collections::HashSet<String> = self
+        let _no_data_keys: std::collections::HashSet<String> = self
             .alpaca_no_data_pairs
             .keys()
             .cloned()
@@ -667,29 +667,24 @@ impl TyphooNApp {
             return;
         }
 
-        let due: Vec<(String, String)> = self
-            .alpaca_retry_queue
-            .iter()
-            .filter(|e| e.next_attempt <= now)
-            .map(|e| (e.symbol.clone(), e.timeframe.clone()))
-            .collect();
-        if due.is_empty() {
-            return;
-        }
-
+        // Index-based dispatch: avoids allocating Vec<(String,String)>
+        // and eliminates O(n) linear .find() after every success.
         let mut redispatched = 0usize;
-        for (sym, tf) in &due {
-            if self.queue_alpaca_fetch(sym, tf) {
-                redispatched += 1;
-                if let Some(e) = self
-                    .alpaca_retry_queue
-                    .iter_mut()
-                    .find(|e| e.symbol == *sym && e.timeframe == *tf)
-                {
-                    e.last_attempt = now;
-                    e.next_attempt = now + Self::alpaca_retry_backoff_secs(e.retry_count + 1);
-                }
+        let mut i = 0;
+        while i < self.alpaca_retry_queue.len() {
+            if self.alpaca_retry_queue[i].next_attempt > now {
+                i += 1;
+                continue;
             }
+            let sym = self.alpaca_retry_queue[i].symbol.clone();
+            let tf = self.alpaca_retry_queue[i].timeframe.clone();
+            if self.queue_alpaca_fetch(&sym, &tf) {
+                redispatched += 1;
+                let e = &mut self.alpaca_retry_queue[i];
+                e.last_attempt = now;
+                e.next_attempt = now + Self::alpaca_retry_backoff_secs(e.retry_count + 1);
+            }
+            i += 1;
         }
         if redispatched == 0 {
             return;
