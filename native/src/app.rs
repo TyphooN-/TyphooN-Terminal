@@ -40,7 +40,9 @@ pub fn nav_muted(ui: &mut egui::Ui, text: impl Into<String>) {
     ui.label(egui::RichText::new(text).size(10.5).color(AXIS_TEXT));
 }
 
+use chrono::Datelike;
 use tokio::sync::mpsc;
+use chrono::Datelike;
 use typhoon_engine::broker::alpaca::{
     AccountInfo, AlpacaBroker, Bar as EngineBar, OrderInfo, PositionInfo,
 };
@@ -11675,7 +11677,6 @@ pub struct TyphooNApp {
     orderbook_result: String, // last fetched L2 orderbook JSON
     kraken_orderbook_ws_symbol: String,
     market_clock_status: String,
-    us_equities_market_open: bool,
     show_symbol_overlap: bool,
     show_correlation: bool,
     show_seasonals: bool,
@@ -14672,7 +14673,6 @@ impl TyphooNApp {
                     let remote_cmd = match &cmd {
                         BrokerCmd::SecScrape { .. } => Some("SEC_SCRAPE"),
                         BrokerCmd::FundamentalsScrape { force, .. } => Some(if *force { "FUNDAMENTALS_FORCE" } else { "FUNDAMENTALS" }),
-                        let market_open = self.us_equities_market_open;
                         BrokerCmd::FundamentalsScrapeOne { .. } => Some("FUNDAMENTALS_ONE"),
                         BrokerCmd::KrakenBackfill { .. } => Some("KRAKEN_BACKFILL"),
                         BrokerCmd::KrakenFuturesBackfill { .. } => Some("KRAKEN_FUTURES_BACKFILL"),
@@ -15111,7 +15111,6 @@ impl TyphooNApp {
                                     } else {
                                         format!("US equities CLOSED · opens in {countdown}")
                                     };
-                                    self.us_equities_market_open = is_open;
                                     let _ = broker_msg_tx_clone.send(BrokerMsg::MarketClock(msg));
                                 }
                                 Err(e) => {
@@ -26405,7 +26404,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         });
                     }
                     BrokerCmd::FundamentalsScrape {
-                        let market_open = self.us_equities_market_open;
                         db_path: _,
                         use_mt5,
                         use_alpaca,
@@ -26504,10 +26502,16 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                     return;
                                                 }
                                             };
-                                            // Skip tickers updated within the last N hours.
-                                            // When the US equities market is closed (weekend, holiday, or after hours),
-                                            // use a 72h window because new filings are extremely rare.
-                                            let skip_hours: i64 = if market_open { 24 } else { 72 };
+                                            // Use 72h over weekends (Sat/Sun) because US equity filings
+                                            // are extremely rare outside business days.
+                                            let skip_hours: i64 = {
+                                                let wd = chrono::Utc::now().weekday();
+                                                if wd == chrono::Weekday::Sat || wd == chrono::Weekday::Sun {
+                                                    72
+                                                } else {
+                                                    24
+                                                }
+                                            };
                                             let cutoff = (chrono::Utc::now() - chrono::Duration::hours(skip_hours))
                                                 .format("%Y-%m-%dT%H:%M:%SZ").to_string();
                                             let mut ok = 0usize;
@@ -28543,7 +28547,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
             orderbook_result: String::new(),
             kraken_orderbook_ws_symbol: String::new(),
             market_clock_status: String::new(),
-            us_equities_market_open: true,
             show_symbol_overlap: false,
             show_correlation: false,
             show_seasonals: false,
