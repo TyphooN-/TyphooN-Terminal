@@ -2192,8 +2192,6 @@ fn cache_source_from_key(key: &str) -> &'static str {
         "kraken"
     } else if key.starts_with("yahoo-chart:") {
         "yahoo-chart"
-    } else if key.starts_with("stooq:") {
-        "stooq"
     } else if key.starts_with("default:") {
         "default"
     } else {
@@ -2262,8 +2260,8 @@ fn chart_gap_fill_bar_allowed(
 ) -> bool {
     if !matches!(
         primary_source,
-        "kraken-equities" | "tastytrade" | "alpaca" | "yahoo-chart" | "stooq"
-    ) || !matches!(gap_source, "alpaca" | "yahoo-chart" | "stooq")
+        "kraken-equities" | "tastytrade" | "alpaca" | "yahoo-chart"
+    ) || !matches!(gap_source, "alpaca" | "yahoo-chart")
     {
         return true;
     }
@@ -2329,7 +2327,7 @@ fn extract_news_symbols_from_market_data_cache(
     Ok(symbols.into_iter().collect())
 }
 
-const CHART_SOURCE_ORDER: [(&str, &str); 9] = [
+const CHART_SOURCE_ORDER: [(&str, &str); 8] = [
     ("mt5", "MT5"),
     ("kraken", "Kraken"),
     ("kraken-equities", "Kraken Equities"),
@@ -2337,7 +2335,6 @@ const CHART_SOURCE_ORDER: [(&str, &str); 9] = [
     ("tastytrade", "tastytrade"),
     ("alpaca", "Alpaca"),
     ("yahoo-chart", "Yahoo Chart"),
-    ("stooq", "Stooq"),
     ("default", "Default"),
 ];
 
@@ -2649,7 +2646,7 @@ impl ChartState {
         {
             return false;
         }
-        if matches!(source, "alpaca" | "yahoo-chart" | "stooq")
+        if matches!(source, "alpaca" | "yahoo-chart")
             && self.primary_source.eq_ignore_ascii_case("kraken-equities")
         {
             return true;
@@ -3008,7 +3005,6 @@ impl ChartState {
             format!("tastytrade:{}:{}", sym, tf),
             format!("alpaca:{}:{}", sym, tf),
             format!("yahoo-chart:{}:{}", sym, tf),
-            format!("stooq:{}:{}", sym, tf),
         ];
         if sym_norm != sym {
             keys_to_try.extend([
@@ -3019,7 +3015,6 @@ impl ChartState {
                 format!("tastytrade:{}:{}", sym_norm, tf),
                 format!("alpaca:{}:{}", sym_norm, tf),
                 format!("yahoo-chart:{}:{}", sym_norm, tf),
-                format!("stooq:{}:{}", sym_norm, tf),
             ]);
         }
         let mut result: Option<(Vec<(i64, f64, f64, f64, f64, f64)>, bool, &'static str)> = None;
@@ -3190,7 +3185,6 @@ impl ChartState {
                     "alpaca",
                     "tastytrade",
                     "yahoo-chart",
-                    "stooq",
                 ];
                 for prefix in &gap_prefixes {
                     // Try both SOLUSD and SOL/USD key forms
@@ -9758,10 +9752,6 @@ enum BrokerCmd {
         symbol: String,
         timeframe: String,
     },
-    StooqDailyFetchBars {
-        symbol: String,
-        timeframe: String,
-    },
     KrakenFetchEquityUniverse,
     KrakenStartPrivateWs,
     /// Start the Kraken WS v2 OHLC streamers (one task per interval,
@@ -11381,7 +11371,6 @@ pub struct TyphooNApp {
     backfill_cryptocompare_enabled: bool,
     backfill_alpaca_kraken_equities_enabled: bool,
     backfill_yahoo_chart_enabled: bool,
-    backfill_stooq_daily_enabled: bool,
     /// Stream Kraken bar updates via WS v2 in addition to the REST scheduler.
     /// Subscribes to every spot pair across 1Min/5Min/15Min/30Min/1Hour/4Hour/
     /// 1Day/1Week so low-timeframe bars stay current without burning REST
@@ -11892,12 +11881,6 @@ pub struct TyphooNApp {
     pending_kraken_futures_fetches: std::collections::HashSet<String>,
     pending_tastytrade_fetches: std::collections::HashSet<String>,
     pending_yahoo_chart_fetches: std::collections::HashSet<String>,
-    pending_stooq_fetches: std::collections::HashSet<String>,
-    /// Runtime Stooq assist pause. Stooq can be reachable globally while blocked
-    /// from the user's network/IP; pause the whole optional provider after
-    /// transport/rate-limit failures instead of spraying per-symbol errors.
-    stooq_sync_pause_until_ts: i64,
-    stooq_sync_pause_reason: String,
     /// Per-key cooldown for broker bar re-queues. The in-flight HashSet only
     /// dedups while a fetch is pending; once it completes we'd previously
     /// re-queue immediately on the next sync tick, which (during a closed
@@ -25987,49 +25970,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             }
                         });
                     }
-                    BrokerCmd::StooqDailyFetchBars { symbol, timeframe } => {
-                        let source = "stooq".to_string();
-                        let result = async {
-                            let bars = fetch_stooq_daily_bars(&fallback_bar_client, &symbol, &timeframe).await?;
-                            let count = if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                                store_fallback_bars(&cache, &source, &symbol, &timeframe, &bars)?
-                            } else {
-                                return Err("cache unavailable".to_string());
-                            };
-                            Ok::<usize, String>(count)
-                        }
-                        .await;
-                        match result {
-                            Ok(count) => {
-                                if count == 0 {
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Unresolvable {
-                                        broker: source.clone(),
-                                        symbol: symbol.clone(),
-                                        timeframe: timeframe.clone(),
-                                        reason: "provider returned no bars".to_string(),
-                                    });
-                                }
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::BarsFetched {
-                                    source,
-                                    symbol,
-                                    timeframe,
-                                    count,
-                                });
-                            }
-                            Err(error) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                    "Stooq fallback failed for {} {}: {}",
-                                    symbol, timeframe, error
-                                )));
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::BarsFetched {
-                                    source,
-                                    symbol,
-                                    timeframe,
-                                    count: 0,
-                                });
-                            }
-                        }
-                    }
+                    
                     BrokerCmd::KrakenFetchEquityUniverse => {
                         let result = if let Some(ref kb) = kraken_broker {
                             kb.get_equity_markets().await
@@ -28679,9 +28620,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
             pending_kraken_futures_fetches: std::collections::HashSet::new(),
             pending_tastytrade_fetches: std::collections::HashSet::new(),
             pending_yahoo_chart_fetches: std::collections::HashSet::new(),
-            pending_stooq_fetches: std::collections::HashSet::new(),
-            stooq_sync_pause_until_ts: 0,
-            stooq_sync_pause_reason: String::new(),
             fetch_last_queued_ts: std::collections::HashMap::new(),
             alpaca_sync_cursor: 0,
             kraken_spot_sync_cursors: [0; 4],
@@ -30806,7 +30744,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
             backfill_cryptocompare_enabled: true,
             backfill_alpaca_kraken_equities_enabled: false,
             backfill_yahoo_chart_enabled: false,
-            backfill_stooq_daily_enabled: false,
             kraken_ws_ohlc_enabled: true,
             kraken_ws_ohlc_started: false,
             crypto_fiat_quote_usd: true,
@@ -33278,7 +33215,6 @@ mod tests {
         chart.primary_source = "kraken-equities";
         assert!(chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "alpaca"));
         assert!(chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "yahoo-chart"));
-        assert!(chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "stooq"));
         assert!(!chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "tastytrade"));
     }
 

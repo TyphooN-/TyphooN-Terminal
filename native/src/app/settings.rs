@@ -599,33 +599,10 @@ impl TyphooNApp {
                                 "Best-effort unkeyed equity/ETF chart fallback. Use only as lower-trust gap fill with provenance, never as authoritative broker data.",
                             )
                             .changed();
-                        backfill_changed |= ui
-                            .checkbox(
-                                &mut self.backfill_stooq_daily_enabled,
-                                "Stooq daily fallback",
-                            )
-                            .on_hover_text(
-                                "Optional daily-only equity/ETF fallback for long-range 1Day gaps where symbols resolve cleanly. Weekly/monthly require an explicit aggregation/provenance pass before Stooq can assist them.",
-                            )
-                            .changed();
                     });
                     if backfill_changed {
                         settings_save_after = true;
                         self.pending_kraken_fetches.clear();
-                        self.stooq_sync_pause_until_ts = 0;
-                        self.stooq_sync_pause_reason.clear();
-                    }
-                    if self.backfill_stooq_daily_enabled
-                        && self.stooq_sync_pause_until_ts > chrono::Utc::now().timestamp()
-                    {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "Stooq paused: {}",
-                                self.stooq_sync_pause_reason
-                            ))
-                            .color(egui::Color32::YELLOW)
-                            .small(),
-                        );
                     }
                     ui.label(
                         egui::RichText::new(

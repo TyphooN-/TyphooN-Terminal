@@ -1509,27 +1509,7 @@ impl eframe::App for TyphooNApp {
                             now + tastytrade_sync_backoff_secs(&e);
                         self.tastytrade_sync_pause_reason = e.clone();
                     }
-                    // Stooq can be globally up while this machine/IP is blocked. If the
-                    // optional Stooq assist lane hits transport/provider failure, pause
-                    // the whole lane instead of logging one error per Kraken equity.
-                    if e.starts_with("Stooq fallback failed") {
-                        let was_paused = self.stooq_sync_pause_until_ts > now;
-                        self.stooq_sync_pause_until_ts = now + 6 * 60 * 60;
-                        self.stooq_sync_pause_reason = e.clone();
-                        if !was_paused {
-                            tracing::debug!(
-                                "Stooq daily fallback paused for 6h after provider/transport failure: {}",
-                                e
-                            );
-                            self.log.push_back(LogEntry::info(
-                                "Stooq daily fallback paused for 6h after provider/transport failure"
-                                    .to_string(),
-                            ));
-                        } else {
-                            tracing::debug!("Stooq daily fallback still paused: {}", e);
-                        }
-                    // Disconnect on auth failure to stop error spam
-                    } else if e.contains("401") || e.contains("Unauthorized") || e.contains("403") {
+ else if e.contains("401") || e.contains("Unauthorized") || e.contains("403") {
                         if self.broker_connected {
                             self.broker_connected = false;
                             self.log.push_back(LogEntry::err(format!(
@@ -7756,7 +7736,6 @@ impl eframe::App for TyphooNApp {
                         "kraken" => "Kraken",
                         "kraken-futures" => "Kraken Futures",
                         "yahoo-chart" => "Yahoo Chart",
-                        "stooq" => "Stooq",
                         _ => source.as_str(),
                     };
                     if should_reload {
@@ -7798,10 +7777,7 @@ impl eframe::App for TyphooNApp {
                             self.refresh_storage_snapshot_after_action("alpaca_bars");
                         }
                     }
-                    if source == "stooq" && count > 0 {
-                        self.stooq_sync_pause_until_ts = 0;
-                        self.stooq_sync_pause_reason.clear();
-                    }
+
                     if should_reload {
                         self.queue_chart_reload(self.active_tab);
                     }

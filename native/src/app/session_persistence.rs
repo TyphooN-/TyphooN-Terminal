@@ -313,7 +313,6 @@ impl TyphooNApp {
             "backfill_cryptocompare_enabled": self.backfill_cryptocompare_enabled,
             "backfill_alpaca_kraken_equities_enabled": self.backfill_alpaca_kraken_equities_enabled,
             "backfill_yahoo_chart_enabled": self.backfill_yahoo_chart_enabled,
-            "backfill_stooq_daily_enabled": self.backfill_stooq_daily_enabled,
             "kraken_ws_ohlc_enabled": self.kraken_ws_ohlc_enabled,
             "crypto_fiat_quote_usd": self.crypto_fiat_quote_usd,
             "crypto_fiat_quote_usdt": self.crypto_fiat_quote_usdt,
@@ -447,9 +446,7 @@ impl TyphooNApp {
         if let Some(enabled) = value["backfill_yahoo_chart_enabled"].as_bool() {
             self.backfill_yahoo_chart_enabled = enabled;
         }
-        if let Some(enabled) = value["backfill_stooq_daily_enabled"].as_bool() {
-            self.backfill_stooq_daily_enabled = enabled;
-        }
+
         if let Some(enabled) = value["kraken_ws_ohlc_enabled"].as_bool() {
             self.kraken_ws_ohlc_enabled = enabled;
         }
@@ -638,7 +635,6 @@ impl TyphooNApp {
             "backfill_cryptocompare_enabled": self.backfill_cryptocompare_enabled,
             "backfill_alpaca_kraken_equities_enabled": self.backfill_alpaca_kraken_equities_enabled,
             "backfill_yahoo_chart_enabled": self.backfill_yahoo_chart_enabled,
-            "backfill_stooq_daily_enabled": self.backfill_stooq_daily_enabled,
             "kraken_ws_ohlc_enabled": self.kraken_ws_ohlc_enabled,
             "crypto_fiat_quote_usd": self.crypto_fiat_quote_usd,
             "crypto_fiat_quote_usdt": self.crypto_fiat_quote_usdt,
@@ -3401,9 +3397,7 @@ impl TyphooNApp {
                 if let Some(enabled) = v["backfill_yahoo_chart_enabled"].as_bool() {
                     self.backfill_yahoo_chart_enabled = enabled;
                 }
-                if let Some(enabled) = v["backfill_stooq_daily_enabled"].as_bool() {
-                    self.backfill_stooq_daily_enabled = enabled;
-                }
+
                 if let Some(ts) = v["tt_sandbox"].as_bool() {
                     self.tt_sandbox = ts;
                 }

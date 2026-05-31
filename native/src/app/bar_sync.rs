@@ -59,7 +59,6 @@ pub(super) fn compute_bar_sync_stats(
             "tastytrade" => Some("Tastytrade"),
             "kraken" | "kraken-futures" | "kraken-equities" => Some("Kraken"),
             "yahoo-chart" => Some("Yahoo"),
-            "stooq" => Some("Stooq"),
             _ => None,
         }
     };
@@ -164,7 +163,6 @@ pub(super) fn sort_sync_stats_rows(rows: &mut [SyncStatsRow]) {
         "Merged",
         "Alpaca",
         "Yahoo",
-        "Stooq",
         "Tastytrade",
         "MT5",
     ];
@@ -209,7 +207,6 @@ pub(super) fn compute_bar_sync_broker_totals(
         "Merged",
         "Alpaca",
         "Yahoo",
-        "Stooq",
         "Tastytrade",
         "MT5",
     ];
@@ -352,7 +349,6 @@ mod tests {
         let rows = compute_bar_sync_stats(
             &[
                 ("yahoo-chart:TNDM:1Day".into(), 10, now_s),
-                ("stooq:TNDM:1Day".into(), 10, now_s),
             ],
             &std::collections::HashMap::new(),
             &|_| false,
@@ -365,12 +361,6 @@ mod tests {
         assert_eq!(yahoo.total, 1);
         assert_eq!(yahoo.healthy, 1);
 
-        let stooq = rows
-            .iter()
-            .find(|row| row.broker == "Stooq" && row.tf == "1Day")
-            .expect("missing Stooq fallback row");
-        assert_eq!(stooq.total, 1);
-        assert_eq!(stooq.healthy, 1);
     }
 
     #[test]

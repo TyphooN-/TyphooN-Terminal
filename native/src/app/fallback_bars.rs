@@ -1,7 +1,7 @@
 //! Lightweight public fallback bar providers for Kraken-equity assist mode.
 //!
 //! These fetchers deliberately store provenance under their own cache prefixes
-//! (`yahoo-chart:` and `stooq:`). They never overwrite Kraken/Alpaca bars and
+//! (`yahoo-chart:`). They never overwrite Kraken/Alpaca bars and
 //! are only queued by explicit Settings → Backfill providers toggles.
 
 use super::*;
@@ -54,10 +54,6 @@ pub(super) fn yahoo_chart_supports_timeframe(timeframe: &str) -> bool {
         normalize_sync_timeframe_key(timeframe),
         Some("1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "1Day" | "1Week" | "1Month")
     )
-}
-
-pub(super) fn stooq_supports_timeframe(timeframe: &str) -> bool {
-    matches!(normalize_sync_timeframe_key(timeframe), Some("1Day"))
 }
 
 fn yahoo_chart_request_symbol(symbol: &str) -> String {
@@ -231,80 +227,6 @@ pub(super) async fn fetch_yahoo_chart_bars(
     Ok(bars)
 }
 
-fn stooq_symbol(symbol: &str) -> String {
-    let bare = normalize_market_data_symbol(symbol)
-        .replace('/', "")
-        .trim_end_matches(".EQ")
-        .to_ascii_lowercase();
-    if bare.contains('.') {
-        bare
-    } else {
-        format!("{bare}.us")
-    }
-}
-
-pub(super) async fn fetch_stooq_daily_bars(
-    client: &reqwest::Client,
-    symbol: &str,
-    timeframe: &str,
-) -> Result<Vec<FallbackBar>, String> {
-    if !stooq_supports_timeframe(timeframe) {
-        return Err(format!("Stooq unsupported timeframe {timeframe}"));
-    }
-    let stooq_symbol = stooq_symbol(symbol);
-    if stooq_symbol == ".us" || stooq_symbol.is_empty() {
-        return Err("Stooq empty symbol".to_string());
-    }
-    let url = format!("https://stooq.com/q/d/l/?s={stooq_symbol}&i=d");
-    let resp = client
-        .get(&url)
-        .header("User-Agent", "TyphooN-Terminal/1.0")
-        .header("Accept", "text/csv,*/*")
-        .send()
-        .await
-        .map_err(|e| format!("Stooq request failed for {symbol} {timeframe}: {e}"))?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(format!("Stooq HTTP {status} for {symbol} {timeframe}"));
-    }
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| format!("Stooq CSV read failed for {symbol} {timeframe}: {e}"))?;
-    let mut bars = Vec::new();
-    for line in text.lines().skip(1) {
-        let cols: Vec<&str> = line.split(',').collect();
-        if cols.len() < 6 || cols.iter().any(|v| v.trim().eq_ignore_ascii_case("N/D")) {
-            continue;
-        }
-        let Ok(date) = chrono::NaiveDate::parse_from_str(cols[0].trim(), "%Y-%m-%d") else {
-            continue;
-        };
-        let Some(dt) = date.and_hms_opt(0, 0, 0) else {
-            continue;
-        };
-        let parse = |idx: usize| cols[idx].trim().parse::<f64>().ok();
-        let Some(open) = parse(1) else { continue };
-        let Some(high) = parse(2) else { continue };
-        let Some(low) = parse(3) else { continue };
-        let Some(close) = parse(4) else { continue };
-        let volume = parse(5).unwrap_or(0.0);
-        let bar = FallbackBar {
-            ts_ms: dt.and_utc().timestamp_millis(),
-            open,
-            high,
-            low,
-            close,
-            volume,
-        };
-        if valid_bar(&bar) {
-            bars.push(bar);
-        }
-    }
-    bars.sort_by_key(|bar| bar.ts_ms);
-    bars.dedup_by_key(|bar| bar.ts_ms);
-    Ok(bars)
-}
 
 pub(super) fn store_fallback_bars(
     cache: &SqliteCache,

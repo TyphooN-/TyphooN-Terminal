@@ -491,7 +491,6 @@ impl TyphooNApp {
             "kraken-futures" => &mut self.pending_kraken_futures_fetches,
             "tastytrade" => &mut self.pending_tastytrade_fetches,
             "yahoo-chart" => &mut self.pending_yahoo_chart_fetches,
-            "stooq" => &mut self.pending_stooq_fetches,
             _ => &mut self.pending_alpaca_fetches,
         }
     }
@@ -502,7 +501,6 @@ impl TyphooNApp {
             + self.pending_kraken_futures_fetches.len()
             + self.pending_tastytrade_fetches.len()
             + self.pending_yahoo_chart_fetches.len()
-            + self.pending_stooq_fetches.len()
     }
 
     pub(super) fn note_cached_sync_success(
@@ -1104,46 +1102,7 @@ impl TyphooNApp {
                 }
             }
         }
-        if self.backfill_stooq_daily_enabled
-            && self.sync_timeframe_enabled("1Day")
-            && self.stooq_sync_pause_until_ts <= chrono::Utc::now().timestamp()
-        {
-            let state = self.build_source_cache_state_map("stooq:");
-            let no_data = self
-                .unresolvable_fetch_keys_by_broker
-                .get("stooq")
-                .cloned()
-                .unwrap_or_default();
-            let backfill_complete = std::collections::HashMap::new();
-            let pending = self.pending_stooq_fetches.clone();
-            let available_slots = queue_window.saturating_sub(pending.len()).min(batch_limit);
-            if available_slots == 0 {
-                return dispatched;
-            }
-            let mut cursor = self.kraken_equities_sync_cursor;
-            let stooq_timeframes = vec!["1Day".to_string()];
-            let candidates = select_alpaca_sync_workset_rotating(
-                &symbols,
-                &stooq_timeframes,
-                &state,
-                &focus_symbols,
-                &no_data,
-                &backfill_complete,
-                &pending,
-                available_slots,
-                foreground_slots.min(available_slots),
-                if full_tilt { 192 } else { 96 },
-                &mut cursor,
-                chrono::Utc::now().timestamp(),
-                alpaca_sync_target_bars,
-            );
-            self.kraken_equities_sync_cursor = cursor;
-            for candidate in candidates {
-                if self.queue_stooq_fetch(&candidate.symbol, &candidate.timeframe) {
-                    dispatched += 1;
-                }
-            }
-        }
+
         dispatched
     }
 
@@ -1534,40 +1493,7 @@ impl TyphooNApp {
         true
     }
 
-    pub(super) fn queue_stooq_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
-        let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
-            return false;
-        };
-        if !self.backfill_stooq_daily_enabled || !self.sync_timeframe_enabled(tf) {
-            return false;
-        }
-        if self.stooq_sync_pause_until_ts > chrono::Utc::now().timestamp() {
-            return false;
-        }
-        if !stooq_supports_timeframe(tf) {
-            return false;
-        }
-        let symbol = normalize_market_data_symbol(symbol)
-            .replace('/', "")
-            .trim_end_matches(".EQ")
-            .to_ascii_uppercase();
-        if symbol.is_empty()
-            || self.is_unresolvable_fetch_key("stooq", &symbol, tf)
-            || self.is_fetch_on_cooldown("stooq", &symbol, tf)
-        {
-            return false;
-        }
-        let fetch_key = alpaca_fetch_key(&symbol, tf);
-        if !self.pending_stooq_fetches.insert(fetch_key) {
-            return false;
-        }
-        self.mark_fetch_queued("stooq", &symbol, tf);
-        let _ = self.broker_tx.send(BrokerCmd::StooqDailyFetchBars {
-            symbol,
-            timeframe: tf.to_string(),
-        });
-        true
-    }
+
 
     pub(super) fn queue_kraken_equity_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
@@ -1625,7 +1551,6 @@ impl TyphooNApp {
             false
         };
         let yahoo_assist_queued = self.queue_yahoo_chart_fetch(&symbol, tf);
-        let stooq_assist_queued = self.queue_stooq_fetch(&symbol, tf);
         let chart_or_owned = self.charts.iter().any(|chart| {
             normalize_market_data_symbol(&chart.symbol)
                 .replace('/', "")
@@ -1642,12 +1567,11 @@ impl TyphooNApp {
             // diagnostics but no longer stacking four user-log entries per
             // symbol refresh.
             tracing::debug!(
-                "Kraken equities sync queued {} {} (alpaca_assist={} yahoo_assist={} stooq_assist={})",
+                "Kraken equities sync queued {} {} (alpaca_assist={} yahoo_assist={})",
                 symbol,
                 tf,
                 alpaca_assist_queued,
-                yahoo_assist_queued,
-                stooq_assist_queued
+                yahoo_assist_queued
             );
         }
         true

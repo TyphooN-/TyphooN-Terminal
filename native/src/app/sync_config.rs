@@ -66,7 +66,7 @@ pub(super) fn kraken_equity_full_universe_timeframe(tf: &str) -> bool {
 /// Broad Kraken-equity coverage target for non-native assist sources. 1Min/5Min
 /// are kept demand/focus scoped because provider access/window limits make them
 /// freshness assists, not realistic 13k-symbol backlog-fill lanes. 15Min+ should
-/// rotate over the whole Kraken equity catalog when Alpaca/Yahoo/Stooq are
+/// rotate over the whole Kraken equity catalog when Alpaca/Yahoo are
 /// enabled so Sync Status does not stay permanently bare below D1.
 pub(super) fn kraken_equity_broad_fallback_timeframe(tf: &str) -> bool {
     matches!(

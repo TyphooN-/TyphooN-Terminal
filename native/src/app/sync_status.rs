@@ -140,7 +140,6 @@ impl TyphooNApp {
                                 "Kraken"        => egui::Color32::from_rgb(255, 130, 60),
                                 "Merged"        => egui::Color32::from_rgb(0, 220, 220),
                                 "Yahoo"         => egui::Color32::from_rgb(155, 89, 182),
-                                "Stooq"         => egui::Color32::from_rgb(46, 204, 113),
                                 _ => AXIS_TEXT,
                             };
                             ui.label(egui::RichText::new(&row.broker).color(broker_color).small().monospace().strong());
@@ -254,7 +253,6 @@ impl TyphooNApp {
                 && kraken_equity_broad_fallback_timeframe(tf)
                 && alpaca_sync_target_bars(tf).is_some())
             || (self.backfill_yahoo_chart_enabled && yahoo_chart_supports_timeframe(tf))
-            || (self.backfill_stooq_daily_enabled && stooq_supports_timeframe(tf))
     }
 
     fn kraken_equities_merged_symbol_status(
@@ -266,7 +264,7 @@ impl TyphooNApp {
         checked_or_complete_lookup: &dyn Fn(&str) -> bool,
     ) -> MergedSyncStatus {
         let mut saw_stale = false;
-        for source in ["kraken-equities", "alpaca", "yahoo-chart", "stooq"] {
+        for source in ["kraken-equities", "alpaca", "yahoo-chart"] {
             if source == "kraken-equities" && !kraken_equity_full_universe_timeframe(tf) {
                 continue;
             }
@@ -282,11 +280,7 @@ impl TyphooNApp {
             {
                 continue;
             }
-            if source == "stooq"
-                && (!self.backfill_stooq_daily_enabled || !stooq_supports_timeframe(tf))
-            {
-                continue;
-            }
+
             let key = format!("{source}:{symbol}:{tf}");
             let Some((bar_count, write_ts_s)) = detailed.get(key.as_str()).copied() else {
                 continue;
@@ -354,9 +348,7 @@ impl TyphooNApp {
         if self.backfill_yahoo_chart_enabled {
             expected_sources.push(("yahoo-chart", "Yahoo"));
         }
-        if self.backfill_stooq_daily_enabled {
-            expected_sources.push(("stooq", "Stooq"));
-        }
+
 
         for (source, broker) in expected_sources {
             for tf in &timeframes {
@@ -376,16 +368,14 @@ impl TyphooNApp {
                 {
                     continue;
                 }
-                if source == "stooq" && tf != "1Day" {
-                    continue;
-                }
+
                 if source == "yahoo-chart" && !yahoo_chart_supports_timeframe(tf) {
                     continue;
                 }
                 let symbols: Vec<String> = match source {
                     "kraken" => spot_symbols.clone(),
                     "kraken-futures" => futures_symbols.clone(),
-                    "kraken-equities" | "alpaca" | "yahoo-chart" | "stooq" => {
+                    "kraken-equities" | "alpaca" | "yahoo-chart" => {
                         kraken_equity_symbols_for_timeframe(
                             &kraken_equity_catalog_symbols,
                             &kraken_equity_demand_symbols,

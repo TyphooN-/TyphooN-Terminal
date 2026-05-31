@@ -2359,7 +2359,6 @@ mod tests {
             equity_symbol_from_bar_cache_key("yahoo-chart:ARAY:15Min"),
             None
         );
-        assert_eq!(equity_symbol_from_bar_cache_key("stooq:POM:1Day"), None);
         assert_eq!(
             equity_symbol_from_bar_cache_key("kraken:BTC/USD:1Day"),
             None
