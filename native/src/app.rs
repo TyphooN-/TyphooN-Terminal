@@ -41,6 +41,7 @@ pub fn nav_muted(ui: &mut egui::Ui, text: impl Into<String>) {
 }
 
 use tokio::sync::mpsc;
+use chrono::Datelike;
 use typhoon_engine::broker::alpaca::{
     AccountInfo, AlpacaBroker, Bar as EngineBar, OrderInfo, PositionInfo,
 };
@@ -26505,8 +26506,18 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                     return;
                                                 }
                                             };
-                                            // Skip tickers updated within 24 hours (unless force=true)
-                                            let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24))
+                                            // Skip tickers updated within the last N hours.
+                                            // Use 72h over weekends (Sat/Sun) because US equity filings
+                                            // are extremely rare outside business days.
+                                            let skip_hours: i64 = {
+                                                let wd = chrono::Utc::now().weekday();
+                                                if wd == chrono::Weekday::Sat || wd == chrono::Weekday::Sun {
+                                                    72
+                                                } else {
+                                                    24
+                                                }
+                                            };
+                                            let cutoff = (chrono::Utc::now() - chrono::Duration::hours(skip_hours))
                                                 .format("%Y-%m-%dT%H:%M:%SZ").to_string();
                                             let mut ok = 0usize;
                                             let mut fail = 0usize;
