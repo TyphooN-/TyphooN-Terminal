@@ -41,7 +41,6 @@ pub fn nav_muted(ui: &mut egui::Ui, text: impl Into<String>) {
 }
 
 use tokio::sync::mpsc;
-use chrono::Datelike;
 use typhoon_engine::broker::alpaca::{
     AccountInfo, AlpacaBroker, Bar as EngineBar, OrderInfo, PositionInfo,
 };
@@ -3106,7 +3105,6 @@ impl ChartState {
                 let snap = |ts: i64| -> i64 {
                     match tf {
                         "1Month" => {
-                            use chrono::Datelike;
                             chrono::DateTime::from_timestamp_millis(ts)
                                 .and_then(|dt| {
                                     chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1)
@@ -3116,7 +3114,6 @@ impl ChartState {
                                 .unwrap_or(ts)
                         }
                         "1Week" => {
-                            use chrono::Datelike;
                             chrono::DateTime::from_timestamp_millis(ts)
                                 .and_then(|dt| {
                                     let days_since_mon = dt.weekday().num_days_from_monday() as i64;
@@ -3127,7 +3124,6 @@ impl ChartState {
                                 .unwrap_or(ts)
                         }
                         "1Day" => {
-                            use chrono::Datelike;
                             chrono::DateTime::from_timestamp_millis(ts)
                                 .and_then(|dt| {
                                     chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), dt.day())
@@ -3434,7 +3430,6 @@ impl ChartState {
                     "1Month" => {
                         // Snap to 1st of month 00:00 UTC
                         let dt = chrono::DateTime::from_timestamp(ts / 1000, 0).unwrap_or_default();
-                        use chrono::Datelike;
                         chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1)
                             .and_then(|d| d.and_hms_opt(0, 0, 0))
                             .map(|ndt| ndt.and_utc().timestamp() * 1000)
@@ -3443,7 +3438,6 @@ impl ChartState {
                     "1Week" => {
                         // Snap to Monday 00:00 UTC
                         let dt = chrono::DateTime::from_timestamp(ts / 1000, 0).unwrap_or_default();
-                        use chrono::Datelike;
                         let days_since_mon = dt.weekday().num_days_from_monday() as i64;
                         let mon = dt.date_naive() - chrono::Duration::days(days_since_mon);
                         mon.and_hms_opt(0, 0, 0)
@@ -11681,6 +11675,7 @@ pub struct TyphooNApp {
     orderbook_result: String, // last fetched L2 orderbook JSON
     kraken_orderbook_ws_symbol: String,
     market_clock_status: String,
+    us_equities_market_open: bool,
     show_symbol_overlap: bool,
     show_correlation: bool,
     show_seasonals: bool,
@@ -14677,6 +14672,7 @@ impl TyphooNApp {
                     let remote_cmd = match &cmd {
                         BrokerCmd::SecScrape { .. } => Some("SEC_SCRAPE"),
                         BrokerCmd::FundamentalsScrape { force, .. } => Some(if *force { "FUNDAMENTALS_FORCE" } else { "FUNDAMENTALS" }),
+                        let market_open = self.us_equities_market_open;
                         BrokerCmd::FundamentalsScrapeOne { .. } => Some("FUNDAMENTALS_ONE"),
                         BrokerCmd::KrakenBackfill { .. } => Some("KRAKEN_BACKFILL"),
                         BrokerCmd::KrakenFuturesBackfill { .. } => Some("KRAKEN_FUTURES_BACKFILL"),
@@ -15115,6 +15111,7 @@ impl TyphooNApp {
                                     } else {
                                         format!("US equities CLOSED · opens in {countdown}")
                                     };
+                                    self.us_equities_market_open = is_open;
                                     let _ = broker_msg_tx_clone.send(BrokerMsg::MarketClock(msg));
                                 }
                                 Err(e) => {
@@ -26408,6 +26405,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         });
                     }
                     BrokerCmd::FundamentalsScrape {
+                        let market_open = self.us_equities_market_open;
                         db_path: _,
                         use_mt5,
                         use_alpaca,
@@ -26507,16 +26505,9 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                 }
                                             };
                                             // Skip tickers updated within the last N hours.
-                                            // Use 72h over weekends (Sat/Sun) because US equity filings
-                                            // are extremely rare outside business days.
-                                            let skip_hours: i64 = {
-                                                let wd = chrono::Utc::now().weekday();
-                                                if wd == chrono::Weekday::Sat || wd == chrono::Weekday::Sun {
-                                                    72
-                                                } else {
-                                                    24
-                                                }
-                                            };
+                                            // When the US equities market is closed (weekend, holiday, or after hours),
+                                            // use a 72h window because new filings are extremely rare.
+                                            let skip_hours: i64 = if market_open { 24 } else { 72 };
                                             let cutoff = (chrono::Utc::now() - chrono::Duration::hours(skip_hours))
                                                 .format("%Y-%m-%dT%H:%M:%SZ").to_string();
                                             let mut ok = 0usize;
@@ -28552,6 +28543,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             orderbook_result: String::new(),
             kraken_orderbook_ws_symbol: String::new(),
             market_clock_status: String::new(),
+            us_equities_market_open: true,
             show_symbol_overlap: false,
             show_correlation: false,
             show_seasonals: false,
@@ -31943,7 +31935,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                             if let Ok(ref conn) =
                                                 cache_ref.open_bg_read_connection()
                                             {
-                                                use chrono::Datelike;
                                                 let year = chrono::Utc::now().year();
                                                 det.tax_lots =
                                                     darwin::compute_tax_lots(conn, &ticker, year)
