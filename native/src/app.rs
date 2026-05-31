@@ -42,7 +42,6 @@ pub fn nav_muted(ui: &mut egui::Ui, text: impl Into<String>) {
 
 use chrono::Datelike;
 use tokio::sync::mpsc;
-use chrono::Datelike;
 use typhoon_engine::broker::alpaca::{
     AccountInfo, AlpacaBroker, Bar as EngineBar, OrderInfo, PositionInfo,
 };
