@@ -25340,7 +25340,28 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     let mut ok = 0usize;
                                     let mut fail = 0usize;
                                     let total = tickers.len();
+                                    let mut processed_keys = std::collections::HashSet::new();
                                     for (i, ticker) in tickers.iter().enumerate() {
+                                        // Deduplicate crypto fetches by base asset (e.g. ETH/USD and ETH/EUR both fetch ETH)
+                                        let fetch_key = if news::is_crypto_symbol(ticker) {
+                                            news::crypto_base_for_symbol(ticker).unwrap_or_else(|| ticker.clone())
+                                        } else {
+                                            ticker.clone()
+                                        };
+
+                                        if processed_keys.contains(&fetch_key) {
+                                            if let Ok(conn) = cache.connection() {
+                                                let _ = news::mark_news_scraped(&conn, ticker);
+                                            }
+                                            ok += 1;
+                                            let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
+                                                "News {}: base asset {} already fetched — skipped network ({}/{})",
+                                                ticker, fetch_key, i + 1, total
+                                            )));
+                                            continue;
+                                        }
+                                        processed_keys.insert(fetch_key);
+
                                         if fresh_tickers.contains(ticker) {
                                             ok += 1;
                                             let _ = msg_tx.send(
@@ -25522,13 +25543,55 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 };
                                 let mut ok = 0usize;
                                 let mut fail = 0usize;
+                                let mut processed_keys = std::collections::HashSet::new();
                                 for (i, ticker) in tickers.iter().enumerate() {
-                                    if fresh_tickers.contains(ticker) {
+                                    // Deduplicate crypto fetches by base asset (e.g. ETH/USD and ETH/EUR both fetch ETH)
+                                    let fetch_key = if news::is_crypto_symbol(ticker) {
+                                        news::crypto_base_for_symbol(ticker).unwrap_or_else(|| ticker.clone())
+                                    } else {
+                                        ticker.clone()
+                                    };
+
+                                    if processed_keys.contains(&fetch_key) {
+                                        if let Ok(conn) = cache.connection() {
+                                            let _ = news::mark_news_scraped(&conn, ticker);
+                                        }
                                         ok += 1;
-                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
-                                            format!("News {}: cached/fresh — skipped network ({}/{})", ticker, i + 1, tickers.len())));
+                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
+                                            "News {}: base asset {} already fetched — skipped network ({}/{})",
+                                            ticker, fetch_key, i + 1, tickers.len()
+                                        )));
                                         continue;
-                                    }
+                                    let mut ok = 0usize;
+                                    let mut fail = 0usize;
+                                    let mut processed_keys = std::collections::HashSet::new();
+                                    for (i, ticker) in tickers.iter().enumerate() {
+                                        // Deduplicate crypto fetches by base asset (e.g. ETH/USD and ETH/EUR both fetch ETH)
+                                        let fetch_key = if news::is_crypto_symbol(ticker) {
+                                            news::crypto_base_for_symbol(ticker).unwrap_or_else(|| ticker.clone())
+                                        } else {
+                                            ticker.clone()
+                                        };
+
+                                        if processed_keys.contains(&fetch_key) {
+                                            if let Ok(conn) = cache.connection() {
+                                                let _ = news::mark_news_scraped(&conn, ticker);
+                                            }
+                                            ok += 1;
+                                            let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
+                                                "News {}: base asset {} already fetched — skipped network ({}/{})",
+                                                ticker, fetch_key, i + 1, tickers.len()
+                                            )));
+                                            continue;
+                                        }
+                                        processed_keys.insert(fetch_key);
+
+                                        if fresh_tickers.contains(ticker) {
+                                            ok += 1;
+                                            let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
+                                                format!("News {}: cached/fresh — skipped network ({}/{})", ticker, i + 1, tickers.len())));
+                                            continue;
+                                        }
                                     let log_tx = msg_tx.clone();
                                     let cb = move |s: &str| {
                                         let _ = log_tx.send(BrokerMsg::FundamentalsProgress(s.to_string()));

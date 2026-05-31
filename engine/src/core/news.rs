@@ -29,19 +29,26 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicI64, Ordering};
 
+
 // ── Rate-limit cooldown ───────────────────────────────────────────────────
 //
 // GDELT's free Doc API throttles aggressively and returns 429 with no
 // Retry-After header. Hitting it once during a bulk per-symbol scrape means
 // every subsequent ticker in the loop will also 429, spamming the log. When
-// we see a 429 we park GDELT for `RATE_LIMIT_COOLDOWN_SECS` and callers
-// short-circuit via `gdelt_in_cooldown()` instead of issuing the request.
+
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::time::sleep;
 
 const RATE_LIMIT_COOLDOWN_SECS: i64 = 600;
+const GDELT_MIN_INTERVAL_SECS: i64 = 5; // Enforce at least 5 seconds between GDELT requests
 static GDELT_COOLDOWN_UNTIL: AtomicI64 = AtomicI64::new(0);
+static GDELT_LAST_REQUEST_TIME: AtomicI64 = AtomicI64::new(0); // Timestamp of the last GDELT request
 
 fn now_secs() -> i64 {
-    chrono::Utc::now().timestamp()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or_default()
 }
 
 /// Seconds remaining on the GDELT 429 cooldown, or 0 if not throttled.
@@ -1170,10 +1177,20 @@ pub async fn fetch_gdelt_news(
     if query.trim().is_empty() {
         return Ok(vec![]);
     }
-    let remaining = gdelt_cooldown_remaining_secs();
-    if remaining > 0 {
-        return Err(format!("GDELT cooldown: {}s remaining", remaining));
+    let remaining_cooldown = gdelt_cooldown_remaining_secs();
+    if remaining_cooldown > 0 {
+        return Err(format!("GDELT cooldown: {}s remaining", remaining_cooldown));
     }
+
+    let current_time = now_secs();
+    let last_request_time = GDELT_LAST_REQUEST_TIME.load(Ordering::Relaxed);
+    let elapsed_since_last_request = current_time.saturating_sub(last_request_time);
+
+    if elapsed_since_last_request < GDELT_MIN_INTERVAL_SECS {
+        let sleep_duration_secs = GDELT_MIN_INTERVAL_SECS.saturating_sub(elapsed_since_last_request);
+        sleep(Duration::from_secs(sleep_duration_secs as u64)).await;
+    }
+
     let url = "https://api.gdeltproject.org/api/v2/doc/doc";
     let resp = client
         .get(url)
@@ -1189,6 +1206,9 @@ pub async fn fetch_gdelt_news(
         .send()
         .await
         .map_err(|e| format!("GDELT request failed: {e}"))?;
+
+    GDELT_LAST_REQUEST_TIME.store(now_secs(), Ordering::Relaxed); // Update last request time after sending
+
     if !resp.status().is_success() {
         let code = resp.status().as_u16();
         if code == 429 {

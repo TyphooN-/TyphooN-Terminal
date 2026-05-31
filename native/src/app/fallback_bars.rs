@@ -123,7 +123,7 @@ pub(super) fn yahoo_chart_provider_no_data_error(error: &str) -> bool {
         || error.contains("Yahoo Chart returned")
 }
 
-pub(super) async fn fetch_yahoo_chart_bars(
+async fn _fetch_yahoo_chart_bars_internal(
     client: &reqwest::Client,
     symbol: &str,
     timeframe: &str,
@@ -225,6 +225,25 @@ pub(super) async fn fetch_yahoo_chart_bars(
     bars.sort_by_key(|bar| bar.ts_ms);
     bars.dedup_by_key(|bar| bar.ts_ms);
     Ok(bars)
+}
+
+pub(super) async fn fetch_yahoo_chart_bars(
+    client: &reqwest::Client,
+    symbol: &str,
+    timeframe: &str,
+) -> Result<Vec<FallbackBar>, String> {
+    let result = _fetch_yahoo_chart_bars_internal(client, symbol, timeframe).await;
+
+    // Yahoo Finance often down-samples 1h requests to 1d for illiquid/young symbols
+    // without returning an error code. If we hit a granularity mismatch on 1Hour,
+    // or a 422 Unprocessable Entity (interval unsupported), retry once at 1Day
+    // to get at least some historical context.
+    if let Err(ref e) = result {
+        if (timeframe == "1Hour" || timeframe == "1h") && (e.contains("expected 1h") || e.contains("HTTP 422")) {
+            return _fetch_yahoo_chart_bars_internal(client, symbol, "1Day").await;
+        }
+    }
+    result
 }
 
 
