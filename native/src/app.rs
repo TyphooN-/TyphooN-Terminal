@@ -11910,6 +11910,8 @@ pub struct TyphooNApp {
     news_selected_url_hash: String,
     /// UI state flag while a fetch/cached-load is in flight.
     news_loading: bool,
+    /// Watchdog start time for news_loading so a lost broker result cannot keep heavy-sync mode latched forever.
+    news_loading_started_at: Option<std::time::Instant>,
     /// Content hash of the current news_full_articles set (used for cache guard / re-filter decisions, mirroring the pattern requested for fundamentals).
     news_input_hash: u64,
     /// Latches once the News window has triggered its initial
@@ -12358,6 +12360,7 @@ pub struct TyphooNApp {
     // Scrape status dashboard
     show_scrape_status: bool,
     scrape_fund_running: bool,
+    scrape_fund_started_at: Option<std::time::Instant>,
     scrape_fund_ok: usize,
     scrape_fund_fail: usize,
     scrape_fund_skipped: usize,
@@ -12368,6 +12371,7 @@ pub struct TyphooNApp {
     auto_fundamentals_deferred: bool,
     auto_fundamentals_started: bool,
     scrape_sec_running: bool,
+    scrape_sec_started_at: Option<std::time::Instant>,
     scrape_sec_last_msg: String,
     /// Startup auto SEC scrape was deferred because Scope had no symbols yet.
     auto_sec_scrape_deferred: bool,
@@ -28855,6 +28859,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             news_search_query: String::new(),
             news_selected_url_hash: String::new(),
             news_loading: false,
+            news_loading_started_at: None,
             news_input_hash: 0,
             news_initial_load_done: false,
             news_db_total: None,
@@ -29141,6 +29146,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             show_scope_window: false,
             show_scrape_status: false,
             scrape_fund_running: false,
+            scrape_fund_started_at: None,
             scrape_fund_ok: 0,
             scrape_fund_fail: 0,
             scrape_fund_skipped: 0,
@@ -29149,6 +29155,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             auto_fundamentals_deferred: false,
             auto_fundamentals_started: false,
             scrape_sec_running: false,
+            scrape_sec_started_at: None,
             scrape_sec_last_msg: String::new(),
             auto_sec_scrape_deferred: false,
             scrape_darwin_running: false,

@@ -36,6 +36,23 @@ fn is_routine_news_progress(msg: &str) -> bool {
 
 const HEAVY_SYNC_PENDING_FETCH_THRESHOLD: usize = 32;
 const HEAVY_SYNC_DEFERRED_CHART_THRESHOLD: usize = 4;
+const NEWS_LOADING_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(180);
+const FUNDAMENTALS_SCRAPE_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+const SEC_SCRAPE_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+fn ui_task_is_stale(
+    running: bool,
+    started_at: &mut Option<std::time::Instant>,
+    now: std::time::Instant,
+    stale_after: std::time::Duration,
+) -> bool {
+    if !running {
+        *started_at = None;
+        return false;
+    }
+    let start = *started_at.get_or_insert(now);
+    now.saturating_duration_since(start) > stale_after
+}
 
 fn ui_heavy_sync_active(
     pending_fetches: usize,
@@ -62,6 +79,50 @@ fn deferred_chart_load_interval(
         (true, false) => std::time::Duration::from_millis(90),
         (false, true) => std::time::Duration::from_millis(75),
         (false, false) => std::time::Duration::from_millis(35),
+    }
+}
+
+impl TyphooNApp {
+    fn clear_stale_ui_busy_flags(&mut self, now: std::time::Instant) {
+        if ui_task_is_stale(
+            self.news_loading,
+            &mut self.news_loading_started_at,
+            now,
+            NEWS_LOADING_STALE_AFTER,
+        ) {
+            self.news_loading = false;
+            self.news_loading_started_at = None;
+            self.log.push_back(LogEntry::warn(
+                "News loading watchdog cleared stale busy flag after 180s".to_string(),
+            ));
+        }
+        if ui_task_is_stale(
+            self.scrape_fund_running,
+            &mut self.scrape_fund_started_at,
+            now,
+            FUNDAMENTALS_SCRAPE_STALE_AFTER,
+        ) {
+            self.scrape_fund_running = false;
+            self.scrape_fund_started_at = None;
+            self.scrape_fund_last_msg =
+                "stale fundamentals scrape flag cleared by UI watchdog".to_string();
+            self.log.push_back(LogEntry::warn(
+                "Fundamentals scrape watchdog cleared stale busy flag after 30m".to_string(),
+            ));
+        }
+        if ui_task_is_stale(
+            self.scrape_sec_running,
+            &mut self.scrape_sec_started_at,
+            now,
+            SEC_SCRAPE_STALE_AFTER,
+        ) {
+            self.scrape_sec_running = false;
+            self.scrape_sec_started_at = None;
+            self.scrape_sec_last_msg = "stale SEC scrape flag cleared by UI watchdog".to_string();
+            self.log.push_back(LogEntry::warn(
+                "SEC scrape watchdog cleared stale busy flag after 30m".to_string(),
+            ));
+        }
     }
 }
 
@@ -113,6 +174,7 @@ impl eframe::App for TyphooNApp {
             }
         }
         self.tick_auto_compact();
+        self.clear_stale_ui_busy_flags(now_instant);
         // Alpaca retry queue: internally throttled to 10s between ticks.
         // Loads persisted state on first call, re-dispatches due entries.
         self.poll_alpaca_retry_queue();
@@ -17741,13 +17803,17 @@ impl eframe::App for TyphooNApp {
                 let pending_fetches = self.total_pending_market_data_fetches();
                 if self.perf_max_update_ms >= 250.0 {
                     tracing::warn!(
-                        "UI frame stall: max_update_ms={:.2} slow_frames={} broker_msgs={} pending_fetches={} deferred_chart_loads={} heavy_sync={} user_interacting={} log_entries={}",
+                        "UI frame stall: max_update_ms={:.2} slow_frames={} broker_msgs={} pending_fetches={} deferred_chart_loads={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} user_interacting={} log_entries={}",
                         self.perf_max_update_ms,
                         self.perf_slow_frame_count,
                         self.perf_broker_msgs_drained,
                         pending_fetches,
                         self.deferred_chart_loads.len(),
                         self.heavy_sync_in_progress,
+                        self.news_loading,
+                        self.scrape_fund_running,
+                        self.scrape_sec_running,
+                        self.auto_compact_in_progress,
                         self.user_interacting,
                         self.log.len()
                     );
@@ -17886,6 +17952,33 @@ mod tests {
         assert!(ui_heavy_sync_active(0, 0, false, true, false, false));
         assert!(ui_heavy_sync_active(0, 0, false, false, true, false));
         assert!(ui_heavy_sync_active(0, 0, false, false, false, true));
+    }
+
+    #[test]
+    fn ui_task_watchdog_marks_stale_and_clears_when_idle() {
+        let now = std::time::Instant::now();
+        let mut started = Some(now - std::time::Duration::from_secs(10));
+
+        assert!(!ui_task_is_stale(
+            true,
+            &mut started,
+            now,
+            std::time::Duration::from_secs(30)
+        ));
+        assert!(started.is_some());
+        assert!(ui_task_is_stale(
+            true,
+            &mut started,
+            now,
+            std::time::Duration::from_secs(5)
+        ));
+        assert!(!ui_task_is_stale(
+            false,
+            &mut started,
+            now,
+            std::time::Duration::from_secs(5)
+        ));
+        assert!(started.is_none());
     }
 
     #[test]
