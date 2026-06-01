@@ -1809,7 +1809,8 @@ impl ChartCamera {
             // empty space to the right so the newest bar can be dragged all the
             // way to the left edge. The left bound stays at right_edge=0, which
             // puts the oldest bar at the right edge with empty space to its left.
-            data_len.saturating_sub(1) as f64 + (self.bars_visible - 1.0).max(CHART_RIGHT_MARGIN as f64)
+            data_len.saturating_sub(1) as f64
+                + (self.bars_visible - 1.0).max(CHART_RIGHT_MARGIN as f64)
         }
     }
 
@@ -6008,20 +6009,20 @@ impl ChartState {
         }
         let slot_count = self.visible_bars.max(1);
         let right_edge = if self.manual_view_override {
-            self.camera.right_edge_bar().round() as i64
+            self.camera.right_edge_bar()
         } else {
-            self.view_offset as i64
+            self.view_offset as f64
         };
-        let virtual_start = right_edge - slot_count as i64 + 1;
-        let virtual_end_exclusive = right_edge + 1;
-        let data_len = self.bars.len() as i64;
-        let start = virtual_start.clamp(0, data_len) as usize;
-        let mut end = virtual_end_exclusive.clamp(0, data_len) as usize;
+        let virtual_start = right_edge - slot_count as f64 + 1.0;
+        let virtual_end_exclusive = right_edge + 1.0;
+        let data_len = self.bars.len() as f64;
+        let start = virtual_start.ceil().clamp(0.0, data_len) as usize;
+        let mut end = virtual_end_exclusive.ceil().clamp(0.0, data_len) as usize;
         if let Some(cap) = self.replay_bar_cap {
             end = end.min(cap);
         }
         let start = start.min(end);
-        let first_slot = (start as i64 - virtual_start).max(0) as f32;
+        let first_slot = ((start as f64 - virtual_start).max(0.0)) as f32;
         (start, end, first_slot, slot_count)
     }
 }
@@ -11357,6 +11358,27 @@ enum BrokerMsg {
 
 fn should_emit_fundamentals_scrape_progress(processed: usize, total: usize) -> bool {
     processed <= 10 || processed == total || processed.is_multiple_of(100)
+}
+
+fn format_news_scope_scrape_start(tickers: &[String]) -> String {
+    const MAX_INLINE_SYMBOLS: usize = 24;
+    let shown: Vec<&str> = tickers
+        .iter()
+        .take(MAX_INLINE_SYMBOLS)
+        .map(String::as_str)
+        .collect();
+    let suffix = tickers
+        .len()
+        .checked_sub(MAX_INLINE_SYMBOLS)
+        .filter(|remaining| *remaining > 0)
+        .map(|remaining| format!(" … +{remaining} more"))
+        .unwrap_or_default();
+    format!(
+        "News scrape: starting for {} MTF Grid symbol(s): {}{}",
+        tickers.len(),
+        shown.join(", "),
+        suffix
+    )
 }
 
 fn is_fundamentals_provider_coverage_gap(error: &str) -> bool {
@@ -25716,11 +25738,9 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                         ));
                                         return;
                                     }
-                                    let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
-                                        "News scrape: starting for {} MTF Grid symbol(s): {}",
-                                        tickers.len(),
-                                        tickers.join(", ")
-                                    )));
+                                    let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
+                                        format_news_scope_scrape_start(&tickers),
+                                    ));
                                     let fresh_tickers = cache
                                         .connection()
                                         .ok()
@@ -33753,12 +33773,39 @@ mod tests {
 
         let (start, end, first_slot, slots) = chart.visible_slot_window();
         assert_eq!((start, end, slots), (0, 1, 100));
-        assert_eq!(first_slot, 99.0, "oldest bar should render in the final slot with empty space to its left");
+        assert_eq!(
+            first_slot, 99.0,
+            "oldest bar should render in the final slot with empty space to its left"
+        );
 
         chart.camera = ChartCamera::from_legacy(598, 100, true);
         let (start, end, first_slot, slots) = chart.visible_slot_window();
         assert_eq!((start, end, slots), (499, 500, 100));
-        assert_eq!(first_slot, 0.0, "newest bar should render in the first slot with empty space to its right");
+        assert_eq!(
+            first_slot, 0.0,
+            "newest bar should render in the first slot with empty space to its right"
+        );
+    }
+
+    #[test]
+    fn chart_state_visible_slot_window_preserves_fractional_camera_offset() {
+        let mut chart = ChartState::new("TEST", Timeframe::H4);
+        chart.bars = make_bars(500);
+        chart.visible_bars = 100;
+        chart.manual_view_override = true;
+        chart.camera = ChartCamera::from_legacy(300, 100, true);
+        chart.camera.begin_pan(800.0, 400.0, 100.0, 20.0);
+        chart
+            .camera
+            .pan_pixels(3.0, 0.0, 800.0, 400.0, 500, 100.0, 20.0);
+
+        let (start, end, first_slot, slots) = chart.visible_slot_window();
+
+        assert_eq!((start, end, slots), (201, 301, 100));
+        assert!(
+            (first_slot - 0.375).abs() < 1e-6,
+            "sub-bar drag must move candles smoothly instead of rounding/snap-back; got first_slot={first_slot}"
+        );
     }
 
     #[test]

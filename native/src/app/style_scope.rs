@@ -122,41 +122,7 @@ impl TyphooNApp {
     pub(super) fn sec_scrape_scope_symbols(&self) -> Vec<String> {
         let mut syms = match self.broker_scope_symbols() {
             Some(scope) => scope,
-            None => {
-                let mut syms = std::collections::HashSet::new();
-                if self.fund_source_mt5 && self.darwinex_enabled {
-                    if self.darwinex_radar_data.is_empty() {
-                        syms.extend(self.bg.all_fundamentals.iter().map(|f| f.symbol.clone()));
-                    } else {
-                        syms.extend(
-                            self.darwinex_radar_data
-                                .iter()
-                                .filter(|(_, _, _, trade_mode, _, _, _, _, _)| *trade_mode != 0)
-                                .map(|(sym, _, _, _, _, _, _, _, _)| {
-                                    sym.split('.').next().unwrap_or(sym.as_str()).to_uppercase()
-                                }),
-                        );
-                    }
-                }
-                if self.fund_source_alpaca && self.alpaca_enabled {
-                    syms.extend(
-                        self.live_positions
-                            .iter()
-                            .map(|p| p.symbol.replace('/', "").to_uppercase()),
-                    );
-                }
-                if self.fund_source_tastytrade && self.tastytrade_enabled {
-                    syms.extend(
-                        self.tt_positions
-                            .iter()
-                            .map(|p| p.symbol.replace('/', "").to_uppercase()),
-                    );
-                }
-                if self.fund_source_kraken && self.kraken_enabled {
-                    syms.extend(self.kraken_scope_symbols());
-                }
-                syms
-            }
+            None => self.news_focus_symbols(),
         };
         syms.retain(|sym| sec_scrape_scope_symbol_allowed(sym));
         let mut syms: Vec<String> = syms.into_iter().collect();
@@ -170,42 +136,7 @@ impl TyphooNApp {
             return scope;
         }
 
-        let mut syms = std::collections::HashSet::new();
-        if self.fund_source_mt5 {
-            if self.darwinex_radar_data.is_empty() {
-                syms.extend(self.bg.all_fundamentals.iter().map(|f| f.symbol.clone()));
-            } else {
-                syms.extend(
-                    self.darwinex_radar_data
-                        .iter()
-                        .filter(|(_, _, _, trade_mode, _, _, _, _, _)| *trade_mode != 0)
-                        .map(|(sym, _, _, _, _, _, _, _, _)| {
-                            sym.split('.').next().unwrap_or(sym.as_str()).to_uppercase()
-                        }),
-                );
-            }
-        }
-        if self.fund_source_alpaca {
-            syms.extend(
-                self.live_positions
-                    .iter()
-                    .map(|p| p.symbol.replace('/', "").to_uppercase()),
-            );
-        }
-        if self.fund_source_tastytrade {
-            syms.extend(
-                self.tt_positions
-                    .iter()
-                    .map(|p| p.symbol.replace('/', "").to_uppercase()),
-            );
-        }
-        if self.fund_source_kraken {
-            syms.extend(self.kraken_scope_symbols());
-        }
-        if syms.is_empty() {
-            syms.extend(self.bg.all_fundamentals.iter().map(|f| f.symbol.clone()));
-        }
-        syms
+        self.news_focus_symbols()
     }
 
     pub(super) fn kraken_scope_symbols(&self) -> std::collections::HashSet<String> {

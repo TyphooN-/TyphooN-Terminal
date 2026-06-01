@@ -27,17 +27,27 @@ fn should_emit_alpaca_retry_queue_log(queue_len: usize) -> bool {
 }
 
 fn is_routine_news_progress(msg: &str) -> bool {
-    msg.starts_with("News ")
+    (msg.starts_with("News ")
         && (msg.contains(": base asset ")
             || msg.contains(": cached/fresh — skipped network")
             || msg.contains(" cached (")
-            || msg.contains(" failed:"))
+            || msg.contains(" failed:")))
+        || (msg.starts_with("news/")
+            && (msg.contains(" articles") || msg.contains(" cached") || msg.contains("failed:")))
 }
 
 const HEAVY_SYNC_PENDING_FETCH_THRESHOLD: usize = 32;
 const HEAVY_SYNC_DEFERRED_CHART_THRESHOLD: usize = 4;
+const AUTO_BACKGROUND_SCRAPE_MAX_SYMBOLS: usize = 256;
+
+fn should_auto_start_background_scope_scrape(scope: EventSource, symbol_count: usize) -> bool {
+    symbol_count > 0
+        && (!matches!(scope, EventSource::All)
+            || symbol_count <= AUTO_BACKGROUND_SCRAPE_MAX_SYMBOLS)
+}
 const NEWS_LOADING_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(180);
-const FUNDAMENTALS_SCRAPE_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+const FUNDAMENTALS_SCRAPE_STALE_AFTER: std::time::Duration =
+    std::time::Duration::from_secs(30 * 60);
 const SEC_SCRAPE_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 fn ui_task_is_stale(
@@ -940,7 +950,10 @@ impl eframe::App for TyphooNApp {
                     {
                         let symbols = self.sec_scrape_scope_symbols();
                         let symbol_count = symbols.len();
-                        if symbol_count > 0 {
+                        if should_auto_start_background_scope_scrape(
+                            self.broker_scope,
+                            symbol_count,
+                        ) {
                             let db_path = cache_db_path();
                             let _ = self
                                 .broker_tx
@@ -956,11 +969,18 @@ impl eframe::App for TyphooNApp {
                                 self.broker_scope_label(),
                                 symbol_count
                             )));
-                        } else {
+                        } else if symbol_count == 0 {
                             self.auto_sec_scrape_deferred = true;
                             self.log.push_back(LogEntry::info(format!(
                                 "SEC EDGAR auto-scrape deferred: Scope {} has no symbols yet",
                                 self.broker_scope_label()
+                            )));
+                        } else {
+                            self.auto_sec_scrape_deferred = false;
+                            self.log.push_back(LogEntry::info(format!(
+                                "SEC EDGAR auto-scrape skipped for broad Scope {} ({} symbols); use manual SEC scrape for full-universe backfill",
+                                self.broker_scope_label(),
+                                symbol_count
                             )));
                         }
                     }
@@ -1986,7 +2006,10 @@ impl eframe::App for TyphooNApp {
                     if self.auto_sec_scrape_deferred && !self.scrape_sec_running {
                         let symbols = self.sec_scrape_scope_symbols();
                         let symbol_count = symbols.len();
-                        if symbol_count > 0 {
+                        if should_auto_start_background_scope_scrape(
+                            self.broker_scope,
+                            symbol_count,
+                        ) {
                             let db_path = cache_db_path();
                             let _ = self
                                 .broker_tx
@@ -2000,6 +2023,13 @@ impl eframe::App for TyphooNApp {
                             );
                             self.log.push_back(LogEntry::info(format!(
                                 "SEC EDGAR deferred scrape started for Scope {} ({} symbols)...",
+                                self.broker_scope_label(),
+                                symbol_count
+                            )));
+                        } else if symbol_count > AUTO_BACKGROUND_SCRAPE_MAX_SYMBOLS {
+                            self.auto_sec_scrape_deferred = false;
+                            self.log.push_back(LogEntry::info(format!(
+                                "SEC EDGAR deferred auto-scrape skipped for broad Scope {} ({} symbols); use manual SEC scrape for full-universe backfill",
                                 self.broker_scope_label(),
                                 symbol_count
                             )));
@@ -17916,8 +17946,41 @@ mod tests {
             "News AAPL: cached/fresh — skipped network (7/42)"
         ));
         assert!(is_routine_news_progress("News MSFT: 12 cached (8/42)"));
+        assert!(is_routine_news_progress("news/yahoo_rss AAPL: 20 articles"));
+        assert!(is_routine_news_progress("news/AAPL: 20 articles fetched"));
         assert!(!is_routine_news_progress(
             "News scrape complete: 41 OK, 1 failed of 42 MTF Grid symbol(s)"
+        ));
+    }
+
+    #[test]
+    fn news_scope_scrape_start_log_summarizes_large_symbol_sets() {
+        let tickers: Vec<String> = (0..200).map(|i| format!("SYM{i}")).collect();
+        let msg = format_news_scope_scrape_start(&tickers);
+
+        assert!(msg.contains("200 MTF Grid symbol(s)"));
+        assert!(msg.contains("SYM0, SYM1, SYM2"));
+        assert!(!msg.contains("SYM199"));
+        assert!(msg.len() < 240);
+    }
+
+    #[test]
+    fn auto_background_scope_scrape_skips_broad_all_universe() {
+        assert!(should_auto_start_background_scope_scrape(
+            EventSource::All,
+            12
+        ));
+        assert!(!should_auto_start_background_scope_scrape(
+            EventSource::All,
+            12_000
+        ));
+        assert!(should_auto_start_background_scope_scrape(
+            EventSource::Kraken,
+            12_000
+        ));
+        assert!(!should_auto_start_background_scope_scrape(
+            EventSource::All,
+            0
         ));
     }
 
