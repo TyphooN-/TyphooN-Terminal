@@ -1496,7 +1496,26 @@ impl TyphooNApp {
         None
     }
 
+    pub(super) fn latest_watchlist_equity_price_for_symbol(&self, symbol: &str) -> Option<f64> {
+        let wanted = Self::kraken_base_asset_for_pair(symbol);
+        if wanted.is_empty() {
+            return None;
+        }
+        self.watchlist_rows.iter().find_map(|row| {
+            let row_base = Self::kraken_base_asset_for_pair(&row.symbol);
+            (row_base == wanted && row.last > 0.0 && row.last.is_finite()).then_some(row.last)
+        })
+    }
+
     pub(super) fn latest_cached_equity_price_for_symbol(&self, symbol: &str) -> Option<f64> {
+        // Prefer the watchlist's equity quote when available. For Kraken Securities
+        // this is the professional price path during pre/post-market because the
+        // Kraken iapi ticker is explicitly requested as `delayed=true` and can lag
+        // live Alpaca/Yahoo/market-data by ~15 minutes. Keep the delayed Kraken
+        // quote as fallback for Kraken-only/offline sessions.
+        if let Some(price) = self.latest_watchlist_equity_price_for_symbol(symbol) {
+            return Some(price);
+        }
         if let Some(meta) = self.kraken_equity_quote_meta_for_symbol(symbol) {
             if meta.price > 0.0 && meta.price.is_finite() {
                 return Some(meta.price);

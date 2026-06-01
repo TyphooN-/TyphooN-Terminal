@@ -1987,6 +1987,7 @@ impl eframe::App for TyphooNApp {
                                     .put_bars(&format!("kraken-equities:{symbol}:quote"), &json);
                             }
                         }
+                        let quote_cache = self.cache.clone();
                         for chart in &mut self.charts {
                             let chart_sym = chart.symbol.replace('/', "").to_ascii_uppercase();
                             let chart_bare = chart_sym
@@ -1999,7 +2000,15 @@ impl eframe::App for TyphooNApp {
                             if chart_bare == symbol {
                                 chart.live_bid = ticker.bid;
                                 chart.live_ask = ticker.ask;
-                                if let Some(bar) = chart.bars.last_mut() {
+                                if let Some(cache) = quote_cache.as_ref() {
+                                    // Apply the same timestamp-aware quote overlay used by
+                                    // chart loads. Directly mutating the last bar made a fresh
+                                    // quote appear at an older candle timestamp, so positions
+                                    // and MTF/Grid charts could disagree about WOK's current
+                                    // price/provenance after fallback bars advanced further than
+                                    // stale Kraken Securities history.
+                                    chart.apply_quote_cache_overlay(cache, &symbol);
+                                } else if let Some(bar) = chart.bars.last_mut() {
                                     bar.close = last;
                                     bar.high = bar.high.max(last);
                                     bar.low = if bar.low > 0.0 {
@@ -2034,7 +2043,7 @@ impl eframe::App for TyphooNApp {
                 BrokerMsg::KrakenEquityBars {
                     symbol,
                     timeframe,
-                    bars,
+                    count,
                 } => {
                     let symbol = symbol
                         .replace('/', "")
@@ -2045,7 +2054,7 @@ impl eframe::App for TyphooNApp {
                         .to_string();
                     self.pending_kraken_fetches
                         .retain(|key| key != &format!("equity:{}:{}", symbol, timeframe));
-                    if bars.is_empty() {
+                    if count == 0 {
                         self.unresolvable_mark(
                             "kraken-equities",
                             &symbol,
@@ -2058,11 +2067,11 @@ impl eframe::App for TyphooNApp {
                             "kraken-equities",
                             &symbol,
                             &timeframe,
-                            bars.len(),
+                            count,
                         );
                         tracing::debug!(
                             "Kraken equities: cached {} bars for {} {}",
-                            bars.len(),
+                            count,
                             symbol,
                             timeframe
                         );
@@ -2353,6 +2362,11 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                     self.watchlist_rows = rows;
+                    // Watchlist quotes are the freshest equity valuation input during
+                    // extended hours. Reprice Kraken Securities balances from them so
+                    // the Positions/Cur column does not lag behind the watchlist by
+                    // Kraken iapi's delayed=true feed window.
+                    self.refresh_kraken_position_costs();
                 }
                 BrokerMsg::CryptoTop50(data) => {
                     self.log.push_back(LogEntry::info(format!(
@@ -17645,15 +17659,30 @@ impl eframe::App for TyphooNApp {
             .saturating_add(msgs_drained as u32);
         if now_instant.duration_since(self.perf_last_report) >= std::time::Duration::from_secs(5) {
             if self.perf_slow_frame_count > 0 || self.perf_broker_msgs_drained > 0 {
-                tracing::debug!(
-                    "frame perf: max_update_ms={:.2} slow_frames={} broker_msgs={} pending_fetches={} deferred_chart_loads={} log_entries={}",
-                    self.perf_max_update_ms,
-                    self.perf_slow_frame_count,
-                    self.perf_broker_msgs_drained,
-                    self.total_pending_market_data_fetches(),
-                    self.deferred_chart_loads.len(),
-                    self.log.len()
-                );
+                let pending_fetches = self.total_pending_market_data_fetches();
+                if self.perf_max_update_ms >= 250.0 {
+                    tracing::warn!(
+                        "UI frame stall: max_update_ms={:.2} slow_frames={} broker_msgs={} pending_fetches={} deferred_chart_loads={} heavy_sync={} user_interacting={} log_entries={}",
+                        self.perf_max_update_ms,
+                        self.perf_slow_frame_count,
+                        self.perf_broker_msgs_drained,
+                        pending_fetches,
+                        self.deferred_chart_loads.len(),
+                        self.heavy_sync_in_progress,
+                        self.user_interacting,
+                        self.log.len()
+                    );
+                } else {
+                    tracing::debug!(
+                        "frame perf: max_update_ms={:.2} slow_frames={} broker_msgs={} pending_fetches={} deferred_chart_loads={} log_entries={}",
+                        self.perf_max_update_ms,
+                        self.perf_slow_frame_count,
+                        self.perf_broker_msgs_drained,
+                        pending_fetches,
+                        self.deferred_chart_loads.len(),
+                        self.log.len()
+                    );
+                }
             }
             self.perf_last_report = now_instant;
             self.perf_slow_frame_count = 0;

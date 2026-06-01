@@ -2276,6 +2276,43 @@ fn chart_quote_overlay_allowed(quote_ts_ms: i64, last_bar_ts_ms: i64) -> bool {
     quote_ts_ms >= last_bar_ts_ms
 }
 
+fn chart_bar_last_valid_ts(raw: &[(i64, f64, f64, f64, f64, f64)]) -> i64 {
+    raw.iter()
+        .rev()
+        .find_map(|(ts, _o, _h, _l, close, _v)| {
+            (*ts > 0 && *close > 0.0 && close.is_finite()).then_some(*ts)
+        })
+        .unwrap_or(0)
+}
+
+fn chart_equity_source_rank(source: &str) -> Option<u8> {
+    match source {
+        "kraken-equities" => Some(0),
+        "tastytrade" => Some(1),
+        "alpaca" => Some(2),
+        "yahoo-chart" => Some(3),
+        "default" => Some(4),
+        "mt5" => Some(5),
+        _ => None,
+    }
+}
+
+fn chart_prefers_fresh_equity_source(symbol: &str) -> bool {
+    let compact = normalize_market_data_symbol(symbol)
+        .replace('/', "")
+        .trim_end_matches(".EQ")
+        .to_ascii_uppercase();
+    !compact.is_empty()
+        && compact.len() <= 8
+        && compact
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.')
+        && !compact.ends_with("USD")
+        && !compact.ends_with("USDT")
+        && !compact.ends_with("USDC")
+        && !compact.ends_with("ZUSD")
+}
+
 fn chart_forming_bar_allowed(last_bar_ts_ms: i64, now_ms: i64, tf_ms: i64) -> bool {
     if last_bar_ts_ms <= 0 || now_ms <= 0 || tf_ms <= 0 {
         return false;
@@ -2922,11 +2959,29 @@ impl ChartState {
             candidates.extend(alt_candidates);
         }
 
+        let prefer_fresh_equity = chart_prefers_fresh_equity_source(&sym_norm);
+        let mut best_equity: Option<(String, i64, u8)> = None;
         for key in &candidates {
             if let Ok(Some(raw)) = cache.get_bars_raw(key) {
                 if !raw.is_empty()
                     && chart_source_bars_match_timeframe(cache_source_from_key(key), tf, &raw)
                 {
+                    let source = cache_source_from_key(key);
+                    if prefer_fresh_equity {
+                        if let Some(rank) = chart_equity_source_rank(source) {
+                            let last_ts = chart_bar_last_valid_ts(&raw);
+                            let replace = best_equity
+                                .as_ref()
+                                .map(|(_, best_ts, best_rank)| {
+                                    last_ts > *best_ts || (last_ts == *best_ts && rank < *best_rank)
+                                })
+                                .unwrap_or(true);
+                            if replace {
+                                best_equity = Some((key.clone(), last_ts, rank));
+                            }
+                            continue;
+                        }
+                    }
                     return key.clone();
                 }
             }
@@ -2945,11 +3000,32 @@ impl ChartState {
                                 &raw,
                             )
                         {
+                            let source = cache_source_from_key(key);
+                            if prefer_fresh_equity {
+                                if let Some(rank) = chart_equity_source_rank(source) {
+                                    let last_ts = chart_bar_last_valid_ts(&raw);
+                                    let replace = best_equity
+                                        .as_ref()
+                                        .map(|(_, best_ts, best_rank)| {
+                                            last_ts > *best_ts
+                                                || (last_ts == *best_ts && rank < *best_rank)
+                                        })
+                                        .unwrap_or(true);
+                                    if replace {
+                                        best_equity = Some((key.clone(), last_ts, rank));
+                                    }
+                                    continue;
+                                }
+                            }
                             return key.clone();
                         }
                     }
                 }
             }
+        }
+
+        if let Some((key, _, _)) = best_equity {
+            return key;
         }
 
         // Default fallback: first source in priority order
@@ -3017,7 +3093,15 @@ impl ChartState {
                 format!("yahoo-chart:{}:{}", sym_norm, tf),
             ]);
         }
+        let prefer_fresh_equity = chart_prefers_fresh_equity_source(&sym_norm);
         let mut result: Option<(Vec<(i64, f64, f64, f64, f64, f64)>, bool, &'static str)> = None;
+        let mut best_equity: Option<(
+            Vec<(i64, f64, f64, f64, f64, f64)>,
+            bool,
+            &'static str,
+            i64,
+            u8,
+        )> = None;
         for k in &keys_to_try {
             match cache.get_bars_raw(k) {
                 Ok(Some(raw))
@@ -3028,11 +3112,32 @@ impl ChartState {
                             &raw,
                         ) =>
                 {
+                    let source = cache_source_from_key(k);
                     let is_gap_fill = k.starts_with("kraken:") || k.starts_with("kraken-futures:");
-                    result = Some((raw, is_gap_fill, cache_source_from_key(k)));
+                    if prefer_fresh_equity {
+                        if let Some(rank) = chart_equity_source_rank(source) {
+                            let last_ts = chart_bar_last_valid_ts(&raw);
+                            let replace = best_equity
+                                .as_ref()
+                                .map(|(_, _, _, best_ts, best_rank)| {
+                                    last_ts > *best_ts || (last_ts == *best_ts && rank < *best_rank)
+                                })
+                                .unwrap_or(true);
+                            if replace {
+                                best_equity = Some((raw, is_gap_fill, source, last_ts, rank));
+                            }
+                            continue;
+                        }
+                    }
+                    result = Some((raw, is_gap_fill, source));
                     break;
                 }
                 _ => {}
+            }
+        }
+        if result.is_none() {
+            if let Some((raw, is_gap_fill, source, _, _)) = best_equity {
+                result = Some((raw, is_gap_fill, source));
             }
         }
         if let Some((raw, primary_is_gap_fill, primary_source)) = result {
@@ -9816,7 +9921,7 @@ enum BrokerMsg {
     KrakenEquityBars {
         symbol: String,
         timeframe: String,
-        bars: Vec<typhoon_engine::broker::kraken::KrakenEquityBar>,
+        count: usize,
     },
     KrakenEquityHistoryError {
         symbol: String,
@@ -14636,6 +14741,10 @@ impl TyphooNApp {
             let yahoo_chart_fetch_permits = Arc::new(tokio::sync::Semaphore::new(4));
             let kraken_fetch_permits =
                 Arc::new(tokio::sync::Semaphore::new(KRAKEN_PUBLIC_FETCH_PERMITS));
+            // Kraken Securities/iapi history is slower and can include synchronous cache work.
+            // Keep it off the broker command loop and cap it separately so broad equities
+            // sync cannot starve UI-visible broker messages (SEC scanner, order state, etc.).
+            let kraken_equity_fetch_permits = Arc::new(tokio::sync::Semaphore::new(2));
             let kraken_public_client = reqwest::Client::builder()
                 .user_agent("TyphooN-Terminal/1.0")
                 .pool_max_idle_per_host(KRAKEN_PUBLIC_FETCH_PERMITS * 2)
@@ -25861,91 +25970,111 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     BrokerCmd::KrakenFetchEquityHistory { symbol, timeframe } => {
                         // iapi_limiter inside get_equity_history short-circuits
                         // with an IAPI_RATE_LIMITED prefixed error during an
-                        // active cooldown, and the bucket spacing means we no
-                        // longer need a handler-side interval gate.
-                        let interval_minutes = match timeframe.as_str() {
-                            "1Min" => 1,
-                            "5Min" => 5,
-                            "15Min" => 15,
-                            "30Min" => 30,
-                            "1Hour" => 60,
-                            "4Hour" => 240,
-                            "1Day" => 1440,
-                            "1Week" => 10080,
-                            "1Month" => 43200,
-                            _ => 1,
-                        };
-                        let result = if let Some(ref kb) = kraken_broker {
-                            kb.get_equity_history(&symbol, interval_minutes, None).await
-                        } else {
+                        // active cooldown. Do the slow network + cache write in
+                        // its own capped task; the broker command loop must stay
+                        // free to process UI-visible commands and status messages.
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache = shared_cache_broker.clone();
+                        let permits = kraken_equity_fetch_permits.clone();
+                        tokio::spawn(async move {
+                            let Ok(_permit) = permits.acquire_owned().await else {
+                                let _ = msg_tx.send(BrokerMsg::KrakenEquityHistoryError {
+                                    symbol,
+                                    timeframe,
+                                    error: "Kraken equities fetch permit closed".to_string(),
+                                });
+                                return;
+                            };
+                            let interval_minutes = match timeframe.as_str() {
+                                "1Min" => 1,
+                                "5Min" => 5,
+                                "15Min" => 15,
+                                "30Min" => 30,
+                                "1Hour" => 60,
+                                "4Hour" => 240,
+                                "1Day" => 1440,
+                                "1Week" => 10080,
+                                "1Month" => 43200,
+                                _ => 1,
+                            };
                             let kb = typhoon_engine::broker::kraken::KrakenBroker::new(
                                 String::new(),
                                 String::new(),
                             );
-                            kb.get_equity_history(&symbol, interval_minutes, None).await
-                        };
-                        match result {
-                            Ok(bars) => {
-                                if !bars.is_empty() {
-                                    if let Some(cache) = shared_cache_broker
-                                        .read()
-                                        .ok()
-                                        .and_then(|g| g.clone())
-                                    {
-                                        let json_bars: Vec<_> = bars
-                                            .iter()
-                                            .filter_map(|bar| {
-                                                let ts = chrono::DateTime::from_timestamp_millis(
-                                                    bar.time_ms,
-                                                )?
-                                                .to_rfc3339();
-                                                Some(serde_json::json!({
-                                                    "timestamp": ts,
-                                                    "open": bar.open,
-                                                    "high": bar.high,
-                                                    "low": bar.low,
-                                                    "close": bar.close,
-                                                    "volume": bar.volume,
-                                                }))
+                            let result = kb
+                                .get_equity_history(&symbol, interval_minutes, None)
+                                .await;
+                            match result {
+                                Ok(bars) => {
+                                    let count = bars.len();
+                                    if count > 0 {
+                                        let cache_handle = shared_cache
+                                            .read()
+                                            .ok()
+                                            .and_then(|g| g.clone());
+                                        if let Some(cache) = cache_handle {
+                                            let bars_for_cache = bars;
+                                            let cache_symbol = symbol.clone();
+                                            let cache_timeframe = timeframe.clone();
+                                            let cache_result = tokio::task::spawn_blocking(move || {
+                                                let json_bars: Vec<_> = bars_for_cache
+                                                    .iter()
+                                                    .filter_map(|bar| {
+                                                        let ts = chrono::DateTime::from_timestamp_millis(
+                                                            bar.time_ms,
+                                                        )?
+                                                        .to_rfc3339();
+                                                        Some(serde_json::json!({
+                                                            "timestamp": ts,
+                                                            "open": bar.open,
+                                                            "high": bar.high,
+                                                            "low": bar.low,
+                                                            "close": bar.close,
+                                                            "volume": bar.volume,
+                                                        }))
+                                                    })
+                                                    .collect();
+                                                let json = serde_json::to_string(&json_bars)
+                                                    .map_err(|e| e.to_string())?;
+                                                let cache_key = format!(
+                                                    "kraken-equities:{}:{}",
+                                                    cache_symbol
+                                                        .replace('/', "")
+                                                        .trim_end_matches(".EQ")
+                                                        .to_ascii_uppercase(),
+                                                    cache_timeframe
+                                                );
+                                                cache.put_bars(&cache_key, &json)
                                             })
-                                            .collect();
-                                        if let Ok(json) = serde_json::to_string(&json_bars) {
-                                            let cache_key = format!(
-                                                "kraken-equities:{}:{}",
-                                                symbol
-                                                    .replace('/', "")
-                                                    .trim_end_matches(".EQ")
-                                                    .to_ascii_uppercase(),
-                                                timeframe
-                                            );
-                                            if let Err(e) = cache.put_bars(&cache_key, &json) {
-                                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
-                                                    format!(
-                                                        "Kraken equities cache write failed for {} {}: {}",
-                                                        symbol, timeframe, e
-                                                    ),
-                                                ));
+                                            .await
+                                            .map_err(|e| format!("cache write task failed: {e}"))
+                                            .and_then(|result| result);
+                                            if let Err(e) = cache_result {
+                                                let _ = msg_tx.send(BrokerMsg::Error(format!(
+                                                    "Kraken equities cache write failed for {} {}: {}",
+                                                    symbol, timeframe, e
+                                                )));
                                             }
                                         }
                                     }
+                                    let _ = msg_tx.send(BrokerMsg::KrakenEquityBars {
+                                        symbol,
+                                        timeframe,
+                                        count,
+                                    });
                                 }
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::KrakenEquityBars {
-                                    symbol,
-                                    timeframe,
-                                    bars,
-                                });
+                                Err(e) => {
+                                    // Engine-side iapi_limiter already armed the
+                                    // cooldown if this is a 429/1015; no extra
+                                    // handler-side state to update here.
+                                    let _ = msg_tx.send(BrokerMsg::KrakenEquityHistoryError {
+                                        symbol,
+                                        timeframe,
+                                        error: e,
+                                    });
+                                }
                             }
-                            Err(e) => {
-                                // Engine-side iapi_limiter already armed the
-                                // cooldown if this is a 429/1015; no extra
-                                // handler-side state to update here.
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::KrakenEquityHistoryError {
-                                    symbol,
-                                    timeframe,
-                                    error: e,
-                                });
-                            }
-                        }
+                        });
                     }
                     BrokerCmd::YahooChartFetchBars { symbol, timeframe } => {
                         let source = "yahoo-chart".to_string();
@@ -26015,7 +26144,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             }
                         });
                     }
-                    
+
                     BrokerCmd::KrakenFetchEquityUniverse => {
                         let result = if let Some(ref kb) = kraken_broker {
                             kb.get_equity_markets().await
@@ -32253,6 +32382,25 @@ mod tests {
             11 * day + 13 * 3_600_000,
             11 * day
         ));
+    }
+
+    #[test]
+    fn chart_fresh_equity_source_policy_targets_plain_equities_only() {
+        assert!(chart_prefers_fresh_equity_source("WOK"));
+        assert!(chart_prefers_fresh_equity_source("WOK.EQ"));
+        assert!(!chart_prefers_fresh_equity_source("BTCUSD"));
+        assert!(!chart_prefers_fresh_equity_source("BTC/USD"));
+        assert!(!chart_prefers_fresh_equity_source("EURUSD"));
+    }
+
+    #[test]
+    fn chart_equity_source_selection_can_prefer_fresher_fallback() {
+        let day = 86_400_000i64;
+        let stale_native = vec![test_bar(1 * day), test_bar(2 * day)];
+        let fresh_fallback = vec![test_bar(8 * day), test_bar(9 * day)];
+        assert!(chart_bar_last_valid_ts(&fresh_fallback) > chart_bar_last_valid_ts(&stale_native));
+        assert!(chart_equity_source_rank("kraken-equities") < chart_equity_source_rank("alpaca"));
+        assert_eq!(chart_equity_source_rank("kraken"), None);
     }
 
     #[test]
