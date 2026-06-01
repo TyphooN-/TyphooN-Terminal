@@ -3269,43 +3269,43 @@ pub(super) fn draw_chart(
     // Also account for indicator values in visible range
     for i in start_idx..end_idx {
         if flags.sma200 {
-            if let Some(v) = chart.sma200[i] {
+            if let Some(v) = indicator_value_at(&chart.sma200, i) {
                 price_min = price_min.min(v);
                 price_max = price_max.max(v);
             }
         }
         if flags.sma100 {
-            if let Some(v) = chart.sma100[i] {
+            if let Some(v) = indicator_value_at(&chart.sma100, i) {
                 price_min = price_min.min(v);
                 price_max = price_max.max(v);
             }
         }
         if flags.kama {
-            if let Some(v) = chart.kama[i] {
+            if let Some(v) = indicator_value_at(&chart.kama, i) {
                 price_min = price_min.min(v);
                 price_max = price_max.max(v);
             }
         }
         if flags.ema21 {
-            if let Some(v) = chart.ema21[i] {
+            if let Some(v) = indicator_value_at(&chart.ema21, i) {
                 price_min = price_min.min(v);
                 price_max = price_max.max(v);
             }
         }
         if flags.bollinger {
-            if let Some(v) = chart.bb_upper[i] {
+            if let Some(v) = indicator_value_at(&chart.bb_upper, i) {
                 price_max = price_max.max(v);
             }
-            if let Some(v) = chart.bb_lower[i] {
+            if let Some(v) = indicator_value_at(&chart.bb_lower, i) {
                 price_min = price_min.min(v);
             }
         }
         if flags.ichimoku {
-            if let Some(v) = chart.ichi_span_a[i] {
+            if let Some(v) = indicator_value_at(&chart.ichi_span_a, i) {
                 price_min = price_min.min(v);
                 price_max = price_max.max(v);
             }
-            if let Some(v) = chart.ichi_span_b[i] {
+            if let Some(v) = indicator_value_at(&chart.ichi_span_b, i) {
                 price_min = price_min.min(v);
                 price_max = price_max.max(v);
             }
@@ -3479,7 +3479,7 @@ pub(super) fn draw_chart(
             if abs_idx >= chart.sma200.len() || abs_idx >= chart.kama.len() {
                 continue;
             }
-            if let (Some(sma_v), Some(kama_v)) = (chart.sma200[abs_idx], chart.kama[abs_idx]) {
+            if let (Some(sma_v), Some(kama_v)) = (indicator_value_at(&chart.sma200, abs_idx), indicator_value_at(&chart.kama, abs_idx)) {
                 let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let y_sma = price_to_y(sma_v);
                 let y_kama = price_to_y(kama_v);
@@ -3520,7 +3520,7 @@ pub(super) fn draw_chart(
             if abs_idx >= chart.bb_upper.len() {
                 continue;
             }
-            if let (Some(u), Some(l)) = (chart.bb_upper[abs_idx], chart.bb_lower[abs_idx]) {
+            if let (Some(u), Some(l)) = (indicator_value_at(&chart.bb_upper, abs_idx), indicator_value_at(&chart.bb_lower, abs_idx)) {
                 let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let yu = price_to_y(u);
                 let yl = price_to_y(l);
@@ -3595,7 +3595,7 @@ pub(super) fn draw_chart(
                 if abs_idx >= upper.len() {
                     continue;
                 }
-                if let (Some(u), Some(l)) = (upper[abs_idx], lower[abs_idx]) {
+                if let (Some(u), Some(l)) = (indicator_value_at(&upper, abs_idx), indicator_value_at(&lower, abs_idx)) {
                     let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                     let yu = price_to_y(u);
                     let yl = price_to_y(l);
@@ -3690,7 +3690,7 @@ pub(super) fn draw_chart(
             if abs_idx >= chart.supertrend.len() {
                 continue;
             }
-            if let Some(v) = chart.supertrend[abs_idx] {
+            if let Some(v) = indicator_value_at(&chart.supertrend, abs_idx) {
                 let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let y = price_to_y(v);
                 let is_bull = chart.supertrend_bull.get(abs_idx).copied().unwrap_or(true);
@@ -3723,8 +3723,10 @@ pub(super) fn draw_chart(
             if abs_idx >= chart.donchian_upper.len() {
                 continue;
             }
-            if let (Some(u), Some(l)) =
-                (chart.donchian_upper[abs_idx], chart.donchian_lower[abs_idx])
+            if let (Some(u), Some(l)) = (
+                indicator_value_at(&chart.donchian_upper, abs_idx),
+                indicator_value_at(&chart.donchian_lower, abs_idx),
+            )
             {
                 let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let yu = price_to_y(u);
@@ -3776,7 +3778,10 @@ pub(super) fn draw_chart(
             if abs_idx >= chart.keltner_upper.len() {
                 continue;
             }
-            if let (Some(u), Some(l)) = (chart.keltner_upper[abs_idx], chart.keltner_lower[abs_idx])
+            if let (Some(u), Some(l)) = (
+                indicator_value_at(&chart.keltner_upper, abs_idx),
+                indicator_value_at(&chart.keltner_lower, abs_idx),
+            )
             {
                 let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let yu = price_to_y(u);
@@ -3841,8 +3846,8 @@ pub(super) fn draw_chart(
                 continue;
             }
             if let (Some(u), Some(l)) = (
-                chart.regression_upper[abs_idx],
-                chart.regression_lower[abs_idx],
+                indicator_value_at(&chart.regression_upper, abs_idx),
+                indicator_value_at(&chart.regression_lower, abs_idx),
             ) {
                 let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let yu = price_to_y(u);
@@ -3905,7 +3910,7 @@ pub(super) fn draw_chart(
             if abs_idx >= chart.ichi_span_a.len() {
                 continue;
             }
-            if let (Some(a), Some(b)) = (chart.ichi_span_a[abs_idx], chart.ichi_span_b[abs_idx]) {
+            if let (Some(a), Some(b)) = (indicator_value_at(&chart.ichi_span_a, abs_idx), indicator_value_at(&chart.ichi_span_b, abs_idx)) {
                 let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let ya = price_to_y(a);
                 let yb = price_to_y(b);
@@ -4171,7 +4176,7 @@ pub(super) fn draw_chart(
             if abs_idx >= chart.psar.len() {
                 continue;
             }
-            if let Some(sar) = chart.psar[abs_idx] {
+            if let Some(sar) = indicator_value_at(&chart.psar, abs_idx) {
                 let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let y = price_to_y(sar);
                 if y >= chart_rect.top() && y <= chart_rect.bottom() {
@@ -10711,6 +10716,10 @@ pub(super) fn draw_indicator_line(
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
+fn indicator_value_at(series: &[Option<f64>], idx: usize) -> Option<f64> {
+    series.get(idx).copied().flatten()
+}
+
 pub(super) fn parse_range(s: &str, default_lo: usize, default_hi: usize) -> (usize, usize) {
     let parts: Vec<&str> = s.split('-').collect();
     if parts.len() == 2 {
@@ -10730,6 +10739,18 @@ pub(super) fn parse_range_f32(s: &str, default_lo: f64, default_hi: f64) -> (f64
         (lo, hi)
     } else {
         (default_lo, default_hi)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn indicator_value_lookup_returns_none_when_series_lags_bars() {
+        let series = vec![Some(1.0), None, Some(3.0)];
+
+        assert_eq!(super::indicator_value_at(&series, 0), Some(1.0));
+        assert_eq!(super::indicator_value_at(&series, 1), None);
+        assert_eq!(super::indicator_value_at(&series, 3), None);
     }
 }
 
