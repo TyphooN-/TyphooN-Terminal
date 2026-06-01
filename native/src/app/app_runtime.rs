@@ -7562,6 +7562,7 @@ impl eframe::App for TyphooNApp {
                                     });
                                     // Advance view offset if following latest
                                     if self.follow_latest
+                                        && !chart.manual_view_override
                                         && chart.view_offset >= chart.bars.len().saturating_sub(2)
                                     {
                                         chart.view_offset = chart.bars.len().saturating_sub(1) + 20;
@@ -9232,25 +9233,33 @@ impl eframe::App for TyphooNApp {
                 if !self.replay_active {
                     if left {
                         chart.view_offset = chart.view_offset.saturating_sub(1);
+                        chart.manual_view_override = true;
                     }
                     if right {
                         chart.view_offset = (chart.view_offset + 1)
                             .min(chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN);
+                        chart.manual_view_override = chart.view_offset
+                            < chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
                     }
                     if home {
                         chart.view_offset =
                             chart.visible_bars.min(chart.bars.len()).saturating_sub(1);
+                        chart.manual_view_override = true;
                     }
                     if end {
                         chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+                        chart.manual_view_override = false;
                     }
                     if pgup {
                         chart.view_offset =
                             chart.view_offset.saturating_sub(chart.visible_bars / 2);
+                        chart.manual_view_override = true;
                     }
                     if pgdn {
                         chart.view_offset = (chart.view_offset + chart.visible_bars / 2)
                             .min(chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN);
+                        chart.manual_view_override = chart.view_offset
+                            < chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
                     }
                 }
                 if plus {
@@ -14714,6 +14723,7 @@ impl eframe::App for TyphooNApp {
                     if let Some(chart) = self.charts.get_mut(self.active_tab) {
                         chart.price_zoom = 1.0;
                         chart.price_pan = 0.0;
+                        chart.manual_view_override = false;
                     }
                 } else if on_chart_body {
                     if self.mtf_enabled {
@@ -14755,6 +14765,7 @@ impl eframe::App for TyphooNApp {
                             chart.price_pan = 0.0;
                             chart.visible_bars = 200;
                             chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+                            chart.manual_view_override = false;
                         }
                     }
                 }
@@ -15258,6 +15269,7 @@ impl eframe::App for TyphooNApp {
                     if cell_scale_resp.double_clicked() {
                         chart.price_zoom = 1.0;
                         chart.price_pan = 0.0;
+                        chart.manual_view_override = false;
                     }
 
                     let cell_chart_body_rect = egui::Rect::from_min_max(
@@ -15395,6 +15407,7 @@ impl eframe::App for TyphooNApp {
                     if price_axis_resp.double_clicked() {
                         chart.price_zoom = 1.0;
                         chart.price_pan = 0.0;
+                        chart.manual_view_override = false;
                     }
 
                     if resp.hovered() && self.draw_mode == DrawMode::None && !scale_press {
@@ -16520,6 +16533,7 @@ impl eframe::App for TyphooNApp {
                             chart.price_pan = 0.0;
                             chart.visible_bars = 200;
                             chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+                            chart.manual_view_override = false;
                             ui.close();
                         }
                         if ui.button(if chart.log_scale { "● Log Scale" } else { "  Log Scale" }).clicked() {
@@ -16531,6 +16545,7 @@ impl eframe::App for TyphooNApp {
                             chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
                             chart.price_zoom = 1.0;
                             chart.price_pan = 0.0;
+                            chart.manual_view_override = false;
                             ui.close();
                         }
                         ui.separator();

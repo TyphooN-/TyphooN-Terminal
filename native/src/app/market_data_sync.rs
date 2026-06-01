@@ -1512,8 +1512,6 @@ impl TyphooNApp {
         true
     }
 
-
-
     pub(super) fn queue_kraken_equity_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;

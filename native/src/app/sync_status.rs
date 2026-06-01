@@ -375,7 +375,6 @@ impl TyphooNApp {
             expected_sources.push(("yahoo-chart", "Yahoo"));
         }
 
-
         for (source, broker) in expected_sources {
             for tf in &timeframes {
                 let Some(tf) = normalize_sync_timeframe_key(tf) else {

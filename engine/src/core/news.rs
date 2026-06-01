@@ -29,7 +29,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicI64, Ordering};
 
-
 // ── Rate-limit cooldown ───────────────────────────────────────────────────
 //
 // GDELT's free Doc API throttles aggressively and returns 429 with no
@@ -1187,7 +1186,8 @@ pub async fn fetch_gdelt_news(
     let elapsed_since_last_request = current_time.saturating_sub(last_request_time);
 
     if elapsed_since_last_request < GDELT_MIN_INTERVAL_SECS {
-        let sleep_duration_secs = GDELT_MIN_INTERVAL_SECS.saturating_sub(elapsed_since_last_request);
+        let sleep_duration_secs =
+            GDELT_MIN_INTERVAL_SECS.saturating_sub(elapsed_since_last_request);
         sleep(Duration::from_secs(sleep_duration_secs as u64)).await;
     }
 

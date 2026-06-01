@@ -1793,8 +1793,19 @@ impl TyphooNApp {
     }
 
     pub(super) fn maybe_incremental_session_save(&mut self, ctx: &egui::Context) {
+        self.flush_alpaca_retry_queue(false);
+        self.flush_alpaca_no_data_marks(false);
+        self.flush_unresolvable_marks(false);
         self.flush_alpaca_backfill_complete_marks(false);
         self.flush_kraken_backfill_complete_marks(false);
+        if self.heavy_sync_in_progress {
+            // build_session_json() walks a large amount of UI/session state and
+            // write_session_json()/sync_preferences_save() hit disk/SQLite. During
+            // startup/full-catalog sync those background states churn constantly,
+            // turning autosave into periodic render-thread stalls. Forced saves on
+            // exit still persist the latest state; keep the frame loop responsive.
+            return;
+        }
         if !self.session_state_ready {
             return;
         }
@@ -1824,6 +1835,9 @@ impl TyphooNApp {
     }
 
     pub(super) fn save_session(&mut self) {
+        self.flush_alpaca_retry_queue(true);
+        self.flush_alpaca_no_data_marks(true);
+        self.flush_unresolvable_marks(true);
         self.flush_alpaca_backfill_complete_marks(true);
         self.flush_kraken_backfill_complete_marks(true);
         // Write demand.txt for BarCacheWriter — ONLY symbols that need MT5 bar updates.

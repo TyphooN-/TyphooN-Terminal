@@ -2042,6 +2042,9 @@ struct ChartState {
     visible_bars: usize,
     /// Index of the right-most visible bar (0 = oldest, len-1 = newest).
     view_offset: usize,
+    /// True after the user manually pans/zooms the chart away from the auto-follow view.
+    /// Cache reloads must preserve this viewport instead of snapping back to latest.
+    manual_view_override: bool,
     /// When replay mode is active, cap visible_range end at this bar index.
     replay_bar_cap: Option<usize>,
     /// Fractional price offset for vertical pan.
@@ -2103,6 +2106,19 @@ fn normalize_market_data_symbol(symbol: &str) -> String {
             head.to_string()
         }
         _ => bare,
+    }
+}
+
+fn chart_reload_view_offset(
+    old_bars_empty: bool,
+    manual_view_override: bool,
+    old_view_distance_from_right: usize,
+    new_max_offset: usize,
+) -> usize {
+    if old_bars_empty || (!manual_view_override && old_view_distance_from_right <= 2) {
+        new_max_offset
+    } else {
+        new_max_offset.saturating_sub(old_view_distance_from_right)
     }
 }
 
@@ -2624,6 +2640,7 @@ impl ChartState {
             cached_trade_overlay_frame: 0,
             visible_bars: 200,
             view_offset: 0,
+            manual_view_override: false,
             replay_bar_cap: None,
             price_pan: 0.0,
             price_zoom: 1.0,
@@ -3205,34 +3222,28 @@ impl ChartState {
                 };
                 let snap = |ts: i64| -> i64 {
                     match tf {
-                        "1Month" => {
-                            chrono::DateTime::from_timestamp_millis(ts)
-                                .and_then(|dt| {
-                                    chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1)
-                                        .and_then(|d| d.and_hms_opt(0, 0, 0))
-                                })
-                                .map(|ndt| ndt.and_utc().timestamp_millis())
-                                .unwrap_or(ts)
-                        }
-                        "1Week" => {
-                            chrono::DateTime::from_timestamp_millis(ts)
-                                .and_then(|dt| {
-                                    let days_since_mon = dt.weekday().num_days_from_monday() as i64;
-                                    (dt.date_naive() - chrono::Duration::days(days_since_mon))
-                                        .and_hms_opt(0, 0, 0)
-                                })
-                                .map(|ndt| ndt.and_utc().timestamp_millis())
-                                .unwrap_or(ts)
-                        }
-                        "1Day" => {
-                            chrono::DateTime::from_timestamp_millis(ts)
-                                .and_then(|dt| {
-                                    chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), dt.day())
-                                        .and_then(|d| d.and_hms_opt(0, 0, 0))
-                                })
-                                .map(|ndt| ndt.and_utc().timestamp_millis())
-                                .unwrap_or(ts)
-                        }
+                        "1Month" => chrono::DateTime::from_timestamp_millis(ts)
+                            .and_then(|dt| {
+                                chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1)
+                                    .and_then(|d| d.and_hms_opt(0, 0, 0))
+                            })
+                            .map(|ndt| ndt.and_utc().timestamp_millis())
+                            .unwrap_or(ts),
+                        "1Week" => chrono::DateTime::from_timestamp_millis(ts)
+                            .and_then(|dt| {
+                                let days_since_mon = dt.weekday().num_days_from_monday() as i64;
+                                (dt.date_naive() - chrono::Duration::days(days_since_mon))
+                                    .and_hms_opt(0, 0, 0)
+                            })
+                            .map(|ndt| ndt.and_utc().timestamp_millis())
+                            .unwrap_or(ts),
+                        "1Day" => chrono::DateTime::from_timestamp_millis(ts)
+                            .and_then(|dt| {
+                                chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), dt.day())
+                                    .and_then(|d| d.and_hms_opt(0, 0, 0))
+                            })
+                            .map(|ndt| ndt.and_utc().timestamp_millis())
+                            .unwrap_or(ts),
                         _ => ts / tf_ms * tf_ms,
                     }
                 };
@@ -3377,11 +3388,12 @@ impl ChartState {
             let ltf_rebuilt = self.rebuild_from_lower_timeframe_if_dislocated(cache, &sym);
             let quote_overlaid = self.apply_quote_cache_overlay(cache, &sym);
             let new_max_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
-            self.view_offset = if old_bars_empty || old_view_distance_from_right <= 2 {
-                new_max_offset
-            } else {
-                new_max_offset.saturating_sub(old_view_distance_from_right)
-            };
+            self.view_offset = chart_reload_view_offset(
+                old_bars_empty,
+                self.manual_view_override,
+                old_view_distance_from_right,
+                new_max_offset,
+            );
             self.compute_indicators_gpu(gpu);
             self.compute_mtf_sma(cache);
             self.compute_multi_kama(cache);
@@ -3835,7 +3847,13 @@ impl ChartState {
                     self.upload_lows.push(b.low as f32);
                     self.upload_volumes.push(b.volume as f32);
                 }
-                gpu.upload_bars_full(&self.upload_opens, &self.upload_closes, &self.upload_highs, &self.upload_lows, &self.upload_volumes);
+                gpu.upload_bars_full(
+                    &self.upload_opens,
+                    &self.upload_closes,
+                    &self.upload_highs,
+                    &self.upload_lows,
+                    &self.upload_volumes,
+                );
 
                 // Update snapshot so the draw_chart early-out works correctly after GPU path
                 self.last_rendered_gen = self.visible_bars_gen;
@@ -4286,11 +4304,11 @@ impl ChartState {
 
                 // Simple O(1) forming-bar update for Momentum (approximate)
                 if self.forming_bar_dirty && n > 1 && mom_p as usize > 0 {
-                    if let Some(prev_mom) = self.momentum.get(n-2).copied().flatten() {
+                    if let Some(prev_mom) = self.momentum.get(n - 2).copied().flatten() {
                         if let Some(last_mom) = self.momentum.last_mut() {
                             if let Some(last) = self.bars.last() {
                                 // Approximate: shift by the change in close
-                                let change = last.close - self.bars[n-2].close;
+                                let change = last.close - self.bars[n - 2].close;
                                 *last_mom = Some(prev_mom + change);
                             }
                         }
@@ -4299,10 +4317,10 @@ impl ChartState {
 
                 // Simple O(1) forming-bar update for Rate of Change (approximate)
                 if self.forming_bar_dirty && n > 1 && mom_p as usize > 0 {
-                    if let Some(_prev_roc) = self.momentum.get(n-2).copied().flatten() {
+                    if let Some(_prev_roc) = self.momentum.get(n - 2).copied().flatten() {
                         if let Some(last_roc) = self.momentum.last_mut() {
                             if let Some(last) = self.bars.last() {
-                                let prev_close = self.bars[n-2].close;
+                                let prev_close = self.bars[n - 2].close;
                                 if prev_close != 0.0 {
                                     let new_roc = ((last.close - prev_close) / prev_close) * 100.0;
                                     *last_roc = Some(new_roc);
@@ -4314,7 +4332,7 @@ impl ChartState {
 
                 // O(1) forming-bar update for Linear Regression Intercept
                 if self.forming_bar_dirty && n > 1 {
-                    if let Some(last_slope) = self.linreg_slope.get(n-2).copied().flatten() {
+                    if let Some(last_slope) = self.linreg_slope.get(n - 2).copied().flatten() {
                         if let Some(last_intercept) = self.linreg_intercept.last_mut() {
                             if let Some(last) = self.bars.last() {
                                 // intercept = y - slope * x  (using current bar as reference)
@@ -4327,14 +4345,17 @@ impl ChartState {
 
                 // Simple O(1) forming-bar update for Chande Forecast Oscillator (CFO)
                 if self.forming_bar_dirty && n > 1 {
-                    if let Some(last_slope) = self.linreg_slope.get(n-2).copied().flatten() {
-                        if let Some(last_intercept) = self.linreg_intercept.get(n-2).copied().flatten() {
+                    if let Some(last_slope) = self.linreg_slope.get(n - 2).copied().flatten() {
+                        if let Some(last_intercept) =
+                            self.linreg_intercept.get(n - 2).copied().flatten()
+                        {
                             if let Some(last_cfo) = self.cmo.last_mut() {
                                 if let Some(last) = self.bars.last() {
                                     let x = (n - 1) as f64;
                                     let forecast = last_slope * x + last_intercept;
                                     if last.close != 0.0 {
-                                        *last_cfo = Some(100.0 * (last.close - forecast) / last.close);
+                                        *last_cfo =
+                                            Some(100.0 * (last.close - forecast) / last.close);
                                     }
                                 }
                             }
@@ -4363,7 +4384,7 @@ impl ChartState {
                 // O(1) forming-bar update for CMO
                 if self.forming_bar_dirty && n > 1 && cmo_p as usize > 0 {
                     if let Some(last) = self.bars.last() {
-                        let delta = last.close - self.bars[n-2].close;
+                        let delta = last.close - self.bars[n - 2].close;
                         if delta > 0.0 {
                             self.cmo_sum_up += delta;
                         } else if delta < 0.0 {
@@ -4383,7 +4404,7 @@ impl ChartState {
                 // O(1) forming-bar update for Linear Regression Slope (simple incremental)
                 if self.forming_bar_dirty && n > 1 {
                     if let Some(last) = self.bars.last() {
-                        let x = (n - 1) as f64;  // current bar index
+                        let x = (n - 1) as f64; // current bar index
                         let y = last.close;
                         self.linreg_sum_x += x;
                         self.linreg_sum_y += y;
@@ -4391,10 +4412,15 @@ impl ChartState {
                         self.linreg_sum_x2 += x * x;
 
                         let n_f = n as f64;
-                        let denom = n_f * self.linreg_sum_x2 - self.linreg_sum_x * self.linreg_sum_x;
+                        let denom =
+                            n_f * self.linreg_sum_x2 - self.linreg_sum_x * self.linreg_sum_x;
                         if let Some(last_slope) = self.linreg_slope.last_mut() {
                             if denom > f64::EPSILON {
-                                *last_slope = Some((n_f * self.linreg_sum_xy - self.linreg_sum_x * self.linreg_sum_y) / denom);
+                                *last_slope = Some(
+                                    (n_f * self.linreg_sum_xy
+                                        - self.linreg_sum_x * self.linreg_sum_y)
+                                        / denom,
+                                );
                             } else {
                                 *last_slope = Some(0.0);
                             }
@@ -4438,7 +4464,7 @@ impl ChartState {
 
                 // O(1) forming-bar update for Disparity (using existing SMA100)
                 if self.forming_bar_dirty && n > 1 && disparity_p as usize == 100 {
-                    if let Some(prev_sma) = self.sma100.get(n-2).copied().flatten() {
+                    if let Some(prev_sma) = self.sma100.get(n - 2).copied().flatten() {
                         if let Some(last_disp) = self.disparity.last_mut() {
                             if let Some(last) = self.bars.last() {
                                 let new_ma = (prev_sma * 99.0 + last.close) / 100.0;
@@ -4543,7 +4569,9 @@ impl ChartState {
                 let ppo_fast = 12u32;
                 let ppo_slow = 26u32;
                 let ppo_sig = 9u32;
-                if let Some(data) = gpu.compute_ppo_gpu(&self.upload_closes, ppo_fast, ppo_slow, ppo_sig) {
+                if let Some(data) =
+                    gpu.compute_ppo_gpu(&self.upload_closes, ppo_fast, ppo_slow, ppo_sig)
+                {
                     let ppo_line_warmup = ppo_slow as usize - 1;
                     let ppo_signal_warmup = ppo_slow as usize + ppo_sig as usize - 2;
                     let mut line = Vec::with_capacity(n);
@@ -11890,6 +11918,8 @@ pub struct TyphooNApp {
     /// Tab count strings — `(scoped_filings, alerts, insider_total)`.
     sec_cache_tab_counts: (usize, usize, usize),
     sec_cache_tab_counts_key: Option<u64>,
+    /// Last time SEC window caches performed O(N) rebuild work on the UI thread.
+    sec_cache_last_rebuild: std::time::Instant,
     show_event_calendar: bool,
     event_calendar_rows: Vec<EventRow>,
     event_filter_source: EventSource,
@@ -12012,6 +12042,9 @@ pub struct TyphooNApp {
     alpaca_retry_last_poll: i64,
     /// Set once after startup to trigger the initial KV load into `alpaca_retry_queue`.
     alpaca_retry_loaded: bool,
+    /// First time the persisted Alpaca retry queue diverged from memory.
+    /// Flushed in coarse batches; never write this KV on every worker result.
+    alpaca_retry_dirty_since: Option<std::time::Instant>,
     /// Definitive no-data tombstones for Alpaca symbol/timeframe pairs.
     /// Persisted via cache KV at `alpaca:no_data_pairs` and consulted by all
     /// automated scheduling paths before dispatch.
@@ -12022,6 +12055,10 @@ pub struct TyphooNApp {
     unresolvable_fetch_keys_by_broker:
         std::collections::HashMap<String, std::collections::HashSet<String>>,
     alpaca_no_data_loaded: bool,
+    /// First time the persisted Alpaca no-data tombstone set diverged from memory.
+    alpaca_no_data_dirty_since: Option<std::time::Instant>,
+    /// First time the persisted unresolvable-pair set diverged from memory.
+    unresolvable_dirty_since: Option<std::time::Instant>,
     /// Persisted "bounded full-history fetch already exhausted available
     /// Alpaca bars for this pair" markers. Only suppresses repeat Backfill
     /// scheduling; Missing/Stale sync still proceeds normally.
@@ -28725,6 +28762,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             sec_cache_timeline_key: None,
             sec_cache_tab_counts: (0, 0, 0),
             sec_cache_tab_counts_key: None,
+            sec_cache_last_rebuild: std::time::Instant::now(),
             show_event_calendar: false,
             event_calendar_rows: Vec::new(),
             event_filter_source: EventSource::All,
@@ -28805,10 +28843,13 @@ When the question touches recent news, sentiment, or prices, combine the researc
             alpaca_retry_queue: Vec::new(),
             alpaca_retry_last_poll: 0,
             alpaca_retry_loaded: false,
+            alpaca_retry_dirty_since: None,
             alpaca_no_data_pairs: std::collections::HashMap::new(),
             unresolvable_pairs: std::collections::HashMap::new(),
             unresolvable_fetch_keys_by_broker: std::collections::HashMap::new(),
             alpaca_no_data_loaded: false,
+            alpaca_no_data_dirty_since: None,
+            unresolvable_dirty_since: None,
             alpaca_backfill_complete_pairs: std::collections::HashMap::new(),
             alpaca_backfill_complete_loaded: false,
             alpaca_backfill_complete_dirty_since: None,
@@ -33373,6 +33414,10 @@ mod tests {
             chart.price_pan > 0.0,
             "dragging downward should move the series downward"
         );
+        assert!(
+            chart.manual_view_override,
+            "manual pan must suppress auto-follow snapback on cache reload"
+        );
     }
 
     #[test]
@@ -33396,6 +33441,15 @@ mod tests {
 
         assert_eq!(chart.view_offset, 299);
         assert_eq!(chart.price_pan, 2.0);
+        assert!(chart.manual_view_override);
+    }
+
+    #[test]
+    fn chart_reload_keeps_near_latest_manual_pan_from_snapping_to_latest() {
+        assert_eq!(chart_reload_view_offset(false, false, 1, 600), 600);
+        assert_eq!(chart_reload_view_offset(false, true, 1, 600), 599);
+        assert_eq!(chart_reload_view_offset(false, true, 12, 600), 588);
+        assert_eq!(chart_reload_view_offset(true, true, 12, 600), 600);
     }
 
     #[test]

@@ -239,13 +239,14 @@ pub(super) async fn fetch_yahoo_chart_bars(
     // or a 422 Unprocessable Entity (interval unsupported), retry once at 1Day
     // to get at least some historical context.
     if let Err(ref e) = result {
-        if (timeframe == "1Hour" || timeframe == "1h") && (e.contains("expected 1h") || e.contains("HTTP 422")) {
+        if (timeframe == "1Hour" || timeframe == "1h")
+            && (e.contains("expected 1h") || e.contains("HTTP 422"))
+        {
             return _fetch_yahoo_chart_bars_internal(client, symbol, "1Day").await;
         }
     }
     result
 }
-
 
 pub(super) fn store_fallback_bars(
     cache: &SqliteCache,

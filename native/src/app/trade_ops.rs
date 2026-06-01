@@ -58,7 +58,7 @@ impl TyphooNApp {
             build_unresolvable_fetch_key_index(&self.unresolvable_pairs);
     }
 
-#[inline]
+    #[inline]
     pub(super) fn alpaca_retry_backoff_secs(retry_count: u32) -> i64 {
         match retry_count {
             0 | 1 => 30,
@@ -79,6 +79,7 @@ impl TyphooNApp {
             }
         }
         self.alpaca_retry_loaded = true;
+        self.alpaca_retry_dirty_since = None;
     }
 
     pub(super) fn alpaca_retry_save(&self) {
@@ -87,6 +88,34 @@ impl TyphooNApp {
                 serde_json::to_string(&self.alpaca_retry_queue).unwrap_or_else(|_| "[]".into());
             let _ = cache.put_kv("alpaca:retry_queue", &json);
         }
+    }
+
+    #[inline]
+    pub(super) fn alpaca_retry_mark_dirty(&mut self) {
+        if self.alpaca_retry_dirty_since.is_none() {
+            self.alpaca_retry_dirty_since = Some(std::time::Instant::now());
+        }
+    }
+
+    pub(super) fn flush_alpaca_retry_queue(&mut self, force: bool) {
+        let Some(dirty_since) = self.alpaca_retry_dirty_since else {
+            return;
+        };
+        let age = std::time::Instant::now().saturating_duration_since(dirty_since);
+        if !force {
+            if age < std::time::Duration::from_secs(2) {
+                return;
+            }
+            // During broad startup sync the broker worker can enqueue thousands of
+            // retry rows. A synchronous SQLite KV write per row was running on the
+            // egui thread and matches the user's 1-40s stalls. Keep state in memory
+            // and persist in coarse safety batches while heavy sync is active.
+            if self.heavy_sync_in_progress && age < std::time::Duration::from_secs(30) {
+                return;
+            }
+        }
+        self.alpaca_retry_save();
+        self.alpaca_retry_dirty_since = None;
     }
 
     pub(super) fn alpaca_no_data_load(&mut self) {
@@ -103,6 +132,7 @@ impl TyphooNApp {
             }
         }
         self.alpaca_no_data_loaded = true;
+        self.alpaca_no_data_dirty_since = None;
     }
 
     pub(super) fn alpaca_no_data_save(&self) {
@@ -118,6 +148,30 @@ impl TyphooNApp {
             let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
             let _ = cache.put_kv("alpaca:no_data_pairs", &json);
         }
+    }
+
+    #[inline]
+    pub(super) fn alpaca_no_data_mark_dirty(&mut self) {
+        if self.alpaca_no_data_dirty_since.is_none() {
+            self.alpaca_no_data_dirty_since = Some(std::time::Instant::now());
+        }
+    }
+
+    pub(super) fn flush_alpaca_no_data_marks(&mut self, force: bool) {
+        let Some(dirty_since) = self.alpaca_no_data_dirty_since else {
+            return;
+        };
+        let age = std::time::Instant::now().saturating_duration_since(dirty_since);
+        if !force {
+            if age < std::time::Duration::from_secs(2) {
+                return;
+            }
+            if self.heavy_sync_in_progress && age < std::time::Duration::from_secs(30) {
+                return;
+            }
+        }
+        self.alpaca_no_data_save();
+        self.alpaca_no_data_dirty_since = None;
     }
 
     pub(super) fn alpaca_no_data_mark(
@@ -144,8 +198,10 @@ impl TyphooNApp {
             Some(existing) => existing.reason != entry.reason,
             None => true,
         };
-        self.alpaca_no_data_pairs.insert(key, entry);
-        self.alpaca_no_data_save();
+        if changed {
+            self.alpaca_no_data_pairs.insert(key, entry);
+            self.alpaca_no_data_mark_dirty();
+        }
         changed
     }
 
@@ -157,7 +213,7 @@ impl TyphooNApp {
         self.alpaca_no_data_pairs
             .remove(&alpaca_fetch_key(symbol, timeframe));
         if self.alpaca_no_data_pairs.len() != before {
-            self.alpaca_no_data_save();
+            self.alpaca_no_data_mark_dirty();
         }
     }
 
@@ -170,6 +226,7 @@ impl TyphooNApp {
         }
         self.alpaca_no_data_pairs.clear();
         self.alpaca_no_data_save();
+        self.alpaca_no_data_dirty_since = None;
     }
 
     pub(super) fn unresolvable_load(&mut self) {
@@ -213,6 +270,30 @@ impl TyphooNApp {
         }
     }
 
+    #[inline]
+    pub(super) fn unresolvable_mark_dirty(&mut self) {
+        if self.unresolvable_dirty_since.is_none() {
+            self.unresolvable_dirty_since = Some(std::time::Instant::now());
+        }
+    }
+
+    pub(super) fn flush_unresolvable_marks(&mut self, force: bool) {
+        let Some(dirty_since) = self.unresolvable_dirty_since else {
+            return;
+        };
+        let age = std::time::Instant::now().saturating_duration_since(dirty_since);
+        if !force {
+            if age < std::time::Duration::from_secs(2) {
+                return;
+            }
+            if self.heavy_sync_in_progress && age < std::time::Duration::from_secs(30) {
+                return;
+            }
+        }
+        self.unresolvable_save();
+        self.unresolvable_dirty_since = None;
+    }
+
     pub(super) fn unresolvable_mark(
         &mut self,
         broker: &str,
@@ -237,12 +318,14 @@ impl TyphooNApp {
             .unresolvable_pairs
             .get(&key)
             .is_none_or(|existing| existing.reason != entry.reason);
-        self.unresolvable_fetch_keys_by_broker
-            .entry(entry.broker.clone())
-            .or_default()
-            .insert(alpaca_fetch_key(&entry.symbol, &entry.timeframe));
-        self.unresolvable_pairs.insert(key, entry);
-        self.unresolvable_save();
+        if changed {
+            self.unresolvable_fetch_keys_by_broker
+                .entry(entry.broker.clone())
+                .or_default()
+                .insert(alpaca_fetch_key(&entry.symbol, &entry.timeframe));
+            self.unresolvable_pairs.insert(key, entry);
+            self.unresolvable_mark_dirty();
+        }
         changed
     }
 
@@ -253,6 +336,7 @@ impl TyphooNApp {
         self.unresolvable_pairs.clear();
         self.unresolvable_fetch_keys_by_broker.clear();
         self.unresolvable_save();
+        self.unresolvable_dirty_since = None;
     }
 
     pub(super) fn alpaca_backfill_complete_load(&mut self) {
@@ -330,11 +414,14 @@ impl TyphooNApp {
         let Some(dirty_since) = self.alpaca_backfill_complete_dirty_since else {
             return;
         };
-        if !force
-            && std::time::Instant::now().saturating_duration_since(dirty_since)
-                < std::time::Duration::from_secs(2)
-        {
-            return;
+        let age = std::time::Instant::now().saturating_duration_since(dirty_since);
+        if !force {
+            if age < std::time::Duration::from_secs(2) {
+                return;
+            }
+            if self.heavy_sync_in_progress && age < std::time::Duration::from_secs(30) {
+                return;
+            }
         }
         self.alpaca_backfill_complete_save();
         self.alpaca_backfill_complete_dirty_since = None;
@@ -512,11 +599,14 @@ impl TyphooNApp {
     }
 
     pub(super) fn flush_kraken_backfill_complete_marks(&mut self, force: bool) {
+        let flush_ready = |dirty_since: std::time::Instant, heavy_sync: bool| {
+            let age = std::time::Instant::now().saturating_duration_since(dirty_since);
+            force
+                || (age >= std::time::Duration::from_secs(2)
+                    && (!heavy_sync || age >= std::time::Duration::from_secs(30)))
+        };
         if let Some(dirty_since) = self.kraken_backfill_complete_dirty_since {
-            if force
-                || std::time::Instant::now().saturating_duration_since(dirty_since)
-                    >= std::time::Duration::from_secs(2)
-            {
+            if flush_ready(dirty_since, self.heavy_sync_in_progress) {
                 self.save_backfill_complete_pairs_to_kv(
                     "kraken:backfill_complete_pairs",
                     &self.kraken_backfill_complete_pairs,
@@ -525,10 +615,7 @@ impl TyphooNApp {
             }
         }
         if let Some(dirty_since) = self.kraken_futures_backfill_complete_dirty_since {
-            if force
-                || std::time::Instant::now().saturating_duration_since(dirty_since)
-                    >= std::time::Duration::from_secs(2)
-            {
+            if flush_ready(dirty_since, self.heavy_sync_in_progress) {
                 self.save_backfill_complete_pairs_to_kv(
                     "kraken-futures:backfill_complete_pairs",
                     &self.kraken_futures_backfill_complete_pairs,
@@ -537,10 +624,7 @@ impl TyphooNApp {
             }
         }
         if let Some(dirty_since) = self.tastytrade_backfill_complete_dirty_since {
-            if force
-                || std::time::Instant::now().saturating_duration_since(dirty_since)
-                    >= std::time::Duration::from_secs(2)
-            {
+            if flush_ready(dirty_since, self.heavy_sync_in_progress) {
                 self.save_backfill_complete_pairs_to_kv(
                     "tastytrade:backfill_complete_pairs",
                     &self.tastytrade_backfill_complete_pairs,
@@ -587,7 +671,7 @@ impl TyphooNApp {
                 partial,
             });
         }
-        self.alpaca_retry_save();
+        self.alpaca_retry_mark_dirty();
     }
 
     /// Clear a successful (symbol, timeframe) from the retry queue.
@@ -596,7 +680,7 @@ impl TyphooNApp {
         self.alpaca_retry_queue
             .retain(|e| !(e.symbol == symbol && e.timeframe == timeframe));
         if (before - self.alpaca_retry_queue.len()) >= 8 {
-            self.alpaca_retry_save();
+            self.alpaca_retry_mark_dirty();
         }
     }
 
@@ -623,7 +707,7 @@ impl TyphooNApp {
         self.alpaca_retry_queue
             .retain(|e| now - e.last_attempt <= MAX_AGE_SECS && e.retry_count < 12);
         if (before - self.alpaca_retry_queue.len()) >= 8 {
-            self.alpaca_retry_save();
+            self.alpaca_retry_mark_dirty();
         }
 
         if !self.broker_connected
@@ -641,7 +725,7 @@ impl TyphooNApp {
                 .unwrap_or(false)
         });
         if (retry_len_before - self.alpaca_retry_queue.len()) >= 8 {
-            self.alpaca_retry_save();
+            self.alpaca_retry_mark_dirty();
         }
         if self.alpaca_retry_queue.is_empty() {
             return;
@@ -650,18 +734,15 @@ impl TyphooNApp {
         let retry_len_before = self.alpaca_retry_queue.len();
         // Build a local set of no-data keys once to avoid repeated
         // alpaca_fetch_key() + HashMap lookups in the retain below.
-        let _no_data_keys: std::collections::HashSet<String> = self
-            .alpaca_no_data_pairs
-            .keys()
-            .cloned()
-            .collect();
+        let _no_data_keys: std::collections::HashSet<String> =
+            self.alpaca_no_data_pairs.keys().cloned().collect();
         self.alpaca_retry_queue.retain(|e| {
             !self
                 .alpaca_no_data_pairs
                 .contains_key(&alpaca_fetch_key(&e.symbol, &e.timeframe))
         });
         if (retry_len_before - self.alpaca_retry_queue.len()) >= 8 {
-            self.alpaca_retry_save();
+            self.alpaca_retry_mark_dirty();
         }
         if self.alpaca_retry_queue.is_empty() {
             return;
@@ -689,7 +770,7 @@ impl TyphooNApp {
         if redispatched == 0 {
             return;
         }
-        self.alpaca_retry_save();
+        self.alpaca_retry_mark_dirty();
         self.log.push_back(LogEntry::info(format!(
             "Alpaca retry: re-dispatched {} symbol(s) ({} in queue)",
             redispatched,

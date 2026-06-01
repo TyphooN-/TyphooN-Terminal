@@ -4499,10 +4499,15 @@ impl TyphooNApp {
 
             // Refresh the DB article count so the header can show "N in
             // DB" even when the in-memory list is empty (fresh launch,
-            // before Load Cached fires). Throttled to 5 s so a window
-            // staying open doesn't hammer the cache lock — the SELECT
-            // COUNT is fast but still costs the read lock.
-            if self.news_db_total_last_refresh.elapsed().as_secs() >= 5 {
+            // before Load Cached fires). This must not run during heavy
+            // sync: opening NEWS in the user's stall log lined up with an
+            // 8.8s UI-frame block while broad bar writes/fundamentals were
+            // active, and this synchronous SQLite read sits directly on the
+            // egui update path. Under load, skip the nice-to-have count and
+            // let the async LoadCachedNews request populate the panel.
+            if !self.heavy_sync_in_progress
+                && self.news_db_total_last_refresh.elapsed().as_secs() >= 5
+            {
                 self.news_db_total_last_refresh = std::time::Instant::now();
                 if let Some(cache) = &self.cache {
                     if let Ok(conn) = cache.connection() {
@@ -4524,7 +4529,7 @@ impl TyphooNApp {
             if !self.news_initial_load_done
                 && !self.news_loading
                 && self.cache.is_some()
-                && self.news_db_total.unwrap_or(0) > 0
+                && self.news_db_total.map(|n| n > 0).unwrap_or(true)
             {
                 self.news_initial_load_done = true;
                 self.news_loading = true;

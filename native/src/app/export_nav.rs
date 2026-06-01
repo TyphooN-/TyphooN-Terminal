@@ -142,9 +142,12 @@ impl TyphooNApp {
 
         let bar_w = rect_width / chart.visible_bars.max(1) as f32;
         let delta_bars = (drag_delta.x / bar_w).round() as isize;
-        chart.view_offset = (chart.drag_start_offset as isize - delta_bars)
-            .clamp(0, (chart.bars.len() + CHART_RIGHT_MARGIN) as isize - 1)
-            as usize;
+        let max_off = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+        chart.view_offset =
+            (chart.drag_start_offset as isize - delta_bars).clamp(0, max_off as isize) as usize;
+        if delta_bars != 0 {
+            chart.manual_view_override = chart.view_offset < max_off;
+        }
 
         // Always apply vertical pan from total drag (no threshold) so slow/precise
         // raises/lowers work like TradingView free-view drag. The y component

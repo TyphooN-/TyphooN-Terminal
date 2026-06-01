@@ -1,5 +1,8 @@
 use super::*;
 
+const SEC_CACHE_HEAVY_SYNC_MIN_REBUILD_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(750);
+
 impl TyphooNApp {
     pub(super) fn dark_visuals() -> egui::Visuals {
         let mut v = egui::Visuals::dark();
@@ -298,6 +301,42 @@ impl TyphooNApp {
             scope.hash(&mut h);
             h.finish()
         };
+        let filings_key = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            bg_rev.hash(&mut h);
+            scope.hash(&mut h);
+            self.sec_filters.hash(&mut h);
+            self.sec_search_query.hash(&mut h);
+            self.sec_sort.column.hash(&mut h);
+            self.sec_sort.ascending.hash(&mut h);
+            h.finish()
+        };
+        let insiders_key = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            bg_rev.hash(&mut h);
+            scope.hash(&mut h);
+            self.sec_search_query.hash(&mut h);
+            h.finish()
+        };
+        let timeline_key = counts_key; // same key as tab counts
+        let cache_cold = self.sec_cache_tab_counts_key.is_none()
+            || self.sec_cache_filings_key.is_none()
+            || self.sec_cache_insiders_key.is_none()
+            || self.sec_cache_timeline_key.is_none();
+        let cache_changed = self.sec_cache_tab_counts_key != Some(counts_key)
+            || self.sec_cache_filings_key != Some(filings_key)
+            || self.sec_cache_insiders_key != Some(insiders_key)
+            || self.sec_cache_timeline_key != Some(timeline_key);
+        if cache_changed
+            && !cache_cold
+            && self.heavy_sync_in_progress
+            && self.sec_cache_last_rebuild.elapsed() < SEC_CACHE_HEAVY_SYNC_MIN_REBUILD_INTERVAL
+        {
+            return;
+        }
+        if cache_changed {
+            self.sec_cache_last_rebuild = std::time::Instant::now();
+        }
         if self.sec_cache_tab_counts_key != Some(counts_key) {
             let (scoped, insider_total) = match &self.cached_scope_syms {
                 None => (
@@ -323,16 +362,6 @@ impl TyphooNApp {
         }
 
         // Filings tab — (bg_rev, scope, filters, query, sort column, sort direction)
-        let filings_key = {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            bg_rev.hash(&mut h);
-            scope.hash(&mut h);
-            self.sec_filters.hash(&mut h);
-            self.sec_search_query.hash(&mut h);
-            self.sec_sort.column.hash(&mut h);
-            self.sec_sort.ascending.hash(&mut h);
-            h.finish()
-        };
         if self.sec_cache_filings_key != Some(filings_key) {
             let filter_types: &[&str] = &["4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
             let all_on = self.sec_filters.iter().all(|&v| v);
@@ -452,13 +481,6 @@ impl TyphooNApp {
         }
 
         // Insiders tab — (bg_rev, scope, query)
-        let insiders_key = {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            bg_rev.hash(&mut h);
-            scope.hash(&mut h);
-            self.sec_search_query.hash(&mut h);
-            h.finish()
-        };
         if self.sec_cache_insiders_key != Some(insiders_key) {
             let search_upper = self.sec_search_query.trim().to_uppercase();
             let has_search = !search_upper.is_empty();
@@ -520,7 +542,6 @@ impl TyphooNApp {
         }
 
         // Timeline tab — (bg_rev, scope)
-        let timeline_key = counts_key; // same key as tab counts
         if self.sec_cache_timeline_key != Some(timeline_key) {
             let mut by_month: std::collections::BTreeMap<String, Vec<usize>> =
                 std::collections::BTreeMap::new();

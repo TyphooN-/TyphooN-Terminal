@@ -158,14 +158,7 @@ pub(super) fn sort_sync_stats_rows(rows: &mut [SyncStatsRow]) {
     let tf_order = [
         "1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week", "1Month",
     ];
-    let broker_order = [
-        "Kraken",
-        "Merged",
-        "Alpaca",
-        "Yahoo",
-        "Tastytrade",
-        "MT5",
-    ];
+    let broker_order = ["Kraken", "Merged", "Alpaca", "Yahoo", "Tastytrade", "MT5"];
     rows.sort_by(|a, b| {
         let ab = broker_order
             .iter()
@@ -202,14 +195,7 @@ pub(super) fn compute_bar_sync_broker_totals(
         entry.1 += row.healthy;
     }
 
-    let order = [
-        "Kraken",
-        "Merged",
-        "Alpaca",
-        "Yahoo",
-        "Tastytrade",
-        "MT5",
-    ];
+    let order = ["Kraken", "Merged", "Alpaca", "Yahoo", "Tastytrade", "MT5"];
     let mut out = Vec::new();
     for name in order {
         if let Some((total, healthy)) = totals.remove(name) {
@@ -347,9 +333,7 @@ mod tests {
     fn compute_bar_sync_stats_exposes_fallback_provider_rows() {
         let now_s = chrono::Utc::now().timestamp();
         let rows = compute_bar_sync_stats(
-            &[
-                ("yahoo-chart:TNDM:1Day".into(), 10, now_s),
-            ],
+            &[("yahoo-chart:TNDM:1Day".into(), 10, now_s)],
             &std::collections::HashMap::new(),
             &|_| false,
         );
@@ -360,7 +344,6 @@ mod tests {
             .expect("missing Yahoo fallback row");
         assert_eq!(yahoo.total, 1);
         assert_eq!(yahoo.healthy, 1);
-
     }
 
     #[test]
