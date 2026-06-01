@@ -1743,6 +1743,145 @@ const BVOL_NORMAL: egui::Color32 = egui::Color32::from_rgb(70, 130, 180); // clr
 /// Right margin: empty bars of space after the last candle (MT5 "chart shift" feature).
 const CHART_RIGHT_MARGIN: usize = 5;
 
+#[derive(Clone, Debug)]
+struct ChartCamera {
+    center_bar: f64,
+    bars_visible: f64,
+    price_center: Option<f64>,
+    price_span: Option<f64>,
+    follow_latest: bool,
+    pan_start_center_bar: f64,
+    pan_start_price_center: Option<f64>,
+    pan_start_price_span: Option<f64>,
+}
+
+impl ChartCamera {
+    fn from_legacy(view_offset: usize, visible_bars: usize, manual_view_override: bool) -> Self {
+        let bars_visible = visible_bars.max(1) as f64;
+        let right_edge = view_offset as f64;
+        let center_bar = right_edge - (bars_visible - 1.0) * 0.5;
+        Self {
+            center_bar,
+            bars_visible,
+            price_center: None,
+            price_span: None,
+            follow_latest: !manual_view_override,
+            pan_start_center_bar: center_bar,
+            pan_start_price_center: None,
+            pan_start_price_span: None,
+        }
+    }
+
+    fn right_edge_bar(&self) -> f64 {
+        self.center_bar + (self.bars_visible - 1.0) * 0.5
+    }
+
+    fn manual_override(&self) -> bool {
+        !self.follow_latest
+    }
+
+    fn max_right_edge(data_len: usize) -> f64 {
+        if data_len == 0 {
+            0.0
+        } else {
+            data_len.saturating_sub(1) as f64 + CHART_RIGHT_MARGIN as f64
+        }
+    }
+
+    fn set_right_edge_bar(&mut self, right_edge: f64, data_len: usize) {
+        let max_right = Self::max_right_edge(data_len);
+        let clamped = right_edge.clamp(0.0, max_right);
+        self.center_bar = clamped - (self.bars_visible - 1.0) * 0.5;
+    }
+
+    fn set_price_view(&mut self, center: f64, span: f64) {
+        self.price_center = Some(center);
+        self.price_span = Some(span.max(f64::EPSILON));
+    }
+
+    fn begin_pan(
+        &mut self,
+        _rect_width: f32,
+        _rect_height: f32,
+        natural_price_center: f64,
+        natural_price_span: f64,
+    ) {
+        if self.price_center.is_none() || self.price_span.is_none() {
+            self.set_price_view(natural_price_center, natural_price_span);
+        }
+        self.pan_start_center_bar = self.center_bar;
+        self.pan_start_price_center = self.price_center;
+        self.pan_start_price_span = self.price_span;
+        self.follow_latest = false;
+    }
+
+    fn pan_pixels(
+        &mut self,
+        delta_x: f32,
+        delta_y: f32,
+        rect_width: f32,
+        rect_height: f32,
+        data_len: usize,
+        natural_price_center: f64,
+        natural_price_span: f64,
+    ) {
+        if data_len == 0 || rect_width <= 1.0 || rect_height <= 1.0 {
+            return;
+        }
+        let bar_px = rect_width as f64 / self.bars_visible.max(1.0);
+        let delta_bars = delta_x as f64 / bar_px;
+        self.center_bar = self.pan_start_center_bar - delta_bars;
+        self.set_right_edge_bar(self.right_edge_bar(), data_len);
+
+        let start_center = self.pan_start_price_center.unwrap_or(natural_price_center);
+        let span = self
+            .pan_start_price_span
+            .unwrap_or(natural_price_span)
+            .max(f64::EPSILON);
+        self.price_center = Some(start_center + delta_y as f64 * span / rect_height as f64);
+        self.price_span = Some(span);
+        self.follow_latest = false;
+    }
+
+    fn on_data_len_changed(&mut self, old_len: usize, new_len: usize) {
+        if new_len == 0 {
+            self.set_right_edge_bar(0.0, 0);
+            return;
+        }
+        if self.follow_latest || old_len == 0 {
+            self.set_right_edge_bar(Self::max_right_edge(new_len), new_len);
+            return;
+        }
+        let old_max = Self::max_right_edge(old_len);
+        let distance_from_right = (old_max - self.right_edge_bar()).max(0.0);
+        let new_right = Self::max_right_edge(new_len) - distance_from_right;
+        self.set_right_edge_bar(new_right, new_len);
+    }
+
+    fn sync_legacy_fields(
+        &self,
+        data_len: usize,
+        visible_bars: &mut usize,
+        view_offset: &mut usize,
+        manual_view_override: &mut bool,
+        price_pan: &mut f64,
+        price_zoom: &mut f64,
+        natural_price_center: f64,
+        natural_price_span: f64,
+    ) {
+        *visible_bars = self.bars_visible.round().max(1.0) as usize;
+        *view_offset = self
+            .right_edge_bar()
+            .round()
+            .clamp(0.0, Self::max_right_edge(data_len)) as usize;
+        *manual_view_override = self.manual_override();
+        if let (Some(center), Some(span)) = (self.price_center, self.price_span) {
+            *price_pan = center - natural_price_center;
+            *price_zoom = (natural_price_span / span.max(f64::EPSILON)).clamp(0.1, 20.0);
+        }
+    }
+}
+
 /// Indicator visibility flags passed to draw_chart.
 struct IndicatorFlags {
     sma200: bool,
@@ -2045,6 +2184,9 @@ struct ChartState {
     /// True after the user manually pans/zooms the chart away from the auto-follow view.
     /// Cache reloads must preserve this viewport instead of snapping back to latest.
     manual_view_override: bool,
+    /// Canonical TradingView-style camera. Legacy viewport fields above are kept
+    /// in sync for draw/overlay code until the renderer consumes the camera directly.
+    camera: ChartCamera,
     /// When replay mode is active, cap visible_range end at this bar index.
     replay_bar_cap: Option<usize>,
     /// Fractional price offset for vertical pan.
@@ -2055,8 +2197,6 @@ struct ChartState {
     // ── interaction helpers ───────────────────────────────────────────────
     is_dragging: bool,
     drag_start: Option<egui::Pos2>,
-    drag_start_offset: usize,
-    drag_start_ppan: f64,
     /// True when dragging on the price axis (TradingView-style vertical scale).
     is_scaling_price: bool,
     /// Price zoom at start of price-axis drag.
@@ -2106,19 +2246,6 @@ fn normalize_market_data_symbol(symbol: &str) -> String {
             head.to_string()
         }
         _ => bare,
-    }
-}
-
-fn chart_reload_view_offset(
-    old_bars_empty: bool,
-    manual_view_override: bool,
-    old_view_distance_from_right: usize,
-    new_max_offset: usize,
-) -> usize {
-    if old_bars_empty || (!manual_view_override && old_view_distance_from_right <= 2) {
-        new_max_offset
-    } else {
-        new_max_offset.saturating_sub(old_view_distance_from_right)
     }
 }
 
@@ -2641,13 +2768,12 @@ impl ChartState {
             visible_bars: 200,
             view_offset: 0,
             manual_view_override: false,
+            camera: ChartCamera::from_legacy(0, 200, false),
             replay_bar_cap: None,
             price_pan: 0.0,
             price_zoom: 1.0,
             is_dragging: false,
             drag_start: None,
-            drag_start_offset: 0,
-            drag_start_ppan: 0.0,
             is_scaling_price: false,
             scale_start_zoom: 1.0,
             scale_start_y: 0.0,
@@ -3088,8 +3214,7 @@ impl ChartState {
         let sym_norm = normalize_market_data_symbol(&sym);
         let tf = self.timeframe.cache_suffix();
         let old_bars_empty = self.bars.is_empty();
-        let old_max_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
-        let old_view_distance_from_right = old_max_offset.saturating_sub(self.view_offset);
+        let old_len = self.bars.len();
         let mut keys_to_try = vec![
             format!("mt5:{}:{}", sym, tf),
             format!("kraken:{}:{}", sym, tf),
@@ -3387,13 +3512,14 @@ impl ChartState {
 
             let ltf_rebuilt = self.rebuild_from_lower_timeframe_if_dislocated(cache, &sym);
             let quote_overlaid = self.apply_quote_cache_overlay(cache, &sym);
-            let new_max_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
-            self.view_offset = chart_reload_view_offset(
-                old_bars_empty,
-                self.manual_view_override,
-                old_view_distance_from_right,
-                new_max_offset,
-            );
+            if old_bars_empty {
+                self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+                self.manual_view_override = false;
+                self.reset_camera_from_legacy();
+            } else {
+                self.camera.on_data_len_changed(old_len, self.bars.len());
+                self.sync_camera_to_legacy();
+            }
             self.compute_indicators_gpu(gpu);
             self.compute_mtf_sma(cache);
             self.compute_multi_kama(cache);
@@ -5746,6 +5872,72 @@ impl ChartState {
                 self.auto_fib_levels.push((price, label.to_string(), true));
             }
         }
+    }
+
+    fn natural_visible_price_view(&self) -> Option<(f64, f64)> {
+        let (si, ei) = self.visible_range();
+        if ei <= si {
+            return None;
+        }
+        let slice = &self.bars[si..ei];
+        let hi = slice.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+        let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+        let padding = (hi - lo).abs() * 0.05;
+        let min = lo - padding;
+        let max = hi + padding;
+        Some(((min + max) * 0.5, (max - min).max(f64::EPSILON)))
+    }
+
+    fn sync_camera_to_legacy(&mut self) {
+        let (natural_center, natural_span) =
+            self.natural_visible_price_view().unwrap_or((0.0, 1.0));
+        self.camera.sync_legacy_fields(
+            self.bars.len(),
+            &mut self.visible_bars,
+            &mut self.view_offset,
+            &mut self.manual_view_override,
+            &mut self.price_pan,
+            &mut self.price_zoom,
+            natural_center,
+            natural_span,
+        );
+    }
+
+    fn reset_camera_from_legacy(&mut self) {
+        self.camera = ChartCamera::from_legacy(
+            self.view_offset,
+            self.visible_bars,
+            self.manual_view_override,
+        );
+        if let Some((natural_center, natural_span)) = self.natural_visible_price_view() {
+            let visible_span = natural_span / self.price_zoom.max(0.1);
+            self.camera
+                .set_price_view(natural_center + self.price_pan, visible_span);
+        }
+    }
+
+    fn begin_chart_camera_pan(&mut self, rect_width: f32, rect_height: f32) {
+        self.reset_camera_from_legacy();
+        let (natural_center, natural_span) =
+            self.natural_visible_price_view().unwrap_or((0.0, 1.0));
+        self.camera
+            .begin_pan(rect_width, rect_height, natural_center, natural_span);
+        self.sync_camera_to_legacy();
+    }
+
+    fn pan_chart_camera_pixels(&mut self, delta: egui::Vec2, rect_width: f32, rect_height: f32) {
+        let (natural_center, natural_span) =
+            self.natural_visible_price_view().unwrap_or((0.0, 1.0));
+        self.camera.pan_pixels(
+            delta.x,
+            delta.y,
+            rect_width,
+            rect_height,
+            self.bars.len(),
+            natural_center,
+            natural_span,
+        );
+        self.sync_camera_to_legacy();
     }
 
     fn visible_range(&self) -> (usize, usize) {
@@ -33383,6 +33575,57 @@ mod tests {
     }
 
     #[test]
+    fn chart_camera_accumulates_fractional_horizontal_pan() {
+        let mut camera = ChartCamera::from_legacy(300, 100, false);
+        camera.begin_pan(800.0, 400.0, 100.0, 20.0);
+
+        camera.pan_pixels(3.0, 0.0, 800.0, 400.0, 500, 80.0, 120.0);
+        assert!(
+            (camera.right_edge_bar() - 299.625).abs() < 1e-9,
+            "3px at 8px/bar should move by 0.375 bar, got {}",
+            camera.right_edge_bar()
+        );
+        assert!(camera.manual_override());
+        assert!(!camera.follow_latest);
+    }
+
+    #[test]
+    fn chart_camera_vertical_pan_uses_zoomed_visible_price_span() {
+        let mut camera = ChartCamera::from_legacy(499, 100, false);
+        camera.set_price_view(100.0, 10.0);
+        camera.begin_pan(800.0, 400.0, 100.0, 20.0);
+
+        camera.pan_pixels(0.0, 120.0, 800.0, 400.0, 500, 80.0, 120.0);
+
+        assert!(
+            (camera.price_center.unwrap() - 103.0).abs() < 1e-9,
+            "120px over 400px of 10pt span should move price center by 3pt; got {:?}",
+            camera.price_center
+        );
+        assert_eq!(camera.price_span, Some(10.0));
+        assert!(camera.manual_override());
+    }
+
+    #[test]
+    fn chart_camera_reload_preserves_manual_distance_but_follow_latest_tracks_end() {
+        let mut manual = ChartCamera::from_legacy(588, 100, true);
+        manual.on_data_len_changed(600, 720);
+        assert!(
+            (manual.right_edge_bar() - 708.0).abs() < 1e-9,
+            "manual camera should preserve distance from right edge across reload"
+        );
+        assert!(!manual.follow_latest);
+
+        let mut following = ChartCamera::from_legacy(600, 100, false);
+        following.on_data_len_changed(601, 720);
+        assert!(
+            (following.right_edge_bar() - 724.0).abs() < 1e-9,
+            "follow-latest camera should snap to new latest bar plus chart-shift margin"
+        );
+        assert!(following.follow_latest);
+    }
+
+    #[test]
     fn test_chart_state_visible_range() {
         let mut chart = ChartState::new("TEST", Timeframe::H4);
         chart.bars = make_bars(500);
@@ -33407,20 +33650,14 @@ mod tests {
     }
 
     #[test]
-    fn chart_body_drag_from_start_pans_time_and_price() {
+    fn chart_body_camera_pans_time_and_price() {
         let mut chart = ChartState::new("TEST", Timeframe::H4);
         chart.bars = make_bars(500);
         chart.visible_bars = 100;
         chart.view_offset = 499;
-        chart.drag_start_offset = chart.view_offset;
-        chart.drag_start_ppan = 0.0;
 
-        TyphooNApp::handle_chart_body_drag_from_start(
-            &mut chart,
-            egui::vec2(80.0, 120.0),
-            800.0,
-            400.0,
-        );
+        chart.begin_chart_camera_pan(800.0, 400.0);
+        chart.pan_chart_camera_pixels(egui::vec2(80.0, 120.0), 800.0, 400.0);
 
         assert_eq!(chart.view_offset, 489);
         assert!(
@@ -33434,66 +33671,46 @@ mod tests {
     }
 
     #[test]
-    fn chart_body_drag_from_start_accumulates_sub_bar_motion() {
+    fn chart_body_camera_accumulates_sub_bar_motion_fractionally() {
         let mut chart = ChartState::new("TEST", Timeframe::H4);
         chart.bars = make_bars(500);
         chart.visible_bars = 100;
         chart.view_offset = 300;
-        chart.drag_start_offset = chart.view_offset;
-        chart.drag_start_ppan = 2.0;
+        chart.price_pan = 2.0;
 
-        // 4px is only half a bar at this zoom.  The old per-frame integer
-        // truncation path would lose this every frame; the from-start path
-        // rounds accumulated movement once the gesture crosses the half-bar.
-        TyphooNApp::handle_chart_body_drag_from_start(
-            &mut chart,
-            egui::vec2(4.0, 0.0),
-            800.0,
-            400.0,
+        chart.begin_chart_camera_pan(800.0, 400.0);
+        chart.pan_chart_camera_pixels(egui::vec2(3.0, 0.0), 800.0, 400.0);
+
+        assert!(
+            (chart.camera.right_edge_bar() - 299.625).abs() < 1e-9,
+            "camera must preserve fractional sub-bar pan; got {}",
+            chart.camera.right_edge_bar()
         );
-
-        assert_eq!(chart.view_offset, 299);
         assert_eq!(chart.price_pan, 2.0);
         assert!(chart.manual_view_override);
     }
 
     #[test]
-    fn chart_body_vertical_pan_uses_zoomed_visible_price_span() {
+    fn chart_body_camera_vertical_pan_uses_zoomed_visible_price_span() {
         let mut chart = ChartState::new("WOK", Timeframe::H4);
         chart.bars = make_bars(500);
         chart.visible_bars = 100;
         chart.view_offset = 499;
-        chart.drag_start_offset = chart.view_offset;
-        chart.drag_start_ppan = 0.0;
         chart.price_zoom = 10.0;
 
-        TyphooNApp::handle_chart_body_drag_from_start(
-            &mut chart,
-            egui::vec2(0.0, 120.0),
-            800.0,
-            400.0,
-        );
+        let (natural_center, natural_span) = chart.natural_visible_price_view().unwrap();
+        chart.begin_chart_camera_pan(800.0, 400.0);
+        chart.pan_chart_camera_pixels(egui::vec2(0.0, 120.0), 800.0, 400.0);
 
-        let (si, ei) = chart.visible_range();
-        let slice = &chart.bars[si..ei];
-        let hi = slice.iter().map(|b| b.high).fold(f64::MIN, f64::max);
-        let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
-        let expected = (hi - lo) / chart.price_zoom * 120.0 / 400.0;
+        let expected = natural_span / 10.0 * 120.0 / 400.0;
         assert!(
             (chart.price_pan - expected).abs() < 1e-9,
             "zoomed vertical pan should move by visible price span; got {}, expected {}",
             chart.price_pan,
             expected
         );
+        assert!((chart.camera.price_center.unwrap() - (natural_center + expected)).abs() < 1e-9);
         assert!(chart.manual_view_override);
-    }
-
-    #[test]
-    fn chart_reload_keeps_near_latest_manual_pan_from_snapping_to_latest() {
-        assert_eq!(chart_reload_view_offset(false, false, 1, 600), 600);
-        assert_eq!(chart_reload_view_offset(false, true, 1, 600), 599);
-        assert_eq!(chart_reload_view_offset(false, true, 12, 600), 588);
-        assert_eq!(chart_reload_view_offset(true, true, 12, 600), 600);
     }
 
     #[test]

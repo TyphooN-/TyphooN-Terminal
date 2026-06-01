@@ -14752,6 +14752,7 @@ impl eframe::App for TyphooNApp {
                         chart.price_zoom = 1.0;
                         chart.price_pan = 0.0;
                         chart.manual_view_override = false;
+                        chart.reset_camera_from_legacy();
                     }
                 } else if on_chart_body {
                     if self.mtf_enabled {
@@ -14918,14 +14919,13 @@ impl eframe::App for TyphooNApp {
                             chart.is_dragging = false;
                             chart.is_scaling_price = false;
                         } else {
-                            // Start normal chart pan drag — only if inside the chart area
-                            chart.is_dragging = true;
-                            self.user_interacting = true;
-                            chart.is_drawing_drag = false;
-                            chart.is_scaling_price = false;
-                            chart.drag_start = pointer.press_origin();
-                            chart.drag_start_offset = chart.view_offset;
-                            chart.drag_start_ppan = chart.price_pan;
+                            // Normal chart pan is owned exclusively by the dedicated
+                            // `single_chart_body_drag` widget registered after drawing.
+                            // This legacy pre-render path used to start a second camera
+                            // drag for every chart tab, then the widget path mutated the
+                            // active chart again in the same gesture. That split-brain
+                            // ownership made TradingView-style free-look feel random or
+                            // completely dead under release builds.
                         }
                     }
                 } else if pointer.primary_released() {
@@ -15144,24 +15144,10 @@ impl eframe::App for TyphooNApp {
                     }
                 }
 
-                // Normal chart body drag → TradingView-style free pan. Use total
-                // movement from the press origin instead of per-frame deltas so
-                // slow drags accumulate sub-bar movement instead of truncating to
-                // zero every frame.
-                if chart.is_dragging {
-                    let total_drag = chart
-                        .drag_start
-                        .and_then(|start| pointer.hover_pos().map(|pos| pos - start))
-                        .unwrap_or(drag_delta);
-                    if total_drag.x.abs() > 0.0 || total_drag.y.abs() > 0.0 {
-                        Self::handle_chart_body_drag_from_start(
-                            chart,
-                            total_drag,
-                            chart_body_rect.width(),
-                            chart_body_rect.height(),
-                        );
-                    }
-                }
+                // Normal chart body pan is handled by `single_chart_body_drag`
+                // after drawing. Keep this legacy pre-render block limited to
+                // SL/TP and drawing-object drags; applying camera pan here races
+                // the widget-owned gesture and can move the active chart twice.
             }
             if sync_trade_inputs {
                 self.sync_trade_line_inputs();
@@ -15293,12 +15279,14 @@ impl eframe::App for TyphooNApp {
                             chart.price_zoom =
                                 (chart.price_zoom * (1.0 + zoom_delta)).clamp(0.1, 20.0);
                             chart.manual_view_override = true;
+                            chart.reset_camera_from_legacy();
                         }
                     }
                     if cell_scale_resp.double_clicked() {
                         chart.price_zoom = 1.0;
                         chart.price_pan = 0.0;
                         chart.manual_view_override = false;
+                        chart.reset_camera_from_legacy();
                     }
 
                     let cell_chart_body_rect = egui::Rect::from_min_max(
@@ -15317,8 +15305,10 @@ impl eframe::App for TyphooNApp {
                         chart.is_drawing_drag = false;
                         chart.is_scaling_price = false;
                         chart.drag_start = cell_body_resp.interact_pointer_pos();
-                        chart.drag_start_offset = chart.view_offset;
-                        chart.drag_start_ppan = chart.price_pan;
+                        chart.begin_chart_camera_pan(
+                            cell_chart_body_rect.width(),
+                            cell_chart_body_rect.height(),
+                        );
                         self.user_interacting = true;
                     }
                     if cell_body_resp.dragged()
@@ -15327,8 +15317,7 @@ impl eframe::App for TyphooNApp {
                         && self.draw_mode == DrawMode::None
                     {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
-                        Self::handle_chart_body_drag_from_start(
-                            chart,
+                        chart.pan_chart_camera_pixels(
                             cell_body_resp.drag_delta(),
                             cell_chart_body_rect.width(),
                             cell_chart_body_rect.height(),
@@ -15428,6 +15417,7 @@ impl eframe::App for TyphooNApp {
                             chart.price_zoom =
                                 (chart.price_zoom * (1.0 + zoom_delta)).clamp(0.1, 20.0);
                             chart.manual_view_override = true;
+                            chart.reset_camera_from_legacy();
                             chart.is_dragging = false;
                             self.user_interacting = true;
                         }
@@ -15438,6 +15428,7 @@ impl eframe::App for TyphooNApp {
                         chart.price_zoom = 1.0;
                         chart.price_pan = 0.0;
                         chart.manual_view_override = false;
+                        chart.reset_camera_from_legacy();
                     }
 
                     if resp.hovered() && self.draw_mode == DrawMode::None && !scale_press {
@@ -15448,8 +15439,10 @@ impl eframe::App for TyphooNApp {
                         chart.is_drawing_drag = false;
                         chart.is_scaling_price = false;
                         chart.drag_start = resp.interact_pointer_pos();
-                        chart.drag_start_offset = chart.view_offset;
-                        chart.drag_start_ppan = chart.price_pan;
+                        chart.begin_chart_camera_pan(
+                            chart_body_interact_rect.width(),
+                            chart_body_interact_rect.height(),
+                        );
                         self.user_interacting = true;
                     }
                     if resp.dragged()
@@ -15458,8 +15451,7 @@ impl eframe::App for TyphooNApp {
                         && !chart.is_scaling_price
                     {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
-                        Self::handle_chart_body_drag_from_start(
-                            chart,
+                        chart.pan_chart_camera_pixels(
                             resp.drag_delta(),
                             chart_body_interact_rect.width(),
                             chart_body_interact_rect.height(),

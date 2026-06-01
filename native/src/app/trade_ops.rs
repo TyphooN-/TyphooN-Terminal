@@ -713,6 +713,7 @@ impl TyphooNApp {
         if !self.broker_connected
             || (!self.alpaca_full_bar_sync_enabled && !self.backfill_alpaca_kraken_equities_enabled)
             || self.alpaca_retry_queue.is_empty()
+            || self.user_interacting
         {
             return;
         }
@@ -752,8 +753,17 @@ impl TyphooNApp {
         // and eliminates O(n) linear .find() after every success.
         let mut redispatched = 0usize;
         let mut i = 0;
-        let redispatch_cap = if self.user_interacting { 24 } else { 96 };
-        while i < self.alpaca_retry_queue.len() && redispatched < redispatch_cap {
+        let retry_scan_started = std::time::Instant::now();
+        let retry_scan_budget = if self.heavy_sync_in_progress {
+            std::time::Duration::from_millis(2)
+        } else {
+            std::time::Duration::from_millis(5)
+        };
+        let redispatch_cap = if self.heavy_sync_in_progress { 24 } else { 96 };
+        while i < self.alpaca_retry_queue.len()
+            && redispatched < redispatch_cap
+            && retry_scan_started.elapsed() < retry_scan_budget
+        {
             if self.alpaca_retry_queue[i].next_attempt > now {
                 i += 1;
                 continue;

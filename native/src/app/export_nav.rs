@@ -129,43 +129,7 @@ impl TyphooNApp {
         chart.view_offset = chart.view_offset.min(max_off);
         chart.visible_bars = new_vis;
         chart.manual_view_override = true;
-    }
-
-    pub(super) fn handle_chart_body_drag_from_start(
-        chart: &mut ChartState,
-        drag_delta: egui::Vec2,
-        rect_width: f32,
-        rect_height: f32,
-    ) {
-        if chart.bars.is_empty() || rect_width <= 1.0 || rect_height <= 1.0 {
-            return;
-        }
-
-        let bar_w = rect_width / chart.visible_bars.max(1) as f32;
-        let delta_bars = (drag_delta.x / bar_w).round() as isize;
-        let max_off = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
-        chart.view_offset =
-            (chart.drag_start_offset as isize - delta_bars).clamp(0, max_off as isize) as usize;
-        if delta_bars != 0 || drag_delta.y.abs() > 0.0 {
-            chart.manual_view_override = true;
-        }
-
-        // Always apply vertical pan from total drag (no threshold) so slow/precise
-        // raises/lowers work like TradingView free-view drag. Use the displayed
-        // price span, not the natural/autoscale span; after price-axis zoom-in a
-        // 10px drag should move the camera by 10px-worth of visible price, not
-        // by many screens. This is what made tiny WOK H4 candles feel trapped or
-        // jumpy after scaling the price axis.
-        let (si, ei) = chart.visible_range();
-        if ei > si {
-            let slice = &chart.bars[si..ei];
-            let hi = slice.iter().map(|b| b.high).fold(f64::MIN, f64::max);
-            let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
-            let natural_range = (hi - lo).max(f64::EPSILON);
-            let visible_range = natural_range / chart.price_zoom.max(0.1);
-            chart.price_pan =
-                chart.drag_start_ppan + drag_delta.y as f64 * visible_range / rect_height as f64;
-        }
+        chart.reset_camera_from_legacy();
     }
 
     // ── floating window rendering ────────────────────────────────────────────
