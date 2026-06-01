@@ -1742,6 +1742,19 @@ const BVOL_NORMAL: egui::Color32 = egui::Color32::from_rgb(70, 130, 180); // clr
 
 /// Right margin: empty bars of space after the last candle (MT5 "chart shift" feature).
 const CHART_RIGHT_MARGIN: usize = 5;
+const CHART_SUB_PANE_H: f32 = 80.0;
+const CHART_MIN_MAIN_CHART_H: f32 = 140.0;
+const CHART_TIME_AXIS_H: f32 = 22.0;
+
+fn chart_price_pane_height(total_chart_height: f32, sub_pane_count: u8) -> f32 {
+    let sub_pane_height = if sub_pane_count > 0 {
+        (CHART_SUB_PANE_H * sub_pane_count as f32)
+            .min((total_chart_height - CHART_MIN_MAIN_CHART_H).max(0.0))
+    } else {
+        0.0
+    };
+    (total_chart_height - sub_pane_height - CHART_TIME_AXIS_H).max(1.0)
+}
 
 #[derive(Clone, Debug)]
 struct ChartCamera {
@@ -1877,8 +1890,16 @@ impl ChartCamera {
         *manual_view_override = self.manual_override();
         if let (Some(center), Some(span)) = (self.price_center, self.price_span) {
             *price_pan = center - natural_price_center;
-            *price_zoom = (natural_price_span / span.max(f64::EPSILON)).clamp(0.1, 20.0);
+            // Compatibility only. Rendering consumes the camera's explicit span,
+            // so do not let this legacy clamp define the actual free-look range.
+            *price_zoom = natural_price_span / span.max(f64::EPSILON);
         }
+    }
+
+    fn explicit_price_range(&self) -> Option<(f64, f64)> {
+        let center = self.price_center?;
+        let span = self.price_span?.max(f64::EPSILON);
+        Some((center - span * 0.5, center + span * 0.5))
     }
 }
 
@@ -5886,6 +5907,13 @@ impl ChartState {
         let min = lo - padding;
         let max = hi + padding;
         Some(((min + max) * 0.5, (max - min).max(f64::EPSILON)))
+    }
+
+    fn visible_price_range(&self) -> Option<(f64, f64)> {
+        if !self.manual_view_override {
+            return None;
+        }
+        self.camera.explicit_price_range()
     }
 
     fn sync_camera_to_legacy(&mut self) {
@@ -33604,6 +33632,29 @@ mod tests {
         );
         assert_eq!(camera.price_span, Some(10.0));
         assert!(camera.manual_override());
+    }
+
+    #[test]
+    fn chart_camera_price_range_can_free_pan_below_zero() {
+        let mut camera = ChartCamera::from_legacy(499, 100, false);
+        camera.set_price_view(0.10, 0.12);
+        camera.begin_pan(800.0, 400.0, 0.10, 0.12);
+
+        camera.pan_pixels(0.0, -380.0, 800.0, 400.0, 500, 0.10, 0.12);
+        let (min, max) = camera.explicit_price_range().unwrap();
+
+        assert!(
+            min < 0.0,
+            "free-look price range should be allowed below zero; got {min}..{max}"
+        );
+        assert!(max > min);
+    }
+
+    #[test]
+    fn chart_price_pane_height_excludes_indicator_panes_for_one_to_one_drag() {
+        assert_eq!(chart_price_pane_height(1000.0, 0), 978.0);
+        assert_eq!(chart_price_pane_height(1000.0, 1), 898.0);
+        assert_eq!(chart_price_pane_height(1000.0, 3), 738.0);
     }
 
     #[test]

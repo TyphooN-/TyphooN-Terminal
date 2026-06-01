@@ -3202,8 +3202,8 @@ pub(super) fn draw_chart(
         + show_ehlers_cg as u8
         + show_ehlers_roof as u8
         + show_squeeze as u8;
-    const SUB_PANE_H: f32 = 80.0; // Height per indicator sub-pane (RSI, Fisher, MACD, Volume)
-    const MIN_MAIN_CHART_H: f32 = 140.0;
+    const SUB_PANE_H: f32 = CHART_SUB_PANE_H; // Height per indicator sub-pane (RSI, Fisher, MACD, Volume)
+    const MIN_MAIN_CHART_H: f32 = CHART_MIN_MAIN_CHART_H;
     // When user is interacting, some expensive sub-pane rendering can be skipped in future passes
     let sub_pane_height = if sub_pane_count > 0 {
         // Keep the main price chart valid even when many sub-panes are enabled
@@ -3313,12 +3313,21 @@ pub(super) fn draw_chart(
     price_min -= padding;
     price_max += padding;
 
-    // Vertical pan + zoom
-    let range = price_max - price_min;
-    let centre = (price_max + price_min) * 0.5 + chart.price_pan;
-    let half = range * 0.5 / chart.price_zoom;
-    price_min = centre - half;
-    price_max = centre + half;
+    // Vertical camera. In manual/free-look mode the camera's explicit price
+    // center/span is authoritative; do not reconstruct it through legacy
+    // price_pan/price_zoom clamps. This is what lets body-drag behave like
+    // TradingView: the visible price window can be panned 1:1 and can cross
+    // through zero into negative values for penny stocks/indicators.
+    if let Some((camera_min, camera_max)) = chart.visible_price_range() {
+        price_min = camera_min;
+        price_max = camera_max;
+    } else {
+        let range = price_max - price_min;
+        let centre = (price_max + price_min) * 0.5 + chart.price_pan;
+        let half = range * 0.5 / chart.price_zoom.max(f64::EPSILON);
+        price_min = centre - half;
+        price_max = centre + half;
+    }
 
     if (price_max - price_min).abs() < f64::EPSILON {
         return;

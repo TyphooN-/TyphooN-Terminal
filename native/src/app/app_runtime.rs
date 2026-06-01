@@ -15187,6 +15187,38 @@ impl eframe::App for TyphooNApp {
             let show_ehlers_roof = self.show_ehlers_roof;
             let sl_price = self.sl_price;
             let tp_price = self.tp_price;
+            let active_sub_pane_count = [
+                show_rsi,
+                show_fisher,
+                show_macd,
+                show_volume_pane,
+                show_stochastic,
+                show_adx,
+                show_cci,
+                show_williams_r,
+                show_obv,
+                show_momentum,
+                show_cmo,
+                show_qstick,
+                show_disparity,
+                show_bop,
+                show_stddev,
+                show_mfi,
+                show_trix,
+                show_ppo,
+                show_ultosc,
+                show_stochrsi,
+                show_var_oscillator,
+                show_better_volume,
+                show_ehlers_ebsw,
+                show_ehlers_cyber,
+                show_ehlers_cg,
+                show_ehlers_roof,
+                self.show_squeeze,
+            ]
+            .into_iter()
+            .filter(|enabled| *enabled)
+            .count() as u8;
 
             if self.mtf_enabled {
                 // Filter to visible charts only
@@ -15305,10 +15337,11 @@ impl eframe::App for TyphooNApp {
                         chart.is_drawing_drag = false;
                         chart.is_scaling_price = false;
                         chart.drag_start = cell_body_resp.interact_pointer_pos();
-                        chart.begin_chart_camera_pan(
-                            cell_chart_body_rect.width(),
+                        let price_pane_h = chart_price_pane_height(
                             cell_chart_body_rect.height(),
+                            active_sub_pane_count,
                         );
+                        chart.begin_chart_camera_pan(cell_chart_body_rect.width(), price_pane_h);
                         self.user_interacting = true;
                     }
                     if cell_body_resp.dragged()
@@ -15317,10 +15350,14 @@ impl eframe::App for TyphooNApp {
                         && self.draw_mode == DrawMode::None
                     {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+                        let price_pane_h = chart_price_pane_height(
+                            cell_chart_body_rect.height(),
+                            active_sub_pane_count,
+                        );
                         chart.pan_chart_camera_pixels(
                             cell_body_resp.drag_delta(),
                             cell_chart_body_rect.width(),
-                            cell_chart_body_rect.height(),
+                            price_pane_h,
                         );
                         self.user_interacting = true;
                     }
@@ -15439,10 +15476,11 @@ impl eframe::App for TyphooNApp {
                         chart.is_drawing_drag = false;
                         chart.is_scaling_price = false;
                         chart.drag_start = resp.interact_pointer_pos();
-                        chart.begin_chart_camera_pan(
-                            chart_body_interact_rect.width(),
+                        let price_pane_h = chart_price_pane_height(
                             chart_body_interact_rect.height(),
+                            active_sub_pane_count,
                         );
+                        chart.begin_chart_camera_pan(chart_body_interact_rect.width(), price_pane_h);
                         self.user_interacting = true;
                     }
                     if resp.dragged()
@@ -15451,10 +15489,14 @@ impl eframe::App for TyphooNApp {
                         && !chart.is_scaling_price
                     {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+                        let price_pane_h = chart_price_pane_height(
+                            chart_body_interact_rect.height(),
+                            active_sub_pane_count,
+                        );
                         chart.pan_chart_camera_pixels(
                             resp.drag_delta(),
                             chart_body_interact_rect.width(),
-                            chart_body_interact_rect.height(),
+                            price_pane_h,
                         );
                         self.user_interacting = true;
                     }
