@@ -1068,36 +1068,52 @@ impl TyphooNApp {
         }
 
         if self.backfill_yahoo_chart_enabled && !fallback_timeframes.is_empty() {
-            let available_slots = queue_window
-                .saturating_sub(self.pending_yahoo_chart_fetches.len())
-                .min(batch_limit);
-            if available_slots > 0 {
-                let state = self.build_source_cache_state_map("yahoo-chart:");
-                let no_data = self
-                    .unresolvable_fetch_keys_by_broker
-                    .get("yahoo-chart")
-                    .cloned()
-                    .unwrap_or_default();
-                let mut cursor = self.kraken_equities_sync_cursor;
-                let candidates = select_alpaca_sync_workset_rotating(
-                    &symbols,
-                    &fallback_timeframes,
-                    &state,
-                    &focus_symbols,
-                    &no_data,
-                    &empty_backfill,
-                    &self.pending_yahoo_chart_fetches,
-                    available_slots,
-                    foreground_slots,
-                    scan_limit,
-                    &mut cursor,
-                    now_s,
-                    alpaca_sync_target_bars,
-                );
-                self.kraken_equities_sync_cursor = cursor;
-                for candidate in candidates {
-                    if self.queue_yahoo_chart_fetch(&candidate.symbol, &candidate.timeframe) {
-                        dispatched += 1;
+            if self.yahoo_chart_sync_pause_until_ts > chrono::Utc::now().timestamp() {
+                // Yahoo sync lane is on cooldown
+            } else {
+                let yahoo_queue_window = if full_tilt {
+                    YAHOO_CHART_FULL_TILT_QUEUE_WINDOW
+                } else {
+                    YAHOO_CHART_QUEUE_WINDOW
+                };
+                let yahoo_batch_limit = if full_tilt {
+                    YAHOO_CHART_FULL_TILT_BATCH_SIZE
+                } else {
+                    YAHOO_CHART_BATCH_SIZE
+                };
+                let yahoo_foreground_slots = if full_tilt { 2 } else { 1 };
+                let yahoo_scan_limit = if full_tilt { 1024 } else { 128 };
+                let available_slots = yahoo_queue_window
+                    .saturating_sub(self.pending_yahoo_chart_fetches.len())
+                    .min(yahoo_batch_limit);
+                if available_slots > 0 {
+                    let state = self.build_source_cache_state_map("yahoo-chart:");
+                    let no_data = self
+                        .unresolvable_fetch_keys_by_broker
+                        .get("yahoo-chart")
+                        .cloned()
+                        .unwrap_or_default();
+                    let mut cursor = self.kraken_equities_sync_cursor;
+                    let candidates = select_alpaca_sync_workset_rotating(
+                        &symbols,
+                        &fallback_timeframes,
+                        &state,
+                        &focus_symbols,
+                        &no_data,
+                        &empty_backfill,
+                        &self.pending_yahoo_chart_fetches,
+                        available_slots,
+                        yahoo_foreground_slots,
+                        yahoo_scan_limit,
+                        &mut cursor,
+                        now_s,
+                        alpaca_sync_target_bars,
+                    );
+                    self.kraken_equities_sync_cursor = cursor;
+                    for candidate in candidates {
+                        if self.queue_yahoo_chart_fetch(&candidate.symbol, &candidate.timeframe) {
+                            dispatched += 1;
+                        }
                     }
                 }
             }
@@ -1466,6 +1482,9 @@ impl TyphooNApp {
             return false;
         };
         if !self.backfill_yahoo_chart_enabled || !self.sync_timeframe_enabled(tf) {
+            return false;
+        }
+        if self.yahoo_chart_sync_pause_until_ts > chrono::Utc::now().timestamp() {
             return false;
         }
         if !yahoo_chart_supports_timeframe(tf) {

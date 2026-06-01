@@ -162,6 +162,32 @@ impl TyphooNApp {
                         }
                     });
                 });
+
+                let now = chrono::Utc::now().timestamp();
+                if self.kraken_equities_sync_pause_until_ts > now {
+                    ui.separator();
+                    ui.label(egui::RichText::new(format!(
+                        "Kraken equities sync paused for {}s: {}",
+                        self.kraken_equities_sync_pause_until_ts - now,
+                        self.kraken_equities_sync_pause_reason
+                    )).color(egui::Color32::from_rgb(231, 76, 60)).small());
+                }
+                if self.yahoo_chart_sync_pause_until_ts > now {
+                    ui.separator();
+                    ui.label(egui::RichText::new(format!(
+                        "Yahoo Chart sync paused for {}s: {}",
+                        self.yahoo_chart_sync_pause_until_ts - now,
+                        self.yahoo_chart_sync_pause_reason
+                    )).color(egui::Color32::from_rgb(231, 76, 60)).small());
+                }
+                if self.tastytrade_sync_pause_until_ts > now {
+                    ui.separator();
+                    ui.label(egui::RichText::new(format!(
+                        "tastytrade sync paused for {}s: {}",
+                        self.tastytrade_sync_pause_until_ts - now,
+                        self.tastytrade_sync_pause_reason
+                    )).color(egui::Color32::from_rgb(231, 76, 60)).small());
+                }
             });
         self.show_sync_status = show_sync_status;
         if sync_save_after {

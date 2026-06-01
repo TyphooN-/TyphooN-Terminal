@@ -41,6 +41,11 @@ pub(super) const TASTYTRADE_FULL_TILT_QUEUE_WINDOW: usize = 192;
 pub(super) const TASTYTRADE_FULL_TILT_BATCH_SIZE: usize = 96;
 pub(super) const TASTYTRADE_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 8192;
 
+pub(super) const YAHOO_CHART_QUEUE_WINDOW: usize = 12;
+pub(super) const YAHOO_CHART_BATCH_SIZE: usize = 1;
+pub(super) const YAHOO_CHART_FULL_TILT_QUEUE_WINDOW: usize = 24;
+pub(super) const YAHOO_CHART_FULL_TILT_BATCH_SIZE: usize = 2;
+
 /// Largest `MAX_BARS` value that can safely cross the MT5 demand.txt / MQL5
 /// boundary. This is a provider-maximum sentinel, not a local history target:
 /// the terminal asks the EA for everything the broker server can provide, then

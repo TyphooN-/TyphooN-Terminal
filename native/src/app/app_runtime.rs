@@ -13,6 +13,7 @@ fn is_routine_market_data_status(msg: &str) -> bool {
 
     (msg.starts_with("Kraken ") || msg.starts_with("Alpaca ")) && routine_progress
         || msg.starts_with("CryptoCompare backfill ")
+        || msg.contains("Yahoo Chart HTTP 429")
         // Once the iapi back-off is armed, late-arriving dispatches that
         // race the gate come back with this prefix. The first arm already
         // produced a tracing::warn at the engine layer, so the user-log
@@ -1508,8 +1509,16 @@ impl eframe::App for TyphooNApp {
                         self.tastytrade_sync_pause_until_ts =
                             now + tastytrade_sync_backoff_secs(&e);
                         self.tastytrade_sync_pause_reason = e.clone();
-                    }
- else if e.contains("401") || e.contains("Unauthorized") || e.contains("403") {
+                    } else if e.contains("Yahoo Chart HTTP 429") {
+                        let pause = 300; // 5 minutes backoff on Yahoo rate limit
+                        if now + pause > self.yahoo_chart_sync_pause_until_ts {
+                            self.yahoo_chart_sync_pause_until_ts = now + pause;
+                            self.yahoo_chart_sync_pause_reason = e.clone();
+                            self.log.push_back(LogEntry::warn(format!(
+                                "Yahoo Chart rate limited — pausing fallback lane for 5m"
+                            )));
+                        }
+                    } else if e.contains("401") || e.contains("Unauthorized") || e.contains("403") {
                         if self.broker_connected {
                             self.broker_connected = false;
                             self.log.push_back(LogEntry::err(format!(

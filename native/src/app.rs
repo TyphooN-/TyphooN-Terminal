@@ -11751,6 +11751,8 @@ pub struct TyphooNApp {
     kraken_equity_universe_retry_after_ts: i64,
     kraken_equities_sync_pause_until_ts: i64,
     kraken_equities_sync_pause_reason: String,
+    yahoo_chart_sync_pause_until_ts: i64,
+    yahoo_chart_sync_pause_reason: String,
     heavy_sync_in_progress: bool,
     /// Tastytrade-cached symbol set (uppercased, parsed from detailed_stats keys
     /// with the `tastytrade:` prefix). Rebuilt alongside cached_mt5_symbols so
@@ -28575,6 +28577,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
             kraken_equity_universe_retry_after_ts: 0,
             kraken_equities_sync_pause_until_ts: 0,
             kraken_equities_sync_pause_reason: String::new(),
+            yahoo_chart_sync_pause_until_ts: 0,
+            yahoo_chart_sync_pause_reason: String::new(),
             cached_tastytrade_symbols: std::collections::HashSet::new(),
             cached_tastytrade_sync_state: std::collections::HashMap::new(),
             cached_tastytrade_sync_state_rev: None,
