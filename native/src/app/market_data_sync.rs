@@ -1,6 +1,36 @@
 use super::*;
 
 const ALPACA_BATCH_FETCH_MAX_SYMBOLS: usize = 50;
+const INTERACTIVE_ALPACA_FETCH_PERMITS: usize = 2;
+const INTERACTIVE_ALPACA_QUEUE_WINDOW: usize = 4;
+const INTERACTIVE_ALPACA_BATCH_SIZE: usize = 2;
+const INTERACTIVE_ALPACA_FOREGROUND_RESERVE: usize = 1;
+pub(super) const INTERACTIVE_TOTAL_PENDING_FETCH_CAP: usize = 64;
+
+fn interaction_throttled_alpaca_capacity(mut capacity: AlpacaSyncCapacity) -> AlpacaSyncCapacity {
+    capacity.fetch_permits = capacity.fetch_permits.min(INTERACTIVE_ALPACA_FETCH_PERMITS);
+    capacity.queue_window = capacity.queue_window.min(INTERACTIVE_ALPACA_QUEUE_WINDOW);
+    capacity.batch_size = capacity.batch_size.min(INTERACTIVE_ALPACA_BATCH_SIZE);
+    capacity.foreground_reserve = capacity
+        .foreground_reserve
+        .min(INTERACTIVE_ALPACA_FOREGROUND_RESERVE);
+    capacity
+}
+
+pub(super) fn background_retry_dispatch_allowed(
+    user_interacting: bool,
+    pending_fetches: usize,
+) -> bool {
+    !user_interacting && pending_fetches < INTERACTIVE_TOTAL_PENDING_FETCH_CAP
+}
+
+fn background_market_data_fetch_allowed(
+    focus: bool,
+    user_interacting: bool,
+    pending_fetches: usize,
+) -> bool {
+    focus || (!user_interacting && pending_fetches < INTERACTIVE_TOTAL_PENDING_FETCH_CAP)
+}
 
 pub(super) fn normalize_kraken_equity_symbol_list<'a, I>(symbols: I) -> Vec<String>
 where
@@ -1241,15 +1271,11 @@ impl TyphooNApp {
             capacity.batch_size = capacity.batch_size.max(ALPACA_FULL_TILT_BATCH_SIZE);
             capacity.foreground_reserve = capacity.foreground_reserve.max(8);
         }
-        if self.user_interacting && !self.full_tilt_sync_enabled() {
-            // Keep chart pan/zoom responsive during large historical syncs.  Do not
-            // stop syncing entirely; just narrow new queue pressure while existing
-            // in-flight requests drain naturally. Full-tilt AC mode intentionally
-            // keeps pressure up when the user asked to spend the hardware.
-            capacity.fetch_permits = capacity.fetch_permits.min(2);
-            capacity.queue_window = capacity.queue_window.min(4);
-            capacity.batch_size = capacity.batch_size.min(2);
-            capacity.foreground_reserve = capacity.foreground_reserve.min(1);
+        if self.user_interacting {
+            // Full-tilt means "use the machine when idle", not "let background
+            // sync steal the drag loop". Clamp new Alpaca pressure while the
+            // user is actively panning/zooming; in-flight requests drain naturally.
+            capacity = interaction_throttled_alpaca_capacity(capacity);
         }
         capacity
     }
@@ -1357,6 +1383,13 @@ impl TyphooNApp {
                 .replace('/', "")
                 .eq_ignore_ascii_case(&symbol)
         });
+        if !background_market_data_fetch_allowed(
+            focus,
+            self.user_interacting,
+            self.total_pending_market_data_fetches(),
+        ) {
+            return false;
+        }
         let Some(_) = classify_alpaca_sync_candidate(
             now_s,
             &symbol,
@@ -2199,5 +2232,53 @@ mod tests {
             normalize_kraken_equity_symbol_list(raw.iter()),
             vec!["TNDM".to_string(), "WOK".to_string()]
         );
+    }
+
+    #[test]
+    fn interaction_throttle_overrides_full_tilt_alpaca_capacity() {
+        let full_tilt = AlpacaSyncCapacity {
+            fetch_permits: 64,
+            queue_window: 256,
+            batch_size: 192,
+            foreground_reserve: 8,
+        };
+        let throttled = interaction_throttled_alpaca_capacity(full_tilt);
+
+        assert_eq!(throttled.fetch_permits, INTERACTIVE_ALPACA_FETCH_PERMITS);
+        assert_eq!(throttled.queue_window, INTERACTIVE_ALPACA_QUEUE_WINDOW);
+        assert_eq!(throttled.batch_size, INTERACTIVE_ALPACA_BATCH_SIZE);
+        assert_eq!(
+            throttled.foreground_reserve,
+            INTERACTIVE_ALPACA_FOREGROUND_RESERVE
+        );
+    }
+
+    #[test]
+    fn background_retry_dispatch_stops_when_user_or_pending_pressure_is_high() {
+        assert!(background_retry_dispatch_allowed(false, 0));
+        assert!(background_retry_dispatch_allowed(
+            false,
+            INTERACTIVE_TOTAL_PENDING_FETCH_CAP - 1
+        ));
+        assert!(!background_retry_dispatch_allowed(
+            false,
+            INTERACTIVE_TOTAL_PENDING_FETCH_CAP
+        ));
+        assert!(!background_retry_dispatch_allowed(true, 0));
+    }
+
+    #[test]
+    fn background_fetch_backpressure_preserves_focus_symbols() {
+        assert!(!background_market_data_fetch_allowed(
+            false,
+            false,
+            INTERACTIVE_TOTAL_PENDING_FETCH_CAP
+        ));
+        assert!(background_market_data_fetch_allowed(true, true, 0));
+        assert!(background_market_data_fetch_allowed(
+            true,
+            false,
+            INTERACTIVE_TOTAL_PENDING_FETCH_CAP * 10
+        ));
     }
 }

@@ -713,7 +713,10 @@ impl TyphooNApp {
         if !self.broker_connected
             || (!self.alpaca_full_bar_sync_enabled && !self.backfill_alpaca_kraken_equities_enabled)
             || self.alpaca_retry_queue.is_empty()
-            || self.user_interacting
+            || !super::market_data_sync::background_retry_dispatch_allowed(
+                self.user_interacting,
+                self.total_pending_market_data_fetches(),
+            )
         {
             return;
         }

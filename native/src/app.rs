@@ -95,7 +95,9 @@ use self::bar_sync::*;
 use self::broker_fetch::*;
 use self::fallback_bars::*;
 use self::kraken_sync::*;
-use self::market_data_sync::normalize_kraken_equity_symbol_list;
+use self::market_data_sync::{
+    INTERACTIVE_TOTAL_PENDING_FETCH_CAP, normalize_kraken_equity_symbol_list,
+};
 use self::sync_config::*;
 use self::sync_workset::*;
 use self::tastytrade_sync::*;
