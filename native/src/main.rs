@@ -143,7 +143,10 @@ fn main() -> eframe::Result {
         .unwrap_or(4);
     let on_ac_power = ac_power_available();
     let default_workers = if on_ac_power {
-        detected_cpus.saturating_sub(1).max(2)
+        // Full-catalog sync can keep every Tokio worker busy with HTTP, JSON,
+        // SQLite, and decompression. Reserving only one logical CPU on AC/max
+        // mode leaves too little scheduler headroom for egui/wgpu + compositor.
+        detected_cpus.saturating_sub(2).max(2)
     } else {
         (detected_cpus / 2).clamp(2, 8)
     };

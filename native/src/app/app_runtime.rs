@@ -26,6 +26,14 @@ fn should_emit_alpaca_retry_queue_log(queue_len: usize) -> bool {
     queue_len > 0 && queue_len.is_multiple_of(100)
 }
 
+fn is_routine_news_progress(msg: &str) -> bool {
+    msg.starts_with("News ")
+        && (msg.contains(": base asset ")
+            || msg.contains(": cached/fresh — skipped network")
+            || msg.contains(" cached (")
+            || msg.contains(" failed:"))
+}
+
 const HEAVY_SYNC_PENDING_FETCH_THRESHOLD: usize = 32;
 const HEAVY_SYNC_DEFERRED_CHART_THRESHOLD: usize = 4;
 
@@ -1262,8 +1270,17 @@ impl eframe::App for TyphooNApp {
         // Cap drain per frame so a flood of messages can't stall the render thread.
         // Anything left over waits for next frame; we repaint immediately in that case.
         let mut msgs_drained = 0usize;
-        let broker_drain_max = if self.user_interacting { 24 } else { 64 };
+        let broker_drain_max = if self.user_interacting { 16 } else { 48 };
+        let broker_drain_started = std::time::Instant::now();
+        let broker_drain_budget = if self.user_interacting {
+            std::time::Duration::from_millis(3)
+        } else if self.heavy_sync_in_progress {
+            std::time::Duration::from_millis(5)
+        } else {
+            std::time::Duration::from_millis(8)
+        };
         while msgs_drained < broker_drain_max
+            && broker_drain_started.elapsed() < broker_drain_budget
             && let Ok(msg) = self.broker_rx.try_recv()
         {
             msgs_drained += 1;
@@ -7714,7 +7731,11 @@ impl eframe::App for TyphooNApp {
                             }
                         }
                     }
-                    self.log.push_back(LogEntry::info(msg.clone()));
+                    if msg.starts_with("Fundamentals progress:") || is_routine_news_progress(msg) {
+                        tracing::debug!("{}", msg);
+                    } else {
+                        self.log.push_back(LogEntry::info(msg.clone()));
+                    }
                 }
                 BrokerMsg::SymbolSuggestions(results) => {
                     // Merge broker search results into autocomplete (if dropdown still visible)
@@ -8061,11 +8082,16 @@ impl eframe::App for TyphooNApp {
         }
         // If we hit the drain cap there are more messages waiting — repaint
         // immediately to process the next batch rather than waiting on the idle tick.
-        if msgs_drained >= broker_drain_max {
+        if msgs_drained >= broker_drain_max || broker_drain_started.elapsed() >= broker_drain_budget
+        {
             // Throttle live Kraken WS forming-bar updates to ~10 fps.
             // Full immediate repaint is only needed for closed bars or user action.
             // The forming_bar_dirty flag on ChartState is the signal from the WS path.
-            ctx.request_repaint_after(std::time::Duration::from_millis(90));
+            ctx.request_repaint_after(if self.user_interacting {
+                std::time::Duration::from_millis(1)
+            } else {
+                std::time::Duration::from_millis(16)
+            });
         }
 
         // ── drain web client commands ────────────────────────────────────
@@ -14635,6 +14661,7 @@ impl eframe::App for TyphooNApp {
                     if let Some(chart) = self.charts.get_mut(self.active_tab) {
                         let pct = (scroll_delta * 0.002).clamp(-0.08, 0.08);
                         chart.price_zoom = (chart.price_zoom * (1.0 + pct as f64)).clamp(0.1, 20.0);
+                        chart.manual_view_override = true;
                     }
                 } else if on_chart_body {
                     let ctrl_held = ctx.input(|i| i.modifiers.ctrl);
@@ -14643,6 +14670,7 @@ impl eframe::App for TyphooNApp {
                         if let Some(chart) = self.charts.get_mut(self.active_tab) {
                             let pct = (scroll_delta * 0.002).clamp(-0.08, 0.08);
                             chart.price_zoom = (chart.price_zoom * (1.0 + pct as f64)).clamp(0.1, 20.0);
+                            chart.manual_view_override = true;
                         }
                     } else {
                         // Scroll on chart → horizontal zoom (time axis, progressive)
@@ -15264,6 +15292,7 @@ impl eframe::App for TyphooNApp {
                             let zoom_delta = -dy as f64 * 0.003;
                             chart.price_zoom =
                                 (chart.price_zoom * (1.0 + zoom_delta)).clamp(0.1, 20.0);
+                            chart.manual_view_override = true;
                         }
                     }
                     if cell_scale_resp.double_clicked() {
@@ -15398,6 +15427,7 @@ impl eframe::App for TyphooNApp {
                             let zoom_delta = -dy as f64 * 0.003;
                             chart.price_zoom =
                                 (chart.price_zoom * (1.0 + zoom_delta)).clamp(0.1, 20.0);
+                            chart.manual_view_override = true;
                             chart.is_dragging = false;
                             self.user_interacting = true;
                         }
@@ -17714,6 +17744,16 @@ impl eframe::App for TyphooNApp {
         });
         if self.user_interacting {
             ctx.request_repaint();
+        } else if self.heavy_sync_in_progress {
+            let frame_ms = if idle_fps_cap > 0 {
+                (1000 / idle_fps_cap.max(1)).max(1)
+            } else {
+                // Keep visible progress/animations fluid under sync pressure while
+                // avoiding unconstrained native-refresh repaint competing with the
+                // background sync workers and the compositor.
+                16
+            };
+            ctx.request_repaint_after(std::time::Duration::from_millis(frame_ms));
         } else if idle_fps_cap > 0 {
             let frame_ms = (1000 / idle_fps_cap.max(1)).max(1);
             ctx.request_repaint_after(std::time::Duration::from_millis(frame_ms));
@@ -17765,6 +17805,20 @@ mod tests {
         assert!(!should_emit_alpaca_retry_queue_log(99));
         assert!(should_emit_alpaca_retry_queue_log(100));
         assert!(should_emit_alpaca_retry_queue_log(200));
+    }
+
+    #[test]
+    fn routine_news_progress_filters_scope_scrape_noise() {
+        assert!(is_routine_news_progress(
+            "News ETH/USD: base asset ETH already fetched — skipped network (2/42)"
+        ));
+        assert!(is_routine_news_progress(
+            "News AAPL: cached/fresh — skipped network (7/42)"
+        ));
+        assert!(is_routine_news_progress("News MSFT: 12 cached (8/42)"));
+        assert!(!is_routine_news_progress(
+            "News scrape complete: 41 OK, 1 failed of 42 MTF Grid symbol(s)"
+        ));
     }
 
     #[test]

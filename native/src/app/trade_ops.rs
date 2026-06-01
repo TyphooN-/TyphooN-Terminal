@@ -752,7 +752,8 @@ impl TyphooNApp {
         // and eliminates O(n) linear .find() after every success.
         let mut redispatched = 0usize;
         let mut i = 0;
-        while i < self.alpaca_retry_queue.len() {
+        let redispatch_cap = if self.user_interacting { 24 } else { 96 };
+        while i < self.alpaca_retry_queue.len() && redispatched < redispatch_cap {
             if self.alpaca_retry_queue[i].next_attempt > now {
                 i += 1;
                 continue;
@@ -771,11 +772,21 @@ impl TyphooNApp {
             return;
         }
         self.alpaca_retry_mark_dirty();
-        self.log.push_back(LogEntry::info(format!(
+        tracing::debug!(
             "Alpaca retry: re-dispatched {} symbol(s) ({} in queue)",
             redispatched,
             self.alpaca_retry_queue.len()
-        )));
+        );
+        if redispatched >= redispatch_cap
+            || (self.alpaca_retry_queue.len() > 0
+                && self.alpaca_retry_queue.len().is_multiple_of(100))
+        {
+            self.log.push_back(LogEntry::info(format!(
+                "Alpaca retry: re-dispatched {} symbol(s) ({} in queue)",
+                redispatched,
+                self.alpaca_retry_queue.len()
+            )));
+        }
     }
 
     /// Format a Unix timestamp as a relative staleness label for UI display.

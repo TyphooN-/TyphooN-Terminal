@@ -33394,6 +33394,19 @@ mod tests {
     }
 
     #[test]
+    fn chart_horizontal_zoom_marks_manual_view_override() {
+        let mut chart = ChartState::new("WOK", Timeframe::H4);
+        chart.bars = make_bars(500);
+        chart.visible_bars = 200;
+        chart.view_offset = 499;
+
+        TyphooNApp::handle_zoom(&mut chart, 60.0);
+
+        assert!(chart.visible_bars < 200);
+        assert!(chart.manual_view_override);
+    }
+
+    #[test]
     fn chart_body_drag_from_start_pans_time_and_price() {
         let mut chart = ChartState::new("TEST", Timeframe::H4);
         chart.bars = make_bars(500);
@@ -33441,6 +33454,37 @@ mod tests {
 
         assert_eq!(chart.view_offset, 299);
         assert_eq!(chart.price_pan, 2.0);
+        assert!(chart.manual_view_override);
+    }
+
+    #[test]
+    fn chart_body_vertical_pan_uses_zoomed_visible_price_span() {
+        let mut chart = ChartState::new("WOK", Timeframe::H4);
+        chart.bars = make_bars(500);
+        chart.visible_bars = 100;
+        chart.view_offset = 499;
+        chart.drag_start_offset = chart.view_offset;
+        chart.drag_start_ppan = 0.0;
+        chart.price_zoom = 10.0;
+
+        TyphooNApp::handle_chart_body_drag_from_start(
+            &mut chart,
+            egui::vec2(0.0, 120.0),
+            800.0,
+            400.0,
+        );
+
+        let (si, ei) = chart.visible_range();
+        let slice = &chart.bars[si..ei];
+        let hi = slice.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+        let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+        let expected = (hi - lo) / chart.price_zoom * 120.0 / 400.0;
+        assert!(
+            (chart.price_pan - expected).abs() < 1e-9,
+            "zoomed vertical pan should move by visible price span; got {}, expected {}",
+            chart.price_pan,
+            expected
+        );
         assert!(chart.manual_view_override);
     }
 
