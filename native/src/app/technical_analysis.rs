@@ -3127,7 +3127,10 @@ pub(super) fn draw_chart(
 ) {
     // ── Performance early-out for live Kraken WS updates ───────────────────
     // Fast path: if nothing changed since last render, skip everything.
-    if !chart.forming_bar_dirty
+    if !chart.manual_view_override
+        && !chart.is_dragging
+        && !chart.is_scaling_price
+        && !chart.forming_bar_dirty
         && chart.visible_bars_gen == chart.last_rendered_gen
         && chart.last_visible_bar_ts == chart.last_rendered_bar_ts
         && chart.visible_bars_gen > 0
@@ -3148,7 +3151,7 @@ pub(super) fn draw_chart(
     // ── background ──────────────────────────────────────────────────────────
     painter.rect_filled(rect, 0.0, BG);
 
-    let (start_idx, end_idx) = chart.visible_range();
+    let (start_idx, end_idx, first_bar_slot, visible_slot_count) = chart.visible_slot_window();
     let bars = &chart.bars[start_idx..end_idx];
 
     if bars.is_empty() {
@@ -3358,8 +3361,13 @@ pub(super) fn draw_chart(
     };
 
     // ── bar width ────────────────────────────────────────────────────────────
-    let n_bars = bars.len() as f32;
+    // Horizontal camera: visible_slot_count is the full virtual viewport, while
+    // `bars` is only the intersecting real-data slice. first_bar_slot offsets
+    // the real bars inside the viewport so panning beyond either edge produces
+    // real empty chart space instead of stretching/clamping candles.
+    let n_bars = visible_slot_count.max(1) as f32;
     let bar_w = (chart_rect.width() / n_bars).max(1.0);
+    let data_left = chart_rect.left() + first_bar_slot * bar_w;
     let candle_w = (bar_w * 0.7).max(1.0);
     let half_body = candle_w * 0.5;
     let render_step = chart_render_sample_step(bars.len(), chart_rect.width());
@@ -3397,8 +3405,8 @@ pub(super) fn draw_chart(
                             Some(v) => v,
                             None => continue,
                         };
-                        let x1 = chart_rect.left() + bs as f32 * bar_w;
-                        let x2 = (chart_rect.left() + i as f32 * bar_w).min(chart_rect.right());
+                        let x1 = data_left + bs as f32 * bar_w;
+                        let x2 = (data_left + i as f32 * bar_w).min(chart_rect.right());
                         painter.rect_filled(
                             egui::Rect::from_min_max(
                                 egui::pos2(x1, chart_rect.top()),
@@ -3446,7 +3454,7 @@ pub(super) fn draw_chart(
     // ── grid lines (time) ────────────────────────────────────────────────────
     let time_step = ((80.0 / bar_w) as usize).max(1);
     for (rel_idx, bar) in bars.iter().enumerate().step_by(time_step) {
-        let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+        let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
         painter.line_segment(
             [
                 egui::pos2(x, chart_rect.top()),
@@ -3472,7 +3480,7 @@ pub(super) fn draw_chart(
                 continue;
             }
             if let (Some(sma_v), Some(kama_v)) = (chart.sma200[abs_idx], chart.kama[abs_idx]) {
-                let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let y_sma = price_to_y(sma_v);
                 let y_kama = price_to_y(kama_v);
                 let (top, bot) = if y_sma < y_kama {
@@ -3513,7 +3521,7 @@ pub(super) fn draw_chart(
                 continue;
             }
             if let (Some(u), Some(l)) = (chart.bb_upper[abs_idx], chart.bb_lower[abs_idx]) {
-                let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let yu = price_to_y(u);
                 let yl = price_to_y(l);
                 if yu >= chart_rect.top() && yl <= chart_rect.bottom() {
@@ -3535,6 +3543,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.bb_upper,
             start_idx,
@@ -3546,6 +3555,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.bb_lower,
             start_idx,
@@ -3557,6 +3567,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.bb_mid,
             start_idx,
@@ -3585,7 +3596,7 @@ pub(super) fn draw_chart(
                     continue;
                 }
                 if let (Some(u), Some(l)) = (upper[abs_idx], lower[abs_idx]) {
-                    let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                    let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                     let yu = price_to_y(u);
                     let yl = price_to_y(l);
                     let (top, bot) = if yu < yl { (yu, yl) } else { (yl, yu) };
@@ -3606,6 +3617,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.vwap,
             start_idx,
@@ -3619,6 +3631,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.vwap_upper1,
             start_idx,
@@ -3630,6 +3643,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.vwap_lower1,
             start_idx,
@@ -3641,6 +3655,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.vwap_upper2,
             start_idx,
@@ -3652,6 +3667,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.vwap_lower2,
             start_idx,
@@ -3675,7 +3691,7 @@ pub(super) fn draw_chart(
                 continue;
             }
             if let Some(v) = chart.supertrend[abs_idx] {
-                let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let y = price_to_y(v);
                 let is_bull = chart.supertrend_bull.get(abs_idx).copied().unwrap_or(true);
                 if is_bull != prev_bull && points.len() > 1 {
@@ -3710,7 +3726,7 @@ pub(super) fn draw_chart(
             if let (Some(u), Some(l)) =
                 (chart.donchian_upper[abs_idx], chart.donchian_lower[abs_idx])
             {
-                let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let yu = price_to_y(u);
                 let yl = price_to_y(l);
                 if yu <= chart_rect.bottom() && yl >= chart_rect.top() {
@@ -3728,6 +3744,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.donchian_upper,
             start_idx,
@@ -3739,6 +3756,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.donchian_lower,
             start_idx,
@@ -3760,7 +3778,7 @@ pub(super) fn draw_chart(
             }
             if let (Some(u), Some(l)) = (chart.keltner_upper[abs_idx], chart.keltner_lower[abs_idx])
             {
-                let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let yu = price_to_y(u);
                 let yl = price_to_y(l);
                 if yu <= chart_rect.bottom() && yl >= chart_rect.top() {
@@ -3778,6 +3796,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.keltner_upper,
             start_idx,
@@ -3789,6 +3808,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.keltner_lower,
             start_idx,
@@ -3800,6 +3820,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.keltner_mid,
             start_idx,
@@ -3823,7 +3844,7 @@ pub(super) fn draw_chart(
                 chart.regression_upper[abs_idx],
                 chart.regression_lower[abs_idx],
             ) {
-                let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let yu = price_to_y(u);
                 let yl = price_to_y(l);
                 if yu <= chart_rect.bottom() && yl >= chart_rect.top() {
@@ -3841,6 +3862,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.regression_upper,
             start_idx,
@@ -3852,6 +3874,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.regression_lower,
             start_idx,
@@ -3863,6 +3886,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.regression_mid,
             start_idx,
@@ -3882,7 +3906,7 @@ pub(super) fn draw_chart(
                 continue;
             }
             if let (Some(a), Some(b)) = (chart.ichi_span_a[abs_idx], chart.ichi_span_b[abs_idx]) {
-                let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let ya = price_to_y(a);
                 let yb = price_to_y(b);
                 let color = if a >= b {
@@ -3906,6 +3930,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.ichi_tenkan,
             start_idx,
@@ -3917,6 +3942,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.ichi_kijun,
             start_idx,
@@ -3928,6 +3954,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.ichi_span_a,
             start_idx,
@@ -3939,6 +3966,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.ichi_span_b,
             start_idx,
@@ -3955,6 +3983,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.sma200,
             start_idx,
@@ -3968,6 +3997,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.sma100,
             start_idx,
@@ -3982,6 +4012,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.kama,
             start_idx,
@@ -4004,7 +4035,7 @@ pub(super) fn draw_chart(
             for &(bar_idx, sma_val) in projected {
                 if bar_idx >= start_idx && bar_idx < end_idx {
                     let rel = bar_idx - start_idx;
-                    let x = chart_rect.left() + (rel as f32 + 0.5) * bar_w;
+                    let x = data_left + (rel as f32 + 0.5) * bar_w;
                     let y = price_to_y(sma_val);
                     if y >= chart_rect.top() && y <= chart_rect.bottom() {
                         let pt = egui::pos2(x, y);
@@ -4039,7 +4070,7 @@ pub(super) fn draw_chart(
             for &(bar_idx, kama_val) in projected {
                 if bar_idx >= start_idx && bar_idx < end_idx {
                     let rel = bar_idx - start_idx;
-                    let x = chart_rect.left() + (rel as f32 + 0.5) * bar_w;
+                    let x = data_left + (rel as f32 + 0.5) * bar_w;
                     let y = price_to_y(kama_val);
                     if y >= chart_rect.top() && y <= chart_rect.bottom() {
                         let pt = egui::pos2(x, y);
@@ -4058,6 +4089,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.ema21,
             start_idx,
@@ -4071,6 +4103,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.wma,
             start_idx,
@@ -4084,6 +4117,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.hma,
             start_idx,
@@ -4103,7 +4137,7 @@ pub(super) fn draw_chart(
             let upper_price = htf_open + atr_val;
             let lower_price = htf_open - atr_val;
             let x_start = if line_start_idx >= start_idx {
-                chart_rect.left() + ((line_start_idx - start_idx) as f32) * bar_w
+                data_left + ((line_start_idx - start_idx) as f32) * bar_w
             } else {
                 chart_rect.left()
             }
@@ -4138,7 +4172,7 @@ pub(super) fn draw_chart(
                 continue;
             }
             if let Some(sar) = chart.psar[abs_idx] {
-                let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let y = price_to_y(sar);
                 if y >= chart_rect.top() && y <= chart_rect.bottom() {
                     painter.circle_filled(egui::pos2(x, y), 2.0, SAR_COL);
@@ -4152,6 +4186,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.ehlers_ss,
             start_idx,
@@ -4165,6 +4200,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.ehlers_decycler,
             start_idx,
@@ -4178,6 +4214,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.ehlers_itl,
             start_idx,
@@ -4191,6 +4228,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.ehlers_mama,
             start_idx,
@@ -4202,6 +4240,7 @@ pub(super) fn draw_chart(
         draw_indicator_line(
             painter,
             chart_rect,
+            data_left,
             bars,
             &chart.ehlers_fama,
             start_idx,
@@ -4336,7 +4375,7 @@ pub(super) fn draw_chart(
         let mut last_low_label_x = f32::NEG_INFINITY;
         for (rel_idx, bar) in bars.iter().enumerate() {
             let abs_idx = start_idx + rel_idx;
-            let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+            let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
             if abs_idx < chart.fractal_up.len() && chart.fractal_up[abs_idx] {
                 let y = price_to_y(bar.high) - 8.0;
                 if y >= chart_rect.top() && x - last_high_label_x >= min_structure_label_gap {
@@ -4407,7 +4446,7 @@ pub(super) fn draw_chart(
             let screen_pts = pts.map(|(idx, price)| {
                 if idx >= start_idx && idx < end_idx {
                     Some(egui::pos2(
-                        chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w,
+                        data_left + ((idx - start_idx) as f32 + 0.5) * bar_w,
                         price_to_y(price),
                     ))
                 } else {
@@ -4485,7 +4524,7 @@ pub(super) fn draw_chart(
         for &(idx, zh, zl, status) in &chart.demand_zones {
             if idx < end_idx {
                 let x_start = if idx >= start_idx {
-                    chart_rect.left() + ((idx - start_idx) as f32) * bar_w
+                    data_left + ((idx - start_idx) as f32) * bar_w
                 } else {
                     chart_rect.left()
                 };
@@ -4531,7 +4570,7 @@ pub(super) fn draw_chart(
         for &(idx, zh, zl, status) in &chart.supply_zones {
             if idx < end_idx {
                 let x_start = if idx >= start_idx {
-                    chart_rect.left() + ((idx - start_idx) as f32) * bar_w
+                    data_left + ((idx - start_idx) as f32) * bar_w
                 } else {
                     chart_rect.left()
                 };
@@ -4592,7 +4631,7 @@ pub(super) fn draw_chart(
         for i in 1..n.saturating_sub(1) {
             let prev = &bars[i - 1];
             let next = &bars[i + 1];
-            let x_start = chart_rect.left() + ((i + 1) as f32 + 0.5) * bar_w;
+            let x_start = data_left + ((i + 1) as f32 + 0.5) * bar_w;
             let x_end = chart_rect.right();
             let scan_start = (i + 2).min(n);
             // Bullish FVG: bar[i+1].low > bar[i-1].high (gap up)
@@ -4753,11 +4792,11 @@ pub(super) fn draw_chart(
         zones.reverse();
 
         for ob in &zones {
-            let x_start = chart_rect.left() + (ob.bar_idx as f32 + 0.5) * bar_w;
+            let x_start = data_left + (ob.bar_idx as f32 + 0.5) * bar_w;
             let x_end = if ob.end_idx >= bars.len() {
                 chart_rect.right()
             } else {
-                chart_rect.left() + (ob.end_idx as f32 + 0.5) * bar_w
+                data_left + (ob.end_idx as f32 + 0.5) * bar_w
             };
             if x_end < chart_rect.left() || x_start > chart_rect.right() {
                 continue;
@@ -4842,9 +4881,9 @@ pub(super) fn draw_chart(
         // Draw swing line
         if let Some((_high, _low, hi_idx, lo_idx)) = chart.auto_fib_swing {
             if hi_idx >= start_idx && hi_idx < end_idx && lo_idx >= start_idx && lo_idx < end_idx {
-                let x1 = chart_rect.left() + ((hi_idx - start_idx) as f32 + 0.5) * bar_w;
+                let x1 = data_left + ((hi_idx - start_idx) as f32 + 0.5) * bar_w;
                 let y1 = price_to_y(_high);
-                let x2 = chart_rect.left() + ((lo_idx - start_idx) as f32 + 0.5) * bar_w;
+                let x2 = data_left + ((lo_idx - start_idx) as f32 + 0.5) * bar_w;
                 let y2 = price_to_y(_low);
                 painter.line_segment(
                     [egui::pos2(x1, y1), egui::pos2(x2, y2)],
@@ -4877,7 +4916,7 @@ pub(super) fn draw_chart(
             // tens of thousands of sub-pixel vertices only adds tessellation work.
             let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / render_step + 1);
             for (rel_idx, bar) in bars.iter().enumerate().step_by(render_step) {
-                let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let y = price_to_y(bar.close);
                 if y >= chart_rect.top() && y <= chart_rect.bottom() {
                     points.push(egui::pos2(x, y));
@@ -4890,7 +4929,7 @@ pub(super) fn draw_chart(
         ChartType::OhlcBars => {
             // OHLC Bars: vertical wick + left tick (open) + right tick (close)
             for (rel_idx, bar) in bars.iter().enumerate().step_by(render_step) {
-                let cx = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let cx = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let y_open = price_to_y(bar.open);
                 let y_high = price_to_y(bar.high);
                 let y_low = price_to_y(bar.low);
@@ -4930,7 +4969,7 @@ pub(super) fn draw_chart(
             // Volume heatmap uses pre-computed vol_avg_20 from ChartState (no per-frame alloc)
             let vol_avg = &chart.vol_avg_20;
             for (rel_idx, bar) in render_bars.iter().enumerate().step_by(render_step) {
-                let cx = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let cx = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let y_open = price_to_y(bar.open);
                 let y_high = price_to_y(bar.high);
                 let y_low = price_to_y(bar.low);
@@ -5022,8 +5061,8 @@ pub(super) fn draw_chart(
     // Position flush to the right edge of the chart (no reserved slot in bar_w math,
     // so we clamp into chart_rect instead of reserving whitespace and shifting all bars).
     if let Some(last) = bars.last() {
-        let next_x = (chart_rect.right() - half_body - 2.0).max(chart_rect.left() + bar_w);
-        if next_x > chart_rect.left() + bar_w {
+        let next_x = (chart_rect.right() - half_body - 2.0).max(data_left + bar_w);
+        if next_x > data_left + bar_w {
             if chart.ext_active && chart.ext_high > 0.0 {
                 // Real extended hours candle (magenta)
                 let ext_col = egui::Color32::from_rgb(200, 50, 200); // Magenta
@@ -6457,7 +6496,7 @@ pub(super) fn draw_chart(
             }
             for (bi, pr) in &cps {
                 if *bi >= start_idx && *bi < end_idx {
-                    let x = chart_rect.left() + ((*bi - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((*bi - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*pr);
                     if y >= chart_rect.top() && y <= chart_rect.bottom() {
                         let r = egui::Rect::from_center_size(
@@ -6492,7 +6531,7 @@ pub(super) fn draw_chart(
                     }
                     let cmp_pct = (cmp[abs_idx].close - cmp_base) / cmp_base;
                     let mapped_price = base_close * (1.0 + cmp_pct);
-                    let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                    let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                     let y = price_to_y(mapped_price);
                     let pt = egui::pos2(x, y.clamp(chart_rect.top(), chart_rect.bottom()));
                     if let Some(pp) = prev_pt {
@@ -6572,7 +6611,7 @@ pub(super) fn draw_chart(
         .take_while(|m| m.bar_idx < end_idx)
     {
         let rel = tm.bar_idx - start_idx;
-        let x = chart_rect.left() + (rel as f32 + 0.5) * bar_w;
+        let x = data_left + (rel as f32 + 0.5) * bar_w;
         let y = price_to_y(tm.price);
         if y < chart_rect.top() || y > chart_rect.bottom() {
             continue;
@@ -6880,12 +6919,12 @@ pub(super) fn draw_chart(
             Drawing::TrendLine { p1, p2, color } => {
                 // Map bar indices to x positions
                 let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                    Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
                 let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                    Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
@@ -6908,12 +6947,12 @@ pub(super) fn draw_chart(
                 bar_end,
             } => {
                 let x_start = if *bar_start >= start_idx && *bar_start < end_idx {
-                    chart_rect.left() + ((*bar_start - start_idx) as f32 + 0.5) * bar_w
+                    data_left + ((*bar_start - start_idx) as f32 + 0.5) * bar_w
                 } else {
                     chart_rect.left()
                 };
                 let x_end = if *bar_end >= start_idx && *bar_end < end_idx {
-                    chart_rect.left() + ((*bar_end - start_idx) as f32 + 0.5) * bar_w
+                    data_left + ((*bar_end - start_idx) as f32 + 0.5) * bar_w
                 } else {
                     chart_rect.right()
                 };
@@ -6939,7 +6978,7 @@ pub(super) fn draw_chart(
             }
             Drawing::VLine { bar_idx, color } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     draw_line(
                         &painter,
                         egui::pos2(x, chart_rect.top()),
@@ -6951,12 +6990,12 @@ pub(super) fn draw_chart(
             }
             Drawing::Rectangle { p1, p2, color } => {
                 let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                    Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
                 let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                    Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
@@ -6979,7 +7018,7 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 if origin.0 >= start_idx && origin.0 < end_idx {
-                    let x1 = chart_rect.left() + ((origin.0 - start_idx) as f32 + 0.5) * bar_w;
+                    let x1 = data_left + ((origin.0 - start_idx) as f32 + 0.5) * bar_w;
                     let y1 = price_to_y(origin.1);
                     let bars_to_edge = ((chart_rect.right() - x1) / bar_w) as f64;
                     let end_price = origin.1 + slope * bars_to_edge;
@@ -7000,12 +7039,12 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                    Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
                 let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                    Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
@@ -7064,7 +7103,7 @@ pub(super) fn draw_chart(
             } => {
                 let y = price_to_y(*price);
                 let x_start = if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w
+                    data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w
                 } else {
                     chart_rect.left()
                 }; // bar left of view — draw full width
@@ -7082,7 +7121,7 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
                     let sc = sel_tint(*color);
                     let sw = egui::Stroke::new(effective_width, sc);
@@ -7104,12 +7143,12 @@ pub(super) fn draw_chart(
             }
             Drawing::ArrowLine { p1, p2, color } => {
                 let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                    Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
                 let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                    Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
@@ -7144,12 +7183,12 @@ pub(super) fn draw_chart(
             }
             Drawing::InfoLine { p1, p2, color } => {
                 let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                    Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
                 let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                    Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
@@ -7196,7 +7235,7 @@ pub(super) fn draw_chart(
                 // Andrews Pitchfork: median line from pivot to midpoint(p2,p3), parallel upper/lower
                 let to_x = |idx: usize| -> Option<f32> {
                     if idx >= start_idx && idx < end_idx {
-                        Some(chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w)
+                        Some(data_left + ((idx - start_idx) as f32 + 0.5) * bar_w)
                     } else {
                         None
                     }
@@ -7251,7 +7290,7 @@ pub(super) fn draw_chart(
             Drawing::FiboExtension { p1, p2, p3, color } => {
                 let to_x = |idx: usize| -> Option<f32> {
                     if idx >= start_idx && idx < end_idx {
-                        Some(chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w)
+                        Some(data_left + ((idx - start_idx) as f32 + 0.5) * bar_w)
                     } else {
                         None
                     }
@@ -7303,7 +7342,7 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 if origin.0 >= start_idx && origin.0 < end_idx {
-                    let ox = chart_rect.left() + ((origin.0 - start_idx) as f32 + 0.5) * bar_w;
+                    let ox = data_left + ((origin.0 - start_idx) as f32 + 0.5) * bar_w;
                     let oy = price_to_y(origin.1);
                     // Gann angles: 1×8, 1×4, 1×3, 1×2, 1×1, 2×1, 3×1, 4×1, 8×1
                     let ratios: &[(f64, &str)] = &[
@@ -7363,7 +7402,7 @@ pub(super) fn draw_chart(
                 target,
             } => {
                 if entry.0 >= start_idx && entry.0 < end_idx {
-                    let x = chart_rect.left() + ((entry.0 - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((entry.0 - start_idx) as f32 + 0.5) * bar_w;
                     let ye = price_to_y(entry.1);
                     let ys = price_to_y(*stop);
                     let yt = price_to_y(*target);
@@ -7408,7 +7447,7 @@ pub(super) fn draw_chart(
                 target,
             } => {
                 if entry.0 >= start_idx && entry.0 < end_idx {
-                    let x = chart_rect.left() + ((entry.0 - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((entry.0 - start_idx) as f32 + 0.5) * bar_w;
                     let ye = price_to_y(entry.1);
                     let ys = price_to_y(*stop);
                     let yt = price_to_y(*target);
@@ -7447,12 +7486,12 @@ pub(super) fn draw_chart(
             }
             Drawing::PriceRange { p1, p2 } => {
                 let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                    Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
                 let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                    Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
@@ -7493,7 +7532,7 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
                     painter.text(
                         egui::pos2(x, y),
@@ -7511,7 +7550,7 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
                     let sz = 8.0_f32;
                     if *is_up {
@@ -7533,12 +7572,12 @@ pub(super) fn draw_chart(
             }
             Drawing::Ellipse { p1, p2, color } => {
                 let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                    Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
                 let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                    Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
@@ -7568,7 +7607,7 @@ pub(super) fn draw_chart(
             Drawing::Triangle { p1, p2, p3, color } => {
                 let to_pt = |idx: usize, price: f64| -> Option<egui::Pos2> {
                     if idx >= start_idx && idx < end_idx {
-                        let x = chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w;
+                        let x = data_left + ((idx - start_idx) as f32 + 0.5) * bar_w;
                         Some(egui::pos2(x, price_to_y(price)))
                     } else {
                         None
@@ -7588,12 +7627,12 @@ pub(super) fn draw_chart(
             }
             Drawing::TrendAngle { p1, p2, color } => {
                 let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                    Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
                 let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                    Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
@@ -7627,12 +7666,12 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                    Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
                 let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                    Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
@@ -7683,7 +7722,7 @@ pub(super) fn draw_chart(
             Drawing::FibChannel { p1, p2, p3, color } => {
                 let to_x = |idx: usize| -> Option<f32> {
                     if idx >= start_idx && idx < end_idx {
-                        Some(chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w)
+                        Some(data_left + ((idx - start_idx) as f32 + 0.5) * bar_w)
                     } else {
                         None
                     }
@@ -7744,7 +7783,7 @@ pub(super) fn draw_chart(
                     cumulative += f;
                     let idx = bar_idx + cumulative;
                     if idx >= start_idx && idx < end_idx {
-                        let x = chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w;
+                        let x = data_left + ((idx - start_idx) as f32 + 0.5) * bar_w;
                         let alpha = if f <= 3 { 120 } else { 80 };
                         let sc = sel_tint(*color);
                         let c =
@@ -7775,7 +7814,7 @@ pub(super) fn draw_chart(
                 if y >= chart_rect.top() && y <= chart_rect.bottom() {
                     // Horizontal line from bar to right edge
                     let x_start = if *bar_idx >= start_idx && *bar_idx < end_idx {
-                        chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w
+                        data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w
                     } else if *bar_idx < start_idx {
                         chart_rect.left()
                     } else {
@@ -7821,7 +7860,7 @@ pub(super) fn draw_chart(
             } => {
                 let to_x = |idx: usize| -> Option<f32> {
                     if idx >= start_idx && idx < end_idx {
-                        Some(chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w)
+                        Some(data_left + ((idx - start_idx) as f32 + 0.5) * bar_w)
                     } else {
                         None
                     }
@@ -7871,12 +7910,12 @@ pub(super) fn draw_chart(
             }
             Drawing::Highlighter { p1, p2, color } => {
                 let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                    Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
                 let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                    Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
@@ -7905,7 +7944,7 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
                     let sz = 6.0_f32;
                     let sc = sel_tint(*color);
@@ -7931,7 +7970,7 @@ pub(super) fn draw_chart(
                 let mut screen_pts: Vec<egui::Pos2> = Vec::with_capacity(points.len());
                 for &(idx, price) in points.iter() {
                     if idx >= start_idx && idx < end_idx {
-                        let x = chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w;
+                        let x = data_left + ((idx - start_idx) as f32 + 0.5) * bar_w;
                         screen_pts.push(egui::pos2(x, price_to_y(price)));
                     }
                 }
@@ -7949,7 +7988,7 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
                     let pad = 4.0_f32;
                     let galley =
@@ -8018,12 +8057,12 @@ pub(super) fn draw_chart(
                         let std_dev = (sum_sq / cn).sqrt();
                         // Draw regression line + 1 StdDev bands
                         let x_start = if b1 >= start_idx && b1 < end_idx {
-                            chart_rect.left() + ((b1 - start_idx) as f32 + 0.5) * bar_w
+                            data_left + ((b1 - start_idx) as f32 + 0.5) * bar_w
                         } else {
                             chart_rect.left()
                         };
                         let x_end = if b2 >= start_idx && b2 < end_idx {
-                            chart_rect.left() + ((b2 - start_idx) as f32 + 0.5) * bar_w
+                            data_left + ((b2 - start_idx) as f32 + 0.5) * bar_w
                         } else {
                             chart_rect.right()
                         };
@@ -8077,12 +8116,12 @@ pub(super) fn draw_chart(
             }
             Drawing::GannBox { p1, p2, color } => {
                 let x1o = if p1.0 >= start_idx && p1.0 < end_idx {
-                    Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
                 let x2o = if p2.0 >= start_idx && p2.0 < end_idx {
-                    Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
@@ -8148,7 +8187,7 @@ pub(super) fn draw_chart(
                 let mut screen_pts: Vec<(f32, f32)> = Vec::new();
                 for &(bi, pr) in points.iter() {
                     if bi >= start_idx && bi < end_idx {
-                        let x = chart_rect.left() + ((bi - start_idx) as f32 + 0.5) * bar_w;
+                        let x = data_left + ((bi - start_idx) as f32 + 0.5) * bar_w;
                         let y = price_to_y(pr);
                         screen_pts.push((x, y));
                     }
@@ -8180,7 +8219,7 @@ pub(super) fn draw_chart(
                 let mut screen_pts: Vec<(f32, f32)> = Vec::new();
                 for &(bi, pr) in points.iter() {
                     if bi >= start_idx && bi < end_idx {
-                        let x = chart_rect.left() + ((bi - start_idx) as f32 + 0.5) * bar_w;
+                        let x = data_left + ((bi - start_idx) as f32 + 0.5) * bar_w;
                         let y = price_to_y(pr);
                         screen_pts.push((x, y));
                     }
@@ -8210,12 +8249,12 @@ pub(super) fn draw_chart(
             }
             Drawing::DateRange { p1, p2 } => {
                 let x1o = if p1.0 >= start_idx && p1.0 < end_idx {
-                    Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
                 let x2o = if p2.0 >= start_idx && p2.0 < end_idx {
-                    Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
@@ -8253,12 +8292,12 @@ pub(super) fn draw_chart(
             }
             Drawing::DatePriceRange { p1, p2 } => {
                 let x1o = if p1.0 >= start_idx && p1.0 < end_idx {
-                    Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
                 let x2o = if p2.0 >= start_idx && p2.0 < end_idx {
-                    Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
@@ -8305,7 +8344,7 @@ pub(super) fn draw_chart(
                 let mut screen_pts: Vec<(f32, f32)> = Vec::new();
                 for &(bi, pr) in points.iter() {
                     if bi >= start_idx && bi < end_idx {
-                        let x = chart_rect.left() + ((bi - start_idx) as f32 + 0.5) * bar_w;
+                        let x = data_left + ((bi - start_idx) as f32 + 0.5) * bar_w;
                         let y = price_to_y(pr);
                         screen_pts.push((x, y));
                     }
@@ -8359,7 +8398,7 @@ pub(super) fn draw_chart(
                 let mut screen_pts: Vec<(f32, f32)> = Vec::new();
                 for &(bi, pr) in points.iter() {
                     if bi >= start_idx && bi < end_idx {
-                        let x = chart_rect.left() + ((bi - start_idx) as f32 + 0.5) * bar_w;
+                        let x = data_left + ((bi - start_idx) as f32 + 0.5) * bar_w;
                         let y = price_to_y(pr);
                         screen_pts.push((x, y));
                     }
@@ -8408,7 +8447,7 @@ pub(super) fn draw_chart(
             Drawing::Brush { points, color } => {
                 for &(bi, pr) in points.iter() {
                     if bi >= start_idx && bi < end_idx {
-                        let x = chart_rect.left() + ((bi - start_idx) as f32 + 0.5) * bar_w;
+                        let x = data_left + ((bi - start_idx) as f32 + 0.5) * bar_w;
                         let y = price_to_y(pr);
                         painter.circle_filled(egui::pos2(x, y), 2.0, *color);
                     }
@@ -8443,7 +8482,7 @@ pub(super) fn draw_chart(
                 let mid_price = (p2.1 + p3.1) / 2.0;
                 let bar_to_x = |b: usize| -> Option<f32> {
                     if b >= start_idx && b < end_idx {
-                        Some(chart_rect.left() + ((b - start_idx) as f32 + 0.5) * bar_w)
+                        Some(data_left + ((b - start_idx) as f32 + 0.5) * bar_w)
                     } else {
                         None
                     }
@@ -8499,7 +8538,7 @@ pub(super) fn draw_chart(
                 let mut b = *bar_start;
                 while b < start_idx + (end_idx - start_idx) + interval * 20 {
                     if b >= start_idx && b < end_idx {
-                        let x = chart_rect.left() + ((b - start_idx) as f32 + 0.5) * bar_w;
+                        let x = data_left + ((b - start_idx) as f32 + 0.5) * bar_w;
                         draw_line(
                             &painter,
                             egui::pos2(x, chart_rect.top()),
@@ -8513,7 +8552,7 @@ pub(super) fn draw_chart(
             }
             Drawing::SineWave { p1, p2, color } => {
                 let bar_to_x = |b: usize| -> f32 {
-                    chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w
+                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
                 };
                 let period = ((p2.0 as f64 - p1.0 as f64).abs()).max(1.0);
                 let amplitude = (p2.1 - p1.1).abs() / 2.0;
@@ -8541,7 +8580,7 @@ pub(super) fn draw_chart(
                 emoji,
             } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
                     painter.text(
                         egui::pos2(x, y),
@@ -8558,7 +8597,7 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
                     let sc = sel_tint(*color);
                     // Pole
@@ -8586,7 +8625,7 @@ pub(super) fn draw_chart(
             } => {
                 let bar_to_x = |b: usize| -> Option<f32> {
                     if b >= start_idx && b < end_idx {
-                        Some(chart_rect.left() + ((b - start_idx) as f32 + 0.5) * bar_w)
+                        Some(data_left + ((b - start_idx) as f32 + 0.5) * bar_w)
                     } else {
                         None
                     }
@@ -8628,7 +8667,7 @@ pub(super) fn draw_chart(
             }
             Drawing::SessionBreak { bar_idx, color } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let sc = sel_tint(*color);
                     // Dashed vertical line — delegate to draw_line for style support
                     draw_line(
@@ -8702,7 +8741,7 @@ pub(super) fn draw_chart(
                 target,
             } => {
                 let bar_to_x = |b: usize| -> f32 {
-                    chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w
+                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
                 };
                 let entry_x = bar_to_x(entry.0);
                 let entry_y = price_to_y(entry.1);
@@ -8764,10 +8803,10 @@ pub(super) fn draw_chart(
                 radius_pt,
                 color,
             } => {
-                let cx = chart_rect.left() + ((center.0 as f32 - start_idx as f32) + 0.5) * bar_w;
+                let cx = data_left + ((center.0 as f32 - start_idx as f32) + 0.5) * bar_w;
                 let cy = price_to_y(center.1);
                 let rx =
-                    chart_rect.left() + ((radius_pt.0 as f32 - start_idx as f32) + 0.5) * bar_w;
+                    data_left + ((radius_pt.0 as f32 - start_idx as f32) + 0.5) * bar_w;
                 let ry = price_to_y(radius_pt.1);
                 let base_r = ((rx - cx).powi(2) + (ry - cy).powi(2)).sqrt();
                 let fib_ratios = [0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
@@ -8794,7 +8833,7 @@ pub(super) fn draw_chart(
             }
             Drawing::ArcDraw { p1, p2, p3, color } => {
                 let bar_to_x = |b: usize| -> f32 {
-                    chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w
+                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
                 };
                 let x1 = bar_to_x(p1.0);
                 let y1 = price_to_y(p1.1);
@@ -8828,7 +8867,7 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 let bar_to_x = |b: usize| -> f32 {
-                    chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w
+                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
                 };
                 let x0 = bar_to_x(p1.0);
                 let y0 = price_to_y(p1.1);
@@ -8865,7 +8904,7 @@ pub(super) fn draw_chart(
             Drawing::PathDraw { points, color } => {
                 if points.len() >= 2 {
                     let bar_to_x = |b: usize| -> f32 {
-                        chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w
+                        data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
                     };
                     let screen_pts: Vec<egui::Pos2> = points
                         .iter()
@@ -8913,7 +8952,7 @@ pub(super) fn draw_chart(
             }
             Drawing::Forecast { p1, p2, color } => {
                 let bar_to_x = |b: usize| -> f32 {
-                    chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w
+                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
                 };
                 let x1 = bar_to_x(p1.0);
                 let y1 = price_to_y(p1.1);
@@ -8950,7 +8989,7 @@ pub(super) fn draw_chart(
             }
             Drawing::GhostFeed { p1, p2, color } => {
                 let bar_to_x = |b: usize| -> f32 {
-                    chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w
+                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
                 };
                 // Mirror the bars from p1..p2 forward starting at p2
                 let src_start = p1.0.min(p2.0);
@@ -9002,7 +9041,7 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
                     let sc = sel_tint(*color);
                     // Pole
@@ -9032,7 +9071,7 @@ pub(super) fn draw_chart(
             }
             Drawing::Ruler { p1, p2, color } => {
                 let bar_to_x = |b: usize| -> f32 {
-                    chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w
+                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
                 };
                 let x1 = bar_to_x(p1.0);
                 let y1 = price_to_y(p1.1);
@@ -9094,7 +9133,7 @@ pub(super) fn draw_chart(
                 let mut b = *bar_start;
                 while b < chart.bars.len() + CHART_RIGHT_MARGIN * 10 {
                     if b >= start_idx && b < end_idx {
-                        let x = chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w;
+                        let x = data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w;
                         let sc = sel_tint(*color);
                         draw_line(
                             &painter,
@@ -9107,9 +9146,9 @@ pub(super) fn draw_chart(
                     // Draw semi-circle arc between this line and the next
                     let next_b = b + interval;
                     if b >= start_idx && next_b < end_idx {
-                        let x1 = chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w;
+                        let x1 = data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w;
                         let x2 =
-                            chart_rect.left() + ((next_b as f32 - start_idx as f32) + 0.5) * bar_w;
+                            data_left + ((next_b as f32 - start_idx as f32) + 0.5) * bar_w;
                         let cx = (x1 + x2) / 2.0;
                         let r = (x2 - x1) / 2.0;
                         let arc_y = chart_rect.bottom() - 2.0;
@@ -9136,7 +9175,7 @@ pub(super) fn draw_chart(
             }
             Drawing::SpeedResistanceFan { p1, p2, p3, color } => {
                 let bar_to_x = |b: usize| -> f32 {
-                    chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w
+                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
                 };
                 let x1 = bar_to_x(p1.0);
                 let y1 = price_to_y(p1.1);
@@ -9184,7 +9223,7 @@ pub(super) fn draw_chart(
             }
             Drawing::SpeedResistanceArc { p1, p2, p3, color } => {
                 let bar_to_x = |b: usize| -> f32 {
-                    chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w
+                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
                 };
                 let x1 = bar_to_x(p1.0);
                 let y1 = price_to_y(p1.1);
@@ -9226,10 +9265,10 @@ pub(super) fn draw_chart(
                 radius_pt,
                 color,
             } => {
-                let cx = chart_rect.left() + ((center.0 as f32 - start_idx as f32) + 0.5) * bar_w;
+                let cx = data_left + ((center.0 as f32 - start_idx as f32) + 0.5) * bar_w;
                 let cy = price_to_y(center.1);
                 let rx =
-                    chart_rect.left() + ((radius_pt.0 as f32 - start_idx as f32) + 0.5) * bar_w;
+                    data_left + ((radius_pt.0 as f32 - start_idx as f32) + 0.5) * bar_w;
                 let ry = price_to_y(radius_pt.1);
                 let base_r = ((rx - cx).powi(2) + (ry - cy).powi(2)).sqrt().max(1.0);
                 // Golden spiral: r = a * e^(b*theta) where b = ln(phi)/(PI/2)
@@ -9256,7 +9295,7 @@ pub(super) fn draw_chart(
             }
             Drawing::RotatedRectangle { p1, p2, p3, color } => {
                 let bar_to_x = |b: usize| -> f32 {
-                    chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w
+                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
                 };
                 let x1 = bar_to_x(p1.0);
                 let y1 = price_to_y(p1.1);
@@ -9302,7 +9341,7 @@ pub(super) fn draw_chart(
                         };
                         if i >= start_idx && i < end_idx {
                             let x =
-                                chart_rect.left() + ((i as f32 - start_idx as f32) + 0.5) * bar_w;
+                                data_left + ((i as f32 - start_idx as f32) + 0.5) * bar_w;
                             let y = price_to_y(vwap);
                             let pt = egui::pos2(x, y);
                             if let Some(p) = prev_pt {
@@ -9331,7 +9370,7 @@ pub(super) fn draw_chart(
             Drawing::TrendChannel { p1, p2, p3, color } => {
                 let to_x = |idx: usize| -> Option<f32> {
                     if idx >= start_idx && idx < end_idx {
-                        Some(chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w)
+                        Some(data_left + ((idx - start_idx) as f32 + 0.5) * bar_w)
                     } else {
                         None
                     }
@@ -9390,7 +9429,7 @@ pub(super) fn draw_chart(
                 let to_pt = |idx: usize, price: f64| -> Option<egui::Pos2> {
                     if idx >= start_idx && idx < end_idx {
                         Some(egui::pos2(
-                            chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w,
+                            data_left + ((idx - start_idx) as f32 + 0.5) * bar_w,
                             price_to_y(price),
                         ))
                     } else {
@@ -9454,7 +9493,7 @@ pub(super) fn draw_chart(
                 let to_pt = |idx: usize, price: f64| -> Option<egui::Pos2> {
                     if idx >= start_idx && idx < end_idx {
                         Some(egui::pos2(
-                            chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w,
+                            data_left + ((idx - start_idx) as f32 + 0.5) * bar_w,
                             price_to_y(price),
                         ))
                     } else {
@@ -9567,12 +9606,12 @@ pub(super) fn draw_chart(
             }
             Drawing::MeasureTool { p1, p2, color } => {
                 let x1o = if p1.0 >= start_idx && p1.0 < end_idx {
-                    Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
                 let x2o = if p2.0 >= start_idx && p2.0 < end_idx {
-                    Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
+                    Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
                 } else {
                     None
                 };
@@ -9648,7 +9687,7 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
                     painter.text(
                         egui::pos2(x, y),
@@ -9666,7 +9705,7 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
                     let sc = sel_tint(*color);
                     let galley =
@@ -9698,7 +9737,7 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
                     let sc = sel_tint(*color);
                     let sz = 8.0_f32;
@@ -9719,7 +9758,7 @@ pub(super) fn draw_chart(
                 color,
             } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
                     let sc = sel_tint(*color);
                     let sz = 8.0_f32;
@@ -9736,9 +9775,9 @@ pub(super) fn draw_chart(
             }
             Drawing::Circle { p1, p2, color } => {
                 if p1.0 >= start_idx && p1.0 < end_idx && p2.0 >= start_idx && p2.0 < end_idx {
-                    let cx = chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w;
+                    let cx = data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w;
                     let cy = price_to_y(p1.1);
-                    let rx = chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w;
+                    let rx = data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w;
                     let ry = price_to_y(p2.1);
                     let radius = ((rx - cx).powi(2) + (ry - cy).powi(2)).sqrt();
                     painter.circle_stroke(
@@ -9756,9 +9795,9 @@ pub(super) fn draw_chart(
             | Drawing::Projection { p1, p2, color }
             | Drawing::DoubleCurve { p1, p2, color } => {
                 if p1.0 >= start_idx && p1.0 < end_idx && p2.0 >= start_idx && p2.0 < end_idx {
-                    let x1 = chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w;
+                    let x1 = data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w;
                     let y1 = price_to_y(p1.1);
-                    let x2 = chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w;
+                    let x2 = data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w;
                     let y2 = price_to_y(p2.1);
                     let sc = sel_tint(*color);
                     draw_line(
@@ -9794,7 +9833,7 @@ pub(super) fn draw_chart(
                     .filter(|(bi, _)| *bi >= start_idx && *bi < end_idx)
                     .map(|(bi, pr)| {
                         (
-                            chart_rect.left() + ((*bi - start_idx) as f32 + 0.5) * bar_w,
+                            data_left + ((*bi - start_idx) as f32 + 0.5) * bar_w,
                             price_to_y(*pr),
                         )
                     })
@@ -9845,7 +9884,7 @@ pub(super) fn draw_chart(
         // Helper: convert (bar_idx, price) to screen pos
         let to_screen = |bar: usize, price: f64| -> Option<egui::Pos2> {
             if bar >= start_idx && bar < end_idx {
-                let x = chart_rect.left() + ((bar - start_idx) as f32 + 0.5) * bar_w;
+                let x = data_left + ((bar - start_idx) as f32 + 0.5) * bar_w;
                 let y = price_to_y(price);
                 Some(egui::pos2(x, y))
             } else {
@@ -10632,6 +10671,7 @@ pub(super) fn chart_render_sample_step(len: usize, width_px: f32) -> usize {
 pub(super) fn draw_indicator_line(
     painter: &egui::Painter,
     chart_rect: egui::Rect,
+    data_left: f32,
     bars: &[Bar],
     series: &[Option<f64>],
     start_idx: usize,
@@ -10649,7 +10689,7 @@ pub(super) fn draw_indicator_line(
             continue;
         }
         if let Some(v) = series[abs_idx] {
-            let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+            let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
             let y = price_to_y(v);
             if y >= chart_rect.top() && y <= chart_rect.bottom() {
                 points.push(egui::pos2(x, y));

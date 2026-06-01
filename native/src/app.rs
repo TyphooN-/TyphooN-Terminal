@@ -1793,7 +1793,7 @@ impl ChartCamera {
         !self.follow_latest
     }
 
-    fn max_right_edge(data_len: usize) -> f64 {
+    fn follow_latest_right_edge(data_len: usize) -> f64 {
         if data_len == 0 {
             0.0
         } else {
@@ -1801,8 +1801,20 @@ impl ChartCamera {
         }
     }
 
+    fn max_right_edge(&self, data_len: usize) -> f64 {
+        if data_len == 0 {
+            0.0
+        } else {
+            // TradingView-style horizontal free-look: allow one full viewport of
+            // empty space to the right so the newest bar can be dragged all the
+            // way to the left edge. The left bound stays at right_edge=0, which
+            // puts the oldest bar at the right edge with empty space to its left.
+            data_len.saturating_sub(1) as f64 + (self.bars_visible - 1.0).max(CHART_RIGHT_MARGIN as f64)
+        }
+    }
+
     fn set_right_edge_bar(&mut self, right_edge: f64, data_len: usize) {
-        let max_right = Self::max_right_edge(data_len);
+        let max_right = self.max_right_edge(data_len);
         let clamped = right_edge.clamp(0.0, max_right);
         self.center_bar = clamped - (self.bars_visible - 1.0) * 0.5;
     }
@@ -1862,12 +1874,12 @@ impl ChartCamera {
             return;
         }
         if self.follow_latest || old_len == 0 {
-            self.set_right_edge_bar(Self::max_right_edge(new_len), new_len);
+            self.set_right_edge_bar(Self::follow_latest_right_edge(new_len), new_len);
             return;
         }
-        let old_max = Self::max_right_edge(old_len);
+        let old_max = self.max_right_edge(old_len);
         let distance_from_right = (old_max - self.right_edge_bar()).max(0.0);
-        let new_right = Self::max_right_edge(new_len) - distance_from_right;
+        let new_right = self.max_right_edge(new_len) - distance_from_right;
         self.set_right_edge_bar(new_right, new_len);
     }
 
@@ -1886,7 +1898,7 @@ impl ChartCamera {
         *view_offset = self
             .right_edge_bar()
             .round()
-            .clamp(0.0, Self::max_right_edge(data_len)) as usize;
+            .clamp(0.0, self.max_right_edge(data_len)) as usize;
         *manual_view_override = self.manual_override();
         if let (Some(center), Some(span)) = (self.price_center, self.price_span) {
             *price_pan = center - natural_price_center;
@@ -5945,12 +5957,20 @@ impl ChartState {
     }
 
     fn begin_chart_camera_pan(&mut self, rect_width: f32, rect_height: f32) {
-        self.reset_camera_from_legacy();
+        // Do not rebuild the camera from rounded legacy fields once manual
+        // free-look is active. `view_offset` is integer compatibility state;
+        // `ChartCamera` is the authoritative fractional bar/price camera.
+        // Reconstructing from legacy at every drag start caused the visible
+        // snap-back between recenter gestures.
+        if !self.manual_view_override {
+            self.reset_camera_from_legacy();
+        }
         let (natural_center, natural_span) =
             self.natural_visible_price_view().unwrap_or((0.0, 1.0));
         self.camera
             .begin_pan(rect_width, rect_height, natural_center, natural_span);
         self.sync_camera_to_legacy();
+        self.mark_view_changed();
     }
 
     fn pan_chart_camera_pixels(&mut self, delta: egui::Vec2, rect_width: f32, rect_height: f32) {
@@ -5966,22 +5986,43 @@ impl ChartState {
             natural_span,
         );
         self.sync_camera_to_legacy();
+        self.mark_view_changed();
+    }
+
+    fn mark_view_changed(&mut self) {
+        // Camera movement changes pixels even when no new bars arrive. The
+        // renderer's live-WS early-out keys off `visible_bars_gen`; without
+        // invalidating it, drag frames can reuse the old picture and look like
+        // rubber-banding/snap-back.
+        self.visible_bars_gen = self.visible_bars_gen.wrapping_add(1);
     }
 
     fn visible_range(&self) -> (usize, usize) {
-        if self.bars.is_empty() {
-            return (0, 0);
-        }
-        let end = (self.view_offset + 1).min(self.bars.len());
-        let start = end.saturating_sub(self.visible_bars);
-        // Replay cap: limit end to replay_bar_cap when active
-        let end = if let Some(cap) = self.replay_bar_cap {
-            end.min(cap)
-        } else {
-            end
-        };
-        let start = start.min(end);
+        let (start, end, _, _) = self.visible_slot_window();
         (start, end)
+    }
+
+    fn visible_slot_window(&self) -> (usize, usize, f32, usize) {
+        if self.bars.is_empty() {
+            return (0, 0, 0.0, self.visible_bars.max(1));
+        }
+        let slot_count = self.visible_bars.max(1);
+        let right_edge = if self.manual_view_override {
+            self.camera.right_edge_bar().round() as i64
+        } else {
+            self.view_offset as i64
+        };
+        let virtual_start = right_edge - slot_count as i64 + 1;
+        let virtual_end_exclusive = right_edge + 1;
+        let data_len = self.bars.len() as i64;
+        let start = virtual_start.clamp(0, data_len) as usize;
+        let mut end = virtual_end_exclusive.clamp(0, data_len) as usize;
+        if let Some(cap) = self.replay_bar_cap {
+            end = end.min(cap);
+        }
+        let start = start.min(end);
+        let first_slot = (start as i64 - virtual_start).max(0) as f32;
+        (start, end, first_slot, slot_count)
     }
 }
 
@@ -33648,6 +33689,69 @@ mod tests {
             "free-look price range should be allowed below zero; got {min}..{max}"
         );
         assert!(max > min);
+    }
+
+    #[test]
+    fn chart_state_repeated_free_look_drag_keeps_camera_authoritative() {
+        let mut chart = ChartState::new("TEST", Timeframe::H4);
+        chart.bars = make_bars(500);
+        chart.visible_bars = 100;
+        chart.view_offset = 499;
+        chart.begin_chart_camera_pan(800.0, 400.0);
+        chart.pan_chart_camera_pixels(egui::vec2(80.0, 0.0), 800.0, 400.0);
+        let first_right_edge = chart.camera.right_edge_bar();
+        let first_price_range = chart.visible_price_range().unwrap();
+        let first_gen = chart.visible_bars_gen;
+
+        chart.begin_chart_camera_pan(800.0, 400.0);
+
+        assert!(
+            (chart.camera.right_edge_bar() - first_right_edge).abs() < 1e-9,
+            "new drag must not rebuild camera from rounded legacy view_offset"
+        );
+        assert_eq!(chart.visible_price_range().unwrap(), first_price_range);
+        assert!(
+            chart.visible_bars_gen > first_gen,
+            "camera changes must invalidate draw early-out"
+        );
+    }
+
+    #[test]
+    fn chart_camera_allows_empty_space_at_both_horizontal_edges() {
+        let mut camera = ChartCamera::from_legacy(99, 100, false);
+        camera.begin_pan(800.0, 400.0, 100.0, 20.0);
+
+        camera.pan_pixels(10_000.0, 0.0, 800.0, 400.0, 500, 100.0, 20.0);
+        assert!(
+            camera.right_edge_bar().abs() < 1e-9,
+            "left free-look bound should put oldest bar at the right edge, not clamp the viewport full of data"
+        );
+
+        camera.begin_pan(800.0, 400.0, 100.0, 20.0);
+        camera.pan_pixels(-10_000.0, 0.0, 800.0, 400.0, 500, 100.0, 20.0);
+        assert!(
+            (camera.right_edge_bar() - 598.0).abs() < 1e-9,
+            "right free-look bound should put newest bar at the left edge for one viewport of empty space"
+        );
+    }
+
+    #[test]
+    fn chart_state_visible_slot_window_preserves_empty_edge_slots() {
+        let mut chart = ChartState::new("TEST", Timeframe::H4);
+        chart.bars = make_bars(500);
+        chart.visible_bars = 100;
+        chart.view_offset = 99;
+        chart.manual_view_override = true;
+        chart.camera = ChartCamera::from_legacy(0, 100, true);
+
+        let (start, end, first_slot, slots) = chart.visible_slot_window();
+        assert_eq!((start, end, slots), (0, 1, 100));
+        assert_eq!(first_slot, 99.0, "oldest bar should render in the final slot with empty space to its left");
+
+        chart.camera = ChartCamera::from_legacy(598, 100, true);
+        let (start, end, first_slot, slots) = chart.visible_slot_window();
+        assert_eq!((start, end, slots), (499, 500, 100));
+        assert_eq!(first_slot, 0.0, "newest bar should render in the first slot with empty space to its right");
     }
 
     #[test]

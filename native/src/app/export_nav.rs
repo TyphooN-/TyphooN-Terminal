@@ -124,7 +124,7 @@ impl TyphooNApp {
         // view_offset is the rightmost visible bar index
         // When zooming in (fewer bars): offset stays same, we see fewer bars on the left
         // When zooming out (more bars): offset stays same, we see more bars on the left
-        let max_off = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+        let max_off = chart.bars.len().saturating_sub(1) + new_vis.saturating_sub(1);
         // Keep the right edge (view_offset) fixed — just change visible_bars
         chart.view_offset = chart.view_offset.min(max_off);
         chart.visible_bars = new_vis;
