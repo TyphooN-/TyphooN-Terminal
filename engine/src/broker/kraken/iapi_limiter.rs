@@ -451,11 +451,9 @@ impl IapiLimiter {
                     );
                     if (new_rate - bucket.current_rate).abs() >= 0.000_001 {
                         tracing::info!(
-                            "iapi AIMD: rate ↑ {:.4} → {:.4} req/s after clean run ({:.2}s → {:.2}s pacing)",
+                            "iapi AIMD: rate ↑ {:.4} → {:.4} req/s after clean run",
                             bucket.current_rate,
-                            new_rate,
-                            rate_to_interval_secs(bucket.current_rate),
-                            rate_to_interval_secs(new_rate)
+                            new_rate
                         );
                         bucket.current_rate = new_rate;
                         bucket.last_rate_change = now;

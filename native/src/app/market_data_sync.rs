@@ -1,35 +1,14 @@
 use super::*;
 
 const ALPACA_BATCH_FETCH_MAX_SYMBOLS: usize = 50;
-const INTERACTIVE_ALPACA_FETCH_PERMITS: usize = 2;
-const INTERACTIVE_ALPACA_QUEUE_WINDOW: usize = 4;
-const INTERACTIVE_ALPACA_BATCH_SIZE: usize = 2;
-const INTERACTIVE_ALPACA_FOREGROUND_RESERVE: usize = 1;
-pub(super) const INTERACTIVE_TOTAL_PENDING_FETCH_CAP: usize = 64;
+pub(super) const BACKGROUND_RETRY_PENDING_FETCH_CAP: usize = 64;
 
-fn interaction_throttled_alpaca_capacity(mut capacity: AlpacaSyncCapacity) -> AlpacaSyncCapacity {
-    capacity.fetch_permits = capacity.fetch_permits.min(INTERACTIVE_ALPACA_FETCH_PERMITS);
-    capacity.queue_window = capacity.queue_window.min(INTERACTIVE_ALPACA_QUEUE_WINDOW);
-    capacity.batch_size = capacity.batch_size.min(INTERACTIVE_ALPACA_BATCH_SIZE);
-    capacity.foreground_reserve = capacity
-        .foreground_reserve
-        .min(INTERACTIVE_ALPACA_FOREGROUND_RESERVE);
-    capacity
+pub(super) fn background_retry_dispatch_allowed(pending_fetches: usize) -> bool {
+    pending_fetches < BACKGROUND_RETRY_PENDING_FETCH_CAP
 }
 
-pub(super) fn background_retry_dispatch_allowed(
-    user_interacting: bool,
-    pending_fetches: usize,
-) -> bool {
-    !user_interacting && pending_fetches < INTERACTIVE_TOTAL_PENDING_FETCH_CAP
-}
-
-fn background_market_data_fetch_allowed(
-    focus: bool,
-    user_interacting: bool,
-    pending_fetches: usize,
-) -> bool {
-    focus || (!user_interacting && pending_fetches < INTERACTIVE_TOTAL_PENDING_FETCH_CAP)
+fn background_market_data_fetch_allowed(focus: bool, pending_fetches: usize) -> bool {
+    focus || pending_fetches < BACKGROUND_RETRY_PENDING_FETCH_CAP
 }
 
 pub(super) fn normalize_kraken_equity_symbol_list<'a, I>(symbols: I) -> Vec<String>
@@ -115,11 +94,6 @@ impl TyphooNApp {
         let key = symbol.to_uppercase();
         if let Some(closes) = self.sparkline_cache.get(&key) {
             return std::sync::Arc::clone(closes);
-        }
-        if self.user_interacting {
-            // Avoid cache misses doing SQLite reads while the user is dragging/zooming;
-            // cached sparklines still render above, misses populate after interaction ends.
-            return std::sync::Arc::new(Vec::new());
         }
         // Soft cap: drop random 25% if exceeded (no LRU bookkeeping cost)
         if self.sparkline_cache.len() > 2000 {
@@ -962,30 +936,22 @@ impl TyphooNApp {
             return 0;
         }
         let full_tilt = self.full_tilt_sync_enabled();
-        let queue_window: usize = if self.user_interacting && !full_tilt {
-            3
-        } else if full_tilt {
+        let queue_window: usize = if full_tilt {
             KRAKEN_EQUITIES_FULL_TILT_QUEUE_WINDOW
         } else {
             8
         };
-        let batch_limit: usize = if self.user_interacting && !full_tilt {
-            1
-        } else if full_tilt {
+        let batch_limit: usize = if full_tilt {
             KRAKEN_EQUITIES_FULL_TILT_BATCH_SIZE
         } else {
             4
         };
-        let foreground_slots = if self.user_interacting && !full_tilt {
-            1
-        } else if full_tilt {
+        let foreground_slots = if full_tilt {
             KRAKEN_EQUITIES_FULL_TILT_BATCH_SIZE
         } else {
             4
         };
-        let scan_limit = if self.user_interacting && !full_tilt {
-            24
-        } else if full_tilt {
+        let scan_limit = if full_tilt {
             KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT
         } else {
             96
@@ -1289,12 +1255,6 @@ impl TyphooNApp {
             capacity.batch_size = capacity.batch_size.max(ALPACA_FULL_TILT_BATCH_SIZE);
             capacity.foreground_reserve = capacity.foreground_reserve.max(8);
         }
-        if self.user_interacting {
-            // Full-tilt means "use the machine when idle", not "let background
-            // sync steal the drag loop". Clamp new Alpaca pressure while the
-            // user is actively panning/zooming; in-flight requests drain naturally.
-            capacity = interaction_throttled_alpaca_capacity(capacity);
-        }
         capacity
     }
 
@@ -1403,11 +1363,7 @@ impl TyphooNApp {
                 .replace('/', "")
                 .eq_ignore_ascii_case(&symbol)
         });
-        if !background_market_data_fetch_allowed(
-            focus,
-            self.user_interacting,
-            self.total_pending_market_data_fetches(),
-        ) {
+        if !background_market_data_fetch_allowed(focus, self.total_pending_market_data_fetches()) {
             return false;
         }
         let Some(_) = classify_alpaca_sync_candidate(
@@ -1886,30 +1842,22 @@ impl TyphooNApp {
             return 0;
         }
         let full_tilt = self.full_tilt_sync_enabled();
-        let queue_window = if self.user_interacting && !full_tilt {
-            4
-        } else if full_tilt {
+        let queue_window = if full_tilt {
             KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW
         } else {
             KRAKEN_SPOT_QUEUE_WINDOW
         };
-        let batch_limit = if self.user_interacting && !full_tilt {
-            batch_limit.min(2)
-        } else if full_tilt {
+        let batch_limit = if full_tilt {
             batch_limit.max(128)
         } else {
             batch_limit
         };
-        let foreground_slots = if self.user_interacting && !full_tilt {
-            foreground_slots.min(1)
-        } else if full_tilt {
+        let foreground_slots = if full_tilt {
             foreground_slots.max(16)
         } else {
             foreground_slots
         };
-        let scan_limit = if self.user_interacting && !full_tilt {
-            48
-        } else if full_tilt {
+        let scan_limit = if full_tilt {
             KRAKEN_SPOT_FULL_TILT_BACKGROUND_SCAN_LIMIT
         } else {
             KRAKEN_SPOT_BACKGROUND_SCAN_LIMIT
@@ -1982,30 +1930,22 @@ impl TyphooNApp {
             return 0;
         }
         let full_tilt = self.full_tilt_sync_enabled();
-        let queue_window = if self.user_interacting && !full_tilt {
-            3
-        } else if full_tilt {
+        let queue_window = if full_tilt {
             KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW
         } else {
             KRAKEN_FUTURES_QUEUE_WINDOW
         };
-        let batch_limit = if self.user_interacting && !full_tilt {
-            batch_limit.min(1)
-        } else if full_tilt {
+        let batch_limit = if full_tilt {
             batch_limit.max(96)
         } else {
             batch_limit
         };
-        let foreground_slots = if self.user_interacting && !full_tilt {
-            foreground_slots.min(1)
-        } else if full_tilt {
+        let foreground_slots = if full_tilt {
             foreground_slots.max(12)
         } else {
             foreground_slots
         };
-        let scan_limit = if self.user_interacting && !full_tilt {
-            32
-        } else if full_tilt {
+        let scan_limit = if full_tilt {
             KRAKEN_FUTURES_FULL_TILT_BACKGROUND_SCAN_LIMIT
         } else {
             KRAKEN_FUTURES_BACKGROUND_SCAN_LIMIT
@@ -2081,16 +2021,12 @@ impl TyphooNApp {
             return 0;
         }
         let full_tilt = self.full_tilt_sync_enabled();
-        let queue_window = if self.user_interacting && !full_tilt {
-            3usize
-        } else if full_tilt {
+        let queue_window = if full_tilt {
             TASTYTRADE_FULL_TILT_QUEUE_WINDOW
         } else {
             8usize
         };
-        let batch_limit = if self.user_interacting && !full_tilt {
-            1usize
-        } else if full_tilt {
+        let batch_limit = if full_tilt {
             TASTYTRADE_FULL_TILT_BATCH_SIZE
         } else {
             3usize
@@ -2122,9 +2058,7 @@ impl TyphooNApp {
             .get("tastytrade")
             .unwrap_or(&empty_no_data_keys);
         let now_s = chrono::Utc::now().timestamp();
-        let scan_limit = if self.user_interacting && !full_tilt {
-            24
-        } else if full_tilt {
+        let scan_limit = if full_tilt {
             TASTYTRADE_FULL_TILT_BACKGROUND_SCAN_LIMIT
         } else {
             TASTYTRADE_BACKGROUND_SCAN_LIMIT
@@ -2263,50 +2197,26 @@ mod tests {
     }
 
     #[test]
-    fn interaction_throttle_overrides_full_tilt_alpaca_capacity() {
-        let full_tilt = AlpacaSyncCapacity {
-            fetch_permits: 64,
-            queue_window: 256,
-            batch_size: 192,
-            foreground_reserve: 8,
-        };
-        let throttled = interaction_throttled_alpaca_capacity(full_tilt);
-
-        assert_eq!(throttled.fetch_permits, INTERACTIVE_ALPACA_FETCH_PERMITS);
-        assert_eq!(throttled.queue_window, INTERACTIVE_ALPACA_QUEUE_WINDOW);
-        assert_eq!(throttled.batch_size, INTERACTIVE_ALPACA_BATCH_SIZE);
-        assert_eq!(
-            throttled.foreground_reserve,
-            INTERACTIVE_ALPACA_FOREGROUND_RESERVE
-        );
-    }
-
-    #[test]
-    fn background_retry_dispatch_stops_when_user_or_pending_pressure_is_high() {
-        assert!(background_retry_dispatch_allowed(false, 0));
+    fn background_retry_dispatch_stops_when_pending_pressure_is_high() {
+        assert!(background_retry_dispatch_allowed(0));
         assert!(background_retry_dispatch_allowed(
-            false,
-            INTERACTIVE_TOTAL_PENDING_FETCH_CAP - 1
+            BACKGROUND_RETRY_PENDING_FETCH_CAP - 1
         ));
         assert!(!background_retry_dispatch_allowed(
-            false,
-            INTERACTIVE_TOTAL_PENDING_FETCH_CAP
+            BACKGROUND_RETRY_PENDING_FETCH_CAP
         ));
-        assert!(!background_retry_dispatch_allowed(true, 0));
     }
 
     #[test]
     fn background_fetch_backpressure_preserves_focus_symbols() {
         assert!(!background_market_data_fetch_allowed(
             false,
-            false,
-            INTERACTIVE_TOTAL_PENDING_FETCH_CAP
+            BACKGROUND_RETRY_PENDING_FETCH_CAP
         ));
-        assert!(background_market_data_fetch_allowed(true, true, 0));
+        assert!(background_market_data_fetch_allowed(true, 0));
         assert!(background_market_data_fetch_allowed(
             true,
-            false,
-            INTERACTIVE_TOTAL_PENDING_FETCH_CAP * 10
+            BACKGROUND_RETRY_PENDING_FETCH_CAP * 10
         ));
     }
 }

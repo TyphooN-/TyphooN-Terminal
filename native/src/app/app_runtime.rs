@@ -165,26 +165,6 @@ impl eframe::App for TyphooNApp {
         if ctx.input(|i| !i.events.is_empty()) {
             self.auto_compact_last_input_at = std::time::Instant::now();
         }
-        // user_interacting is set true on drag-start / price-axis scale-start
-        // and was never reset, so after the user's first mouse drag the cache
-        // rebuild gates further down (`if !self.user_interacting && ...`) and
-        // every market_data_sync throttle (`if user_interacting && !full_tilt`)
-        // stayed in their "interacting" state forever. That left active-symbol
-        // sets, scoped fundamentals, MT5/tastytrade coverage maps, and alpaca
-        // sync state permanently frozen at whatever value they had the moment
-        // of that first drag, even hours later, and held BG sync at the
-        // throttled batch sizes. Reset here so any cache rebuild gated on
-        // !user_interacting can proceed the moment the mouse is released.
-        if self.user_interacting {
-            let still_interacting = ctx.input(|i| {
-                i.pointer.primary_down()
-                    || i.pointer.secondary_down()
-                    || i.smooth_scroll_delta.y.abs() > 0.0
-            });
-            if !still_interacting {
-                self.user_interacting = false;
-            }
-        }
         self.tick_auto_compact();
         self.clear_stale_ui_busy_flags(now_instant);
         // Alpaca retry queue: internally throttled to 10s between ticks.
@@ -206,7 +186,7 @@ impl eframe::App for TyphooNApp {
         // PERF: rebuild scope HashSet only when bg data loaded or scope changed,
         // not every frame. Steady state = zero work.
         let scope_key = (self.bg_rev, self.broker_scope);
-        if !self.user_interacting && self.cached_scope_key != Some(scope_key) {
+        if self.cached_scope_key != Some(scope_key) {
             self.cached_scope_syms = self.broker_scope_symbols();
             self.cached_scope_key = Some(scope_key);
         }
@@ -220,14 +200,13 @@ impl eframe::App for TyphooNApp {
         }
         // PERF: Cache scoped_fundamentals_owned() only when bg/scope changes — not per frame.
         // Was cloning ~500 Fundamentals structs (≈1 MB) every frame for no reason.
-        if !self.user_interacting && self.cached_scoped_fundamentals_key != Some(scope_key) {
+        if self.cached_scoped_fundamentals_key != Some(scope_key) {
             self.cached_scoped_fundamentals = self.scoped_fundamentals_owned();
             self.cached_scoped_fundamentals_key = Some(scope_key);
         }
         // PERF: Cache Darwin tradability + MT5/tasty bar-coverage sets on bg_rev.
         // Was rebuilding per frame in hot windows and sync loops.
-        if !self.user_interacting
-            && self.cached_mt5_symbols_rev != Some(self.bg_rev)
+        if self.cached_mt5_symbols_rev != Some(self.bg_rev)
             && (!self.heavy_sync_in_progress || self.cached_mt5_symbols.is_empty())
         {
             // Start with Darwinex symbols from MT5 specs (if any)
@@ -291,8 +270,7 @@ impl eframe::App for TyphooNApp {
                 .collect();
             self.cached_mt5_symbols_rev = Some(self.bg_rev);
         }
-        if !self.user_interacting
-            && self.cached_alpaca_sync_state_rev != Some(self.bg_rev)
+        if self.cached_alpaca_sync_state_rev != Some(self.bg_rev)
             && (!self.heavy_sync_in_progress || self.cached_alpaca_sync_state.is_empty())
         {
             let previous = self.cached_alpaca_sync_state.clone();
@@ -1215,7 +1193,7 @@ impl eframe::App for TyphooNApp {
         // Failed loads stay queued. The actual load is still expensive — cache read + GPU
         // indicators + MTF overlays — so pace restored MTF grids instead of burning
         // consecutive UI frames while broad sync/news/SEC/fundamentals are active.
-        if !self.deferred_chart_loads.is_empty() && !self.user_interacting {
+        if !self.deferred_chart_loads.is_empty() {
             let load_interval =
                 deferred_chart_load_interval(self.heavy_sync_in_progress, self.mtf_enabled);
             if now_instant.duration_since(self.deferred_chart_last_load_at) >= load_interval {
@@ -1242,10 +1220,7 @@ impl eframe::App for TyphooNApp {
         }
 
         // ── recompute indicators when periods changed in UI ──────────────
-        if self.user_interacting {
-            // Skip expensive recomputes during interaction to protect frame rate
-        }
-        if self.indicators_dirty && !self.user_interacting {
+        if self.indicators_dirty {
             self.indicators_dirty = false;
             let mut gpu = self.gpu_indicators.take();
             // MAX PERFORMANCE: During heavy sync, completely skip indicator computation
@@ -1361,11 +1336,9 @@ impl eframe::App for TyphooNApp {
         // Cap drain per frame so a flood of messages can't stall the render thread.
         // Anything left over waits for next frame; we repaint immediately in that case.
         let mut msgs_drained = 0usize;
-        let broker_drain_max = if self.user_interacting { 16 } else { 48 };
+        let broker_drain_max = 48;
         let broker_drain_started = std::time::Instant::now();
-        let broker_drain_budget = if self.user_interacting {
-            std::time::Duration::from_millis(3)
-        } else if self.heavy_sync_in_progress {
+        let broker_drain_budget = if self.heavy_sync_in_progress {
             std::time::Duration::from_millis(5)
         } else {
             std::time::Duration::from_millis(8)
@@ -8183,11 +8156,7 @@ impl eframe::App for TyphooNApp {
             // Throttle live Kraken WS forming-bar updates to ~10 fps.
             // Full immediate repaint is only needed for closed bars or user action.
             // The forming_bar_dirty flag on ChartState is the signal from the WS path.
-            ctx.request_repaint_after(if self.user_interacting {
-                std::time::Duration::from_millis(1)
-            } else {
-                std::time::Duration::from_millis(16)
-            });
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
 
         // ── drain web client commands ────────────────────────────────────
@@ -15439,7 +15408,6 @@ impl eframe::App for TyphooNApp {
                             active_sub_pane_count,
                         );
                         chart.begin_chart_camera_pan(cell_chart_body_rect.width(), price_pane_h);
-                        self.user_interacting = true;
                     }
                     if cell_body_press && chart.is_dragging {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
@@ -15457,8 +15425,7 @@ impl eframe::App for TyphooNApp {
                                     cell_chart_body_rect.width(),
                                     price_pane_h,
                                 );
-                                self.user_interacting = true;
-                            }
+                                    }
                         }
                     }
                     if !cell_body_press && chart.is_dragging {
@@ -15545,7 +15512,6 @@ impl eframe::App for TyphooNApp {
                             .interact_pointer_pos()
                             .map(|pos| pos.y)
                             .unwrap_or(chart.scale_start_y);
-                        self.user_interacting = true;
                     }
                     if scale_press {
                         let dy = ctx.input(|i| i.pointer.delta().y);
@@ -15554,8 +15520,7 @@ impl eframe::App for TyphooNApp {
                             let factor = (1.0 + zoom_delta).clamp(0.1, 20.0);
                             chart.zoom_chart_price_by(factor);
                             chart.is_dragging = false;
-                            self.user_interacting = true;
-                        }
+                            }
                     } else if chart.is_scaling_price {
                         chart.is_scaling_price = false;
                     }
@@ -15582,7 +15547,6 @@ impl eframe::App for TyphooNApp {
                             active_sub_pane_count,
                         );
                         chart.begin_chart_camera_pan(chart_body_interact_rect.width(), price_pane_h);
-                        self.user_interacting = true;
                     }
                     if body_press && chart.is_dragging && !chart.is_scaling_price {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
@@ -15598,8 +15562,7 @@ impl eframe::App for TyphooNApp {
                                     chart_body_interact_rect.width(),
                                     price_pane_h,
                                 );
-                                self.user_interacting = true;
-                            }
+                                    }
                         }
                     }
                     if !body_press && chart.is_dragging {
@@ -17839,7 +17802,7 @@ impl eframe::App for TyphooNApp {
         let update_ms = now_instant.elapsed().as_secs_f64() * 1000.0;
         if update_ms >= 250.0 {
             tracing::warn!(
-                "UI frame stall detail: update_ms={:.2} pre_broker_ms={:.2} broker_drain_ms={:.2} render_after_broker_ms={:.2} session_save_ms={:.2} msgs_drained={} pending_fetches={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} user_interacting={}",
+                "UI frame stall detail: update_ms={:.2} pre_broker_ms={:.2} broker_drain_ms={:.2} render_after_broker_ms={:.2} session_save_ms={:.2} msgs_drained={} pending_fetches={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={}",
                 update_ms,
                 perf_pre_broker_ms,
                 perf_broker_drain_ms,
@@ -17852,7 +17815,6 @@ impl eframe::App for TyphooNApp {
                 self.scrape_fund_running,
                 self.scrape_sec_running,
                 self.auto_compact_in_progress,
-                self.user_interacting,
             );
         }
         if update_ms > 16.7 {
@@ -17867,7 +17829,7 @@ impl eframe::App for TyphooNApp {
                 let pending_fetches = self.total_pending_market_data_fetches();
                 if self.perf_max_update_ms >= 250.0 {
                     tracing::warn!(
-                        "UI frame stall: max_update_ms={:.2} slow_frames={} broker_msgs={} pending_fetches={} deferred_chart_loads={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} user_interacting={} log_entries={}",
+                        "UI frame stall: max_update_ms={:.2} slow_frames={} broker_msgs={} pending_fetches={} deferred_chart_loads={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} log_entries={}",
                         self.perf_max_update_ms,
                         self.perf_slow_frame_count,
                         self.perf_broker_msgs_drained,
@@ -17878,7 +17840,6 @@ impl eframe::App for TyphooNApp {
                         self.scrape_fund_running,
                         self.scrape_sec_running,
                         self.auto_compact_in_progress,
-                        self.user_interacting,
                         self.log.len()
                     );
                 } else {
@@ -17906,9 +17867,7 @@ impl eframe::App for TyphooNApp {
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(0)
         });
-        if self.user_interacting {
-            ctx.request_repaint();
-        } else if self.heavy_sync_in_progress {
+        if self.heavy_sync_in_progress {
             let frame_ms = if idle_fps_cap > 0 {
                 (1000 / idle_fps_cap.max(1)).max(1)
             } else {
@@ -17983,7 +17942,7 @@ mod tests {
         assert!(is_routine_news_progress("news/yahoo_rss AAPL: 20 articles"));
         assert!(is_routine_news_progress("news/AAPL: 20 articles fetched"));
         assert!(!is_routine_news_progress(
-            "News scrape complete: 41 OK, 1 failed of 42 MTF Grid symbol(s)"
+            "News scrape complete: 41 OK, 1 failed of 42 symbol(s)"
         ));
     }
 
@@ -17992,7 +17951,7 @@ mod tests {
         let tickers: Vec<String> = (0..200).map(|i| format!("SYM{i}")).collect();
         let msg = format_news_scope_scrape_start(&tickers);
 
-        assert!(msg.contains("200 MTF Grid symbol(s)"));
+        assert!(msg.contains("200 symbol(s)"));
         assert!(msg.contains("SYM0, SYM1, SYM2"));
         assert!(!msg.contains("SYM199"));
         assert!(msg.len() < 240);

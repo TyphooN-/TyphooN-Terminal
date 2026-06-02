@@ -159,12 +159,67 @@ impl TyphooNApp {
         syms
     }
 
-    pub(super) fn enabled_news_scope_symbols(&self) -> std::collections::HashSet<String> {
-        if let Some(scope) = self.broker_scope_symbols() {
-            return scope;
+    pub(super) fn active_news_scrape_symbols(&self) -> std::collections::HashSet<String> {
+        let mut syms = self.news_focus_symbols();
+        syms.extend(self.mtf_grid_news_symbols());
+        for p in &self.live_positions {
+            let s = p.symbol.trim().to_ascii_uppercase();
+            if !s.is_empty() {
+                syms.insert(s);
+            }
         }
+        for p in &self.tt_positions {
+            let s = p.symbol.trim().to_ascii_uppercase();
+            if !s.is_empty() {
+                syms.insert(s);
+            }
+        }
+        for p in &self.kr_positions {
+            let s = p.symbol.trim().to_ascii_uppercase();
+            if !s.is_empty() {
+                syms.insert(s.trim_end_matches(".EQ").to_string());
+            }
+        }
+        syms
+    }
 
-        self.news_focus_symbols()
+    pub(super) fn news_scrape_scope_symbols(&self) -> Vec<String> {
+        let mut raw = std::collections::HashSet::new();
+        match self.broker_scope {
+            EventSource::All => {
+                // News Scope ALL is an explicit full-universe scrape. Do not
+                // reuse the active/watchlist/MTF focus set here; that regression
+                // silently turned ALL into a tiny active scrape.
+                if self.kraken_enabled
+                    && self.kraken_scrape_xstocks
+                    && self.kraken_equity_universe_symbols.is_empty()
+                {
+                    return Vec::new();
+                }
+                raw.extend(self.kraken_equity_universe_symbols.iter().cloned());
+                for (sym, _name, class) in &self.all_broker_assets {
+                    if class == "us_equity" {
+                        raw.insert(sym.clone());
+                    }
+                }
+                raw.extend(self.tastytrade_universe_symbols.iter().cloned());
+                raw.extend(self.cached_tastytrade_symbols.iter().cloned());
+                raw.extend(self.active_news_scrape_symbols());
+            }
+            _ => raw.extend(self.active_news_scrape_symbols()),
+        }
+        let mut syms: Vec<String> = raw
+            .into_iter()
+            .map(|sym| {
+                normalize_market_data_symbol(&sym)
+                    .replace('/', "")
+                    .to_ascii_uppercase()
+            })
+            .filter(|sym| !sym.is_empty())
+            .collect();
+        syms.sort_unstable();
+        syms.dedup();
+        syms
     }
 
     pub(super) fn kraken_scope_symbols(&self) -> std::collections::HashSet<String> {

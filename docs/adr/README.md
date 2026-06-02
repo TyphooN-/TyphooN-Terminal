@@ -9,6 +9,6 @@ Rules:
 3. If work follows an existing architecture, update the existing ADR instead of creating a new one.
 4. Historical per-round detail lives in git history; the top-level ADR set should stay readable.
 
-Current count: 103 ADRs after adding the dedicated market-data provider-lane decision, the Kraken equities Alpaca/provider gap-fill decision, the Kraken iapi AIMD rate-discovery decision, and compacting the Godel/TA-Lib parity rounds, table-wiring passes, and feature-audit closure records.
+Current count: 107 ADRs after adding provider-lane, gap-fill, iapi AIMD, async indicator dispatch, performance-plan, Stooq fallback removal, and the no-`user_interacting` sync-throttle decision while compacting older execution-log ADRs.
 
 See the root README ADR Index for the numbered list.

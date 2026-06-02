@@ -2,9 +2,7 @@ use super::*;
 
 impl TyphooNApp {
     pub(super) fn refill_market_data_sync_slots(&mut self) {
-        let pending_cap = if self.user_interacting {
-            INTERACTIVE_TOTAL_PENDING_FETCH_CAP
-        } else if self.full_tilt_sync_enabled() {
+        let pending_cap = if self.full_tilt_sync_enabled() {
             KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW
                 + KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW
                 + ALPACA_FULL_TILT_QUEUE_WINDOW

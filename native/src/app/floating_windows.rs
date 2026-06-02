@@ -4542,13 +4542,16 @@ impl TyphooNApp {
                     limit: 500,
                 });
             }
-            let news_scope_label = self.broker_scope_label().to_string();
-            let mut scoped_news_symbols: Vec<String> =
-                self.enabled_news_scope_symbols().into_iter().collect();
-            scoped_news_symbols.sort();
-            scoped_news_symbols.dedup();
-            if scoped_news_symbols.is_empty() && !chart_symbol.trim().is_empty() {
-                scoped_news_symbols.push(chart_symbol.clone());
+            let news_scope_is_all = self.broker_scope == EventSource::All;
+            let news_scope_label = if news_scope_is_all { "All" } else { "Active" }.to_string();
+            // Build only the small Active set per frame. Full ALL expansion can be
+            // 10k+ symbols, so do it only after the user clicks Fetch (All).
+            let mut active_news_symbols: Vec<String> =
+                self.active_news_scrape_symbols().into_iter().collect();
+            active_news_symbols.sort();
+            active_news_symbols.dedup();
+            if active_news_symbols.is_empty() && !chart_symbol.trim().is_empty() {
+                active_news_symbols.push(chart_symbol.clone());
             }
 
             let content_h = ctx.content_rect().height();
@@ -4612,36 +4615,50 @@ impl TyphooNApp {
                                 self.log.push_back(LogEntry::info(format!("News: fetching multi-source for {}...", sym)));
                             }
                         }
-                        let scrape_label = format!("Scrape Scope ({})", news_scope_label);
-                        let scrape_hover = format!(
-                            "Bulk news scrape for current top-bar scope: {} ({} symbol{})",
-                            news_scope_label,
-                            scoped_news_symbols.len(),
-                            if scoped_news_symbols.len() == 1 { "" } else { "s" }
-                        );
+                        let scrape_label = format!("Fetch ({})", news_scope_label);
+                        let scrape_hover = if news_scope_is_all {
+                            "Full news scrape for the whole available source universe. Symbol expansion is deferred until click so the UI does not rebuild 10k+ symbols every frame.".to_string()
+                        } else {
+                            format!(
+                                "Bulk news scrape for Active symbols: watchlist + positions + MTF Grid ({} symbol{})",
+                                active_news_symbols.len(),
+                                if active_news_symbols.len() == 1 { "" } else { "s" }
+                            )
+                        };
                         if ui
                             .add_enabled(
-                                !self.news_loading && !scoped_news_symbols.is_empty(),
+                                !self.news_loading
+                                    && (news_scope_is_all || !active_news_symbols.is_empty()),
                                 egui::Button::new(scrape_label).fill(BTN_MG),
                             )
                             .on_hover_text(scrape_hover)
                             .clicked()
                         {
-                            let symbols = scoped_news_symbols.clone();
-                            self.news_loading = true;
-                            let _ = self.broker_tx.send(BrokerCmd::NewsScrapeSymbols {
-                                symbols,
-                                marketaux_key: self.marketaux_key.clone(),
-                                alpha_vantage_key: self.alpha_vantage_key.clone(),
-                                fmp_key: self.fmp_key.clone(),
-                                finnhub_key: self.finnhub_key.clone(),
-                                cryptopanic_key: self.cryptopanic_key.clone(),
-                            });
-                            self.log.push_back(LogEntry::info(format!(
-                                "News: scope scrape started for {} ({} symbols)",
-                                news_scope_label,
-                                scoped_news_symbols.len()
-                            )));
+                            let symbols = if news_scope_is_all {
+                                self.news_scrape_scope_symbols()
+                            } else {
+                                active_news_symbols.clone()
+                            };
+                            if symbols.is_empty() {
+                                self.log.push_back(LogEntry::warn(
+                                    "News: full universe is not ready yet; wait for source universes to load",
+                                ));
+                            } else {
+                                let symbol_count = symbols.len();
+                                self.news_loading = true;
+                                let _ = self.broker_tx.send(BrokerCmd::NewsScrapeSymbols {
+                                    symbols,
+                                    marketaux_key: self.marketaux_key.clone(),
+                                    alpha_vantage_key: self.alpha_vantage_key.clone(),
+                                    fmp_key: self.fmp_key.clone(),
+                                    finnhub_key: self.finnhub_key.clone(),
+                                    cryptopanic_key: self.cryptopanic_key.clone(),
+                                });
+                                self.log.push_back(LogEntry::info(format!(
+                                    "News: scope scrape started for {} ({} symbols)",
+                                    news_scope_label, symbol_count
+                                )));
+                            }
                         }
                         if self.news_loading {
                             ui.spinner();
@@ -60017,7 +60034,7 @@ impl TyphooNApp {
                                     });
                                     let sym_resp = sym_resp_opt.unwrap();
                                     // UX6: Auto-scroll to first EXTREME tier outlier on pending flag
-                                    if !self.user_interacting && self.outlier_scroll_pending && !scrolled && o.tier == "EXTREME" {
+                                    if self.outlier_scroll_pending && !scrolled && o.tier == "EXTREME" {
                                         sym_resp.scroll_to_me(Some(egui::Align::Center));
                                         scrolled = true;
                                     }

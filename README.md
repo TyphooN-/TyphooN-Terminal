@@ -320,6 +320,10 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [101](docs/adr/101-kraken-iapi-aimd-rate-discovery-and-persistence.md) | Kraken iapi AIMD Rate Discovery and Persistence |
 | [102](docs/adr/102-kraken-equities-gap-fill-via-alpaca-and-provider-fallback.md) | Kraken Equities Gap Fill via Alpaca and Provider Fallback |
 | [103](docs/adr/103-dedicated-market-data-provider-lanes.md) | Dedicated Market-Data Provider Lanes for Deep/Fresh Bars |
+| [104](docs/adr/104-async-multi-output-indicator-dispatch.md) | Async Multi-Output Indicator Dispatch |
+| [105](docs/adr/105-performance-optimization-plan.md) | Performance Optimization Plan |
+| [106](docs/adr/106-remove-stooq-daily-fallback.md) | Remove Stooq Daily Fallback |
+| [107](docs/adr/107-no-user-interacting-sync-throttle.md) | No `user_interacting` Sync Throttle |
 
 ---
 

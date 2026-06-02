@@ -95,9 +95,7 @@ use self::bar_sync::*;
 use self::broker_fetch::*;
 use self::fallback_bars::*;
 use self::kraken_sync::*;
-use self::market_data_sync::{
-    INTERACTIVE_TOTAL_PENDING_FETCH_CAP, normalize_kraken_equity_symbol_list,
-};
+use self::market_data_sync::normalize_kraken_equity_symbol_list;
 use self::sync_config::*;
 use self::sync_workset::*;
 use self::tastytrade_sync::*;
@@ -11459,7 +11457,7 @@ fn format_news_scope_scrape_start(tickers: &[String]) -> String {
         .map(|remaining| format!(" … +{remaining} more"))
         .unwrap_or_default();
     format!(
-        "News scrape: starting for {} MTF Grid symbol(s): {}{}",
+        "News scrape: starting for {} symbol(s): {}{}",
         tickers.len(),
         shown.join(", "),
         suffix
@@ -12199,7 +12197,6 @@ pub struct TyphooNApp {
     sparkline_cache: std::collections::HashMap<String, std::sync::Arc<Vec<f64>>>,
     /// UX3: Deferred symbol action from right-panel context menus (applied at end of update()).
     deferred_symbol_action: SymbolAction,
-    user_interacting: bool, // set during mouse drag/zoom to throttle background sync (used by bar_sync / alpaca_sync)
     /// PERF: Cached active symbols list. Recomputed when chart/position/watchlist inputs change.
     cached_active_symbols: Vec<String>,
     cached_active_symbols_key: Option<u64>,
@@ -25827,7 +25824,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     tickers.sort();
                                     if tickers.is_empty() {
                                         let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
-                                            "News scrape: no MTF Grid symbols".into(),
+                                            "News scrape: no symbols".into(),
                                         ));
                                         return;
                                     }
@@ -25958,7 +25955,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                             .await;
                                     }
                                     let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
-                                        "News scrape complete: {} OK, {} failed of {} MTF Grid symbol(s)",
+                                        "News scrape complete: {} OK, {} failed of {} symbol(s)",
                                         ok, fail, total
                                     )));
                                     if let Some(first) = tickers.first() {
@@ -29094,7 +29091,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
             workspaces: std::collections::HashMap::new(),
             sparkline_cache: std::collections::HashMap::with_capacity(256),
             deferred_symbol_action: SymbolAction::None,
-            user_interacting: false,
             cached_active_symbols: Vec::with_capacity(64),
             cached_active_symbols_key: None,
             cached_active_symbols_set: std::collections::HashSet::with_capacity(64),
