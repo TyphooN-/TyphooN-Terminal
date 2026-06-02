@@ -1,7 +1,7 @@
 use super::*;
 
 const SEC_CACHE_HEAVY_SYNC_MIN_REBUILD_INTERVAL: std::time::Duration =
-    std::time::Duration::from_millis(750);
+    std::time::Duration::from_secs(30);
 
 impl TyphooNApp {
     pub(super) fn dark_visuals() -> egui::Visuals {
@@ -250,19 +250,36 @@ impl TyphooNApp {
     pub(super) fn rebuild_sec_caches(&mut self) {
         use std::hash::{Hash, Hasher};
 
-        let bg_rev = self.bg_rev;
+        let sec_data_key = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            self.bg.sec_filings.len().hash(&mut h);
+            self.bg.sec_alerts.len().hash(&mut h);
+            self.bg.insider_trades.len().hash(&mut h);
+            self.bg.sec_content_stats.hash(&mut h);
+            if let Some(first) = self.bg.sec_filings.first() {
+                first.id.hash(&mut h);
+                first.filing_date.hash(&mut h);
+                first.accession_number.hash(&mut h);
+            }
+            if let Some(last) = self.bg.sec_filings.last() {
+                last.id.hash(&mut h);
+                last.filing_date.hash(&mut h);
+                last.accession_number.hash(&mut h);
+            }
+            h.finish()
+        };
         let scope = self.broker_scope;
 
-        // Tab counts — (bg_rev, scope)
+        // Tab counts — (SEC data, scope)
         let counts_key = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            bg_rev.hash(&mut h);
+            sec_data_key.hash(&mut h);
             scope.hash(&mut h);
             h.finish()
         };
         let filings_key = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            bg_rev.hash(&mut h);
+            sec_data_key.hash(&mut h);
             scope.hash(&mut h);
             self.sec_filters.hash(&mut h);
             self.sec_search_query.hash(&mut h);
@@ -272,7 +289,7 @@ impl TyphooNApp {
         };
         let insiders_key = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            bg_rev.hash(&mut h);
+            sec_data_key.hash(&mut h);
             scope.hash(&mut h);
             self.sec_search_query.hash(&mut h);
             h.finish()
@@ -320,8 +337,10 @@ impl TyphooNApp {
             self.sec_cache_tab_counts_key = Some(counts_key);
         }
 
-        // Filings tab — (bg_rev, scope, filters, query, sort column, sort direction)
-        if self.sec_cache_filings_key != Some(filings_key) {
+        // Filings tab — (SEC data, scope, filters, query, sort column, sort direction).
+        // Do not rebuild hidden-tab caches while the broad SEC scraper is inserting rows;
+        // hidden O(N) work is exactly what makes the UI feel stuck.
+        if self.sec_tab == 0 && self.sec_cache_filings_key != Some(filings_key) {
             let filter_types: &[&str] = &["4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
             let all_on = self.sec_filters.iter().all(|&v| v);
             let none_on = self.sec_filters.iter().all(|&v| !v);
@@ -347,12 +366,16 @@ impl TyphooNApp {
             } else {
                 std::collections::HashMap::new()
             };
-            let mut seen: std::collections::HashSet<(String, String, String)> =
+            let mut seen: std::collections::HashSet<(&str, &str, &str)> =
                 std::collections::HashSet::with_capacity(filings.len());
             let mut idxs: Vec<usize> = Vec::with_capacity(filings.len());
             for (idx, f) in filings.iter().enumerate() {
                 // Dedup by (date, ticker, form_type) — tuple key, no per-row format!() alloc.
-                let key = (f.filing_date.clone(), f.ticker.clone(), f.form_type.clone());
+                let key = (
+                    f.filing_date.as_str(),
+                    f.ticker.as_str(),
+                    f.form_type.as_str(),
+                );
                 if !seen.insert(key) {
                     continue;
                 }
@@ -401,46 +424,48 @@ impl TyphooNApp {
             // it once before the sort closure so the lookup is O(1) per compare.
             let col = self.sec_sort.column;
             let asc = self.sec_sort.ascending;
-            let needs_fund_lookup = matches!(col, 6 | 7);
-            let fund_map: std::collections::HashMap<&str, (&str, &str)> = if needs_fund_lookup {
-                self.bg
-                    .all_fundamentals
-                    .iter()
-                    .map(|f| (f.symbol.as_str(), (f.sector.as_str(), f.industry.as_str())))
-                    .collect()
-            } else {
-                std::collections::HashMap::new()
-            };
-            idxs.sort_by(|&a, &b| {
-                let fa = &filings[a];
-                let fb = &filings[b];
-                let ord = match col {
-                    0 => fa.filing_date.cmp(&fb.filing_date),
-                    1 => fa.ticker.cmp(&fb.ticker),
-                    2 => fa.form_type.cmp(&fb.form_type),
-                    3 => fa.category.cmp(&fb.category),
-                    4 => fa.company_name.cmp(&fb.company_name),
-                    5 => fa.accession_number.cmp(&fb.accession_number),
-                    6 => {
-                        let sa = fund_map.get(fa.ticker.as_str()).map(|v| v.0).unwrap_or("");
-                        let sb = fund_map.get(fb.ticker.as_str()).map(|v| v.0).unwrap_or("");
-                        sa.cmp(sb)
-                    }
-                    7 => {
-                        let ia = fund_map.get(fa.ticker.as_str()).map(|v| v.1).unwrap_or("");
-                        let ib = fund_map.get(fb.ticker.as_str()).map(|v| v.1).unwrap_or("");
-                        ia.cmp(ib)
-                    }
-                    _ => std::cmp::Ordering::Equal,
+            if !(col == 0 && !asc) {
+                let needs_fund_lookup = matches!(col, 6 | 7);
+                let fund_map: std::collections::HashMap<&str, (&str, &str)> = if needs_fund_lookup {
+                    self.bg
+                        .all_fundamentals
+                        .iter()
+                        .map(|f| (f.symbol.as_str(), (f.sector.as_str(), f.industry.as_str())))
+                        .collect()
+                } else {
+                    std::collections::HashMap::new()
                 };
-                if asc { ord } else { ord.reverse() }
-            });
+                idxs.sort_by(|&a, &b| {
+                    let fa = &filings[a];
+                    let fb = &filings[b];
+                    let ord = match col {
+                        0 => fa.filing_date.cmp(&fb.filing_date),
+                        1 => fa.ticker.cmp(&fb.ticker),
+                        2 => fa.form_type.cmp(&fb.form_type),
+                        3 => fa.category.cmp(&fb.category),
+                        4 => fa.company_name.cmp(&fb.company_name),
+                        5 => fa.accession_number.cmp(&fb.accession_number),
+                        6 => {
+                            let sa = fund_map.get(fa.ticker.as_str()).map(|v| v.0).unwrap_or("");
+                            let sb = fund_map.get(fb.ticker.as_str()).map(|v| v.0).unwrap_or("");
+                            sa.cmp(sb)
+                        }
+                        7 => {
+                            let ia = fund_map.get(fa.ticker.as_str()).map(|v| v.1).unwrap_or("");
+                            let ib = fund_map.get(fb.ticker.as_str()).map(|v| v.1).unwrap_or("");
+                            ia.cmp(ib)
+                        }
+                        _ => std::cmp::Ordering::Equal,
+                    };
+                    if asc { ord } else { ord.reverse() }
+                });
+            }
             self.sec_cache_filings = idxs;
             self.sec_cache_filings_key = Some(filings_key);
         }
 
-        // Insiders tab — (bg_rev, scope, query)
-        if self.sec_cache_insiders_key != Some(insiders_key) {
+        // Insiders tab — (SEC data, scope, query)
+        if self.sec_tab == 2 && self.sec_cache_insiders_key != Some(insiders_key) {
             let search_upper = self.sec_search_query.trim().to_uppercase();
             let has_search = !search_upper.is_empty();
 
@@ -500,8 +525,8 @@ impl TyphooNApp {
             self.sec_cache_insiders_key = Some(insiders_key);
         }
 
-        // Timeline tab — (bg_rev, scope)
-        if self.sec_cache_timeline_key != Some(timeline_key) {
+        // Timeline tab — (SEC data, scope)
+        if self.sec_tab == 3 && self.sec_cache_timeline_key != Some(timeline_key) {
             let mut by_month: std::collections::BTreeMap<String, Vec<usize>> =
                 std::collections::BTreeMap::new();
             for (idx, f) in self.bg.sec_filings.iter().enumerate() {
