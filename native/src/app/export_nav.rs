@@ -118,18 +118,9 @@ impl TyphooNApp {
         // Progressive factor: ~5% per notch (15px), capped at 15% per frame
         let pct = (delta * 0.003).clamp(-0.15, 0.15);
         let factor = 1.0 - pct;
-        let old_vis = chart.visible_bars;
-        let new_vis = ((old_vis as f32 * factor) as usize).clamp(10, chart.bars.len().max(10));
-        // TradingView zoom: anchor to the RIGHT (latest bars stay fixed)
-        // view_offset is the rightmost visible bar index
-        // When zooming in (fewer bars): offset stays same, we see fewer bars on the left
-        // When zooming out (more bars): offset stays same, we see more bars on the left
-        let max_off = chart.bars.len().saturating_sub(1) + new_vis.saturating_sub(1);
-        // Keep the right edge (view_offset) fixed — just change visible_bars
-        chart.view_offset = chart.view_offset.min(max_off);
-        chart.visible_bars = new_vis;
-        chart.manual_view_override = true;
-        chart.reset_camera_from_legacy();
+        // Keep the camera authoritative. Rebuilding from rounded legacy fields
+        // here makes body-drag free-look visibly snap back after scroll zoom.
+        chart.zoom_chart_bars_by(factor as f64);
     }
 
     // ── floating window rendering ────────────────────────────────────────────

@@ -1871,6 +1871,31 @@ impl ChartCamera {
         self.follow_latest = false;
     }
 
+    fn zoom_price_by(&mut self, factor: f64, natural_price_center: f64, natural_price_span: f64) {
+        let factor = factor.clamp(0.01, 100.0);
+        if self.price_center.is_none() || self.price_span.is_none() {
+            self.set_price_view(natural_price_center, natural_price_span);
+        }
+        let center = self.price_center.unwrap_or(natural_price_center);
+        let span = self
+            .price_span
+            .unwrap_or(natural_price_span)
+            .max(f64::EPSILON);
+        // factor > 1.0 means zoom in / compress the visible price range.
+        self.set_price_view(center, span / factor);
+        self.follow_latest = false;
+    }
+
+    fn zoom_bars_by(&mut self, factor: f64, data_len: usize) {
+        if data_len == 0 {
+            return;
+        }
+        let old_right_edge = self.right_edge_bar();
+        self.bars_visible = (self.bars_visible * factor).clamp(10.0, data_len.max(10) as f64);
+        self.set_right_edge_bar(old_right_edge, data_len);
+        self.follow_latest = false;
+    }
+
     fn on_data_len_changed(&mut self, old_len: usize, new_len: usize) {
         if new_len == 0 {
             self.set_right_edge_bar(0.0, 0);
@@ -5988,6 +6013,21 @@ impl ChartState {
             natural_center,
             natural_span,
         );
+        self.sync_camera_to_legacy();
+        self.mark_view_changed();
+    }
+
+    fn zoom_chart_price_by(&mut self, factor: f64) {
+        let (natural_center, natural_span) =
+            self.natural_visible_price_view().unwrap_or((0.0, 1.0));
+        self.camera
+            .zoom_price_by(factor, natural_center, natural_span);
+        self.sync_camera_to_legacy();
+        self.mark_view_changed();
+    }
+
+    fn zoom_chart_bars_by(&mut self, factor: f64) {
+        self.camera.zoom_bars_by(factor, self.bars.len());
         self.sync_camera_to_legacy();
         self.mark_view_changed();
     }
@@ -33858,6 +33898,39 @@ mod tests {
 
         assert!(chart.visible_bars < 200);
         assert!(chart.manual_view_override);
+    }
+
+    #[test]
+    fn chart_zoom_keeps_free_look_camera_instead_of_rebuilding_from_legacy() {
+        let mut chart = ChartState::new("WOK", Timeframe::H4);
+        chart.bars = make_bars(500);
+        chart.visible_bars = 100;
+        chart.view_offset = 499;
+
+        chart.begin_chart_camera_pan(800.0, 400.0);
+        chart.pan_chart_camera_pixels(egui::vec2(83.0, 120.0), 800.0, 400.0);
+        let right_before = chart.camera.right_edge_bar();
+        let price_center_before = chart.camera.price_center.unwrap();
+
+        chart.zoom_chart_price_by(1.25);
+        assert!(
+            (chart.camera.right_edge_bar() - right_before).abs() < 1e-9,
+            "vertical zoom must not rebuild horizontal camera from rounded view_offset"
+        );
+        assert!(
+            (chart.camera.price_center.unwrap() - price_center_before).abs() < 1e-9,
+            "vertical zoom should scale around the current free-look price center"
+        );
+
+        TyphooNApp::handle_zoom(&mut chart, 30.0);
+        assert!(
+            chart.manual_view_override,
+            "horizontal zoom must keep manual free-look active"
+        );
+        assert!(
+            (chart.camera.price_center.unwrap() - price_center_before).abs() < 1e-9,
+            "horizontal zoom must not reset vertical free-look price center"
+        );
     }
 
     #[test]

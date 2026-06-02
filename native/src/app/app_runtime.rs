@@ -14752,8 +14752,8 @@ impl eframe::App for TyphooNApp {
                     // Scroll on price axis → vertical zoom (TradingView style: squish/expand)
                     if let Some(chart) = self.charts.get_mut(self.active_tab) {
                         let pct = (scroll_delta * 0.002).clamp(-0.08, 0.08);
-                        chart.price_zoom = (chart.price_zoom * (1.0 + pct as f64)).clamp(0.1, 20.0);
-                        chart.manual_view_override = true;
+                        let factor = (1.0 + pct as f64).clamp(0.1, 20.0);
+                        chart.zoom_chart_price_by(factor);
                     }
                 } else if on_chart_body {
                     let ctrl_held = ctx.input(|i| i.modifiers.ctrl);
@@ -14761,8 +14761,8 @@ impl eframe::App for TyphooNApp {
                         // Ctrl+scroll on chart → vertical zoom (progressive)
                         if let Some(chart) = self.charts.get_mut(self.active_tab) {
                             let pct = (scroll_delta * 0.002).clamp(-0.08, 0.08);
-                            chart.price_zoom = (chart.price_zoom * (1.0 + pct as f64)).clamp(0.1, 20.0);
-                            chart.manual_view_override = true;
+                            let factor = (1.0 + pct as f64).clamp(0.1, 20.0);
+                            chart.zoom_chart_price_by(factor);
                         }
                     } else {
                         // Scroll on chart → horizontal zoom (time axis, progressive)
@@ -15400,10 +15400,8 @@ impl eframe::App for TyphooNApp {
                         let dy = ctx.input(|i| i.pointer.delta().y);
                         if dy.abs() > 0.0 {
                             let zoom_delta = -dy as f64 * 0.003;
-                            chart.price_zoom =
-                                (chart.price_zoom * (1.0 + zoom_delta)).clamp(0.1, 20.0);
-                            chart.manual_view_override = true;
-                            chart.reset_camera_from_legacy();
+                            let factor = (1.0 + zoom_delta).clamp(0.1, 20.0);
+                            chart.zoom_chart_price_by(factor);
                         }
                     }
                     if cell_scale_resp.double_clicked() {
@@ -15543,10 +15541,8 @@ impl eframe::App for TyphooNApp {
                         let dy = ctx.input(|i| i.pointer.delta().y);
                         if dy.abs() > 0.0 {
                             let zoom_delta = -dy as f64 * 0.003;
-                            chart.price_zoom =
-                                (chart.price_zoom * (1.0 + zoom_delta)).clamp(0.1, 20.0);
-                            chart.manual_view_override = true;
-                            chart.reset_camera_from_legacy();
+                            let factor = (1.0 + zoom_delta).clamp(0.1, 20.0);
+                            chart.zoom_chart_price_by(factor);
                             chart.is_dragging = false;
                             self.user_interacting = true;
                         }
