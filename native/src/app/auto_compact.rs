@@ -7,7 +7,7 @@
 //! Gate (all must hold):
 //! - User has not disabled auto-compact in Storage Manager.
 //! - At least the configured cadence has elapsed since the last successful run.
-//! - Local time is within the configured idle window (default Sunday 04:00–05:00).
+//! - Local time is within the configured idle window (default daily 04:00–05:00).
 //! - The engine has been idle for ≥ `IDLE_THRESHOLD` (no UI input, no compact in flight).
 //! - The host is on AC power (best-effort; non-Linux assumes AC).
 //! - At least the configured row threshold is below the target zstd level.
@@ -17,8 +17,10 @@ use chrono::{Datelike, TimeZone, Timelike};
 /// Target zstd level for periodic compaction.
 pub const TARGET_LEVEL: i32 = 22;
 
-/// Minimum days between automated runs.
-pub const CADENCE_DAYS: i64 = 7;
+/// Minimum days between automated runs. Live ingestion stores bars at a fast
+/// zstd level for responsiveness; daily idle compaction restores cold rows to
+/// the archival target without taxing foreground sync or chart interaction.
+pub const CADENCE_DAYS: i64 = 1;
 
 /// User must have been idle this long before we start a run.
 pub const IDLE_THRESHOLD_SECS: u64 = 300;
@@ -458,10 +460,18 @@ mod tests {
     }
 
     #[test]
-    fn gate_skips_off_weekday() {
+    fn weekly_gate_skips_off_weekday() {
         let mut i = base();
+        i.schedule.cadence_days = 7;
         i.local_weekday = (DEFAULT_WINDOW_WEEKDAY + 1) % 7;
         assert!(!evaluate_gate(&i).run);
+    }
+
+    #[test]
+    fn daily_default_ignores_weekday_gate() {
+        let mut i = base();
+        i.local_weekday = (DEFAULT_WINDOW_WEEKDAY + 1) % 7;
+        assert!(evaluate_gate(&i).run);
     }
 
     #[test]
@@ -549,8 +559,11 @@ mod tests {
     }
 
     #[test]
-    fn next_eligible_skips_to_next_week_when_cadence_misses_window() {
-        let schedule = Schedule::default();
+    fn next_eligible_skips_to_next_week_when_weekly_cadence_misses_window() {
+        let schedule = Schedule {
+            cadence_days: 7,
+            ..Schedule::default()
+        };
         let now = local_dt(2026, 5, 3, DEFAULT_WINDOW_HOUR_START, 0);
         let last_run_ms =
             now.timestamp_millis() - schedule.cadence_days * 86_400_000 + 2 * 60 * 60_000;

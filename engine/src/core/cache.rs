@@ -20,7 +20,7 @@ pub type BgConnection = Connection;
 const BAR_BINARY_MAGIC: &[u8; 4] = b"TTBR"; // TyphooN Terminal Bar Record
 /// Bytes per bar in binary format: i64 timestamp + 5×f64 (OHLCV) = 48 bytes
 const BYTES_PER_BAR: usize = 8 + 5 * 8; // 48
-const BAR_ZSTD_LEVEL: i32 = 22;
+const BAR_ZSTD_LEVEL: i32 = 3;
 const KV_ZSTD_LEVEL: i32 = 3;
 const BACKUP_ZSTD_LEVEL: i32 = 22;
 const ENCRYPTED_BACKUP_MAGIC: &[u8] = b"TYPHOON-BACKUP-AESGCM-V1\0";
@@ -755,8 +755,8 @@ impl SqliteCache {
 
     /// Store bar data in packed binary format + zstd compression.
     /// Binary format is ~3-5x smaller than JSON before compression.
-    /// Uses zstd-22 immediately for bar blobs. Writes happen off the render hot path;
-    /// reads pay the same zstd decompression path regardless of source compression level.
+    /// Uses live-ingest zstd level for bar blobs. Max compression belongs in idle
+    /// compaction; using zstd-22 during broad sync can saturate CPU and starve egui.
     pub fn put_bars(&self, key: &str, json_data: &str) -> Result<(), String> {
         let binary = pack_bars_for_key(key, json_data)?;
         let bar_count = u32::from_le_bytes(
@@ -1326,20 +1326,22 @@ impl SqliteCache {
 
     /// Merge new bars into existing cached entry. Deduplicates by timestamp, sorts, re-stores.
     /// Trims to max_bars (keeps most recent) when a bounded caller explicitly asks for it.
-    /// Uses zstd-22 for final bar storage so rows never need a later recompression pass.
+    /// Uses the live-ingest zstd level for final bar storage. Idle compaction can
+    /// recompress cold rows to zstd-22 without taxing foreground interaction.
     /// Returns the full merged dataset as JSON.
     pub fn merge_bars(&self, key: &str, new_json: &str, max_bars: usize) -> Result<String, String> {
         self.merge_bars_with_level(key, new_json, max_bars, BAR_ZSTD_LEVEL)
     }
 
-    /// Hot-path merge for high-frequency writers (Kraken WS bar close). Uses
-    /// zstd-3 instead of zstd-22. Encoder is ~10–20× faster which is the
+    /// Hot-path merge for high-frequency writers (Kraken WS bar close). Keeps
+    /// the same zstd-3 level as live REST ingestion. Encoder is ~10–20× faster
+    /// than zstd-22 which is the
     /// load-bearing fix for first-subscribe snapshot storms (~12k keys × ~700
     /// closed bars each landing in one flush): zstd-22 turns that into ~30s
     /// of CPU saturation, zstd-3 into ~3s. Compression ratio drops by ~15%
     /// (mid-50s KB → low-60s KB per blob) which is irrelevant on disk but
     /// massive on encode latency. The next REST refetch that touches this
-    /// key will re-pack it at zstd-22 via [`merge_bars`].
+    /// key can later be repacked at zstd-22 by idle compaction.
     pub fn merge_bars_fast(
         &self,
         key: &str,
@@ -2779,6 +2781,28 @@ mod tests {
         let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
         std::env::temp_dir().join(format!("typhoon_cache_test_{}_{}.db", pid, id))
+    }
+
+    #[test]
+    fn live_bar_writes_use_fast_zstd_level_not_idle_compaction_level() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let bars = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10.0}]"#;
+
+        cache.put_bars("alpaca:AAPL:1Day", bars).unwrap();
+        let level: i32 = cache
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT zstd_level FROM bar_cache WHERE key = ?1",
+                params!["alpaca:AAPL:1Day"],
+                |row| row.get::<_, i32>(0),
+            )
+            .unwrap();
+
+        assert_eq!(level, 3);
+        let _ = std::fs::remove_file(db_path);
     }
 
     /// Helper: build a valid TTBR binary blob with N bars.
