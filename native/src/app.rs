@@ -3655,8 +3655,11 @@ impl ChartState {
                 "mt5:",
                 "default:",
                 "kraken-futures:",
+                "kraken-equities:",
                 "kraken:",
+                "tastytrade:",
                 "alpaca:",
+                "yahoo-chart:",
                 "paper_TyphooN:",
                 "alpaca_paper_TyphooN:",
             ];
@@ -3919,7 +3922,7 @@ impl ChartState {
 
         if self.bars.is_empty() {
             log.push_back(LogEntry::warn(format!(
-                "No data found for key '{}' — run the MT5 XML import pipeline first",
+                "No chart data found for key '{}'",
                 key
             )));
         } else {
@@ -5579,8 +5582,11 @@ impl ChartState {
                 "mt5:",
                 "default:",
                 "kraken-futures:",
+                "kraken-equities:",
                 "kraken:",
+                "tastytrade:",
                 "alpaca:",
+                "yahoo-chart:",
                 "paper_TyphooN:",
                 "alpaca_paper_TyphooN:",
             ];
@@ -5598,9 +5604,12 @@ impl ChartState {
         let prefixes = [
             "mt5:",
             "default:",
-            "kraken-futures:",
+            "kraken-equities:",
             "kraken:",
+            "kraken-futures:",
+            "tastytrade:",
             "alpaca:",
+            "yahoo-chart:",
             "paper_TyphooN:",
             "alpaca_paper_TyphooN:",
             "",
@@ -5617,6 +5626,13 @@ impl ChartState {
                 // e.g. "mt5:EURUSD:1Hour" — BarCacheWriter's 3-part key format.
                 let key = format!("{}{}:{}", prefix, bare_sym, tf_suffix);
                 if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
+                    if !chart_source_bars_match_timeframe(
+                        cache_source_from_key(&key),
+                        tf_suffix,
+                        &raw,
+                    ) {
+                        continue;
+                    }
                     htf_bars = Some(
                         raw.into_iter()
                             .map(|(ts, o, h, l, c, v)| Bar {
@@ -5636,6 +5652,13 @@ impl ChartState {
             if htf_bars.is_none() {
                 let key = format!("{}:{}", base_sym, tf_suffix);
                 if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
+                    if !chart_source_bars_match_timeframe(
+                        cache_source_from_key(&key),
+                        tf_suffix,
+                        &raw,
+                    ) {
+                        continue;
+                    }
                     htf_bars = Some(
                         raw.into_iter()
                             .map(|(ts, o, h, l, c, v)| Bar {
@@ -5747,8 +5770,11 @@ impl ChartState {
                 "mt5:",
                 "default:",
                 "kraken-futures:",
+                "kraken-equities:",
                 "kraken:",
+                "tastytrade:",
                 "alpaca:",
+                "yahoo-chart:",
                 "paper_TyphooN:",
                 "alpaca_paper_TyphooN:",
             ];
@@ -5766,9 +5792,12 @@ impl ChartState {
         let prefixes = [
             "mt5:",
             "default:",
-            "kraken-futures:",
+            "kraken-equities:",
             "kraken:",
+            "kraken-futures:",
+            "tastytrade:",
             "alpaca:",
+            "yahoo-chart:",
             "paper_TyphooN:",
             "alpaca_paper_TyphooN:",
             "",
@@ -5784,6 +5813,13 @@ impl ChartState {
             for prefix in &prefixes {
                 let key = format!("{}{}:{}", prefix, bare_sym, tf_suffix);
                 if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
+                    if !chart_source_bars_match_timeframe(
+                        cache_source_from_key(&key),
+                        tf_suffix,
+                        &raw,
+                    ) {
+                        continue;
+                    }
                     htf_bars = Some(
                         raw.into_iter()
                             .map(|(ts, o, h, l, c, v)| Bar {
@@ -5803,6 +5839,13 @@ impl ChartState {
             if htf_bars.is_none() {
                 let key = format!("{}:{}", base_sym, tf_suffix);
                 if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
+                    if !chart_source_bars_match_timeframe(
+                        cache_source_from_key(&key),
+                        tf_suffix,
+                        &raw,
+                    ) {
+                        continue;
+                    }
                     htf_bars = Some(
                         raw.into_iter()
                             .map(|(ts, o, h, l, c, v)| Bar {

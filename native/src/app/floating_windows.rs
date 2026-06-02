@@ -53584,8 +53584,8 @@ impl TyphooNApp {
             // search query, or sort direction change.
             self.rebuild_sec_caches();
             let sec_scope_label = self.broker_scope_label();
-            let sec_scrape_scope_symbols = self.sec_scrape_scope_symbols();
             let mut sec_pending_action = SymbolAction::None;
+            let mut sec_scrape_clicked = false;
             egui::Window::new("SEC Filing Scanner")
                 .open(&mut self.show_sec)
                 .resizable(true).default_size([900.0, 650.0]).min_size([600.0, 200.0]).constrain(false)
@@ -53631,31 +53631,7 @@ impl TyphooNApp {
                             .on_hover_text("Scrape SEC EDGAR filings for the current Scope")
                             .clicked()
                         {
-                            let symbols = sec_scrape_scope_symbols.clone();
-                            let symbol_count = symbols.len();
-                            if symbol_count > 0 {
-                                let db_path = cache_db_path();
-                                let _ = self.broker_tx.send(BrokerCmd::SecScrape { db_path, symbols });
-                                self.scrape_sec_running = true;
-                                self.scrape_sec_last_msg = format!(
-                                    "scraping Scope {} ({} symbols)...",
-                                    sec_scope_label, symbol_count
-                                );
-                                self.log.push_back(LogEntry::info(format!(
-                                    "SEC EDGAR scrape initiated for Scope {} ({} symbols)...",
-                                    sec_scope_label,
-                                    symbol_count
-                                )));
-                            } else {
-                                self.scrape_sec_last_msg = format!(
-                                    "skipped: Scope {} has no symbols",
-                                    sec_scope_label
-                                );
-                                self.log.push_back(LogEntry::warn(format!(
-                                    "SEC EDGAR scrape skipped: Scope {} has no symbols",
-                                    sec_scope_label
-                                )));
-                            }
+                            sec_scrape_clicked = true;
                         }
                         if self.scrape_sec_running {
                             ui.spinner();
@@ -54095,6 +54071,32 @@ impl TyphooNApp {
                         });
                     }
                 });
+            if sec_scrape_clicked {
+                let symbols = self.sec_scrape_scope_symbols();
+                let symbol_count = symbols.len();
+                if symbol_count > 0 {
+                    let db_path = cache_db_path();
+                    let _ = self
+                        .broker_tx
+                        .send(BrokerCmd::SecScrape { db_path, symbols });
+                    self.scrape_sec_running = true;
+                    self.scrape_sec_last_msg = format!(
+                        "scraping Scope {} ({} symbols)...",
+                        sec_scope_label, symbol_count
+                    );
+                    self.log.push_back(LogEntry::info(format!(
+                        "SEC EDGAR scrape initiated for Scope {} ({} symbols)...",
+                        sec_scope_label, symbol_count
+                    )));
+                } else {
+                    self.scrape_sec_last_msg =
+                        format!("skipped: Scope {} has no symbols", sec_scope_label);
+                    self.log.push_back(LogEntry::warn(format!(
+                        "SEC EDGAR scrape skipped: Scope {} has no symbols",
+                        sec_scope_label
+                    )));
+                }
+            }
             // Apply deferred symbol context menu action (after window borrow released)
             self.apply_symbol_action(sec_pending_action);
         }
@@ -55476,8 +55478,8 @@ impl TyphooNApp {
 
         // ── Scrape Status Dashboard ──
         if self.show_scrape_status {
-            let scrape_status_sec_scope_symbols = self.sec_scrape_scope_symbols();
             let scrape_status_sec_scope_label = self.broker_scope_label();
+            let mut scrape_status_sec_clicked = false;
             egui::Window::new("Scrape Status Dashboard")
                 .open(&mut self.show_scrape_status)
                 .resizable(true)
@@ -55642,24 +55644,7 @@ impl TyphooNApp {
                                     )
                                     .clicked()
                                 {
-                                    let symbols = scrape_status_sec_scope_symbols.clone();
-                                    if symbols.is_empty() {
-                                        self.scrape_sec_last_msg = format!(
-                                            "skipped: Scope {} has no symbols",
-                                            scrape_status_sec_scope_label
-                                        );
-                                    } else {
-                                        let symbol_count = symbols.len();
-                                        let db_path = cache_db_path();
-                                        let _ = self
-                                            .broker_tx
-                                            .send(BrokerCmd::SecScrape { db_path, symbols });
-                                        self.scrape_sec_running = true;
-                                        self.scrape_sec_last_msg = format!(
-                                            "scraping Scope {} ({} symbols)...",
-                                            scrape_status_sec_scope_label, symbol_count
-                                        );
-                                    }
+                                    scrape_status_sec_clicked = true;
                                 }
                             } else {
                                 ui.horizontal(|ui| {
@@ -55905,6 +55890,26 @@ impl TyphooNApp {
                         );
                     }
                 });
+            if scrape_status_sec_clicked {
+                let symbols = self.sec_scrape_scope_symbols();
+                if symbols.is_empty() {
+                    self.scrape_sec_last_msg = format!(
+                        "skipped: Scope {} has no symbols",
+                        scrape_status_sec_scope_label
+                    );
+                } else {
+                    let symbol_count = symbols.len();
+                    let db_path = cache_db_path();
+                    let _ = self
+                        .broker_tx
+                        .send(BrokerCmd::SecScrape { db_path, symbols });
+                    self.scrape_sec_running = true;
+                    self.scrape_sec_last_msg = format!(
+                        "scraping Scope {} ({} symbols)...",
+                        scrape_status_sec_scope_label, symbol_count
+                    );
+                }
+            }
         }
 
         // Fundamentals Viewer
