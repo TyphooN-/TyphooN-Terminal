@@ -87,7 +87,7 @@ impl TyphooNApp {
                                 &[
                                     ("gemini-2.5-pro", "gemini-2.5-pro"),
                                     ("gemini-2.5-flash", "gemini-2.5-flash"),
-                                    ("gemini-2.0-flash", "gemini-2.0-flash"),
+                                    ("gemini-2.5-flash-lite", "gemini-2.5-flash-lite"),
                                 ],
                             ),
                             3 => (
@@ -450,7 +450,7 @@ impl TyphooNApp {
                 .min_height(280.0)
                 .constrain(true)
                 .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(
                             egui::RichText::new("Gemini CLI — local binary")
                                 .small()
@@ -473,10 +473,23 @@ impl TyphooNApp {
                                 );
                                 ui.selectable_value(
                                     &mut self.gemini_model,
-                                    "gemini-2.0-flash".to_string(),
-                                    "gemini-2.0-flash",
+                                    "gemini-2.5-flash-lite".to_string(),
+                                    "gemini-2.5-flash-lite (cheap)",
                                 );
                             });
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.gemini_model)
+                                .desired_width(180.0)
+                                .hint_text("any gemini CLI model id"),
+                        )
+                        .on_hover_text(
+                            "Type any model your installed gemini CLI/account can use. TyphooN passes it through to `gemini --model`; unsupported/limited models report the CLI error.",
+                        );
+                        ui.label(
+                            egui::RichText::new("usage shown after each reply; remaining quota unavailable")
+                                .small()
+                                .color(AXIS_TEXT),
+                        );
                         if self.gemini_cli_packet.is_some() {
                             ui.label(egui::RichText::new("[packet loaded]").small().color(UP));
                         }

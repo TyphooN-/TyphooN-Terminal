@@ -300,6 +300,50 @@ impl TyphooNApp {
         }
     }
 
+    pub(super) fn gemini_cli_json_response(stdout: &str) -> Option<String> {
+        let value: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+        if let Some(message) = value
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+        {
+            return Some(format!("Error: {message}"));
+        }
+        let response = value.get("response")?.as_str()?.trim();
+        let stats = value.get("stats")?.get("models")?.as_object()?;
+        let (model, model_stats) = stats.iter().next()?;
+        let tokens = model_stats.get("tokens")?;
+        let total = tokens.get("total").and_then(|v| v.as_i64()).unwrap_or(0);
+        let prompt = tokens.get("prompt").and_then(|v| v.as_i64()).unwrap_or(0);
+        let candidates = tokens
+            .get("candidates")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let thoughts = tokens.get("thoughts").and_then(|v| v.as_i64()).unwrap_or(0);
+        let cached = tokens.get("cached").and_then(|v| v.as_i64()).unwrap_or(0);
+        Some(format!(
+            "{response}\n\n[Gemini CLI usage: model={model}, total_tokens={total}, prompt={prompt}, output={candidates}, thoughts={thoughts}, cached={cached}. Remaining quota is not exposed by Gemini CLI.]"
+        ))
+    }
+
+    fn gemini_cli_output_response(result: std::io::Result<std::process::Output>) -> String {
+        match result {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                if !stdout.trim().is_empty() {
+                    Self::gemini_cli_json_response(&stdout)
+                        .unwrap_or_else(|| stdout.trim().to_string())
+                } else if !stderr.trim().is_empty() {
+                    format!("Error: {}", stderr.trim())
+                } else {
+                    "(empty response)".to_string()
+                }
+            }
+            Err(e) => format!("Failed to run gemini CLI: {e}"),
+        }
+    }
+
     pub(super) fn spawn_claude_print(
         model: String,
         session_id: String,
@@ -341,13 +385,21 @@ impl TyphooNApp {
         if let Err(e) = std::thread::Builder::new()
             .name("typhoon-ai-gemini-prompt".into())
             .spawn(move || {
+                let model = model.trim();
+                let model = if model.is_empty() {
+                    "gemini-2.5-pro"
+                } else {
+                    model
+                };
                 let result = std::process::Command::new("gemini")
                     .arg("--model")
-                    .arg(&model)
+                    .arg(model)
                     .arg("--prompt")
                     .arg(&prompt)
+                    .arg("--output-format")
+                    .arg("json")
                     .output();
-                let _ = tx.send(Self::cli_output_response("gemini", result));
+                let _ = tx.send(Self::gemini_cli_output_response(result));
             })
         {
             let _ = tx_on_spawn_err.send(format!("Failed to spawn gemini CLI worker: {e}"));

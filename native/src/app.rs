@@ -7097,7 +7097,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "ASKGEMINI",
-        desc: "Ask Gemini CLI with full TyphooN data packet — ASKGEMINI SYM[,SYM] [question]",
+        desc: "Ask Gemini CLI with full TyphooN data packet — ASKGEMINI SYM[,SYM] [question] (uses current Gemini CLI model; arbitrary IDs allowed)",
     },
     Command {
         name: "ASKCODEX",
@@ -32984,6 +32984,40 @@ mod tests {
         let (syms, q) = TyphooNApp::parse_ask_args("");
         assert!(syms.is_empty());
         assert!(q.is_empty());
+    }
+
+    #[test]
+    fn gemini_cli_json_response_appends_usage_stats() {
+        let stdout = r#"{
+          "response": "OK",
+          "stats": {
+            "models": {
+              "gemini-2.5-flash": {
+                "tokens": {
+                  "prompt": 100,
+                  "candidates": 7,
+                  "total": 125,
+                  "cached": 80,
+                  "thoughts": 18
+                }
+              }
+            }
+          }
+        }"#;
+        let parsed = TyphooNApp::gemini_cli_json_response(stdout).unwrap();
+        assert!(parsed.starts_with("OK"));
+        assert!(parsed.contains("model=gemini-2.5-flash"));
+        assert!(parsed.contains("total_tokens=125"));
+        assert!(parsed.contains("Remaining quota is not exposed"));
+    }
+
+    #[test]
+    fn gemini_cli_json_response_preserves_error_message() {
+        let stdout = r#"{"error":{"message":"Requested entity was not found."}}"#;
+        assert_eq!(
+            TyphooNApp::gemini_cli_json_response(stdout).unwrap(),
+            "Error: Requested entity was not found."
+        );
     }
 
     #[test]
