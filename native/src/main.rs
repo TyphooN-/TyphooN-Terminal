@@ -131,22 +131,21 @@ fn main() -> eframe::Result {
     }
 
     // Start tokio runtime in background thread for async broker operations.
-    // Use the machine, not a hard-coded two-thread cap: broker sync, WebSockets,
-    // cache work, and AI/tool subprocess IO should drain behind the UI instead of
-    // competing with it. Keep one core free for egui/wgpu on AC/desktop, but do
-    // not cap high-core machines at an arbitrary low worker count; the terminal
-    // is expected to sync brokers/feed/cache work aggressively while presentation
-    // is capped by VSync/adaptive sync.
+    // Do not hand almost every logical CPU to background sync. Release/max-LTO
+    // runs can keep Tokio busy with HTTP, JSON, SQLite, zstd, SEC/fundamentals,
+    // and WS decode work for minutes; if the async pool is 42/44 CPUs, egui/wgpu
+    // and the compositor lose scheduling headroom and ordinary pointer motion
+    // stutters. Full-tilt must mean continuous bounded pressure, not UI starvation.
     // TYPHOON_TOKIO_WORKERS can override this for profiling.
     let detected_cpus = std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
         .unwrap_or(4);
     let on_ac_power = ac_power_available();
     let default_workers = if on_ac_power {
-        // Full-catalog sync can keep every Tokio worker busy with HTTP, JSON,
-        // SQLite, and decompression. Reserving only one logical CPU on AC/max
-        // mode leaves too little scheduler headroom for egui/wgpu + compositor.
-        detected_cpus.saturating_sub(2).max(2)
+        // Cap high-core machines as well as reserving cores: beyond ~24 async
+        // workers this app becomes scheduler/cache-contention bound before it
+        // becomes provider-throughput bound.
+        detected_cpus.saturating_sub(8).clamp(4, 24)
     } else {
         (detected_cpus / 2).clamp(2, 8)
     };

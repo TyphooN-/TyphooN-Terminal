@@ -3,7 +3,7 @@
 //! Kept out of `app.rs` so scheduler policy has a small, compile-checkable home
 //! instead of adding more constants and helper code to the main application unit.
 
-pub(super) const KRAKEN_PUBLIC_FETCH_PERMITS: usize = 24;
+pub(super) const KRAKEN_PUBLIC_FETCH_PERMITS: usize = 12;
 pub(super) const KRAKEN_SPOT_QUEUE_WINDOW: usize = 160;
 pub(super) const KRAKEN_FUTURES_QUEUE_WINDOW: usize = 96;
 pub(super) const ALPACA_BACKGROUND_SCAN_LIMIT: usize = 384;
@@ -17,15 +17,15 @@ pub(super) const TASTYTRADE_BACKGROUND_SCAN_LIMIT: usize = 96;
 /// in force so we do not turn a large universe into duplicate request storms.
 pub(super) const FULL_TILT_SYNC_INTERVAL_SECS: u64 = 1;
 pub(super) const BALANCED_SYNC_INTERVAL_SECS: u64 = 60;
-pub(super) const ALPACA_FULL_TILT_QUEUE_WINDOW: usize = 256;
-pub(super) const ALPACA_FULL_TILT_BATCH_SIZE: usize = 192;
-pub(super) const ALPACA_FULL_TILT_FETCH_PERMITS: usize = 64;
-pub(super) const ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 16_384;
-pub(super) const KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW: usize = 640;
-pub(super) const KRAKEN_SPOT_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 16_384;
+pub(super) const ALPACA_FULL_TILT_QUEUE_WINDOW: usize = 64;
+pub(super) const ALPACA_FULL_TILT_BATCH_SIZE: usize = 32;
+pub(super) const ALPACA_FULL_TILT_FETCH_PERMITS: usize = 8;
+pub(super) const ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2_048;
+pub(super) const KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW: usize = 256;
+pub(super) const KRAKEN_SPOT_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2_048;
 pub(super) const KRAKEN_EQUITIES_FULL_TILT_QUEUE_WINDOW: usize = 96;
 pub(super) const KRAKEN_EQUITIES_FULL_TILT_BATCH_SIZE: usize = 48;
-pub(super) const KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 16_384;
+pub(super) const KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2_048;
 // Per-call iapi spacing (was KRAKEN_EQUITIES_HISTORY_MIN_INTERVAL_MS) and the
 // flat post-429 pause (was KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS) are now
 // owned by the engine-side `iapi_limiter` (token bucket + escalating
@@ -36,10 +36,10 @@ pub(super) const KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 16_384
 /// primary feed.
 pub(super) const KRAKEN_TRADES_REST_REFRESH_SECS: u64 = 600;
 pub(super) const KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW: usize = 384;
-pub(super) const KRAKEN_FUTURES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 8192;
-pub(super) const TASTYTRADE_FULL_TILT_QUEUE_WINDOW: usize = 192;
-pub(super) const TASTYTRADE_FULL_TILT_BATCH_SIZE: usize = 96;
-pub(super) const TASTYTRADE_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 8192;
+pub(super) const KRAKEN_FUTURES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 1024;
+pub(super) const TASTYTRADE_FULL_TILT_QUEUE_WINDOW: usize = 64;
+pub(super) const TASTYTRADE_FULL_TILT_BATCH_SIZE: usize = 32;
+pub(super) const TASTYTRADE_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 1024;
 
 pub(super) const YAHOO_CHART_QUEUE_WINDOW: usize = 12;
 pub(super) const YAHOO_CHART_BATCH_SIZE: usize = 1;
@@ -85,14 +85,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn full_tilt_profile_refills_every_tick_with_larger_safe_windows() {
+    fn full_tilt_profile_refills_every_tick_with_responsive_bounded_windows() {
         assert_eq!(FULL_TILT_SYNC_INTERVAL_SECS, 1);
-        assert!(ALPACA_FULL_TILT_QUEUE_WINDOW >= 256);
-        assert!(ALPACA_FULL_TILT_BATCH_SIZE >= 192);
-        assert!(ALPACA_FULL_TILT_FETCH_PERMITS >= 64);
-        assert!(KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW >= KRAKEN_SPOT_QUEUE_WINDOW * 4);
-        assert!(KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW >= KRAKEN_FUTURES_QUEUE_WINDOW * 4);
-        assert!(TASTYTRADE_FULL_TILT_QUEUE_WINDOW >= 192);
+        assert!(ALPACA_FULL_TILT_QUEUE_WINDOW >= 64);
+        assert!(ALPACA_FULL_TILT_BATCH_SIZE >= 32);
+        assert!(ALPACA_FULL_TILT_FETCH_PERMITS >= 8);
+        assert!(KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW > KRAKEN_SPOT_QUEUE_WINDOW);
+        assert!(KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW > KRAKEN_FUTURES_QUEUE_WINDOW);
+        assert!(TASTYTRADE_FULL_TILT_QUEUE_WINDOW >= 64);
+        assert!(KRAKEN_PUBLIC_FETCH_PERMITS <= 12);
     }
 
     #[test]

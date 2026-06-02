@@ -352,7 +352,7 @@ pub(super) async fn run_alpaca_fetch_task(
                         }
                         Ok(_) => {
                             let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
-                                "No bars returned for {} {}",
+                                "Alpaca {} {}: no bars returned",
                                 symbol, timeframe
                             )));
                         }
@@ -387,7 +387,7 @@ pub(super) async fn run_alpaca_fetch_task(
                 let is_rate = e.contains("429") || e.to_lowercase().contains("rate limit");
                 let is_no_data = e.contains("No bar data for ");
                 let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
-                    "Fetch bars failed for {} {}: {}",
+                    "Alpaca fetch bars failed for {} {}: {}",
                     symbol, timeframe, e
                 )));
                 if is_no_data {
