@@ -68,18 +68,19 @@ pub struct IapiLimiterConfig {
     /// shouldn't 1015 us at this rate.
     pub aimd_min_rate: f64,
     /// Ceiling for the AIMD rate. The limiter will not climb above this even
-    /// on a long clean run. Default 20.0 req/s: high enough that a clean
-    /// session can probe beyond the old 5 req/s cap, still bounded so a bad
-    /// config cannot become raw uncapped hammering.
+    /// on a long clean run. This is a safety guard, not a guessed Kraken cap:
+    /// AIMD should keep probing until Cloudflare pushes back or this high
+    /// operational guard is reached.
     pub aimd_max_rate: f64,
     /// How often (during clean traffic) to tighten request pacing by one
-    /// `aimd_resolution` interval step. The legacy field name is rate-shaped,
-    /// but iapi tuning is interval-precise: at rate `r`, the next clean step is
-    /// `1 / ((1 / r) - aimd_resolution)`, clamped by `aimd_max_rate`.
+    /// `aimd_resolution` interval step while pacing is coarser than the
+    /// resolution. Once pacing reaches that resolution floor (for example
+    /// 0.01s = 100 req/s), AIMD switches to static req/s increments so it can
+    /// keep probing higher rates without collapsing interval math to zero.
     pub aimd_increase_interval: Duration,
-    /// Legacy additive increment retained for config/test compatibility. The
-    /// iapi limiter now derives the additive step from `aimd_resolution` as a
-    /// request-interval delta instead of adding this value directly to req/s.
+    /// Additive req/s increment used after the interval-step ramp reaches the
+    /// configured pacing resolution. This keeps probing above 0.01s pacing
+    /// controlled instead of jumping straight to `aimd_max_rate`.
     pub aimd_increment_per_step: f64,
     /// Multiplicative decrease applied to the rate on each 429. Default
     /// 0.5 (TCP-style halving) — aggressive enough to back off hard
@@ -118,9 +119,9 @@ impl Default for IapiLimiterConfig {
             persistence_path: None,
             aimd_enabled: true,
             aimd_min_rate: 0.5,
-            aimd_max_rate: 20.0,
+            aimd_max_rate: 250.0,
             aimd_increase_interval: Duration::from_secs(10),
-            aimd_increment_per_step: 0.01,
+            aimd_increment_per_step: 5.0,
             aimd_decrease_factor: 0.5,
             aimd_resolution: 0.01,
             aimd_tuned_after: Duration::from_secs(30 * 60),
@@ -445,6 +446,7 @@ impl IapiLimiter {
                     let new_rate = next_rate_for_shorter_interval(
                         bucket.current_rate,
                         self.config.aimd_resolution,
+                        self.config.aimd_increment_per_step,
                         effective_max,
                     );
                     if (new_rate - bucket.current_rate).abs() >= 0.000_001 {
@@ -762,6 +764,7 @@ fn interval_to_rate(interval_secs: f64) -> f64 {
 fn next_rate_for_shorter_interval(
     current_rate: f64,
     interval_step_secs: f64,
+    additive_rate_step: f64,
     max_rate: f64,
 ) -> f64 {
     if !current_rate.is_finite() || current_rate <= 0.0 {
@@ -769,8 +772,19 @@ fn next_rate_for_shorter_interval(
     }
     let step = interval_step_secs.max(0.001);
     let current_interval = rate_to_interval_secs(current_rate);
+    if !current_interval.is_finite() {
+        return max_rate.max(0.0);
+    }
+    // Interval-step discovery is ideal while pacing is coarser than the
+    // configured precision. At or below that precision, subtracting another
+    // interval step would hit zero/negative spacing and jump straight to the
+    // max. Switch to bounded additive req/s probing instead.
+    if current_interval <= step {
+        let rate_step = additive_rate_step.max(0.001);
+        return (current_rate + rate_step).min(max_rate);
+    }
     let max_interval = rate_to_interval_secs(max_rate);
-    let next_interval = (current_interval - step).max(max_interval).max(0.001);
+    let next_interval = (current_interval - step).max(max_interval).max(step);
     interval_to_rate(next_interval).min(max_rate)
 }
 
@@ -1330,6 +1344,31 @@ mod tests {
         assert_eq!(s.tuned_rate, 0.0);
         assert_eq!(s.checkpoint_rate, 0.0);
         assert_eq!(s.discovered_ceiling, 0.0);
+    }
+
+    #[test]
+    fn aimd_interval_ramp_switches_to_additive_above_resolution_floor() {
+        let max_rate = 250.0;
+        let at_resolution = interval_to_rate(0.01);
+        let first = next_rate_for_shorter_interval(at_resolution, 0.01, 5.0, max_rate);
+        assert!(
+            (first - 105.0).abs() < 1e-9,
+            "should add static req/s above 0.01s pacing, got {first}"
+        );
+        let second = next_rate_for_shorter_interval(first, 0.01, 5.0, max_rate);
+        assert!(
+            (second - 110.0).abs() < 1e-9,
+            "should continue static probing, got {second}"
+        );
+    }
+
+    #[test]
+    fn aimd_interval_ramp_does_not_jump_straight_to_high_max_rate() {
+        let next = next_rate_for_shorter_interval(100.0, 0.01, 5.0, 1_000.0);
+        assert!(
+            (next - 105.0).abs() < 1e-9,
+            "0.01s pacing should add one rate step, not jump to max; got {next}"
+        );
     }
 
     #[tokio::test]
