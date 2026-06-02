@@ -131,13 +131,6 @@ fn ordered_sync_timeframes_high_first(timeframes: &[String]) -> Vec<String> {
     unique
 }
 
-fn foreground_sync_timeframes(timeframes: &[String]) -> Vec<String> {
-    ordered_sync_timeframes_high_first(timeframes)
-        .into_iter()
-        .filter(|tf| !matches!(tf.as_str(), "1Min" | "5Min"))
-        .collect()
-}
-
 pub(super) fn alpaca_fetch_key(symbol: &str, timeframe: &str) -> String {
     let sym = normalize_market_data_symbol(symbol).replace('/', "");
     let tf = normalize_sync_timeframe_key(timeframe).unwrap_or(timeframe);
@@ -279,6 +272,7 @@ pub(super) fn classify_alpaca_sync_candidate_with_stale_multiplier(
     None
 }
 
+#[cfg(test)]
 fn select_alpaca_sync_candidates_from_iter<'a, I>(
     symbols: I,
     timeframes: &[String],
@@ -397,6 +391,7 @@ where
 /// when `selected.len() >= cap`. Within a single timeframe bucket, sorts by
 /// (focus desc, score desc, symbol asc) so foreground charts win and the most-
 /// stale entries fetch first.
+#[cfg(test)]
 fn drain_buckets_high_tf_first(
     selected: &mut Vec<AlpacaSyncCandidate>,
     buckets: &mut HashMap<&'static str, Vec<AlpacaSyncCandidate>>,
@@ -431,6 +426,7 @@ fn drain_buckets_high_tf_first(
     }
 }
 
+#[cfg(test)]
 pub(super) fn select_alpaca_sync_candidates(
     symbols: &[String],
     timeframes: &[String],
@@ -620,158 +616,161 @@ pub(super) fn select_alpaca_sync_workset_rotating_with_stale_multiplier(
         return Vec::new();
     }
 
-    let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
-    let mut staged_selected = pending_fetches.clone();
+    let total_symbols = symbols.len();
+    let background_scan_limit = background_scan_limit.max(batch_size).min(total_symbols);
+    let symbol_start = *cursor % total_symbols;
 
-    // Foreground symbols are open charts, actively traded symbols, and broker
-    // positions. During the trading session these are the product: give them
-    // the entire available batch before the broad universe ring advances. That
-    // keeps every MTF_Grid cell current before backfilling/scanning lower-value
-    // symbols.
-    let foreground_budget = batch_size;
-    let foreground_timeframes = foreground_sync_timeframes(timeframes);
-    if foreground_budget > 0 && !focus_symbols.is_empty() && !foreground_timeframes.is_empty() {
-        let mut foreground_symbols: Vec<String> = focus_symbols.iter().cloned().collect();
-        foreground_symbols.sort();
-        let foreground = select_alpaca_sync_candidates(
-            &foreground_symbols,
-            &foreground_timeframes,
-            state_map,
-            focus_symbols,
-            no_data_keys,
-            backfill_complete_pairs,
-            &staged_selected,
-            foreground_budget,
-            now_s,
-            target_bars_for_tf,
-        );
-        for candidate in foreground {
-            if selected.len() >= batch_size {
-                break;
-            }
-            if staged_selected.insert(alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)) {
-                selected.push(candidate);
-            }
-        }
-        if selected.len() >= batch_size {
-            return selected;
-        }
-    }
-
-    // Treat the remaining broker universe as one high-TF-first ring:
-    //   MN1/all symbols -> W1/all symbols -> ... -> M1/all symbols.
-    // Each refill examines a bounded number of flattened (timeframe,symbol)
-    // slots, so work is independent of total broker universe size while still
-    // preventing low timeframes from being combed before high-timeframe
-    // coverage has had a chance to advance across every symbol.
-    let total_slots = symbols.len().saturating_mul(ordered_timeframes.len());
-    if total_slots == 0 {
-        return selected;
-    }
-    let scan_limit = background_scan_limit.max(batch_size).min(total_slots);
-    if scan_limit == 0 {
-        return selected;
-    }
-
-    let start = *cursor % total_slots;
-    *cursor = (start + scan_limit) % total_slots;
-
-    let bucket_capacity = batch_size.saturating_mul(2).max(ordered_timeframes.len());
-    let mut missing: Vec<AlpacaSyncCandidate> = Vec::with_capacity(bucket_capacity);
-    let mut stale: Vec<AlpacaSyncCandidate> = Vec::with_capacity(bucket_capacity);
-    let mut backfill: Vec<AlpacaSyncCandidate> = Vec::with_capacity(bucket_capacity);
-    for offset in 0..scan_limit {
-        let flat_idx = (start + offset) % total_slots;
-        let tf_idx = flat_idx / symbols.len();
-        let symbol_idx = flat_idx % symbols.len();
-        let Some(tf) = ordered_timeframes
-            .get(tf_idx)
-            .and_then(|timeframe| normalize_sync_timeframe_key(timeframe))
-        else {
+    // Strict high-timeframe-first mode: each refill chooses the highest
+    // timeframe that still has actionable work, then spends the whole batch on
+    // that timeframe. This matches the product goal for merged bars:
+    // MN1/all symbols -> W1/all symbols -> D1 -> H4 -> H1 -> lower TFs.
+    // Focus/open symbols sort first *within* the chosen timeframe, but they do
+    // not let a lower-timeframe chart refresh preempt incomplete higher-TF
+    // coverage/backfill for the merged dataset.
+    for timeframe in &ordered_timeframes {
+        let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             continue;
         };
-        let symbol_key = normalize_market_data_symbol(&symbols[symbol_idx]).replace('/', "");
-        if symbol_key.is_empty() {
-            continue;
-        }
-        let fetch_key = alpaca_fetch_key(&symbol_key, tf);
-        if no_data_keys.contains(&fetch_key) || pending_fetches.contains(&fetch_key) {
-            continue;
-        }
-        let state = state_map
-            .get(&(symbol_key.clone(), tf.to_string()))
-            .copied();
-        let Some(candidate) = classify_alpaca_sync_candidate_with_stale_multiplier(
-            now_s,
-            &symbol_key,
-            tf,
-            state,
-            focus_symbols.contains(&symbol_key),
-            background_stale_periods,
-            target_bars_for_tf,
-        ) else {
-            continue;
-        };
-        if candidate.bucket == AlpacaSyncBucket::Backfill
-            && backfill_complete_pairs.contains_key(&fetch_key)
-        {
-            continue;
-        }
-        match candidate.bucket {
-            AlpacaSyncBucket::Missing => missing.push(candidate),
-            AlpacaSyncBucket::Stale => stale.push(candidate),
-            AlpacaSyncBucket::Backfill => backfill.push(candidate),
-        }
-    }
 
-    // Same priority+reservation policy as the inner selector: Missing wins
-    // most slots but Stale gets a guaranteed share so 30M/1H refresh keeps
-    // moving even when 1Min Missing dominates a scan slice. Order: Missing
-    // up to missing_budget → Stale up to batch_size → leftover Missing →
-    // Backfill.
-    let remaining = batch_size.saturating_sub(selected.len());
-    let stale_reserve = (remaining / 4).max(1).min(remaining);
-    let missing_budget = remaining.saturating_sub(stale_reserve);
+        let mut staged_selected = pending_fetches.clone();
+        let mut missing: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
+        let mut stale: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
+        let mut backfill: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
 
-    fn take_from(
-        bucket: &mut Vec<AlpacaSyncCandidate>,
-        cap_total: usize,
-        selected: &mut Vec<AlpacaSyncCandidate>,
-        staged_selected: &mut std::collections::HashSet<String>,
-    ) {
-        let want = cap_total.saturating_sub(selected.len());
-        let take = want.min(bucket.len());
-        for c in bucket.drain(..take) {
-            if staged_selected.insert(alpaca_fetch_key(&c.symbol, &c.timeframe)) {
-                selected.push(c);
+        // Always test focused/position/watchlist symbols for the current high
+        // timeframe before rotating background symbols. This preserves trading
+        // session usefulness without breaking high-TF-first ordering.
+        if !matches!(tf, "1Min" | "5Min") {
+            let mut foreground_symbols: Vec<&str> =
+                focus_symbols.iter().map(String::as_str).collect();
+            foreground_symbols.sort_unstable();
+            for symbol in foreground_symbols {
+                collect_sync_candidate_for_timeframe(
+                    symbol,
+                    tf,
+                    state_map,
+                    focus_symbols,
+                    no_data_keys,
+                    backfill_complete_pairs,
+                    &mut staged_selected,
+                    now_s,
+                    background_stale_periods,
+                    target_bars_for_tf,
+                    &mut missing,
+                    &mut stale,
+                    &mut backfill,
+                );
             }
         }
+
+        for offset in 0..background_scan_limit {
+            let symbol_idx = (symbol_start + offset) % total_symbols;
+            collect_sync_candidate_for_timeframe(
+                &symbols[symbol_idx],
+                tf,
+                state_map,
+                focus_symbols,
+                no_data_keys,
+                backfill_complete_pairs,
+                &mut staged_selected,
+                now_s,
+                background_stale_periods,
+                target_bars_for_tf,
+                &mut missing,
+                &mut stale,
+                &mut backfill,
+            );
+        }
+
+        if missing.is_empty() && stale.is_empty() && backfill.is_empty() {
+            continue;
+        }
+
+        *cursor = (symbol_start + background_scan_limit) % total_symbols;
+
+        let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
+        sort_sync_bucket(&mut missing);
+        sort_sync_bucket(&mut stale);
+        sort_sync_bucket(&mut backfill);
+
+        take_sync_bucket(&mut selected, &mut missing, batch_size);
+        take_sync_bucket(&mut selected, &mut stale, batch_size);
+        take_sync_bucket(&mut selected, &mut backfill, batch_size);
+        return selected;
     }
 
-    let missing_cap = selected.len() + missing_budget;
-    let mut missing = missing;
-    let mut stale = stale;
-    let mut backfill = backfill;
-    take_from(
-        &mut missing,
-        missing_cap,
-        &mut selected,
-        &mut staged_selected,
-    );
-    take_from(&mut stale, batch_size, &mut selected, &mut staged_selected);
-    take_from(
-        &mut missing,
-        batch_size,
-        &mut selected,
-        &mut staged_selected,
-    );
-    take_from(
-        &mut backfill,
-        batch_size,
-        &mut selected,
-        &mut staged_selected,
-    );
-    selected
+    *cursor = (symbol_start + background_scan_limit) % total_symbols;
+    Vec::new()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_sync_candidate_for_timeframe(
+    symbol: &str,
+    tf: &'static str,
+    state_map: &HashMap<(String, String), SyncCacheState>,
+    focus_symbols: &HashSet<String>,
+    no_data_keys: &HashSet<String>,
+    backfill_complete_pairs: &HashMap<String, AlpacaBackfillCompletePair>,
+    staged_selected: &mut HashSet<String>,
+    now_s: i64,
+    background_stale_periods: i64,
+    target_bars_for_tf: fn(&str) -> Option<u32>,
+    missing: &mut Vec<AlpacaSyncCandidate>,
+    stale: &mut Vec<AlpacaSyncCandidate>,
+    backfill: &mut Vec<AlpacaSyncCandidate>,
+) {
+    let symbol_key = normalize_market_data_symbol(symbol).replace('/', "");
+    if symbol_key.is_empty() {
+        return;
+    }
+    let fetch_key = alpaca_fetch_key(&symbol_key, tf);
+    if no_data_keys.contains(&fetch_key) || !staged_selected.insert(fetch_key.clone()) {
+        return;
+    }
+    let focus = focus_symbols.contains(&symbol_key);
+    let state = state_map
+        .get(&(symbol_key.clone(), tf.to_string()))
+        .copied();
+    let Some(candidate) = classify_alpaca_sync_candidate_with_stale_multiplier(
+        now_s,
+        &symbol_key,
+        tf,
+        state,
+        focus,
+        background_stale_periods,
+        target_bars_for_tf,
+    ) else {
+        return;
+    };
+    if candidate.bucket == AlpacaSyncBucket::Backfill
+        && backfill_complete_pairs.contains_key(&fetch_key)
+    {
+        return;
+    }
+    match candidate.bucket {
+        AlpacaSyncBucket::Missing => missing.push(candidate),
+        AlpacaSyncBucket::Stale => stale.push(candidate),
+        AlpacaSyncBucket::Backfill => backfill.push(candidate),
+    }
+}
+
+fn sort_sync_bucket(bucket: &mut [AlpacaSyncCandidate]) {
+    bucket.sort_by(|a, b| {
+        b.focus
+            .cmp(&a.focus)
+            .then(b.score.cmp(&a.score))
+            .then(a.symbol.cmp(&b.symbol))
+    });
+}
+
+fn take_sync_bucket(
+    selected: &mut Vec<AlpacaSyncCandidate>,
+    bucket: &mut Vec<AlpacaSyncCandidate>,
+    cap: usize,
+) {
+    let want = cap.saturating_sub(selected.len());
+    let take = want.min(bucket.len());
+    selected.extend(bucket.drain(..take));
 }
 
 #[cfg(test)]
@@ -1239,7 +1238,7 @@ mod tests {
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].symbol, "QQQ");
         assert_eq!(selected[0].bucket, AlpacaSyncBucket::Missing);
-        assert_eq!(cursor, 0);
+        assert_eq!(cursor, 1);
     }
 
     #[test]
@@ -1280,6 +1279,10 @@ mod tests {
         );
         assert_eq!(cursor, 2);
 
+        let pending: HashSet<String> = first
+            .iter()
+            .map(|c| alpaca_fetch_key(&c.symbol, &c.timeframe))
+            .collect();
         let second = select_alpaca_sync_workset_rotating(
             &symbols,
             &timeframes,
@@ -1287,7 +1290,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashMap::new(),
-            &HashSet::new(),
+            &pending,
             2,
             0,
             2,
@@ -1300,12 +1303,44 @@ mod tests {
                 .iter()
                 .map(|c| (&c.symbol, &c.timeframe))
                 .collect::<Vec<_>>(),
+            vec![(&"QQQ".to_string(), &"1Month".to_string()),]
+        );
+        assert_eq!(cursor, 1);
+
+        let pending: HashSet<String> = pending
+            .into_iter()
+            .chain(
+                second
+                    .iter()
+                    .map(|c| alpaca_fetch_key(&c.symbol, &c.timeframe)),
+            )
+            .collect();
+        let third = select_alpaca_sync_workset_rotating(
+            &symbols,
+            &timeframes,
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &pending,
+            2,
+            0,
+            2,
+            &mut cursor,
+            now_s,
+            alpaca_sync_target_bars,
+        );
+        assert_eq!(
+            third
+                .iter()
+                .map(|c| (&c.symbol, &c.timeframe))
+                .collect::<Vec<_>>(),
             vec![
-                (&"QQQ".to_string(), &"1Month".to_string()),
-                (&"AAPL".to_string(), &"1Week".to_string()),
+                (&"MSFT".to_string(), &"1Week".to_string()),
+                (&"QQQ".to_string(), &"1Week".to_string()),
             ]
         );
-        assert_eq!(cursor, 4);
+        assert_eq!(cursor, 0);
     }
 
     #[test]
@@ -1447,7 +1482,53 @@ mod tests {
                 (&"QQQ".to_string(), &"1Month".to_string()),
             ]
         );
-        assert_eq!(cursor, 3);
+        assert_eq!(cursor, 0);
+    }
+
+    #[test]
+    fn high_timeframe_backfill_preempts_lower_timeframe_stale_refresh() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec!["AAPL".to_string()];
+        let timeframes = vec!["1Hour".to_string(), "1Month".to_string()];
+        let state_map = HashMap::from([
+            (
+                ("AAPL".to_string(), "1Month".to_string()),
+                SyncCacheState {
+                    last_bar_ts_s: now_s - 60,
+                    write_ts_s: now_s - 60,
+                    bar_count: 10,
+                },
+            ),
+            (
+                ("AAPL".to_string(), "1Hour".to_string()),
+                SyncCacheState {
+                    last_bar_ts_s: now_s - 25 * 3600,
+                    write_ts_s: now_s - 3600,
+                    bar_count: 50_000,
+                },
+            ),
+        ]);
+        let mut cursor = 0usize;
+
+        let selected = select_alpaca_sync_workset_rotating(
+            &symbols,
+            &timeframes,
+            &state_map,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            1,
+            0,
+            1,
+            &mut cursor,
+            now_s,
+            |_| Some(100),
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].timeframe, "1Month");
+        assert_eq!(selected[0].bucket, AlpacaSyncBucket::Backfill);
     }
 
     #[test]
