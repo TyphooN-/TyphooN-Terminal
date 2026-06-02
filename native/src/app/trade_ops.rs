@@ -106,11 +106,11 @@ impl TyphooNApp {
             if age < std::time::Duration::from_secs(2) {
                 return;
             }
-            // During broad startup sync the broker worker can enqueue thousands of
-            // retry rows. A synchronous SQLite KV write per row was running on the
-            // egui thread and matches the user's 1-40s stalls. Keep state in memory
-            // and persist in coarse safety batches while heavy sync is active.
-            if self.heavy_sync_in_progress && age < std::time::Duration::from_secs(30) {
+            // Do not serialize/write broker marker state on the egui thread during
+            // broad sync. These maps can hold tens of thousands of entries; even
+            // a coarse periodic safety flush causes visible chart stalls. Forced
+            // saves on exit persist the latest state.
+            if self.heavy_sync_in_progress {
                 return;
             }
         }
@@ -166,7 +166,7 @@ impl TyphooNApp {
             if age < std::time::Duration::from_secs(2) {
                 return;
             }
-            if self.heavy_sync_in_progress && age < std::time::Duration::from_secs(30) {
+            if self.heavy_sync_in_progress {
                 return;
             }
         }
@@ -286,7 +286,7 @@ impl TyphooNApp {
             if age < std::time::Duration::from_secs(2) {
                 return;
             }
-            if self.heavy_sync_in_progress && age < std::time::Duration::from_secs(30) {
+            if self.heavy_sync_in_progress {
                 return;
             }
         }
@@ -419,7 +419,7 @@ impl TyphooNApp {
             if age < std::time::Duration::from_secs(2) {
                 return;
             }
-            if self.heavy_sync_in_progress && age < std::time::Duration::from_secs(30) {
+            if self.heavy_sync_in_progress {
                 return;
             }
         }
@@ -601,9 +601,7 @@ impl TyphooNApp {
     pub(super) fn flush_kraken_backfill_complete_marks(&mut self, force: bool) {
         let flush_ready = |dirty_since: std::time::Instant, heavy_sync: bool| {
             let age = std::time::Instant::now().saturating_duration_since(dirty_since);
-            force
-                || (age >= std::time::Duration::from_secs(2)
-                    && (!heavy_sync || age >= std::time::Duration::from_secs(30)))
+            force || (age >= std::time::Duration::from_secs(2) && !heavy_sync)
         };
         if let Some(dirty_since) = self.kraken_backfill_complete_dirty_since {
             if flush_ready(dirty_since, self.heavy_sync_in_progress) {

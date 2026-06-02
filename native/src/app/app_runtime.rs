@@ -157,6 +157,9 @@ impl eframe::App for TyphooNApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame_count += 1;
         let now_instant = std::time::Instant::now();
+        let perf_pre_broker_ms;
+        let perf_broker_drain_ms;
+        let perf_after_broker_started;
         // Track user activity for the auto-compact idle gate. Any input event in
         // the frame counts as activity. Cheap — `events` is always queried below.
         if ctx.input(|i| !i.events.is_empty()) {
@@ -1348,6 +1351,7 @@ impl eframe::App for TyphooNApp {
         }
 
         // ── poll async broker messages ───────────────────────────────────
+        perf_pre_broker_ms = now_instant.elapsed().as_secs_f64() * 1000.0;
         // Cap drain per frame so a flood of messages can't stall the render thread.
         // Anything left over waits for next frame; we repaint immediately in that case.
         let mut msgs_drained = 0usize;
@@ -8164,6 +8168,8 @@ impl eframe::App for TyphooNApp {
                 }
             }
         }
+        perf_broker_drain_ms = broker_drain_started.elapsed().as_secs_f64() * 1000.0;
+        perf_after_broker_started = std::time::Instant::now();
         // If we hit the drain cap there are more messages waiting — repaint
         // immediately to process the next batch rather than waiting on the idle tick.
         if msgs_drained >= broker_drain_max || broker_drain_started.elapsed() >= broker_drain_budget
@@ -17816,9 +17822,33 @@ impl eframe::App for TyphooNApp {
         // - TYPHOON_IDLE_FPS can force an explicit refresh-rate cap for
         //   profiling/problem displays; unset/0 means native-refresh continuous
         //   repaint through vsync/GSYNC/FreeSync.
+        let session_save_started = std::time::Instant::now();
+        let render_after_broker_ms = session_save_started
+            .saturating_duration_since(perf_after_broker_started)
+            .as_secs_f64()
+            * 1000.0;
         self.maybe_incremental_session_save(ctx);
+        let session_save_ms = session_save_started.elapsed().as_secs_f64() * 1000.0;
 
         let update_ms = now_instant.elapsed().as_secs_f64() * 1000.0;
+        if update_ms >= 250.0 {
+            tracing::warn!(
+                "UI frame stall detail: update_ms={:.2} pre_broker_ms={:.2} broker_drain_ms={:.2} render_after_broker_ms={:.2} session_save_ms={:.2} msgs_drained={} pending_fetches={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} user_interacting={}",
+                update_ms,
+                perf_pre_broker_ms,
+                perf_broker_drain_ms,
+                render_after_broker_ms,
+                session_save_ms,
+                msgs_drained,
+                self.total_pending_market_data_fetches(),
+                self.heavy_sync_in_progress,
+                self.news_loading,
+                self.scrape_fund_running,
+                self.scrape_sec_running,
+                self.auto_compact_in_progress,
+                self.user_interacting,
+            );
+        }
         if update_ms > 16.7 {
             self.perf_slow_frame_count = self.perf_slow_frame_count.saturating_add(1);
         }
