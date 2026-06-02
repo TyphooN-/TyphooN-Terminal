@@ -580,6 +580,11 @@ impl TyphooNApp {
                 self.cached_tastytrade_sync_state_rev = Some(self.bg_rev);
                 self.cached_tastytrade_symbols.insert(symbol);
             }
+            "yahoo-chart" => {
+                self.cached_yahoo_chart_sync_state
+                    .insert((symbol.clone(), tf.to_string()), state);
+                self.cached_yahoo_chart_sync_state_rev = Some(self.bg_rev);
+            }
             _ => {}
         }
     }
@@ -985,7 +990,9 @@ impl TyphooNApp {
         } else {
             96
         };
-        if self.cached_kraken_equities_sync_state_rev != Some(self.bg_rev) {
+        if self.cached_kraken_equities_sync_state_rev != Some(self.bg_rev)
+            && (!self.heavy_sync_in_progress || self.cached_kraken_equities_sync_state.is_empty())
+        {
             let previous = self.cached_kraken_equities_sync_state.clone();
             let mut rebuilt = self.build_source_cache_state_map("kraken-equities:");
             merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
@@ -1043,7 +1050,9 @@ impl TyphooNApp {
         }
 
         if self.backfill_alpaca_kraken_equities_enabled && !fallback_timeframes.is_empty() {
-            if self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
+            if self.cached_alpaca_sync_state_rev != Some(self.bg_rev)
+                && (!self.heavy_sync_in_progress || self.cached_alpaca_sync_state.is_empty())
+            {
                 let previous = self.cached_alpaca_sync_state.clone();
                 let mut rebuilt = self.build_alpaca_cache_state_map();
                 merge_recent_sync_overrides(&mut rebuilt, &previous, now_s);
@@ -1117,7 +1126,16 @@ impl TyphooNApp {
                     .saturating_sub(self.pending_yahoo_chart_fetches.len())
                     .min(yahoo_batch_limit);
                 if available_slots > 0 {
-                    let state = self.build_source_cache_state_map("yahoo-chart:");
+                    if self.cached_yahoo_chart_sync_state_rev != Some(self.bg_rev)
+                        && (!self.heavy_sync_in_progress
+                            || self.cached_yahoo_chart_sync_state.is_empty())
+                    {
+                        let previous = self.cached_yahoo_chart_sync_state.clone();
+                        let mut rebuilt = self.build_source_cache_state_map("yahoo-chart:");
+                        merge_recent_sync_overrides(&mut rebuilt, &previous, now_s);
+                        self.cached_yahoo_chart_sync_state = rebuilt;
+                        self.cached_yahoo_chart_sync_state_rev = Some(self.bg_rev);
+                    }
                     let no_data = self
                         .unresolvable_fetch_keys_by_broker
                         .get("yahoo-chart")
@@ -1127,7 +1145,7 @@ impl TyphooNApp {
                     let candidates = select_alpaca_sync_workset_rotating(
                         &symbols,
                         &fallback_timeframes,
-                        &state,
+                        &self.cached_yahoo_chart_sync_state,
                         &focus_symbols,
                         &no_data,
                         &empty_backfill,
@@ -1366,7 +1384,9 @@ impl TyphooNApp {
         if self.is_fetch_on_cooldown("alpaca", &symbol, tf) {
             return false;
         }
-        if self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
+        if self.cached_alpaca_sync_state_rev != Some(self.bg_rev)
+            && (!self.heavy_sync_in_progress || self.cached_alpaca_sync_state.is_empty())
+        {
             let previous = self.cached_alpaca_sync_state.clone();
             let mut rebuilt = self.build_alpaca_cache_state_map();
             merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
@@ -1796,7 +1816,9 @@ impl TyphooNApp {
             return 0;
         }
 
-        if self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
+        if self.cached_alpaca_sync_state_rev != Some(self.bg_rev)
+            && (!self.heavy_sync_in_progress || self.cached_alpaca_sync_state.is_empty())
+        {
             let previous = self.cached_alpaca_sync_state.clone();
             let mut rebuilt = self.build_alpaca_cache_state_map();
             merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
@@ -1898,7 +1920,9 @@ impl TyphooNApp {
         if available_slots == 0 {
             return 0;
         }
-        if self.cached_kraken_sync_state_rev != Some(self.bg_rev) {
+        if self.cached_kraken_sync_state_rev != Some(self.bg_rev)
+            && (!self.heavy_sync_in_progress || self.cached_kraken_sync_state.is_empty())
+        {
             let previous = self.cached_kraken_sync_state.clone();
             let mut rebuilt = self.build_source_cache_state_map("kraken:");
             merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
@@ -1992,7 +2016,9 @@ impl TyphooNApp {
         if available_slots == 0 {
             return 0;
         }
-        if self.cached_kraken_futures_sync_state_rev != Some(self.bg_rev) {
+        if self.cached_kraken_futures_sync_state_rev != Some(self.bg_rev)
+            && (!self.heavy_sync_in_progress || self.cached_kraken_futures_sync_state.is_empty())
+        {
             let previous = self.cached_kraken_futures_sync_state.clone();
             let mut rebuilt = self.build_source_cache_state_map("kraken-futures:");
             merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
@@ -2076,7 +2102,9 @@ impl TyphooNApp {
         if available_slots == 0 {
             return 0;
         }
-        if self.cached_tastytrade_sync_state_rev != Some(self.bg_rev) {
+        if self.cached_tastytrade_sync_state_rev != Some(self.bg_rev)
+            && (!self.heavy_sync_in_progress || self.cached_tastytrade_sync_state.is_empty())
+        {
             let previous = self.cached_tastytrade_sync_state.clone();
             let mut rebuilt = self.build_source_cache_state_map("tastytrade:");
             merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());

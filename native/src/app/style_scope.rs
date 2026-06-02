@@ -303,6 +303,13 @@ impl TyphooNApp {
             || self.sec_cache_filings_key != Some(filings_key)
             || self.sec_cache_insiders_key != Some(insiders_key)
             || self.sec_cache_timeline_key != Some(timeline_key);
+        if cache_changed && self.heavy_sync_in_progress && self.scrape_sec_running {
+            // During the broad EDGAR scrape the background thread can publish huge
+            // filing/insider snapshots. Rebuilding the visible SEC tab cache on
+            // egui has already produced 10s+ chart freezes. Keep the last cache
+            // while scraping; one stale SEC pane beats broken free-look.
+            return;
+        }
         if cache_changed
             && !cache_cold
             && self.heavy_sync_in_progress

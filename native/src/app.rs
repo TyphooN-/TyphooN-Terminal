@@ -12189,6 +12189,9 @@ pub struct TyphooNApp {
     /// Cached Kraken internal equities bar-state map keyed by normalized `(symbol, timeframe)`.
     cached_kraken_equities_sync_state: std::collections::HashMap<(String, String), SyncCacheState>,
     cached_kraken_equities_sync_state_rev: Option<u64>,
+    /// Cached Yahoo Chart assist bar-state map keyed by normalized `(symbol, timeframe)`.
+    cached_yahoo_chart_sync_state: std::collections::HashMap<(String, String), SyncCacheState>,
+    cached_yahoo_chart_sync_state_rev: Option<u64>,
     /// Cached Sync Status rows. The window is informational; recomputing the
     /// whole broker/timeframe matrix on every repaint during full sync is pure
     /// render-thread waste.
@@ -29065,6 +29068,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
             cached_kraken_futures_sync_state_rev: None,
             cached_kraken_equities_sync_state: std::collections::HashMap::new(),
             cached_kraken_equities_sync_state_rev: None,
+            cached_yahoo_chart_sync_state: std::collections::HashMap::new(),
+            cached_yahoo_chart_sync_state_rev: None,
             cached_bar_sync_rows: Vec::new(),
             cached_bar_sync_rows_last: std::time::Instant::now()
                 .checked_sub(std::time::Duration::from_secs(10))

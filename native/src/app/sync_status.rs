@@ -1,12 +1,19 @@
 use super::market_data_sync::kraken_equity_symbols_for_timeframe;
 use super::*;
 
+const BAR_SYNC_STATS_IDLE_REFRESH: std::time::Duration = std::time::Duration::from_secs(1);
+const BAR_SYNC_STATS_HEAVY_REFRESH: std::time::Duration = std::time::Duration::from_secs(15);
+
 impl TyphooNApp {
     pub(super) fn compute_bar_sync_rows(&mut self) -> Vec<SyncStatsRow> {
         let now = std::time::Instant::now();
+        let refresh_interval = if self.heavy_sync_in_progress {
+            BAR_SYNC_STATS_HEAVY_REFRESH
+        } else {
+            BAR_SYNC_STATS_IDLE_REFRESH
+        };
         if !self.cached_bar_sync_rows.is_empty()
-            && now.duration_since(self.cached_bar_sync_rows_last)
-                < std::time::Duration::from_secs(1)
+            && now.duration_since(self.cached_bar_sync_rows_last) < refresh_interval
         {
             return self.cached_bar_sync_rows.clone();
         }

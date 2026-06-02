@@ -226,7 +226,10 @@ impl eframe::App for TyphooNApp {
         }
         // PERF: Cache Darwin tradability + MT5/tasty bar-coverage sets on bg_rev.
         // Was rebuilding per frame in hot windows and sync loops.
-        if !self.user_interacting && self.cached_mt5_symbols_rev != Some(self.bg_rev) {
+        if !self.user_interacting
+            && self.cached_mt5_symbols_rev != Some(self.bg_rev)
+            && (!self.heavy_sync_in_progress || self.cached_mt5_symbols.is_empty())
+        {
             // Start with Darwinex symbols from MT5 specs (if any)
             let mut darwin: std::collections::HashSet<String> = self
                 .bg
@@ -288,7 +291,10 @@ impl eframe::App for TyphooNApp {
                 .collect();
             self.cached_mt5_symbols_rev = Some(self.bg_rev);
         }
-        if !self.user_interacting && self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
+        if !self.user_interacting
+            && self.cached_alpaca_sync_state_rev != Some(self.bg_rev)
+            && (!self.heavy_sync_in_progress || self.cached_alpaca_sync_state.is_empty())
+        {
             let previous = self.cached_alpaca_sync_state.clone();
             let mut rebuilt = self.build_alpaca_cache_state_map();
             merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
