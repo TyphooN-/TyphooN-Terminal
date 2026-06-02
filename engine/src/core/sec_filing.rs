@@ -22,14 +22,16 @@ const RATE_LIMIT_MS: u64 = 250; // SEC EDGAR fair use: max 10 req/sec, use 4/sec
 /// All SEC filing types we track — comprehensive coverage for trading signals.
 const RELEVANT_FORMS: &[&str] = &[
     // Core financials
-    "10-K", "10-Q", "20-F", "8-K", // Amended (restated = red flag)
+    "10-K", "10-Q", "20-F", "20-F/A", "8-K", // Amended (restated = red flag)
     "10-K/A", "10-Q/A", "8-K/A", // Late filing (distress signal)
     "NT 10-K", "NT 10-Q", // Insider trades
-    "4", "3", "5", // Proxy/governance
+    "4", "3", "5", "144", // Proxy/governance
     "DEF 14A", "DEFA14A", "PREM14A",
     // Shareholder disclosures (activist/institutional)
-    "SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A", "13F-HR", // Offerings/dilution
-    "S-1", "S-3", "S-4", "424B5", "424B2", "424B4", // M&A
+    "SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A", "13F-HR", // Offerings/dilution / registrations
+    "S-1", "S-3", "S-4", "S-8", "424B5", "424B2",
+    "424B4", // Foreign issuer / specialized reports
+    "6-K", "SD", // M&A
     "SC TO-T", "SC TO-I", "SC 14D9", // Deregistration (delisting risk)
     "15-12B", "15-12G",  // SEC scrutiny
     "CORRESP", // Employee plans
@@ -832,8 +834,7 @@ pub async fn scrape_all_portfolio_symbols(
     let symbols: Vec<String> = if let Some(symbols) = scoped_symbols {
         let mut symbols: Vec<String> = symbols
             .into_iter()
-            .map(|sym| sym.trim().to_uppercase())
-            .filter(|sym| is_equity_symbol(sym))
+            .filter_map(|sym| normalize_sec_equity_symbol(&sym))
             .collect();
         symbols.sort_unstable();
         symbols.dedup();
@@ -850,8 +851,9 @@ pub async fn scrape_all_portfolio_symbols(
         ) {
             if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
                 for row in rows.flatten() {
-                    let sym = row.trim().to_uppercase();
-                    if is_equity_symbol(&sym) { sym_set.insert(sym); }
+                    if let Some(sym) = normalize_sec_equity_symbol(&row) {
+                        sym_set.insert(sym);
+                    }
                 }
             }
         }
@@ -900,8 +902,7 @@ pub async fn scrape_all_portfolio_symbols(
                 ) {
                     if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
                         for row in rows.flatten() {
-                            let sym = row.trim().to_uppercase();
-                            if is_equity_symbol(&sym) {
+                            if let Some(sym) = normalize_sec_equity_symbol(&row) {
                                 sym_set.insert(sym);
                             }
                         }
@@ -996,6 +997,27 @@ fn is_equity_symbol(sym: &str) -> bool {
         && sym.chars().all(|c| c.is_ascii_alphabetic())
 }
 
+fn normalize_sec_equity_symbol(sym: &str) -> Option<String> {
+    let mut sym = sym.trim().to_uppercase();
+    if sym.is_empty() || sym.starts_with("__") || sym.contains('/') {
+        return None;
+    }
+    // Kraken xStocks can be stored/transmitted as venue-qualified symbols
+    // (WOK.EQ, BABY.EQ, etc.). SEC EDGAR lookup needs the underlying equity
+    // ticker. Normalize before applying the equity filter so scoped SEC scrapes
+    // don't silently drop xStock holdings.
+    if let Some(stripped) = sym.strip_suffix(".EQ") {
+        sym = stripped.to_string();
+    } else if let Some(stripped) = sym.strip_suffix(".X") {
+        sym = stripped.to_string();
+    }
+    if is_equity_symbol(&sym) {
+        Some(sym)
+    } else {
+        None
+    }
+}
+
 fn equity_symbol_from_bar_cache_key(key: &str) -> Option<String> {
     let mut parts = key.splitn(3, ':');
     let source = parts.next()?;
@@ -1004,21 +1026,7 @@ fn equity_symbol_from_bar_cache_key(key: &str) -> Option<String> {
     }
     let raw_symbol = parts.next()?.trim();
     let _tf = parts.next()?;
-    if raw_symbol.is_empty() || raw_symbol.starts_with("__") {
-        return None;
-    }
-    let mut sym = raw_symbol.to_uppercase();
-    if let Some(stripped) = sym.strip_suffix(".EQ") {
-        sym = stripped.to_string();
-    }
-    if sym.contains('/') {
-        return None;
-    }
-    if is_equity_symbol(&sym) {
-        Some(sym)
-    } else {
-        None
-    }
+    normalize_sec_equity_symbol(raw_symbol)
 }
 
 fn collect_equity_symbols_from_kv_blob(
@@ -1044,8 +1052,7 @@ fn collect_equity_symbols_from_json(
             if !symbol_context {
                 return;
             }
-            let sym = raw.trim().to_uppercase();
-            if is_equity_symbol(&sym) {
+            if let Some(sym) = normalize_sec_equity_symbol(raw) {
                 out.insert(sym);
             }
         }
@@ -2324,6 +2331,15 @@ mod tests {
     }
 
     #[test]
+    fn normalize_sec_equity_symbol_strips_kraken_xstock_suffixes() {
+        assert_eq!(normalize_sec_equity_symbol("WOK.EQ"), Some("WOK".into()));
+        assert_eq!(normalize_sec_equity_symbol("baby.eq"), Some("BABY".into()));
+        assert_eq!(normalize_sec_equity_symbol("AAPL"), Some("AAPL".into()));
+        assert_eq!(normalize_sec_equity_symbol("BTC/USD"), None);
+        assert_eq!(normalize_sec_equity_symbol("TOOLONG.EQ"), None);
+    }
+
+    #[test]
     fn bar_cache_key_parsing_3_part() {
         // Canonical BarCacheWriter key shape: `mt5:SYM:TF`.
         let key = "mt5:MSFT:1Day";
@@ -2371,6 +2387,8 @@ mod tests {
         let json = serde_json::json!([
             "TNDM",
             {"symbol": "wok"},
+            {"symbol": "WOK.EQ"},
+            {"ticker": "BABY.EQ"},
             {"ticker": "POM"},
             {"side": "BUY"},
             {"symbol": "BTC/USD"},
@@ -2381,6 +2399,7 @@ mod tests {
         collect_equity_symbols_from_kv_blob(&compressed, &mut symbols);
         assert!(symbols.contains("TNDM"));
         assert!(symbols.contains("WOK"));
+        assert!(symbols.contains("BABY"));
         assert!(symbols.contains("POM"));
         assert!(symbols.contains("ARAY"));
         assert!(!symbols.contains("BUY"));

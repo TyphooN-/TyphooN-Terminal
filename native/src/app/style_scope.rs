@@ -120,12 +120,14 @@ impl TyphooNApp {
     }
 
     pub(super) fn sec_scrape_scope_symbols(&self) -> Vec<String> {
-        let mut syms = match self.broker_scope_symbols() {
+        let syms = match self.broker_scope_symbols() {
             Some(scope) => scope,
             None => self.news_focus_symbols(),
         };
-        syms.retain(|sym| sec_scrape_scope_symbol_allowed(sym));
-        let mut syms: Vec<String> = syms.into_iter().collect();
+        let mut syms: Vec<String> = syms
+            .into_iter()
+            .filter_map(|sym| normalize_sec_scrape_symbol(&sym))
+            .collect();
         syms.sort_unstable();
         syms.dedup();
         syms
@@ -907,11 +909,40 @@ impl TyphooNApp {
     }
 }
 
-fn sec_scrape_scope_symbol_allowed(sym: &str) -> bool {
-    let sym = sym.trim();
-    !sym.is_empty()
-        && sym.len() <= 5
-        && !sym.starts_with("__")
-        && !sym.contains('/')
-        && sym.chars().all(|c| c.is_ascii_alphabetic())
+fn normalize_sec_scrape_symbol(sym: &str) -> Option<String> {
+    let mut sym = sym.trim().to_uppercase();
+    if sym.is_empty() || sym.starts_with("__") || sym.contains('/') {
+        return None;
+    }
+    // Kraken xStocks positions can arrive as WOK.EQ/BABY.EQ before the full
+    // Kraken equities catalog is loaded. SEC has the underlying equity ticker,
+    // not the venue-qualified synthetic symbol. Filtering before stripping .EQ
+    // silently dropped those symbols and made the SEC scrape report 0 tickers.
+    if let Some(stripped) = sym.strip_suffix(".EQ") {
+        sym = stripped.to_string();
+    } else if let Some(stripped) = sym.strip_suffix(".X") {
+        sym = stripped.to_string();
+    }
+    if sym.is_empty()
+        || sym.len() > 5
+        || sym.starts_with("__")
+        || !sym.chars().all(|c| c.is_ascii_alphabetic())
+    {
+        return None;
+    }
+    Some(sym)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sec_scrape_symbol_normalizes_kraken_xstock_suffixes() {
+        assert_eq!(normalize_sec_scrape_symbol("WOK.EQ"), Some("WOK".into()));
+        assert_eq!(normalize_sec_scrape_symbol("baby.eq"), Some("BABY".into()));
+        assert_eq!(normalize_sec_scrape_symbol("AAPL"), Some("AAPL".into()));
+        assert_eq!(normalize_sec_scrape_symbol("BTC/USD"), None);
+        assert_eq!(normalize_sec_scrape_symbol("TOOLONG.EQ"), None);
+    }
 }
