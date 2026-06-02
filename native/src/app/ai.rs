@@ -82,14 +82,7 @@ impl TyphooNApp {
                                     ("o1-preview", "o1-preview"),
                                 ],
                             ),
-                            2 => (
-                                "ai_model_gemini",
-                                &[
-                                    ("gemini-2.5-pro", "gemini-2.5-pro"),
-                                    ("gemini-2.5-flash", "gemini-2.5-flash"),
-                                    ("gemini-2.5-flash-lite", "gemini-2.5-flash-lite"),
-                                ],
-                            ),
+                            2 => ("ai_model_gemini", Self::gemini_cli_model_options()),
                             3 => (
                                 "ai_model_grok",
                                 &[("grok-3", "grok-3"), ("grok-3-mini", "grok-3-mini")],
@@ -461,21 +454,13 @@ impl TyphooNApp {
                         egui::ComboBox::from_id_salt("gemini_model_picker")
                             .selected_text(self.gemini_model.as_str())
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut self.gemini_model,
-                                    "gemini-2.5-pro".to_string(),
-                                    "gemini-2.5-pro (max)",
-                                );
-                                ui.selectable_value(
-                                    &mut self.gemini_model,
-                                    "gemini-2.5-flash".to_string(),
-                                    "gemini-2.5-flash (fast)",
-                                );
-                                ui.selectable_value(
-                                    &mut self.gemini_model,
-                                    "gemini-2.5-flash-lite".to_string(),
-                                    "gemini-2.5-flash-lite (cheap)",
-                                );
+                                for (value, label) in Self::gemini_cli_model_options() {
+                                    ui.selectable_value(
+                                        &mut self.gemini_model,
+                                        value.to_string(),
+                                        *label,
+                                    );
+                                }
                             });
                         ui.add(
                             egui::TextEdit::singleline(&mut self.gemini_model)

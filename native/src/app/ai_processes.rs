@@ -1,6 +1,40 @@
 use super::*;
 
 impl TyphooNApp {
+    pub(super) fn default_gemini_cli_model() -> &'static str {
+        "gemini-3.1-pro-preview"
+    }
+
+    pub(super) fn gemini_cli_model_options() -> &'static [(&'static str, &'static str)] {
+        &[
+            (
+                "gemini-3.1-pro-preview",
+                "gemini-3.1-pro-preview (default preview pro)",
+            ),
+            (
+                "gemini-3.1-pro-preview-customtools",
+                "gemini-3.1-pro-preview-customtools",
+            ),
+            (
+                "gemini-3.1-flash-lite-preview",
+                "gemini-3.1-flash-lite-preview",
+            ),
+            ("gemini-3-pro-preview", "gemini-3-pro-preview"),
+            ("gemini-3-flash-preview", "gemini-3-flash-preview"),
+            ("gemini-2.5-pro", "gemini-2.5-pro"),
+            ("gemini-2.5-flash", "gemini-2.5-flash"),
+            ("gemini-2.5-flash-lite", "gemini-2.5-flash-lite"),
+            ("auto", "auto (Gemini CLI decides)"),
+            ("pro", "pro alias"),
+            ("flash", "flash alias"),
+            ("flash-lite", "flash-lite alias"),
+            ("auto-gemini-3", "auto-gemini-3"),
+            ("auto-gemini-2.5", "auto-gemini-2.5"),
+            ("gemma-4-31b-it", "gemma-4-31b-it"),
+            ("gemma-4-26b-a4b-it", "gemma-4-26b-a4b-it"),
+        ]
+    }
+
     pub(super) fn build_packet_tree(text: &str) -> Vec<PacketTreeNode> {
         let mut out = Vec::new();
         let mut offset: usize = 0;
@@ -387,7 +421,7 @@ impl TyphooNApp {
             .spawn(move || {
                 let model = model.trim();
                 let model = if model.is_empty() {
-                    "gemini-2.5-pro"
+                    "gemini-3.1-pro-preview"
                 } else {
                     model
                 };

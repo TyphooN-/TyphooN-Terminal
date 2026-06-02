@@ -16032,7 +16032,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let cache_model = model.clone().unwrap_or_else(|| match provider.as_str() {
                                 "claude" => "claude-opus-4-5".to_string(),
                                 "openai" => "gpt-4o".into(),
-                                "gemini" => "gemini-2.5-pro".into(),
+                                "gemini" => Self::default_gemini_cli_model().into(),
                                 "grok" => "grok-3".into(),
                                 "mistral" => "mistral-large-latest".into(),
                                 "perplexity" => "sonar-pro".into(),
@@ -16093,7 +16093,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 // OpenAI-compatible endpoint (GPT, Gemini, Grok, Mistral, Perplexity, Ollama)
                                 let (url, default_model, auth_header) = match provider.as_str() {
                                     "openai" => ("https://api.openai.com/v1/chat/completions", "gpt-4o", format!("Bearer {}", api_key)),
-                                    "gemini" => ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-pro", format!("Bearer {}", api_key)),
+                                    "gemini" => ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", Self::default_gemini_cli_model(), format!("Bearer {}", api_key)),
                                     "grok" => ("https://api.x.ai/v1/chat/completions", "grok-3", format!("Bearer {}", api_key)),
                                     "mistral" => ("https://api.mistral.ai/v1/chat/completions", "mistral-large-latest", format!("Bearer {}", api_key)),
                                     "perplexity" => ("https://api.perplexity.ai/chat/completions", "sonar-pro", format!("Bearer {}", api_key)),
@@ -28865,7 +28865,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             gemini_cli_history: Vec::new(),
             gemini_cli_rx: None,
             gemini_cli_packet: None,
-            gemini_model: "gemini-2.5-pro".to_string(),
+            gemini_model: Self::default_gemini_cli_model().to_string(),
             show_codex_cli: false,
             codex_cli_input: String::new(),
             codex_cli_history: Vec::new(),
@@ -32984,6 +32984,43 @@ mod tests {
         let (syms, q) = TyphooNApp::parse_ask_args("");
         assert!(syms.is_empty());
         assert!(q.is_empty());
+    }
+
+    #[test]
+    fn gemini_cli_default_prefers_3_1_pro_preview() {
+        assert_eq!(
+            TyphooNApp::default_gemini_cli_model(),
+            "gemini-3.1-pro-preview"
+        );
+    }
+
+    #[test]
+    fn gemini_cli_model_options_include_cli_valid_set() {
+        let models: Vec<&str> = TyphooNApp::gemini_cli_model_options()
+            .iter()
+            .map(|(model, _label)| *model)
+            .collect();
+        for expected in [
+            "auto",
+            "pro",
+            "flash",
+            "flash-lite",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-pro-preview-customtools",
+            "gemini-3.1-flash-lite-preview",
+            "gemini-3-pro-preview",
+            "gemini-3-flash-preview",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemma-4-31b-it",
+            "gemma-4-26b-a4b-it",
+        ] {
+            assert!(
+                models.contains(&expected),
+                "missing Gemini CLI model {expected}"
+            );
+        }
     }
 
     #[test]
