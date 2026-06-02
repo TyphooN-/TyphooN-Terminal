@@ -3,13 +3,13 @@
 //! Kept out of `app.rs` so scheduler policy has a small, compile-checkable home
 //! instead of adding more constants and helper code to the main application unit.
 
-pub(super) const KRAKEN_PUBLIC_FETCH_PERMITS: usize = 12;
-pub(super) const KRAKEN_SPOT_QUEUE_WINDOW: usize = 160;
-pub(super) const KRAKEN_FUTURES_QUEUE_WINDOW: usize = 96;
-pub(super) const ALPACA_BACKGROUND_SCAN_LIMIT: usize = 384;
-pub(super) const KRAKEN_SPOT_BACKGROUND_SCAN_LIMIT: usize = 384;
-pub(super) const KRAKEN_FUTURES_BACKGROUND_SCAN_LIMIT: usize = 192;
-pub(super) const TASTYTRADE_BACKGROUND_SCAN_LIMIT: usize = 96;
+pub(super) const KRAKEN_PUBLIC_FETCH_PERMITS: usize = 24;
+pub(super) const KRAKEN_SPOT_QUEUE_WINDOW: usize = 240;
+pub(super) const KRAKEN_FUTURES_QUEUE_WINDOW: usize = 144;
+pub(super) const ALPACA_BACKGROUND_SCAN_LIMIT: usize = 768;
+pub(super) const KRAKEN_SPOT_BACKGROUND_SCAN_LIMIT: usize = 768;
+pub(super) const KRAKEN_FUTURES_BACKGROUND_SCAN_LIMIT: usize = 384;
+pub(super) const TASTYTRADE_BACKGROUND_SCAN_LIMIT: usize = 192;
 
 /// AC/desktop full-tilt mode keeps request pressure high enough to saturate API
 /// allowances and async worker capacity. It is still bounded: pending sets,
@@ -93,7 +93,7 @@ mod tests {
         assert!(KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW > KRAKEN_SPOT_QUEUE_WINDOW);
         assert!(KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW > KRAKEN_FUTURES_QUEUE_WINDOW);
         assert!(TASTYTRADE_FULL_TILT_QUEUE_WINDOW >= 64);
-        assert!(KRAKEN_PUBLIC_FETCH_PERMITS <= 12);
+        assert_eq!(KRAKEN_PUBLIC_FETCH_PERMITS, 24);
     }
 
     #[test]

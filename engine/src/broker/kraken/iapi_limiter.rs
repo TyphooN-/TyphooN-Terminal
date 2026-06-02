@@ -302,13 +302,30 @@ impl IapiLimiter {
                         state.discovered_ceiling,
                     )
                 }
-                Some(state) => (
-                    0,
-                    EscalationState::default(),
-                    restored_aimd_rate(state),
-                    state.tuned_rate > 0.0,
-                    state.discovered_ceiling,
-                ),
+                Some(state) => {
+                    let recent_rate_limit = state.last_arm_unix > 0
+                        && state.last_arm_unix <= now_unix
+                        && (now_unix - state.last_arm_unix) as u64
+                            <= config.escalation_reset_after.as_secs();
+                    // Once the persisted cooldown/escalation window is gone, do
+                    // not keep a stale empirical ceiling or "converged" latch
+                    // forever. Kraken/Cloudflare limits vary by session/IP; an
+                    // old 0.66 req/s discovery was freezing future launches at
+                    // crawler-idle speed and preventing AIMD from probing back
+                    // toward max intensity. Keep the learned rate as the safe
+                    // starting point, but let AIMD ramp again.
+                    (
+                        0,
+                        EscalationState::default(),
+                        restored_aimd_rate(state),
+                        false,
+                        if recent_rate_limit {
+                            state.discovered_ceiling
+                        } else {
+                            0.0
+                        },
+                    )
+                }
                 None => (0, EscalationState::default(), 0.0, false, 0.0),
             };
         let starting_tokens = if cooldown_until > now_unix {
@@ -975,6 +992,35 @@ mod tests {
         let lim = IapiLimiter::new(cfg);
         assert!(lim.remaining_backoff_secs().is_none());
         lim.acquire(1.0).await.expect("free");
+    }
+
+    #[tokio::test]
+    async fn expired_rate_limit_persistence_does_not_freeze_aimd_ceiling() {
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let now_unix = chrono::Utc::now().timestamp();
+        let state = PersistedState {
+            cooldown_until_unix: now_unix - 60,
+            consecutive: 0,
+            last_arm_unix: 0,
+            tuned_rate: 0.662_251_655_629_138_7,
+            checkpoint_rate: 0.0,
+            discovered_ceiling: 0.662_251_655_629_138_7,
+        };
+        std::fs::write(tmp.path(), serde_json::to_string(&state).unwrap()).unwrap();
+        let cfg = IapiLimiterConfig {
+            persistence_path: Some(tmp.path().to_path_buf()),
+            ..aimd_config()
+        };
+        let lim = IapiLimiter::new(cfg);
+        let bucket = lim.bucket.lock().await;
+        assert!(
+            !bucket.converged,
+            "expired tuned state must not pause future AIMD ramp-up"
+        );
+        assert!(
+            bucket.discovered_ceiling.is_none(),
+            "stale discovered ceiling must not cap a fresh launch"
+        );
     }
 
     /// Build a config tuned for AIMD behaviour tests: 10 ms increase
