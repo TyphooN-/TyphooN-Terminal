@@ -1,5 +1,19 @@
 use super::*;
 
+fn alpaca_batch_missing_symbol_retry_reason(
+    outcome: typhoon_engine::broker::alpaca::FetchOutcome,
+) -> Option<&'static str> {
+    match outcome {
+        typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedPartial => {
+            Some("batch_rate_limited_partial")
+        }
+        typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedEmpty => {
+            Some("batch_rate_limited_empty")
+        }
+        typhoon_engine::broker::alpaca::FetchOutcome::Complete => None,
+    }
+}
+
 pub(super) async fn run_alpaca_batch_fetch_task(
     broker: AlpacaBroker,
     shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
@@ -59,24 +73,18 @@ pub(super) async fn run_alpaca_batch_fetch_task(
             for symbol in &symbols {
                 let new_bars = bars_by_symbol.get(symbol).cloned().unwrap_or_default();
                 if new_bars.is_empty() {
-                    // Alpaca's multi-symbol endpoint may omit a symbol from an otherwise
-                    // successful batch even when the symbol is valid/tradable. Treat that
-                    // as inconclusive and let the retry queue perform a targeted
-                    // single-symbol probe before any persistent no-data tombstone is
-                    // written. Targeted fetches still own the real no-data decision.
-                    let reason = if matches!(
-                        outcome,
-                        typhoon_engine::broker::alpaca::FetchOutcome::Complete
-                    ) {
-                        "batch_symbol_omitted_probe_required"
-                    } else {
-                        "batch_rate_limited_partial"
-                    };
-                    let _ = broker_msg_tx.send(BrokerMsg::AlpacaRetryEnqueue {
-                        symbol: symbol.clone(),
-                        timeframe: timeframe.clone(),
-                        reason: reason.into(),
-                    });
+                    // A successful multi-symbol response can omit symbols that have
+                    // no rows for that timeframe/window. Do not explode a broad
+                    // batch omission into thousands of targeted probes; the broad
+                    // scheduler's fetch cooldown is enough to retry later, while
+                    // focused symbols already use the single-symbol fetch path.
+                    if let Some(reason) = alpaca_batch_missing_symbol_retry_reason(outcome) {
+                        let _ = broker_msg_tx.send(BrokerMsg::AlpacaRetryEnqueue {
+                            symbol: symbol.clone(),
+                            timeframe: timeframe.clone(),
+                            reason: reason.into(),
+                        });
+                    }
                     let _ = broker_msg_tx.send(BrokerMsg::AlpacaFetchSettled {
                         symbol: symbol.clone(),
                         timeframe: timeframe.clone(),
@@ -1143,5 +1151,27 @@ mod tests {
     fn backfill_complete_marker_forces_incremental_even_for_thin_history() {
         assert!(!should_request_full_backfill(true, Some(1_000), 1));
         assert!(!should_request_full_backfill(true, Some(u32::MAX), 10_000));
+    }
+
+    #[test]
+    fn successful_batch_omissions_do_not_spawn_targeted_retry_storms() {
+        assert_eq!(
+            alpaca_batch_missing_symbol_retry_reason(
+                typhoon_engine::broker::alpaca::FetchOutcome::Complete
+            ),
+            None
+        );
+        assert_eq!(
+            alpaca_batch_missing_symbol_retry_reason(
+                typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedPartial
+            ),
+            Some("batch_rate_limited_partial")
+        );
+        assert_eq!(
+            alpaca_batch_missing_symbol_retry_reason(
+                typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedEmpty
+            ),
+            Some("batch_rate_limited_empty")
+        );
     }
 }
