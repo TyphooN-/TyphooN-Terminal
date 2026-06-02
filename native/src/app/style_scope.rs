@@ -120,11 +120,37 @@ impl TyphooNApp {
     }
 
     pub(super) fn sec_scrape_scope_symbols(&self) -> Vec<String> {
-        let syms = match self.broker_scope_symbols() {
-            Some(scope) => scope,
-            None => self.news_focus_symbols(),
-        };
-        let mut syms: Vec<String> = syms
+        let mut raw = std::collections::HashSet::new();
+        match self.broker_scope {
+            EventSource::All => {
+                // Scope ALL means the whole tradable equity universe, not the
+                // current chart/news focus set. Kraken xStocks arrive after
+                // startup via KrakenEquityUniverse; until then return empty so
+                // auto-scrape defers instead of launching a misleading 4-symbol
+                // scrape that prevents the real universe scrape from starting.
+                if self.kraken_enabled
+                    && self.kraken_scrape_xstocks
+                    && self.kraken_equity_universe_symbols.is_empty()
+                {
+                    return Vec::new();
+                }
+                raw.extend(self.kraken_equity_universe_symbols.iter().cloned());
+                for (sym, _name, class) in &self.all_broker_assets {
+                    if class == "us_equity" {
+                        raw.insert(sym.clone());
+                    }
+                }
+                raw.extend(self.tastytrade_universe_symbols.iter().cloned());
+                raw.extend(self.cached_tastytrade_symbols.iter().cloned());
+                raw.extend(self.news_focus_symbols());
+            }
+            _ => {
+                if let Some(scope) = self.broker_scope_symbols() {
+                    raw.extend(scope);
+                }
+            }
+        }
+        let mut syms: Vec<String> = raw
             .into_iter()
             .filter_map(|sym| normalize_sec_scrape_symbol(&sym))
             .collect();

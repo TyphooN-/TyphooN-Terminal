@@ -15307,8 +15307,13 @@ impl TyphooNApp {
                             let _ = msg_tx.send(BrokerMsg::OrderResult("SEC scrape started...".into()));
                             match sec_filing::scrape_all_portfolio_symbols(db_path, Some(symbols)).await {
                                 Ok(stats) => {
+                                    let error_suffix = if stats.errors.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!(", {} errors (first: {})", stats.errors.len(), stats.errors[0])
+                                    };
                                     let _ = msg_tx.send(BrokerMsg::SecScrapeResult(
-                                        format!("SEC scrape complete: {} tickers, {} filings, {} insider trades, {} alerts", stats.tickers_scanned, stats.new_filings, stats.new_insider_trades, stats.new_alerts)
+                                        format!("SEC scrape complete: {} tickers, {} filings, {} insider trades, {} alerts{}", stats.tickers_scanned, stats.new_filings, stats.new_insider_trades, stats.new_alerts, error_suffix)
                                     ));
                                 }
                                 Err(e) => {

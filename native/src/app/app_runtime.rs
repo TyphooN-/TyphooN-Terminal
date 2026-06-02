@@ -38,12 +38,11 @@ fn is_routine_news_progress(msg: &str) -> bool {
 
 const HEAVY_SYNC_PENDING_FETCH_THRESHOLD: usize = 32;
 const HEAVY_SYNC_DEFERRED_CHART_THRESHOLD: usize = 4;
-const AUTO_BACKGROUND_SCRAPE_MAX_SYMBOLS: usize = 256;
-
-fn should_auto_start_background_scope_scrape(scope: EventSource, symbol_count: usize) -> bool {
+fn should_auto_start_background_scope_scrape(_scope: EventSource, symbol_count: usize) -> bool {
+    // SEC filing sync is part of the trading universe, not a tiny watchlist-only
+    // garnish. Broad Scope ALL must auto-run for the full tradable equity
+    // universe once that universe is loaded.
     symbol_count > 0
-        && (!matches!(scope, EventSource::All)
-            || symbol_count <= AUTO_BACKGROUND_SCRAPE_MAX_SYMBOLS)
 }
 const NEWS_LOADING_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(180);
 const FUNDAMENTALS_SCRAPE_STALE_AFTER: std::time::Duration =
@@ -2023,13 +2022,6 @@ impl eframe::App for TyphooNApp {
                             );
                             self.log.push_back(LogEntry::info(format!(
                                 "SEC EDGAR deferred scrape started for Scope {} ({} symbols)...",
-                                self.broker_scope_label(),
-                                symbol_count
-                            )));
-                        } else if symbol_count > AUTO_BACKGROUND_SCRAPE_MAX_SYMBOLS {
-                            self.auto_sec_scrape_deferred = false;
-                            self.log.push_back(LogEntry::info(format!(
-                                "SEC EDGAR deferred auto-scrape skipped for broad Scope {} ({} symbols); use manual SEC scrape for full-universe backfill",
                                 self.broker_scope_label(),
                                 symbol_count
                             )));
@@ -17961,12 +17953,12 @@ mod tests {
     }
 
     #[test]
-    fn auto_background_scope_scrape_skips_broad_all_universe() {
+    fn auto_background_scope_scrape_runs_broad_all_universe_after_symbols_load() {
         assert!(should_auto_start_background_scope_scrape(
             EventSource::All,
             12
         ));
-        assert!(!should_auto_start_background_scope_scrape(
+        assert!(should_auto_start_background_scope_scrape(
             EventSource::All,
             12_000
         ));

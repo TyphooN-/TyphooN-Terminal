@@ -279,9 +279,9 @@ fn categorize_form(form_type: &str) -> &'static str {
 
 // ── CIK Lookup ──────────────────────────────────────────────────────
 
-/// Look up CIK for a ticker from the SEC company_tickers.json endpoint.
-/// Returns the CIK as a zero-padded 10-digit string.
-async fn lookup_cik_online(client: &reqwest::Client, ticker: &str) -> Result<String, String> {
+async fn fetch_sec_ticker_cik_map(
+    client: &reqwest::Client,
+) -> Result<std::collections::HashMap<String, String>, String> {
     let resp = client
         .get("https://www.sec.gov/files/company_tickers.json")
         .header("User-Agent", SEC_EDGAR_USER_AGENT)
@@ -294,74 +294,22 @@ async fn lookup_cik_online(client: &reqwest::Client, ticker: &str) -> Result<Str
         .await
         .map_err(|e| format!("SEC ticker map parse failed: {e}"))?;
 
-    let upper_ticker = ticker.to_uppercase();
+    let mut out = std::collections::HashMap::new();
     if let Some(obj) = tickers_json.as_object() {
         for (_, v) in obj {
-            if v["ticker"].as_str() == Some(upper_ticker.as_str()) {
-                if let Some(cik) = v["cik_str"]
-                    .as_u64()
-                    .or_else(|| v["cik_str"].as_str().and_then(|s| s.parse().ok()))
-                {
-                    return Ok(format!("{:010}", cik));
-                }
-            }
+            let Some(ticker) = v["ticker"].as_str() else {
+                continue;
+            };
+            let Some(cik) = v["cik_str"]
+                .as_u64()
+                .or_else(|| v["cik_str"].as_str().and_then(|s| s.parse().ok()))
+            else {
+                continue;
+            };
+            out.insert(ticker.to_uppercase(), format!("{:010}", cik));
         }
     }
-    Err(format!("CIK not found for {ticker}"))
-}
-
-/// Get CIK from local DB cache or fetch from SEC.
-async fn get_cik(db_path: &Path, client: &reqwest::Client, ticker: &str) -> Result<String, String> {
-    let db = db_path.to_path_buf();
-    let t = ticker.to_uppercase();
-
-    // Check local cache first (blocking)
-    let cached = {
-        let db2 = db.clone();
-        let t2 = t.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = open_conn(&db2)?;
-            let cik: Option<String> = conn
-                .query_row(
-                    "SELECT cik FROM sec_scrape_index WHERE ticker = ?1",
-                    params![t2],
-                    |row| row.get(0),
-                )
-                .ok()
-                .flatten();
-            Ok::<_, String>(cik)
-        })
-        .await
-        .map_err(|e| format!("spawn_blocking: {e}"))??
-    };
-
-    if let Some(ref cik) = cached {
-        if !cik.is_empty() {
-            return Ok(cik.clone());
-        }
-    }
-
-    // Fetch from SEC (async)
-    let cik = lookup_cik_online(client, ticker).await?;
-
-    // Cache it (blocking)
-    {
-        let db2 = db.clone();
-        let t2 = t.clone();
-        let cik2 = cik.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = open_conn(&db2)?;
-            conn.execute(
-                "INSERT OR REPLACE INTO sec_scrape_index (ticker, cik, last_scrape_date, filing_count, updated_at)
-                 VALUES (?1, ?2, COALESCE((SELECT last_scrape_date FROM sec_scrape_index WHERE ticker = ?1), NULL),
-                         COALESCE((SELECT filing_count FROM sec_scrape_index WHERE ticker = ?1), 0), ?3)",
-                params![t2, cik2, chrono::Utc::now().timestamp()],
-            ).map_err(|e| format!("Cache CIK failed: {e}"))?;
-            Ok::<_, String>(())
-        }).await.map_err(|e| format!("spawn_blocking: {e}"))??;
-    }
-
-    Ok(cik)
+    Ok(out)
 }
 
 // ── Filing Scraper ──────────────────────────────────────────────────
@@ -932,23 +880,45 @@ pub async fn scrape_all_portfolio_symbols(
         errors: Vec::new(),
     };
 
-    // PERF: single batch load of last_scrape_date for ALL tickers — was N
-    // connection opens + N queries inside the per-symbol loop.
-    let scrape_dates: std::collections::HashMap<String, String> = {
+    // PERF: single batch load of last_scrape_date and cached CIKs for ALL tickers.
+    // Broad tradable-universe SEC sync can be 12k+ symbols; doing a SQLite open
+    // and SEC company_tickers.json fetch per symbol turns that into a crawl.
+    let (scrape_dates, cached_ciks): (
+        std::collections::HashMap<String, String>,
+        std::collections::HashMap<String, String>,
+    ) = {
         let db = db_path.clone();
         tokio::task::spawn_blocking(move || -> Result<_, String> {
             let conn = open_conn(&db)?;
-            let mut stmt = conn.prepare(
-                "SELECT ticker, last_scrape_date FROM sec_scrape_index WHERE last_scrape_date IS NOT NULL"
-            ).map_err(|e| format!("prepare scrape_index: {e}"))?;
-            let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            }).map_err(|e| format!("query scrape_index: {e}"))?;
-            let mut map = std::collections::HashMap::with_capacity(256);
-            for r in rows.flatten() { map.insert(r.0, r.1); }
-            Ok(map)
-        }).await.map_err(|e| format!("spawn_blocking: {e}"))??
+            let mut stmt = conn
+                .prepare("SELECT ticker, last_scrape_date, cik FROM sec_scrape_index")
+                .map_err(|e| format!("prepare scrape_index: {e}"))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })
+                .map_err(|e| format!("query scrape_index: {e}"))?;
+            let mut dates = std::collections::HashMap::with_capacity(1024);
+            let mut ciks = std::collections::HashMap::with_capacity(1024);
+            for r in rows.flatten() {
+                let ticker = r.0.to_uppercase();
+                if let Some(date) = r.1.filter(|date| !date.is_empty()) {
+                    dates.insert(ticker.clone(), date);
+                }
+                if let Some(cik) = r.2.filter(|cik| !cik.is_empty()) {
+                    ciks.insert(ticker, cik);
+                }
+            }
+            Ok((dates, ciks))
+        })
+        .await
+        .map_err(|e| format!("spawn_blocking: {e}"))??
     };
+    let mut sec_ticker_cik_map: Option<std::collections::HashMap<String, String>> = None;
 
     for sym in &symbols {
         // O(1) HashMap lookup replaces the N+1 per-symbol SELECT.
@@ -956,12 +926,31 @@ pub async fn scrape_all_portfolio_symbols(
             continue;
         }
 
-        // Look up CIK
-        let cik = match get_cik(&db_path, &client, sym).await {
-            Ok(c) => c,
-            Err(e) => {
-                stats.errors.push(format!("{sym}: {e}"));
-                continue;
+        // Look up CIK. For broad universes, fetch SEC's ticker map once and
+        // reuse it for every uncached symbol instead of hitting SEC once per
+        // ticker before even reaching submissions.
+        let cik = if let Some(cik) = cached_ciks.get(sym).filter(|cik| !cik.is_empty()) {
+            cik.clone()
+        } else {
+            if sec_ticker_cik_map.is_none() {
+                match fetch_sec_ticker_cik_map(&client).await {
+                    Ok(map) => sec_ticker_cik_map = Some(map),
+                    Err(e) => {
+                        stats.errors.push(format!("SEC ticker map: {e}"));
+                        break;
+                    }
+                }
+            }
+            match sec_ticker_cik_map
+                .as_ref()
+                .and_then(|map| map.get(sym))
+                .cloned()
+            {
+                Some(cik) => cik,
+                None => {
+                    stats.errors.push(format!("{sym}: CIK not found"));
+                    continue;
+                }
             }
         };
 
