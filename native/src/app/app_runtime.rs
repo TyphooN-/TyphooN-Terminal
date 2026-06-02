@@ -15414,7 +15414,10 @@ impl eframe::App for TyphooNApp {
                             egui::Sense::click_and_drag(),
                         )
                         .on_hover_cursor(egui::CursorIcon::Grab);
-                    if cell_body_resp.drag_started() && !scaling_this_cell && self.draw_mode == DrawMode::None {
+                    let cell_body_press = cell_body_resp.is_pointer_button_down_on()
+                        && !scaling_this_cell
+                        && self.draw_mode == DrawMode::None;
+                    if cell_body_press && !chart.is_dragging {
                         chart.is_dragging = true;
                         chart.is_drawing_drag = false;
                         chart.is_scaling_price = false;
@@ -15426,24 +15429,27 @@ impl eframe::App for TyphooNApp {
                         chart.begin_chart_camera_pan(cell_chart_body_rect.width(), price_pane_h);
                         self.user_interacting = true;
                     }
-                    if cell_body_resp.dragged()
-                        && chart.is_dragging
-                        && !scaling_this_cell
-                        && self.draw_mode == DrawMode::None
-                    {
+                    if cell_body_press && chart.is_dragging {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
-                        let price_pane_h = chart_price_pane_height(
-                            cell_chart_body_rect.height(),
-                            active_sub_pane_count,
-                        );
-                        chart.pan_chart_camera_pixels(
-                            cell_body_resp.drag_delta(),
-                            cell_chart_body_rect.width(),
-                            price_pane_h,
-                        );
-                        self.user_interacting = true;
+                        if let (Some(start), Some(pos)) =
+                            (chart.drag_start, cell_body_resp.interact_pointer_pos())
+                        {
+                            let total_drag = pos - start;
+                            if total_drag.x.abs() > 0.0 || total_drag.y.abs() > 0.0 {
+                                let price_pane_h = chart_price_pane_height(
+                                    cell_chart_body_rect.height(),
+                                    active_sub_pane_count,
+                                );
+                                chart.pan_chart_camera_pixels(
+                                    total_drag,
+                                    cell_chart_body_rect.width(),
+                                    price_pane_h,
+                                );
+                                self.user_interacting = true;
+                            }
+                        }
                     }
-                    if cell_body_resp.drag_stopped() && chart.is_dragging {
+                    if !cell_body_press && chart.is_dragging {
                         chart.is_dragging = false;
                         chart.drag_start = None;
                     }
@@ -15548,10 +15554,13 @@ impl eframe::App for TyphooNApp {
                         chart.reset_camera_from_legacy();
                     }
 
+                    let body_press = resp.is_pointer_button_down_on()
+                        && self.draw_mode == DrawMode::None
+                        && !scale_press;
                     if resp.hovered() && self.draw_mode == DrawMode::None && !scale_press {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
                     }
-                    if resp.drag_started() && self.draw_mode == DrawMode::None && !scale_press {
+                    if body_press && !chart.is_dragging {
                         chart.is_dragging = true;
                         chart.is_drawing_drag = false;
                         chart.is_scaling_price = false;
@@ -15563,24 +15572,25 @@ impl eframe::App for TyphooNApp {
                         chart.begin_chart_camera_pan(chart_body_interact_rect.width(), price_pane_h);
                         self.user_interacting = true;
                     }
-                    if resp.dragged()
-                        && chart.is_dragging
-                        && self.draw_mode == DrawMode::None
-                        && !chart.is_scaling_price
-                    {
+                    if body_press && chart.is_dragging && !chart.is_scaling_price {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
-                        let price_pane_h = chart_price_pane_height(
-                            chart_body_interact_rect.height(),
-                            active_sub_pane_count,
-                        );
-                        chart.pan_chart_camera_pixels(
-                            resp.drag_delta(),
-                            chart_body_interact_rect.width(),
-                            price_pane_h,
-                        );
-                        self.user_interacting = true;
+                        if let (Some(start), Some(pos)) = (chart.drag_start, resp.interact_pointer_pos()) {
+                            let total_drag = pos - start;
+                            if total_drag.x.abs() > 0.0 || total_drag.y.abs() > 0.0 {
+                                let price_pane_h = chart_price_pane_height(
+                                    chart_body_interact_rect.height(),
+                                    active_sub_pane_count,
+                                );
+                                chart.pan_chart_camera_pixels(
+                                    total_drag,
+                                    chart_body_interact_rect.width(),
+                                    price_pane_h,
+                                );
+                                self.user_interacting = true;
+                            }
+                        }
                     }
-                    if resp.drag_stopped() && chart.is_dragging {
+                    if !body_press && chart.is_dragging {
                         chart.is_dragging = false;
                         chart.drag_start = None;
                     }
