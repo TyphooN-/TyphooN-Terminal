@@ -490,15 +490,29 @@ impl SqliteCache {
     }
 
     fn purge_obsolete_low_tf_provider_bars_locked(conn: &Connection) -> Result<usize, String> {
-        conn.execute(
-            "DELETE FROM bar_cache
+        let deleted = conn
+            .execute(
+                "DELETE FROM bar_cache
              WHERE (key LIKE 'kraken-equities:%:1Min'
                  OR key LIKE 'kraken-equities:%:5Min'
+                 OR key LIKE 'alpaca:%:1Min'
+                 OR key LIKE 'alpaca:%:5Min'
+                 OR key LIKE 'yahoo-chart:%:1Min'
+                 OR key LIKE 'yahoo-chart:%:5Min')",
+                [],
+            )
+            .map_err(|e| format!("obsolete low-TF provider bar purge failed: {e}"))?;
+        let _ = conn.execute(
+            "DELETE FROM bar_track
+             WHERE (key LIKE 'kraken-equities:%:1Min'
+                 OR key LIKE 'kraken-equities:%:5Min'
+                 OR key LIKE 'alpaca:%:1Min'
+                 OR key LIKE 'alpaca:%:5Min'
                  OR key LIKE 'yahoo-chart:%:1Min'
                  OR key LIKE 'yahoo-chart:%:5Min')",
             [],
-        )
-        .map_err(|e| format!("obsolete low-TF provider bar purge failed: {e}"))
+        );
+        Ok(deleted)
     }
 
     /// Open or create a SQLite database at the given path.
@@ -595,11 +609,12 @@ impl SqliteCache {
         }
 
         // One-shot migration: remove stale low-timeframe provider-assist bars.
-        // M1/M5 remain valid for Kraken Spot public OHLC/WS, but Kraken Securities
-        // iapi is delayed and Yahoo intraday data is bounded assist data. Those
-        // rows make equities look better-covered than they are and inflate startup
-        // cache work. Keep higher-TF iapi/Yahoo rows and all Kraken Spot rows.
-        let migration_marker = "__migration__purge_iapi_yahoo_1m5m_2026_06__";
+        // M1/M5 remain valid for Kraken Spot public OHLC/WS. Native Kraken
+        // Securities iapi, Alpaca assist, and Yahoo assist low-TF rows are not
+        // merge targets; they make equities look better-covered than they are
+        // and inflate startup cache work. Keep higher-TF assist rows and all
+        // Kraken Spot rows.
+        let migration_marker = "__migration__purge_nonspot_provider_1m5m_2026_06__";
         let already_migrated: bool = conn
             .query_row(
                 "SELECT 1 FROM kv_cache WHERE key = ?1",
@@ -2373,6 +2388,17 @@ impl SqliteCache {
         Ok((deleted, (before - after).max(0)))
     }
 
+    /// Delete non-Spot provider M1/M5 rows that are not valid merge/cache
+    /// targets. Kraken Spot (`kraken:*:1Min/5Min`) is intentionally preserved.
+    /// Returns `(rows_deleted, bytes_freed)`.
+    pub fn delete_non_spot_low_timeframe_bars(&self) -> Result<(u64, i64), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let deleted = Self::purge_obsolete_low_tf_provider_bars_locked(&conn)? as u64;
+        let (before, after) = Self::reclaim_space_locked(&conn, &self.db_path)
+            .map_err(|e| format!("Deleted {deleted} rows but reclaim failed: {e}"))?;
+        Ok((deleted, (before - after).max(0)))
+    }
+
     /// Run PRAGMA incremental_vacuum to reclaim freed pages without full VACUUM.
     /// Lighter than VACUUM — doesn't rewrite the entire DB, just reclaims free pages.
     /// Safe to call periodically (e.g., on shutdown, after compaction).
@@ -3699,9 +3725,12 @@ mod tests {
 
         cache.put_bars("kraken-equities:AAPL:1Min", json).unwrap();
         cache.put_bars("kraken-equities:AAPL:5Min", json).unwrap();
+        cache.put_bars("alpaca:AAPL:1Min", json).unwrap();
+        cache.put_bars("alpaca:AAPL:5Min", json).unwrap();
         cache.put_bars("yahoo-chart:AAPL:1Min", json).unwrap();
         cache.put_bars("yahoo-chart:AAPL:5Min", json).unwrap();
         cache.put_bars("kraken-equities:AAPL:15Min", json).unwrap();
+        cache.put_bars("alpaca:AAPL:15Min", json).unwrap();
         cache.put_bars("yahoo-chart:AAPL:15Min", json).unwrap();
         cache.put_bars("kraken:BTC/USD:1Min", json).unwrap();
 
@@ -3709,7 +3738,7 @@ mod tests {
         let purged = SqliteCache::purge_obsolete_low_tf_provider_bars_locked(&conn).unwrap();
         drop(conn);
 
-        assert_eq!(purged, 4);
+        assert_eq!(purged, 6);
         assert!(
             cache
                 .get_bars("kraken-equities:AAPL:1Min")
@@ -3722,6 +3751,8 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        assert!(cache.get_bars("alpaca:AAPL:1Min").unwrap().is_none());
+        assert!(cache.get_bars("alpaca:AAPL:5Min").unwrap().is_none());
         assert!(cache.get_bars("yahoo-chart:AAPL:1Min").unwrap().is_none());
         assert!(cache.get_bars("yahoo-chart:AAPL:5Min").unwrap().is_none());
         assert!(
@@ -3730,6 +3761,7 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+        assert!(cache.get_bars("alpaca:AAPL:15Min").unwrap().is_some());
         assert!(cache.get_bars("yahoo-chart:AAPL:15Min").unwrap().is_some());
         assert!(cache.get_bars("kraken:BTC/USD:1Min").unwrap().is_some());
 

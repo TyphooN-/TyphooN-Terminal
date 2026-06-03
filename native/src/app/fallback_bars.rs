@@ -52,7 +52,7 @@ fn fallback_bars_to_cache_json(bars: &[FallbackBar]) -> Result<String, String> {
 pub(super) fn yahoo_chart_supports_timeframe(timeframe: &str) -> bool {
     matches!(
         normalize_sync_timeframe_key(timeframe),
-        Some("1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "1Day" | "1Week" | "1Month")
+        Some("15Min" | "30Min" | "1Hour" | "1Day" | "1Week" | "1Month")
     )
 }
 

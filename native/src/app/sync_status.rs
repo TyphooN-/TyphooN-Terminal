@@ -420,6 +420,16 @@ impl TyphooNApp {
         }
 
         for (source, broker) in expected_sources {
+            if source == "kraken-equities"
+                && !existing
+                    .iter()
+                    .any(|key| key.starts_with("kraken-equities:"))
+            {
+                // Don't paint a scary 0% iapi lane before the native iapi sync
+                // has produced any rows. Once the lane exists, missing high-TF
+                // symbols are still counted as empty coverage work.
+                continue;
+            }
             for tf in &timeframes {
                 let Some(tf) = normalize_sync_timeframe_key(tf) else {
                     continue;

@@ -92,7 +92,10 @@ pub(super) fn alpaca_sync_capacity_for_rpm(rpm: u32) -> AlpacaSyncCapacity {
 }
 
 pub(super) fn alpaca_sync_target_bars(tf: &str) -> Option<u32> {
-    normalize_sync_timeframe_key(tf).map(|_| u32::MAX)
+    match normalize_sync_timeframe_key(tf)? {
+        "1Min" | "5Min" => None,
+        _ => Some(u32::MAX),
+    }
 }
 
 pub(super) fn alpaca_incremental_fetch_limit_at(
@@ -194,8 +197,10 @@ mod tests {
     }
 
     #[test]
-    fn alpaca_sync_target_bars_returns_max_for_known_timeframes() {
-        assert_eq!(alpaca_sync_target_bars("1Min"), Some(u32::MAX));
+    fn alpaca_sync_target_bars_returns_max_for_supported_timeframes() {
+        assert!(alpaca_sync_target_bars("1Min").is_none());
+        assert!(alpaca_sync_target_bars("5Min").is_none());
+        assert_eq!(alpaca_sync_target_bars("15Min"), Some(u32::MAX));
         assert_eq!(alpaca_sync_target_bars("MN1"), Some(u32::MAX));
         assert!(alpaca_sync_target_bars("bogus").is_none());
     }
