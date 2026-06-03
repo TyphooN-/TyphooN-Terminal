@@ -512,6 +512,26 @@ impl SqliteCache {
                  OR key LIKE 'yahoo-chart:%:5Min')",
             [],
         );
+        let _ = conn.execute(
+            "DELETE FROM kv_cache
+             WHERE (key LIKE 'kraken-equities:%:1Min'
+                 OR key LIKE 'kraken-equities:%:5Min'
+                 OR key LIKE 'alpaca:%:1Min'
+                 OR key LIKE 'alpaca:%:5Min'
+                 OR key LIKE 'yahoo-chart:%:1Min'
+                 OR key LIKE 'yahoo-chart:%:5Min')",
+            [],
+        );
+        let _ = conn.execute(
+            "DELETE FROM sync_state
+             WHERE (key LIKE 'kraken-equities:%:1Min'
+                 OR key LIKE 'kraken-equities:%:5Min'
+                 OR key LIKE 'alpaca:%:1Min'
+                 OR key LIKE 'alpaca:%:5Min'
+                 OR key LIKE 'yahoo-chart:%:1Min'
+                 OR key LIKE 'yahoo-chart:%:5Min')",
+            [],
+        );
         Ok(deleted)
     }
 
@@ -625,13 +645,41 @@ impl SqliteCache {
         if !already_migrated {
             let purged = Self::purge_obsolete_low_tf_provider_bars_locked(&conn)?;
             tracing::info!(
-                "cache migration: purged {} obsolete kraken-equities/yahoo-chart M1/M5 bar entries",
+                "cache migration: purged {} obsolete non-spot provider M1/M5 bar entries",
                 purged
             );
             let _ = conn.execute(
                 "INSERT OR REPLACE INTO kv_cache (key, value, timestamp) VALUES (?1, ?2, ?3)",
                 params![
                     migration_marker,
+                    purged.to_string().as_bytes(),
+                    chrono::Utc::now().timestamp()
+                ],
+            );
+        }
+
+        // Follow-up for installs that already ran the first bar-only migration:
+        // clear any matching metadata/sync KVs too. The helper is idempotent and
+        // also keeps the bar tables clean for fresh installs.
+        let metadata_migration_marker =
+            "__migration__purge_nonspot_provider_1m5m_metadata_2026_06__";
+        let metadata_already_migrated: bool = conn
+            .query_row(
+                "SELECT 1 FROM kv_cache WHERE key = ?1",
+                params![metadata_migration_marker],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !metadata_already_migrated {
+            let purged = Self::purge_obsolete_low_tf_provider_bars_locked(&conn)?;
+            tracing::info!(
+                "cache migration: verified obsolete non-spot provider M1/M5 metadata purge ({} bar rows removed)",
+                purged
+            );
+            let _ = conn.execute(
+                "INSERT OR REPLACE INTO kv_cache (key, value, timestamp) VALUES (?1, ?2, ?3)",
+                params![
+                    metadata_migration_marker,
                     purged.to_string().as_bytes(),
                     chrono::Utc::now().timestamp()
                 ],
@@ -3733,6 +3781,12 @@ mod tests {
         cache.put_bars("alpaca:AAPL:15Min", json).unwrap();
         cache.put_bars("yahoo-chart:AAPL:15Min", json).unwrap();
         cache.put_bars("kraken:BTC/USD:1Min", json).unwrap();
+        cache.put_kv("alpaca:AAPL:1Min", "stale-kv").unwrap();
+        cache.put_kv("yahoo-chart:AAPL:5Min", "stale-kv").unwrap();
+        cache.put_kv("kraken:BTC/USD:1Min", "spot-kv").unwrap();
+        cache.set_sync_ts("kraken-equities:AAPL:1Min", 123).unwrap();
+        cache.set_sync_ts("alpaca:AAPL:5Min", 123).unwrap();
+        cache.set_sync_ts("kraken:BTC/USD:1Min", 123).unwrap();
 
         let conn = cache.connection().unwrap();
         let purged = SqliteCache::purge_obsolete_low_tf_provider_bars_locked(&conn).unwrap();
@@ -3764,6 +3818,12 @@ mod tests {
         assert!(cache.get_bars("alpaca:AAPL:15Min").unwrap().is_some());
         assert!(cache.get_bars("yahoo-chart:AAPL:15Min").unwrap().is_some());
         assert!(cache.get_bars("kraken:BTC/USD:1Min").unwrap().is_some());
+        assert!(cache.get_kv("alpaca:AAPL:1Min").unwrap().is_none());
+        assert!(cache.get_kv("yahoo-chart:AAPL:5Min").unwrap().is_none());
+        assert!(cache.get_kv("kraken:BTC/USD:1Min").unwrap().is_some());
+        assert_eq!(cache.get_sync_ts("kraken-equities:AAPL:1Min"), 0);
+        assert_eq!(cache.get_sync_ts("alpaca:AAPL:5Min"), 0);
+        assert_eq!(cache.get_sync_ts("kraken:BTC/USD:1Min"), 123);
 
         let _ = std::fs::remove_file(db_path);
     }
