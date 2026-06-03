@@ -382,9 +382,6 @@ impl TyphooNApp {
             .iter()
             .map(|(key, _, _)| key.clone())
             .collect();
-        let has_native_kraken_equity_bar_rows = existing
-            .iter()
-            .any(|key| kraken_equities_native_sync_bar_key(key));
         let spot_symbols: Vec<String> = self
             .kraken_sync_symbol_sectors()
             .into_iter()
@@ -406,12 +403,6 @@ impl TyphooNApp {
         }
 
         for (source, broker) in expected_sources {
-            if source == "kraken-equities" && !has_native_kraken_equity_bar_rows {
-                // Don't paint a scary 0% iapi lane from quote metadata alone.
-                // Once the native high-TF iapi bar lane exists, missing
-                // symbols are still counted as empty coverage work.
-                continue;
-            }
             for tf in &timeframes {
                 let Some(tf) = normalize_sync_timeframe_key(tf) else {
                     continue;
@@ -506,17 +497,6 @@ fn kraken_equities_merged_timeframe_supported(tf: &str) -> bool {
     kraken_equity_full_universe_timeframe(tf) || kraken_equity_broad_fallback_timeframe(tf)
 }
 
-fn kraken_equities_native_sync_bar_key(key: &str) -> bool {
-    let Some(rest) = key.strip_prefix("kraken-equities:") else {
-        return false;
-    };
-    let Some((symbol, raw_tf)) = rest.rsplit_once(':') else {
-        return false;
-    };
-    !symbol.is_empty()
-        && normalize_sync_timeframe_key(raw_tf).is_some_and(kraken_equity_full_universe_timeframe)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,21 +508,5 @@ mod tests {
         assert!(kraken_equities_merged_timeframe_supported("15Min"));
         assert!(kraken_equities_merged_timeframe_supported("1Day"));
         assert!(kraken_equities_merged_timeframe_supported("1Month"));
-    }
-
-    #[test]
-    fn kraken_iapi_expected_lane_requires_native_bar_rows_not_quotes() {
-        assert!(!kraken_equities_native_sync_bar_key(
-            "kraken-equities:WOK:quote"
-        ));
-        assert!(!kraken_equities_native_sync_bar_key(
-            "kraken-equities:WOK:15Min"
-        ));
-        assert!(kraken_equities_native_sync_bar_key(
-            "kraken-equities:WOK:1Day"
-        ));
-        assert!(kraken_equities_native_sync_bar_key(
-            "kraken-equities:NASDAQ:AAPL:1Month"
-        ));
     }
 }
