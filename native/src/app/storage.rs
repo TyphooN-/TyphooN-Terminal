@@ -1,4 +1,5 @@
 use super::*;
+use std::hash::{Hash, Hasher};
 
 fn sortable_header(
     ui: &mut egui::Ui,
@@ -239,6 +240,82 @@ impl TyphooNApp {
         keys
     }
 
+    fn storage_filtered_rows_cache_key(&self) -> u64 {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.bg_rev.hash(&mut h);
+        self.bg.detailed_stats.len().hash(&mut h);
+        self.bg.cache_blob_sizes.len().hash(&mut h);
+        self.storage_filter.hash(&mut h);
+        self.storage_sort_col.hash(&mut h);
+        self.storage_sort_asc.hash(&mut h);
+        h.finish()
+    }
+
+    pub(super) fn cached_disabled_kraken_quote_cache_keys(&mut self) -> &[String] {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.bg_rev.hash(&mut h);
+        self.bg.detailed_stats.len().hash(&mut h);
+        for quote in [
+            "USD", "USDT", "USDC", "USDG", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF",
+        ] {
+            self.crypto_fiat_quote_scrape_enabled(quote).hash(&mut h);
+        }
+        let key = h.finish();
+        if self.storage_disabled_kraken_quote_keys_cache_rev != Some(key) {
+            self.storage_disabled_kraken_quote_keys_cache = self.disabled_kraken_quote_cache_keys();
+            self.storage_disabled_kraken_quote_keys_cache_rev = Some(key);
+        }
+        &self.storage_disabled_kraken_quote_keys_cache
+    }
+
+    pub(super) fn cached_storage_filtered_rows(&mut self) -> &[(String, i64, i64)] {
+        let key = self.storage_filtered_rows_cache_key();
+        if self.storage_filtered_rows_cache_key != Some(key) {
+            let filter = self.storage_filter.to_uppercase();
+            let mut rows: Vec<(String, i64, i64)> = self
+                .bg
+                .detailed_stats
+                .iter()
+                .filter(|(cache_key, _, _)| {
+                    filter.is_empty() || cache_key.to_uppercase().contains(&filter)
+                })
+                .map(|(cache_key, count, ts)| (cache_key.clone(), *count, *ts))
+                .collect();
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            rows.sort_by(|a, b| {
+                let size_a = self
+                    .bg
+                    .cache_blob_sizes
+                    .get(a.0.as_str())
+                    .copied()
+                    .unwrap_or(0);
+                let size_b = self
+                    .bg
+                    .cache_blob_sizes
+                    .get(b.0.as_str())
+                    .copied()
+                    .unwrap_or(0);
+                let age_a = if a.2 > 0 { now_ms - a.2 } else { i64::MAX };
+                let age_b = if b.2 > 0 { now_ms - b.2 } else { i64::MAX };
+                let ord = match self.storage_sort_col {
+                    1 => a.1.cmp(&b.1),
+                    2 => size_a.cmp(&size_b),
+                    3 | 4 => a.2.cmp(&b.2),
+                    5 => age_a.cmp(&age_b),
+                    _ => a.0.cmp(&b.0),
+                };
+                if self.storage_sort_asc {
+                    ord
+                } else {
+                    ord.reverse()
+                }
+            });
+            self.storage_filtered_rows_cache = rows;
+            self.storage_filtered_rows_cache_key = Some(key);
+        }
+        &self.storage_filtered_rows_cache
+    }
+
     pub(super) fn render_storage_table(&mut self, ui: &mut egui::Ui) {
         if !self.alpaca_no_data_loaded {
             self.alpaca_no_data_load();
@@ -344,7 +421,7 @@ impl TyphooNApp {
                         });
                 });
         }
-        let disabled_kraken_quote_keys = self.disabled_kraken_quote_cache_keys();
+        let disabled_kraken_quote_keys = self.cached_disabled_kraken_quote_cache_keys().to_vec();
         ui.horizontal_wrapped(|ui| {
             ui.label(
                 egui::RichText::new(format!(
@@ -433,55 +510,17 @@ impl TyphooNApp {
         });
         ui.separator();
 
-        // Own the filtered rows so the UI can mutate `self` later in the frame
-        // without borrowing `self.bg.detailed_stats` across nested closures.
-        let filter = self.storage_filter.to_uppercase();
-        let mut filtered: Vec<(String, i64, i64)> = self
-            .bg
-            .detailed_stats
-            .iter()
-            .filter(|(key, _, _)| filter.is_empty() || key.to_uppercase().contains(&filter))
-            .map(|(key, count, ts)| (key.clone(), *count, *ts))
-            .collect();
-        filtered.sort_by(|a, b| {
-            let size_a = self
-                .bg
-                .cache_blob_sizes
-                .get(a.0.as_str())
-                .copied()
-                .unwrap_or(0);
-            let size_b = self
-                .bg
-                .cache_blob_sizes
-                .get(b.0.as_str())
-                .copied()
-                .unwrap_or(0);
-            let now_ms = chrono::Utc::now().timestamp_millis();
-            let age_a = if a.2 > 0 { now_ms - a.2 } else { i64::MAX };
-            let age_b = if b.2 > 0 { now_ms - b.2 } else { i64::MAX };
-            let ord = match self.storage_sort_col {
-                1 => a.1.cmp(&b.1),
-                2 => size_a.cmp(&size_b),
-                3 | 4 => a.2.cmp(&b.2),
-                5 => age_a.cmp(&age_b),
-                _ => a.0.cmp(&b.0),
-            };
-            if self.storage_sort_asc {
-                ord
-            } else {
-                ord.reverse()
-            }
-        });
-
+        let filter_is_empty = self.storage_filter.is_empty();
         let page_size = 200;
-        let total = filtered.len();
+        let total = self.cached_storage_filtered_rows().len();
         let total_pages = (total + page_size - 1) / page_size;
         if self.storage_page >= total_pages && total_pages > 0 {
             self.storage_page = total_pages - 1;
         }
         let page_start = self.storage_page * page_size;
         let page_end = (page_start + page_size).min(total);
-        let page_rows: Vec<(String, i64, i64)> = filtered[page_start..page_end].to_vec();
+        let page_rows: Vec<(String, i64, i64)> =
+            self.cached_storage_filtered_rows()[page_start..page_end].to_vec();
 
         ui.horizontal(|ui| {
             ui.label(
@@ -497,7 +536,7 @@ impl TyphooNApp {
                 );
             }
 
-            let can_bulk = !filter.is_empty() && total > 0;
+            let can_bulk = !filter_is_empty && total > 0;
             if self.storage_delete_filtered_confirm {
                 if ui
                     .add_enabled(
@@ -511,7 +550,11 @@ impl TyphooNApp {
                     )
                     .clicked()
                 {
-                    let keys: Vec<String> = filtered.iter().map(|(key, _, _)| key.clone()).collect();
+                    let keys: Vec<String> = self
+                        .cached_storage_filtered_rows()
+                        .iter()
+                        .map(|(key, _, _)| key.clone())
+                        .collect();
                     if let Some(cache) = self.cache.clone() {
                         let result = cache.delete_keys(&keys);
                         match result {

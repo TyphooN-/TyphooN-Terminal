@@ -12352,6 +12352,12 @@ pub struct TyphooNApp {
     storage_page: usize,
     storage_sort_col: usize,
     storage_sort_asc: bool,
+    /// Cached filtered/sorted Storage Manager rows. Rebuilding this every frame
+    /// against a multi-million-row cache summary causes hard UI stalls.
+    storage_filtered_rows_cache: Vec<(String, i64, i64)>,
+    storage_filtered_rows_cache_key: Option<u64>,
+    storage_disabled_kraken_quote_keys_cache: Vec<String>,
+    storage_disabled_kraken_quote_keys_cache_rev: Option<u64>,
     cache_stats_sort_col: usize,
     cache_stats_sort_asc: bool,
     /// Canonical cache suffix selected for "delete this timeframe across all brokers".
@@ -29212,6 +29218,10 @@ When the question touches recent news, sentiment, or prices, combine the researc
             storage_page: 0,
             storage_sort_col: 4,
             storage_sort_asc: false,
+            storage_filtered_rows_cache: Vec::new(),
+            storage_filtered_rows_cache_key: None,
+            storage_disabled_kraken_quote_keys_cache: Vec::new(),
+            storage_disabled_kraken_quote_keys_cache_rev: None,
             cache_stats_sort_col: 0,
             cache_stats_sort_asc: true,
             storage_delete_timeframe: "1Min".to_string(),
