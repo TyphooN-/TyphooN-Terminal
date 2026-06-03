@@ -42,6 +42,18 @@ fn obsolete_nonspot_low_timeframe(broker: &str, timeframe: &str) -> bool {
     )
 }
 
+fn stale_kraken_equity_no_data_mark(entry: &UnresolvablePair, now_s: i64) -> bool {
+    const KRAKEN_EQUITY_NO_DATA_TTL_SECS: i64 = 6 * 60 * 60;
+    if !entry.broker.eq_ignore_ascii_case("kraken-equities") {
+        return false;
+    }
+    let reason = entry.reason.to_ascii_lowercase();
+    if !(reason.contains("no data") || reason.contains("no bars")) {
+        return false;
+    }
+    entry.ts <= 0 || now_s.saturating_sub(entry.ts) > KRAKEN_EQUITY_NO_DATA_TTL_SECS
+}
+
 pub(super) fn build_unresolvable_fetch_key_index(
     pairs: &std::collections::HashMap<String, UnresolvablePair>,
 ) -> std::collections::HashMap<String, std::collections::HashSet<String>> {
@@ -259,10 +271,12 @@ impl TyphooNApp {
             if let Ok(Some(json)) = cache.get_kv("broker:unresolvable_pairs") {
                 match serde_json::from_str::<Vec<UnresolvablePair>>(&json) {
                     Ok(entries) => {
+                        let now_s = chrono::Utc::now().timestamp();
                         self.unresolvable_pairs = entries
                             .into_iter()
                             .filter(|entry| {
                                 !obsolete_nonspot_low_timeframe(&entry.broker, &entry.timeframe)
+                                    && !stale_kraken_equity_no_data_mark(entry, now_s)
                             })
                             .map(|entry| {
                                 let key = unresolvable_pair_key(
@@ -285,10 +299,14 @@ impl TyphooNApp {
 
     pub(super) fn unresolvable_save(&self) {
         if let Some(ref cache) = self.cache {
+            let now_s = chrono::Utc::now().timestamp();
             let mut entries: Vec<UnresolvablePair> = self
                 .unresolvable_pairs
                 .values()
-                .filter(|entry| !obsolete_nonspot_low_timeframe(&entry.broker, &entry.timeframe))
+                .filter(|entry| {
+                    !obsolete_nonspot_low_timeframe(&entry.broker, &entry.timeframe)
+                        && !stale_kraken_equity_no_data_mark(entry, now_s)
+                })
                 .cloned()
                 .collect();
             entries.sort_by(|a, b| {
@@ -2505,7 +2523,8 @@ impl TyphooNApp {
 
 #[cfg(test)]
 mod tests {
-    use super::kraken_equity_quote_meta_candidates;
+    use super::{kraken_equity_quote_meta_candidates, stale_kraken_equity_no_data_mark};
+    use crate::app::UnresolvablePair;
 
     #[test]
     fn kraken_equity_quote_meta_candidates_normalize_wrappers_and_pairs() {
@@ -2519,5 +2538,31 @@ mod tests {
             kraken_equity_quote_meta_candidates("WOKUSD"),
             vec!["WOKUSD", "WOK"]
         );
+    }
+
+    #[test]
+    fn stale_kraken_equity_no_data_marks_expire() {
+        let now = 10_000;
+        let stale = UnresolvablePair {
+            broker: "kraken-equities".to_string(),
+            symbol: "WOK".to_string(),
+            timeframe: "1Day".to_string(),
+            reason: "Kraken equity history request failed: HTTP 400 Bad Request: No data"
+                .to_string(),
+            ts: now - 7 * 60 * 60,
+        };
+        assert!(stale_kraken_equity_no_data_mark(&stale, now));
+
+        let fresh = UnresolvablePair {
+            ts: now - 60,
+            ..stale.clone()
+        };
+        assert!(!stale_kraken_equity_no_data_mark(&fresh, now));
+
+        let alpaca = UnresolvablePair {
+            broker: "alpaca".to_string(),
+            ..stale
+        };
+        assert!(!stale_kraken_equity_no_data_mark(&alpaca, now));
     }
 }
