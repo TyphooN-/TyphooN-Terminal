@@ -5157,20 +5157,56 @@ pub(super) fn draw_chart(
                 );
                 x += dash_len * 2.0;
             }
-            // Price label background
+            // Price label + TradingView-style countdown to the next candle close.
             let label = format_price(last.close);
-            let lbl_rect = egui::Rect::from_min_size(
-                egui::pos2(chart_rect.right() + 2.0, y - 8.0),
-                egui::vec2(price_axis_w - 4.0, 16.0),
-            );
-            painter.rect_filled(lbl_rect, 2.0, color);
-            painter.text(
-                egui::pos2(chart_rect.right() + 4.0, y),
-                egui::Align2::LEFT_CENTER,
-                &label,
-                egui::FontId::monospace(10.0),
-                egui::Color32::BLACK,
-            );
+            let countdown = chart
+                .bars
+                .last()
+                .and_then(|latest| next_candle_countdown_label(latest.ts_ms, chart.timeframe));
+            if let Some(countdown) = countdown {
+                let label_y = y.clamp(chart_rect.top() + 15.0, chart_rect.bottom() - 15.0);
+                let lbl_rect = egui::Rect::from_min_size(
+                    egui::pos2(chart_rect.right() + 2.0, label_y - 14.0),
+                    egui::vec2(price_axis_w - 4.0, 28.0),
+                );
+                let price_rect = egui::Rect::from_min_size(
+                    lbl_rect.min,
+                    egui::vec2(lbl_rect.width(), 15.0),
+                );
+                let timer_rect = egui::Rect::from_min_max(
+                    egui::pos2(lbl_rect.left(), lbl_rect.top() + 15.0),
+                    lbl_rect.max,
+                );
+                painter.rect_filled(price_rect, 2.0, color);
+                painter.rect_filled(timer_rect, 2.0, egui::Color32::from_rgb(12, 18, 28));
+                painter.text(
+                    egui::pos2(chart_rect.right() + 4.0, price_rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    &label,
+                    egui::FontId::monospace(10.0),
+                    egui::Color32::BLACK,
+                );
+                painter.text(
+                    egui::pos2(chart_rect.right() + 4.0, timer_rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    &countdown,
+                    egui::FontId::monospace(9.0),
+                    egui::Color32::from_rgb(200, 220, 235),
+                );
+            } else {
+                let lbl_rect = egui::Rect::from_min_size(
+                    egui::pos2(chart_rect.right() + 2.0, y - 8.0),
+                    egui::vec2(price_axis_w - 4.0, 16.0),
+                );
+                painter.rect_filled(lbl_rect, 2.0, color);
+                painter.text(
+                    egui::pos2(chart_rect.right() + 4.0, y),
+                    egui::Align2::LEFT_CENTER,
+                    &label,
+                    egui::FontId::monospace(10.0),
+                    egui::Color32::BLACK,
+                );
+            }
         }
     }
 
@@ -10764,6 +10800,36 @@ mod tests {
         assert_eq!(super::indicator_value_at(&series, 1), None);
         assert_eq!(super::indicator_value_at(&series, 3), None);
     }
+
+    #[test]
+    fn candle_countdown_uses_current_bar_boundary() {
+        let last_bar = 1_700_000_000_000_i64;
+        let now = last_bar + 3 * 60_000 + 15_000;
+
+        assert_eq!(
+            super::next_candle_remaining_ms_at(last_bar, super::Timeframe::M5, now),
+            Some(105_000)
+        );
+    }
+
+    #[test]
+    fn candle_countdown_rolls_forward_for_stale_bar_data() {
+        let last_bar = 1_700_000_000_000_i64;
+        let now = last_bar + 17 * 60_000 + 10_000;
+
+        assert_eq!(
+            super::next_candle_remaining_ms_at(last_bar, super::Timeframe::M5, now),
+            Some(170_000)
+        );
+    }
+
+    #[test]
+    fn candle_countdown_formats_like_chart_axis_timer() {
+        assert_eq!(super::format_candle_countdown(4_000), "00:04");
+        assert_eq!(super::format_candle_countdown(65_000), "01:05");
+        assert_eq!(super::format_candle_countdown(3_661_000), "1:01:01");
+        assert_eq!(super::format_candle_countdown(90_000_000), "1d 01:00");
+    }
 }
 
 pub(super) fn format_price(p: f64) -> String {
@@ -10802,6 +10868,48 @@ pub(super) fn format_ts(ts_ms: i64, tf: Timeframe) -> String {
     let mut buf = String::with_capacity(12);
     format_ts_buf(ts_ms, tf, &mut buf);
     buf
+}
+
+fn now_unix_ms() -> Option<i64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_millis()).ok())
+}
+
+fn next_candle_remaining_ms_at(last_bar_ts_ms: i64, tf: Timeframe, now_ms: i64) -> Option<i64> {
+    let interval_ms = i64::from(tf.minutes()).checked_mul(60_000)?;
+    if interval_ms <= 0 {
+        return None;
+    }
+    let elapsed = now_ms.saturating_sub(last_bar_ts_ms);
+    let intervals_elapsed = elapsed / interval_ms;
+    let next_close_ms = last_bar_ts_ms.checked_add(
+        (intervals_elapsed + 1).checked_mul(interval_ms)?,
+    )?;
+    Some(next_close_ms.saturating_sub(now_ms))
+}
+
+fn next_candle_countdown_label(last_bar_ts_ms: i64, tf: Timeframe) -> Option<String> {
+    let now_ms = now_unix_ms()?;
+    let remaining_ms = next_candle_remaining_ms_at(last_bar_ts_ms, tf, now_ms)?;
+    Some(format_candle_countdown(remaining_ms))
+}
+
+fn format_candle_countdown(remaining_ms: i64) -> String {
+    let total_secs = (remaining_ms.max(0) + 999) / 1000;
+    let days = total_secs / 86_400;
+    let hours = (total_secs % 86_400) / 3_600;
+    let minutes = (total_secs % 3_600) / 60;
+    let seconds = total_secs % 60;
+
+    if days > 0 {
+        format!("{days}d {hours:02}:{minutes:02}")
+    } else if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes:02}:{seconds:02}")
+    }
 }
 
 /// Buffer-reusing variant of format_ts — writes into caller's String to avoid heap alloc per call.
