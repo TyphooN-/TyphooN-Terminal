@@ -489,6 +489,18 @@ impl SqliteCache {
         Ok((before, after))
     }
 
+    fn purge_obsolete_low_tf_provider_bars_locked(conn: &Connection) -> Result<usize, String> {
+        conn.execute(
+            "DELETE FROM bar_cache
+             WHERE (key LIKE 'kraken-equities:%:1Min'
+                 OR key LIKE 'kraken-equities:%:5Min'
+                 OR key LIKE 'yahoo-chart:%:1Min'
+                 OR key LIKE 'yahoo-chart:%:5Min')",
+            [],
+        )
+        .map_err(|e| format!("obsolete low-TF provider bar purge failed: {e}"))
+    }
+
     /// Open or create a SQLite database at the given path.
     pub fn open(path: &PathBuf) -> Result<Self, String> {
         let conn = Connection::open(path).map_err(|e| format!("SQLite open failed: {e}"))?;
@@ -570,6 +582,35 @@ impl SqliteCache {
                 .unwrap_or(0);
             tracing::info!(
                 "cache migration: purged {} alpaca stock bar entries (re-fetch with adjustment=all)",
+                purged
+            );
+            let _ = conn.execute(
+                "INSERT OR REPLACE INTO kv_cache (key, value, timestamp) VALUES (?1, ?2, ?3)",
+                params![
+                    migration_marker,
+                    purged.to_string().as_bytes(),
+                    chrono::Utc::now().timestamp()
+                ],
+            );
+        }
+
+        // One-shot migration: remove stale low-timeframe provider-assist bars.
+        // M1/M5 remain valid for Kraken Spot public OHLC/WS, but Kraken Securities
+        // iapi is delayed and Yahoo intraday data is bounded assist data. Those
+        // rows make equities look better-covered than they are and inflate startup
+        // cache work. Keep higher-TF iapi/Yahoo rows and all Kraken Spot rows.
+        let migration_marker = "__migration__purge_iapi_yahoo_1m5m_2026_06__";
+        let already_migrated: bool = conn
+            .query_row(
+                "SELECT 1 FROM kv_cache WHERE key = ?1",
+                params![migration_marker],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !already_migrated {
+            let purged = Self::purge_obsolete_low_tf_provider_bars_locked(&conn)?;
+            tracing::info!(
+                "cache migration: purged {} obsolete kraken-equities/yahoo-chart M1/M5 bar entries",
                 purged
             );
             let _ = conn.execute(
@@ -3648,6 +3689,51 @@ mod tests {
         let _ = std::fs::remove_file(src_db_path);
         let _ = std::fs::remove_file(dst_db_path);
         let _ = std::fs::remove_file(backup_path);
+    }
+
+    #[test]
+    fn obsolete_low_tf_provider_purge_keeps_spot_and_higher_tf_rows() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let json = r#"[{"timestamp":"2024-06-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}]"#;
+
+        cache.put_bars("kraken-equities:AAPL:1Min", json).unwrap();
+        cache.put_bars("kraken-equities:AAPL:5Min", json).unwrap();
+        cache.put_bars("yahoo-chart:AAPL:1Min", json).unwrap();
+        cache.put_bars("yahoo-chart:AAPL:5Min", json).unwrap();
+        cache.put_bars("kraken-equities:AAPL:15Min", json).unwrap();
+        cache.put_bars("yahoo-chart:AAPL:15Min", json).unwrap();
+        cache.put_bars("kraken:BTC/USD:1Min", json).unwrap();
+
+        let conn = cache.connection().unwrap();
+        let purged = SqliteCache::purge_obsolete_low_tf_provider_bars_locked(&conn).unwrap();
+        drop(conn);
+
+        assert_eq!(purged, 4);
+        assert!(
+            cache
+                .get_bars("kraken-equities:AAPL:1Min")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            cache
+                .get_bars("kraken-equities:AAPL:5Min")
+                .unwrap()
+                .is_none()
+        );
+        assert!(cache.get_bars("yahoo-chart:AAPL:1Min").unwrap().is_none());
+        assert!(cache.get_bars("yahoo-chart:AAPL:5Min").unwrap().is_none());
+        assert!(
+            cache
+                .get_bars("kraken-equities:AAPL:15Min")
+                .unwrap()
+                .is_some()
+        );
+        assert!(cache.get_bars("yahoo-chart:AAPL:15Min").unwrap().is_some());
+        assert!(cache.get_bars("kraken:BTC/USD:1Min").unwrap().is_some());
+
+        let _ = std::fs::remove_file(db_path);
     }
 
     #[test]

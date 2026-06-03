@@ -1,6 +1,8 @@
 use super::*;
 
-pub(super) const MTF_GRID_TIMEFRAMES: [(&str, Timeframe); 7] = [
+pub(super) const MTF_GRID_TIMEFRAMES: [(&str, Timeframe); 9] = [
+    ("M1", Timeframe::M1),
+    ("M5", Timeframe::M5),
     ("M15", Timeframe::M15),
     ("M30", Timeframe::M30),
     ("H1", Timeframe::H1),
@@ -601,7 +603,7 @@ impl TyphooNApp {
     }
 
     /// Ensure this symbol has one MTF chart per supported MTF Grid timeframe.
-    /// M1/M5 are intentionally excluded because Kraken low-timeframe history is incomplete.
+    /// M1/M5 stay visible for Kraken Spot; unsupported/missing providers render as empty/grey panes.
     pub(super) fn ensure_mtf_grid_for_symbol(&mut self, symbol: &str) {
         let symbol = symbol.trim();
         if symbol.is_empty() {
@@ -1181,15 +1183,16 @@ mod tests {
     }
 
     #[test]
-    fn mtf_grid_timeframes_exclude_unavailable_m1_m5() {
+    fn mtf_grid_timeframes_include_low_timeframes_for_spot_pairs() {
         let labels: Vec<&str> = MTF_GRID_TIMEFRAMES
             .iter()
             .map(|(label, _)| *label)
             .collect();
 
-        assert_eq!(labels, vec!["M15", "M30", "H1", "H4", "D1", "W1", "MN1"]);
-        assert!(!labels.contains(&"M1"));
-        assert!(!labels.contains(&"M5"));
+        assert_eq!(
+            labels,
+            vec!["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"]
+        );
     }
 
     #[test]
@@ -1201,6 +1204,7 @@ mod tests {
             ChartState::new("kraken:BABYUSD:1Hour", Timeframe::H1),
             ChartState::new("kraken:WOK.EQ:1Min", Timeframe::M1),
             ChartState::new("kraken:WOK.EQ:1Week", Timeframe::W1),
+            ChartState::new("kraken:BABYUSD:5Min", Timeframe::M5),
         ];
         let visible = vec![true; charts.len()];
 
@@ -1208,9 +1212,8 @@ mod tests {
 
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].symbol, "WOK");
-        assert_eq!(groups[0].indices, vec![2, 0, 5]);
+        assert_eq!(groups[0].indices, vec![4, 2, 0, 5]);
         assert_eq!(groups[1].symbol, "BABYUSD");
-        assert_eq!(groups[1].indices, vec![3, 1]);
-        assert!(groups.iter().all(|group| !group.indices.contains(&4)));
+        assert_eq!(groups[1].indices, vec![6, 3, 1]);
     }
 }
