@@ -56042,12 +56042,60 @@ impl TyphooNApp {
                     });
                     ui.separator();
 
-                    egui::ScrollArea::vertical()
-                        .auto_shrink(false)
-                        .max_height(520.0)
-                        .show(ui, |ui| {
-                    for ticker in &tickers {
-                        let found = self
+                    let active_symbol_set: std::collections::HashSet<&str> =
+                        tickers.iter().map(String::as_str).collect();
+                    self.fundamentals_hidden_symbols
+                        .retain(|symbol| active_symbol_set.contains(symbol.as_str()));
+
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new("Visible symbols:")
+                                .color(AXIS_TEXT)
+                                .small(),
+                        );
+                        if ui.small_button("All").clicked() {
+                            self.fundamentals_hidden_symbols.clear();
+                        }
+                        if tickers.len() > 1 && ui.small_button("None").clicked() {
+                            self.fundamentals_hidden_symbols = tickers.iter().cloned().collect();
+                        }
+                        for ticker in &tickers {
+                            let visible = !self.fundamentals_hidden_symbols.contains(ticker);
+                            let response = ui
+                                .selectable_label(visible, egui::RichText::new(ticker).small())
+                                .on_hover_text("Toggle this symbol in the Fundamentals tile view");
+                            if response.clicked() {
+                                if visible {
+                                    self.fundamentals_hidden_symbols.insert(ticker.clone());
+                                } else {
+                                    self.fundamentals_hidden_symbols.remove(ticker);
+                                }
+                            }
+                        }
+                    });
+                    ui.separator();
+
+                    let visible_tickers: Vec<&String> = tickers
+                        .iter()
+                        .filter(|ticker| !self.fundamentals_hidden_symbols.contains(*ticker))
+                        .collect();
+                    if visible_tickers.is_empty() {
+                        ui.label(
+                            egui::RichText::new("No symbols selected. Toggle symbols above or click All.")
+                                .color(AXIS_TEXT),
+                        );
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .id_salt("fundamentals_symbol_tiles")
+                            .auto_shrink(false)
+                            .max_height(ui.available_height().max(240.0))
+                            .show(ui, |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    for ticker in visible_tickers {
+                                        ui.group(|ui| {
+                                            ui.set_min_width(300.0);
+                                            ui.set_max_width(340.0);
+                                            let found = self
                             .bg
                             .all_fundamentals
                             .iter()
@@ -56086,12 +56134,8 @@ impl TyphooNApp {
                             }
                         });
                         ui.separator();
-                        if let Some(f) = found {
-                            egui::ScrollArea::vertical()
-                                .auto_shrink(false)
-                                .max_height(360.0)
-                                .show(ui, |ui| {
-                                    // Company info
+                                            if let Some(f) = found {
+                                                // Company info
                                     ui.label(
                                         egui::RichText::new(if f.company_name.is_empty() {
                                             "—"
@@ -56127,7 +56171,7 @@ impl TyphooNApp {
 
                                     // Valuation grid
                                     ui.label(egui::RichText::new("Valuation").small().strong());
-                                    egui::Grid::new("fund_val")
+                                    egui::Grid::new(("fund_val", ticker.as_str()))
                                         .striped(true)
                                         .num_columns(4)
                                         .show(ui, |ui| {
@@ -56246,7 +56290,7 @@ impl TyphooNApp {
 
                                     // Ratios grid
                                     ui.label(egui::RichText::new("Ratios").small().strong());
-                                    egui::Grid::new("fund_ratios")
+                                    egui::Grid::new(("fund_ratios", ticker.as_str()))
                                         .striped(true)
                                         .num_columns(4)
                                         .show(ui, |ui| {
@@ -56339,7 +56383,7 @@ impl TyphooNApp {
                                             .small()
                                             .strong(),
                                     );
-                                    egui::Grid::new("fund_prof")
+                                    egui::Grid::new(("fund_prof", ticker.as_str()))
                                         .striped(true)
                                         .num_columns(4)
                                         .show(ui, |ui| {
@@ -56533,18 +56577,21 @@ impl TyphooNApp {
                                         .color(AXIS_TEXT)
                                         .small(),
                                     );
-                                });
                         } else {
                             ui.label(
                                 egui::RichText::new("No fundamentals data. Click Scrape/Refresh.")
                                     .color(AXIS_TEXT),
                             );
                         }
-                        if tickers.len() > 1 {
-                            ui.separator();
-                        }
-                    } // end for ticker in &tickers
-                        });
+                                            if tickers.len() > 1 {
+                                                ui.separator();
+                                            }
+                                        });
+                                        ui.add_space(8.0);
+                                    } // end for ticker in visible_tickers
+                                });
+                            });
+                    }
                 });
         }
 

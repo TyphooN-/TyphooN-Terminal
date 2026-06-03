@@ -12141,18 +12141,20 @@ pub struct TyphooNApp {
     show_calendar: bool,
     show_sec: bool,
     sec_selected_filing: Option<usize>,
-    sec_tab: usize,                 // 0=Filings, 1=Alerts, 2=Insiders, 3=Timeline
-    sec_search_query: String,       // text search filter for filings
-    sec_keyword_input: String,      // keyword watchlist input
-    sec_keywords: Vec<String>,      // cached keyword list
-    earnings_active_only: bool,     // filter earnings calendar to active symbols
-    dividends_active_only: bool,    // filter dividend calendar to active symbols
-    ev_active_only: bool,           // filter EV scanner to active symbols
-    congress_active_only: bool,     // filter congressional trades to active symbols
-    volume_active_only: bool,       // filter unusual volume to active symbols
-    sec_filing_content: String,     // cached filing document text
+    sec_tab: usize,              // 0=Filings, 1=Alerts, 2=Insiders, 3=Timeline
+    sec_search_query: String,    // text search filter for filings
+    sec_keyword_input: String,   // keyword watchlist input
+    sec_keywords: Vec<String>,   // cached keyword list
+    earnings_active_only: bool,  // filter earnings calendar to active symbols
+    dividends_active_only: bool, // filter dividend calendar to active symbols
+    ev_active_only: bool,        // filter EV scanner to active symbols
+    /// Per-symbol visibility toggles in the Fundamentals window.
+    fundamentals_hidden_symbols: std::collections::HashSet<String>,
+    congress_active_only: bool, // filter congressional trades to active symbols
+    volume_active_only: bool,   // filter unusual volume to active symbols
+    sec_filing_content: String, // cached filing document text
     sec_filing_content_for: String, // accession number this content belongs to (for sticky display)
-    sec_filing_pinned: bool,        // pin document viewer (don't clear when navigating filings)
+    sec_filing_pinned: bool,    // pin document viewer (don't clear when navigating filings)
     sec_filing_loading: bool,
     sec_filing_summary: Option<sec_filing::FilingSummary>,
     sec_filing_summary_for: String,
@@ -29056,6 +29058,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             earnings_active_only: false,
             dividends_active_only: false,
             ev_active_only: false,
+            fundamentals_hidden_symbols: std::collections::HashSet::new(),
             congress_active_only: false,
             volume_active_only: false,
             sec_filing_content: String::new(),
