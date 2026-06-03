@@ -12285,6 +12285,10 @@ pub struct TyphooNApp {
     /// Filings tab: sorted indices into `bg.sec_filings` after dedup+scope+filter+search.
     sec_cache_filings: Vec<usize>,
     sec_cache_filings_key: Option<u64>,
+    /// User-controlled filter/search/sort key for the filings cache. Kept
+    /// separate from the SEC data key so checkbox/search changes can rebuild
+    /// the visible table even while a broad EDGAR scrape is publishing rows.
+    sec_cache_filings_controls_key: Option<u64>,
     /// Insiders tab: (ticker, trade index) tuples for cross-symbol rendering.
     sec_cache_insiders: Vec<(String, usize)>,
     sec_cache_insiders_clusters: Vec<(String, usize)>,
@@ -29154,6 +29158,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             tastytrade_sync_pause_reason: String::new(),
             sec_cache_filings: Vec::new(),
             sec_cache_filings_key: None,
+            sec_cache_filings_controls_key: None,
             sec_cache_insiders: Vec::new(),
             sec_cache_insiders_clusters: Vec::new(),
             sec_cache_insiders_key: None,

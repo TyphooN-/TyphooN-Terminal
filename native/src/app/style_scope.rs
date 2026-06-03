@@ -342,6 +342,14 @@ impl TyphooNApp {
             self.sec_sort.ascending.hash(&mut h);
             h.finish()
         };
+        let filings_controls_key = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            self.sec_filters.hash(&mut h);
+            self.sec_search_query.hash(&mut h);
+            self.sec_sort.column.hash(&mut h);
+            self.sec_sort.ascending.hash(&mut h);
+            h.finish()
+        };
         let insiders_key = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             sec_data_key.hash(&mut h);
@@ -358,16 +366,24 @@ impl TyphooNApp {
             || self.sec_cache_filings_key != Some(filings_key)
             || self.sec_cache_insiders_key != Some(insiders_key)
             || self.sec_cache_timeline_key != Some(timeline_key);
-        if cache_changed && self.heavy_sync_in_progress && self.scrape_sec_running {
+        let visible_filings_controls_changed =
+            self.sec_tab == 0 && self.sec_cache_filings_controls_key != Some(filings_controls_key);
+        if cache_changed
+            && self.heavy_sync_in_progress
+            && self.scrape_sec_running
+            && !visible_filings_controls_changed
+        {
             // During the broad EDGAR scrape the background thread can publish huge
             // filing/insider snapshots. Rebuilding the visible SEC tab cache on
             // egui has already produced 10s+ chart freezes. Keep the last cache
-            // while scraping; one stale SEC pane beats broken free-look.
+            // while scraping. User-driven filing filter/search/sort changes are
+            // allowed through; otherwise the scanner controls look broken.
             return;
         }
         if cache_changed
             && !cache_cold
             && self.heavy_sync_in_progress
+            && !visible_filings_controls_changed
             && self.sec_cache_last_rebuild.elapsed() < SEC_CACHE_HEAVY_SYNC_MIN_REBUILD_INTERVAL
         {
             return;
@@ -404,9 +420,6 @@ impl TyphooNApp {
         // hidden O(N) work is exactly what makes the UI feel stuck.
         if self.sec_tab == 0 && self.sec_cache_filings_key != Some(filings_key) {
             let filter_types: &[&str] = &["4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
-            let all_on = self.sec_filters.iter().all(|&v| v);
-            let none_on = self.sec_filters.iter().all(|&v| !v);
-            let show_all = all_on || none_on;
             // Symbol-only search: uppercase query once, compare against ticker (stored upper).
             let search_upper = self.sec_search_query.trim().to_uppercase();
             let has_search = !search_upper.is_empty();
@@ -441,21 +454,8 @@ impl TyphooNApp {
                 if !seen.insert(key) {
                     continue;
                 }
-                if !show_all {
-                    let pass = self.sec_filters.iter().enumerate().any(|(i, &en)| {
-                        if !en {
-                            return false;
-                        }
-                        let ft = filter_types.get(i).unwrap_or(&"");
-                        if *ft == "4" {
-                            f.form_type == "4"
-                        } else {
-                            f.form_type.contains(ft)
-                        }
-                    });
-                    if !pass {
-                        continue;
-                    }
+                if !sec_filing_form_matches_filters(&f.form_type, &self.sec_filters, filter_types) {
+                    continue;
                 }
                 if let Some(ref set) = self.cached_scope_syms {
                     if !set.contains(f.ticker.as_str()) {
@@ -524,6 +524,7 @@ impl TyphooNApp {
             }
             self.sec_cache_filings = idxs;
             self.sec_cache_filings_key = Some(filings_key);
+            self.sec_cache_filings_controls_key = Some(filings_controls_key);
         }
 
         // Insiders tab — (SEC data, scope, query)
@@ -1022,6 +1023,30 @@ impl TyphooNApp {
     }
 }
 
+fn sec_filing_form_matches_filters(
+    form_type: &str,
+    filters: &[bool; 7],
+    filter_types: &[&str],
+) -> bool {
+    if filters.iter().all(|&enabled| enabled) {
+        return true;
+    }
+    if filters.iter().all(|&enabled| !enabled) {
+        return false;
+    }
+    filters.iter().enumerate().any(|(i, &enabled)| {
+        if !enabled {
+            return false;
+        }
+        let expected = filter_types.get(i).copied().unwrap_or("");
+        if expected == "4" {
+            form_type == "4"
+        } else {
+            form_type.contains(expected)
+        }
+    })
+}
+
 fn normalize_sec_scrape_symbol(sym: &str) -> Option<String> {
     let mut sym = sym.trim().to_uppercase();
     if sym.is_empty() || sym.starts_with("__") || sym.contains('/') {
@@ -1057,5 +1082,46 @@ mod tests {
         assert_eq!(normalize_sec_scrape_symbol("AAPL"), Some("AAPL".into()));
         assert_eq!(normalize_sec_scrape_symbol("BTC/USD"), None);
         assert_eq!(normalize_sec_scrape_symbol("TOOLONG.EQ"), None);
+    }
+
+    #[test]
+    fn sec_filing_form_filters_are_checkbox_exact() {
+        let filter_types: &[&str] = &["4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
+        assert!(sec_filing_form_matches_filters(
+            "10-Q",
+            &[true; 7],
+            filter_types
+        ));
+        assert!(!sec_filing_form_matches_filters(
+            "10-Q",
+            &[false; 7],
+            filter_types
+        ));
+
+        let mut form4_only = [false; 7];
+        form4_only[0] = true;
+        assert!(sec_filing_form_matches_filters(
+            "4",
+            &form4_only,
+            filter_types
+        ));
+        assert!(!sec_filing_form_matches_filters(
+            "10-K",
+            &form4_only,
+            filter_types
+        ));
+
+        let mut proxy_only = [false; 7];
+        proxy_only[2] = true;
+        assert!(sec_filing_form_matches_filters(
+            "DEF 14A",
+            &proxy_only,
+            filter_types
+        ));
+        assert!(!sec_filing_form_matches_filters(
+            "13F-HR",
+            &proxy_only,
+            filter_types
+        ));
     }
 }
