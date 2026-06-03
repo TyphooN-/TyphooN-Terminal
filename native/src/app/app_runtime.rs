@@ -38,11 +38,79 @@ fn is_routine_news_progress(msg: &str) -> bool {
 
 const HEAVY_SYNC_PENDING_FETCH_THRESHOLD: usize = 32;
 const HEAVY_SYNC_DEFERRED_CHART_THRESHOLD: usize = 4;
-fn should_auto_start_background_scope_scrape(_scope: EventSource, symbol_count: usize) -> bool {
-    // SEC filing sync is part of the trading universe, not a tiny watchlist-only
-    // garnish. Broad Scope ALL must auto-run for the full tradable equity
-    // universe once that universe is loaded.
-    symbol_count > 0
+fn should_auto_start_background_scope_scrape(scope: EventSource, symbol_count: usize) -> bool {
+    // Broad Scope ALL is valid when the user explicitly asks for it, but
+    // auto-starting a 12k-symbol SEC sweep on startup turns chart interaction
+    // into molasses: the scrape pounds SQLite/EDGAR while egui is trying to
+    // render and apply camera drags. Keep automatic startup scrapes bounded;
+    // manual ALL still goes through the full universe at click time.
+    symbol_count > 0 && (!matches!(scope, EventSource::All) || symbol_count <= 512)
+}
+
+fn broker_msg_kind(msg: &BrokerMsg) -> &'static str {
+    match msg {
+        BrokerMsg::Connected(_) => "Connected",
+        BrokerMsg::Error(_) => "Error",
+        BrokerMsg::Account(_) => "Account",
+        BrokerMsg::Positions(_) => "Positions",
+        BrokerMsg::Orders(_) => "Orders",
+        BrokerMsg::OrderResult(_) => "OrderResult",
+        BrokerMsg::KrakenTrades(_) => "KrakenTrades",
+        BrokerMsg::KrakenLiveTrade(_) => "KrakenLiveTrade",
+        BrokerMsg::KrakenOpenOrders(_) => "KrakenOpenOrders",
+        BrokerMsg::KrakenWsStatus { .. } => "KrakenWsStatus",
+        BrokerMsg::KrakenOrderbookUpdate(_) => "KrakenOrderbookUpdate",
+        BrokerMsg::KrakenWsBarsCommitted { .. } => "KrakenWsBarsCommitted",
+        BrokerMsg::KrakenWsOhlcStatus { .. } => "KrakenWsOhlcStatus",
+        BrokerMsg::KrakenEquityQuote(_) => "KrakenEquityQuote",
+        BrokerMsg::KrakenEquityBars { .. } => "KrakenEquityBars",
+        BrokerMsg::KrakenEquityHistoryError { .. } => "KrakenEquityHistoryError",
+        BrokerMsg::KrakenEquityUniverse(_) => "KrakenEquityUniverse",
+        BrokerMsg::SecScrapeResult(_) => "SecScrapeResult",
+        BrokerMsg::FilingContent(_) => "FilingContent",
+        BrokerMsg::FinnhubNewsResult(_) => "FinnhubNewsResult",
+        BrokerMsg::Quote(_, _, _, _) => "Quote",
+        BrokerMsg::MarketClock(_) => "MarketClock",
+        BrokerMsg::StreamTick { .. } => "StreamTick",
+        BrokerMsg::StreamQuoteTick { .. } => "StreamQuoteTick",
+        BrokerMsg::JsonResult(_, _) => "JsonResult",
+        BrokerMsg::FundamentalsProgress(_) => "FundamentalsProgress",
+        BrokerMsg::DarwinFtpScanResult(_) => "DarwinFtpScanResult",
+        BrokerMsg::DarwinFtpReturns(_) => "DarwinFtpReturns",
+        BrokerMsg::BarsFetched { .. } => "BarsFetched",
+        BrokerMsg::AlpacaRetryEnqueue { .. } => "AlpacaRetryEnqueue",
+        BrokerMsg::AlpacaNoData { .. } => "AlpacaNoData",
+        BrokerMsg::AlpacaBackfillComplete { .. } => "AlpacaBackfillComplete",
+        BrokerMsg::AlpacaFetchSettled { .. } => "AlpacaFetchSettled",
+        BrokerMsg::KrakenFetchSettled { .. } => "KrakenFetchSettled",
+        BrokerMsg::Unresolvable { .. } => "Unresolvable",
+        BrokerMsg::KrakenBackfillComplete { .. } => "KrakenBackfillComplete",
+        BrokerMsg::KrakenFuturesFetchSettled { .. } => "KrakenFuturesFetchSettled",
+        BrokerMsg::KrakenFuturesBackfillComplete { .. } => "KrakenFuturesBackfillComplete",
+        BrokerMsg::TastytradeBackfillComplete { .. } => "TastytradeBackfillComplete",
+        BrokerMsg::TastytradeFetchSettled { .. } => "TastytradeFetchSettled",
+        BrokerMsg::AlpacaRateLimitObserved { .. } => "AlpacaRateLimitObserved",
+        BrokerMsg::SymbolSuggestions(_) => "SymbolSuggestions",
+        BrokerMsg::WatchlistQuotes(_) => "WatchlistQuotes",
+        BrokerMsg::FredData(_, _) => "FredData",
+        BrokerMsg::EconCalendarData(_) => "EconCalendarData",
+        BrokerMsg::CongressData(_) => "CongressData",
+        BrokerMsg::UnusualVolumeResults(_) => "UnusualVolumeResults",
+        BrokerMsg::TastytradePositions(_) => "TastytradePositions",
+        BrokerMsg::TastytradeBalances(_) => "TastytradeBalances",
+        BrokerMsg::KrakenPositions(_) => "KrakenPositions",
+        BrokerMsg::AllAssets(_) => "AllAssets",
+        BrokerMsg::RecentFills(_) => "RecentFills",
+        BrokerMsg::Mt5SyncDone(_) => "Mt5SyncDone",
+        BrokerMsg::Mt5LiveQuotes(_) => "Mt5LiveQuotes",
+        BrokerMsg::Mt5Heartbeat(_) => "Mt5Heartbeat",
+        BrokerMsg::CryptoTop50(_) => "CryptoTop50",
+        BrokerMsg::KrakenBalances(_) => "KrakenBalances",
+        BrokerMsg::KrakenPairs(_) => "KrakenPairs",
+        BrokerMsg::KrakenFuturesInstruments(_) => "KrakenFuturesInstruments",
+        BrokerMsg::TastytradeUniverse(_) => "TastytradeUniverse",
+        _ => "Other",
+    }
 }
 const NEWS_LOADING_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(180);
 const FUNDAMENTALS_SCRAPE_STALE_AFTER: std::time::Duration =
@@ -1065,13 +1133,33 @@ impl eframe::App for TyphooNApp {
             while let Ok(newer) = self.bg_rx.try_recv() {
                 data = newer;
             }
-            // Auto-populate darwinex_radar_data from BG-loaded specs so Darwinex scope
-            // filtering works without requiring manual DARWINEXRADAR command.
-            if !data.darwinex_specs.is_empty() {
-                self.darwinex_radar_data = data.darwinex_specs.clone();
+            // Applying a BG snapshot can move hundreds of thousands of SEC rows
+            // into `self.bg` and drop the previous vector on the egui thread. During
+            // heavy sync/SEC/news sweeps that showed up as 250ms+ pre_broker stalls
+            // every refresh cycle, which makes chart drag feel like snap-back. If no
+            // window that needs the BG tables is visible, drop this refresh and let
+            // the next 3s BG cycle republish after the hot path cools down.
+            let bg_window_visible = self.show_sec
+                || self.show_fundamentals
+                || self.show_storage
+                || self.show_cache_stats
+                || self.show_darwin_accounts
+                || self.show_darwin_portfolio;
+            if !self.heavy_sync_in_progress || bg_window_visible {
+                // Auto-populate darwinex_radar_data from BG-loaded specs so Darwinex scope
+                // filtering works without requiring manual DARWINEXRADAR command.
+                if !data.darwinex_specs.is_empty() {
+                    self.darwinex_radar_data = data.darwinex_specs.clone();
+                }
+                self.bg = data;
+                self.bg_rev = self.bg_rev.wrapping_add(1);
+            } else {
+                tracing::debug!(
+                    "Deferred BG snapshot apply during heavy sync (sec_filings={}, details={})",
+                    data.sec_filings.len(),
+                    data.detailed_stats.len()
+                );
             }
-            self.bg = data;
-            self.bg_rev = self.bg_rev.wrapping_add(1);
         }
 
         // ── LAN client: load server's broker positions/account from KV cache ──
@@ -1348,6 +1436,8 @@ impl eframe::App for TyphooNApp {
             && let Ok(msg) = self.broker_rx.try_recv()
         {
             msgs_drained += 1;
+            let msg_kind = broker_msg_kind(&msg);
+            let msg_started = std::time::Instant::now();
             match msg {
                 BrokerMsg::Connected(s) => {
                     if s.contains("Kraken") {
@@ -2046,32 +2136,11 @@ impl eframe::App for TyphooNApp {
                                 price: last,
                             },
                         );
-                        if let Some(cache) = self.cache.as_ref() {
-                            let ts_ms = if ticker.time_ms > 0 {
-                                ticker.time_ms
-                            } else {
-                                chrono::Utc::now().timestamp_millis()
-                            };
-                            let ts = chrono::DateTime::from_timestamp_millis(ts_ms)
-                                .unwrap_or_else(chrono::Utc::now)
-                                .to_rfc3339();
-                            let open = ticker.open.unwrap_or(last).max(0.0);
-                            let high = ticker.high.unwrap_or(last).max(last);
-                            let low = ticker.low.unwrap_or(last).min(last).max(0.0);
-                            let bar = serde_json::json!({
-                                "timestamp": ts,
-                                "open": open,
-                                "high": high,
-                                "low": low,
-                                "close": last,
-                                "volume": ticker.volume.max(0.0),
-                            });
-                            if let Ok(json) = serde_json::to_string(&vec![bar]) {
-                                let _ = cache
-                                    .put_bars(&format!("kraken-equities:{symbol}:quote"), &json);
-                            }
-                        }
-                        let quote_cache = self.cache.clone();
+                        // Do not write quote bars from the egui thread. During SEC/news
+                        // sweeps SQLite can be write-locked for seconds; a single
+                        // KrakenEquityQuote then blew the entire broker drain budget and
+                        // froze free-look. History fetches still persist quote/history bars
+                        // on blocking workers; this path is just the live UI overlay.
                         for chart in &mut self.charts {
                             let chart_sym = chart.symbol.replace('/', "").to_ascii_uppercase();
                             let chart_bare = chart_sym
@@ -2084,15 +2153,7 @@ impl eframe::App for TyphooNApp {
                             if chart_bare == symbol {
                                 chart.live_bid = ticker.bid;
                                 chart.live_ask = ticker.ask;
-                                if let Some(cache) = quote_cache.as_ref() {
-                                    // Apply the same timestamp-aware quote overlay used by
-                                    // chart loads. Directly mutating the last bar made a fresh
-                                    // quote appear at an older candle timestamp, so positions
-                                    // and MTF/Grid charts could disagree about WOK's current
-                                    // price/provenance after fallback bars advanced further than
-                                    // stale Kraken Securities history.
-                                    chart.apply_quote_cache_overlay(cache, &symbol);
-                                } else if let Some(bar) = chart.bars.last_mut() {
+                                if let Some(bar) = chart.bars.last_mut() {
                                     bar.close = last;
                                     bar.high = bar.high.max(last);
                                     bar.low = if bar.low > 0.0 {
@@ -8145,6 +8206,13 @@ impl eframe::App for TyphooNApp {
                             .push_back(LogEntry::warn("GPU not available — cannot compute stats"));
                     }
                 }
+            }
+            let msg_elapsed = msg_started.elapsed();
+            if msg_elapsed > std::time::Duration::from_millis(25) {
+                tracing::warn!(
+                    "BrokerMsg::{msg_kind} handling took {:.2}ms on UI thread",
+                    msg_elapsed.as_secs_f64() * 1000.0
+                );
             }
         }
         perf_broker_drain_ms = broker_drain_started.elapsed().as_secs_f64() * 1000.0;
@@ -15395,10 +15463,14 @@ impl eframe::App for TyphooNApp {
                             egui::Sense::click_and_drag(),
                         )
                         .on_hover_cursor(egui::CursorIcon::Grab);
-                    let cell_body_press = cell_body_resp.is_pointer_button_down_on()
+                    let cell_body_started = cell_body_resp.is_pointer_button_down_on()
                         && !scaling_this_cell
                         && self.draw_mode == DrawMode::None;
-                    if cell_body_press && !chart.is_dragging {
+                    let cell_body_press = (cell_body_started
+                        || (chart.is_dragging && ctx.input(|i| i.pointer.primary_down())))
+                        && !scaling_this_cell
+                        && self.draw_mode == DrawMode::None;
+                    if cell_body_started && !chart.is_dragging {
                         chart.is_dragging = true;
                         chart.is_drawing_drag = false;
                         chart.is_scaling_price = false;
@@ -15412,7 +15484,7 @@ impl eframe::App for TyphooNApp {
                     if cell_body_press && chart.is_dragging {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
                         if let (Some(start), Some(pos)) =
-                            (chart.drag_start, cell_body_resp.interact_pointer_pos())
+                            (chart.drag_start, ctx.input(|i| i.pointer.interact_pos()))
                         {
                             let total_drag = pos - start;
                             if total_drag.x.abs() > 0.0 || total_drag.y.abs() > 0.0 {
@@ -15531,13 +15603,17 @@ impl eframe::App for TyphooNApp {
                         chart.reset_camera_from_legacy();
                     }
 
-                    let body_press = resp.is_pointer_button_down_on()
+                    let body_started = resp.is_pointer_button_down_on()
+                        && self.draw_mode == DrawMode::None
+                        && !scale_press;
+                    let body_press = (body_started
+                        || (chart.is_dragging && ctx.input(|i| i.pointer.primary_down())))
                         && self.draw_mode == DrawMode::None
                         && !scale_press;
                     if resp.hovered() && self.draw_mode == DrawMode::None && !scale_press {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
                     }
-                    if body_press && !chart.is_dragging {
+                    if body_started && !chart.is_dragging {
                         chart.is_dragging = true;
                         chart.is_drawing_drag = false;
                         chart.is_scaling_price = false;
@@ -15550,7 +15626,7 @@ impl eframe::App for TyphooNApp {
                     }
                     if body_press && chart.is_dragging && !chart.is_scaling_price {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
-                        if let (Some(start), Some(pos)) = (chart.drag_start, resp.interact_pointer_pos()) {
+                        if let (Some(start), Some(pos)) = (chart.drag_start, ctx.input(|i| i.pointer.interact_pos())) {
                             let total_drag = pos - start;
                             if total_drag.x.abs() > 0.0 || total_drag.y.abs() > 0.0 {
                                 let price_pane_h = chart_price_pane_height(
@@ -17958,12 +18034,12 @@ mod tests {
     }
 
     #[test]
-    fn auto_background_scope_scrape_runs_broad_all_universe_after_symbols_load() {
+    fn auto_background_scope_scrape_skips_large_all_universe_after_symbols_load() {
         assert!(should_auto_start_background_scope_scrape(
             EventSource::All,
             12
         ));
-        assert!(should_auto_start_background_scope_scrape(
+        assert!(!should_auto_start_background_scope_scrape(
             EventSource::All,
             12_000
         ));
