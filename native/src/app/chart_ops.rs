@@ -1,6 +1,6 @@
 use super::*;
 
-const MTF_GRID_TIMEFRAMES: [(&str, Timeframe); 7] = [
+pub(super) const MTF_GRID_TIMEFRAMES: [(&str, Timeframe); 7] = [
     ("M15", Timeframe::M15),
     ("M30", Timeframe::M30),
     ("H1", Timeframe::H1),
@@ -9,6 +9,58 @@ const MTF_GRID_TIMEFRAMES: [(&str, Timeframe); 7] = [
     ("W1", Timeframe::W1),
     ("MN1", Timeframe::MN1),
 ];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MtfChartGroup {
+    pub(super) symbol: String,
+    pub(super) indices: Vec<usize>,
+}
+
+fn mtf_timeframe_rank(tf: Timeframe) -> Option<usize> {
+    MTF_GRID_TIMEFRAMES
+        .iter()
+        .position(|(_, candidate)| *candidate == tf)
+}
+
+fn mtf_grid_symbol_key(symbol: &str) -> String {
+    let mut candidate = bare_symbol_from_key(symbol);
+    if let Some(stripped) = candidate.strip_suffix(".EQ") {
+        candidate = stripped.to_string();
+    }
+    candidate
+}
+
+pub(super) fn mtf_visible_chart_groups(
+    charts: &[ChartState],
+    visible: &[bool],
+) -> Vec<MtfChartGroup> {
+    let mut groups: Vec<MtfChartGroup> = Vec::new();
+    for (idx, chart) in charts.iter().enumerate() {
+        if !visible.get(idx).copied().unwrap_or(true)
+            || mtf_timeframe_rank(chart.timeframe).is_none()
+        {
+            continue;
+        }
+        let symbol = mtf_grid_symbol_key(&chart.symbol);
+        if symbol.is_empty() {
+            continue;
+        }
+        if let Some(group) = groups.iter_mut().find(|group| group.symbol == symbol) {
+            group.indices.push(idx);
+        } else {
+            groups.push(MtfChartGroup {
+                symbol,
+                indices: vec![idx],
+            });
+        }
+    }
+    for group in &mut groups {
+        group
+            .indices
+            .sort_by_key(|idx| mtf_timeframe_rank(charts[*idx].timeframe).unwrap_or(usize::MAX));
+    }
+    groups
+}
 
 /// True iff `raw` becomes `target_upper` after stripping `'/'` and uppercasing
 /// (ASCII). Avoids the per-call `raw.replace('/', "").to_uppercase()` allocation
@@ -388,66 +440,25 @@ impl TyphooNApp {
             return false;
         };
 
+        self.ensure_mtf_grid_for_symbol(&symbol);
         if let Some(existing_idx) = self.charts.iter().position(|chart| {
             chart.timeframe == Timeframe::D1
-                && normalize_market_data_symbol(&chart.symbol)
-                    .replace('/', "")
-                    .trim_end_matches(".EQ")
-                    .eq_ignore_ascii_case(
-                        &symbol
-                            .replace('/', "")
-                            .trim_end_matches(".EQ")
-                            .to_ascii_uppercase(),
-                    )
+                && mtf_grid_symbol_key(&chart.symbol).eq_ignore_ascii_case(
+                    &symbol
+                        .replace('/', "")
+                        .trim_end_matches(".EQ")
+                        .to_ascii_uppercase(),
+                )
         }) {
             self.active_tab = existing_idx;
-            while self.mtf_visible.len() < self.charts.len() {
-                self.mtf_visible.push(true);
-            }
-            if let Some(visible) = self.mtf_visible.get_mut(existing_idx) {
-                *visible = true;
-            }
-            self.symbol_input = symbol.clone();
-            self.mtf_enabled = true;
-            self.compute_mtf_grid_status();
-            self.log.push_back(LogEntry::info(format!(
-                "News: focused existing {} D1 chart tab",
-                symbol
-            )));
-            return true;
         }
-
-        let mut chart = ChartState::new(&symbol, Timeframe::D1);
-        if let Some(ref cache) = self.cache.clone() {
-            let mut gpu = self.gpu_indicators.take();
-            if !chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()) {
-                self.gpu_indicators = gpu;
-                self.charts.push(chart);
-                let idx = self.charts.len().saturating_sub(1);
-                self.queue_chart_reload(idx);
-            } else {
-                self.gpu_indicators = gpu;
-                self.charts.push(chart);
-            }
-        } else {
-            self.charts.push(chart);
-        }
-        self.active_tab = self.charts.len().saturating_sub(1);
         self.symbol_input = symbol.clone();
-        while self.mtf_visible.len() < self.charts.len() {
-            self.mtf_visible.push(true);
-        }
-        if let Some(visible) = self.mtf_visible.get_mut(self.active_tab) {
-            *visible = true;
-        }
         self.mtf_enabled = true;
-        let queued = self.queue_symbol_fetch_for_source(&symbol, Timeframe::D1.cache_suffix());
         self.compute_mtf_grid_status();
-        self.log.push_back(LogEntry::info(if queued {
-            format!("News: opened {} D1 chart tab and queued data fetch", symbol)
-        } else {
-            format!("News: opened {} D1 chart tab", symbol)
-        }));
+        self.log.push_back(LogEntry::info(format!(
+            "News: opened/focused {} MTF grid",
+            symbol
+        )));
         true
     }
 
@@ -589,51 +600,72 @@ impl TyphooNApp {
         symbols.into_iter().collect()
     }
 
-    /// Set up MTF grid with N columns and target chart count.
-    /// Creates charts for M15+ timeframes, filling up to `target` charts.
-    pub(super) fn setup_mtf_grid(&mut self, cols: usize, target: usize) {
-        let all_tfs = MTF_GRID_TIMEFRAMES.map(|(_, tf)| tf);
-        let sym = self.symbol_input.trim().to_string();
-        // Grow charts to target count
-        while self.charts.len() < target {
-            let tf_idx = self.charts.len() % all_tfs.len();
-            let mut chart = ChartState::new(&sym, all_tfs[tf_idx]);
-            if let Some(ref cache) = self.cache {
-                {
+    /// Ensure this symbol has one MTF chart per supported MTF Grid timeframe.
+    /// M1/M5 are intentionally excluded because Kraken low-timeframe history is incomplete.
+    pub(super) fn ensure_mtf_grid_for_symbol(&mut self, symbol: &str) {
+        let symbol = symbol.trim();
+        if symbol.is_empty() {
+            return;
+        }
+        let symbol_key = normalize_market_data_symbol(symbol)
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .to_ascii_uppercase();
+        for &(label, tf) in &MTF_GRID_TIMEFRAMES {
+            let existing_idx = self.charts.iter().position(|chart| {
+                chart.timeframe == tf
+                    && mtf_grid_symbol_key(&chart.symbol).eq_ignore_ascii_case(&symbol_key)
+            });
+            let idx = if let Some(idx) = existing_idx {
+                idx
+            } else {
+                let mut chart = ChartState::new(symbol, tf);
+                if let Some(ref cache) = self.cache.clone() {
                     let mut gpu = self.gpu_indicators.take();
-                    if !chart.try_load(cache, &mut self.log, gpu.as_mut()) {
-                        self.queue_chart_reload(0);
-                    }
-                    self.gpu_indicators = gpu;
-                }
-            }
-            self.charts.push(chart);
-        }
-        // Load any existing charts that have empty bars (e.g. from session restore)
-        if let Some(ref cache) = self.cache {
-            let mut retry_first_chart = false;
-            for chart in &mut self.charts {
-                if chart.bars.is_empty() {
-                    {
-                        let mut gpu = self.gpu_indicators.take();
-                        if !chart.try_load(cache, &mut self.log, gpu.as_mut()) {
-                            retry_first_chart = true;
-                        }
+                    if !chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()) {
                         self.gpu_indicators = gpu;
+                        self.charts.push(chart);
+                        let idx = self.charts.len().saturating_sub(1);
+                        self.queue_chart_reload(idx);
+                        let _ = self.queue_symbol_fetch_for_source(symbol, tf.cache_suffix());
+                        idx
+                    } else {
+                        self.gpu_indicators = gpu;
+                        self.charts.push(chart);
+                        self.charts.len().saturating_sub(1)
                     }
+                } else {
+                    self.charts.push(chart);
+                    let idx = self.charts.len().saturating_sub(1);
+                    let _ = self.queue_symbol_fetch_for_source(symbol, tf.cache_suffix());
+                    idx
                 }
+            };
+            while self.mtf_visible.len() < self.charts.len() {
+                self.mtf_visible.push(true);
             }
-            if retry_first_chart {
-                self.queue_chart_reload(0);
+            if let Some(visible) = self.mtf_visible.get_mut(idx) {
+                *visible = true;
+            }
+            if label == "D1" {
+                self.active_tab = idx;
             }
         }
+    }
+
+    /// Set up MTF grid with N columns. Creates one chart per supported MTF timeframe
+    /// for the current symbol; the legacy `target` is ignored except for menu compatibility.
+    pub(super) fn setup_mtf_grid(&mut self, cols: usize, _target: usize) {
+        let sym = self.symbol_input.trim().to_string();
+        self.ensure_mtf_grid_for_symbol(&sym);
         self.mtf_cols = cols;
         self.mtf_enabled = true;
+        let symbol_count = mtf_visible_chart_groups(&self.charts, &self.mtf_visible).len();
         self.log.push_back(LogEntry::info(format!(
-            "MTF grid: {}×{} ({} charts)",
+            "MTF grid: {} col(s), {} symbol grid(s), {} supported TFs per symbol",
             cols,
-            (target + cols - 1) / cols,
-            self.charts.len()
+            symbol_count,
+            MTF_GRID_TIMEFRAMES.len()
         )));
     }
 
@@ -1146,5 +1178,39 @@ mod tests {
             TyphooNApp::normalize_news_ticker_for_chart("THIS-SYMBOL-IS-TOO-LONG"),
             None
         );
+    }
+
+    #[test]
+    fn mtf_grid_timeframes_exclude_unavailable_m1_m5() {
+        let labels: Vec<&str> = MTF_GRID_TIMEFRAMES
+            .iter()
+            .map(|(label, _)| *label)
+            .collect();
+
+        assert_eq!(labels, vec!["M15", "M30", "H1", "H4", "D1", "W1", "MN1"]);
+        assert!(!labels.contains(&"M1"));
+        assert!(!labels.contains(&"M5"));
+    }
+
+    #[test]
+    fn mtf_grid_groups_visible_charts_by_symbol_and_sorts_each_symbol_by_timeframe() {
+        let charts = vec![
+            ChartState::new("kraken:WOK.EQ:1Day", Timeframe::D1),
+            ChartState::new("kraken:BABYUSD:4Hour", Timeframe::H4),
+            ChartState::new("kraken:WOK.EQ:15Min", Timeframe::M15),
+            ChartState::new("kraken:BABYUSD:1Hour", Timeframe::H1),
+            ChartState::new("kraken:WOK.EQ:1Min", Timeframe::M1),
+            ChartState::new("kraken:WOK.EQ:1Week", Timeframe::W1),
+        ];
+        let visible = vec![true; charts.len()];
+
+        let groups = mtf_visible_chart_groups(&charts, &visible);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].symbol, "WOK");
+        assert_eq!(groups[0].indices, vec![2, 0, 5]);
+        assert_eq!(groups[1].symbol, "BABYUSD");
+        assert_eq!(groups[1].indices, vec![3, 1]);
+        assert!(groups.iter().all(|group| !group.indices.contains(&4)));
     }
 }

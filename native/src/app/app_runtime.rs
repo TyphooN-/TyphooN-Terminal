@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::chart_ops::{MTF_GRID_TIMEFRAMES, mtf_visible_chart_groups};
 
 fn is_routine_market_data_status(msg: &str) -> bool {
     let routine_progress = msg.contains(": fetching recent window...")
@@ -1350,15 +1351,13 @@ impl eframe::App for TyphooNApp {
                 // Merge with any preloaded data already in mtf_grid_status
                 self.mtf_grid_status.extend(results);
                 self.mtf_grid_status.sort_by_key(|r| match r.0 {
-                    "M1" => 0,
-                    "M5" => 1,
-                    "M15" => 2,
-                    "M30" => 3,
-                    "H1" => 4,
-                    "H4" => 5,
-                    "D1" => 6,
-                    "W1" => 7,
-                    "MN1" => 8,
+                    "M15" => 0,
+                    "M30" => 1,
+                    "H1" => 2,
+                    "H4" => 3,
+                    "D1" => 4,
+                    "W1" => 5,
+                    "MN1" => 6,
                     _ => 99u8,
                 });
                 self.mtf_grid_rx = None; // done
@@ -9497,24 +9496,16 @@ impl eframe::App for TyphooNApp {
                         ui.close();
                     }
                     ui.menu_button("Grid Layout", |ui| {
-                        if ui.button("2×2 (4 charts)").clicked() {
-                            self.setup_mtf_grid(2, 4);
+                        if ui.button("2 columns per symbol").clicked() {
+                            self.setup_mtf_grid(2, MTF_GRID_TIMEFRAMES.len());
                             ui.close();
                         }
-                        if ui.button("3×2 (6 charts)").clicked() {
-                            self.setup_mtf_grid(3, 6);
+                        if ui.button("3 columns per symbol").clicked() {
+                            self.setup_mtf_grid(3, MTF_GRID_TIMEFRAMES.len());
                             ui.close();
                         }
-                        if ui.button("3×3 (9 charts)").clicked() {
-                            self.setup_mtf_grid(3, 9);
-                            ui.close();
-                        }
-                        if ui.button("4×3 (12 charts)").clicked() {
-                            self.setup_mtf_grid(4, 12);
-                            ui.close();
-                        }
-                        if ui.button("4×4 (16 charts)").clicked() {
-                            self.setup_mtf_grid(4, 16);
+                        if ui.button("4 columns per symbol").clicked() {
+                            self.setup_mtf_grid(4, MTF_GRID_TIMEFRAMES.len());
                             ui.close();
                         }
                     });
@@ -13844,74 +13835,99 @@ impl eframe::App for TyphooNApp {
                         .id_salt("mtf_grid_section")
                         .default_open(self.right_mtf_grid_open)
                         .show(ui, |ui| {
-                        let tf_labels = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"];
+                        let tf_labels = ["M15", "M30", "H1", "H4", "D1", "W1", "MN1"];
                         let ma_labels = ["SMA200", "KAMA", "Fisher"];
                         // Symbol count only — the Fetch News button moved into the News
                         // section header and now picks the multi-symbol path automatically
                         // when MTF mode has >1 symbol, so we no longer render a second one
                         // here.
                         let mtf_news_symbols = self.mtf_grid_news_symbols();
+                        let mtf_groups = mtf_visible_chart_groups(&self.charts, &self.mtf_visible);
                         ui.label(
                             egui::RichText::new(format!(
-                                "{} symbol{}",
+                                "{} symbol{} · M15+ only",
                                 mtf_news_symbols.len(),
                                 if mtf_news_symbols.len() == 1 { "" } else { "s" }
                             ))
                             .color(AXIS_TEXT)
                             .small(),
                         );
-                        egui::Grid::new("mtf_ma_grid")
-                            .spacing(egui::vec2(4.0, 2.0))
-                            .show(ui, |ui| {
-                                // Header row
-                                ui.label(egui::RichText::new("").small());
-                                for tf in &tf_labels {
-                                    ui.label(egui::RichText::new(*tf).color(AXIS_TEXT).small());
-                                }
-                                ui.end_row();
-                                // Data rows from mtf_grid_status
-                                for ma in &ma_labels {
-                                    ui.label(egui::RichText::new(*ma).color(AXIS_TEXT).small());
+                        if mtf_groups.is_empty() {
+                            egui::Grid::new("mtf_ma_grid")
+                                .spacing(egui::vec2(4.0, 2.0))
+                                .show(ui, |ui| {
+                                    ui.label(egui::RichText::new("").small());
                                     for tf in &tf_labels {
-                                        // Find status for this TF
-                                        let status =
-                                            self.mtf_grid_status.iter().find(|s| s.0 == *tf);
-                                        let dot_color =
-                                            if let Some(&(_, close, sma, kama, fisher, fsig)) =
-                                                status
-                                            {
+                                        ui.label(egui::RichText::new(*tf).color(AXIS_TEXT).small());
+                                    }
+                                    ui.end_row();
+                                    for ma in &ma_labels {
+                                        ui.label(egui::RichText::new(*ma).color(AXIS_TEXT).small());
+                                        for tf in &tf_labels {
+                                            let status = self.mtf_grid_status.iter().find(|s| s.0 == *tf);
+                                            let dot_color = if let Some(&(_, close, sma, kama, fisher, fsig)) = status {
                                                 let bullish = match *ma {
-                                                    "SMA200" => match (close, sma) {
-                                                        (Some(c), Some(s)) => Some(c > s),
-                                                        _ => None,
-                                                    },
-                                                    "KAMA" => match (close, kama) {
-                                                        (Some(c), Some(k)) => Some(c > k),
-                                                        _ => None,
-                                                    },
-                                                    "Fisher" => match (fisher, fsig) {
-                                                        (Some(f), Some(s)) => Some(f > s),
-                                                        _ => None,
-                                                    },
+                                                    "SMA200" => match (close, sma) { (Some(c), Some(s)) => Some(c > s), _ => None },
+                                                    "KAMA" => match (close, kama) { (Some(c), Some(k)) => Some(c > k), _ => None },
+                                                    "Fisher" => match (fisher, fsig) { (Some(f), Some(s)) => Some(f > s), _ => None },
                                                     _ => None,
                                                 };
-                                                match bullish {
-                                                    Some(true) => UP,
-                                                    Some(false) => DOWN,
-                                                    None => AXIS_TEXT,
-                                                }
+                                                match bullish { Some(true) => UP, Some(false) => DOWN, None => AXIS_TEXT }
                                             } else {
                                                 egui::Color32::from_rgb(50, 50, 60)
                                             };
-                                        ui.label(
-                                            egui::RichText::new("\u{25CF}")
-                                                .color(dot_color)
-                                                .small(),
-                                        );
+                                            ui.label(egui::RichText::new("\u{25CF}").color(dot_color).small());
+                                        }
+                                        ui.end_row();
                                     }
-                                    ui.end_row();
-                                }
-                            });
+                                });
+                        } else {
+                            for group in mtf_groups {
+                                ui.label(egui::RichText::new(&group.symbol).color(ACCENT).small().strong());
+                                egui::Grid::new(format!("mtf_ma_grid_{}", group.symbol))
+                                    .spacing(egui::vec2(4.0, 2.0))
+                                    .show(ui, |ui| {
+                                        ui.label(egui::RichText::new("").small());
+                                        for tf in &tf_labels {
+                                            ui.label(egui::RichText::new(*tf).color(AXIS_TEXT).small());
+                                        }
+                                        ui.end_row();
+                                        for ma in &ma_labels {
+                                            ui.label(egui::RichText::new(*ma).color(AXIS_TEXT).small());
+                                            for tf in &tf_labels {
+                                                let tf_match = |chart: &&ChartState| chart.timeframe.label() == *tf;
+                                                let status = group
+                                                    .indices
+                                                    .iter()
+                                                    .filter_map(|idx| self.charts.get(*idx))
+                                                    .find(tf_match)
+                                                    .map(|chart| {
+                                                        (
+                                                            chart.bars.last().map(|b| b.close),
+                                                            chart.sma200.last().and_then(|v| *v),
+                                                            chart.kama.last().and_then(|v| *v),
+                                                            chart.fisher.last().and_then(|v| *v),
+                                                            chart.fisher_signal.last().and_then(|v| *v),
+                                                        )
+                                                    });
+                                                let dot_color = if let Some((close, sma, kama, fisher, fsig)) = status {
+                                                    let bullish = match *ma {
+                                                        "SMA200" => match (close, sma) { (Some(c), Some(s)) => Some(c > s), _ => None },
+                                                        "KAMA" => match (close, kama) { (Some(c), Some(k)) => Some(c > k), _ => None },
+                                                        "Fisher" => match (fisher, fsig) { (Some(f), Some(s)) => Some(f > s), _ => None },
+                                                        _ => None,
+                                                    };
+                                                    match bullish { Some(true) => UP, Some(false) => DOWN, None => AXIS_TEXT }
+                                                } else {
+                                                    egui::Color32::from_rgb(50, 50, 60)
+                                                };
+                                                ui.label(egui::RichText::new("\u{25CF}").color(dot_color).small());
+                                            }
+                                            ui.end_row();
+                                        }
+                                    });
+                            }
+                        }
                         });
                         self.right_mtf_grid_open = mtf_grid_section.fully_open();
                         self.handle_right_panel_section_drag(
@@ -15392,17 +15408,39 @@ impl eframe::App for TyphooNApp {
             .count() as u8;
 
             if self.mtf_enabled {
-                // Filter to visible charts only
-                while self.mtf_visible.len() < self.charts.len() { self.mtf_visible.push(true); }
-                let visible_indices: Vec<usize> = (0..self.charts.len())
-                    .filter(|&i| self.mtf_visible.get(i).copied().unwrap_or(true))
-                    .take(16)
+                // Filter to visible, supported MTF charts and group them by symbol. Each
+                // symbol gets its own MT5-style grid; M1/M5 are excluded at the helper.
+                while self.mtf_visible.len() < self.charts.len() {
+                    self.mtf_visible.push(true);
+                }
+                let mtf_groups = mtf_visible_chart_groups(&self.charts, &self.mtf_visible);
+                if mtf_groups.is_empty() {
+                    ui.painter().text(
+                        available.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "No supported MTF Grid charts (M15+ only)",
+                        egui::FontId::proportional(14.0),
+                        AXIS_TEXT,
+                    );
+                    return;
+                }
+                let cols = self.mtf_cols.max(1);
+                let header_h = 18.0_f32;
+                let row_gap = 4.0_f32;
+                let group_layout: Vec<(usize, usize)> = mtf_groups
+                    .iter()
+                    .map(|group| {
+                        let group_cols = cols.min(group.indices.len().max(1));
+                        let rows = (group.indices.len() + group_cols - 1) / group_cols;
+                        (group_cols, rows.max(1))
+                    })
                     .collect();
-                let total = visible_indices.len().max(1);
-                let cols   = self.mtf_cols.max(1).min(total);
-                let rows   = (total + cols - 1) / cols;
-                let cell_w = available.width()  / cols  as f32;
-                let cell_h = available.height() / rows  as f32;
+                let total_chart_rows: usize = group_layout.iter().map(|(_, rows)| *rows).sum();
+                let reserved_h = header_h * mtf_groups.len() as f32
+                    + row_gap * mtf_groups.len().saturating_sub(1) as f32;
+                let chart_row_h = ((available.height() - reserved_h).max(80.0)
+                    / total_chart_rows.max(1) as f32)
+                    .max(80.0);
 
                 // Detect click on grid cell to focus it
                 let click_pos = if ctx.input(|i| i.pointer.primary_clicked()) {
@@ -15411,20 +15449,37 @@ impl eframe::App for TyphooNApp {
 
                 // Lazy-load bars for visible MTF grid charts
                 if let Some(ref cache) = self.cache {
-                    for &vi in &visible_indices {
-                    let chart = &mut self.charts[vi];
-                        if chart.bars.is_empty() {
-                            let loaded = { let mut gpu = self.gpu_indicators.take(); let r = chart.try_load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; r };
-                            if loaded {
-                                break; // loaded one, continue next frame
-                            } else {
-                                break; // lock contended, try next frame
+                    'load_one: for group in &mtf_groups {
+                        for &vi in &group.indices {
+                            let chart = &mut self.charts[vi];
+                            if chart.bars.is_empty() {
+                                let loaded = { let mut gpu = self.gpu_indicators.take(); let r = chart.try_load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; r };
+                                let _ = loaded;
+                                break 'load_one;
                             }
                         }
                     }
                 }
 
-                for (grid_pos, &vi) in visible_indices.iter().enumerate() {
+                let mut group_top = available.top();
+                for (group_idx, group) in mtf_groups.iter().enumerate() {
+                    let (cols, rows) = group_layout[group_idx];
+                    let group_header_rect = egui::Rect::from_min_size(
+                        egui::pos2(available.left(), group_top),
+                        egui::vec2(available.width(), header_h),
+                    );
+                    ui.painter().text(
+                        group_header_rect.left_center() + egui::vec2(6.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        &group.symbol,
+                        egui::FontId::proportional(12.0),
+                        ACCENT,
+                    );
+                    group_top += header_h;
+                    let cell_w = available.width() / cols as f32;
+                    let cell_h = chart_row_h;
+
+                    for (grid_pos, &vi) in group.indices.iter().enumerate() {
                 // Rebuild trade overlay every 120 frames (~30s) or on first load
                 let fc = self.frame_count;
                 if !self.heavy_sync_in_progress && self.charts[vi].cached_trade_overlay_frame == 0 || fc.wrapping_sub(self.charts[vi].cached_trade_overlay_frame) > 120 {
@@ -15576,6 +15631,8 @@ impl eframe::App for TyphooNApp {
                         egui::Stroke::new(border_width, border_color),
                         egui::StrokeKind::Outside,
                     );
+                    }
+                    group_top += rows as f32 * cell_h + row_gap;
                 }
             } else {
                 // Allocate the visual chart area as hover-only, then create separate
