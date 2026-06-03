@@ -395,6 +395,7 @@ impl TyphooNApp {
             egui::Window::new("Kraken Trade History")
                 .open(&mut self.show_kraken_trade_history)
                 .default_size([900.0, 500.0])
+                .max_size([900.0, 560.0])
                 .resizable(true)
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
@@ -459,6 +460,7 @@ impl TyphooNApp {
             egui::Window::new("Kraken Open Orders")
                 .open(&mut self.show_kraken_open_orders)
                 .default_size([1000.0, 420.0])
+                .max_size([1000.0, 560.0])
                 .resizable(true)
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
@@ -534,6 +536,7 @@ impl TyphooNApp {
             egui::Window::new("DARWIN Accounts")
                 .open(&mut self.show_darwin_accounts)
                 .resizable(true).default_size([800.0, 600.0])
+.max_size([800.0, 640.0])
                 .show(ctx, |ui| {
                     // Soft palette for charts
                     let chart_green = egui::Color32::from_rgb(46, 204, 113);
@@ -1126,6 +1129,7 @@ impl TyphooNApp {
             egui::Window::new("DARWIN Portfolio")
                 .open(&mut self.show_darwin_portfolio)
                 .resizable(true).default_size([700.0, 500.0])
+.max_size([700.0, 560.0])
                 .show(ctx, |ui| {
                     // View selector dropdown (matching old WebKit 20+ views)
                     let views = [
@@ -3854,6 +3858,7 @@ impl TyphooNApp {
                 .open(&mut show_symbols)
                 .resizable(true)
                 .default_size([680.0, 650.0])
+                .max_size([680.0, 640.0])
                 .show(ctx, |ui| {
                     let sym_teal = egui::Color32::from_rgb(26, 188, 156);
                     let sym_gold = egui::Color32::from_rgb(241, 196, 15);
@@ -5196,6 +5201,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([780.0, 560.0])
+                .max_size([780.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -5423,6 +5429,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([760.0, 480.0])
+                .max_size([760.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         if ui
@@ -5584,6 +5591,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([700.0, 460.0])
+                .max_size([700.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -5768,6 +5776,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([520.0, 420.0])
+                .max_size([520.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -5859,6 +5868,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([820.0, 520.0])
+                .max_size([820.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -5948,6 +5958,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([720.0, 460.0])
+                .max_size([720.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -6104,6 +6115,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([960.0, 620.0])
+                .max_size([960.0, 640.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -6237,6 +6249,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([680.0, 560.0])
+                .max_size([680.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         if ui.add_enabled(!self.commodities_loading, egui::Button::new("Refresh").fill(BTN_BLUE)).clicked() {
@@ -6292,6 +6305,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([520.0, 620.0])
+                .max_size([520.0, 640.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -6512,6 +6526,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([720.0, 440.0])
+                .max_size([720.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -6661,6 +6676,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([720.0, 500.0])
+                .max_size([720.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -6801,6 +6817,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([960.0, 580.0])
+                .max_size([960.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -7159,6 +7176,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([920.0, 560.0])
+                .max_size([920.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         if ui.add(egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
@@ -7238,6 +7256,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([540.0, 380.0])
+                .max_size([540.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -7360,6 +7379,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([820.0, 540.0])
+                .max_size([820.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("ETF:").color(AXIS_TEXT));
@@ -7671,6 +7691,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([620.0, 400.0])
+                .max_size([620.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -7803,6 +7824,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([880.0, 560.0])
+                .max_size([880.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Index:").color(AXIS_TEXT));
@@ -9095,6 +9117,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([760.0, 520.0])
+                .max_size([760.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -9288,6 +9311,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([620.0, 480.0])
+                .max_size([620.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         if ui.add(egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
@@ -9746,6 +9770,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([640.0, 420.0])
+                .max_size([640.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -9839,6 +9864,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([620.0, 380.0])
+                .max_size([620.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Ticker:").color(AXIS_TEXT));
@@ -9914,6 +9940,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([620.0, 460.0])
+                .max_size([620.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -10283,6 +10310,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([780.0, 560.0])
+                .max_size([780.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -10539,6 +10567,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([620.0, 480.0])
+                .max_size([620.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -10773,6 +10802,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([620.0, 440.0])
+                .max_size([620.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -10867,6 +10897,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([600.0, 420.0])
+                .max_size([600.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -11038,6 +11069,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([620.0, 460.0])
+                .max_size([620.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -11191,6 +11223,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([680.0, 480.0])
+                .max_size([680.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -11272,6 +11305,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([620.0, 440.0])
+                .max_size([620.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -11364,6 +11398,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([620.0, 420.0])
+                .max_size([620.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -11614,6 +11649,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([640.0, 420.0])
+                .max_size([640.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -11820,6 +11856,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([620.0, 420.0])
+                .max_size([620.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -11914,6 +11951,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([640.0, 480.0])
+                .max_size([640.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -31809,6 +31847,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([720.0, 480.0])
+                .max_size([720.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         if ui
@@ -39808,6 +39847,7 @@ impl TyphooNApp {
             .open(&mut open)
             .resizable(true)
             .default_size([780.0, 480.0])
+            .max_size([780.0, 560.0])
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.expcal_win_tab, 0, "Market calendar");
@@ -53266,6 +53306,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([980.0, 680.0])
+                .max_size([980.0, 640.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Symbols:");
@@ -53606,6 +53647,7 @@ impl TyphooNApp {
             egui::Window::new("SEC Filing Scanner")
                 .open(&mut self.show_sec)
                 .resizable(true).default_size([900.0, 650.0]).min_size([600.0, 200.0]).constrain(false)
+.max_size([900.0, 640.0])
                 .scroll([false, true])
                 .show(ctx, |ui| {
                     let sec_high = egui::Color32::from_rgb(231, 76, 60);
@@ -54389,6 +54431,7 @@ impl TyphooNApp {
                 .open(&mut self.show_unusual_volume)
                 .resizable(true)
                 .default_size([500.0, 400.0])
+                .max_size([500.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
@@ -54975,6 +55018,7 @@ impl TyphooNApp {
                 .open(&mut self.show_congress)
                 .resizable(true)
                 .default_size([750.0, 450.0])
+                .max_size([750.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
@@ -55097,6 +55141,7 @@ impl TyphooNApp {
             egui::Window::new("SwapHarvest — Positive Swap Scanner")
                 .open(&mut self.show_swap_harvest)
                 .resizable(true).default_size([900.0, 600.0])
+.max_size([900.0, 640.0])
                 .show(ctx, |ui| {
                     if let Some(ref result) = self.swap_harvest_results {
                         // Summary bar
@@ -55218,6 +55263,7 @@ impl TyphooNApp {
                 .open(&mut self.show_darwinex_radar)
                 .resizable(true)
                 .default_size([950.0, 600.0])
+                .max_size([950.0, 640.0])
                 .show(ctx, |ui| {
                     let data = &self.darwinex_radar_data;
                     // Summary
@@ -56783,6 +56829,7 @@ impl TyphooNApp {
                 .open(&mut self.show_earnings_calendar)
                 .resizable(true)
                 .default_size([500.0, 400.0])
+                .max_size([500.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
@@ -56865,6 +56912,7 @@ impl TyphooNApp {
                 .open(&mut self.show_dividend_calendar)
                 .resizable(true)
                 .default_size([500.0, 400.0])
+                .max_size([500.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
@@ -56935,6 +56983,7 @@ impl TyphooNApp {
                 .open(&mut self.show_analyst)
                 .resizable(true)
                 .default_size([480.0, 340.0])
+                .max_size([480.0, 560.0])
                 .show(ctx, |ui| {
                     let sym = self
                         .charts
@@ -57988,6 +58037,7 @@ impl TyphooNApp {
                 .open(&mut self.show_sector_heatmap)
                 .resizable(true)
                 .default_size([500.0, 400.0])
+                .max_size([500.0, 560.0])
                 .show(ctx, |ui| {
                     let sectors = typhoon_engine::core::screener::compute_sector_heatmap(&scoped);
                     ui.label(
@@ -58046,6 +58096,7 @@ impl TyphooNApp {
                 .open(&mut self.show_dividends)
                 .resizable(true)
                 .default_size([700.0, 400.0])
+                .max_size([700.0, 560.0])
                 .show(ctx, |ui| {
                     let divs = typhoon_engine::core::screener::screen_dividend_stocks(&scoped);
                     ui.label(
@@ -58365,6 +58416,7 @@ impl TyphooNApp {
             egui::Window::new("Statistical Arbitrage Pairs")
                 .open(&mut self.show_stat_arb)
                 .resizable(true).default_size([600.0, 400.0])
+.max_size([600.0, 560.0])
                 .show(ctx, |ui| {
                     ui.label(egui::RichText::new("Correlated Pairs — Spread Z-Score").strong());
                     ui.separator();
@@ -58967,6 +59019,7 @@ impl TyphooNApp {
                 .open(&mut self.show_indicator_compiler)
                 .resizable(true)
                 .default_size([650.0, 550.0])
+                .max_size([650.0, 560.0])
                 .show(ctx, |ui| {
                     let cc_green = egui::Color32::from_rgb(46, 204, 113);
                     let cc_red = egui::Color32::from_rgb(231, 76, 60);
@@ -59862,6 +59915,7 @@ impl TyphooNApp {
             egui::Window::new("Outlier Scanner")
                 .open(&mut self.show_darwinex_outliers)
                 .resizable(true).default_size([800.0, 550.0])
+.max_size([800.0, 560.0])
                 .show(ctx, |ui| {
                     let ol_high = egui::Color32::from_rgb(231, 76, 60);
                     let ol_med = egui::Color32::from_rgb(241, 196, 15);
@@ -61943,6 +61997,7 @@ impl TyphooNApp {
                 .open(&mut self.show_help)
                 .resizable(true)
                 .default_size([720.0, 560.0])
+                .max_size([720.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.heading("Help");
@@ -62620,6 +62675,7 @@ impl TyphooNApp {
                 .open(&mut self.show_world_indices)
                 .resizable(true)
                 .default_size([620.0, 480.0])
+                .max_size([620.0, 560.0])
                 .show(ctx, |ui| {
                     ui.label(egui::RichText::new("World Stock Indices & ETFs").strong());
                     if ui.small_button("Refresh").clicked() {
@@ -62756,6 +62812,7 @@ impl TyphooNApp {
                 .open(&mut self.show_crypto_top50)
                 .resizable(true)
                 .default_size([700.0, 550.0])
+                .max_size([700.0, 560.0])
                 .show(ctx, |ui| {
                     ui.label(egui::RichText::new("Top 50 Cryptocurrencies by Market Cap").strong());
                     if ui.small_button("Refresh").clicked() {
@@ -62861,6 +62918,7 @@ impl TyphooNApp {
                 .open(&mut self.show_forex_matrix)
                 .resizable(true)
                 .default_size([550.0, 380.0])
+                .max_size([550.0, 560.0])
                 .show(ctx, |ui| {
                     ui.label(egui::RichText::new("Major Forex Pairs").strong());
                     if ui.small_button("Refresh").clicked() {
@@ -62973,6 +63031,7 @@ impl TyphooNApp {
             egui::Window::new("DarwinIA Browser")
                 .open(&mut self.show_darwin_browser)
                 .resizable(true).default_size([950.0, 600.0])
+.max_size([950.0, 640.0])
                 .show(ctx, |ui| {
                     // Top bar: scan button + stats
                     ui.horizontal(|ui| {
