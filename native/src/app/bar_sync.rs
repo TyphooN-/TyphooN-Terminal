@@ -8,12 +8,15 @@ use super::sync_workset::normalize_sync_timeframe_key;
 /// unused scaffolding in the tree.
 #[derive(Clone, Debug, Default)]
 pub(super) struct SyncStatsRow {
-    pub(super) broker: String,   // "MT5" | "Alpaca" | "Tastytrade" | "Kraken"
+    pub(super) broker: String,   // "Kraken Spot" | "Kraken iapi" | "Alpaca" | …
     pub(super) tf: String,       // "1Min" | "1Hour" | "1Day" | …
     pub(super) total: u64,       // (sym,tf) pairs seen for this (broker,tf) bucket
     pub(super) healthy: u64,     // last bar lag < TF_period × 24
     pub(super) stale: u64,       // last bar lag ≥ threshold
     pub(super) empty: u64,       // cached blob has no bars (last_ms <= 0)
+    pub(super) settled: u64,     // checked/exhausted provider window, counted healthy
+    pub(super) unsupported: u64, // structurally unsupported by this broad sync lane
+    pub(super) note: Option<String>,
     pub(super) pct_healthy: f32, // 0..100
 }
 
@@ -57,14 +60,16 @@ pub(super) fn compute_bar_sync_stats(
             "mt5" => Some("MT5"),
             "alpaca" => Some("Alpaca"),
             "tastytrade" => Some("Tastytrade"),
-            "kraken" | "kraken-futures" | "kraken-equities" => Some("Kraken"),
+            "kraken" => Some("Kraken Spot"),
+            "kraken-futures" => Some("Kraken Futures"),
+            "kraken-equities" => Some("Kraken iapi"),
             "yahoo-chart" => Some("Yahoo"),
             _ => None,
         }
     };
-    let required_brokers = ["Kraken"];
+    let required_brokers = ["Kraken Spot"];
 
-    let mut groups: BTreeMap<(String, String), (u64, u64, u64)> = BTreeMap::new();
+    let mut groups: BTreeMap<(String, String), (u64, u64, u64, u64)> = BTreeMap::new();
     for broker in &required_brokers {
         for tf in &tf_order {
             groups
@@ -121,6 +126,9 @@ pub(super) fn compute_bar_sync_stats(
             let bar_aged_out = now_ms - last_ms > period * 24;
             if bar_aged_out && !recently_checked && !is_backfill_complete(key) {
                 entry.1 += 1;
+            } else if bar_aged_out && !recently_checked && is_backfill_complete(key) {
+                entry.0 += 1;
+                entry.3 += 1;
             } else {
                 entry.0 += 1;
             }
@@ -131,7 +139,7 @@ pub(super) fn compute_bar_sync_stats(
 
     let mut rows: Vec<SyncStatsRow> = groups
         .into_iter()
-        .map(|((broker, tf), (healthy, stale, empty))| {
+        .map(|((broker, tf), (healthy, stale, empty, settled))| {
             let total = healthy + stale + empty;
             let pct_healthy = if total == 0 {
                 0.0
@@ -145,6 +153,9 @@ pub(super) fn compute_bar_sync_stats(
                 healthy,
                 stale,
                 empty,
+                settled,
+                unsupported: 0,
+                note: None,
                 pct_healthy,
             }
         })
@@ -158,7 +169,16 @@ pub(super) fn sort_sync_stats_rows(rows: &mut [SyncStatsRow]) {
     let tf_order = [
         "1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week", "1Month",
     ];
-    let broker_order = ["Kraken", "Merged", "Alpaca", "Yahoo", "Tastytrade", "MT5"];
+    let broker_order = [
+        "Kraken Spot",
+        "Kraken iapi",
+        "Kraken Futures",
+        "Merged",
+        "Alpaca",
+        "Yahoo",
+        "Tastytrade",
+        "MT5",
+    ];
     rows.sort_by(|a, b| {
         let ab = broker_order
             .iter()
@@ -180,6 +200,71 @@ pub(super) fn sort_sync_stats_rows(rows: &mut [SyncStatsRow]) {
     });
 }
 
+pub(super) fn low_timeframe_broad_sync_disabled_note(tf: &str) -> Option<&'static str> {
+    match normalize_sync_timeframe_key(tf)? {
+        "1Min" | "5Min" => Some(
+            "Broad 1Min/5Min sync is disabled; current provider lanes stay demand/focus scoped until a viable low-timeframe source exists.",
+        ),
+        _ => None,
+    }
+}
+
+pub(super) fn unsupported_sync_stats_row(
+    broker: impl Into<String>,
+    tf: impl Into<String>,
+    unsupported: u64,
+    note: impl Into<String>,
+) -> SyncStatsRow {
+    SyncStatsRow {
+        broker: broker.into(),
+        tf: tf.into(),
+        total: 0,
+        healthy: 0,
+        stale: 0,
+        empty: 0,
+        settled: 0,
+        unsupported,
+        note: Some(note.into()),
+        pct_healthy: 100.0,
+    }
+}
+
+pub(super) fn low_timeframe_unsupported_rows(
+    broker: &str,
+    enabled_timeframes: &[String],
+    unsupported: u64,
+) -> Vec<SyncStatsRow> {
+    enabled_timeframes
+        .iter()
+        .filter_map(|tf| {
+            let tf = normalize_sync_timeframe_key(tf)?;
+            let note = low_timeframe_broad_sync_disabled_note(tf)?;
+            Some(unsupported_sync_stats_row(broker, tf, unsupported, note))
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SyncStatsRowStatusCells {
+    pub(super) symbols: String,
+    pub(super) healthy: String,
+    pub(super) stale_or_empty: String,
+    pub(super) settled: String,
+    pub(super) unsupported: String,
+    pub(super) note: String,
+}
+
+pub(super) fn sync_stats_row_status_cells(row: &SyncStatsRow) -> SyncStatsRowStatusCells {
+    SyncStatsRowStatusCells {
+        symbols: row.total.to_string(),
+        healthy: row.healthy.to_string(),
+        stale_or_empty: (row.stale + row.empty).to_string(),
+        settled: row.settled.to_string(),
+        unsupported: row.unsupported.to_string(),
+        note: row.note.clone().unwrap_or_default(),
+    }
+}
+
 /// Aggregate per-broker totals from a Vec<SyncStatsRow> for the compact
 /// banner / one-liner display. Returns `(broker, total, healthy, pct)`
 /// tuples in display order (Kraken, Alpaca, Tastytrade, MT5, then any others).
@@ -195,7 +280,16 @@ pub(super) fn compute_bar_sync_broker_totals(
         entry.1 += row.healthy;
     }
 
-    let order = ["Kraken", "Merged", "Alpaca", "Yahoo", "Tastytrade", "MT5"];
+    let order = [
+        "Kraken Spot",
+        "Kraken iapi",
+        "Kraken Futures",
+        "Merged",
+        "Alpaca",
+        "Yahoo",
+        "Tastytrade",
+        "MT5",
+    ];
     let mut out = Vec::new();
     for name in order {
         if let Some((total, healthy)) = totals.remove(name) {
@@ -311,7 +405,7 @@ mod tests {
         );
         let stale_row = stale_rows
             .iter()
-            .find(|row| row.broker == "Kraken" && row.tf == "1Hour")
+            .find(|row| row.broker == "Kraken Spot" && row.tf == "1Hour")
             .expect("missing 1Hour row");
         assert_eq!(stale_row.stale, 1);
         assert_eq!(stale_row.healthy, 0);
@@ -323,7 +417,7 @@ mod tests {
         );
         let healthy_row = healthy_rows
             .iter()
-            .find(|row| row.broker == "Kraken" && row.tf == "1Hour")
+            .find(|row| row.broker == "Kraken Spot" && row.tf == "1Hour")
             .expect("missing 1Hour row");
         assert_eq!(healthy_row.healthy, 1);
         assert_eq!(healthy_row.stale, 0);
@@ -356,6 +450,9 @@ mod tests {
                 healthy: 1,
                 stale: 0,
                 empty: 0,
+                settled: 0,
+                unsupported: 0,
+                note: None,
                 pct_healthy: 100.0,
             },
             SyncStatsRow {
@@ -365,15 +462,21 @@ mod tests {
                 healthy: 2,
                 stale: 0,
                 empty: 0,
+                settled: 0,
+                unsupported: 0,
+                note: None,
                 pct_healthy: 100.0,
             },
             SyncStatsRow {
-                broker: "Kraken".into(),
+                broker: "Kraken Spot".into(),
                 tf: "1Day".into(),
                 total: 2,
                 healthy: 1,
                 stale: 1,
                 empty: 0,
+                settled: 0,
+                unsupported: 0,
+                note: None,
                 pct_healthy: 50.0,
             },
         ]);
@@ -382,7 +485,7 @@ mod tests {
             .iter()
             .map(|(broker, _, _, _)| broker.as_str())
             .collect();
-        assert_eq!(names, vec!["Kraken", "Merged", "Yahoo"]);
+        assert_eq!(names, vec!["Kraken Spot", "Merged", "Yahoo"]);
     }
 
     #[test]
@@ -399,14 +502,111 @@ mod tests {
 
         let fifteen = rows
             .iter()
-            .find(|row| row.broker == "Kraken" && row.tf == "15Min")
+            .find(|row| row.broker == "Kraken Spot" && row.tf == "15Min")
             .expect("required Kraken 15Min placeholder row should exist");
         assert_eq!(fifteen.total, 0);
 
         let day = rows
             .iter()
-            .find(|row| row.broker == "Kraken" && row.tf == "1Day")
+            .find(|row| row.broker == "Kraken iapi" && row.tf == "1Day")
             .expect("missing Kraken 1Day row");
         assert_eq!(day.total, 1);
+    }
+
+    #[test]
+    fn kraken_native_sources_are_reported_as_separate_lanes() {
+        let now_s = chrono::Utc::now().timestamp();
+        let rows = compute_bar_sync_stats(
+            &[
+                ("kraken:BTC/USD:1Day".into(), 10, now_s),
+                ("kraken-equities:AAPL:1Day".into(), 10, now_s),
+            ],
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
+
+        let spot = rows
+            .iter()
+            .find(|row| row.broker == "Kraken Spot" && row.tf == "1Day")
+            .expect("missing Kraken Spot 1Day row");
+        assert_eq!(spot.total, 1);
+
+        let equities = rows
+            .iter()
+            .find(|row| row.broker == "Kraken iapi" && row.tf == "1Day")
+            .expect("missing Kraken iapi 1Day row");
+        assert_eq!(equities.total, 1);
+    }
+
+    #[test]
+    fn backfill_complete_pair_reports_settled_bucket_without_counting_stale() {
+        let now_s = chrono::Utc::now().timestamp();
+        let aged_bar_ms = (now_s - 48 * 3600).saturating_mul(1000);
+        let aged_write_s = now_s - 48 * 3600;
+        let key = "kraken:ETH/USD:1Hour".to_string();
+
+        let rows = compute_bar_sync_stats(
+            &[(key.clone(), 720, aged_write_s)],
+            &std::collections::HashMap::from([(key.clone(), (1, aged_bar_ms, 1))]),
+            &|k| k == key,
+        );
+
+        let hour = rows
+            .iter()
+            .find(|row| row.broker == "Kraken Spot" && row.tf == "1Hour")
+            .expect("missing Kraken Spot 1Hour row");
+        assert_eq!(hour.healthy, 1);
+        assert_eq!(hour.stale, 0);
+        assert_eq!(hour.settled, 1);
+    }
+
+    #[test]
+    fn disabled_low_timeframe_rows_are_provider_unsupported_not_stale() {
+        for tf in ["1Min", "5Min"] {
+            let note = low_timeframe_broad_sync_disabled_note(tf)
+                .expect("low-TF broad sync should be explicitly disabled");
+            assert!(note.contains("demand/focus scoped"));
+
+            let row = unsupported_sync_stats_row("Merged", tf, 42, note);
+            assert_eq!(row.total, 0);
+            assert_eq!(row.stale, 0);
+            assert_eq!(row.empty, 0);
+            assert_eq!(row.unsupported, 42);
+            assert_eq!(row.pct_healthy, 100.0);
+        }
+    }
+
+    #[test]
+    fn low_timeframe_unsupported_rows_report_each_disabled_enabled_timeframe() {
+        let rows = low_timeframe_unsupported_rows("Merged", &["1Min".into(), "5Min".into(), "15Min".into()], 123);
+        let labels: Vec<(&str, &str, u64)> = rows
+            .iter()
+            .map(|row| (row.broker.as_str(), row.tf.as_str(), row.unsupported))
+            .collect();
+        assert_eq!(labels, vec![("Merged", "1Min", 123), ("Merged", "5Min", 123)]);
+        assert!(rows.iter().all(|row| row.total == 0 && row.stale == 0 && row.empty == 0));
+    }
+
+    #[test]
+    fn sync_status_row_cells_surface_settled_unsupported_and_notes() {
+        let row = SyncStatsRow {
+            broker: "Merged".into(),
+            tf: "5Min".into(),
+            total: 0,
+            healthy: 0,
+            stale: 0,
+            empty: 0,
+            settled: 7,
+            unsupported: 42,
+            note: Some("demand/focus scoped".into()),
+            pct_healthy: 100.0,
+        };
+        let cells = sync_stats_row_status_cells(&row);
+        assert_eq!(cells.symbols, "0");
+        assert_eq!(cells.healthy, "0");
+        assert_eq!(cells.stale_or_empty, "0");
+        assert_eq!(cells.settled, "7");
+        assert_eq!(cells.unsupported, "42");
+        assert_eq!(cells.note, "demand/focus scoped");
     }
 }

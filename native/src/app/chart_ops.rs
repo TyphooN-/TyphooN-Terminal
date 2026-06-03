@@ -28,6 +28,59 @@ fn symbol_matches_no_alloc(raw: &str, target_upper: &str) -> bool {
     t.next().is_none()
 }
 
+#[inline]
+pub(super) fn trade_marker_price_key(price: f64) -> i64 {
+    (price * 100000.0) as i64
+}
+
+#[inline]
+pub(super) fn trade_marker_volume_key(volume: f64) -> i64 {
+    (volume * 100000.0) as i64
+}
+
+pub(super) fn add_trade_marker_volume(
+    marker_map: &mut std::collections::HashMap<(usize, bool, i64), (f64, u32, String)>,
+    bar_idx: usize,
+    is_buy: bool,
+    price_key: i64,
+    volume: f64,
+    ticker: &str,
+) {
+    let entry = marker_map
+        .entry((bar_idx, is_buy, price_key))
+        .or_insert((0.0, 0, String::new()));
+    entry.0 += volume;
+    entry.1 += 1;
+    if !entry.2.contains(ticker) {
+        if !entry.2.is_empty() {
+            entry.2.push_str(", ");
+        }
+        entry.2.push_str(ticker);
+    }
+}
+
+pub(super) fn darwin_marker_signature(
+    account: &str,
+    fallback_ticker: &str,
+    bar_idx: usize,
+    is_buy: bool,
+    price_key: i64,
+    volume: f64,
+) -> (String, usize, bool, i64, i64) {
+    let owner = if account.is_empty() {
+        fallback_ticker
+    } else {
+        account
+    };
+    (
+        owner.to_string(),
+        bar_idx,
+        is_buy,
+        price_key,
+        trade_marker_volume_key(volume),
+    )
+}
+
 impl TyphooNApp {
     pub(super) fn close_partial_active_symbol(&mut self) {
         let Some((symbol, _)) = self.active_trade_symbol_and_price() else {
@@ -663,9 +716,11 @@ impl TyphooNApp {
         };
 
         // Collect deals from all DARWIN accounts matching this symbol
-        use std::collections::HashMap;
+        use std::collections::{HashMap, HashSet};
         let bare_upper = bare_sym.to_uppercase();
         let mut marker_map: HashMap<(usize, bool, i64), (f64, u32, String)> = HashMap::new(); // (bar_idx, is_buy, price_cents) → (total_vol, count, ticker)
+        let mut darwin_closed_position_markers: HashSet<(String, usize, bool, i64, i64)> =
+            HashSet::new();
 
         if self.show_darwin_positions {
             for det in &self.bg.account_details {
@@ -679,40 +734,46 @@ impl TyphooNApp {
                     let ts = parse_time(&pos.open_time);
                     if let Some(bar_idx) = find_bar(ts) {
                         let is_buy = pos.pos_type == "buy";
-                        let price_key = (pos.open_price * 100000.0) as i64;
-                        let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((
-                            0.0,
-                            0,
-                            String::new(),
+                        let price_key = trade_marker_price_key(pos.open_price);
+                        add_trade_marker_volume(
+                            &mut marker_map,
+                            bar_idx,
+                            is_buy,
+                            price_key,
+                            pos.volume,
+                            &ticker,
+                        );
+                        darwin_closed_position_markers.insert(darwin_marker_signature(
+                            &pos.account,
+                            &ticker,
+                            bar_idx,
+                            is_buy,
+                            price_key,
+                            pos.volume,
                         ));
-                        entry.0 += pos.volume;
-                        entry.1 += 1;
-                        if !entry.2.contains(&ticker) {
-                            if !entry.2.is_empty() {
-                                entry.2.push_str(", ");
-                            }
-                            entry.2.push_str(&ticker);
-                        }
                     }
                     // Exit arrow (opposite direction)
                     if !pos.close_time.is_empty() {
                         let ts = parse_time(&pos.close_time);
                         if let Some(bar_idx) = find_bar(ts) {
                             let is_buy = pos.pos_type != "buy";
-                            let price_key = (pos.close_price * 100000.0) as i64;
-                            let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((
-                                0.0,
-                                0,
-                                String::new(),
+                            let price_key = trade_marker_price_key(pos.close_price);
+                            add_trade_marker_volume(
+                                &mut marker_map,
+                                bar_idx,
+                                is_buy,
+                                price_key,
+                                pos.volume,
+                                &ticker,
+                            );
+                            darwin_closed_position_markers.insert(darwin_marker_signature(
+                                &pos.account,
+                                &ticker,
+                                bar_idx,
+                                is_buy,
+                                price_key,
+                                pos.volume,
                             ));
-                            entry.0 += pos.volume;
-                            entry.1 += 1;
-                            if !entry.2.contains(&ticker) {
-                                if !entry.2.is_empty() {
-                                    entry.2.push_str(", ");
-                                }
-                                entry.2.push_str(&ticker);
-                            }
                         }
                     }
                 }
@@ -727,20 +788,26 @@ impl TyphooNApp {
                     let ts = parse_time(&deal.time);
                     if let Some(bar_idx) = find_bar(ts) {
                         let is_buy = deal.deal_type == "buy";
-                        let price_key = (deal.price * 100000.0) as i64;
-                        let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((
-                            0.0,
-                            0,
-                            String::new(),
-                        ));
-                        entry.0 += deal.volume;
-                        entry.1 += 1;
-                        if !entry.2.contains(&det.ticker) {
-                            if !entry.2.is_empty() {
-                                entry.2.push_str(", ");
-                            }
-                            entry.2.push_str(&det.ticker);
+                        let price_key = trade_marker_price_key(deal.price);
+                        let signature = darwin_marker_signature(
+                            &deal.account,
+                            &det.ticker,
+                            bar_idx,
+                            is_buy,
+                            price_key,
+                            deal.volume,
+                        );
+                        if darwin_closed_position_markers.contains(&signature) {
+                            continue;
                         }
+                        add_trade_marker_volume(
+                            &mut marker_map,
+                            bar_idx,
+                            is_buy,
+                            price_key,
+                            deal.volume,
+                            &det.ticker,
+                        );
                     }
                 }
 

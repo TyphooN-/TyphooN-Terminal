@@ -62,6 +62,7 @@ impl TyphooNApp {
         );
         self.add_expected_kraken_sync_rows(&mut rows);
         self.add_kraken_equities_merged_rows(&mut rows, &checked_or_complete_lookup);
+        self.add_low_timeframe_unsupported_rows(&mut rows);
         sort_sync_stats_rows(&mut rows);
         let (total, healthy) = rows
             .iter()
@@ -103,7 +104,7 @@ impl TyphooNApp {
         let mut show_sync_status = self.show_sync_status;
         egui::Window::new("Sync Status")
             .open(&mut show_sync_status)
-            .resizable(true).default_size([560.0, 480.0])
+            .resizable(true).default_size([760.0, 480.0])
             .scroll([false, true])
             .show(ctx, |ui| {
                 ui.label(egui::RichText::new("Bar sync % per broker / timeframe").color(AXIS_TEXT).small());
@@ -136,29 +137,35 @@ impl TyphooNApp {
                 ui.separator();
 
                 egui::ScrollArea::vertical().id_salt("sync_scroll").auto_shrink(false).show(ui, |ui| {
-                    egui::Grid::new("sync_grid").striped(true).num_columns(6).min_col_width(60.0).show(ui, |ui| {
+                    egui::Grid::new("sync_grid").striped(true).num_columns(9).min_col_width(60.0).show(ui, |ui| {
                         ui.label(egui::RichText::new("Broker").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("TF").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Symbols").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Healthy").color(AXIS_TEXT).small().strong());
-                        ui.label(egui::RichText::new("Stale").color(AXIS_TEXT).small().strong());
+                        ui.label(egui::RichText::new("Stale/Empty").color(AXIS_TEXT).small().strong());
+                        ui.label(egui::RichText::new("Settled").color(AXIS_TEXT).small().strong());
+                        ui.label(egui::RichText::new("Unsupported").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("% Synced").color(AXIS_TEXT).small().strong());
+                        ui.label(egui::RichText::new("Note").color(AXIS_TEXT).small().strong());
                         ui.end_row();
                         for row in &rows {
                             let broker_color = match row.broker.as_str() {
                                 "MT5"           => egui::Color32::from_rgb(26, 188, 156),
                                 "Alpaca"        => egui::Color32::from_rgb(52, 152, 219),
                                 "Tastytrade"    => egui::Color32::from_rgb(170, 100, 220),
-                                "Kraken"        => egui::Color32::from_rgb(255, 130, 60),
+                                "Kraken Spot" | "Kraken iapi" | "Kraken Futures" => egui::Color32::from_rgb(255, 130, 60),
                                 "Merged"        => egui::Color32::from_rgb(0, 220, 220),
                                 "Yahoo"         => egui::Color32::from_rgb(155, 89, 182),
                                 _ => AXIS_TEXT,
                             };
+                            let cells = sync_stats_row_status_cells(row);
                             ui.label(egui::RichText::new(&row.broker).color(broker_color).small().monospace().strong());
                             ui.label(egui::RichText::new(&row.tf).color(AXIS_TEXT).small().monospace());
-                            ui.label(egui::RichText::new(format!("{}", row.total)).small());
-                            ui.label(egui::RichText::new(format!("{}", row.healthy)).color(egui::Color32::from_rgb(26, 188, 156)).small());
-                            ui.label(egui::RichText::new(format!("{}", row.stale + row.empty)).color(AXIS_TEXT).small());
+                            ui.label(egui::RichText::new(cells.symbols).small());
+                            ui.label(egui::RichText::new(cells.healthy).color(egui::Color32::from_rgb(26, 188, 156)).small());
+                            ui.label(egui::RichText::new(cells.stale_or_empty).color(AXIS_TEXT).small());
+                            ui.label(egui::RichText::new(cells.settled).color(egui::Color32::from_rgb(52, 152, 219)).small());
+                            ui.label(egui::RichText::new(cells.unsupported).color(egui::Color32::from_rgb(150, 150, 150)).small());
                             let pct_color = if row.total == 0 {
                                 egui::Color32::from_rgb(150, 150, 150)
                             } else if row.pct_healthy >= 90.0 {
@@ -170,6 +177,12 @@ impl TyphooNApp {
                             };
                             ui.label(egui::RichText::new(format!("{:.1}%", row.pct_healthy))
                                 .color(pct_color).small().strong());
+                            let note_text = cells.note;
+                            let note_label = if note_text.is_empty() { "" } else { "note" };
+                            let note_response = ui.label(egui::RichText::new(note_label).color(AXIS_TEXT).small());
+                            if !note_text.is_empty() {
+                                note_response.on_hover_text(note_text);
+                            }
                             ui.end_row();
                         }
                     });
@@ -277,6 +290,9 @@ impl TyphooNApp {
                 healthy,
                 stale,
                 empty,
+                settled: 0,
+                unsupported: 0,
+                note: None,
                 pct_healthy,
             });
         }
@@ -356,6 +372,22 @@ impl TyphooNApp {
         }
     }
 
+    fn add_low_timeframe_unsupported_rows(&self, rows: &mut Vec<SyncStatsRow>) {
+        let timeframes = self.enabled_standard_sync_timeframes();
+        if timeframes.is_empty() {
+            return;
+        }
+        let unsupported = self.kraken_equity_catalog_symbols().len() as u64;
+        if unsupported == 0 {
+            return;
+        }
+        rows.extend(low_timeframe_unsupported_rows(
+            "Kraken iapi",
+            &timeframes,
+            unsupported,
+        ));
+    }
+
     fn add_expected_kraken_sync_rows(&self, rows: &mut Vec<SyncStatsRow>) {
         let timeframes = self.enabled_standard_sync_timeframes();
         if timeframes.is_empty() {
@@ -376,9 +408,9 @@ impl TyphooNApp {
         let kraken_equity_catalog_symbols = self.kraken_equity_catalog_symbols();
         let kraken_equity_demand_symbols = self.kraken_equity_demand_symbols();
         let mut expected_sources: Vec<(&str, &str)> = vec![
-            ("kraken", "Kraken"),
-            ("kraken-equities", "Kraken"),
-            ("kraken-futures", "Kraken"),
+            ("kraken", "Kraken Spot"),
+            ("kraken-equities", "Kraken iapi"),
+            ("kraken-futures", "Kraken Futures"),
         ];
         if self.backfill_alpaca_kraken_equities_enabled {
             expected_sources.push(("alpaca", "Alpaca"));
@@ -444,6 +476,9 @@ impl TyphooNApp {
                             healthy: 0,
                             stale: 0,
                             empty: 1,
+                            settled: 0,
+                            unsupported: 0,
+                            note: None,
                             pct_healthy: 0.0,
                         });
                     }

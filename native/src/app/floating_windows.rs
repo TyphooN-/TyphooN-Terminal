@@ -11950,7 +11950,7 @@ impl TyphooNApp {
             egui::Window::new("PTFS — Piotroski F-Score")
                 .open(&mut open)
                 .resizable(true)
-                .default_size([640.0, 480.0])
+                .default_size([520.0, 480.0])
                 .max_size([640.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
@@ -55990,7 +55990,7 @@ impl TyphooNApp {
             egui::Window::new("Fundamentals")
                 .open(&mut self.show_fundamentals)
                 .resizable(true)
-                .default_size([640.0, 480.0])
+                .default_size([520.0, 480.0])
                 .max_size([900.0, 640.0])
                 .show(ctx, |ui| {
                     let tickers = fund_tickers.clone();
@@ -59961,8 +59961,8 @@ impl TyphooNApp {
             }
             egui::Window::new("Outlier Scanner")
                 .open(&mut self.show_darwinex_outliers)
-                .resizable(true).default_size([800.0, 550.0])
-.max_size([800.0, 560.0])
+                .resizable(true)
+                .default_size([900.0, 600.0])
                 .show(ctx, |ui| {
                     let ol_high = egui::Color32::from_rgb(231, 76, 60);
                     let ol_med = egui::Color32::from_rgb(241, 196, 15);
