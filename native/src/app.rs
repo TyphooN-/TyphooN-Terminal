@@ -15603,10 +15603,23 @@ impl TyphooNApp {
                                     let is_open = v["is_open"].as_bool().unwrap_or(false);
                                     let next_open = v["next_open"].as_str().unwrap_or("—");
                                     let next_close = v["next_close"].as_str().unwrap_or("—");
-                                    let target = if is_open { next_close } else { next_open };
-                                    let countdown = chrono::DateTime::parse_from_rfc3339(target)
-                                        .ok()
-                                        .map(|dt| dt.with_timezone(&chrono::Utc) - chrono::Utc::now())
+
+                                    // Robust target selection: prefer the one that is actually in the future.
+                                    // This fixes the "wrong open/closed timing" when the broker returns
+                                    // a stale next_close/next_open relative to the is_open flag.
+                                    let mut target = if is_open { next_close } else { next_open };
+                                    let mut target_dt = chrono::DateTime::parse_from_rfc3339(target).ok()
+                                        .map(|dt| dt.with_timezone(&chrono::Utc));
+
+                                    if target_dt.map_or(true, |dt| dt <= chrono::Utc::now()) {
+                                        // Chosen target is in the past — flip to the other one
+                                        target = if is_open { next_open } else { next_close };
+                                        target_dt = chrono::DateTime::parse_from_rfc3339(target).ok()
+                                            .map(|dt| dt.with_timezone(&chrono::Utc));
+                                    }
+
+                                    let countdown = target_dt
+                                        .map(|dt| dt - chrono::Utc::now())
                                         .filter(|d| d.num_seconds() > 0)
                                         .map(|d| {
                                             let hours = d.num_hours();
@@ -15620,6 +15633,7 @@ impl TyphooNApp {
                                             }
                                         })
                                         .unwrap_or_else(|| "—".to_string());
+
                                     let msg = if is_open {
                                         format!("US equities OPEN · closes in {countdown}")
                                     } else {

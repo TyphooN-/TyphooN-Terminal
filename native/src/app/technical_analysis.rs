@@ -3312,7 +3312,7 @@ pub(super) fn draw_chart(
         }
     }
 
-    let padding = (price_max - price_min) * 0.05;
+    let padding = if chart.manual_view_override { (price_max - price_min) * 0.02 } else { (price_max - price_min) * 0.05 };
     price_min -= padding;
     price_max += padding;
 
@@ -3321,9 +3321,21 @@ pub(super) fn draw_chart(
     // price_pan/price_zoom clamps. This is what lets body-drag behave like
     // TradingView: the visible price window can be panned 1:1 and can cross
     // through zero into negative values for penny stocks/indicators.
-    if let Some((camera_min, camera_max)) = chart.visible_price_range() {
-        price_min = camera_min;
-        price_max = camera_max;
+    if chart.manual_view_override {
+        if let Some((camera_min, camera_max)) = chart.visible_price_range() {
+            price_min = camera_min;
+            price_max = camera_max;
+        } else if let Some((min, max)) = chart.camera.explicit_price_range() {
+            price_min = min;
+            price_max = max;
+        } else {
+            // Still in manual mode but camera not yet populated — use legacy as last resort
+            let range = price_max - price_min;
+            let centre = (price_max + price_min) * 0.5 + chart.price_pan;
+            let half = range * 0.5 / chart.price_zoom.max(f64::EPSILON);
+            price_min = centre - half;
+            price_max = centre + half;
+        }
     } else {
         let range = price_max - price_min;
         let centre = (price_max + price_min) * 0.5 + chart.price_pan;
