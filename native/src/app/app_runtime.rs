@@ -160,6 +160,23 @@ fn deferred_chart_load_interval(
 }
 
 impl TyphooNApp {
+    #[inline]
+    fn drop_bg_snapshot_off_ui(&self, data: BgDarwinData) {
+        // BgDarwinData can own hundreds of thousands of SEC/news/storage rows.
+        // Dropping it on the egui thread was enough to create 300ms-15s stalls
+        // even when we intentionally skipped applying the snapshot. Move the
+        // destructor work to a blocking worker; the update hot path only moves
+        // the Vec/HashMap headers.
+        self.rt_handle.spawn_blocking(move || drop(data));
+    }
+
+    #[inline]
+    fn replace_bg_snapshot_off_ui_drop(&mut self, data: BgDarwinData) {
+        let old = std::mem::replace(&mut self.bg, data);
+        self.drop_bg_snapshot_off_ui(old);
+        self.bg_rev = self.bg_rev.wrapping_add(1);
+    }
+
     fn clear_stale_ui_busy_flags(&mut self, now: std::time::Instant) {
         if ui_task_is_stale(
             self.news_loading,
@@ -464,7 +481,7 @@ impl eframe::App for TyphooNApp {
         // current data even when the Sync Status window isn't open. The
         // compute call self-throttles to ≤1Hz so this is cheap.
         if self.cache_loaded {
-            let _ = self.compute_bar_sync_rows();
+            self.refresh_bar_sync_rows_if_stale();
         }
 
         if now_instant.duration_since(self.kraken_universe_last_schedule)
@@ -1131,7 +1148,8 @@ impl eframe::App for TyphooNApp {
         // The channel carries full snapshots, so newest wins; apply at most one per frame.
         if let Ok(mut data) = self.bg_rx.try_recv() {
             while let Ok(newer) = self.bg_rx.try_recv() {
-                data = newer;
+                let older = std::mem::replace(&mut data, newer);
+                self.drop_bg_snapshot_off_ui(older);
             }
             // Applying a BG snapshot can move hundreds of thousands of SEC rows
             // into `self.bg` and drop the previous vector on the egui thread. During
@@ -1151,14 +1169,14 @@ impl eframe::App for TyphooNApp {
                 if !data.darwinex_specs.is_empty() {
                     self.darwinex_radar_data = data.darwinex_specs.clone();
                 }
-                self.bg = data;
-                self.bg_rev = self.bg_rev.wrapping_add(1);
+                self.replace_bg_snapshot_off_ui_drop(data);
             } else {
                 tracing::debug!(
                     "Deferred BG snapshot apply during heavy sync (sec_filings={}, details={})",
                     data.sec_filings.len(),
                     data.detailed_stats.len()
                 );
+                self.drop_bg_snapshot_off_ui(data);
             }
         }
 

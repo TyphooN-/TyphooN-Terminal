@@ -5,7 +5,8 @@ const BAR_SYNC_STATS_IDLE_REFRESH: std::time::Duration = std::time::Duration::fr
 const BAR_SYNC_STATS_HEAVY_REFRESH: std::time::Duration = std::time::Duration::from_secs(15);
 
 impl TyphooNApp {
-    pub(super) fn compute_bar_sync_rows(&mut self) -> Vec<SyncStatsRow> {
+    #[inline]
+    pub(super) fn refresh_bar_sync_rows_if_stale(&mut self) {
         let now = std::time::Instant::now();
         let refresh_interval = if self.heavy_sync_in_progress {
             BAR_SYNC_STATS_HEAVY_REFRESH
@@ -15,7 +16,7 @@ impl TyphooNApp {
         if !self.cached_bar_sync_rows.is_empty()
             && now.duration_since(self.cached_bar_sync_rows_last) < refresh_interval
         {
-            return self.cached_bar_sync_rows.clone();
+            return;
         }
         let now_ms = chrono::Utc::now().timestamp_millis();
         let checked_or_complete_lookup = |key: &str| -> bool {
@@ -85,6 +86,10 @@ impl TyphooNApp {
         }
         self.cached_bar_sync_rows = rows;
         self.cached_bar_sync_rows_last = now;
+    }
+
+    pub(super) fn compute_bar_sync_rows(&mut self) -> Vec<SyncStatsRow> {
+        self.refresh_bar_sync_rows_if_stale();
         self.cached_bar_sync_rows.clone()
     }
 
