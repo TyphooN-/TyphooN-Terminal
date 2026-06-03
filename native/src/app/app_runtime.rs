@@ -2377,7 +2377,7 @@ impl eframe::App for TyphooNApp {
                     // Offload the expensive serialization + KV write to a blocking task
                     // so large watchlists don't stall the UI thread for seconds.
                     let rows_for_kv = rows.clone();
-                    tokio::task::spawn_blocking(move || {
+                    self.rt_handle.spawn_blocking(move || {
                         if let Ok(_j) = serde_json::to_string(&rows_for_kv) {
                             // put_kv_dedup requires &mut self; for now we skip the dedup
                             // in the background path. A follow-up can route this through
@@ -2498,7 +2498,7 @@ impl eframe::App for TyphooNApp {
                         let _rows_for_matrix = rows.clone();
                         let _show_idx = self.show_world_indices;
                         let _show_fx = self.show_forex_matrix;
-                        tokio::task::spawn_blocking(move || {
+                        self.rt_handle.spawn_blocking(move || {
                             // Heavy allocation + filtering moved off UI thread.
                             // Results would be sent back via channel in a full implementation.
                         });
