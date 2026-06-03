@@ -15492,7 +15492,12 @@ impl eframe::App for TyphooNApp {
                         chart.is_dragging = true;
                         chart.is_drawing_drag = false;
                         chart.is_scaling_price = false;
-                        chart.drag_start = cell_body_resp.interact_pointer_pos();
+                        chart.drag_start = ctx.input(|i| {
+                            i.pointer
+                                .press_origin()
+                                .or_else(|| i.pointer.interact_pos())
+                                .or_else(|| i.pointer.hover_pos())
+                        });
                         let price_pane_h = chart_price_pane_height(
                             cell_chart_body_rect.height(),
                             active_sub_pane_count,
@@ -15635,7 +15640,12 @@ impl eframe::App for TyphooNApp {
                         chart.is_dragging = true;
                         chart.is_drawing_drag = false;
                         chart.is_scaling_price = false;
-                        chart.drag_start = resp.interact_pointer_pos();
+                        chart.drag_start = ctx.input(|i| {
+                            i.pointer
+                                .press_origin()
+                                .or_else(|| i.pointer.interact_pos())
+                                .or_else(|| i.pointer.hover_pos())
+                        });
                         let price_pane_h = chart_price_pane_height(
                             chart_body_interact_rect.height(),
                             active_sub_pane_count,

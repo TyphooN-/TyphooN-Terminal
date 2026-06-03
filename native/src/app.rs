@@ -1903,10 +1903,15 @@ impl ChartCamera {
             self.set_right_edge_bar(Self::follow_latest_right_edge(new_len), new_len);
             return;
         }
-        let old_max = self.max_right_edge(old_len);
-        let distance_from_right = (old_max - self.right_edge_bar()).max(0.0);
-        let new_right = self.max_right_edge(new_len) - distance_from_right;
-        self.set_right_edge_bar(new_right, new_len);
+
+        // Manual free-look is an absolute camera, not "distance from the live
+        // right edge". Preserving distance from max_right_edge made every live
+        // bar/cache reload nudge the viewport toward latest, which looked like
+        // TradingView-style body drag was snapping back under active feeds.
+        // Keep the user's recentered bar position fixed and only clamp if the
+        // new dataset actually invalidates that position.
+        let right_edge = self.right_edge_bar();
+        self.set_right_edge_bar(right_edge, new_len);
     }
 
     fn sync_legacy_fields(
@@ -33981,12 +33986,12 @@ mod tests {
     }
 
     #[test]
-    fn chart_camera_reload_preserves_manual_distance_but_follow_latest_tracks_end() {
+    fn chart_camera_reload_preserves_manual_position_but_follow_latest_tracks_end() {
         let mut manual = ChartCamera::from_legacy(588, 100, true);
         manual.on_data_len_changed(600, 720);
         assert!(
-            (manual.right_edge_bar() - 708.0).abs() < 1e-9,
-            "manual camera should preserve distance from right edge across reload"
+            (manual.right_edge_bar() - 588.0).abs() < 1e-9,
+            "manual camera should preserve the user's absolute recentered viewport across live reloads"
         );
         assert!(!manual.follow_latest);
 
