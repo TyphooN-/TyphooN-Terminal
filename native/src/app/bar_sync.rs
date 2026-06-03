@@ -99,6 +99,11 @@ pub(super) fn compute_bar_sync_stats(
         let Some(tf) = normalize_sync_timeframe_key(raw_tf) else {
             continue;
         };
+        if matches!(prefix, "kraken-equities" | "alpaca" | "yahoo-chart")
+            && matches!(tf, "1Min" | "5Min")
+        {
+            continue;
+        }
         // Stale Kraken-equities intraday rows are historical byproducts / demand
         // fetches, not part of the native full-universe iapi contract. Counting
         // them in the native aggregate makes Sync Status report a misleading
@@ -198,50 +203,6 @@ pub(super) fn sort_sync_stats_rows(rows: &mut [SyncStatsRow]) {
             .unwrap_or(usize::MAX);
         ab.cmp(&bb).then(ai.cmp(&bi)).then(a.broker.cmp(&b.broker))
     });
-}
-
-pub(super) fn low_timeframe_broad_sync_disabled_note(tf: &str) -> Option<&'static str> {
-    match normalize_sync_timeframe_key(tf)? {
-        "1Min" | "5Min" => Some(
-            "Broad 1Min/5Min sync is disabled; current provider lanes stay demand/focus scoped until a viable low-timeframe source exists.",
-        ),
-        _ => None,
-    }
-}
-
-pub(super) fn unsupported_sync_stats_row(
-    broker: impl Into<String>,
-    tf: impl Into<String>,
-    unsupported: u64,
-    note: impl Into<String>,
-) -> SyncStatsRow {
-    SyncStatsRow {
-        broker: broker.into(),
-        tf: tf.into(),
-        total: 0,
-        healthy: 0,
-        stale: 0,
-        empty: 0,
-        settled: 0,
-        unsupported,
-        note: Some(note.into()),
-        pct_healthy: 100.0,
-    }
-}
-
-pub(super) fn low_timeframe_unsupported_rows(
-    broker: &str,
-    enabled_timeframes: &[String],
-    unsupported: u64,
-) -> Vec<SyncStatsRow> {
-    enabled_timeframes
-        .iter()
-        .filter_map(|tf| {
-            let tf = normalize_sync_timeframe_key(tf)?;
-            let note = low_timeframe_broad_sync_disabled_note(tf)?;
-            Some(unsupported_sync_stats_row(broker, tf, unsupported, note))
-        })
-        .collect()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -441,6 +402,34 @@ mod tests {
     }
 
     #[test]
+    fn compute_bar_sync_stats_hides_obsolete_nonspot_low_timeframe_rows() {
+        let now_s = chrono::Utc::now().timestamp();
+        let rows = compute_bar_sync_stats(
+            &[
+                ("alpaca:AAPL:1Min".into(), 10, now_s),
+                ("alpaca:AAPL:5Min".into(), 10, now_s),
+                ("yahoo-chart:AAPL:1Min".into(), 10, now_s),
+                ("yahoo-chart:AAPL:5Min".into(), 10, now_s),
+                ("kraken-equities:AAPL:1Min".into(), 10, now_s),
+                ("kraken-equities:AAPL:5Min".into(), 10, now_s),
+                ("kraken:BTC/USD:1Min".into(), 10, now_s),
+            ],
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
+
+        assert!(!rows.iter().any(|row| matches!(
+            (row.broker.as_str(), row.tf.as_str()),
+            ("Alpaca" | "Yahoo" | "Kraken iapi", "1Min" | "5Min")
+        )));
+        let spot = rows
+            .iter()
+            .find(|row| row.broker == "Kraken Spot" && row.tf == "1Min")
+            .expect("valid Kraken Spot low timeframe row should remain visible");
+        assert_eq!(spot.total, 1);
+    }
+
+    #[test]
     fn broker_totals_orders_merged_before_fallback_sources() {
         let totals = compute_bar_sync_broker_totals(&[
             SyncStatsRow {
@@ -558,33 +547,6 @@ mod tests {
         assert_eq!(hour.healthy, 1);
         assert_eq!(hour.stale, 0);
         assert_eq!(hour.settled, 1);
-    }
-
-    #[test]
-    fn disabled_low_timeframe_rows_are_provider_unsupported_not_stale() {
-        for tf in ["1Min", "5Min"] {
-            let note = low_timeframe_broad_sync_disabled_note(tf)
-                .expect("low-TF broad sync should be explicitly disabled");
-            assert!(note.contains("demand/focus scoped"));
-
-            let row = unsupported_sync_stats_row("Merged", tf, 42, note);
-            assert_eq!(row.total, 0);
-            assert_eq!(row.stale, 0);
-            assert_eq!(row.empty, 0);
-            assert_eq!(row.unsupported, 42);
-            assert_eq!(row.pct_healthy, 100.0);
-        }
-    }
-
-    #[test]
-    fn low_timeframe_unsupported_rows_report_each_disabled_enabled_timeframe() {
-        let rows = low_timeframe_unsupported_rows("Merged", &["1Min".into(), "5Min".into(), "15Min".into()], 123);
-        let labels: Vec<(&str, &str, u64)> = rows
-            .iter()
-            .map(|row| (row.broker.as_str(), row.tf.as_str(), row.unsupported))
-            .collect();
-        assert_eq!(labels, vec![("Merged", "1Min", 123), ("Merged", "5Min", 123)]);
-        assert!(rows.iter().all(|row| row.total == 0 && row.stale == 0 && row.empty == 0));
     }
 
     #[test]

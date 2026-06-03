@@ -32,6 +32,16 @@ fn kraken_equity_quote_meta_candidates(symbol: &str) -> Vec<String> {
     candidates
 }
 
+fn obsolete_nonspot_low_timeframe(broker: &str, timeframe: &str) -> bool {
+    matches!(
+        normalize_sync_timeframe_key(timeframe),
+        Some("1Min" | "5Min")
+    ) && matches!(
+        broker.to_ascii_lowercase().as_str(),
+        "alpaca" | "kraken-equities" | "yahoo-chart"
+    )
+}
+
 pub(super) fn build_unresolvable_fetch_key_index(
     pairs: &std::collections::HashMap<String, UnresolvablePair>,
 ) -> std::collections::HashMap<String, std::collections::HashSet<String>> {
@@ -74,7 +84,10 @@ impl TyphooNApp {
         if let Some(ref cache) = self.cache {
             if let Ok(Some(json)) = cache.get_kv("alpaca:retry_queue") {
                 if let Ok(queue) = serde_json::from_str::<Vec<AlpacaRetry>>(&json) {
-                    self.alpaca_retry_queue = queue;
+                    self.alpaca_retry_queue = queue
+                        .into_iter()
+                        .filter(|entry| !obsolete_nonspot_low_timeframe("alpaca", &entry.timeframe))
+                        .collect();
                 }
             }
         }
@@ -84,8 +97,12 @@ impl TyphooNApp {
 
     pub(super) fn alpaca_retry_save(&self) {
         if let Some(ref cache) = self.cache {
-            let json =
-                serde_json::to_string(&self.alpaca_retry_queue).unwrap_or_else(|_| "[]".into());
+            let entries: Vec<&AlpacaRetry> = self
+                .alpaca_retry_queue
+                .iter()
+                .filter(|entry| !obsolete_nonspot_low_timeframe("alpaca", &entry.timeframe))
+                .collect();
+            let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
             let _ = cache.put_kv("alpaca:retry_queue", &json);
         }
     }
@@ -124,6 +141,7 @@ impl TyphooNApp {
                 if let Some(entries) = deserialize_alpaca_no_data_pairs(&json) {
                     self.alpaca_no_data_pairs = entries
                         .into_iter()
+                        .filter(|entry| !obsolete_nonspot_low_timeframe("alpaca", &entry.timeframe))
                         .map(|entry| (alpaca_fetch_key(&entry.symbol, &entry.timeframe), entry))
                         .collect();
                 } else {
@@ -137,8 +155,12 @@ impl TyphooNApp {
 
     pub(super) fn alpaca_no_data_save(&self) {
         if let Some(ref cache) = self.cache {
-            let mut entries: Vec<AlpacaNoDataPair> =
-                self.alpaca_no_data_pairs.values().cloned().collect();
+            let mut entries: Vec<AlpacaNoDataPair> = self
+                .alpaca_no_data_pairs
+                .values()
+                .filter(|entry| !obsolete_nonspot_low_timeframe("alpaca", &entry.timeframe))
+                .cloned()
+                .collect();
             entries.sort_by(|a, b| {
                 a.symbol.cmp(&b.symbol).then(
                     sync_timeframe_sort_key(&a.timeframe)
@@ -186,6 +208,9 @@ impl TyphooNApp {
         let timeframe = normalize_sync_timeframe_key(timeframe)
             .unwrap_or(timeframe)
             .to_string();
+        if obsolete_nonspot_low_timeframe("alpaca", &timeframe) {
+            return false;
+        }
         let symbol = normalize_market_data_symbol(symbol).replace('/', "");
         let key = alpaca_fetch_key(&symbol, &timeframe);
         let entry = AlpacaNoDataPair {
@@ -236,6 +261,9 @@ impl TyphooNApp {
                     Ok(entries) => {
                         self.unresolvable_pairs = entries
                             .into_iter()
+                            .filter(|entry| {
+                                !obsolete_nonspot_low_timeframe(&entry.broker, &entry.timeframe)
+                            })
                             .map(|entry| {
                                 let key = unresolvable_pair_key(
                                     &entry.broker,
@@ -257,8 +285,12 @@ impl TyphooNApp {
 
     pub(super) fn unresolvable_save(&self) {
         if let Some(ref cache) = self.cache {
-            let mut entries: Vec<UnresolvablePair> =
-                self.unresolvable_pairs.values().cloned().collect();
+            let mut entries: Vec<UnresolvablePair> = self
+                .unresolvable_pairs
+                .values()
+                .filter(|entry| !obsolete_nonspot_low_timeframe(&entry.broker, &entry.timeframe))
+                .cloned()
+                .collect();
             entries.sort_by(|a, b| {
                 a.broker.cmp(&b.broker).then(a.symbol.cmp(&b.symbol)).then(
                     sync_timeframe_sort_key(&a.timeframe)
@@ -306,6 +338,9 @@ impl TyphooNApp {
             .to_string();
         let symbol = normalize_market_data_symbol(symbol).replace('/', "");
         let broker = broker.to_ascii_lowercase();
+        if obsolete_nonspot_low_timeframe(&broker, &timeframe) {
+            return false;
+        }
         let key = unresolvable_pair_key(&broker, &symbol, &timeframe);
         let entry = UnresolvablePair {
             broker,
@@ -346,6 +381,7 @@ impl TyphooNApp {
                 {
                     self.alpaca_backfill_complete_pairs = entries
                         .into_iter()
+                        .filter(|entry| !obsolete_nonspot_low_timeframe("alpaca", &entry.timeframe))
                         .map(|entry| (alpaca_fetch_key(&entry.symbol, &entry.timeframe), entry))
                         .collect();
                 }
@@ -360,6 +396,7 @@ impl TyphooNApp {
             let mut entries: Vec<AlpacaBackfillCompletePair> = self
                 .alpaca_backfill_complete_pairs
                 .values()
+                .filter(|entry| !obsolete_nonspot_low_timeframe("alpaca", &entry.timeframe))
                 .cloned()
                 .collect();
             entries.sort_by(|a, b| {
@@ -386,6 +423,9 @@ impl TyphooNApp {
         let timeframe = normalize_sync_timeframe_key(timeframe)
             .unwrap_or(timeframe)
             .to_string();
+        if obsolete_nonspot_low_timeframe("alpaca", &timeframe) {
+            return false;
+        }
         let symbol = normalize_market_data_symbol(symbol).replace('/', "");
         let key = alpaca_fetch_key(&symbol, &timeframe);
         let entry = AlpacaBackfillCompletePair {
@@ -635,12 +675,18 @@ impl TyphooNApp {
     /// Upsert a (symbol, timeframe) pair into the retry queue. Called when
     /// the fetch worker signals `AlpacaRetryEnqueue` for 429/partial/error outcomes.
     pub(super) fn alpaca_retry_enqueue(&mut self, symbol: &str, timeframe: &str, reason: &str) {
+        let timeframe = normalize_sync_timeframe_key(timeframe)
+            .unwrap_or(timeframe)
+            .to_string();
+        if obsolete_nonspot_low_timeframe("alpaca", &timeframe) {
+            return;
+        }
         if !self.alpaca_no_data_loaded {
             self.alpaca_no_data_load();
         }
         if self
             .alpaca_no_data_pairs
-            .contains_key(&alpaca_fetch_key(symbol, timeframe))
+            .contains_key(&alpaca_fetch_key(symbol, &timeframe))
         {
             return;
         }

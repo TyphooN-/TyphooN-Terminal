@@ -62,7 +62,6 @@ impl TyphooNApp {
         );
         self.add_expected_kraken_sync_rows(&mut rows);
         self.add_kraken_equities_merged_rows(&mut rows, &checked_or_complete_lookup);
-        self.add_low_timeframe_unsupported_rows(&mut rows);
         sort_sync_stats_rows(&mut rows);
         let (total, healthy) = rows
             .iter()
@@ -370,22 +369,6 @@ impl TyphooNApp {
         } else {
             MergedSyncStatus::Empty
         }
-    }
-
-    fn add_low_timeframe_unsupported_rows(&self, rows: &mut Vec<SyncStatsRow>) {
-        let timeframes = self.enabled_standard_sync_timeframes();
-        if timeframes.is_empty() {
-            return;
-        }
-        let unsupported = self.kraken_equity_catalog_symbols().len() as u64;
-        if unsupported == 0 {
-            return;
-        }
-        rows.extend(low_timeframe_unsupported_rows(
-            "Kraken iapi",
-            &timeframes,
-            unsupported,
-        ));
     }
 
     fn add_expected_kraken_sync_rows(&self, rows: &mut Vec<SyncStatsRow>) {
