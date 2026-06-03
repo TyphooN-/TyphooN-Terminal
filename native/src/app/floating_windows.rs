@@ -55944,43 +55944,62 @@ impl TyphooNApp {
             egui::Window::new("Fundamentals")
                 .open(&mut self.show_fundamentals)
                 .resizable(true)
-                .default_size([600.0, 550.0])
+                .default_size([640.0, 480.0])
+                .max_size([900.0, 640.0])
                 .show(ctx, |ui| {
                     let tickers = fund_tickers.clone();
 
-                    // Scrape All button when MTF grid
-                    if tickers.len() > 1 {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "Fundamentals: {} symbols",
-                                    tickers.len()
-                                ))
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("Fundamentals: {} active symbols", tickers.len()))
                                 .strong(),
-                            );
-                            if ui
-                                .add(egui::Button::new("Scrape All").fill(BTN_BLUE))
+                        );
+                        if ui
+                            .add(egui::Button::new("Full Fundamentals Scrape").fill(BTN_GREEN))
+                            .on_hover_text("Scrape fundamentals for the configured full source universe, not just active charts")
+                            .clicked()
+                        {
+                            let db_path = cache_db_path();
+                            let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
+                                db_path,
+                                use_mt5: self.fund_source_mt5,
+                                use_alpaca: self.fund_source_alpaca,
+                                use_tastytrade: self.fund_source_tastytrade,
+                                use_kraken: self.fund_source_kraken,
+                                kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
+                                force: false,
+                            });
+                            self.log.push_back(LogEntry::info(
+                                "Full fundamentals scrape started for configured source universe...",
+                            ));
+                        }
+                        if tickers.len() > 1
+                            && ui
+                                .add(egui::Button::new("Scrape Active").fill(BTN_BLUE))
+                                .on_hover_text("Refresh fundamentals only for symbols currently active in charts/windows")
                                 .clicked()
-                            {
-                                for t in &tickers {
-                                    if !t.is_empty() {
-                                        let db_path = cache_db_path();
-                                        let _ =
-                                            self.broker_tx.send(BrokerCmd::FundamentalsScrapeOne {
-                                                ticker: t.clone(),
-                                                db_path,
-                                            });
-                                    }
+                        {
+                            for t in &tickers {
+                                if !t.is_empty() {
+                                    let db_path = cache_db_path();
+                                    let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrapeOne {
+                                        ticker: t.clone(),
+                                        db_path,
+                                    });
                                 }
-                                self.log.push_back(LogEntry::info(format!(
-                                    "Scraping fundamentals for {} symbols...",
-                                    tickers.len()
-                                )));
                             }
-                        });
-                        ui.separator();
-                    }
+                            self.log.push_back(LogEntry::info(format!(
+                                "Scraping fundamentals for {} active symbols...",
+                                tickers.len()
+                            )));
+                        }
+                    });
+                    ui.separator();
 
+                    egui::ScrollArea::vertical()
+                        .auto_shrink(false)
+                        .max_height(520.0)
+                        .show(ui, |ui| {
                     for ticker in &tickers {
                         let found = self
                             .bg
@@ -56024,6 +56043,7 @@ impl TyphooNApp {
                         if let Some(f) = found {
                             egui::ScrollArea::vertical()
                                 .auto_shrink(false)
+                                .max_height(360.0)
                                 .show(ui, |ui| {
                                     // Company info
                                     ui.label(
@@ -56478,6 +56498,7 @@ impl TyphooNApp {
                             ui.separator();
                         }
                     } // end for ticker in &tickers
+                        });
                 });
         }
 
