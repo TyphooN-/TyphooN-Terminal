@@ -48,6 +48,122 @@ fn should_auto_start_background_scope_scrape(scope: EventSource, symbol_count: u
     symbol_count > 0 && (!matches!(scope, EventSource::All) || symbol_count <= 512)
 }
 
+fn format_session_countdown(duration: chrono::Duration) -> String {
+    let seconds = duration.num_seconds().max(0);
+    let hours = seconds / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    if hours >= 24 {
+        format!("{}d {}h", hours / 24, hours % 24)
+    } else if hours > 0 {
+        format!("{}h {}m", hours, minutes)
+    } else {
+        format!("{}m", minutes.max(1))
+    }
+}
+
+fn nth_sunday(year: i32, month: u32, nth: u32) -> Option<chrono::NaiveDate> {
+    use chrono::Datelike;
+    let first = chrono::NaiveDate::from_ymd_opt(year, month, 1)?;
+    let days_to_sunday = (7 - first.weekday().num_days_from_sunday()) % 7;
+    first.checked_add_signed(chrono::Duration::days(
+        (days_to_sunday + (nth.saturating_sub(1)) * 7) as i64,
+    ))
+}
+
+fn us_eastern_offset_seconds(now_utc: chrono::DateTime<chrono::Utc>) -> i64 {
+    use chrono::Datelike;
+    let year = now_utc.date_naive().year();
+    // US Eastern daylight time starts at 02:00 local / 07:00 UTC on the second
+    // Sunday in March and ends at 02:00 local / 06:00 UTC on the first Sunday
+    // in November. Kraken's published equity/xStock sessions are in ET.
+    let Some(dst_start) = nth_sunday(year, 3, 2).and_then(|d| d.and_hms_opt(7, 0, 0)) else {
+        return -5 * 3_600;
+    };
+    let Some(dst_end) = nth_sunday(year, 11, 1).and_then(|d| d.and_hms_opt(6, 0, 0)) else {
+        return -5 * 3_600;
+    };
+    let now_naive = now_utc.naive_utc();
+    if now_naive >= dst_start && now_naive < dst_end {
+        -4 * 3_600
+    } else {
+        -5 * 3_600
+    }
+}
+
+fn kraken_xstocks_session_status_at(now_utc: chrono::DateTime<chrono::Utc>) -> String {
+    use chrono::{Datelike, Timelike};
+
+    let now_et =
+        now_utc.naive_utc() + chrono::Duration::seconds(us_eastern_offset_seconds(now_utc));
+    let weekday = now_et.weekday();
+    let minute_of_day = now_et.hour() as i64 * 60 + now_et.minute() as i64;
+    const PRE: i64 = 4 * 60;
+    const REGULAR: i64 = 9 * 60 + 30;
+    const AFTER: i64 = 16 * 60;
+    const OVERNIGHT: i64 = 20 * 60;
+
+    let day_start = now_et.date().and_hms_opt(0, 0, 0).unwrap_or(now_et);
+    let boundary_today = |minutes: i64| day_start + chrono::Duration::minutes(minutes);
+    let next_sunday_open = || {
+        let days_until_sunday = (7 - weekday.num_days_from_sunday()) % 7;
+        let mut target = day_start
+            + chrono::Duration::days(days_until_sunday as i64)
+            + chrono::Duration::minutes(OVERNIGHT);
+        if target <= now_et {
+            target += chrono::Duration::days(7);
+        }
+        target
+    };
+
+    if (weekday == chrono::Weekday::Fri && minute_of_day >= OVERNIGHT)
+        || weekday == chrono::Weekday::Sat
+        || (weekday == chrono::Weekday::Sun && minute_of_day < OVERNIGHT)
+    {
+        let target = next_sunday_open();
+        return format!(
+            "Kraken xStocks CLOSED · opens Sun 8:00 PM ET in {}",
+            format_session_countdown(target - now_et)
+        );
+    }
+
+    let (session, next_label, target) = if minute_of_day < PRE {
+        ("OVERNIGHT", "pre-market", boundary_today(PRE))
+    } else if minute_of_day < REGULAR {
+        ("PRE", "regular", boundary_today(REGULAR))
+    } else if minute_of_day < AFTER {
+        ("REGULAR", "after-hours", boundary_today(AFTER))
+    } else if minute_of_day < OVERNIGHT {
+        let label = if weekday == chrono::Weekday::Fri {
+            "close"
+        } else {
+            "overnight"
+        };
+        ("AFTER", label, boundary_today(OVERNIGHT))
+    } else {
+        (
+            "OVERNIGHT",
+            "pre-market",
+            boundary_today(PRE) + chrono::Duration::days(1),
+        )
+    };
+
+    if next_label == "close" {
+        format!(
+            "Kraken xStocks {session} · closes in {}",
+            format_session_countdown(target - now_et)
+        )
+    } else {
+        format!(
+            "Kraken xStocks {session} · next {next_label} in {}",
+            format_session_countdown(target - now_et)
+        )
+    }
+}
+
+fn kraken_xstocks_session_status_now() -> String {
+    kraken_xstocks_session_status_at(chrono::Utc::now())
+}
+
 fn broker_msg_kind(msg: &BrokerMsg) -> &'static str {
     match msg {
         BrokerMsg::Connected(_) => "Connected",
@@ -10386,13 +10502,27 @@ impl eframe::App for TyphooNApp {
                             let chart_source = chart.primary_source;
                             let symbol = chart.symbol.split(':').next_back().unwrap_or("");
                             let normalized_symbol = normalize_market_data_symbol(symbol);
+                            let normalized_upper = normalized_symbol.to_ascii_uppercase();
+                            let bare_equity_symbol = normalized_upper
+                                .replace('/', "")
+                                .trim_end_matches(".EQ")
+                                .to_string();
+                            let kraken_equity_pair = self.kraken_scrape_xstocks
+                                && (chart_source == "kraken-equities"
+                                    || normalized_upper.ends_with(".EQ")
+                                    || self
+                                        .kraken_equity_universe_symbols
+                                        .iter()
+                                        .any(|candidate| candidate.as_str() == bare_equity_symbol.as_str()));
                             let kraken_crypto_pair = chart_source == "kraken"
-                                && !normalized_symbol.to_ascii_uppercase().contains(".EQ")
+                                && !kraken_equity_pair
                                 && typhoon_engine::core::kraken::to_kraken_pair_lossy(
                                     &normalized_symbol,
                                 )
                                 .is_some();
-                            if self.kraken_connected && kraken_crypto_pair {
+                            if self.kraken_connected && kraken_equity_pair {
+                                Some(kraken_xstocks_session_status_now())
+                            } else if self.kraken_connected && kraken_crypto_pair {
                                 Some("24/7".to_string())
                             } else if self.broker_connected && !self.market_clock_status.is_empty()
                             {
@@ -10405,7 +10535,10 @@ impl eframe::App for TyphooNApp {
                             let session_upper = session.to_ascii_uppercase();
                             let session_color = if session_upper.contains("CLOSED") {
                                 DOWN
-                            } else if session_upper.contains("OPEN") || session == "24/7" {
+                            } else if session_upper.contains("OPEN")
+                                || session_upper.contains("KRAKEN XSTOCKS")
+                                || session == "24/7"
+                            {
                                 UP
                             } else {
                                 AXIS_TEXT
@@ -18123,6 +18256,58 @@ mod tests {
         assert!(!should_emit_alpaca_retry_queue_log(99));
         assert!(should_emit_alpaca_retry_queue_log(100));
         assert!(should_emit_alpaca_retry_queue_log(200));
+    }
+
+    #[test]
+    fn kraken_xstocks_session_status_tracks_all_24_5_sessions() {
+        let at = |ts: &str| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+
+        assert!(
+            kraken_xstocks_session_status_at(at("2026-06-01T07:30:00Z"))
+                .starts_with("Kraken xStocks OVERNIGHT · next pre-market")
+        );
+        assert!(
+            kraken_xstocks_session_status_at(at("2026-06-01T12:00:00Z"))
+                .starts_with("Kraken xStocks PRE · next regular")
+        );
+        assert!(
+            kraken_xstocks_session_status_at(at("2026-06-01T15:00:00Z"))
+                .starts_with("Kraken xStocks REGULAR · next after-hours")
+        );
+        assert!(
+            kraken_xstocks_session_status_at(at("2026-06-01T21:00:00Z"))
+                .starts_with("Kraken xStocks AFTER · next overnight")
+        );
+        assert!(
+            kraken_xstocks_session_status_at(at("2026-06-02T01:00:00Z"))
+                .starts_with("Kraken xStocks OVERNIGHT · next pre-market")
+        );
+    }
+
+    #[test]
+    fn kraken_xstocks_session_status_closes_only_for_weekend_window() {
+        let friday_after = chrono::DateTime::parse_from_rfc3339("2026-06-05T23:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let saturday = chrono::DateTime::parse_from_rfc3339("2026-06-06T16:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let sunday_open = chrono::DateTime::parse_from_rfc3339("2026-06-08T00:30:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        assert!(
+            kraken_xstocks_session_status_at(friday_after)
+                .starts_with("Kraken xStocks AFTER · closes")
+        );
+        assert!(kraken_xstocks_session_status_at(saturday).starts_with("Kraken xStocks CLOSED"));
+        assert!(
+            kraken_xstocks_session_status_at(sunday_open).starts_with("Kraken xStocks OVERNIGHT")
+        );
     }
 
     #[test]
