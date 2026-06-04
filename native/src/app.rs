@@ -50,6 +50,7 @@ mod broker_fetch;
 mod chart;
 mod chart_ops;
 mod command_palette;
+mod command_research_windows;
 mod commands;
 mod common;
 mod darwin_universe;
