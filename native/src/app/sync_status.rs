@@ -152,7 +152,7 @@ impl TyphooNApp {
                                 "MT5"           => egui::Color32::from_rgb(26, 188, 156),
                                 "Alpaca"        => egui::Color32::from_rgb(52, 152, 219),
                                 "Tastytrade"    => egui::Color32::from_rgb(170, 100, 220),
-                                "Kraken Spot" | "Kraken iapi" | "Kraken Futures" => egui::Color32::from_rgb(255, 130, 60),
+                                "Kraken Spot" | "Kraken Equities" | "Kraken Futures" => egui::Color32::from_rgb(255, 130, 60),
                                 "Merged"        => egui::Color32::from_rgb(0, 220, 220),
                                 "Yahoo"         => egui::Color32::from_rgb(155, 89, 182),
                                 _ => AXIS_TEXT,
@@ -403,6 +403,7 @@ impl TyphooNApp {
         let kraken_equity_demand_symbols = self.kraken_equity_demand_symbols();
         let mut expected_sources: Vec<(&str, &str)> = vec![
             ("kraken", "Kraken Spot"),
+            ("kraken-equities", "Kraken Equities"),
             ("kraken-futures", "Kraken Futures"),
         ];
         if self.backfill_alpaca_kraken_equities_enabled {
@@ -417,10 +418,9 @@ impl TyphooNApp {
                 let Some(tf) = normalize_sync_timeframe_key(tf) else {
                     continue;
                 };
-                // Equities/iapi is the rate-limit bottleneck. Native Kraken
-                // rows remain high-TF only, while Alpaca/Yahoo assist rows can
-                // represent broad 15Min+ catalog coverage where those provider
-                // lanes are enabled.
+                // Kraken Equities/xStocks is WS-first now, so native rows cover
+                // every enabled standard timeframe. Alpaca/Yahoo assist rows
+                // remain broad 15Min+ only where those provider lanes are enabled.
                 if source == "kraken-equities" && !kraken_equity_full_universe_timeframe(tf) {
                     continue;
                 }
@@ -479,29 +479,30 @@ impl TyphooNApp {
             }
         }
 
-        let iapi_symbol_count = if !kraken_equity_catalog_symbols.is_empty() {
+        let equities_symbol_count = if !kraken_equity_catalog_symbols.is_empty() {
             kraken_equity_catalog_symbols.len()
         } else {
             kraken_equity_demand_symbols.len()
         };
-        if iapi_symbol_count > 0
+        if equities_symbol_count > 0
             && !rows
                 .iter()
-                .any(|row| row.broker == "Kraken iapi" && row.tf == "---")
+                .any(|row| row.broker == "Kraken Equities" && row.tf == "---")
         {
-            rows.push(kraken_iapi_control_plane_row(iapi_symbol_count as u64));
+            rows.push(kraken_equities_control_plane_row(
+                equities_symbol_count as u64,
+            ));
         }
     }
 }
 
-fn kraken_iapi_control_plane_row(symbol_count: u64) -> SyncStatsRow {
+fn kraken_equities_control_plane_row(symbol_count: u64) -> SyncStatsRow {
     SyncStatsRow {
-        broker: "Kraken iapi".to_string(),
+        broker: "Kraken Equities".to_string(),
         tf: "---".to_string(),
-        // Kraken iapi/xStocks is the universe + quote control plane. Native iapi
-        // bars are not the source of truth for chart coverage; Merged/Alpaca/Yahoo
-        // rows show actual bar freshness. Do not count the catalog as 12k empty
-        // bar-cache rows or auto full-tilt stays pinned forever.
+        // Kraken Equities/xStocks catalog/quote control-plane row. Timeframe rows
+        // above show real WS/REST bar freshness; do not count the catalog itself as
+        // 12k empty bar-cache rows or auto full-tilt stays pinned forever.
         total: symbol_count,
         healthy: 0,
         stale: 0,
@@ -544,18 +545,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn merged_sync_rows_skip_demand_only_low_timeframes() {
-        assert!(!kraken_equities_merged_timeframe_supported("1Min"));
-        assert!(!kraken_equities_merged_timeframe_supported("5Min"));
+    fn merged_sync_rows_support_all_native_kraken_equities_timeframes() {
+        assert!(kraken_equities_merged_timeframe_supported("1Min"));
+        assert!(kraken_equities_merged_timeframe_supported("5Min"));
         assert!(kraken_equities_merged_timeframe_supported("15Min"));
         assert!(kraken_equities_merged_timeframe_supported("1Day"));
         assert!(kraken_equities_merged_timeframe_supported("1Month"));
     }
 
     #[test]
-    fn kraken_iapi_control_plane_row_is_single_catalog_row() {
-        let row = kraken_iapi_control_plane_row(12_268);
-        assert_eq!(row.broker, "Kraken iapi");
+    fn kraken_equities_control_plane_row_is_single_catalog_row() {
+        let row = kraken_equities_control_plane_row(12_268);
+        assert_eq!(row.broker, "Kraken Equities");
         assert_eq!(row.tf, "---");
         assert_eq!(row.total, 12_268);
         assert_eq!(row.healthy, 0);
@@ -576,7 +577,7 @@ mod tests {
         assert!(
             totals
                 .iter()
-                .all(|(broker, _, _, _)| broker != "Kraken iapi"),
+                .all(|(broker, _, _, _)| broker != "Kraken Equities"),
             "control-plane-only rows stay in the table but do not pollute broker bar totals"
         );
     }

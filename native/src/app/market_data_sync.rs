@@ -35,7 +35,10 @@ pub(super) fn kraken_equity_symbols_for_timeframe(
     demand_symbols: &[String],
     timeframe: &str,
 ) -> Vec<String> {
-    if kraken_equity_broad_fallback_timeframe(timeframe) && !catalog_symbols.is_empty() {
+    if (kraken_equity_full_universe_timeframe(timeframe)
+        || kraken_equity_broad_fallback_timeframe(timeframe))
+        && !catalog_symbols.is_empty()
+    {
         normalize_kraken_equity_symbol_list(catalog_symbols.iter())
     } else {
         normalize_kraken_equity_symbol_list(demand_symbols.iter())
@@ -925,9 +928,9 @@ impl TyphooNApp {
             return 0;
         }
         let enabled_timeframes = self.enabled_standard_sync_timeframes();
-        // Native iapi stays on the high-TF full-catalog lane. 15Min+ broad
-        // coverage is still a product goal, but it must come from assist
-        // providers where possible instead of consuming the entire iapi limiter.
+        // Kraken Equities is WS-first for live/current OHLC and REST/iapi remains
+        // the repair/backfill lane. Treat all enabled standard timeframes as native
+        // Kraken Equities coverage; assist providers keep their own narrower gates.
         let native_timeframes: Vec<String> = enabled_timeframes
             .iter()
             .filter(|tf| kraken_equity_full_universe_timeframe(tf))
@@ -1538,12 +1541,6 @@ impl TyphooNApp {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
         };
-        // iapi delivers equity prices delayed by 15 minutes, so M1 and M5
-        // bars are illusory fidelity — they just consume budget we need for
-        // higher TFs. Per ADR-072 policy update 2026-05-26, never fetch these.
-        if matches!(tf, "1Min" | "5Min") {
-            return false;
-        }
         if !self.kraken_enabled || !self.sync_timeframe_enabled(tf) {
             return false;
         }
@@ -1559,7 +1556,7 @@ impl TyphooNApp {
         }
         // WS v2 OHLC is now the primary xStocks current-bar path. Once it has
         // delivered a fresh closed bar for this symbol/timeframe, suppress the
-        // delayed iapi history pull; keep iapi for initial cold-start/gap repair
+        // REST/iapi history pull; keep REST for initial cold-start/gap repair
         // and for cases where WS has not produced this tuple yet.
         if self.kraken_ws_pair_is_fresh(&symbol, tf) {
             return false;

@@ -60,12 +60,15 @@ pub(super) const MT5_PROVIDER_MAX_BARS: u32 = i32::MAX as u32;
 pub(super) const KRAKEN_SPOT_PROVIDER_WINDOW_BARS: u32 = 720;
 pub(super) const KRAKEN_SPOT_MONTH_PROVIDER_WINDOW_BARS: u32 = 24;
 
-/// Kraken Securities/iapi is the native/authoritative lane but provider pressure
-/// is empirical, session/IP dependent, and AIMD-controlled. Keep native iapi
-/// broad-universe pressure on durable higher-TF bars for now; use provider
-/// assist lanes for broad 15Min+ coverage where those sources can supply it.
+/// Kraken Equities/xStocks is now WS-first for live/current OHLC. Treat the
+/// native lane as full-standard-timeframe coverage in Sync Status: M1/M5 are
+/// valid for Kraken Equities now, and M15/M30/H1/H4/D1/W1/MN1 remain visible
+/// across the xStocks catalog.
 pub(super) fn kraken_equity_full_universe_timeframe(tf: &str) -> bool {
-    matches!(tf, "1Day" | "1Week" | "1Month")
+    matches!(
+        tf,
+        "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week" | "1Month"
+    )
 }
 
 /// Broad Kraken-equity coverage target for non-native assist sources. 1Min/5Min
@@ -103,9 +106,13 @@ mod tests {
     }
 
     #[test]
-    fn kraken_equity_full_universe_sync_is_native_high_timeframe_only() {
-        assert!(!kraken_equity_full_universe_timeframe("15Min"));
-        assert!(!kraken_equity_full_universe_timeframe("4Hour"));
+    fn kraken_equity_full_universe_sync_is_native_all_standard_timeframes() {
+        assert!(kraken_equity_full_universe_timeframe("1Min"));
+        assert!(kraken_equity_full_universe_timeframe("5Min"));
+        assert!(kraken_equity_full_universe_timeframe("15Min"));
+        assert!(kraken_equity_full_universe_timeframe("30Min"));
+        assert!(kraken_equity_full_universe_timeframe("1Hour"));
+        assert!(kraken_equity_full_universe_timeframe("4Hour"));
         assert!(kraken_equity_full_universe_timeframe("1Day"));
         assert!(kraken_equity_full_universe_timeframe("1Week"));
         assert!(kraken_equity_full_universe_timeframe("1Month"));

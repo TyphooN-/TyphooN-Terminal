@@ -8,13 +8,13 @@ use super::sync_workset::normalize_sync_timeframe_key;
 /// unused scaffolding in the tree.
 #[derive(Clone, Debug, Default)]
 pub(super) struct SyncStatsRow {
-    pub(super) broker: String,   // "Kraken Spot" | "Kraken iapi" | "Alpaca" | …
-    pub(super) tf: String,       // "1Min" | "1Hour" | "1Day" | …
-    pub(super) total: u64,       // (sym,tf) pairs seen for this (broker,tf) bucket
-    pub(super) healthy: u64,     // last bar lag < TF_period × 24
-    pub(super) stale: u64,       // last bar lag ≥ threshold
-    pub(super) empty: u64,       // cached blob has no bars (last_ms <= 0)
-    pub(super) settled: u64,     // checked/exhausted provider window, counted healthy
+    pub(super) broker: String, // "Kraken Spot" | "Kraken Equities" | "Alpaca" | …
+    pub(super) tf: String,     // "1Min" | "1Hour" | "1Day" | …
+    pub(super) total: u64,     // (sym,tf) pairs seen for this (broker,tf) bucket
+    pub(super) healthy: u64,   // last bar lag < TF_period × 24
+    pub(super) stale: u64,     // last bar lag ≥ threshold
+    pub(super) empty: u64,     // cached blob has no bars (last_ms <= 0)
+    pub(super) settled: u64,   // checked/exhausted provider window, counted healthy
     pub(super) unsupported: u64, // structurally unsupported by this broad sync lane
     pub(super) note: Option<String>,
     pub(super) pct_healthy: f32, // 0..100
@@ -62,7 +62,7 @@ pub(super) fn compute_bar_sync_stats(
             "tastytrade" => Some("Tastytrade"),
             "kraken" => Some("Kraken Spot"),
             "kraken-futures" => Some("Kraken Futures"),
-            "kraken-equities" => Some("Kraken iapi"),
+            "kraken-equities" => Some("Kraken Equities"),
             "yahoo-chart" => Some("Yahoo"),
             _ => None,
         }
@@ -99,15 +99,12 @@ pub(super) fn compute_bar_sync_stats(
         let Some(tf) = normalize_sync_timeframe_key(raw_tf) else {
             continue;
         };
-        if matches!(prefix, "kraken-equities" | "alpaca" | "yahoo-chart")
-            && matches!(tf, "1Min" | "5Min")
-        {
+        if matches!(prefix, "alpaca" | "yahoo-chart") && matches!(tf, "1Min" | "5Min") {
             continue;
         }
-        // Stale Kraken-equities intraday rows are historical byproducts / demand
-        // fetches, not part of the native full-universe iapi contract. Counting
-        // them in the native aggregate makes Sync Status report a misleading
-        // native backlog; provider-assist rows carry broad 15Min+ coverage.
+        // Kraken-equities is WS-first and now supports all standard native
+        // timeframes. Keep provider-assist low-TF stale rows hidden, but surface
+        // native Kraken Equities M1/M5 rows in Sync Status.
         if prefix == "kraken-equities" && !super::kraken_equity_full_universe_timeframe(tf) {
             continue;
         }
@@ -176,7 +173,7 @@ pub(super) fn sort_sync_stats_rows(rows: &mut [SyncStatsRow]) {
     ];
     let broker_order = [
         "Kraken Spot",
-        "Kraken iapi",
+        "Kraken Equities",
         "Kraken Futures",
         "Merged",
         "Alpaca",
@@ -238,7 +235,7 @@ pub(super) fn sync_stats_row_status_cells(row: &SyncStatsRow) -> SyncStatsRowSta
 }
 
 pub(super) fn sync_stats_row_is_control_plane(row: &SyncStatsRow) -> bool {
-    row.broker == "Kraken iapi" && row.tf == "---"
+    row.broker == "Kraken Equities" && row.tf == "---"
 }
 
 /// Aggregate per-broker totals from a Vec<SyncStatsRow> for the compact
@@ -261,7 +258,7 @@ pub(super) fn compute_bar_sync_broker_totals(
 
     let order = [
         "Kraken Spot",
-        "Kraken iapi",
+        "Kraken Equities",
         "Kraken Futures",
         "Merged",
         "Alpaca",
@@ -420,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn compute_bar_sync_stats_hides_obsolete_nonspot_low_timeframe_rows() {
+    fn compute_bar_sync_stats_hides_obsolete_assist_low_timeframe_rows_but_keeps_kraken_equities() {
         let now_s = chrono::Utc::now().timestamp();
         let rows = compute_bar_sync_stats(
             &[
@@ -438,8 +435,13 @@ mod tests {
 
         assert!(!rows.iter().any(|row| matches!(
             (row.broker.as_str(), row.tf.as_str()),
-            ("Alpaca" | "Yahoo" | "Kraken iapi", "1Min" | "5Min")
+            ("Alpaca" | "Yahoo", "1Min" | "5Min")
         )));
+        let equities = rows
+            .iter()
+            .find(|row| row.broker == "Kraken Equities" && row.tf == "1Min")
+            .expect("valid Kraken Equities low timeframe row should remain visible");
+        assert_eq!(equities.total, 1);
         let spot = rows
             .iter()
             .find(|row| row.broker == "Kraken Spot" && row.tf == "1Min")
@@ -496,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn compute_bar_sync_stats_ignores_kraken_equity_intraday_universe_rows() {
+    fn compute_bar_sync_stats_surfaces_kraken_equity_intraday_universe_rows() {
         let now_s = chrono::Utc::now().timestamp();
         let rows = compute_bar_sync_stats(
             &[
@@ -509,13 +511,13 @@ mod tests {
 
         let fifteen = rows
             .iter()
-            .find(|row| row.broker == "Kraken Spot" && row.tf == "15Min")
-            .expect("required Kraken 15Min placeholder row should exist");
-        assert_eq!(fifteen.total, 0);
+            .find(|row| row.broker == "Kraken Equities" && row.tf == "15Min")
+            .expect("Kraken Equities 15Min row should be visible");
+        assert_eq!(fifteen.total, 1);
 
         let day = rows
             .iter()
-            .find(|row| row.broker == "Kraken iapi" && row.tf == "1Day")
+            .find(|row| row.broker == "Kraken Equities" && row.tf == "1Day")
             .expect("missing Kraken 1Day row");
         assert_eq!(day.total, 1);
     }
@@ -540,8 +542,8 @@ mod tests {
 
         let equities = rows
             .iter()
-            .find(|row| row.broker == "Kraken iapi" && row.tf == "1Day")
-            .expect("missing Kraken iapi 1Day row");
+            .find(|row| row.broker == "Kraken Equities" && row.tf == "1Day")
+            .expect("missing Kraken Equities 1Day row");
         assert_eq!(equities.total, 1);
     }
 

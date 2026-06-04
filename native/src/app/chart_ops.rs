@@ -603,7 +603,7 @@ impl TyphooNApp {
     }
 
     /// Ensure this symbol has one MTF chart per supported MTF Grid timeframe.
-    /// M1/M5 stay visible for Kraken Spot; unsupported/missing providers render as empty/grey panes.
+    /// M1/M5 stay visible for native Kraken Spot and Kraken Equities; unsupported/missing assist providers render as empty/grey panes.
     pub(super) fn ensure_mtf_grid_for_symbol(&mut self, symbol: &str) {
         let symbol = symbol.trim();
         if symbol.is_empty() {
@@ -1183,7 +1183,7 @@ mod tests {
     }
 
     #[test]
-    fn mtf_grid_timeframes_include_low_timeframes_for_spot_pairs() {
+    fn mtf_grid_timeframes_include_low_timeframes_for_native_kraken_pairs() {
         let labels: Vec<&str> = MTF_GRID_TIMEFRAMES
             .iter()
             .map(|(label, _)| *label)

@@ -173,10 +173,10 @@ impl TyphooNApp {
                                 tracing::warn!("Cache-open thread: repair_bar_counts failed: {e}")
                             }
                         }
-                        // One-shot migration: M1/M5 are only valid merge/cache targets for
-                        // Kraken Spot right now. Drop stale low-TF provider-assist rows
-                        // from Kraken iapi, Alpaca, and Yahoo so freed pages host bars we
-                        // actually use. Flagged so we don't re-run.
+                        // One-shot migration: M1/M5 are valid native Kraken targets
+                        // (Spot + Equities/xStocks). Drop stale low-TF provider-assist rows
+                        // from Alpaca/Yahoo so freed pages host bars we actually use.
+                        // Flagged so we don't re-run.
                         const NON_SPOT_M1M5_PURGE_KEY: &str =
                             "migration:non_spot_provider_m1m5_purged_v1";
                         let already_purged =
@@ -185,7 +185,7 @@ impl TyphooNApp {
                             match c.delete_non_spot_low_timeframe_bars() {
                                 Ok((deleted, freed)) => {
                                     tracing::info!(
-                                        "Cache-open thread: purged {deleted} non-spot provider M1/M5 rows, freed {} MB",
+                                        "Cache-open thread: purged {deleted} provider-assist M1/M5 rows, freed {} MB",
                                         freed / 1_048_576
                                     );
                                     if let Err(e) = c.put_kv(
@@ -198,7 +198,7 @@ impl TyphooNApp {
                                     }
                                 }
                                 Err(e) => tracing::warn!(
-                                    "Cache-open thread: non-spot provider M1/M5 purge failed: {e}"
+                                    "Cache-open thread: provider-assist M1/M5 purge failed: {e}"
                                 ),
                             }
                         }
