@@ -32,6 +32,24 @@ fn mtf_grid_symbol_key(symbol: &str) -> String {
     candidate
 }
 
+fn kraken_position_covers_balance_asset(positions: &[PositionInfo], asset: &str) -> bool {
+    let display = TyphooNApp::kraken_display_asset(asset);
+    let bare_display = display.strip_suffix(".EQ").unwrap_or(display.as_str());
+    positions.iter().any(|pos| {
+        if !pos.qty.is_finite() || pos.qty <= 0.0 || !pos.side.eq_ignore_ascii_case("long") {
+            return false;
+        }
+        let pos_symbol = typhoon_engine::core::kraken::normalize_pair_symbol(&pos.symbol)
+            .replace('/', "")
+            .to_ascii_uppercase();
+        let pos_base = TyphooNApp::kraken_base_asset_for_pair(&pos_symbol);
+        TyphooNApp::kraken_asset_keys_match(&display, &pos_symbol)
+            || TyphooNApp::kraken_asset_keys_match(bare_display, &pos_symbol)
+            || TyphooNApp::kraken_asset_keys_match(&display, &pos_base)
+            || TyphooNApp::kraken_asset_keys_match(bare_display, &pos_base)
+    })
+}
+
 pub(super) fn mtf_visible_chart_groups(
     charts: &[ChartState],
     visible: &[bool],
@@ -1058,6 +1076,9 @@ impl TyphooNApp {
                 if !qty.is_finite() || *qty <= 0.0 || Self::kraken_is_cash_balance_asset(asset) {
                     continue;
                 }
+                if kraken_position_covers_balance_asset(&self.kr_positions, asset) {
+                    continue;
+                }
                 let display = Self::kraken_display_asset(asset);
                 let pair = Self::kraken_spot_pair_for_balance_asset(asset);
                 let pair_norm = typhoon_engine::core::kraken::normalize_pair_symbol(&pair)
@@ -1215,5 +1236,34 @@ mod tests {
         assert_eq!(groups[0].indices, vec![4, 2, 0, 5]);
         assert_eq!(groups[1].symbol, "BABYUSD");
         assert_eq!(groups[1].indices, vec![6, 3, 1]);
+    }
+
+    fn test_position(symbol: &str, qty: f64, side: &str) -> PositionInfo {
+        PositionInfo {
+            symbol: symbol.to_string(),
+            qty,
+            side: side.to_string(),
+            avg_entry_price: 1.0,
+            market_value: qty,
+            unrealized_pl: 0.0,
+            asset_class: "stock".to_string(),
+            asset_id: "equity_balance:test".to_string(),
+        }
+    }
+
+    #[test]
+    fn kraken_balance_overlay_skips_assets_already_reported_as_positions() {
+        let positions = vec![test_position("WOK", 7142.0, "long")];
+
+        assert!(kraken_position_covers_balance_asset(&positions, "WOK.EQ"));
+        assert!(kraken_position_covers_balance_asset(&positions, "WOK"));
+    }
+
+    #[test]
+    fn kraken_balance_overlay_still_allows_inventory_without_position_row() {
+        let positions = vec![test_position("GDC", 100.0, "long")];
+
+        assert!(!kraken_position_covers_balance_asset(&positions, "WOK.EQ"));
+        assert!(!kraken_position_covers_balance_asset(&positions, "WOK"));
     }
 }
