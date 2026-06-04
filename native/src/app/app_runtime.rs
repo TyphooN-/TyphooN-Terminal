@@ -383,16 +383,18 @@ impl eframe::App for TyphooNApp {
             let _ = self.broker_tx.send(BrokerCmd::KrakenGetPairs);
             self.kraken_pairs_requested = true;
         }
+        let now_ts = chrono::Utc::now().timestamp();
         if self.cache_loaded
             && self.lan_sync_mode != "client"
             && self.kraken_enabled
             && self.kraken_scrape_xstocks
             && self.kraken_equity_universe_symbols.is_empty()
-            && !self.kraken_equity_universe_requested
-            && chrono::Utc::now().timestamp() >= self.kraken_equity_universe_retry_after_ts
+            && (!self.kraken_equity_universe_requested
+                || now_ts >= self.kraken_equity_universe_retry_after_ts)
         {
             let _ = self.broker_tx.send(BrokerCmd::KrakenFetchEquityUniverse);
             self.kraken_equity_universe_requested = true;
+            self.kraken_equity_universe_retry_after_ts = now_ts + 120;
         }
         if self.cache_loaded
             && self.lan_sync_mode != "client"
@@ -1675,6 +1677,18 @@ impl eframe::App for TyphooNApp {
                         self.kraken_pairs_requested = false;
                     } else if e.starts_with("Kraken futures instruments:") {
                         self.kraken_futures_requested = false;
+                    } else if e.starts_with("Kraken equities universe failed:") {
+                        self.kraken_equity_universe_requested = false;
+                        let backoff = if e.contains("iapi temporarily rate-limited")
+                            || e.contains("1015")
+                            || e.contains("429")
+                            || e.to_ascii_lowercase().contains("rate limit")
+                        {
+                            300
+                        } else {
+                            60
+                        };
+                        self.kraken_equity_universe_retry_after_ts = now + backoff;
                     } else if e.starts_with("tastytrade connection unavailable:")
                         || e.starts_with("tastytrade market data unavailable:")
                     {

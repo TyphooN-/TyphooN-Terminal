@@ -35,7 +35,7 @@ pub(super) fn kraken_equity_symbols_for_timeframe(
     demand_symbols: &[String],
     timeframe: &str,
 ) -> Vec<String> {
-    if kraken_equity_broad_fallback_timeframe(timeframe) {
+    if kraken_equity_broad_fallback_timeframe(timeframe) && !catalog_symbols.is_empty() {
         normalize_kraken_equity_symbol_list(catalog_symbols.iter())
     } else {
         normalize_kraken_equity_symbol_list(demand_symbols.iter())
@@ -911,7 +911,13 @@ impl TyphooNApp {
     }
 
     pub(super) fn schedule_kraken_equities_universe(&mut self) -> usize {
-        let symbols = self.kraken_equity_catalog_symbols();
+        let catalog_symbols = self.kraken_equity_catalog_symbols();
+        let demand_symbols = self.kraken_equity_demand_symbols();
+        let symbols = if catalog_symbols.is_empty() {
+            demand_symbols
+        } else {
+            catalog_symbols
+        };
         if !self.kraken_enabled || !self.kraken_full_bar_sync_enabled || symbols.is_empty() {
             return 0;
         }
@@ -967,12 +973,12 @@ impl TyphooNApp {
         }
         self.ensure_unresolvable_fetch_key_index();
         let _focus_symbols = self.market_data_focus_symbols();
-let focus_symbols = self.market_data_focus_symbols();
+        let focus_symbols = self.market_data_focus_symbols();
 
-// Kraken high-TF (1Day/1Week/1Month) backfill aggressiveness fix:
-// Always treat these rows as high-priority when the symbol is focused
-// (open chart or MTF grid). This prevents the "stale forever" state
-// the user reported even for actively used Kraken symbols.
+        // Kraken high-TF (1Day/1Week/1Month) backfill aggressiveness fix:
+        // Always treat these rows as high-priority when the symbol is focused
+        // (open chart or MTF grid). This prevents the "stale forever" state
+        // the user reported even for actively used Kraken symbols.
 
         let empty_no_data_keys = std::collections::HashSet::new();
         let empty_backfill = std::collections::HashMap::new();
@@ -2185,6 +2191,14 @@ mod tests {
         );
         assert_eq!(
             kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Min"),
+            vec!["ARRAY".to_string(), "POM".to_string()]
+        );
+        assert_eq!(
+            kraken_equity_symbols_for_timeframe(&[], &demand, "1Day"),
+            vec!["ARRAY".to_string(), "POM".to_string()]
+        );
+        assert_eq!(
+            kraken_equity_symbols_for_timeframe(&[], &demand, "15Min"),
             vec!["ARRAY".to_string(), "POM".to_string()]
         );
     }

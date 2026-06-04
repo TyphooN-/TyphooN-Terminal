@@ -26603,7 +26603,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 let _ = broker_msg_tx_clone.send(BrokerMsg::KrakenEquityUniverse(markets));
                             }
                             Err(e) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e));
+                                let _ = broker_msg_tx_clone
+                                    .send(BrokerMsg::Error(format!("Kraken equities universe failed: {e}")));
                             }
                         }
                     }
