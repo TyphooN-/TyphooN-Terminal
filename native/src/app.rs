@@ -78,6 +78,7 @@ mod sync_status;
 mod sync_workset;
 mod tastytrade_sync;
 mod technical_analysis;
+mod technical_indicators;
 mod tool_windows;
 mod trade_ops;
 mod types;
@@ -100,6 +101,7 @@ use self::sync_config::*;
 use self::sync_workset::*;
 use self::tastytrade_sync::*;
 use self::technical_analysis::*;
+use self::technical_indicators::*;
 
 impl TyphooNApp {
     pub fn new(cc: &eframe::CreationContext<'_>, rt_handle: tokio::runtime::Handle) -> Self {
