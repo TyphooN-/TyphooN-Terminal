@@ -1,4 +1,6 @@
-use super::market_data_sync::kraken_equity_symbols_for_timeframe;
+use super::market_data_sync::{
+    kraken_equity_native_symbols_for_timeframe, kraken_equity_symbols_for_timeframe,
+};
 use super::*;
 
 const BAR_SYNC_STATS_IDLE_REFRESH: std::time::Duration = std::time::Duration::from_secs(1);
@@ -444,13 +446,15 @@ impl TyphooNApp {
                 let symbols: Vec<String> = match source {
                     "kraken" => spot_symbols.clone(),
                     "kraken-futures" => futures_symbols.clone(),
-                    "kraken-equities" | "alpaca" | "yahoo-chart" => {
-                        kraken_equity_symbols_for_timeframe(
-                            &kraken_equity_catalog_symbols,
-                            &kraken_equity_demand_symbols,
-                            tf,
-                        )
-                    }
+                    "kraken-equities" => kraken_equity_native_symbols_for_timeframe(
+                        &kraken_equity_demand_symbols,
+                        tf,
+                    ),
+                    "alpaca" | "yahoo-chart" => kraken_equity_symbols_for_timeframe(
+                        &kraken_equity_catalog_symbols,
+                        &kraken_equity_demand_symbols,
+                        tf,
+                    ),
                     _ => Vec::new(),
                 };
                 for symbol in symbols {

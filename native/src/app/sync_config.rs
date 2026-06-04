@@ -71,9 +71,10 @@ pub(super) fn kraken_spot_native_timeframe(tf: &str) -> bool {
 }
 
 /// Kraken Equities/xStocks is WS-first for live/current OHLC. M1/M5 are valid
-/// for Kraken Equities now, and M15/M30/H1/H4/D1/W1 remain visible across the
-/// xStocks catalog. Monthly is intentionally excluded: construct it from D1 on
-/// the merged/chart path instead of writing `kraken-equities:*:1Month` KVs.
+/// for real tokenized xStocks now, and M15/M30/H1/H4/D1/W1 remain visible for
+/// the native xStock demand set. Monthly is intentionally excluded: construct
+/// it from D1 on the merged/chart path instead of writing
+/// `kraken-equities:*:1Month` KVs.
 pub(super) fn kraken_equity_full_universe_timeframe(tf: &str) -> bool {
     matches!(
         tf,
