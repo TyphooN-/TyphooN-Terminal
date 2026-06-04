@@ -24,11 +24,13 @@ fn chart_source_cadence_rejects_monthly_bars_mislabeled_as_daily() {
 fn chart_source_cadence_rejects_kraken_equity_rolling_htf_bars() {
     let day = 86_400_000i64;
     let rolling_month: Vec<_> = (0..36).map(|i| test_bar(i * 43 * day)).collect();
-    assert!(!chart_source_bars_match_timeframe(
-        "kraken-equities",
-        "1Month",
-        &rolling_month
-    ));
+    for source in ["kraken", "kraken-equities", "kraken-futures"] {
+        assert!(!chart_source_bars_match_timeframe(
+            source,
+            "1Month",
+            &rolling_month
+        ));
+    }
 
     let rolling_week: Vec<_> = (0..36).map(|i| test_bar(i * 10 * day)).collect();
     assert!(!chart_source_bars_match_timeframe(
@@ -47,6 +49,30 @@ fn chart_source_cadence_accepts_calendar_monthly_bars() {
         "1Month",
         &calendar_month
     ));
+}
+
+#[test]
+fn chart_constructs_calendar_monthly_from_daily_raw_bars() {
+    let day = 86_400_000i64;
+    let raw = vec![
+        (1_704_067_200_000, 10.0, 12.0, 9.0, 11.0, 100.0),
+        (1_704_153_600_000, 11.0, 13.0, 10.0, 12.0, 200.0),
+        (1_706_745_600_000, 12.0, 15.0, 11.0, 14.0, 300.0),
+        (1_706_832_000_000, 14.0, 16.0, 13.0, 15.0, 400.0),
+    ];
+    let monthly = ChartState::aggregate_daily_raw_to_monthly(raw);
+    assert_eq!(monthly.len(), 2);
+    assert_eq!(monthly[0].ts_ms, 1_704_067_200_000 / day * day);
+    assert_eq!(monthly[0].open, 10.0);
+    assert_eq!(monthly[0].high, 13.0);
+    assert_eq!(monthly[0].low, 9.0);
+    assert_eq!(monthly[0].close, 12.0);
+    assert_eq!(monthly[0].volume, 300.0);
+    assert_eq!(monthly[1].open, 12.0);
+    assert_eq!(monthly[1].high, 16.0);
+    assert_eq!(monthly[1].low, 11.0);
+    assert_eq!(monthly[1].close, 15.0);
+    assert_eq!(monthly[1].volume, 700.0);
 }
 
 #[test]

@@ -1444,7 +1444,10 @@ impl TyphooNApp {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
         };
-        if !self.kraken_enabled || !self.sync_timeframe_enabled(tf) {
+        if !self.kraken_enabled
+            || !self.sync_timeframe_enabled(tf)
+            || !kraken_spot_native_timeframe(tf)
+        {
             return false;
         }
         let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
@@ -1541,7 +1544,10 @@ impl TyphooNApp {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
         };
-        if !self.kraken_enabled || !self.sync_timeframe_enabled(tf) {
+        if !self.kraken_enabled
+            || !self.sync_timeframe_enabled(tf)
+            || !kraken_equity_full_universe_timeframe(tf)
+        {
             return false;
         }
         if self.kraken_equities_sync_pause_until_ts > chrono::Utc::now().timestamp() {
@@ -1627,7 +1633,7 @@ impl TyphooNApp {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
         };
-        if !self.sync_timeframe_enabled(tf) {
+        if !self.sync_timeframe_enabled(tf) || tf == "1Month" {
             return false;
         }
         let symbol = typhoon_engine::core::kraken_futures::normalize_futures_symbol(symbol);

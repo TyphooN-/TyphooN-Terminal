@@ -729,10 +729,13 @@ pub(crate) fn cache_source_from_key(key: &str) -> &'static str {
 }
 
 pub(crate) fn chart_source_bars_match_timeframe(
-    _source: &str,
+    source: &str,
     timeframe: &str,
     bars: &[(i64, f64, f64, f64, f64, f64)],
 ) -> bool {
+    if timeframe == "1Month" && matches!(source, "kraken" | "kraken-equities" | "kraken-futures") {
+        return false;
+    }
     if bars.len() < 20 {
         return true;
     }
@@ -1259,6 +1262,55 @@ impl ChartState {
         (self.timeframe.minutes().max(1) as i64) * 60_000
     }
 
+    pub(crate) fn aggregate_daily_raw_to_monthly(
+        raw: Vec<(i64, f64, f64, f64, f64, f64)>,
+    ) -> Vec<Bar> {
+        use chrono::{Datelike, TimeZone};
+        let mut monthly: std::collections::BTreeMap<(i32, u32), Bar> =
+            std::collections::BTreeMap::new();
+        for (ts, o, h, l, c, v) in raw.into_iter().filter(|(ts, o, h, l, c, _v)| {
+            *ts > 0
+                && *o > 0.0
+                && *h > 0.0
+                && *l > 0.0
+                && *c > 0.0
+                && o.is_finite()
+                && h.is_finite()
+                && l.is_finite()
+                && c.is_finite()
+                && *h >= *l
+        }) {
+            let Some(dt) = chrono::Utc.timestamp_millis_opt(ts).single() else {
+                continue;
+            };
+            let Some(bucket_dt) = chrono::Utc
+                .with_ymd_and_hms(dt.year(), dt.month(), 1, 0, 0, 0)
+                .single()
+            else {
+                continue;
+            };
+            let bucket_key = (dt.year(), dt.month());
+            let bucket_ts = bucket_dt.timestamp_millis();
+            monthly
+                .entry(bucket_key)
+                .and_modify(|bar| {
+                    bar.high = bar.high.max(h).max(c);
+                    bar.low = bar.low.min(l).min(c);
+                    bar.close = c;
+                    bar.volume += v;
+                })
+                .or_insert(Bar {
+                    ts_ms: bucket_ts,
+                    open: o,
+                    high: h,
+                    low: l,
+                    close: c,
+                    volume: v,
+                });
+        }
+        monthly.into_values().collect()
+    }
+
     pub(crate) fn aggregate_bars_to_timeframe(
         raw: Vec<(i64, f64, f64, f64, f64, f64)>,
         tf_ms: i64,
@@ -1673,6 +1725,34 @@ impl ChartState {
                 result = Some((raw, is_gap_fill, source));
             }
         }
+        if result.is_none() && tf == "1Month" {
+            let monthly_sources = [
+                "mt5",
+                "kraken",
+                "kraken-equities",
+                "kraken-futures",
+                "tastytrade",
+                "alpaca",
+                "yahoo-chart",
+                "default",
+            ];
+            for source in monthly_sources {
+                for key in chart_source_cache_keys(source, &sym, "1Day") {
+                    let Ok(Some(raw)) = cache.get_bars_raw(&key) else {
+                        continue;
+                    };
+                    let monthly = Self::aggregate_daily_raw_to_monthly(raw);
+                    if monthly.len() >= 2 {
+                        self.bars = monthly;
+                        self.primary_source = "merged";
+                        self.primary_first_ts = self.bars.first().map(|bar| bar.ts_ms).unwrap_or(0);
+                        self.gap_fill_timestamps.clear();
+                        self.compute_indicators_gpu(gpu);
+                        return true;
+                    }
+                }
+            }
+        }
         if let Some((raw, primary_is_gap_fill, primary_source)) = result {
             self.gap_fill_timestamps.clear();
             // Filter invalid bars (parity with load() at ~line 1842) — epoch-0 timestamps,
@@ -2005,7 +2085,7 @@ impl ChartState {
 
         // Load primary source (filter invalid bars at read time)
         match cache.get_bars_raw(&key) {
-            Ok(Some(raw)) => {
+            Ok(Some(raw)) if chart_source_bars_match_timeframe(key_source, tf, &raw) => {
                 self.bars = raw
                     .into_iter()
                     .filter(|(ts, o, h, l, c, _v)| {
@@ -2022,9 +2102,36 @@ impl ChartState {
                     .collect();
                 self.primary_source = if self.bars.is_empty() { "" } else { key_source };
             }
-            Ok(None) => {
+            Ok(Some(_)) | Ok(None) => {
                 self.bars.clear();
                 self.primary_source = "";
+                if tf == "1Month" {
+                    for source in [
+                        "mt5",
+                        "kraken",
+                        "kraken-equities",
+                        "kraken-futures",
+                        "tastytrade",
+                        "alpaca",
+                        "yahoo-chart",
+                        "default",
+                    ] {
+                        for daily_key in chart_source_cache_keys(source, &bare_sym, "1Day") {
+                            let Ok(Some(raw)) = cache.get_bars_raw(&daily_key) else {
+                                continue;
+                            };
+                            let monthly = Self::aggregate_daily_raw_to_monthly(raw);
+                            if monthly.len() >= 2 {
+                                self.bars = monthly;
+                                self.primary_source = "merged";
+                                break;
+                            }
+                        }
+                        if !self.bars.is_empty() {
+                            break;
+                        }
+                    }
+                }
             }
             Err(e) => {
                 self.bars.clear();

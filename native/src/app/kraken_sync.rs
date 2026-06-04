@@ -9,16 +9,11 @@
 //! target used by Alpaca and Tastytrade.
 
 use super::sync_workset::normalize_sync_timeframe_key;
-use super::{KRAKEN_SPOT_MONTH_PROVIDER_WINDOW_BARS, KRAKEN_SPOT_PROVIDER_WINDOW_BARS};
+use super::{KRAKEN_SPOT_PROVIDER_WINDOW_BARS, kraken_spot_native_timeframe};
 
 pub(super) fn kraken_sync_target_bars(tf: &str) -> Option<u32> {
-    match normalize_sync_timeframe_key(tf)? {
-        "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week" => {
-            Some(KRAKEN_SPOT_PROVIDER_WINDOW_BARS)
-        }
-        "1Month" => Some(KRAKEN_SPOT_MONTH_PROVIDER_WINDOW_BARS),
-        _ => None,
-    }
+    let tf = normalize_sync_timeframe_key(tf)?;
+    kraken_spot_native_timeframe(tf).then_some(KRAKEN_SPOT_PROVIDER_WINDOW_BARS)
 }
 
 pub(super) fn kraken_equities_sync_target_bars(tf: &str) -> Option<u32> {
@@ -52,10 +47,7 @@ mod tests {
             kraken_sync_target_bars("1Week"),
             Some(KRAKEN_SPOT_PROVIDER_WINDOW_BARS)
         );
-        assert_eq!(
-            kraken_sync_target_bars("1Month"),
-            Some(KRAKEN_SPOT_MONTH_PROVIDER_WINDOW_BARS)
-        );
+        assert!(kraken_sync_target_bars("1Month").is_none());
         assert!(kraken_sync_target_bars("bogus").is_none());
     }
 
@@ -107,25 +99,15 @@ mod tests {
     fn kraken_equities_short_provider_history_does_not_repeat_backfill() {
         let now_s = 1_700_000_000i64;
         let symbols = vec!["WOK".to_string()];
-        let timeframes = vec!["1Month".to_string(), "1Week".to_string()];
-        let state_map = HashMap::from([
-            (
-                ("WOK".to_string(), "1Month".to_string()),
-                SyncCacheState {
-                    last_bar_ts_s: now_s - 60,
-                    write_ts_s: now_s - 60,
-                    bar_count: 14,
-                },
-            ),
-            (
-                ("WOK".to_string(), "1Week".to_string()),
-                SyncCacheState {
-                    last_bar_ts_s: now_s - 60,
-                    write_ts_s: now_s - 60,
-                    bar_count: 63,
-                },
-            ),
-        ]);
+        let timeframes = vec!["1Week".to_string()];
+        let state_map = HashMap::from([(
+            ("WOK".to_string(), "1Week".to_string()),
+            SyncCacheState {
+                last_bar_ts_s: now_s - 60,
+                write_ts_s: now_s - 60,
+                bar_count: 63,
+            },
+        )]);
 
         let selected = select_alpaca_sync_candidates(
             &symbols,

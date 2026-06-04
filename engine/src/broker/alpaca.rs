@@ -1815,12 +1815,8 @@ impl AlpacaBroker {
     ) -> Result<(Vec<Bar>, FetchOutcome), String> {
         let is_crypto = symbol.contains('/');
 
-        // Monthly: aggregate from weekly
-        if timeframe == "1Month" {
-            let (weekly, outcome) = Box::pin(self.get_all_bars(symbol, "1Week", progress)).await?;
-            return Ok((Self::aggregate_weekly_to_monthly(&weekly), outcome));
-        }
-
+        // Alpaca's stock bars API documents native Month aggregations
+        // (`[1,2,3,4,6,12]Month`), so do not synthesize 1Month provider KVs.
         let base = if is_crypto {
             format!("{}/v1beta3/crypto/us/bars", DATA_BASE)
         } else {
@@ -2014,10 +2010,6 @@ impl AlpacaBroker {
         if symbols.is_empty() {
             return Ok((HashMap::new(), FetchOutcome::Complete));
         }
-        if timeframe == "1Month" {
-            return Err("Alpaca batch bars do not support 1Month aggregation".to_string());
-        }
-
         let start = chrono::Utc::now()
             - chrono::Duration::days(lookback_days_for_request(
                 false,
@@ -2192,27 +2184,8 @@ impl AlpacaBroker {
     ) -> Result<(Vec<Bar>, FetchOutcome), String> {
         let is_crypto = symbol.contains('/');
 
-        // Alpaca doesn't support 1Month — fetch weekly bars and aggregate
-        if timeframe == "1Month" {
-            // Fetch enough weekly bars: ~4.3 weeks per month, request 5x for safety
-            let (weekly, outcome) = Box::pin(self.get_bars_window(
-                symbol,
-                "1Week",
-                (limit * 5).max(1000),
-                after_timestamp,
-                lookback_mode,
-                Some("1Month"),
-            ))
-            .await?;
-            let monthly = Self::aggregate_weekly_to_monthly(&weekly);
-            let trimmed = if monthly.len() > limit as usize {
-                monthly[monthly.len() - limit as usize..].to_vec()
-            } else {
-                monthly
-            };
-            return Ok((trimmed, outcome));
-        }
-
+        // Alpaca supports native Month bars; keep 1Month provider caches native
+        // instead of writing weekly-aggregated bars under `alpaca:*:1Month`.
         let actual_tf = timeframe;
         let log_tf = display_timeframe.unwrap_or(actual_tf);
         let aggregation_suffix = if display_timeframe == Some("1Month") && actual_tf == "1Week" {

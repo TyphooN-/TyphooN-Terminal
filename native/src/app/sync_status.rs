@@ -136,14 +136,13 @@ impl TyphooNApp {
                 ui.separator();
 
                 egui::ScrollArea::vertical().id_salt("sync_scroll").auto_shrink(false).show(ui, |ui| {
-                    egui::Grid::new("sync_grid").striped(true).num_columns(9).min_col_width(60.0).show(ui, |ui| {
+                    egui::Grid::new("sync_grid").striped(true).num_columns(8).min_col_width(60.0).show(ui, |ui| {
                         ui.label(egui::RichText::new("Broker").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("TF").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Symbols").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Healthy").color(AXIS_TEXT).small().strong());
-                        ui.label(egui::RichText::new("Stale/Empty").color(AXIS_TEXT).small().strong());
+                        ui.label(egui::RichText::new("Needs Work").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Settled").color(AXIS_TEXT).small().strong());
-                        ui.label(egui::RichText::new("Unsupported").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("% Synced").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Note").color(AXIS_TEXT).small().strong());
                         ui.end_row();
@@ -162,9 +161,19 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new(&row.tf).color(AXIS_TEXT).small().monospace());
                             ui.label(egui::RichText::new(cells.symbols).small());
                             ui.label(egui::RichText::new(cells.healthy).color(egui::Color32::from_rgb(26, 188, 156)).small());
-                            ui.label(egui::RichText::new(cells.stale_or_empty).color(AXIS_TEXT).small());
-                            ui.label(egui::RichText::new(cells.settled).color(egui::Color32::from_rgb(52, 152, 219)).small());
-                            ui.label(egui::RichText::new(cells.unsupported).color(egui::Color32::from_rgb(150, 150, 150)).small());
+                            let needs_work_response = ui.label(egui::RichText::new(cells.stale_or_empty).color(AXIS_TEXT).small());
+                            if row.stale > 0 || row.empty > 0 {
+                                needs_work_response.on_hover_text(format!(
+                                    "Stale: {} cached symbol/timeframe rows have aged beyond the freshness window and need a refresh. Empty: {} expected rows have no usable bars cached yet.",
+                                    row.stale, row.empty
+                                ));
+                            }
+                            let settled_response = ui.label(egui::RichText::new(cells.settled).color(egui::Color32::from_rgb(52, 152, 219)).small());
+                            if row.settled > 0 {
+                                settled_response.on_hover_text(
+                                    "Settled: provider history/window was recently checked or exhausted; counted healthy because another refetch cannot produce newer historical bars yet."
+                                );
+                            }
                             let pct_color = if row.total == 0 {
                                 egui::Color32::from_rgb(150, 150, 150)
                             } else if row.pct_healthy >= 90.0 {
@@ -174,11 +183,7 @@ impl TyphooNApp {
                             } else {
                                 egui::Color32::from_rgb(231, 76, 60)
                             };
-                            let pct_text = if row.total == 0 && row.unsupported > 0 {
-                                "n/a".to_string()
-                            } else {
-                                format!("{:.1}%", row.pct_healthy)
-                            };
+                            let pct_text = format!("{:.1}%", row.pct_healthy);
                             ui.label(
                                 egui::RichText::new(pct_text)
                                     .color(pct_color)
@@ -299,7 +304,6 @@ impl TyphooNApp {
                 stale,
                 empty,
                 settled: 0,
-                unsupported: 0,
                 note: None,
                 pct_healthy,
             });
@@ -311,6 +315,7 @@ impl TyphooNApp {
             return false;
         }
         kraken_equity_full_universe_timeframe(tf)
+            || (tf == "1Month" && kraken_equity_full_universe_timeframe("1Day"))
             || (self.backfill_alpaca_kraken_equities_enabled
                 && kraken_equity_broad_fallback_timeframe(tf)
                 && alpaca_sync_target_bars(tf).is_some())
@@ -416,10 +421,14 @@ impl TyphooNApp {
                 let Some(tf) = normalize_sync_timeframe_key(tf) else {
                     continue;
                 };
-                // Kraken Equities/xStocks is WS-first now, so native rows cover
-                // every enabled standard timeframe. Alpaca/Yahoo assist rows
-                // remain broad 15Min+ only where those provider lanes are enabled.
+                // Kraken Equities/xStocks is WS-first through W1. Monthly rows
+                // are constructed-only and belong under Merged, not native Kraken
+                // provider rows. Alpaca/Yahoo assist rows remain broad 15Min+
+                // only where those provider lanes are enabled.
                 if source == "kraken-equities" && !kraken_equity_full_universe_timeframe(tf) {
+                    continue;
+                }
+                if matches!(source, "kraken" | "kraken-futures") && tf == "1Month" {
                     continue;
                 }
                 if source == "alpaca"
@@ -468,7 +477,6 @@ impl TyphooNApp {
                             stale: 0,
                             empty: 1,
                             settled: 0,
-                            unsupported: 0,
                             note: None,
                             pct_healthy: 0.0,
                         });
@@ -510,7 +518,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn merged_sync_rows_support_all_native_kraken_equities_timeframes() {
+    fn merged_sync_rows_support_native_and_constructed_kraken_equities_timeframes() {
         assert!(kraken_equities_merged_timeframe_supported("1Min"));
         assert!(kraken_equities_merged_timeframe_supported("5Min"));
         assert!(kraken_equities_merged_timeframe_supported("15Min"));

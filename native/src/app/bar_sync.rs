@@ -15,7 +15,6 @@ pub(super) struct SyncStatsRow {
     pub(super) stale: u64,     // last bar lag ≥ threshold
     pub(super) empty: u64,     // cached blob has no bars (last_ms <= 0)
     pub(super) settled: u64,   // checked/exhausted provider window, counted healthy
-    pub(super) unsupported: u64, // structurally unsupported by this broad sync lane
     pub(super) note: Option<String>,
     pub(super) pct_healthy: f32, // 0..100
 }
@@ -102,10 +101,14 @@ pub(super) fn compute_bar_sync_stats(
         if matches!(prefix, "alpaca" | "yahoo-chart") && matches!(tf, "1Min" | "5Min") {
             continue;
         }
-        // Kraken-equities is WS-first and now supports all standard native
-        // timeframes. Keep provider-assist low-TF stale rows hidden, but surface
-        // native Kraken Equities M1/M5 rows in Sync Status.
+        // Kraken-equities is WS-first for native bars through W1. Monthly is
+        // constructed from D1 on the merged/chart path, so hide stale
+        // `kraken-equities:*:1Month` legacy rows instead of treating them as
+        // provider-native coverage.
         if prefix == "kraken-equities" && !super::kraken_equity_full_universe_timeframe(tf) {
+            continue;
+        }
+        if matches!(prefix, "kraken" | "kraken-futures") && tf == "1Month" {
             continue;
         }
         let entry = groups
@@ -156,7 +159,6 @@ pub(super) fn compute_bar_sync_stats(
                 stale,
                 empty,
                 settled,
-                unsupported: 0,
                 note: None,
                 pct_healthy,
             }
@@ -208,7 +210,6 @@ pub(super) struct SyncStatsRowStatusCells {
     pub(super) healthy: String,
     pub(super) stale_or_empty: String,
     pub(super) settled: String,
-    pub(super) unsupported: String,
     pub(super) note: String,
 }
 
@@ -218,7 +219,6 @@ pub(super) fn sync_stats_row_status_cells(row: &SyncStatsRow) -> SyncStatsRowSta
         healthy: row.healthy.to_string(),
         stale_or_empty: (row.stale + row.empty).to_string(),
         settled: row.settled.to_string(),
-        unsupported: row.unsupported.to_string(),
         note: row.note.clone().unwrap_or_default(),
     }
 }
@@ -445,7 +445,6 @@ mod tests {
                 stale: 0,
                 empty: 0,
                 settled: 0,
-                unsupported: 0,
                 note: None,
                 pct_healthy: 100.0,
             },
@@ -457,7 +456,6 @@ mod tests {
                 stale: 0,
                 empty: 0,
                 settled: 0,
-                unsupported: 0,
                 note: None,
                 pct_healthy: 100.0,
             },
@@ -469,7 +467,6 @@ mod tests {
                 stale: 1,
                 empty: 0,
                 settled: 0,
-                unsupported: 0,
                 note: None,
                 pct_healthy: 50.0,
             },
@@ -555,25 +552,23 @@ mod tests {
     }
 
     #[test]
-    fn sync_status_row_cells_surface_settled_unsupported_and_notes() {
+    fn sync_status_row_cells_surface_settled_and_notes() {
         let row = SyncStatsRow {
             broker: "Merged".into(),
             tf: "5Min".into(),
-            total: 0,
-            healthy: 0,
-            stale: 0,
-            empty: 0,
+            total: 3,
+            healthy: 1,
+            stale: 1,
+            empty: 1,
             settled: 7,
-            unsupported: 42,
-            note: Some("demand/focus scoped".into()),
-            pct_healthy: 100.0,
+            note: Some("provider lane note".to_string()),
+            pct_healthy: 33.3,
         };
         let cells = sync_stats_row_status_cells(&row);
-        assert_eq!(cells.symbols, "0");
-        assert_eq!(cells.healthy, "0");
-        assert_eq!(cells.stale_or_empty, "0");
+        assert_eq!(cells.symbols, "3");
+        assert_eq!(cells.healthy, "1");
+        assert_eq!(cells.stale_or_empty, "2");
         assert_eq!(cells.settled, "7");
-        assert_eq!(cells.unsupported, "42");
-        assert_eq!(cells.note, "demand/focus scoped");
+        assert_eq!(cells.note, "provider lane note");
     }
 }

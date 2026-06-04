@@ -94,6 +94,8 @@ pub(super) fn alpaca_sync_capacity_for_rpm(rpm: u32) -> AlpacaSyncCapacity {
 pub(super) fn alpaca_sync_target_bars(tf: &str) -> Option<u32> {
     match normalize_sync_timeframe_key(tf)? {
         "1Min" | "5Min" => None,
+        // Alpaca's stock bars API documents native Month aggregations
+        // (`[1,2,3,4,6,12]Month`), so 1Month is provider-native here.
         _ => Some(u32::MAX),
     }
 }
