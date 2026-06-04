@@ -105,10 +105,10 @@ fn kraken_xstocks_session_status_at(now_utc: chrono::DateTime<chrono::Utc>) -> S
         now_utc.naive_utc() + chrono::Duration::seconds(us_eastern_offset_seconds(now_utc));
     let weekday = now_et.weekday();
     let minute_of_day = now_et.hour() as i64 * 60 + now_et.minute() as i64;
-    const PRE: i64 = 4 * 60;
-    const REGULAR: i64 = 9 * 60 + 30;
-    const AFTER: i64 = 16 * 60;
-    const OVERNIGHT: i64 = 20 * 60;
+    pub(crate) const PRE: i64 = 4 * 60;
+    pub(crate) const REGULAR: i64 = 9 * 60 + 30;
+    pub(crate) const AFTER: i64 = 16 * 60;
+    pub(crate) const OVERNIGHT: i64 = 20 * 60;
 
     let day_start = now_et.date().and_hms_opt(0, 0, 0).unwrap_or(now_et);
     let boundary_today = |minutes: i64| day_start + chrono::Duration::minutes(minutes);

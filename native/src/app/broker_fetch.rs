@@ -448,8 +448,8 @@ pub(super) fn cryptocompare_backfill_symbol(symbol: &str) -> Option<String> {
     if symbol.is_empty() || symbol.contains(".EQ") {
         return None;
     }
-    const FIAT: &[&str] = &["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF"];
-    const USD_QUOTES: &[&str] = &["USDG", "USDT", "USDC", "USD"];
+    pub(crate) const FIAT: &[&str] = &["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF"];
+    pub(crate) const USD_QUOTES: &[&str] = &["USDG", "USDT", "USDC", "USD"];
     for quote in USD_QUOTES {
         if let Some(base) = symbol.strip_suffix(quote) {
             if !base.is_empty() && !FIAT.contains(&base) {

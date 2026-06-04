@@ -1968,8 +1968,8 @@ pub(super) fn compute_stochrsi(
 }
 
 pub(super) fn compute_var_oscillator(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
-    const VAR_Z95: f64 = 1.644_853_626_951_472_2;
-    const VAR_EPS: f64 = 1e-9;
+    pub(crate) const VAR_Z95: f64 = 1.644_853_626_951_472_2;
+    pub(crate) const VAR_EPS: f64 = 1e-9;
 
     let n = bars.len();
     let mut out = vec![None; n];
@@ -2491,7 +2491,7 @@ pub(super) fn compute_supply_demand_zones_from_gpu(
     gpu_data: &[f32],
     bars: &[Bar],
 ) -> (Vec<(usize, f64, f64, u8)>, Vec<(usize, f64, f64, u8)>) {
-    const FRACTAL_LOOKBACK: usize = 5;
+    pub(crate) const FRACTAL_LOOKBACK: usize = 5;
     let n = bars.len();
     if n < FRACTAL_LOOKBACK * 2 + 1 {
         return (Vec::new(), Vec::new());
@@ -2517,7 +2517,7 @@ pub(super) fn compute_supply_demand_zones_from_gpu(
         * 0.01;
 
     // Apply BACK_LIMIT (matching MQL5 InpBackLimit=1000) to limit scan depth
-    const BACK_LIMIT: usize = 1000;
+    pub(crate) const BACK_LIMIT: usize = 1000;
     let scan_start = if n > BACK_LIMIT + FRACTAL_LOOKBACK {
         n - BACK_LIMIT
     } else {
@@ -2645,8 +2645,8 @@ pub(super) fn compute_supply_demand_zones_from_gpu(
 pub(super) fn compute_supply_demand_zones(
     bars: &[Bar],
 ) -> (Vec<(usize, f64, f64, u8)>, Vec<(usize, f64, f64, u8)>) {
-    const FRACTAL_LOOKBACK: usize = 5;
-    const BACK_LIMIT: usize = 1000;
+    pub(crate) const FRACTAL_LOOKBACK: usize = 5;
+    pub(crate) const BACK_LIMIT: usize = 1000;
 
     let n = bars.len();
     if n < FRACTAL_LOOKBACK * 2 + 1 {
@@ -3205,8 +3205,8 @@ pub(super) fn draw_chart(
         + show_ehlers_cg as u8
         + show_ehlers_roof as u8
         + show_squeeze as u8;
-    const SUB_PANE_H: f32 = CHART_SUB_PANE_H; // Height per indicator sub-pane (RSI, Fisher, MACD, Volume)
-    const MIN_MAIN_CHART_H: f32 = CHART_MIN_MAIN_CHART_H;
+    pub(crate) const SUB_PANE_H: f32 = CHART_SUB_PANE_H; // Height per indicator sub-pane (RSI, Fisher, MACD, Volume)
+    pub(crate) const MIN_MAIN_CHART_H: f32 = CHART_MIN_MAIN_CHART_H;
     // When user is interacting, some expensive sub-pane rendering can be skipped in future passes
     let sub_pane_height = if sub_pane_count > 0 {
         // Keep the main price chart valid even when many sub-panes are enabled
@@ -3312,7 +3312,11 @@ pub(super) fn draw_chart(
         }
     }
 
-    let padding = if chart.manual_view_override { (price_max - price_min) * 0.02 } else { (price_max - price_min) * 0.05 };
+    let padding = if chart.manual_view_override {
+        (price_max - price_min) * 0.02
+    } else {
+        (price_max - price_min) * 0.05
+    };
     price_min -= padding;
     price_max += padding;
 
@@ -3491,7 +3495,10 @@ pub(super) fn draw_chart(
             if abs_idx >= chart.sma200.len() || abs_idx >= chart.kama.len() {
                 continue;
             }
-            if let (Some(sma_v), Some(kama_v)) = (indicator_value_at(&chart.sma200, abs_idx), indicator_value_at(&chart.kama, abs_idx)) {
+            if let (Some(sma_v), Some(kama_v)) = (
+                indicator_value_at(&chart.sma200, abs_idx),
+                indicator_value_at(&chart.kama, abs_idx),
+            ) {
                 let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let y_sma = price_to_y(sma_v);
                 let y_kama = price_to_y(kama_v);
@@ -3532,7 +3539,10 @@ pub(super) fn draw_chart(
             if abs_idx >= chart.bb_upper.len() {
                 continue;
             }
-            if let (Some(u), Some(l)) = (indicator_value_at(&chart.bb_upper, abs_idx), indicator_value_at(&chart.bb_lower, abs_idx)) {
+            if let (Some(u), Some(l)) = (
+                indicator_value_at(&chart.bb_upper, abs_idx),
+                indicator_value_at(&chart.bb_lower, abs_idx),
+            ) {
                 let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let yu = price_to_y(u);
                 let yl = price_to_y(l);
@@ -3607,7 +3617,10 @@ pub(super) fn draw_chart(
                 if abs_idx >= upper.len() {
                     continue;
                 }
-                if let (Some(u), Some(l)) = (indicator_value_at(&upper, abs_idx), indicator_value_at(&lower, abs_idx)) {
+                if let (Some(u), Some(l)) = (
+                    indicator_value_at(&upper, abs_idx),
+                    indicator_value_at(&lower, abs_idx),
+                ) {
                     let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                     let yu = price_to_y(u);
                     let yl = price_to_y(l);
@@ -3738,8 +3751,7 @@ pub(super) fn draw_chart(
             if let (Some(u), Some(l)) = (
                 indicator_value_at(&chart.donchian_upper, abs_idx),
                 indicator_value_at(&chart.donchian_lower, abs_idx),
-            )
-            {
+            ) {
                 let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let yu = price_to_y(u);
                 let yl = price_to_y(l);
@@ -3793,8 +3805,7 @@ pub(super) fn draw_chart(
             if let (Some(u), Some(l)) = (
                 indicator_value_at(&chart.keltner_upper, abs_idx),
                 indicator_value_at(&chart.keltner_lower, abs_idx),
-            )
-            {
+            ) {
                 let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let yu = price_to_y(u);
                 let yl = price_to_y(l);
@@ -3922,7 +3933,10 @@ pub(super) fn draw_chart(
             if abs_idx >= chart.ichi_span_a.len() {
                 continue;
             }
-            if let (Some(a), Some(b)) = (indicator_value_at(&chart.ichi_span_a, abs_idx), indicator_value_at(&chart.ichi_span_b, abs_idx)) {
+            if let (Some(a), Some(b)) = (
+                indicator_value_at(&chart.ichi_span_a, abs_idx),
+                indicator_value_at(&chart.ichi_span_b, abs_idx),
+            ) {
                 let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                 let ya = price_to_y(a);
                 let yb = price_to_y(b);
@@ -5169,10 +5183,8 @@ pub(super) fn draw_chart(
                     egui::pos2(chart_rect.right() + 2.0, label_y - 14.0),
                     egui::vec2(price_axis_w - 4.0, 28.0),
                 );
-                let price_rect = egui::Rect::from_min_size(
-                    lbl_rect.min,
-                    egui::vec2(lbl_rect.width(), 15.0),
-                );
+                let price_rect =
+                    egui::Rect::from_min_size(lbl_rect.min, egui::vec2(lbl_rect.width(), 15.0));
                 let timer_rect = egui::Rect::from_min_max(
                     egui::pos2(lbl_rect.left(), lbl_rect.top() + 15.0),
                     lbl_rect.max,
@@ -6707,8 +6719,8 @@ pub(super) fn draw_chart(
     // Greedy pixel-proximity clustering per side. CLUSTER_X/Y roughly match the
     // bounding box of an 8pt monospace label so only markers that would
     // actually overlap get merged.
-    const CLUSTER_X: f32 = 44.0;
-    const CLUSTER_Y: f32 = 12.0;
+    pub(crate) const CLUSTER_X: f32 = 44.0;
+    pub(crate) const CLUSTER_Y: f32 = 12.0;
     struct LabelCluster {
         x_sum: f32,
         y_sum: f32,
@@ -8604,9 +8616,8 @@ pub(super) fn draw_chart(
                 }
             }
             Drawing::SineWave { p1, p2, color } => {
-                let bar_to_x = |b: usize| -> f32 {
-                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
-                };
+                let bar_to_x =
+                    |b: usize| -> f32 { data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w };
                 let period = ((p2.0 as f64 - p1.0 as f64).abs()).max(1.0);
                 let amplitude = (p2.1 - p1.1).abs() / 2.0;
                 let mid_price = (p1.1 + p2.1) / 2.0;
@@ -8793,9 +8804,8 @@ pub(super) fn draw_chart(
                 stop,
                 target,
             } => {
-                let bar_to_x = |b: usize| -> f32 {
-                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
-                };
+                let bar_to_x =
+                    |b: usize| -> f32 { data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w };
                 let entry_x = bar_to_x(entry.0);
                 let entry_y = price_to_y(entry.1);
                 let stop_y = price_to_y(*stop);
@@ -8858,8 +8868,7 @@ pub(super) fn draw_chart(
             } => {
                 let cx = data_left + ((center.0 as f32 - start_idx as f32) + 0.5) * bar_w;
                 let cy = price_to_y(center.1);
-                let rx =
-                    data_left + ((radius_pt.0 as f32 - start_idx as f32) + 0.5) * bar_w;
+                let rx = data_left + ((radius_pt.0 as f32 - start_idx as f32) + 0.5) * bar_w;
                 let ry = price_to_y(radius_pt.1);
                 let base_r = ((rx - cx).powi(2) + (ry - cy).powi(2)).sqrt();
                 let fib_ratios = [0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
@@ -8885,9 +8894,8 @@ pub(super) fn draw_chart(
                 }
             }
             Drawing::ArcDraw { p1, p2, p3, color } => {
-                let bar_to_x = |b: usize| -> f32 {
-                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
-                };
+                let bar_to_x =
+                    |b: usize| -> f32 { data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w };
                 let x1 = bar_to_x(p1.0);
                 let y1 = price_to_y(p1.1);
                 let x2 = bar_to_x(p2.0);
@@ -8919,9 +8927,8 @@ pub(super) fn draw_chart(
                 p2,
                 color,
             } => {
-                let bar_to_x = |b: usize| -> f32 {
-                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
-                };
+                let bar_to_x =
+                    |b: usize| -> f32 { data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w };
                 let x0 = bar_to_x(p1.0);
                 let y0 = price_to_y(p1.1);
                 let cx1 = bar_to_x(ctrl1.0);
@@ -9004,9 +9011,8 @@ pub(super) fn draw_chart(
                 }
             }
             Drawing::Forecast { p1, p2, color } => {
-                let bar_to_x = |b: usize| -> f32 {
-                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
-                };
+                let bar_to_x =
+                    |b: usize| -> f32 { data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w };
                 let x1 = bar_to_x(p1.0);
                 let y1 = price_to_y(p1.1);
                 let x2 = bar_to_x(p2.0);
@@ -9041,9 +9047,8 @@ pub(super) fn draw_chart(
                 );
             }
             Drawing::GhostFeed { p1, p2, color } => {
-                let bar_to_x = |b: usize| -> f32 {
-                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
-                };
+                let bar_to_x =
+                    |b: usize| -> f32 { data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w };
                 // Mirror the bars from p1..p2 forward starting at p2
                 let src_start = p1.0.min(p2.0);
                 let src_end = p1.0.max(p2.0);
@@ -9123,9 +9128,8 @@ pub(super) fn draw_chart(
                 }
             }
             Drawing::Ruler { p1, p2, color } => {
-                let bar_to_x = |b: usize| -> f32 {
-                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
-                };
+                let bar_to_x =
+                    |b: usize| -> f32 { data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w };
                 let x1 = bar_to_x(p1.0);
                 let y1 = price_to_y(p1.1);
                 let x2 = bar_to_x(p2.0);
@@ -9200,8 +9204,7 @@ pub(super) fn draw_chart(
                     let next_b = b + interval;
                     if b >= start_idx && next_b < end_idx {
                         let x1 = data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w;
-                        let x2 =
-                            data_left + ((next_b as f32 - start_idx as f32) + 0.5) * bar_w;
+                        let x2 = data_left + ((next_b as f32 - start_idx as f32) + 0.5) * bar_w;
                         let cx = (x1 + x2) / 2.0;
                         let r = (x2 - x1) / 2.0;
                         let arc_y = chart_rect.bottom() - 2.0;
@@ -9227,9 +9230,8 @@ pub(super) fn draw_chart(
                 }
             }
             Drawing::SpeedResistanceFan { p1, p2, p3, color } => {
-                let bar_to_x = |b: usize| -> f32 {
-                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
-                };
+                let bar_to_x =
+                    |b: usize| -> f32 { data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w };
                 let x1 = bar_to_x(p1.0);
                 let y1 = price_to_y(p1.1);
                 let x2 = bar_to_x(p2.0);
@@ -9275,9 +9277,8 @@ pub(super) fn draw_chart(
                 );
             }
             Drawing::SpeedResistanceArc { p1, p2, p3, color } => {
-                let bar_to_x = |b: usize| -> f32 {
-                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
-                };
+                let bar_to_x =
+                    |b: usize| -> f32 { data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w };
                 let x1 = bar_to_x(p1.0);
                 let y1 = price_to_y(p1.1);
                 let x2 = bar_to_x(p2.0);
@@ -9320,8 +9321,7 @@ pub(super) fn draw_chart(
             } => {
                 let cx = data_left + ((center.0 as f32 - start_idx as f32) + 0.5) * bar_w;
                 let cy = price_to_y(center.1);
-                let rx =
-                    data_left + ((radius_pt.0 as f32 - start_idx as f32) + 0.5) * bar_w;
+                let rx = data_left + ((radius_pt.0 as f32 - start_idx as f32) + 0.5) * bar_w;
                 let ry = price_to_y(radius_pt.1);
                 let base_r = ((rx - cx).powi(2) + (ry - cy).powi(2)).sqrt().max(1.0);
                 // Golden spiral: r = a * e^(b*theta) where b = ln(phi)/(PI/2)
@@ -9347,9 +9347,8 @@ pub(super) fn draw_chart(
                 }
             }
             Drawing::RotatedRectangle { p1, p2, p3, color } => {
-                let bar_to_x = |b: usize| -> f32 {
-                    data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w
-                };
+                let bar_to_x =
+                    |b: usize| -> f32 { data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w };
                 let x1 = bar_to_x(p1.0);
                 let y1 = price_to_y(p1.1);
                 let x2 = bar_to_x(p2.0);
@@ -9393,8 +9392,7 @@ pub(super) fn draw_chart(
                             typical
                         };
                         if i >= start_idx && i < end_idx {
-                            let x =
-                                data_left + ((i as f32 - start_idx as f32) + 0.5) * bar_w;
+                            let x = data_left + ((i as f32 - start_idx as f32) + 0.5) * bar_w;
                             let y = price_to_y(vwap);
                             let pt = egui::pos2(x, y);
                             if let Some(p) = prev_pt {
@@ -10884,9 +10882,8 @@ fn next_candle_remaining_ms_at(last_bar_ts_ms: i64, tf: Timeframe, now_ms: i64) 
     }
     let elapsed = now_ms.saturating_sub(last_bar_ts_ms);
     let intervals_elapsed = elapsed / interval_ms;
-    let next_close_ms = last_bar_ts_ms.checked_add(
-        (intervals_elapsed + 1).checked_mul(interval_ms)?,
-    )?;
+    let next_close_ms =
+        last_bar_ts_ms.checked_add((intervals_elapsed + 1).checked_mul(interval_ms)?)?;
     Some(next_close_ms.saturating_sub(now_ms))
 }
 

@@ -24,7 +24,6 @@ const BYTES_PER_BAR: usize = 8 + 5 * 8; // 48
 pub const DEFAULT_BAR_ZSTD_LEVEL: i32 = 3;
 pub const MIN_ZSTD_LEVEL: i32 = 1;
 pub const MAX_ZSTD_LEVEL: i32 = 22;
-const KV_ZSTD_LEVEL: i32 = 3;
 static BAR_ZSTD_LEVEL: AtomicI32 = AtomicI32::new(DEFAULT_BAR_ZSTD_LEVEL);
 
 pub fn sanitize_zstd_level(level: i32) -> i32 {
@@ -1023,10 +1022,12 @@ impl SqliteCache {
 
     /// Store key-value data (fundamentals, news, etc.).
     pub fn put_kv(&self, key: &str, json_data: &str) -> Result<(), String> {
-        // Keep KV at level 3: this is the hot mutable path for AI sessions,
-        // fundamentals, broker queues, and LAN metadata. Bar storage uses zstd-22;
-        // KV can still be compacted/exported separately without stalling UI writes.
-        let compressed = zstd::encode_all(json_data.as_bytes(), KV_ZSTD_LEVEL)
+        // Use the same live zstd setting as bar ingestion so every cache write
+        // path — bars, news, SEC filings, fundamentals, broker queues, and
+        // scraped metadata — obeys the UI zstd slider instead of silently
+        // pinning KV data to a separate compression level.
+        let zstd_level = bar_zstd_level();
+        let compressed = zstd::encode_all(json_data.as_bytes(), zstd_level)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -3755,6 +3756,36 @@ mod tests {
 
         let missing = cache.get_kv_raw("missing:key").unwrap();
         assert!(missing.is_none());
+    }
+
+    #[test]
+    fn kv_writes_obey_configured_zstd_level() {
+        let previous_level = bar_zstd_level();
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let payload = "SEC filing / news payload ".repeat(512);
+
+        set_bar_zstd_level(1);
+        cache.put_kv("news:test", &payload).unwrap();
+        let low_level_raw = cache.get_kv_raw("news:test").unwrap().unwrap().0;
+        assert_eq!(
+            low_level_raw,
+            zstd::encode_all(payload.as_bytes(), 1).unwrap()
+        );
+
+        set_bar_zstd_level(22);
+        cache.put_kv("sec:test", &payload).unwrap();
+        let high_level_raw = cache.get_kv_raw("sec:test").unwrap().unwrap().0;
+        assert_eq!(
+            high_level_raw,
+            zstd::encode_all(payload.as_bytes(), 22).unwrap()
+        );
+        assert_eq!(
+            cache.get_kv("sec:test").unwrap().as_deref(),
+            Some(payload.as_str())
+        );
+
+        set_bar_zstd_level(previous_level);
     }
 
     #[test]

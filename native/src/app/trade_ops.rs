@@ -43,7 +43,7 @@ fn obsolete_nonspot_low_timeframe(broker: &str, timeframe: &str) -> bool {
 }
 
 fn stale_kraken_equity_no_data_mark(entry: &UnresolvablePair, now_s: i64) -> bool {
-    const KRAKEN_EQUITY_NO_DATA_TTL_SECS: i64 = 6 * 60 * 60;
+    pub(crate) const KRAKEN_EQUITY_NO_DATA_TTL_SECS: i64 = 6 * 60 * 60;
     if !entry.broker.eq_ignore_ascii_case("kraken-equities") {
         return false;
     }

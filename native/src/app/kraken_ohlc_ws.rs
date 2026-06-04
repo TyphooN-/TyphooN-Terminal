@@ -96,7 +96,7 @@ fn format_ws_symbol(pair_name: &str, display: &str) -> Option<String> {
     if normalised.is_empty() {
         return None;
     }
-    const QUOTES: [&str; 12] = [
+    pub(crate) const QUOTES: [&str; 12] = [
         "USDG", "USDT", "USDC", "USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "XBT", "BTC",
     ];
     for quote in QUOTES {
