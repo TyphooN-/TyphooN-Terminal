@@ -65,7 +65,7 @@ impl TyphooNApp {
         sort_sync_stats_rows(&mut rows);
         let (total, healthy) = rows
             .iter()
-            .filter(|row| row.broker != "Merged")
+            .filter(|row| row.broker != "Merged" && !sync_stats_row_is_control_plane(row))
             .fold((0u64, 0u64), |(t, h), row| (t + row.total, h + row.healthy));
         self.cached_bar_sync_overall_pct = if total == 0 {
             100.0
@@ -165,7 +165,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new(cells.stale_or_empty).color(AXIS_TEXT).small());
                             ui.label(egui::RichText::new(cells.settled).color(egui::Color32::from_rgb(52, 152, 219)).small());
                             ui.label(egui::RichText::new(cells.unsupported).color(egui::Color32::from_rgb(150, 150, 150)).small());
-                            let pct_color = if row.total == 0 {
+                            let pct_color = if sync_stats_row_is_control_plane(row) || row.total == 0 {
                                 egui::Color32::from_rgb(150, 150, 150)
                             } else if row.pct_healthy >= 90.0 {
                                 egui::Color32::from_rgb(26, 188, 156)
@@ -174,7 +174,9 @@ impl TyphooNApp {
                             } else {
                                 egui::Color32::from_rgb(231, 76, 60)
                             };
-                            let pct_text = if row.total == 0 && row.unsupported > 0 {
+                            let pct_text = if sync_stats_row_is_control_plane(row) {
+                                "---".to_string()
+                            } else if row.total == 0 && row.unsupported > 0 {
                                 "n/a".to_string()
                             } else {
                                 format!("{:.1}%", row.pct_healthy)
@@ -401,7 +403,6 @@ impl TyphooNApp {
         let kraken_equity_demand_symbols = self.kraken_equity_demand_symbols();
         let mut expected_sources: Vec<(&str, &str)> = vec![
             ("kraken", "Kraken Spot"),
-            ("kraken-equities", "Kraken iapi"),
             ("kraken-futures", "Kraken Futures"),
         ];
         if self.backfill_alpaca_kraken_equities_enabled {
@@ -445,19 +446,6 @@ impl TyphooNApp {
                     }
                     _ => Vec::new(),
                 };
-                if source == "kraken-equities" {
-                    if !symbols.is_empty()
-                        && !rows.iter().any(|row| row.broker == broker && row.tf == tf)
-                    {
-                        rows.push(kraken_iapi_control_plane_row(
-                            broker,
-                            tf,
-                            symbols.len() as u64,
-                        ));
-                    }
-                    continue;
-                }
-
                 for symbol in symbols {
                     if existing.contains(&format!("{source}:{symbol}:{tf}")) {
                         continue;
@@ -490,27 +478,37 @@ impl TyphooNApp {
                 }
             }
         }
+
+        let iapi_symbol_count = if !kraken_equity_catalog_symbols.is_empty() {
+            kraken_equity_catalog_symbols.len()
+        } else {
+            kraken_equity_demand_symbols.len()
+        };
+        if iapi_symbol_count > 0
+            && !rows
+                .iter()
+                .any(|row| row.broker == "Kraken iapi" && row.tf == "---")
+        {
+            rows.push(kraken_iapi_control_plane_row(iapi_symbol_count as u64));
+        }
     }
 }
 
-fn kraken_iapi_control_plane_row(broker: &str, tf: &str, symbol_count: u64) -> SyncStatsRow {
+fn kraken_iapi_control_plane_row(symbol_count: u64) -> SyncStatsRow {
     SyncStatsRow {
-        broker: broker.to_string(),
-        tf: tf.to_string(),
+        broker: "Kraken iapi".to_string(),
+        tf: "---".to_string(),
         // Kraken iapi/xStocks is the universe + quote control plane. Native iapi
         // bars are not the source of truth for chart coverage; Merged/Alpaca/Yahoo
         // rows show actual bar freshness. Do not count the catalog as 12k empty
         // bar-cache rows or auto full-tilt stays pinned forever.
-        total: 0,
+        total: symbol_count,
         healthy: 0,
         stale: 0,
         empty: 0,
         settled: 0,
-        unsupported: symbol_count,
-        note: Some(
-            "control-plane catalog loaded; chart bars are tracked by Merged/Alpaca/Yahoo lanes"
-                .to_string(),
-        ),
+        unsupported: 0,
+        note: None,
         pct_healthy: 0.0,
     }
 }
@@ -555,19 +553,24 @@ mod tests {
     }
 
     #[test]
-    fn kraken_iapi_control_plane_row_does_not_count_as_empty_bars() {
-        let row = kraken_iapi_control_plane_row("Kraken iapi", "1Day", 12_268);
-        assert_eq!(row.total, 0);
+    fn kraken_iapi_control_plane_row_is_single_catalog_row() {
+        let row = kraken_iapi_control_plane_row(12_268);
+        assert_eq!(row.broker, "Kraken iapi");
+        assert_eq!(row.tf, "---");
+        assert_eq!(row.total, 12_268);
         assert_eq!(row.healthy, 0);
         assert_eq!(row.stale, 0);
         assert_eq!(row.empty, 0);
-        assert_eq!(row.unsupported, 12_268);
-        assert!(
-            row.note
-                .as_deref()
-                .unwrap()
-                .contains("control-plane catalog")
-        );
+        assert_eq!(row.unsupported, 0);
+        assert!(row.note.is_none());
+
+        let cells = sync_stats_row_status_cells(&row);
+        assert_eq!(cells.symbols, "12268");
+        assert_eq!(cells.healthy, "---");
+        assert_eq!(cells.stale_or_empty, "---");
+        assert_eq!(cells.settled, "---");
+        assert_eq!(cells.unsupported, "---");
+        assert!(cells.note.is_empty());
 
         let totals = compute_bar_sync_broker_totals(&[row]);
         assert!(
