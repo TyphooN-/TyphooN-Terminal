@@ -114,7 +114,7 @@ pub struct CommodityQuote {
     pub change_pct: f64,
 }
 
-// ── ADR-109 Godel Parity Round 2 types ─────────────────────────────────────
+// ── Godel Parity Round 2 types ─────────────────────────────────────
 
 /// DVD — single historical dividend payment.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -173,7 +173,7 @@ pub const TREASURY_TENORS: &[(&str, &str)] = &[
     ("^TYX", "30Y"),
 ];
 
-// ── ADR-110 Godel Parity Round 3 types ─────────────────────────────────────
+// ── Godel Parity Round 3 types ─────────────────────────────────────
 
 /// FA — one fiscal period of an Income Statement.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -295,7 +295,7 @@ pub struct CotReport {
     pub noncomm_net_change: f64,
 }
 
-// ── ADR-111 Godel Parity Round 4 types ─────────────────────────────────────
+// ── Godel Parity Round 4 types ─────────────────────────────────────
 
 /// SPLT — one historical stock split event.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -363,7 +363,7 @@ pub struct IndexMember {
     pub date_added: String, // YYYY-MM-DD when admitted to index
 }
 
-// ── ADR-112 Godel Parity Round 5 ─────────────────────────────────────────
+// ── Godel Parity Round 5 ─────────────────────────────────────────
 
 /// INS — one insider trade filing (Form 4 row).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -425,7 +425,7 @@ pub struct EarningsSurprise {
     pub surprise_pct: f64, // (actual - estimate) / |estimate| * 100
 }
 
-// ── ADR-113 Godel Parity Round 6 ─────────────────────────────────────────
+// ── Godel Parity Round 6 ─────────────────────────────────────────
 
 /// WEI — one global equity index quote row.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -518,7 +518,7 @@ pub const WORLD_INDICES_UNIVERSE: &[(&str, &str, &str)] = &[
 /// Default equity risk premium used in the WACC CAPM calc (Damodaran-style).
 pub const DEFAULT_EQUITY_RISK_PREMIUM_PCT: f64 = 5.0;
 
-// ── ADR-114 Godel Parity Round 7 ─────────────────────────────────────────
+// ── Godel Parity Round 7 ─────────────────────────────────────────
 // WCR / BETA / DDM / RV / FIGI surfaces.
 
 /// WCR — single currency-cross row for the World Currency Rates dashboard.
@@ -677,7 +677,7 @@ pub const COMMODITIES_UNIVERSE: &[(&str, &str, &str)] = &[
     ("GF=F", "Feeder Cattle", "Livestock"),
 ];
 
-// ── ADR-115 Godel Parity Round 8 ─────────────────────────────────────────
+// ── Godel Parity Round 8 ─────────────────────────────────────────
 // HRA / DCF / SVM / OMON / IVOL surfaces.
 
 /// HRA — one rolling-period return row (e.g. 1M, 3M, 1Y, YTD).
@@ -828,7 +828,7 @@ pub struct IvolSnapshot {
     pub note: String,
 }
 
-// ── ADR-116 Godel Parity Round 9 ─────────────────────────────────────────
+// ── Godel Parity Round 9 ─────────────────────────────────────────
 // SEAG / COR / TRA / TECH / SKEW surfaces — all pure compute over existing
 // HP / DVD / OMON caches, zero new API dependencies.
 
@@ -969,7 +969,7 @@ pub struct VolatilitySkew {
     pub note: String,
 }
 
-// ── ADR-117 Godel Parity Round 10 ───────────────────────────────────────────
+// ── Godel Parity Round 10 ───────────────────────────────────────────
 
 /// LEV — one leverage / coverage ratio row.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1105,7 +1105,7 @@ pub struct ShortInterestHistoryPoint {
     pub shares_outstanding: f64,
 }
 
-// ── ADR-118 Godel Parity Round 11 ───────────────────────────────────────────
+// ── Godel Parity Round 11 ───────────────────────────────────────────
 
 /// ALTZ — one component of the Altman Z-score.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1227,7 +1227,7 @@ pub struct PriceTargetDispersion {
     pub note: String,
 }
 
-// ── ADR-119 Godel Parity Round 12 ───────────────────────────────────────────
+// ── Godel Parity Round 12 ───────────────────────────────────────────
 
 /// MNGR — Insider Activity Bias snapshot for a symbol.
 /// Computed from cached INS (Form 4 insider trades) within a lookback window.
@@ -1362,7 +1362,7 @@ pub struct UpdmSnapshot {
     pub note: String,
 }
 
-// ── ADR-120 Godel Parity Round 13 ───────────────────────────────────────────
+// ── Godel Parity Round 13 ───────────────────────────────────────────
 
 /// MOM — 12-1 month momentum snapshot for a symbol.
 /// Pure compute over cached historical bars (HP).
@@ -1492,7 +1492,7 @@ pub struct CreditSnapshot {
     pub note: String,
 }
 
-// ── ADR-121 Godel Parity Round 14 ───────────────────────────────────────────
+// ── Godel Parity Round 14 ───────────────────────────────────────────
 
 /// GROWM — Growth-at-Reasonable-Price (GARP) composite.
 /// Fuses cached MOM + EARM + DIVG snapshots from Rounds 12/13.
@@ -1625,7 +1625,7 @@ pub struct MarginsSnapshot {
     pub note: String,
 }
 
-// ── ADR-122 Godel Parity Round 15 ───────────────────────────────────────────
+// ── Godel Parity Round 15 ───────────────────────────────────────────
 
 /// Generic meta-composite sub-component row used by VAL / QUAL / RISK.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1764,7 +1764,7 @@ pub struct CoverageSnapshot {
     pub note: String,
 }
 
-// ── ADR-123 Godel Parity Round 16 ───────────────────────────────────────────
+// ── Godel Parity Round 16 ───────────────────────────────────────────
 
 /// VRK — Value Rank vs sector peers snapshot.
 /// Percentile rank of `ValueSnapshot.composite_score` within the same sector.
@@ -1885,7 +1885,7 @@ pub struct PeadSnapshot {
     pub note: String,
 }
 
-// ── ADR-124 Round 17 — size/momentum/drift rank + ops quality + revenue growth ──
+// ── Round 17 — size/momentum/drift rank + ops quality + revenue growth ──
 
 /// SIZEF — Size Factor Rank snapshot.
 /// Percentile rank of `Fundamentals.market_cap` within the same sector,
@@ -1992,7 +1992,7 @@ pub struct RevenueGrowthRankSnapshot {
     pub note: String,
 }
 
-// ── ADR-125 Round 18 — rank overlays + surprise streak ────────────────────
+// ── Round 18 — rank overlays + surprise streak ────────────────────
 
 /// LEVRANK — Leverage Rank vs Sector Peers.
 /// Percentile rank of debt-to-equity (`total_debt / total_equity`) from the
@@ -2106,7 +2106,7 @@ pub struct EarningsSurpriseStreakSnapshot {
     pub note: String,
 }
 
-// ── ADR-126 Round 19 — dividend/earnings/rating rank overlays + gap/streak ─
+// ── Round 19 — dividend/earnings/rating rank overlays + gap/streak ─
 
 /// DVDRANK — Dividend Growth Rank vs Sector Peers.
 /// Percentile rank of `DivgSnapshot.cagr_3y_pct` within the same sector.
@@ -2218,7 +2218,7 @@ pub struct DailyEventStreakSnapshot {
     pub note: String,
 }
 
-// ── ADR-127 Round 20 — yield/short rank + HP volatility/drawdown/returns ──
+// ── Round 20 — yield/short rank + HP volatility/drawdown/returns ──
 
 /// DVDYIELDRANK — Dividend Yield Rank vs Sector Peers.
 /// Percentile rank of `Fundamentals.dividend_yield` within the same sector.
@@ -2320,7 +2320,7 @@ pub struct PricePerformanceSnapshot {
     pub note: String,
 }
 
-// ── ADR-195 Round 89/90 — deferred benchmark / peer-relative parity ──
+// ── Round 89/90 — deferred benchmark / peer-relative parity ──
 
 /// MOMRANK_MULTI — sector-relative percentile rank of cached PRICEPERF
 /// horizons. Higher recent returns vs peers earn a higher rank, with a
@@ -2428,7 +2428,7 @@ pub struct CorrelationRankSnapshot {
     pub note: String,
 }
 
-// ── ADR-197 Round 93/94 — remaining cache-backed Godel parity surfaces ──
+// ── Round 93/94 — remaining cache-backed Godel parity surfaces ──
 
 /// OPERANK_DELTA — operating margin trend rank vs sector peers.
 /// Percentile rank of `MarginsSnapshot.operating_margin_change_pct`
@@ -2525,7 +2525,7 @@ pub struct VolRiskPremiumSnapshot {
     pub note: String,
 }
 
-// ── ADR-198 Round 95 — short-interest history + trend rank ─────────────────
+// ── Round 95 — short-interest history + trend rank ─────────────────
 
 /// SHORTRANK_DELTA — short-interest trend rank vs sector peers.
 /// Uses the change in `short_percent_of_float` over the trailing 180-day
@@ -2557,7 +2557,7 @@ pub struct ShortInterestDeltaRankSnapshot {
     pub note: String,
 }
 
-// ── ADR-199 Round 96 — insider ownership concentration parity ─────────────
+// ── Round 96 — insider ownership concentration parity ─────────────
 
 /// INSIDERCONC — insider ownership concentration vs sector peers.
 /// Estimates insider-held % from the latest known `shares_owned_after` per
@@ -2589,7 +2589,7 @@ pub struct InsiderConcentrationSnapshot {
     pub note: String,
 }
 
-// ── ADR-128 Round 21 — beta/peg rank + HP 52wk/rvcone/calendar ──
+// ── Round 21 — beta/peg rank + HP 52wk/rvcone/calendar ──
 
 /// BETARANK — Sector percentile rank of Fundamentals.beta, risk-inverted.
 /// Lower beta earns a higher (safer) rank, mirroring SHRANK / LEVRANK /
@@ -2700,7 +2700,7 @@ pub struct CalendarPeriodBreakdownSnapshot {
     pub note: String,
 }
 
-// ── ADR-129 Round 22 — HP return-distribution + behavior stats ──
+// ── Round 22 — HP return-distribution + behavior stats ──
 
 /// RETSKEW — Return distribution skewness (third standardized moment).
 /// Pure symbol-local HP stat over the trailing 253-session window of log
@@ -2799,7 +2799,7 @@ pub struct DailyRangeSnapshot {
     pub note: String,
 }
 
-// ── ADR-131 Godel Parity Round 23 (AUTOCOR / HURST / HITRATE / GLASYM / VOLRATIO) ──
+// ── Godel Parity Round 23 (AUTOCOR / HURST / HITRATE / GLASYM / VOLRATIO) ──
 //
 // Five pure HP-local stat surfaces. All five compute over the
 // trailing 253-session window of the existing `research_historical_price`
@@ -2922,13 +2922,13 @@ pub struct VolumeRatioSnapshot {
     pub note: String,
 }
 
-// ── ADR-132 Round 24 — HP drawup/gap/vol-cluster/close-placement/AR(1) stats ──
+// ── Round 24 — HP drawup/gap/vol-cluster/close-placement/AR(1) stats ──
 
 /// DRAWUP — Rally history (mirror of DDHIST).
 /// Pure symbol-local HP stat over the trailing 253-session window.
 /// Tracks the running trough and each run from trough-to-peak: max
 /// drawup, longest duration, and count of ≥5% / ≥10% rallies.
-/// Complements DDHIST (ADR-127) with the upside equivalent.
+/// Complements DDHIST with the upside equivalent.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DrawupHistorySnapshot {
     pub symbol: String,
@@ -3033,7 +3033,7 @@ pub struct MeanReversionHalfLifeSnapshot {
     pub note: String,
 }
 
-// ── ADR-133 Round 25 — HP downside-vol / Sharpe / efficiency / wick / vol-of-vol ──
+// ── Round 25 — HP downside-vol / Sharpe / efficiency / wick / vol-of-vol ──
 //
 // Five more pure symbol-local HP surfaces computed from the trailing 253-
 // session window. DOWNVOL and SHARPR are classical return-distribution risk
@@ -3162,7 +3162,7 @@ pub struct VolOfVolSnapshot {
     pub note: String,
 }
 
-// ── ADR-134 Round 26 — HP calmar / ulcer / variance-ratio / amihud / jarque-bera ──
+// ── Round 26 — HP calmar / ulcer / variance-ratio / amihud / jarque-bera ──
 
 /// CALMAR — Calmar ratio: annualized return / max drawdown.
 /// Pure symbol-local HP stat over the trailing 253-session window.
@@ -3260,7 +3260,7 @@ pub struct JarqueBeraSnapshot {
     pub note: String,
 }
 
-// ── ADR-135 Round 27 — HP omega / DFA / Burke / monthly-seas / Roll-spread ──
+// ── Round 27 — HP omega / DFA / Burke / monthly-seas / Roll-spread ──
 
 /// OMEGA — Omega ratio at threshold 0.
 /// Pure symbol-local HP stat over the trailing 253-session window.
@@ -3368,7 +3368,7 @@ pub struct RollSpreadSnapshot {
     pub note: String,
 }
 
-// ── ADR-136 Round 28 — HP range-vol / Garman-Klass / Rogers-Satchell / CVaR / dow-effect ──
+// ── Round 28 — HP range-vol / Garman-Klass / Rogers-Satchell / CVaR / dow-effect ──
 
 /// PARKINSON — Parkinson (1980) high-low range-based volatility estimator.
 /// Pure symbol-local HP stat over the trailing 253-session window.
@@ -3471,7 +3471,7 @@ pub struct DayOfWeekEffectSnapshot {
     pub note: String,
 }
 
-// ── ADR-137 Round 29 — HP Sterling / Kelly / Ljung-Box / runs test / zero-return ──
+// ── Round 29 — HP Sterling / Kelly / Ljung-Box / runs test / zero-return ──
 
 /// STERLING — Sterling ratio: annualized return / average of N worst drawdowns.
 /// Pure symbol-local HP stat over the trailing 253-session window.
@@ -3583,7 +3583,7 @@ pub struct ZeroReturnSnapshot {
     pub note: String,
 }
 
-// ── ADR-138 Round 30: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──────────────
+// ── Round 30: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──────────────
 
 /// PSR — Probabilistic Sharpe Ratio (Lopez de Prado 2012).
 /// Pure symbol-local HP stat over the trailing 253-session window.
@@ -3851,7 +3851,7 @@ pub struct CornishFisherSnapshot {
     pub note: String,
 }
 
-// ── ADR-140 Round 32 structs ──────────────────────────────────────────────
+// ── Round 32 structs ──────────────────────────────────────────────
 
 /// ENTROPY — Shannon entropy of the return distribution.
 /// H = −Σ pᵢ log₂(pᵢ) over a histogram of daily log-returns
@@ -3948,7 +3948,7 @@ pub struct ApenSnapshot {
     pub note: String,
 }
 
-// ── ADR-141 Round 33 structs ──────────────────────────────────────────────
+// ── Round 33 structs ──────────────────────────────────────────────
 
 /// UPR — Upside Potential Ratio (Sortino & van der Meer 1991).
 /// UPR = E[max(r−MAR,0)] / √E[min(r−MAR,0)²] where MAR=0.
@@ -4029,7 +4029,7 @@ pub struct GiniSnapshot {
     pub note: String,
 }
 
-// ── ADR-142 Round 34 structs ──
+// ── Round 34 structs ──
 
 /// SAMPEN — Sample Entropy (Richman & Moorman 2000).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -4105,7 +4105,7 @@ pub struct SpecentSnapshot {
     pub note: String,
 }
 
-// ── ADR-143 Round 35 structs ──
+// ── Round 35 structs ──
 
 /// ROBVOL — Robust Volatility (MAD + IQR, outlier-resistant).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -4193,7 +4193,7 @@ pub struct EwmaVolSnapshot {
     pub note: String,
 }
 
-// ── ADR-144 Round 36 ──────────────────────────────────────────────────────
+// ── Round 36 ──────────────────────────────────────────────────────
 
 /// KSNORM — Kolmogorov-Smirnov normality test (standardised returns vs N(0,1)).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -4282,7 +4282,7 @@ pub struct PeakoverSnapshot {
     pub note: String,
 }
 
-// ── ADR-145 Round 37 ──────────────────────────────────────────────────────
+// ── Round 37 ──────────────────────────────────────────────────────
 
 /// HIGUCHI — Higuchi fractal dimension (Higuchi 1988).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -4588,7 +4588,7 @@ pub struct PeriodogramSnapshot {
     pub note: String,
 }
 
-// ── ADR-150 Round 41 surfaces ─────────────────────────────────────────────
+// ── Round 41 surfaces ─────────────────────────────────────────────
 
 /// MCLEODLI — McLeod-Li test (Ljung-Box on squared returns for ARCH effects).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -4669,7 +4669,7 @@ pub struct KendallTauSnapshot {
     pub note: String,
 }
 
-// ── ADR-151 Round 42 surfaces ─────────────────────────────────────────────
+// ── Round 42 surfaces ─────────────────────────────────────────────
 
 /// SQUEEZE — composite short-squeeze outlier score per symbol.
 /// Fuses five orthogonal axes: short-float %, days-to-cover, 20d momentum,
@@ -5546,7 +5546,7 @@ pub struct HeikinSnapshot {
     pub note: String,
 }
 
-// ── ADR-163 Round 52: ALMA / ZLEMA / ELDERRAY / TSF / RVI ──────────────────
+// ── Round 52: ALMA / ZLEMA / ELDERRAY / TSF / RVI ──────────────────
 
 /// ALMA — Arnaud Legoux Moving Average with Gaussian kernel.
 /// weights[i] = exp(-((i - m)^2) / (2*s^2)) where m = offset*(N-1), s = N/sigma.
@@ -5643,7 +5643,7 @@ pub struct RviSnapshot {
     pub note: String,
 }
 
-// ── ADR-164 Round 53: TRIMA / T3 / VIDYA / SMI / PVT ───────────────────────
+// ── Round 53: TRIMA / T3 / VIDYA / SMI / PVT ───────────────────────
 
 /// TRIMA — Triangular Moving Average. SMA-of-SMA with a (N+1)/2 sub-window
 /// produces a triangular-weighted central MA. Distinct from SMA (flat),
@@ -5748,7 +5748,7 @@ pub struct PvtSnapshot {
     pub note: String,
 }
 
-// ── ADR-165 Round 54: AC / CHVOL / BBWIDTH / ELDERIMP / RMI ───────────────
+// ── Round 54: AC / CHVOL / BBWIDTH / ELDERIMP / RMI ───────────────
 
 /// Bill Williams's Accelerator Oscillator — a second-derivative momentum
 /// indicator built as `AC = AO − SMA₅(AO)` where
@@ -6079,10 +6079,10 @@ pub struct VrocSnapshot {
 /// `K = EMA_{1/3}(RSV)`, `D = EMA_{1/3}(K)`, and the distinguishing
 /// `J = 3·K − 2·D`. J amplifies cross-overs earlier than plain %K/%D,
 /// and its extreme prints (J>100 or J<0) are interpreted as aggressive
-/// overbought/oversold flags. Distinct from STOCH (ADR-108, bare %K/%D
-/// only), STOCHRSI (ADR-137, stochastic-of-RSI rather than
+/// overbought/oversold flags. Distinct from STOCH (, bare %K/%D
+/// only), STOCHRSI (, stochastic-of-RSI rather than
 /// stochastic-of-price), KST (Pring's Know-Sure-Thing, multi-ROC
-/// rate-of-change composite), and WILLR (ADR-134, inverse %R). KDJ
+/// rate-of-change composite), and WILLR (, inverse %R). KDJ
 /// is the one momentum surface that explicitly exposes the amplified
 /// J line as a separate field rather than a derived calculation.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -6134,7 +6134,7 @@ pub struct QqeSnapshot {
 /// `PMO = EMA(EMA(ROC(close,1)·10, 35), 20)` followed by a 10-bar EMA
 /// signal line. The heavy triple-smoothing produces a highly reactive
 /// but noise-filtered momentum line. Distinct from MACD (EMA₁₂ − EMA₂₆
-/// of close), from TRIX (triple-smoothed EMA of close, ADR-141), and
+/// of close), from TRIX (triple-smoothed EMA of close, ), and
 /// from PPO (percentage price oscillator); PMO is smoothed-ROC with a
 /// signal line, designed for multi-month swing trading.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -6159,8 +6159,8 @@ pub struct PmoSnapshot {
 /// `CFO = 100 · (close − forecast) / close`. Positive means price is
 /// ahead of trend (bullish deviation), negative means behind (bearish
 /// deviation). Zero crossings are trend-reversal signals in Chande's
-/// systems. Distinct from LINREG (fitted value, ADR-145), TSF
-/// (projected future value, ADR-146), and from PPO / DPO
+/// systems. Distinct from LINREG (fitted value, ), TSF
+/// (projected future value, ), and from PPO / DPO
 /// (non-regression momentum). CFO is the one oscillator built as
 /// close-minus-regression-forecast as a percentage.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -6180,7 +6180,7 @@ pub struct CfoSnapshot {
 }
 
 /// Colin Twiggs's Twiggs Money Flow — a smoothed, volume-weighted
-/// variant of Chaikin Money Flow (ADR-140). Replaces the bar's full
+/// variant of Chaikin Money Flow. Replaces the bar's full
 /// high/low range with a *true range* (max(high, prev_close) −
 /// min(low, prev_close)) to correctly handle gap bars, then smooths
 /// with an exponential MA rather than a simple sum: TMF tracks
@@ -6229,7 +6229,7 @@ pub struct FractalsSnapshot {
     pub note: String,
 }
 
-/// Ehlers Inverse Fisher Transform of RSI — rescales RSI (ADR-108) to
+/// Ehlers Inverse Fisher Transform of RSI — rescales RSI to
 /// [-5, 5] via `v = 0.1·(RSI − 50)`, smooths with a 9-bar WMA, then
 /// applies `ift = (e^{2v} − 1) / (e^{2v} + 1)` to produce a bounded
 /// [-1, 1] oscillator. The inverse Fisher transform compresses
@@ -6237,8 +6237,8 @@ pub struct FractalsSnapshot {
 /// sharpening reversal signals relative to raw RSI. Crossings of
 /// ±0.5 are strong trend-change alerts. Distinct from raw RSI, from
 /// STOCHRSI (stochastic of RSI), from QQE (smoothed RSI with
-/// adaptive bands, ADR-169), and from CRSI (Connors composite,
-/// ADR-167).
+/// adaptive bands, ), and from CRSI (Connors composite,
+/// ).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct IftRsiSnapshot {
     pub symbol: String,
@@ -6314,7 +6314,7 @@ pub struct CogSnapshot {
 /// BEAR_NEEDLES. Between needle events, the ordering of short,
 /// medium, and long drives the trend classification. Distinct from
 /// every 2-line MA crossover (golden/death cross), from Guppy
-/// (GMMA, 12-line fan, ADR-168), and from ALLIGATOR (3-line SMMA).
+/// (GMMA, 12-line fan, ), and from ALLIGATOR (3-line SMMA).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct DidiSnapshot {
     pub symbol: String,
@@ -6357,7 +6357,7 @@ pub struct DemarkerSnapshot {
 }
 
 /// Bill Williams Gator Oscillator — a companion to the Alligator
-/// (ADR-165) that visualizes how the three shifted SMMAs diverge or
+/// that visualizes how the three shifted SMMAs diverge or
 /// converge. `upper = |jaws − teeth|` plotted above zero and
 /// `lower = −|teeth − lips|` plotted below zero, where jaws =
 /// SMMA₁₃ shifted 8 bars, teeth = SMMA₈ shifted 5, lips = SMMA₅
@@ -6391,7 +6391,7 @@ pub struct GatorSnapshot {
 /// FADE (MFI down, volume down — interest fading), FAKE (MFI up,
 /// volume down — false breakout) and SQUAT (MFI down, volume up —
 /// indecision battle, often precedes reversal). Distinct from
-/// Chaikin's MFI (ADR-148, based on money-flow volume).
+/// Chaikin's MFI (, based on money-flow volume).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct BwMfiSnapshot {
     pub symbol: String,
@@ -6414,7 +6414,7 @@ pub struct BwMfiSnapshot {
 /// providing an institutional-footprint smoother. The VWMA−SMA
 /// spread is the core signal: positive when big volume aligns with
 /// higher prices, negative when big volume aligns with lower prices.
-/// Distinct from VWAP (session-anchored, ADR-155) and from every
+/// Distinct from VWAP (session-anchored, ) and from every
 /// other fixed-length MA (SMA, EMA, HMA, DEMA, ALMA, KAMA, MAMA).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct VwmaSnapshot {
@@ -6439,7 +6439,7 @@ pub struct VwmaSnapshot {
 /// price-level stddev). The `regime_label` compares current N=20
 /// stddev against a trailing 60-bar stddev: HIGH_VOL when current
 /// >1.5× long, LOW_VOL when <0.67×, MID_VOL otherwise. Distinct
-/// from EWMAVOL (exponentially-weighted, ADR-158), from REALIZED_VOL
+/// from EWMAVOL (exponentially-weighted, ), from REALIZED_VOL
 /// (return-based), and from Parkinson/Garman-Klass/RS (range-based).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct StddevSnapshot {
@@ -6459,7 +6459,7 @@ pub struct StddevSnapshot {
     pub note: String,
 }
 
-// ── ADR-172 Round 60 — WMA / RAINBOW / MESA_SINE / FRAMA / IBS ─────────────
+// ── Round 60 — WMA / RAINBOW / MESA_SINE / FRAMA / IBS ─────────────
 
 /// Weighted Moving Average (WMA) — a linearly-weighted moving
 /// average where weights increase from 1 (oldest) to N (newest):
@@ -6493,7 +6493,7 @@ pub struct WmaSnapshot {
 /// the fan's current center. A wide rainbow means strong trend
 /// (levels spread apart); a narrow rainbow means consolidation
 /// (levels bunched tightly). Distinct from GMMA (Guppy's
-/// 12-line EMA fan, ADR-168) which uses EMAs of varying lengths
+/// 12-line EMA fan, ) which uses EMAs of varying lengths
 /// rather than recursive 2-bar SMAs.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct RainbowSnapshot {
@@ -6521,9 +6521,9 @@ pub struct RainbowSnapshot {
 /// flagged; when it crosses below, a cycle-top sell is flagged.
 /// In trending markets the two lines separate and fail to cross,
 /// producing no signals — a useful regime filter in itself.
-/// Distinct from MAMA (phase-adaptive MA, ADR-170), FISHER
-/// (probability Gaussianization, ADR-129), and COG (weighted
-/// centroid, ADR-170); MESA_SINE focuses on cycle phase rather
+/// Distinct from MAMA (phase-adaptive MA, ), FISHER
+/// (probability Gaussianization, ), and COG (weighted
+/// centroid, ); MESA_SINE focuses on cycle phase rather
 /// than value or momentum.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct MesaSineSnapshot {
@@ -6549,9 +6549,9 @@ pub struct MesaSineSnapshot {
 /// ratio; α = exp(-4.6·(D − 1)). Strong trends (D near 1.0)
 /// yield α ≈ 1 (fast-following); choppy markets (D near 2.0)
 /// yield α near 0.01 (heavy smoothing). Distinct from KAMA
-/// (efficiency-ratio adaptive, ADR-117), VIDYA (volatility-index
-/// adaptive, ADR-148), MAMA (Hilbert-phase adaptive, ADR-170),
-/// and T3 (Tillson triple-DEMA, ADR-142).
+/// (efficiency-ratio adaptive, ), VIDYA (volatility-index
+/// adaptive, ), MAMA (Hilbert-phase adaptive, ),
+/// and T3 (Tillson triple-DEMA, ).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct FramaSnapshot {
     pub symbol: String,
@@ -6576,7 +6576,7 @@ pub struct FramaSnapshot {
 /// the low (bearish conviction). IBS is a mean-reversion favorite
 /// — high IBS readings (>0.8) often precede short-term
 /// pullbacks, low IBS (<0.2) often precede bounces. Distinct from
-/// STOCH (%K over N-bar HHV/LLV, ADR-108) which spans multiple
+/// STOCH (%K over N-bar HHV/LLV, ) which spans multiple
 /// bars, and from every momentum oscillator; IBS is a single-bar
 /// position metric.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -6595,7 +6595,7 @@ pub struct IbsSnapshot {
     pub note: String,
 }
 
-// ── ADR-173 Round 61 — LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT ──
+// ── Round 61 — LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT ──
 
 /// Ehlers Laguerre RSI — a bounded [0, 1] oscillator built from
 /// Ehlers's 4-stage Laguerre filter (γ=0.5). The 4-stage filter
@@ -6604,8 +6604,8 @@ pub struct IbsSnapshot {
 /// upward differences vs total differences across the stages,
 /// yielding a cleaner oscillator than classic RSI with no
 /// divergence false signals near extremes. Distinct from RSI
-/// (Wilder smoothing of gains/losses, ADR-108), STOCHRSI (ADR-137),
-/// CRSI (Connors, ADR-167), QQE (ADR-169), and IFT_RSI (ADR-170).
+/// (Wilder smoothing of gains/losses, ), STOCHRSI,
+/// CRSI (Connors, ), QQE, and IFT_RSI.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct LaguerreRsiSnapshot {
     pub symbol: String,
@@ -6629,8 +6629,8 @@ pub struct LaguerreRsiSnapshot {
 /// threshold_pct from the prior extreme. The snapshot emits the
 /// last high pivot (value + bars_ago), the last low pivot, the
 /// active leg direction (UP/DOWN), and the projected reversal
-/// level. Distinct from FRACTALS (ADR-170, Bill Williams 5-bar
-/// strict peaks) and from PIVOTS (ADR-161, prior-session math),
+/// level. Distinct from FRACTALS (, Bill Williams 5-bar
+/// strict peaks) and from PIVOTS (, prior-session math),
 /// which use fundamentally different construction — ZigZag is a
 /// %-threshold reversal detector.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -6658,7 +6658,7 @@ pub struct ZigzagSnapshot {
 /// PGO a trend-following signal rather than mean-reversion — the
 /// "pretty good" name reflects Johnson's empirical observation that
 /// it filters noise better than raw ROC. Distinct from ROC
-/// (unscaled price change), PPO (percentage-scaled MACD, ADR-115),
+/// (unscaled price change), PPO (percentage-scaled MACD, ),
 /// and RSI/STOCH (bounded oscillators) because PGO's scaling is by
 /// volatility, not percent.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -6679,11 +6679,11 @@ pub struct PgoSnapshot {
 /// Hilbert Transform Instantaneous Trendline (HT_TRENDLINE) — a
 /// smoothed trendline based on the dominant cycle period derived
 /// from Ehlers's Hilbert-transform homodyne discriminator. Unlike
-/// MAMA (ADR-170) which outputs an adaptive MA proper,
+/// MAMA which outputs an adaptive MA proper,
 /// HT_TRENDLINE reports the `trendline = WMA(close, period)` over
 /// the detected cycle period — a lag-matched smoother that
 /// follows the dominant trend without the adaptive α rescaling.
-/// Distinct from MAMA (adaptive α), FRAMA (ADR-172 fractal-
+/// Distinct from MAMA (adaptive α), FRAMA (fractal-
 /// dimension α), and every fixed-length smoother.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct HtTrendlineSnapshot {
@@ -6705,8 +6705,8 @@ pub struct HtTrendlineSnapshot {
 /// the close's position within the range. N=14. TA-Lib's MIDPOINT
 /// function; useful as a simple anchor for detecting where price
 /// sits relative to the most recent trading range. Distinct from
-/// Donchian channel (ADR-151, raw HHV/LLV bands), from SMA, and
-/// from pivot systems (ADR-161) because it uses only HHV+LLV
+/// Donchian channel (, raw HHV/LLV bands), from SMA, and
+/// from pivot systems because it uses only HHV+LLV
 /// extremes rather than OHLC4 or session math.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct MidpointSnapshot {
@@ -6729,8 +6729,8 @@ pub struct MidpointSnapshot {
 /// 9-period EMA of that EMA (EMA of EMA). A classic "reversal
 /// bulge" crosses above 27 then below 26.5 signalling a likely
 /// reversal independent of direction. Distinct from ATR (range
-/// magnitude, ADR-108) because Mass Index is a unitless ratio of
-/// range smoothings and from CHOP (ADR-123) because it measures
+/// magnitude, ) because Mass Index is a unitless ratio of
+/// range smoothings and from CHOP because it measures
 /// range expansion/contraction via nested EMAs rather than
 /// high-low efficiency.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -6755,8 +6755,8 @@ pub struct MassIndexSnapshot {
 /// closing price. This makes ATR scale-invariant so it can be
 /// compared across symbols of different price levels (a $5 ATR
 /// means different things for a $10 stock vs a $500 stock).
-/// Distinct from plain ATR (raw dollar volatility, ADR-108) and
-/// from stddev-based vols (ADR-171 STDDEV) because NATR uses the
+/// Distinct from plain ATR (raw dollar volatility, ) and
+/// from stddev-based vols (STDDEV) because NATR uses the
 /// true range directly rather than log return variance.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct NatrSnapshot {
@@ -6779,8 +6779,8 @@ pub struct NatrSnapshot {
 /// KC, the squeeze fires ("squeeze off") and directional
 /// momentum typically follows. Paired with a linear-regression
 /// histogram to indicate breakout direction (up vs down).
-/// Distinct from BBW (ADR-115 Bollinger Band Width regime) and
-/// from Keltner (ADR-151 standalone bands) because TTM Squeeze
+/// Distinct from BBW (Bollinger Band Width regime) and
+/// from Keltner (standalone bands) because TTM Squeeze
 /// tests the geometric relation between both systems.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct TtmSqueezeSnapshot {
@@ -6806,10 +6806,10 @@ pub struct TtmSqueezeSnapshot {
 /// means high volume on an up move (bullish conviction); strong
 /// negative means heavy selling. Zero-line crossings flag
 /// momentum shifts; extreme readings warn of exhaustion.
-/// Distinct from OBV (cumulative sign-weighted volume, ADR-108)
+/// Distinct from OBV (cumulative sign-weighted volume, )
 /// because Force Index weights by the size of the price change
 /// not just the direction, and from CMF (money-flow-multiplier,
-/// ADR-109) which uses H/L rather than bar-over-bar close change.
+/// ) which uses H/L rather than bar-over-bar close change.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ForceIndexSnapshot {
     pub symbol: String,
@@ -6827,7 +6827,7 @@ pub struct ForceIndexSnapshot {
 
 /// True Range (raw, single-bar) — TA-Lib's TRANGE function:
 /// `tr = max(H − L, |H − C_prev|, |L − C_prev|)`. The single-bar
-/// volatility measure that underlies Wilder's ATR (ADR-108) but
+/// volatility measure that underlies Wilder's ATR but
 /// reports the current bar's TR directly without any smoothing.
 /// Useful for gap-aware bar-size comparisons and for building
 /// custom volatility systems. Distinct from ATR (N-period EMA of
@@ -6852,7 +6852,7 @@ pub struct TrangeSnapshot {
 /// Linear Regression Slope (LINEARREG_SLOPE) — TA-Lib's linreg slope
 /// function: the least-squares slope of an N-bar linear regression
 /// on close prices, in price-units-per-bar. Distinct from TSF (value
-/// of linear regression line at the current bar, ADR-140) and from
+/// of linear regression line at the current bar, ) and from
 /// LINEARREG (the regression line value) because this emits just
 /// the slope coefficient β. A positive slope indicates trending up;
 /// the magnitude captures the rate of trend acceleration.
@@ -6873,7 +6873,7 @@ pub struct LinearregSlopeSnapshot {
 /// Hilbert Dominant Cycle Period (HT_DCPERIOD) — Ehlers's Hilbert-
 /// transform homodyne discriminator applied to close prices to
 /// detect the dominant cycle period in bars. Distinct from HT_TRENDLINE
-/// (ADR-173) which uses the period to drive a WMA smoother, and from
+/// which uses the period to drive a WMA smoother, and from
 /// MESA_SINE / MAMA which use the period for adaptive α rescaling.
 /// This snapshot emits just the detected period itself — useful for
 /// choosing adaptive parameters on other indicators, or for regime
@@ -6940,9 +6940,9 @@ pub struct AccbandsSnapshot {
 /// Fast Stochastic (STOCHF) — TA-Lib's STOCHF: the unsmoothed
 /// stochastic oscillator pair (%K, %D) without the inner 3-bar
 /// smoothing of slow STOCH. `%K = 100 × (C − LLV(N)) / (HHV(N) − LLV(N))`
-/// with N=14, and %D = SMA(%K, 3). Distinct from STOCH (ADR-110 slow
-/// stochastic with inner smoothing applied), STOCHRSI (ADR-137 applied
-/// to RSI), and SMI (ADR-140 scaled MIDPRICE). Faster, noisier, more
+/// with N=14, and %D = SMA(%K, 3). Distinct from STOCH (slow
+/// stochastic with inner smoothing applied), STOCHRSI (applied
+/// to RSI), and SMI (scaled MIDPRICE). Faster, noisier, more
 /// responsive to immediate price action.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct StochfSnapshot {
@@ -6963,7 +6963,7 @@ pub struct StochfSnapshot {
 /// Linear Regression (LINEARREG) — TA-Lib's LINEARREG: the fitted value
 /// `y_hat(t) = slope·(N-1) + intercept` of the least-squares regression
 /// of close over the last N=14 bars, reporting the endpoint of the
-/// fitted line. Distinct from LINEARREG_SLOPE (ADR-175 raw slope),
+/// fitted line. Distinct from LINEARREG_SLOPE (raw slope),
 /// LINEARREG_ANGLE (slope→angle), and LINEARREG_INTERCEPT (y at t=0)
 /// because LINEARREG reports the projected endpoint of the line — the
 /// most recent fitted value, which is the closest fitted approximation
@@ -7006,7 +7006,7 @@ pub struct LinearregAngleSnapshot {
 
 /// Hilbert Dominant Cycle Phase (HT_DCPHASE) — TA-Lib's HT_DCPHASE
 /// reuses the Ehlers homodyne discriminator pipeline (same as
-/// HT_DCPERIOD, ADR-175) and reports the phase of the dominant cycle
+/// HT_DCPERIOD, ) and reports the phase of the dominant cycle
 /// at the current bar in degrees (0..360°). Useful for timing cycle
 /// turns — phase 0° is the cycle bottom, 180° is the top. Distinct
 /// from HT_DCPERIOD (cycle length in bars) and HT_TRENDMODE (trend
@@ -7074,9 +7074,9 @@ pub struct HtPhasorSnapshot {
     pub note: String,
 }
 
-/// MIDPRICE (ADR-177) — TA-Lib MIDPRICE function: midpoint between the
+/// MIDPRICE — TA-Lib MIDPRICE function: midpoint between the
 /// highest high and the lowest low over an N-bar window (default 14).
-/// Distinct from MIDPOINT (close-based midpoint, ADR-173) and from
+/// Distinct from MIDPOINT (close-based midpoint, ) and from
 /// Donchian (which exposes both bands separately) because MIDPRICE
 /// reports the HH/LL midpoint as a single line anchored to the bar
 /// range rather than close.
@@ -7096,7 +7096,7 @@ pub struct MidpriceSnapshot {
     pub note: String,
 }
 
-/// APO (ADR-177) — TA-Lib Absolute Price Oscillator: `EMA_fast(close)
+/// APO — TA-Lib Absolute Price Oscillator: `EMA_fast(close)
 /// − EMA_slow(close)` with defaults fast=12, slow=26. Distinct from
 /// PPO (percentage APO: `(fast − slow) / slow × 100`) and from MACD
 /// (APO + signal line + histogram) because APO reports the raw
@@ -7117,7 +7117,7 @@ pub struct ApoSnapshot {
     pub note: String,
 }
 
-/// MOM (ADR-177) — TA-Lib raw momentum: `close − close[n−period]`
+/// MOM — TA-Lib raw momentum: `close − close[n−period]`
 /// over a 10-bar default lookback. Distinct from ROC (percentage: mom
 /// / close[n−period] × 100) and from MOMENTUM_12_1 (composite 12m−1m
 /// factor score) because MOM reports the raw price delta in currency
@@ -7137,9 +7137,9 @@ pub struct MomSnapshot {
     pub note: String,
 }
 
-/// SAREXT (ADR-177) — TA-Lib Extended Parabolic SAR with configurable
+/// SAREXT — TA-Lib Extended Parabolic SAR with configurable
 /// asymmetric long/short acceleration factors and an optional forced
-/// start trend. Distinct from PSAR (ADR-108 fixed 0.02/0.02/0.20) in
+/// start trend. Distinct from PSAR (fixed 0.02/0.02/0.20) in
 /// that SAREXT exposes separate af_init/af_step/af_max for long vs
 /// short regimes, enabling traders to tune the trailing stop's
 /// aggressiveness differently on each side of the trade (typical for
@@ -7167,7 +7167,7 @@ pub struct SarextSnapshot {
     pub note: String,
 }
 
-/// ADXR (ADR-177) — TA-Lib Average Directional Movement Rating:
+/// ADXR — TA-Lib Average Directional Movement Rating:
 /// `(ADX_now + ADX[n − period]) / 2` over a 14-bar default lookback.
 /// Distinct from ADX (point-in-time directional movement strength)
 /// because ADXR smooths ADX with its lagged value to emphasise trend
@@ -7188,7 +7188,7 @@ pub struct AdxrSnapshot {
     pub note: String,
 }
 
-// ── ADR-178 Round 66 ──────────────────────────────────────────────────────
+// ── Round 66 ──────────────────────────────────────────────────────
 /// TA-Lib AVGPRICE — `(open + high + low + close) / 4`.
 /// Simplest price-transform primitive: the four-component OHLC average.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -7276,7 +7276,7 @@ pub struct VarianceSnapshot {
     pub note: String,
 }
 
-// ── ADR-179 Round 67 ──────────────────────────────────────────────────────
+// ── Round 67 ──────────────────────────────────────────────────────
 /// TA-Lib PLUS_DI — Wilder's Positive Directional Indicator.
 /// `+DI = 100 × (Wilder-smoothed +DM) / ATR` over 14-bar default.
 /// Measures upward directional movement strength: paired with −DI it
@@ -7376,7 +7376,7 @@ pub struct DxSnapshot {
     pub note: String,
 }
 
-// ── ADR-180 Round 68 ──────────────────────────────────────────────────────
+// ── Round 68 ──────────────────────────────────────────────────────
 /// TA-Lib ROC — raw Rate of Change `close_t − close_{t−n}` (period 10).
 /// Raw price delta; distinct from ROCP (percentage) and ROCR (ratio).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -7559,7 +7559,7 @@ pub struct MaxIndexSnapshot {
     pub note: String,
 }
 
-// ── Round 70 — BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT (ADR-182) ──
+// ── Round 70 — BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT ──
 
 /// TA-Lib BBANDS — Bollinger Bands around a 20-bar SMA ± 2·σ.
 /// Classic volatility-band oscillator. Position within the bands
@@ -7670,7 +7670,7 @@ pub struct LinearRegInterceptSnapshot {
     pub note: String,
 }
 
-// ── Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP (ADR-183) ──
+// ── Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP ──
 
 /// TA-Lib AROONOSC — Aroon Oscillator = AROON_UP − AROON_DOWN over a
 /// 14-bar window. Complements the already-shipped AROON primitive by
@@ -7998,7 +7998,7 @@ pub struct CdlDarkCloudCoverSnapshot {
     pub note: String,
 }
 
-// ── ADR-186 Round 74 — CDLPIERCING / CDLDRAGONFLYDOJI / CDLGRAVESTONEDOJI / CDLHANGINGMAN / CDLINVERTEDHAMMER ──
+// ── Round 74 — CDLPIERCING / CDLDRAGONFLYDOJI / CDLGRAVESTONEDOJI / CDLHANGINGMAN / CDLINVERTEDHAMMER ──
 
 /// TA-Lib CDLPIERCING — Piercing Line (2-bar bullish reversal, mirror
 /// of Dark Cloud Cover). Prior bar red with large body; current bar
@@ -8343,7 +8343,7 @@ pub struct CdlThreeInsideSnapshot {
     pub note: String,
 }
 
-// ── ADR-192 Round 77 — CDLBELTHOLD / CDLCLOSINGMARUBOZU / CDLHIGHWAVE /
+// ── Round 77 — CDLBELTHOLD / CDLCLOSINGMARUBOZU / CDLHIGHWAVE /
 //    CDLLONGLINE / CDLSHORTLINE ──
 
 /// TA-Lib CDLBELTHOLD — Belt-hold line. Long real body with virtually
@@ -8449,7 +8449,7 @@ pub struct CdlShortLineSnapshot {
     pub note: String,
 }
 
-// ── ADR-193 Round 78 — CDLCOUNTERATTACK / CDLHOMINGPIGEON / CDLINNECK /
+// ── Round 78 — CDLCOUNTERATTACK / CDLHOMINGPIGEON / CDLINNECK /
 //    CDLONNECK / CDLTHRUSTING ──
 
 /// TA-Lib CDLCOUNTERATTACK — Counterattack lines. Two opposite-colour
@@ -8559,7 +8559,7 @@ pub struct CdlThrustingSnapshot {
     pub note: String,
 }
 
-// ── ADR-190 Round 79 — CDL2CROWS / CDL3LINESTRIKE / CDL3OUTSIDE /
+// ── Round 79 — CDL2CROWS / CDL3LINESTRIKE / CDL3OUTSIDE /
 //    CDLMATCHINGLOW ──
 
 /// TA-Lib CDL2CROWS — Two Crows. Long green body, then a gap-up red
@@ -8641,7 +8641,7 @@ pub struct CdlMatchingLowSnapshot {
     pub note: String,
 }
 
-// ── ADR-190 Round 80 — CDLSEPARATINGLINES / CDLSTICKSANDWICH /
+// ── Round 80 — CDLSEPARATINGLINES / CDLSTICKSANDWICH /
 //    CDLRICKSHAWMAN / CDLTAKURI ──
 
 /// TA-Lib CDLSEPARATINGLINES — Separating Lines. Opposite-colour
@@ -8726,7 +8726,7 @@ pub struct CdlTakuriSnapshot {
     pub note: String,
 }
 
-// ── ADR-191 Round 81/82 — harder TA-Lib CDL parity pack ──────────────────
+// ── Round 81/82 — harder TA-Lib CDL parity pack ──────────────────
 
 /// TA-Lib CDL3STARSINSOUTH — Three Stars in the South. A 3-bar bullish
 /// reversal made of three descending red candles where downside pressure
@@ -8858,7 +8858,7 @@ pub struct CdlUniqueThreeRiverSnapshot {
     pub note: String,
 }
 
-// ── ADR-192 Round 83/84 — next TA-Lib CDL parity pack ────────────────────
+// ── Round 83/84 — next TA-Lib CDL parity pack ────────────────────
 
 /// TA-Lib CDLADVANCEBLOCK — Advance Block. Three rising green candles
 /// whose progress weakens as bodies shrink and upper shadows lengthen.
@@ -8986,7 +8986,7 @@ pub struct CdlConcealBabySwallowSnapshot {
     pub note: String,
 }
 
-// ── ADR-193 Round 85/86 — stateful TA-Lib CDL parity pack ────────────────
+// ── Round 85/86 — stateful TA-Lib CDL parity pack ────────────────
 
 /// TA-Lib CDLHIKKAKE — Hikkake. Inside-bar setup followed by a false
 /// break to one side of the inside bar.
@@ -9068,7 +9068,7 @@ pub struct CdlRiseFallThreeMethodsSnapshot {
     pub note: String,
 }
 
-// ── ADR-194 Round 87/88 — remaining TA-Lib CDL parity pack ───────────────
+// ── Round 87/88 — remaining TA-Lib CDL parity pack ───────────────
 
 /// TA-Lib CDLSTALLEDPATTERN — Stalled Pattern. Three advancing white
 /// candles where the third gaps up but loses momentum with a small real
@@ -9116,7 +9116,7 @@ pub struct CdlTasukiGapSnapshot {
     pub note: String,
 }
 
-// ── ADR-189 Round 76 (Quant Stats) surfaces ───────────────────────────────
+// ── Round 76 (Quant Stats) surfaces ───────────────────────────────
 
 /// MODSHARPE — Pezier-White Adjusted Sharpe Ratio.
 /// Classical Sharpe SR = √252 · E[r]/σ[r] assumes normal returns. The
@@ -10334,7 +10334,7 @@ pub async fn scrape_and_cache_symbol(
         }
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 
-        // ADR-109: dividend history (FMP)
+        // dividend history (FMP)
         match fetch_fmp_dividend_history(client, &sym, fmp_key).await {
             Ok(rows) => {
                 if !rows.is_empty() {
@@ -10345,7 +10345,7 @@ pub async fn scrape_and_cache_symbol(
         }
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 
-        // ADR-109: forward earnings estimates (FMP)
+        // forward earnings estimates (FMP)
         match fetch_fmp_earnings_estimates(client, &sym, fmp_key).await {
             Ok(rows) => {
                 if !rows.is_empty() {
@@ -10356,7 +10356,7 @@ pub async fn scrape_and_cache_symbol(
         }
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 
-        // ADR-109: analyst rating changes (FMP)
+        // analyst rating changes (FMP)
         match fetch_fmp_rating_changes(client, &sym, fmp_key).await {
             Ok(rows) => {
                 if !rows.is_empty() {
@@ -10367,7 +10367,7 @@ pub async fn scrape_and_cache_symbol(
         }
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 
-        // ADR-110: full FA bundle (6 FMP calls, internal 400ms sleeps).
+        // full FA bundle (6 FMP calls, internal 400ms sleeps).
         match fetch_fmp_financial_bundle(client, &sym, fmp_key).await {
             Ok(bundle) => {
                 let any = !bundle.income_annual.is_empty()
@@ -10385,7 +10385,7 @@ pub async fn scrape_and_cache_symbol(
         }
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 
-        // ADR-111: stock split history (FMP).
+        // stock split history (FMP).
         match fetch_fmp_stock_splits(client, &sym, fmp_key).await {
             Ok(rows) => {
                 if !rows.is_empty() {
@@ -10401,7 +10401,7 @@ pub async fn scrape_and_cache_symbol(
         }
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 
-        // ADR-111: ETF holdings (FMP). No-op for non-ETF tickers (empty result).
+        // ETF holdings (FMP). No-op for non-ETF tickers (empty result).
         match fetch_fmp_etf_holdings(client, &sym, fmp_key).await {
             Ok(rows) => {
                 if !rows.is_empty() {
@@ -10417,7 +10417,7 @@ pub async fn scrape_and_cache_symbol(
         }
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 
-        // ADR-111: ESG scores (FMP).
+        // ESG scores (FMP).
         match fetch_fmp_esg(client, &sym, fmp_key).await {
             Ok(rows) => {
                 if !rows.is_empty() {
@@ -10434,7 +10434,7 @@ pub async fn scrape_and_cache_symbol(
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     }
 
-    // ADR-110: Finnhub executives (separate from FMP block; needs Finnhub key).
+    // Finnhub executives (separate from FMP block; needs Finnhub key).
     if !finnhub_key.is_empty() {
         match fetch_finnhub_executives(client, &sym, finnhub_key).await {
             Ok(rows) => {
@@ -10451,7 +10451,7 @@ pub async fn scrape_and_cache_symbol(
         }
         tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
-        // ADR-111: analyst recommendation trends (Finnhub).
+        // analyst recommendation trends (Finnhub).
         match fetch_finnhub_recommendations(client, &sym, finnhub_key).await {
             Ok(rows) => {
                 if !rows.is_empty() {
@@ -10467,7 +10467,7 @@ pub async fn scrape_and_cache_symbol(
         }
         tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
-        // ADR-111: consensus price target (Finnhub).
+        // consensus price target (Finnhub).
         match fetch_finnhub_price_target(client, &sym, finnhub_key).await {
             Ok(pt) => {
                 if pt.num_analysts > 0 || pt.target_mean > 0.0 {
@@ -10486,7 +10486,7 @@ pub async fn scrape_and_cache_symbol(
     Ok(())
 }
 
-// ── ADR-109 fetchers ───────────────────────────────────────────────────────
+// ── fetchers ───────────────────────────────────────────────────────
 
 /// FMP /historical-price-full/stock_dividend/{symbol} — full dividend payment history.
 pub async fn fetch_fmp_dividend_history(
@@ -10662,7 +10662,7 @@ pub async fn fetch_treasury_yields(client: &reqwest::Client) -> Result<Vec<Treas
     Ok(out)
 }
 
-// ── ADR-110 fetchers ───────────────────────────────────────────────────────
+// ── fetchers ───────────────────────────────────────────────────────
 
 /// Parse a Socrata numeric field that arrives as either a JSON number or a string.
 fn socrata_f64(v: &serde_json::Value) -> f64 {
@@ -11021,7 +11021,7 @@ pub async fn fetch_cftc_cot(client: &reqwest::Client) -> Result<Vec<CotReport>, 
     Ok(rows)
 }
 
-// ── ADR-111 fetchers ───────────────────────────────────────────────────────
+// ── fetchers ───────────────────────────────────────────────────────
 
 /// FMP /historical-price-full/stock_split/{symbol} — historical stock splits.
 pub async fn fetch_fmp_stock_splits(
@@ -11273,7 +11273,7 @@ pub async fn fetch_fmp_index_members(
     Ok(rows)
 }
 
-// ── ADR-112 Round 5 fetchers ───────────────────────────────────────────────
+// ── Round 5 fetchers ───────────────────────────────────────────────
 
 /// FMP /v4/insider-trading — SEC Form 4 insider trade rows (default page=0, up to 100 rows).
 pub async fn fetch_fmp_insider_trades(
@@ -11513,7 +11513,7 @@ pub async fn fetch_fmp_earnings_surprises(
     Ok(rows)
 }
 
-// ── ADR-113 Round 6 fetchers ───────────────────────────────────────────────
+// ── Round 6 fetchers ───────────────────────────────────────────────
 
 /// Yahoo batch-quote the WORLD_INDICES_UNIVERSE tickers for the WEI dashboard.
 /// Returns rows in the universe's declared order so the UI grouping stays stable.
@@ -11701,7 +11701,7 @@ pub fn compute_wacc_snapshot(
     }
 }
 
-// ── ADR-114 Round 7 — WCR fetcher ─────────────────────────────────────────
+// ── Round 7 — WCR fetcher ─────────────────────────────────────────
 
 /// Fetch the hardcoded FX-majors universe through Yahoo and return the rows
 /// in the order declared by `FX_MAJORS_UNIVERSE`.
@@ -11735,7 +11735,7 @@ pub async fn fetch_currency_rates(client: &reqwest::Client) -> Result<Vec<Curren
     Ok(out)
 }
 
-// ── ADR-114 Round 7 — BETA compute ────────────────────────────────────────
+// ── Round 7 — BETA compute ────────────────────────────────────────
 
 /// Compute an OLS regression of symbol log-returns on market log-returns.
 /// Returns (beta, alpha_per_period, r_squared, correlation, n).
@@ -11974,7 +11974,7 @@ fn rolling_corr_stats(
     (corr, beta, r_squared, used)
 }
 
-// ── ADR-114 Round 7 — DDM compute ─────────────────────────────────────────
+// ── Round 7 — DDM compute ─────────────────────────────────────────
 
 /// Compute a Gordon Growth dividend-discount-model snapshot from cached
 /// dividend history and a required return (typically WACC or cost of equity).
@@ -12092,7 +12092,7 @@ pub fn compute_ddm_snapshot(
     }
 }
 
-// ── ADR-114 Round 7 — RV compute (relative valuation peer matrix) ─────────
+// ── Round 7 — RV compute (relative valuation peer matrix) ─────────
 
 /// One input row for the relative-valuation calculator: a metric name plus
 /// the subject's value and a list of peer values. Caller builds this from
@@ -12167,7 +12167,7 @@ pub fn compute_relative_valuation(
     }
 }
 
-// ── ADR-114 Round 7 — FIGI (OpenFIGI) fetcher ─────────────────────────────
+// ── Round 7 — FIGI (OpenFIGI) fetcher ─────────────────────────────
 
 /// Fetch OpenFIGI identifiers for a symbol. OpenFIGI is a free service run by
 /// Bloomberg — no API key required for reasonable volumes. We POST the
@@ -12223,7 +12223,7 @@ pub async fn fetch_openfigi_identifiers(
     Ok(out)
 }
 
-// ── ADR-115 Round 8 — HRA compute (historical return + risk) ──────────────
+// ── Round 8 — HRA compute (historical return + risk) ──────────────
 
 /// Compute an `HraSnapshot` from a chronologically-ordered slice of bars
 /// (oldest → newest). Returns periods are simple-return (close₀→closeₙ),
@@ -12421,7 +12421,7 @@ pub fn compute_hra_snapshot(
     }
 }
 
-// ── ADR-115 Round 8 — DCF compute (Discounted Cash Flow, FCFF basis) ─────
+// ── Round 8 — DCF compute (Discounted Cash Flow, FCFF basis) ─────
 
 /// Compute a multi-year DCF fair-value snapshot on a free cash flow to firm
 /// (FCFF) basis. All inputs are already-cached values — this is pure compute.
@@ -12554,7 +12554,7 @@ pub fn compute_dcf_snapshot(
     }
 }
 
-// ── ADR-115 Round 8 — SVM compute (Stock Valuation Model triangulation) ──
+// ── Round 8 — SVM compute (Stock Valuation Model triangulation) ──
 
 /// Build a multi-model fair-value triangulation from the caller's cached
 /// WACC / DDM / DCF / RV snapshots plus any peer-median multiples the
@@ -12696,7 +12696,7 @@ pub fn compute_svm_snapshot(
     }
 }
 
-// ── ADR-115 Round 8 — OMON fetch (Yahoo options chain) ───────────────────
+// ── Round 8 — OMON fetch (Yahoo options chain) ───────────────────
 
 fn parse_yahoo_option_contract(
     c: &serde_json::Value,
@@ -12911,7 +12911,7 @@ pub async fn fetch_yahoo_options_chain(
     })
 }
 
-// ── ADR-115 Round 8 — IVOL compute (IV Rank / IV Percentile) ─────────────
+// ── Round 8 — IVOL compute (IV Rank / IV Percentile) ─────────────
 
 /// Compute an `IvolSnapshot` from a 52-week history of ATM IV observations
 /// plus a current ATM IV reading. The caller is responsible for extracting
@@ -12978,7 +12978,7 @@ pub fn compute_ivol_snapshot(
     }
 }
 
-// ── ADR-116 Round 9 — SEAG compute (seasonality) ─────────────────────────
+// ── Round 9 — SEAG compute (seasonality) ─────────────────────────
 
 /// Compute a `SeasonalitySnapshot` from a chronologically-ordered slice of
 /// bars. Builds monthly buckets (Jan..Dec) of year-over-year per-month returns
@@ -13197,7 +13197,7 @@ pub fn compute_seasonality_snapshot(
     }
 }
 
-// ── ADR-116 Round 9 — COR compute (correlation matrix vs peers) ──────────
+// ── Round 9 — COR compute (correlation matrix vs peers) ──────────
 
 /// Compute a pairwise correlation matrix for a subject symbol against a set
 /// of peer bar series over a rolling window of `window_days`. Uses Pearson
@@ -13324,7 +13324,7 @@ pub fn compute_correlation_matrix(
     }
 }
 
-// ── ADR-116 Round 9 — TRA compute (total return = price + dividends) ────
+// ── Round 9 — TRA compute (total return = price + dividends) ────
 
 /// Compute a `TotalReturnSnapshot` by combining HP price returns with the
 /// sum of cash dividends paid over the same window. Pure compute; inputs are
@@ -13466,7 +13466,7 @@ pub fn compute_total_return_snapshot(
     }
 }
 
-// ── ADR-116 Round 9 — TECH compute (technical indicators) ────────────────
+// ── Round 9 — TECH compute (technical indicators) ────────────────
 
 /// Compute standard technical indicators (RSI, MACD, Bollinger, ATR, ADX,
 /// Stochastic) from a chronologically-ordered slice of bars. Pure compute.
@@ -13792,7 +13792,7 @@ pub fn compute_technical_indicators(
     }
 }
 
-// ── ADR-116 Round 9 — SKEW compute (volatility smile/skew) ───────────────
+// ── Round 9 — SKEW compute (volatility smile/skew) ───────────────
 
 /// Compute a `VolatilitySkew` snapshot from a cached options chain. For each
 /// expiry, walk the strike ladder and emit a `SkewPoint` combining call & put
@@ -13923,7 +13923,7 @@ pub fn compute_volatility_skew(
     }
 }
 
-// ── ADR-117 Round 10 — LEV compute (leverage & coverage ratios) ─────────────
+// ── Round 10 — LEV compute (leverage & coverage ratios) ─────────────
 
 /// Compute a `LeverageSnapshot` from cached financial statements and the
 /// Fundamentals row. Pulls trailing-12-month EBITDA + interest expense from
@@ -14117,7 +14117,7 @@ pub fn compute_leverage_snapshot(
     }
 }
 
-// ── ADR-117 Round 10 — ACRL compute (earnings quality / accruals) ───────────
+// ── Round 10 — ACRL compute (earnings quality / accruals) ───────────
 
 /// Compute an `AccrualsSnapshot` from cached financial statements. Walks the
 /// last 4 quarterly income + cash-flow pairs, producing an FCF/NI ratio per
@@ -14225,7 +14225,7 @@ pub fn compute_accruals_snapshot(
     }
 }
 
-// ── ADR-117 Round 10 — RVOL compute (realized volatility cone) ──────────────
+// ── Round 10 — RVOL compute (realized volatility cone) ──────────────
 
 /// Compute a `RealizedVolSnapshot` from oldest-first daily bars. Produces
 /// rolling 20d / 60d / 120d / 252d realized volatility (annualized stdev of
@@ -14344,7 +14344,7 @@ pub fn compute_realized_vol_snapshot(
     }
 }
 
-// ── ADR-117 Round 10 — FCFY compute (FCF yield + dividend coverage) ─────────
+// ── Round 10 — FCFY compute (FCF yield + dividend coverage) ─────────
 
 /// Compute an `FcfYieldSnapshot` from cached financial statements + market cap.
 /// Builds per-annual FCF yield / dividend coverage rows, rolls TTM from the last
@@ -14477,7 +14477,7 @@ pub fn compute_fcf_yield_snapshot(
     }
 }
 
-// ── ADR-117 Round 10 — SHRT compute (short interest + days-to-cover) ────────
+// ── Round 10 — SHRT compute (short interest + days-to-cover) ────────
 
 /// Compute a `ShortInterestSnapshot` from the Fundamentals short fields plus
 /// daily HP bars. Days-to-cover comes from `short_shares / avg_daily_volume_20d`.
@@ -14548,7 +14548,7 @@ pub fn compute_short_interest_snapshot(
     }
 }
 
-// ── ADR-118 Godel Parity Round 11 compute fns ──────────────────────────────
+// ── Godel Parity Round 11 compute fns ──────────────────────────────
 
 /// ALTZ — classic Altman Z-score for public manufacturers.
 /// Z = 1.2(WC/TA) + 1.4(RE/TA) + 3.3(EBIT/TA) + 0.6(MVE/TL) + 1.0(Sales/TA)
@@ -15244,7 +15244,7 @@ pub fn compute_price_target_dispersion(
     }
 }
 
-// ── ADR-119 Godel Parity Round 12 compute fns ──────────────────────────────
+// ── Godel Parity Round 12 compute fns ──────────────────────────────
 
 fn parse_yyyy_mm_dd_to_days(s: &str) -> Option<i64> {
     // Crude julian-ish day number. We don't need calendar correctness — just
@@ -15984,7 +15984,7 @@ pub fn compute_updm_snapshot(symbol: &str, as_of: &str, actions: &[RatingChange]
     }
 }
 
-// ── ADR-120 Godel Parity Round 13 compute fns ──────────────────────────────
+// ── Godel Parity Round 13 compute fns ──────────────────────────────
 
 /// Pick the daily close closest to (and not after) `target_offset_back` bars
 /// from the most recent bar. `bars` is newest-first. Returns None if the
@@ -16695,7 +16695,7 @@ pub fn compute_credit_snapshot(
     }
 }
 
-// ── ADR-121 Round 14 compute fns ───────────────────────────────────────────
+// ── Round 14 compute fns ───────────────────────────────────────────
 
 /// GROWM — Growth-at-Reasonable-Price fusion of MOM + EARM + DIVG.
 pub fn compute_growm_snapshot(
@@ -17361,7 +17361,7 @@ pub fn compute_margins_snapshot(
     }
 }
 
-// ── ADR-122 Round 15 compute fns ───────────────────────────────────────────
+// ── Round 15 compute fns ───────────────────────────────────────────
 
 fn median_f64(values: &[f64]) -> f64 {
     if values.is_empty() {
@@ -18361,7 +18361,7 @@ pub fn compute_covg_snapshot(
     }
 }
 
-// ── ADR-123 Godel Parity Round 16 compute fns ──────────────────────────────
+// ── Godel Parity Round 16 compute fns ──────────────────────────────
 
 /// Simple quartile at `q ∈ [0,1]` via linear interpolation on a sorted slice.
 /// Used by the Round 16 rank surfaces for p25 / p75 sector markers.
@@ -18983,7 +18983,7 @@ pub fn compute_pead_snapshot(
     }
 }
 
-// ── ADR-124 Round 17 — rank surfaces + FQM + revenue growth ────────────────
+// ── Round 17 — rank surfaces + FQM + revenue growth ────────────────
 
 /// Market-cap tier classifier (absolute dollar thresholds).
 fn size_tier_label(market_cap: f64) -> &'static str {
@@ -19239,7 +19239,7 @@ pub fn compute_peadrank_snapshot(
 /// (does the business machine convert sales into durable cash?) rather than
 /// capital-structure strength. A highly-levered business with elite margins
 /// and strong cash conversion will FQM-high and QUAL-mid — that's the
-/// intended divergence from ADR-122 QUAL.
+/// intended divergence from QUAL.
 pub fn compute_fqm_snapshot(
     symbol: &str,
     as_of: &str,
@@ -19532,7 +19532,7 @@ pub fn compute_revrank_snapshot(
     }
 }
 
-// ── ADR-125 Round 18 compute fns ───────────────────────────────────────────
+// ── Round 18 compute fns ───────────────────────────────────────────
 
 /// Compute the debt-to-equity ratio for a `LeverageSnapshot`.
 /// Returns `None` when equity is non-positive (shell / deficit), which is
@@ -19995,7 +19995,7 @@ pub fn compute_surpstk_snapshot(
     }
 }
 
-// ── ADR-126 Round 19 compute fns ──────────────────────────────────────────
+// ── Round 19 compute fns ──────────────────────────────────────────
 
 pub fn compute_dvdrank_snapshot(
     symbol: &str,
@@ -20493,7 +20493,7 @@ pub fn compute_des_snapshot(
     }
 }
 
-// ── ADR-127 Round 20 compute fns ──────────────────────────────────────────
+// ── Round 20 compute fns ──────────────────────────────────────────
 
 /// DVDYIELDRANK compute: sector percentile rank of the subject's dividend
 /// yield. Non-payers (None or 0.0) are filtered so the cohort is
@@ -20963,7 +20963,7 @@ pub fn compute_priceperf_snapshot(
     }
 }
 
-// ── ADR-128 Round 21 compute fns ──
+// ── Round 21 compute fns ──
 
 /// BETARANK compute: sector percentile rank of Fundamentals.beta,
 /// risk-inverted so a *lower* beta earns a *higher* (safer) rank.
@@ -23166,7 +23166,7 @@ pub fn compute_insiderconc_snapshot(
     }
 }
 
-// ── ADR-129 Round 22 compute fns ──
+// ── Round 22 compute fns ──
 
 /// Shared helper: collect trailing 253 bars sorted oldest-first and
 /// compute log returns. Returns (sorted_bars, log_returns).
@@ -23570,7 +23570,7 @@ pub fn compute_dayrange_snapshot(
     }
 }
 
-// ── ADR-131 Round 23 computes (AUTOCOR / HURST / HITRATE / GLASYM / VOLRATIO) ──
+// ── Round 23 computes (AUTOCOR / HURST / HITRATE / GLASYM / VOLRATIO) ──
 
 /// Helper: autocorrelation of a return series at a given lag, computed
 /// via the standard estimator `sum((r_t - mean)(r_{t-k} - mean)) /
@@ -24003,7 +24003,7 @@ pub fn compute_volratio_snapshot(
     }
 }
 
-// ── ADR-132 Round 24 computes (DRAWUP / GAPSTATS / VOLCLUSTER / CLOSEPLC / MRHL) ──
+// ── Round 24 computes (DRAWUP / GAPSTATS / VOLCLUSTER / CLOSEPLC / MRHL) ──
 
 /// DRAWUP compute: trough-to-peak rally history over the trailing 253
 /// sessions. Mirror of `compute_ddhist_snapshot` — flip peak↔trough and
@@ -24438,7 +24438,7 @@ pub fn compute_mrhl_snapshot(
     }
 }
 
-// ── ADR-133 Round 25 computes (DOWNVOL / SHARPR / EFFRATIO / WICKBIAS / VOLOFVOL) ──
+// ── Round 25 computes (DOWNVOL / SHARPR / EFFRATIO / WICKBIAS / VOLOFVOL) ──
 
 /// DOWNVOL compute: semi-deviation + Sortino ratio.
 pub fn compute_downvol_snapshot(
@@ -24847,7 +24847,7 @@ pub fn compute_volofvol_snapshot(
     }
 }
 
-// ── ADR-134 Round 26 computes (CALMAR / ULCER / VARRATIO / AMIHUD / JBNORM) ──
+// ── Round 26 computes (CALMAR / ULCER / VARRATIO / AMIHUD / JBNORM) ──
 
 pub fn compute_calmar_snapshot(
     symbol: &str,
@@ -25263,7 +25263,7 @@ pub fn compute_jbnorm_snapshot(
     }
 }
 
-// ── ADR-135 Round 27 computes (OMEGA / DFA / BURKE / MONTHSEAS / ROLLSPRD) ──
+// ── Round 27 computes (OMEGA / DFA / BURKE / MONTHSEAS / ROLLSPRD) ──
 
 pub fn compute_omega_snapshot(
     symbol: &str,
@@ -25845,7 +25845,7 @@ pub fn compute_rollsprd_snapshot(
     }
 }
 
-// ── ADR-136 Round 28 computes ──
+// ── Round 28 computes ──
 
 fn annualized_vol_label(annualized_pct: f64) -> &'static str {
     if annualized_pct < 10.0 {
@@ -26223,7 +26223,7 @@ pub fn compute_doweffect_snapshot(
     }
 }
 
-// ── ADR-137 Round 29 computes ──
+// ── Round 29 computes ──
 
 /// Standard normal CDF via Abramowitz & Stegun 7.1.26 rational erf approximation.
 /// Max error ~1.5e-7 — plenty for label-granularity p-values.
@@ -26681,7 +26681,7 @@ pub fn compute_zeroret_snapshot(
     }
 }
 
-// ── ADR-138 Round 30 computes: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──
+// ── Round 30 computes: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──
 
 pub fn compute_psr_snapshot(
     symbol: &str,
@@ -27118,7 +27118,7 @@ pub fn compute_dddur_snapshot(
     }
 }
 
-// ── ADR-139 Round 31: HILLTAIL / ARCHLM / PAINRATIO / CUSUM / CFVAR ──
+// ── Round 31: HILLTAIL / ARCHLM / PAINRATIO / CUSUM / CFVAR ──
 
 pub fn compute_hilltail_snapshot(
     symbol: &str,
@@ -27583,7 +27583,7 @@ pub fn compute_cfvar_snapshot(
     }
 }
 
-// ── ADR-140 Round 32 compute fns ──────────────────────────────────────────
+// ── Round 32 compute fns ──────────────────────────────────────────
 
 /// ENTROPY compute: Shannon entropy over a histogram of daily log-returns.
 pub fn compute_entropy_snapshot(
@@ -27979,7 +27979,7 @@ pub fn compute_apen_snapshot(
     }
 }
 
-// ── ADR-141 Round 33 compute fns ──────────────────────────────────────────
+// ── Round 33 compute fns ──────────────────────────────────────────
 
 /// UPR compute: Upside Potential Ratio = E[max(r,0)] / √E[min(r,0)²] (MAR=0).
 pub fn compute_upr_snapshot(symbol: &str, as_of: &str, bars: &[HistoricalPriceRow]) -> UprSnapshot {
@@ -28336,7 +28336,7 @@ pub fn compute_gini_snapshot(
     }
 }
 
-// ── ADR-142 Round 34 compute ──
+// ── Round 34 compute ──
 
 /// SAMPEN compute: Sample Entropy (Richman & Moorman 2000).
 pub fn compute_sampen_snapshot(
@@ -28700,7 +28700,7 @@ pub fn compute_specent_snapshot(
     }
 }
 
-// ── ADR-143 Round 35 compute ──
+// ── Round 35 compute ──
 
 /// ROBVOL compute: Robust Volatility via MAD and IQR.
 pub fn compute_robvol_snapshot(
@@ -29115,7 +29115,7 @@ pub fn compute_ewmavol_snapshot(
     }
 }
 
-// ── ADR-144 Round 36 computes ────────────────────────────────────────────
+// ── Round 36 computes ────────────────────────────────────────────
 
 /// Standard normal CDF via Abramowitz-Stegun 7.1.26 approximation.
 fn norm_cdf_as(z: f64) -> f64 {
@@ -29574,7 +29574,7 @@ pub fn compute_peakover_snapshot(
     }
 }
 
-// ── ADR-145 Round 37 computes ────────────────────────────────────────────
+// ── Round 37 computes ────────────────────────────────────────────
 
 /// HIGUCHI compute: Higuchi 1988 fractal dimension.
 pub fn compute_higuchi_snapshot(
@@ -30086,7 +30086,7 @@ pub fn compute_rankac_snapshot(
     }
 }
 
-// ── ADR-146 Round 38 computes ────────────────────────────────────────────
+// ── Round 38 computes ────────────────────────────────────────────
 
 /// BNSJUMP compute: Barndorff-Nielsen & Shephard 2006 jump-test Z-statistic.
 pub fn compute_bnsjump_snapshot(
@@ -30636,7 +30636,7 @@ pub fn compute_tsi_snapshot(symbol: &str, as_of: &str, bars: &[HistoricalPriceRo
     }
 }
 
-// ── ADR-147 Round 39 computes ────────────────────────────────────────────
+// ── Round 39 computes ────────────────────────────────────────────
 
 /// GARCH11 compute: Bollerslev 1986 GARCH(1,1) fit via coordinate-descent MLE.
 pub fn compute_garch11_snapshot(
@@ -31232,7 +31232,7 @@ pub fn compute_automi_snapshot(
     }
 }
 
-// ── ADR-149 Round 40 compute functions ─────────────────────────────────────
+// ── Round 40 compute functions ─────────────────────────────────────
 
 /// DURBINWATSON compute: Durbin-Watson d statistic on log-returns.
 pub fn compute_durbinwatson_snapshot(
@@ -31613,7 +31613,7 @@ pub fn compute_periodogram_snapshot(
     }
 }
 
-// ── ADR-150 Round 41 computes ─────────────────────────────────────────────
+// ── Round 41 computes ─────────────────────────────────────────────
 
 /// MCLEODLI compute: McLeod-Li portmanteau on squared log-returns.
 /// Q = n(n+2) Σ_k=1..h ρ̂²(k) / (n-k), compared against χ²(h).
@@ -32152,7 +32152,7 @@ pub fn compute_kendalltau_snapshot(
     }
 }
 
-// ── ADR-151 Round 42 compute functions ────────────────────────────────────
+// ── Round 42 compute functions ────────────────────────────────────
 
 /// SQUEEZE — composite short-squeeze outlier score.
 /// Fuses five axes (short-float %, days-to-cover, 20d momentum, relvol, IV
@@ -35957,7 +35957,7 @@ pub fn compute_rwi_snapshot(symbol: &str, as_of: &str, bars: &[HistoricalPriceRo
     }
 }
 
-// ── ADR-161 Round 51: DEMA / TEMA / LINREG / PIVOTS / HEIKIN ───────────────
+// ── Round 51: DEMA / TEMA / LINREG / PIVOTS / HEIKIN ───────────────
 
 fn ema_series(values: &[f64], length: usize) -> Vec<f64> {
     let n = values.len();
@@ -36341,7 +36341,7 @@ pub fn compute_heikin_snapshot(
     }
 }
 
-// ── ADR-163 Round 52: ALMA / ZLEMA / ELDERRAY / TSF / RVI ──────────────────
+// ── Round 52: ALMA / ZLEMA / ELDERRAY / TSF / RVI ──────────────────
 
 pub fn compute_alma_snapshot(
     symbol: &str,
@@ -36713,7 +36713,7 @@ pub fn compute_rvi_snapshot(symbol: &str, as_of: &str, bars: &[HistoricalPriceRo
     }
 }
 
-// ── ADR-164 Round 53: TRIMA / T3 / VIDYA / SMI / PVT ───────────────────────
+// ── Round 53: TRIMA / T3 / VIDYA / SMI / PVT ───────────────────────
 
 fn sma_series(values: &[f64], length: usize) -> Vec<f64> {
     let n = values.len();
@@ -37112,7 +37112,7 @@ pub fn compute_pvt_snapshot(symbol: &str, as_of: &str, bars: &[HistoricalPriceRo
     }
 }
 
-// ── ADR-165 Round 54 compute functions ───────────────────────────────────
+// ── Round 54 compute functions ───────────────────────────────────
 
 /// Bill Williams's Accelerator Oscillator (AC).
 ///
@@ -39586,7 +39586,7 @@ pub fn compute_stddev_snapshot(
     }
 }
 
-// ── ADR-172 Round 60 compute fns ──────────────────────────────────────────
+// ── Round 60 compute fns ──────────────────────────────────────────
 
 pub fn compute_wma_snapshot(symbol: &str, as_of: &str, bars: &[HistoricalPriceRow]) -> WmaSnapshot {
     let sym = symbol.to_uppercase();
@@ -39967,7 +39967,7 @@ pub fn compute_ibs_snapshot(symbol: &str, as_of: &str, bars: &[HistoricalPriceRo
     }
 }
 
-// ── ADR-173 Round 61 compute fns ──────────────────────────────────────────
+// ── Round 61 compute fns ──────────────────────────────────────────
 
 pub fn compute_laguerre_rsi_snapshot(
     symbol: &str,
@@ -42078,7 +42078,7 @@ pub fn compute_adxr_snapshot(
     }
 }
 
-// ── ADR-178 Round 66 compute fns ────────────────────────────────────────────
+// ── Round 66 compute fns ────────────────────────────────────────────
 
 /// Compute TA-Lib AVGPRICE — `(open + high + low + close) / 4`.
 pub fn compute_avgprice_snapshot(
@@ -42359,7 +42359,7 @@ pub fn compute_variance_snapshot(
     }
 }
 
-// ── ADR-179 Round 67 compute fns ────────────────────────────────────────────
+// ── Round 67 compute fns ────────────────────────────────────────────
 
 /// Build Wilder-smoothed +DM / −DM / TR / +DI / −DI series for the DMI
 /// family. Returns (plus_di, minus_di, atr, plus_smoothed, minus_smoothed,
@@ -42716,7 +42716,7 @@ pub fn compute_dx_snapshot(symbol: &str, as_of: &str, bars: &[HistoricalPriceRow
     }
 }
 
-// ── ADR-180 Round 68 compute fns ────────────────────────────────────────────
+// ── Round 68 compute fns ────────────────────────────────────────────
 
 fn roc_label(pct: f64) -> &'static str {
     if pct >= 5.0 {
@@ -43009,7 +43009,7 @@ pub fn compute_correl_snapshot(
     }
 }
 
-// ── ADR-181 Round 69 compute fns ────────────────────────────────────────────
+// ── Round 69 compute fns ────────────────────────────────────────────
 
 /// Walk the trailing `period`-bar window ending at `end_idx` and return
 /// `(min_val, min_idx_in_series, max_val, max_idx_in_series)`. The two
@@ -44051,7 +44051,7 @@ pub fn compute_mavp_snapshot(
     }
 }
 
-// ── ADR-184 Round 72 CDL* candlestick patterns ─────────────────────────────
+// ── Round 72 CDL* candlestick patterns ─────────────────────────────
 
 /// Candle metrics for a single bar: (body, range, upper_shadow,
 /// lower_shadow, body_pct_range, is_bullish). body = |close - open|;
@@ -44461,7 +44461,7 @@ pub fn compute_cdl_harami_snapshot(
     }
 }
 
-// ── ADR-185 Round 73 CDL* 3-bar and additional 2-bar patterns ──────────────
+// ── Round 73 CDL* 3-bar and additional 2-bar patterns ──────────────
 
 pub fn compute_cdl_morning_star_snapshot(
     symbol: &str,
@@ -44892,7 +44892,7 @@ pub fn compute_cdl_dark_cloud_cover_snapshot(
     }
 }
 
-// ── ADR-186 Round 74 compute fns — CDLPIERCING / CDLDRAGONFLYDOJI /
+// ── Round 74 compute fns — CDLPIERCING / CDLDRAGONFLYDOJI /
 //    CDLGRAVESTONEDOJI / CDLHANGINGMAN / CDLINVERTEDHAMMER ──
 
 pub fn compute_cdl_piercing_snapshot(
@@ -46063,7 +46063,7 @@ pub fn compute_cdl_three_inside_snapshot(
     }
 }
 
-// ── ADR-192 Round 77 compute fns — CDLBELTHOLD / CDLCLOSINGMARUBOZU /
+// ── Round 77 compute fns — CDLBELTHOLD / CDLCLOSINGMARUBOZU /
 //    CDLHIGHWAVE / CDLLONGLINE / CDLSHORTLINE ──
 
 pub fn compute_cdl_belt_hold_snapshot(
@@ -46412,7 +46412,7 @@ pub fn compute_cdl_short_line_snapshot(
     }
 }
 
-// ── ADR-193 Round 78 compute fns — CDLCOUNTERATTACK / CDLHOMINGPIGEON /
+// ── Round 78 compute fns — CDLCOUNTERATTACK / CDLHOMINGPIGEON /
 //    CDLINNECK / CDLONNECK / CDLTHRUSTING ──
 
 pub fn compute_cdl_counterattack_snapshot(
@@ -46841,7 +46841,7 @@ pub fn compute_cdl_thrusting_snapshot(
     }
 }
 
-// ── ADR-190 Round 79 compute fns — CDL2CROWS / CDL3LINESTRIKE /
+// ── Round 79 compute fns — CDL2CROWS / CDL3LINESTRIKE /
 //    CDL3OUTSIDE / CDLMATCHINGLOW ──
 
 pub fn compute_cdl_two_crows_snapshot(
@@ -47202,7 +47202,7 @@ pub fn compute_cdl_matching_low_snapshot(
     }
 }
 
-// ── ADR-190 Round 80 compute fns — CDLSEPARATINGLINES / CDLSTICKSANDWICH /
+// ── Round 80 compute fns — CDLSEPARATINGLINES / CDLSTICKSANDWICH /
 //    CDLRICKSHAWMAN / CDLTAKURI ──
 
 pub fn compute_cdl_separating_lines_snapshot(
@@ -47529,7 +47529,7 @@ pub fn compute_cdl_takuri_snapshot(
     }
 }
 
-// ── ADR-191 Round 81/82 compute fns — CDL3STARSINSOUTH /
+// ── Round 81/82 compute fns — CDL3STARSINSOUTH /
 //    CDLIDENTICAL3CROWS / CDLKICKING / CDLKICKINGBYLENGTH /
 //    CDLLADDERBOTTOM / CDLUNIQUE3RIVER ──
 
@@ -48123,7 +48123,7 @@ pub fn compute_cdl_unique_three_river_snapshot(
     }
 }
 
-// ── ADR-192 Round 83/84 compute fns — CDLADVANCEBLOCK /
+// ── Round 83/84 compute fns — CDLADVANCEBLOCK /
 //    CDLBREAKAWAY / CDLGAPSIDESIDEWHITE / CDLUPSIDEGAP2CROWS /
 //    CDLXSIDEGAP3METHODS / CDLCONCEALBABYSWALL ──
 
@@ -48746,7 +48746,7 @@ pub fn compute_cdl_conceal_baby_swallow_snapshot(
     }
 }
 
-// ── ADR-193 Round 85/86 compute fns — CDLHIKKAKE / CDLHIKKAKEMOD /
+// ── Round 85/86 compute fns — CDLHIKKAKE / CDLHIKKAKEMOD /
 //    CDLMATHOLD / CDLRISEFALL3METHODS ──
 
 pub fn compute_cdl_hikkake_snapshot(
@@ -49175,7 +49175,7 @@ pub fn compute_cdl_rise_fall_three_methods_snapshot(
     }
 }
 
-// ── ADR-194 Round 87/88 compute fns — CDLSTALLEDPATTERN /
+// ── Round 87/88 compute fns — CDLSTALLEDPATTERN /
 //    CDLTASUKIGAP ──
 
 pub fn compute_cdl_stalled_pattern_snapshot(
@@ -49403,7 +49403,7 @@ pub fn compute_cdl_tasuki_gap_snapshot(
     }
 }
 
-// ── ADR-189 Round 76 (Quant Stats) compute fns ────────────────────────────
+// ── Round 76 (Quant Stats) compute fns ────────────────────────────
 
 /// MODSHARPE compute: Pezier-White Adjusted Sharpe Ratio.
 /// ASR = SR · [1 + (S/6)·SR − ((K−3)/24)·SR²] where S, K are the skewness
@@ -49862,7 +49862,7 @@ pub fn compute_hlvclust_snapshot(
     }
 }
 
-// ── ADR-190 Round 77: YANGZHANG / KUIPER / DAGOSTINO / BAIPERRON / KUPIECPOF ──
+// ── Round 77: YANGZHANG / KUIPER / DAGOSTINO / BAIPERRON / KUPIECPOF ──
 
 pub fn compute_yangzhang_snapshot(
     symbol: &str,
@@ -50368,7 +50368,7 @@ pub fn compute_kupiecpof_snapshot(
     }
 }
 
-// ── ADR-109 SQLite schema + helpers ────────────────────────────────────────
+// ── SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v2(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -50499,7 +50499,7 @@ pub fn get_rating_changes(
     }
 }
 
-// ── ADR-110 SQLite schema + helpers ────────────────────────────────────────
+// ── SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v3(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -50584,7 +50584,7 @@ pub fn get_executives(conn: &Connection, symbol: &str) -> Result<Option<Vec<Exec
     }
 }
 
-// ── ADR-111 SQLite schema + helpers ────────────────────────────────────────
+// ── SQLite schema + helpers ────────────────────────────────────────
 
 pub fn create_research_tables_v4(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -50825,7 +50825,7 @@ pub fn get_index_members(
     }
 }
 
-// ── ADR-112 Round 5 SQLite schema + helpers ────────────────────────────────
+// ── Round 5 SQLite schema + helpers ────────────────────────────────
 
 pub fn create_research_tables_v5(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -51030,7 +51030,7 @@ pub fn get_earnings_surprises(
     }
 }
 
-// ── ADR-113 Round 6 SQLite schema + helpers ────────────────────────────────
+// ── Round 6 SQLite schema + helpers ────────────────────────────────
 
 pub fn create_research_tables_v6(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -51167,7 +51167,7 @@ pub fn get_wacc(conn: &Connection, symbol: &str) -> Result<Option<WaccSnapshot>,
     }
 }
 
-// ── ADR-114 Round 7 SQLite schema + helpers ───────────────────────────────
+// ── Round 7 SQLite schema + helpers ───────────────────────────────
 
 pub fn create_research_tables_v7(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -51345,7 +51345,7 @@ pub fn get_figi(conn: &Connection, symbol: &str) -> Result<Option<FigiSnapshot>,
     }
 }
 
-// ── ADR-115 Round 8 schema: HRA / DCF / SVM / OMON / IVOL ────────────────
+// ── Round 8 schema: HRA / DCF / SVM / OMON / IVOL ────────────────
 
 pub fn create_research_tables_v8(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -51528,7 +51528,7 @@ pub fn get_ivol(conn: &Connection, symbol: &str) -> Result<Option<IvolSnapshot>,
     }
 }
 
-// ── ADR-116 Round 9 schema: SEAG / COR / TRA / TECH / SKEW ───────────────
+// ── Round 9 schema: SEAG / COR / TRA / TECH / SKEW ───────────────
 
 pub fn create_research_tables_v9(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -51733,7 +51733,7 @@ pub fn get_vol_skew(conn: &Connection, symbol: &str) -> Result<Option<Volatility
     }
 }
 
-// ── ADR-117 Round 10 schema: LEV / ACRL / RVOL / FCFY / SHRT ──────────────
+// ── Round 10 schema: LEV / ACRL / RVOL / FCFY / SHRT ──────────────
 
 pub fn create_research_tables_v10(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -51950,7 +51950,7 @@ pub fn get_all_short_interest_symbols(conn: &Connection) -> Result<Vec<String>, 
     Ok(rows)
 }
 
-// ── ADR-118 Godel Parity Round 11 schema + helpers ─────────────────────────
+// ── Godel Parity Round 11 schema + helpers ─────────────────────────
 
 pub fn create_research_tables_v11(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -52150,7 +52150,7 @@ pub fn get_price_target_dispersion(
     }
 }
 
-// ── ADR-119 Godel Parity Round 12 schema + helpers ─────────────────────────
+// ── Godel Parity Round 12 schema + helpers ─────────────────────────
 
 pub fn create_research_tables_v12(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -52343,7 +52343,7 @@ pub fn get_updm(conn: &Connection, symbol: &str) -> Result<Option<UpdmSnapshot>,
     }
 }
 
-// ── ADR-120 Godel Parity Round 13 schema + helpers ─────────────────────────
+// ── Godel Parity Round 13 schema + helpers ─────────────────────────
 
 pub fn create_research_tables_v13(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -52539,7 +52539,7 @@ pub fn get_credit(conn: &Connection, symbol: &str) -> Result<Option<CreditSnapsh
     }
 }
 
-// ── ADR-121 Godel Parity Round 14 schema + helpers ─────────────────────────
+// ── Godel Parity Round 14 schema + helpers ─────────────────────────
 
 pub fn create_research_tables_v14(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -52721,7 +52721,7 @@ pub fn get_margins(conn: &Connection, symbol: &str) -> Result<Option<MarginsSnap
     }
 }
 
-// ── ADR-122 Godel Parity Round 15 schema + helpers ─────────────────────────
+// ── Godel Parity Round 15 schema + helpers ─────────────────────────
 
 pub fn create_research_tables_v15(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -52906,7 +52906,7 @@ pub fn get_covg(conn: &Connection, symbol: &str) -> Result<Option<CoverageSnapsh
     }
 }
 
-// ── ADR-123 Round 16 schema + helpers ──────────────────────────────────────
+// ── Round 16 schema + helpers ──────────────────────────────────────
 
 pub fn create_research_tables_v16(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v15(conn);
@@ -53141,7 +53141,7 @@ pub fn get_all_risk(conn: &Connection) -> Result<Vec<RiskSnapshot>, String> {
     Ok(rows)
 }
 
-// ── ADR-124 Round 17 schema + wrappers ────────────────────────────────────
+// ── Round 17 schema + wrappers ────────────────────────────────────
 
 pub fn create_research_tables_v17(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v16(conn);
@@ -53376,7 +53376,7 @@ pub fn get_all_pead(conn: &Connection) -> Result<Vec<PeadSnapshot>, String> {
     Ok(rows)
 }
 
-// ── ADR-125 Round 18 schema + wrappers ────────────────────────────────────
+// ── Round 18 schema + wrappers ────────────────────────────────────
 
 pub fn create_research_tables_v18(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v17(conn);
@@ -53647,7 +53647,7 @@ pub fn get_all_liquidity(conn: &Connection) -> Result<Vec<LiquiditySnapshot>, St
     Ok(rows)
 }
 
-// ── ADR-126 Round 19 schema + wrappers ────────────────────────────────────
+// ── Round 19 schema + wrappers ────────────────────────────────────
 
 pub fn create_research_tables_v19(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v18(conn);
@@ -53854,7 +53854,7 @@ pub fn get_des(
     }
 }
 
-// ── ADR-127 Round 20 schema + wrappers ────────────────────────────────────
+// ── Round 20 schema + wrappers ────────────────────────────────────
 
 pub fn create_research_tables_v20(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v19(conn);
@@ -54067,7 +54067,7 @@ pub fn get_priceperf(
     }
 }
 
-// ── ADR-128 Round 21 schema v21 + wrappers ──
+// ── Round 21 schema v21 + wrappers ──
 
 pub fn create_research_tables_v21(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v20(conn);
@@ -54275,7 +54275,7 @@ pub fn get_calpb(
     }
 }
 
-// ── ADR-129 Round 22 schema v22 + wrappers ──
+// ── Round 22 schema v22 + wrappers ──
 
 pub fn create_research_tables_v22(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v21(conn);
@@ -54480,7 +54480,7 @@ pub fn get_dayrange(conn: &Connection, symbol: &str) -> Result<Option<DailyRange
     }
 }
 
-// ── ADR-130 Web article ingestion (JSON-blob-per-symbol, schema v23) ──
+// ── Web article ingestion (JSON-blob-per-symbol, schema v23) ──
 //
 // Agent-supplied web research articles. When the research packet's
 // "Return Path" footer asks an AI agent to emit a fenced
@@ -54763,7 +54763,7 @@ pub fn parse_ingest_block(text: &str) -> Vec<(String, Vec<WebArticle>)> {
     out.into_iter().collect()
 }
 
-// ── ADR-131 Godel Parity Round 23 schema + helpers ────────────────────────
+// ── Godel Parity Round 23 schema + helpers ────────────────────────
 
 pub fn create_research_tables_v24(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v23(conn);
@@ -54967,7 +54967,7 @@ pub fn get_volratio(
     }
 }
 
-// ── ADR-132 Round 24 schema + upsert/get ──
+// ── Round 24 schema + upsert/get ──
 
 pub fn create_research_tables_v25(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v24(conn);
@@ -55177,7 +55177,7 @@ pub fn get_mrhl(
     }
 }
 
-// ── ADR-133 Round 25 schema + upsert/get ──
+// ── Round 25 schema + upsert/get ──
 
 pub fn create_research_tables_v26(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v25(conn);
@@ -55379,7 +55379,7 @@ pub fn get_volofvol(conn: &Connection, symbol: &str) -> Result<Option<VolOfVolSn
     }
 }
 
-// ── ADR-134 Round 26 schema + upsert/get ──
+// ── Round 26 schema + upsert/get ──
 
 pub fn create_research_tables_v27(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v26(conn);
@@ -55581,7 +55581,7 @@ pub fn get_jbnorm(conn: &Connection, symbol: &str) -> Result<Option<JarqueBeraSn
     }
 }
 
-// ── ADR-135 Round 27 schema + upsert/get ──
+// ── Round 27 schema + upsert/get ──
 
 pub fn create_research_tables_v28(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v27(conn);
@@ -55786,7 +55786,7 @@ pub fn get_rollsprd(conn: &Connection, symbol: &str) -> Result<Option<RollSpread
     }
 }
 
-// ── ADR-136 Round 28 schema v29 ──
+// ── Round 28 schema v29 ──
 
 pub fn create_research_tables_v29(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v28(conn);
@@ -55992,7 +55992,7 @@ pub fn get_doweffect(
     }
 }
 
-// ── ADR-137 Round 29: STERLING / KELLYF / LJUNGB / RUNSTEST / ZERORET ──
+// ── Round 29: STERLING / KELLYF / LJUNGB / RUNSTEST / ZERORET ──
 
 pub fn create_research_tables_v30(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v29(conn);
@@ -56197,7 +56197,7 @@ pub fn get_zeroret(conn: &Connection, symbol: &str) -> Result<Option<ZeroReturnS
     }
 }
 
-// ── ADR-138 Round 30: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──
+// ── Round 30: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──
 
 pub fn create_research_tables_v31(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v30(conn);
@@ -56408,7 +56408,7 @@ pub fn get_dddur(
     }
 }
 
-// ── ADR-139 Round 31: HILLTAIL / ARCHLM / PAINRATIO / CUSUM / CFVAR ──
+// ── Round 31: HILLTAIL / ARCHLM / PAINRATIO / CUSUM / CFVAR ──
 
 pub fn create_research_tables_v32(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v31(conn);
@@ -56603,7 +56603,7 @@ pub fn get_cfvar(conn: &Connection, symbol: &str) -> Result<Option<CornishFisher
     }
 }
 
-// ── ADR-140 Round 32 schema v33 + upsert/get ─────────────────────────────
+// ── Round 32 schema v33 + upsert/get ─────────────────────────────
 
 pub fn create_research_tables_v33(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v32(conn);
@@ -56786,7 +56786,7 @@ pub fn get_apen(conn: &Connection, symbol: &str) -> Result<Option<ApenSnapshot>,
     }
 }
 
-// ── ADR-141 Round 33 schema v34 + upsert/get ─────────────────────────────
+// ── Round 33 schema v34 + upsert/get ─────────────────────────────
 
 pub fn create_research_tables_v34(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v33(conn);
@@ -56977,7 +56977,7 @@ pub fn get_gini(conn: &Connection, symbol: &str) -> Result<Option<GiniSnapshot>,
     }
 }
 
-// ── ADR-142 Round 34 schema v35 ──
+// ── Round 34 schema v35 ──
 
 pub fn create_research_tables_v35(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v34(conn);
@@ -57164,7 +57164,7 @@ pub fn get_specent(conn: &Connection, symbol: &str) -> Result<Option<SpecentSnap
     }
 }
 
-// ── ADR-143 Round 35 schema v36 ──
+// ── Round 35 schema v36 ──
 
 pub fn create_research_tables_v36(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v35(conn);
@@ -57355,7 +57355,7 @@ pub fn get_ewmavol(conn: &Connection, symbol: &str) -> Result<Option<EwmaVolSnap
     }
 }
 
-// ── ADR-144 Round 36 schema v37 ──
+// ── Round 36 schema v37 ──
 
 pub fn create_research_tables_v37(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v36(conn);
@@ -57542,7 +57542,7 @@ pub fn get_peakover(conn: &Connection, symbol: &str) -> Result<Option<PeakoverSn
     }
 }
 
-/// ADR-145 Round 37 schema v38: adds `research_higuchi`, `research_pickands`,
+/// Round 37 schema v38: adds `research_higuchi`, `research_pickands`,
 /// `research_kappa3`, `research_lyapunov`, `research_rankac`. Additive over v37.
 pub fn create_research_tables_v38(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v37(conn);
@@ -57733,7 +57733,7 @@ pub fn get_rankac(conn: &Connection, symbol: &str) -> Result<Option<RankacSnapsh
     }
 }
 
-/// ADR-146 Round 38 schema v39: adds `research_bnsjump`, `research_pproot`,
+/// Round 38 schema v39: adds `research_bnsjump`, `research_pproot`,
 /// `research_mfdfa`, `research_hillks`, `research_tsi`. Additive over v38.
 pub fn create_research_tables_v39(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v38(conn);
@@ -57916,7 +57916,7 @@ pub fn get_tsi(conn: &Connection, symbol: &str) -> Result<Option<TsiSnapshot>, S
     }
 }
 
-/// ADR-147 Round 39 schema v40: adds `research_garch11`, `research_sadf`,
+/// Round 39 schema v40: adds `research_garch11`, `research_sadf`,
 /// `research_cordim`, `research_skspec`, `research_automi`. Additive over v39.
 pub fn create_research_tables_v40(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v39(conn);
@@ -58099,7 +58099,7 @@ pub fn get_automi(conn: &Connection, symbol: &str) -> Result<Option<AutomiSnapsh
     }
 }
 
-/// ADR-149 Round 40 schema v41: adds `research_durbinwatson`,
+/// Round 40 schema v41: adds `research_durbinwatson`,
 /// `research_bdstest`, `research_breuschpagan`, `research_turnpts`,
 /// `research_periodogram`. Additive over v40.
 pub fn create_research_tables_v41(conn: &Connection) -> Result<(), String> {
@@ -58307,7 +58307,7 @@ pub fn get_periodogram(
     }
 }
 
-/// ADR-150 Round 41 schema v42: adds `research_mcleodli`, `research_oufit`,
+/// Round 41 schema v42: adds `research_mcleodli`, `research_oufit`,
 /// `research_gph`, `research_burgspec`, `research_kendalltau`. Additive over v41.
 pub fn create_research_tables_v42(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v41(conn);
@@ -58500,7 +58500,7 @@ pub fn get_kendalltau(
     }
 }
 
-// ── ADR-151 Round 42 schema ────────────────────────────────────────────────
+// ── Round 42 schema ────────────────────────────────────────────────
 
 pub fn create_research_tables_v43(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v42(conn);
@@ -58712,7 +58712,7 @@ pub fn get_kama(conn: &Connection, symbol: &str) -> Result<Option<KamaSnapshot>,
     }
 }
 
-// ── ADR-152 Round 43 schema ────────────────────────────────────────────────
+// ── Round 43 schema ────────────────────────────────────────────────
 
 pub fn create_research_tables_v44(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v43(conn);
@@ -59629,7 +59629,7 @@ pub fn get_awesome(conn: &Connection, symbol: &str) -> Result<Option<AwesomeSnap
     }
 }
 
-/// ADR-158 Round 48 tables: EFI, EMV, NVI, PVI, COPPOCK.
+/// Round 48 tables: EFI, EMV, NVI, PVI, COPPOCK.
 pub fn create_research_tables_v49(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v48(conn);
     conn.execute_batch(
@@ -60704,7 +60704,7 @@ pub fn get_pvt(conn: &Connection, symbol: &str) -> Result<Option<PvtSnapshot>, S
     }
 }
 
-/// ADR-165 Round 54 schema: AC / CHVOL / BBWIDTH / ELDERIMP / RMI
+/// Round 54 schema: AC / CHVOL / BBWIDTH / ELDERIMP / RMI
 pub fn create_research_tables_v55(conn: &Connection) -> Result<(), String> {
     create_research_tables_v54(conn)?;
     conn.execute_batch(
@@ -60938,7 +60938,7 @@ pub fn get_all_updm(conn: &Connection) -> Result<Vec<UpdmSnapshot>, String> {
     Ok(rows)
 }
 
-// ── ADR-166 Options Expiration Calendar ────────────────────────────────────
+// ── Options Expiration Calendar ────────────────────────────────────
 
 /// Tier 1: entry in the offline market calendar — one expiration candidate
 /// generated from pure date math. `expiry_type` is the canonical
@@ -62270,7 +62270,7 @@ pub fn get_stochf(conn: &Connection, symbol: &str) -> Result<Option<StochfSnapsh
     }
 }
 
-// ── ADR-176 Round 64 v66 schema + helpers ──────────────────────────────────
+// ── Round 64 v66 schema + helpers ──────────────────────────────────
 
 pub fn create_research_tables_v66(conn: &Connection) -> Result<(), String> {
     create_research_tables_v65(conn)?;
@@ -62487,7 +62487,7 @@ pub fn get_ht_phasor(conn: &Connection, symbol: &str) -> Result<Option<HtPhasorS
     }
 }
 
-// ── ADR-177 Round 65 schema (v67) ──────────────────────────────────────────
+// ── Round 65 schema (v67) ──────────────────────────────────────────
 pub fn create_research_tables_v67(conn: &Connection) -> Result<(), String> {
     create_research_tables_v66(conn)?;
     conn.execute_batch(
@@ -62677,7 +62677,7 @@ pub fn get_adxr(conn: &Connection, symbol: &str) -> Result<Option<AdxrSnapshot>,
     }
 }
 
-// ── ADR-178 Round 66 schema (v68) ──────────────────────────────────────────
+// ── Round 66 schema (v68) ──────────────────────────────────────────
 pub fn create_research_tables_v68(conn: &Connection) -> Result<(), String> {
     create_research_tables_v67(conn)?;
     conn.execute_batch(
@@ -62885,7 +62885,7 @@ pub fn get_variance(conn: &Connection, symbol: &str) -> Result<Option<VarianceSn
     }
 }
 
-// ── ADR-179 Round 67 schema (v69) ──────────────────────────────────────────
+// ── Round 67 schema (v69) ──────────────────────────────────────────
 pub fn create_research_tables_v69(conn: &Connection) -> Result<(), String> {
     create_research_tables_v68(conn)?;
     conn.execute_batch(
@@ -63088,7 +63088,7 @@ pub fn get_dx(conn: &Connection, symbol: &str) -> Result<Option<DxSnapshot>, Str
     }
 }
 
-// ── ADR-180 Round 68 — schema v70 + upsert/get helpers ─────────────────────
+// ── Round 68 — schema v70 + upsert/get helpers ─────────────────────
 
 pub fn create_research_tables_v70(conn: &Connection) -> Result<(), String> {
     create_research_tables_v69(conn)?;
@@ -63280,7 +63280,7 @@ pub fn get_correl(conn: &Connection, symbol: &str) -> Result<Option<CorrelSnapsh
     }
 }
 
-// ── ADR-181 Round 69 — schema v71 + upsert/get helpers ─────────────────────
+// ── Round 69 — schema v71 + upsert/get helpers ─────────────────────
 
 pub fn create_research_tables_v71(conn: &Connection) -> Result<(), String> {
     create_research_tables_v70(conn)?;
@@ -63671,7 +63671,7 @@ pub fn get_linreg_intercept(
     }
 }
 
-// ── Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP (ADR-183) ──
+// ── Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP ──
 
 pub fn create_research_tables_v73(conn: &Connection) -> Result<(), String> {
     create_research_tables_v72(conn)?;
@@ -63878,7 +63878,7 @@ pub fn get_mavp(conn: &Connection, symbol: &str) -> Result<Option<MavpSnapshot>,
     }
 }
 
-// ── ADR-184 Round 72 CDL* SQLite schema + helpers ──────────────────────────
+// ── Round 72 CDL* SQLite schema + helpers ──────────────────────────
 
 pub fn create_research_tables_v74(conn: &Connection) -> Result<(), String> {
     create_research_tables_v73(conn)?;
@@ -64103,7 +64103,7 @@ pub fn get_cdl_harami(
     }
 }
 
-// ── ADR-185 Round 73 CDL* 3-bar/2-bar SQLite schema + helpers ─────────────
+// ── Round 73 CDL* 3-bar/2-bar SQLite schema + helpers ─────────────
 
 pub fn create_research_tables_v75(conn: &Connection) -> Result<(), String> {
     create_research_tables_v74(conn)?;
@@ -64332,7 +64332,7 @@ pub fn get_cdl_dark_cloud_cover(
     }
 }
 
-// ── ADR-186 Round 74 schema v76 + upsert/get fns — CDLPIERCING /
+// ── Round 74 schema v76 + upsert/get fns — CDLPIERCING /
 //    CDLDRAGONFLYDOJI / CDLGRAVESTONEDOJI / CDLHANGINGMAN /
 //    CDLINVERTEDHAMMER ──
 
@@ -64566,7 +64566,7 @@ pub fn get_cdl_inverted_hammer(
     }
 }
 
-// ── ADR-187 Round 75 schema v77 + upsert/get fns — CDLHARAMICROSS /
+// ── Round 75 schema v77 + upsert/get fns — CDLHARAMICROSS /
 //    CDLLONGLEGGEDDOJI / CDLMARUBOZU / CDLSPINNINGTOP / CDLTRISTAR ──
 
 pub fn create_research_tables_v77(conn: &Connection) -> Result<(), String> {
@@ -64793,7 +64793,7 @@ pub fn get_cdl_tristar(
     }
 }
 
-// ── ADR-189 Round 76 schema v78 (Quant Stats) ─────────────────────────────
+// ── Round 76 schema v78 (Quant Stats) ─────────────────────────────
 
 pub fn create_research_tables_v78(conn: &Connection) -> Result<(), String> {
     create_research_tables_v77(conn)?;
@@ -65004,7 +65004,7 @@ pub fn get_hlvclust(conn: &Connection, symbol: &str) -> Result<Option<HlvClustSn
     }
 }
 
-// ── ADR-190 Round 77 schema v79 (Quant Stats) ─────────────────────────────
+// ── Round 77 schema v79 (Quant Stats) ─────────────────────────────
 
 pub fn create_research_tables_v79(conn: &Connection) -> Result<(), String> {
     create_research_tables_v78(conn)?;
@@ -65211,7 +65211,7 @@ pub fn get_kupiecpof(conn: &Connection, symbol: &str) -> Result<Option<KupiecPof
     }
 }
 
-// ── ADR-191 Round 76 schema v80 (TA-Lib CDL) ─────────────
+// ── Round 76 schema v80 (TA-Lib CDL) ─────────────
 //    CDLDOJISTAR / CDLMORNINGDOJISTAR / CDLEVENINGDOJISTAR /
 //    CDLABANDONEDBABY / CDL3INSIDE
 
@@ -65456,7 +65456,7 @@ pub fn get_cdl_three_inside(
     }
 }
 
-// ── ADR-192 Round 77 schema v81 (TA-Lib CDL) ─────────────────────────────
+// ── Round 77 schema v81 (TA-Lib CDL) ─────────────────────────────
 //    CDLBELTHOLD / CDLCLOSINGMARUBOZU / CDLHIGHWAVE / CDLLONGLINE /
 //    CDLSHORTLINE
 
@@ -65690,7 +65690,7 @@ pub fn get_cdl_short_line(
     }
 }
 
-// ── ADR-193 Round 78 schema v82 (TA-Lib CDL) ─────────────────────────────
+// ── Round 78 schema v82 (TA-Lib CDL) ─────────────────────────────
 //    CDLCOUNTERATTACK / CDLHOMINGPIGEON / CDLINNECK / CDLONNECK /
 //    CDLTHRUSTING
 
@@ -65925,7 +65925,7 @@ pub fn get_cdl_thrusting(
     }
 }
 
-// ── ADR-190 Round 79 schema v83 (TA-Lib CDL) ─────────────────────────────
+// ── Round 79 schema v83 (TA-Lib CDL) ─────────────────────────────
 //    CDL2CROWS / CDL3LINESTRIKE / CDL3OUTSIDE / CDLMATCHINGLOW
 
 pub fn create_research_tables_v83(conn: &Connection) -> Result<(), String> {
@@ -66120,7 +66120,7 @@ pub fn get_cdl_matching_low(
     }
 }
 
-// ── ADR-190 Round 80 schema v84 (TA-Lib CDL) ─────────────────────────────
+// ── Round 80 schema v84 (TA-Lib CDL) ─────────────────────────────
 //    CDLSEPARATINGLINES / CDLSTICKSANDWICH / CDLRICKSHAWMAN / CDLTAKURI
 
 pub fn create_research_tables_v84(conn: &Connection) -> Result<(), String> {
@@ -66315,7 +66315,7 @@ pub fn get_cdl_takuri(
     }
 }
 
-// ── ADR-191 Round 81/82 schema v85 (TA-Lib CDL) ──────────────────────────
+// ── Round 81/82 schema v85 (TA-Lib CDL) ──────────────────────────
 //    CDL3STARSINSOUTH / CDLIDENTICAL3CROWS / CDLKICKING /
 //    CDLKICKINGBYLENGTH / CDLLADDERBOTTOM / CDLUNIQUE3RIVER
 
@@ -66612,7 +66612,7 @@ pub fn get_cdl_unique_three_river(
     }
 }
 
-// ── ADR-192 Round 83/84 schema v86 (TA-Lib CDL) ──────────────────────────
+// ── Round 83/84 schema v86 (TA-Lib CDL) ──────────────────────────
 //    CDLADVANCEBLOCK / CDLBREAKAWAY / CDLGAPSIDESIDEWHITE /
 //    CDLUPSIDEGAP2CROWS / CDLXSIDEGAP3METHODS / CDLCONCEALBABYSWALL
 
@@ -66909,7 +66909,7 @@ pub fn get_cdl_conceal_baby_swallow(
     }
 }
 
-// ── ADR-193 Round 85/86 schema v87 (TA-Lib CDL) ──────────────────────────
+// ── Round 85/86 schema v87 (TA-Lib CDL) ──────────────────────────
 //    CDLHIKKAKE / CDLHIKKAKEMOD / CDLMATHOLD /
 //    CDLRISEFALL3METHODS
 
@@ -67100,7 +67100,7 @@ pub fn get_cdl_rise_fall_three_methods(
     }
 }
 
-// ── ADR-194 Round 87/88 schema v88 (TA-Lib CDL) ──────────────────────────
+// ── Round 87/88 schema v88 (TA-Lib CDL) ──────────────────────────
 //    CDLSTALLEDPATTERN / CDLTASUKIGAP
 
 pub fn create_research_tables_v88(conn: &Connection) -> Result<(), String> {
@@ -67203,7 +67203,7 @@ pub fn get_cdl_tasuki_gap(
     }
 }
 
-// ── ADR-195 Round 89/90 schema v89 (deferred Godel parity surfaces) ─────
+// ── Round 89/90 schema v89 (deferred Godel parity surfaces) ─────
 //    MOMRANK_MULTI / CORRSTK
 
 pub fn create_research_tables_v89(conn: &Connection) -> Result<(), String> {
@@ -67310,7 +67310,7 @@ pub fn get_all_corrstk(conn: &Connection) -> Result<Vec<CorrStkSnapshot>, String
     Ok(rows)
 }
 
-// ── ADR-196 Round 91/92 schema v90 (deferred peer-rank follow-through) ──
+// ── Round 91/92 schema v90 (deferred peer-rank follow-through) ──
 //    TLRANK / CORRRANK
 
 pub fn create_research_tables_v90(conn: &Connection) -> Result<(), String> {
@@ -67408,7 +67408,7 @@ pub fn get_corrrank(
     }
 }
 
-// ── ADR-197 Round 93/94 schema v91 (remaining cache-backed parity) ──────
+// ── Round 93/94 schema v91 (remaining cache-backed parity) ──────
 //    OPERANK_DELTA / DIVACC / EPSACC / VRP
 
 pub fn create_research_tables_v91(conn: &Connection) -> Result<(), String> {
@@ -67591,7 +67591,7 @@ pub fn get_vrp(conn: &Connection, symbol: &str) -> Result<Option<VolRiskPremiumS
     }
 }
 
-// ── ADR-198 Round 95 schema v92 (short-interest history + trend rank) ────
+// ── Round 95 schema v92 (short-interest history + trend rank) ────
 //    SHORT_INTEREST_HISTORY / SHORTRANK_DELTA
 
 pub fn create_research_tables_v92(conn: &Connection) -> Result<(), String> {
@@ -67721,7 +67721,7 @@ pub fn get_shortrank_delta(
     }
 }
 
-// ── ADR-199 Round 96 schema v93 (insider ownership concentration) ────────
+// ── Round 96 schema v93 (insider ownership concentration) ────────
 //    INSIDERCONC
 
 pub fn create_research_tables_v93(conn: &Connection) -> Result<(), String> {
@@ -68470,7 +68470,7 @@ mod tests {
         assert!(summary.sections.iter().any(|s| s.title == "Q&A"));
     }
 
-    // ── ADR-109 ─────────────────────────────────────────────────────────
+    // ── ─────────────────────────────────────────────────────────
 
     fn open_mem_conn() -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -68589,7 +68589,7 @@ mod tests {
         assert_eq!(rows.len(), 2);
     }
 
-    // ── ADR-110 ─────────────────────────────────────────────────────────
+    // ── ─────────────────────────────────────────────────────────
 
     fn open_mem_conn_v3() -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -68727,7 +68727,7 @@ mod tests {
         assert!(r.noncomm_net_change > 0.0);
     }
 
-    // ── ADR-111 ─────────────────────────────────────────────────────────
+    // ── ─────────────────────────────────────────────────────────
 
     fn open_mem_conn_v4() -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -68938,7 +68938,7 @@ mod tests {
         assert_eq!(got[1].sector, "Information Technology");
     }
 
-    // ── ADR-112 Round 5 ─────────────────────────────────────────────────
+    // ── Round 5 ─────────────────────────────────────────────────
 
     fn open_mem_conn_v5() -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -69139,7 +69139,7 @@ mod tests {
         assert!(got[0].surprise > 0.0);
     }
 
-    // ── ADR-113 Round 6 ─────────────────────────────────────────────────
+    // ── Round 6 ─────────────────────────────────────────────────
 
     fn open_mem_conn_v6() -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -69369,7 +69369,7 @@ mod tests {
         assert!((m.volume - 45_000_000.0).abs() < 1.0);
     }
 
-    // ── ADR-114 Round 7 ─────────────────────────────────────────────────
+    // ── Round 7 ─────────────────────────────────────────────────
 
     fn open_mem_conn_v7() -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -69707,7 +69707,7 @@ mod tests {
         assert_eq!(got.identifiers[0].figi, "BBG000B9XRY4");
     }
 
-    // ── ADR-115 Round 8 tests ──────────────────────────────────────────
+    // ── Round 8 tests ──────────────────────────────────────────
 
     fn open_mem_conn_v8() -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -70125,7 +70125,7 @@ mod tests {
         assert!((snap.iv_52w_high_pct - 25.0).abs() < 1e-6);
     }
 
-    // ── ADR-116 Round 9 tests ──────────────────────────────────────────
+    // ── Round 9 tests ──────────────────────────────────────────
 
     fn open_mem_conn_v9() -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -70509,7 +70509,7 @@ mod tests {
         assert!(!snap.note.is_empty());
     }
 
-    // ── ADR-117 Round 10 tests ──────────────────────────────────────────
+    // ── Round 10 tests ──────────────────────────────────────────
 
     fn open_mem_conn_v10() -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -70854,7 +70854,7 @@ mod tests {
         assert_eq!(snap.squeeze_risk_label, "INSUFFICIENT_DATA");
     }
 
-    // ── ADR-118 Godel Parity Round 11 tests ─────────────────────────────
+    // ── Godel Parity Round 11 tests ─────────────────────────────
 
     fn open_mem_conn_v11() -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -71250,7 +71250,7 @@ mod tests {
         assert!(!snap.note.is_empty());
     }
 
-    // ── ADR-119 Godel Parity Round 12 tests ────────────────────────────────
+    // ── Godel Parity Round 12 tests ────────────────────────────────
 
     fn open_mem_conn_v12() -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -71698,7 +71698,7 @@ mod tests {
         assert_eq!(snap.bias_label, "NO_COVERAGE");
     }
 
-    // ── ADR-120 Godel Parity Round 13 tests ────────────────────────────────
+    // ── Godel Parity Round 13 tests ────────────────────────────────
 
     fn open_mem_conn_v13() -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -72059,7 +72059,7 @@ mod tests {
         assert_eq!(snap.inputs_available, 0);
     }
 
-    // ── ADR-121 Round 14 tests ─────────────────────────────────────────────
+    // ── Round 14 tests ─────────────────────────────────────────────
 
     #[test]
     fn growm_snapshot_roundtrip() {
@@ -72350,7 +72350,7 @@ mod tests {
         assert_eq!(snap.overall_trend_label, "INSUFFICIENT_DATA");
     }
 
-    // ── ADR-122 Round 15 tests ─────────────────────────────────────────────
+    // ── Round 15 tests ─────────────────────────────────────────────
 
     #[test]
     fn val_snapshot_roundtrip() {
@@ -72678,7 +72678,7 @@ mod tests {
         assert_eq!(snap.coverage_label, "NONE");
     }
 
-    // ── ADR-123 Round 16 tests ─────────────────────────────────────────────
+    // ── Round 16 tests ─────────────────────────────────────────────
 
     #[test]
     fn vrk_snapshot_roundtrip() {
@@ -72984,7 +72984,7 @@ mod tests {
         assert_eq!(snap.drift_direction_label, "INSUFFICIENT_DATA");
     }
 
-    // ── ADR-124 Round 17 tests ────────────────────────────────────────────
+    // ── Round 17 tests ────────────────────────────────────────────
 
     fn mk_mom(sym: &str, composite: f64) -> MomentumSnapshot {
         MomentumSnapshot {
@@ -73275,7 +73275,7 @@ mod tests {
         assert_eq!(snap.relative_label, "NO_DATA");
     }
 
-    // ── ADR-125 Round 18 tests ────────────────────────────────────────────
+    // ── Round 18 tests ────────────────────────────────────────────
 
     fn mk_lev(sym: &str, debt: f64, equity: f64) -> LeverageSnapshot {
         LeverageSnapshot {
@@ -73595,7 +73595,7 @@ mod tests {
         assert_eq!(snap.streak_label, "INSUFFICIENT_DATA");
     }
 
-    // ── ADR-126 Round 19 tests ────────────────────────────────────────────
+    // ── Round 19 tests ────────────────────────────────────────────
 
     fn mk_divg(sym: &str, cagr3: f64, trend: &str) -> DivgSnapshot {
         DivgSnapshot {
@@ -73883,7 +73883,7 @@ mod tests {
         assert_eq!(snap.streak_label, "INSUFFICIENT_DATA");
     }
 
-    // ── ADR-127 Round 20 tests ────────────────────────────────────────────
+    // ── Round 20 tests ────────────────────────────────────────────
 
     #[test]
     fn dvdyieldrank_snapshot_roundtrip() {
@@ -74192,7 +74192,7 @@ mod tests {
         assert_eq!(snap.trend_label, "INSUFFICIENT_DATA");
     }
 
-    // ── ADR-128 Round 21 tests ──
+    // ── Round 21 tests ──
 
     #[test]
     fn betarank_snapshot_roundtrip() {
@@ -74529,7 +74529,7 @@ mod tests {
         assert_eq!(snap.momentum_label, "INSUFFICIENT_DATA");
     }
 
-    // ── ADR-129 Round 22 tests ──
+    // ── Round 22 tests ──
 
     #[test]
     fn retskew_snapshot_roundtrip() {
@@ -74809,7 +74809,7 @@ mod tests {
         assert_eq!(snap.range_label, "INSUFFICIENT_DATA");
     }
 
-    // ── ADR-130 Web article ingestion tests ──
+    // ── Web article ingestion tests ──
 
     #[test]
     fn ingested_articles_roundtrip() {
@@ -75025,7 +75025,7 @@ Trailing text.
         assert_eq!(snap.articles[0].title, "Old article");
     }
 
-    // ── ADR-131 Round 23 tests ──
+    // ── Round 23 tests ──
 
     fn synthetic_up_trend_bars() -> Vec<HistoricalPriceRow> {
         // 60 bars, each slightly higher than the previous (deterministic
@@ -75265,7 +75265,7 @@ Trailing text.
         assert!(snap.up_days > 0 && snap.down_days > 0);
     }
 
-    // ── ADR-132 Round 24 tests ──
+    // ── Round 24 tests ──
 
     fn synthetic_gappy_bars() -> Vec<HistoricalPriceRow> {
         // 40 bars with intentional overnight gaps (open ≠ prior close).
@@ -75468,7 +75468,7 @@ Trailing text.
         assert!(snap.beta.is_finite());
     }
 
-    // ── ADR-133 Round 25 tests ──
+    // ── Round 25 tests ──
 
     #[test]
     fn downvol_snapshot_roundtrip() {
@@ -75659,7 +75659,7 @@ Trailing text.
         assert_eq!(snap.cv_label, "INSUFFICIENT_DATA");
     }
 
-    // ── ADR-134 Round 26 tests ──
+    // ── Round 26 tests ──
 
     #[test]
     fn calmar_roundtrip() {
@@ -75848,7 +75848,7 @@ Trailing text.
         );
     }
 
-    // ── ADR-135 Round 27 tests ──
+    // ── Round 27 tests ──
 
     #[test]
     fn omega_roundtrip() {
@@ -76120,7 +76120,7 @@ Trailing text.
         assert!(snap.implicit_spread_bps > 0.0);
     }
 
-    // ── ADR-136 Round 28 tests ──
+    // ── Round 28 tests ──
 
     fn synthetic_ohlc_bars_150() -> Vec<HistoricalPriceRow> {
         // 150 dated bars with non-trivial intraday ranges and a mild
@@ -76388,7 +76388,7 @@ Trailing text.
         assert!(snap.dow_sample_count.iter().all(|c| *c >= 10));
     }
 
-    // ── ADR-137 Round 29 tests ──
+    // ── Round 29 tests ──
 
     fn synthetic_oscillating_bars_150() -> Vec<HistoricalPriceRow> {
         // 150 bars alternating up/down ~0.5% so we have both positive and
@@ -76646,7 +76646,7 @@ Trailing text.
         assert!((snap.epsilon - 1e-6).abs() < 1e-15);
     }
 
-    // ── ADR-138 Round 30 tests: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──
+    // ── Round 30 tests: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──
 
     #[test]
     fn psr_snapshot_roundtrip() {
@@ -77059,7 +77059,7 @@ Trailing text.
         assert!(snap.gauss_var_5pct_pct <= snap.mean_ret_pct);
     }
 
-    // ── ADR-140 Round 32 tests ────────────────────────────────────────────
+    // ── Round 32 tests ────────────────────────────────────────────
 
     #[test]
     fn entropy_snapshot_roundtrip() {
@@ -77258,7 +77258,7 @@ Trailing text.
         assert_eq!(snap.apen_label, "REGULAR");
     }
 
-    // ── ADR-141 Round 33 tests ────────────────────────────────────────────
+    // ── Round 33 tests ────────────────────────────────────────────
 
     #[test]
     fn upr_snapshot_roundtrip() {
@@ -77444,7 +77444,7 @@ Trailing text.
         assert_eq!(snap.gini_label, "LOW_CONCENTRATION");
     }
 
-    // ── ADR-142 Round 34 tests ──
+    // ── Round 34 tests ──
 
     #[test]
     fn sampen_snapshot_roundtrip() {
@@ -77609,7 +77609,7 @@ Trailing text.
         assert!(snap.specent_label == "PERIODIC" || snap.specent_label == "MODERATE_PERIODICITY");
     }
 
-    // ── ADR-143 Round 35 tests ──
+    // ── Round 35 tests ──
 
     #[test]
     fn robvol_snapshot_roundtrip() {
@@ -77780,7 +77780,7 @@ Trailing text.
         assert!((snap.lambda - 0.94).abs() < 1e-9);
     }
 
-    // ── ADR-144 Round 36 tests ────────────────────────────────────
+    // ── Round 36 tests ────────────────────────────────────
 
     #[test]
     fn ksnorm_roundtrip() {
@@ -78113,7 +78113,7 @@ Trailing text.
         assert!(snap.max_abs_rho >= snap.mean_abs_rho);
     }
 
-    // ── Round 38 (ADR-146) ─────────────────────────────────────────────────
+    // ── Round 38 ─────────────────────────────────────────────────
 
     #[test]
     fn bnsjump_roundtrip() {
@@ -78501,7 +78501,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-149 Round 40 tests ──
+    // ── Round 40 tests ──
 
     #[test]
     fn durbinwatson_roundtrip() {
@@ -78695,7 +78695,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-150 Round 41 tests ──
+    // ── Round 41 tests ──
 
     #[test]
     fn mcleodli_roundtrip() {
@@ -78912,7 +78912,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-151 Round 42 tests ──
+    // ── Round 42 tests ──
 
     #[test]
     fn squeeze_roundtrip() {
@@ -79164,7 +79164,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-152 Round 43 tests ──
+    // ── Round 43 tests ──
     #[test]
     fn ichimoku_roundtrip() {
         let conn = Connection::open_in_memory().unwrap();
@@ -79381,7 +79381,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-153 Round 44 tests ──────────────────────────────────────────────
+    // ── Round 44 tests ──────────────────────────────────────────────
 
     #[test]
     fn adx_roundtrip() {
@@ -79581,7 +79581,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-154 Round 45 tests ──────────────────────────────────────────────
+    // ── Round 45 tests ──────────────────────────────────────────────
 
     #[test]
     fn vortex_roundtrip() {
@@ -79781,7 +79781,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-155 Round 46 tests ──────────────────────────────────────────────
+    // ── Round 46 tests ──────────────────────────────────────────────
 
     #[test]
     fn ppo_roundtrip() {
@@ -79983,7 +79983,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-156 Round 47 tests ──────────────────────────────────────────────
+    // ── Round 47 tests ──────────────────────────────────────────────
 
     #[test]
     fn mass_roundtrip() {
@@ -80191,7 +80191,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-158 Round 48 tests ──────────────────────────────────────────────
+    // ── Round 48 tests ──────────────────────────────────────────────
 
     #[test]
     fn efi_roundtrip() {
@@ -80557,7 +80557,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-160 Round 50 tests ──
+    // ── Round 50 tests ──
 
     #[test]
     fn stoch_roundtrip() {
@@ -80952,7 +80952,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-163 Round 52: ALMA / ZLEMA / ELDERRAY / TSF / RVI ──────────────
+    // ── Round 52: ALMA / ZLEMA / ELDERRAY / TSF / RVI ──────────────
 
     #[test]
     fn alma_roundtrip() {
@@ -81144,7 +81144,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-164 Round 53 tests ────────────────────────────────────────────
+    // ── Round 53 tests ────────────────────────────────────────────
 
     #[test]
     fn trima_roundtrip() {
@@ -82588,7 +82588,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-172 Round 60 tests ───────────────────────────────────────────
+    // ── Round 60 tests ───────────────────────────────────────────
 
     #[test]
     fn wma_roundtrip() {
@@ -82964,7 +82964,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-174 Round 62 tests ──
+    // ── Round 62 tests ──
 
     #[test]
     fn mass_index_roundtrip() {
@@ -83155,7 +83155,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-175 Round 63 tests ──
+    // ── Round 63 tests ──
 
     #[test]
     fn linearreg_slope_roundtrip() {
@@ -83334,7 +83334,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-176 Round 64 tests ──
+    // ── Round 64 tests ──
     #[test]
     fn linearreg_roundtrip() {
         let conn = Connection::open_in_memory().unwrap();
@@ -83711,7 +83711,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-178 Round 66 ──
+    // ── Round 66 ──
     #[test]
     fn avgprice_roundtrip() {
         let conn = Connection::open_in_memory().unwrap();
@@ -83893,7 +83893,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-179 Round 67 ──
+    // ── Round 67 ──
     #[test]
     fn plus_di_roundtrip() {
         let conn = Connection::open_in_memory().unwrap();
@@ -84080,7 +84080,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-180 Round 68 ──
+    // ── Round 68 ──
     #[test]
     fn roc_roundtrip() {
         let conn = Connection::open_in_memory().unwrap();
@@ -84269,7 +84269,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-181 Round 69 ──
+    // ── Round 69 ──
     #[test]
     fn min_roundtrip() {
         let conn = Connection::open_in_memory().unwrap();
@@ -84645,7 +84645,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-183 Round 71 tests ──────────────────────────────────────────────
+    // ── Round 71 tests ──────────────────────────────────────────────
 
     #[test]
     fn aroonosc_roundtrip() {
@@ -84856,7 +84856,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-184 Round 72 CDL* tests ────────────────────────────────────────
+    // ── Round 72 CDL* tests ────────────────────────────────────────
 
     fn synthetic_cdl_doji_bar() -> HistoricalPriceRow {
         // Final bar has open ≈ close (tiny body) with long shadows — a doji.
@@ -85194,7 +85194,7 @@ Trailing text.
         assert!(snap.body_size_ratio < 1.0);
     }
 
-    // ── ADR-185 Round 73 CDL* tests ────────────────────────────────────────
+    // ── Round 73 CDL* tests ────────────────────────────────────────
 
     fn boring_green_bars(count: usize, start_date_month: u32) -> Vec<HistoricalPriceRow> {
         (0..count)
@@ -85553,7 +85553,7 @@ Trailing text.
         assert!(snap.penetration_pct > 0.0);
     }
 
-    // ── ADR-186 Round 74 tests — CDLPIERCING / CDLDRAGONFLYDOJI /
+    // ── Round 74 tests — CDLPIERCING / CDLDRAGONFLYDOJI /
     //    CDLGRAVESTONEDOJI / CDLHANGINGMAN / CDLINVERTEDHAMMER ──
 
     #[test]
@@ -86931,7 +86931,7 @@ Trailing text.
         assert!(snap.penetration_pct > 25.0 && snap.penetration_pct < 50.0);
     }
 
-    // ── ADR-190 Round 79/80 tests — CDL2CROWS / CDL3LINESTRIKE /
+    // ── Round 79/80 tests — CDL2CROWS / CDL3LINESTRIKE /
     //    CDL3OUTSIDE / CDLMATCHINGLOW / CDLSEPARATINGLINES /
     //    CDLSTICKSANDWICH / CDLRICKSHAWMAN / CDLTAKURI ──
 
@@ -87419,7 +87419,7 @@ Trailing text.
         assert!(snap.lower_shadow_pct >= 70.0);
     }
 
-    // ── ADR-191 Round 81/82 tests — CDL3STARSINSOUTH /
+    // ── Round 81/82 tests — CDL3STARSINSOUTH /
     //    CDLIDENTICAL3CROWS / CDLKICKING / CDLKICKINGBYLENGTH /
     //    CDLLADDERBOTTOM / CDLUNIQUE3RIVER ──
 
@@ -87845,7 +87845,7 @@ Trailing text.
         assert!(snap.third_close_vs_second_close_pct < 0.0);
     }
 
-    // ── ADR-192 Round 83/84 tests — CDLADVANCEBLOCK / CDLBREAKAWAY /
+    // ── Round 83/84 tests — CDLADVANCEBLOCK / CDLBREAKAWAY /
     //    CDLGAPSIDESIDEWHITE / CDLUPSIDEGAP2CROWS /
     //    CDLXSIDEGAP3METHODS / CDLCONCEALBABYSWALL ──
 
@@ -88304,7 +88304,7 @@ Trailing text.
         assert!(snap.fourth_range_engulf_pct > 0.0);
     }
 
-    // ── ADR-193 Round 85/86 tests — CDLHIKKAKE / CDLHIKKAKEMOD /
+    // ── Round 85/86 tests — CDLHIKKAKE / CDLHIKKAKEMOD /
     //    CDLMATHOLD / CDLRISEFALL3METHODS ──
 
     #[test]
@@ -88641,7 +88641,7 @@ Trailing text.
         assert!(snap.middle_avg_body_pct_range <= 35.0);
     }
 
-    // ── ADR-194 Round 87/88 tests — CDLSTALLEDPATTERN /
+    // ── Round 87/88 tests — CDLSTALLEDPATTERN /
     //    CDLTASUKIGAP ──
 
     #[test]
@@ -88784,7 +88784,7 @@ Trailing text.
         assert!(snap.gap_fill_pct > 0.0 && snap.gap_fill_pct < 100.0);
     }
 
-    // ── ADR-189 Round 76 (Quant Stats) tests ──
+    // ── Round 76 (Quant Stats) tests ──
 
     #[test]
     fn modsharpe_roundtrip() {
@@ -89011,7 +89011,7 @@ Trailing text.
         }
     }
 
-    // ── ADR-190 Round 77 (Quant Stats) tests ──
+    // ── Round 77 (Quant Stats) tests ──
 
     #[test]
     fn yangzhang_roundtrip() {

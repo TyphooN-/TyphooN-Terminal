@@ -22,7 +22,7 @@
 //! `cli_session_id` stays empty for them — the saved transcript is replayed into
 //! the chat pane and used as prompt context on the next turn.
 //!
-//! See ADR-157 for the full resume UX.
+//! See for the full resume UX.
 
 use crate::core::cache::SqliteCache as Cache;
 use serde::{Deserialize, Serialize};

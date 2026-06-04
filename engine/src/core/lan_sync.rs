@@ -183,517 +183,517 @@ const SYNCABLE_TABLES: &[&str] = &[
     "research_rating_changes",
     "research_financials",
     "research_executives",
-    // ── ADR-111 Round 4 ─────────────────────────────
+    // ── Round 4 ─────────────────────────────
     "research_stock_splits",
     "research_etf_holdings",
     "research_analyst_recs",
     "research_price_target",
     "research_esg",
     "research_index_members",
-    // ── ADR-112 Round 5 ─────────────────────────────
+    // ── Round 5 ─────────────────────────────
     "research_insider_trades",
     "research_institutional_holders",
     "research_shares_float",
     "research_historical_price",
     "research_earnings_surprise",
-    // ── ADR-113 Round 6 ─────────────────────────────
+    // ── Round 6 ─────────────────────────────
     "research_world_indices",
     "research_market_movers",
     "research_sector_performance",
     "research_wacc",
-    // ── ADR-114 Round 7 ─────────────────────────────
+    // ── Round 7 ─────────────────────────────
     "research_currency_rates",
     "research_beta",
     "research_ddm",
     "research_relative_valuation",
     "research_figi",
-    // ── ADR-115 Round 8 ─────────────────────────────
+    // ── Round 8 ─────────────────────────────
     "research_hra",
     "research_dcf",
     "research_svm",
     "research_options_chain",
     "research_ivol",
-    // ── ADR-116 Round 9 ─────────────────────────────
+    // ── Round 9 ─────────────────────────────
     "research_seasonality",
     "research_correlation",
     "research_total_return",
     "research_technicals",
     "research_vol_skew",
-    // ── ADR-117 Round 10 ────────────────────────────
+    // ── Round 10 ────────────────────────────
     "research_leverage",
     "research_accruals",
     "research_realized_vol",
     "research_fcf_yield",
     "research_short_interest",
-    // ── ADR-118 Round 11 ────────────────────────────
+    // ── Round 11 ────────────────────────────
     "research_altman_z",
     "research_piotroski",
     "research_ohlc_vol",
     "research_eps_beat",
     "research_price_target_dispersion",
-    // ── ADR-119 Round 12 ────────────────────────────
+    // ── Round 12 ────────────────────────────
     "research_insider_activity",
     "research_divg",
     "research_earm",
     "research_sector_rotation",
     "research_updm",
-    // ── ADR-120 Round 13 ────────────────────────────
+    // ── Round 13 ────────────────────────────
     "research_momentum",
     "research_liquidity",
     "research_breakout",
     "research_cash_cycle",
     "research_credit",
-    // ── ADR-121 Round 14 ────────────────────────────
+    // ── Round 14 ────────────────────────────
     "research_growm",
     "research_flow",
     "research_regime",
     "research_relvol",
     "research_margins",
-    // ── ADR-122 Round 15 ────────────────────────────
+    // ── Round 15 ────────────────────────────
     "research_val",
     "research_qual",
     "research_risk",
     "research_insstrk",
     "research_covg",
-    // ── ADR-123 Round 16 ────────────────────────────
+    // ── Round 16 ────────────────────────────
     "research_vrk",
     "research_qrk",
     "research_rrk",
     "research_relepsgr",
     "research_pead",
-    // ── ADR-124 Round 17 ────────────────────────────
+    // ── Round 17 ────────────────────────────
     "research_sizef",
     "research_momf",
     "research_peadrank",
     "research_fqm",
     "research_revrank",
-    // ── ADR-125 Round 18 ────────────────────────────
+    // ── Round 18 ────────────────────────────
     "research_levrank",
     "research_operank",
     "research_fqmrank",
     "research_liqrank",
     "research_surpstk",
-    // ── ADR-126 Round 19 ────────────────────────────
+    // ── Round 19 ────────────────────────────
     "research_dvdrank",
     "research_earmrank",
     "research_updgrank",
     "research_gy",
     "research_des",
-    // ── ADR-127 Round 20 ────────────────────────────
+    // ── Round 20 ────────────────────────────
     "research_dvdyieldrank",
     "research_shrank",
     "research_atrann",
     "research_ddhist",
     "research_priceperf",
-    // ── ADR-128 Round 21 ────────────────────────────
+    // ── Round 21 ────────────────────────────
     "research_betarank",
     "research_pegrank",
     "research_fhighlow",
     "research_rvcone",
     "research_calpb",
-    // ── ADR-129 Round 22 ────────────────────────────
+    // ── Round 22 ────────────────────────────
     "research_retskew",
     "research_retkurt",
     "research_tailr",
     "research_runlen",
     "research_dayrange",
-    // ── ADR-130 web article ingestion ──────────────
+    // ── web article ingestion ──────────────
     "research_web_articles",
-    // ── ADR-131 Round 23 ────────────────────────────
+    // ── Round 23 ────────────────────────────
     "research_autocor",
     "research_hurst",
     "research_hitrate",
     "research_glasym",
     "research_volratio",
-    // ── ADR-132 Round 24 ────────────────────────────
+    // ── Round 24 ────────────────────────────
     "research_drawup",
     "research_gapstats",
     "research_volcluster",
     "research_closeplc",
     "research_mrhl",
-    // ── ADR-133 Round 25 ────────────────────────────
+    // ── Round 25 ────────────────────────────
     "research_downvol",
     "research_sharpr",
     "research_effratio",
     "research_wickbias",
     "research_volofvol",
-    // ── ADR-134 Round 26 ────────────────────────────
+    // ── Round 26 ────────────────────────────
     "research_calmar",
     "research_ulcer",
     "research_varratio",
     "research_amihud",
     "research_jbnorm",
-    // ── ADR-135 Round 27 ────────────────────────────
+    // ── Round 27 ────────────────────────────
     "research_omega",
     "research_dfa",
     "research_burke",
     "research_monthseas",
     "research_rollsprd",
-    // ── ADR-136 Round 28 ────────────────────────────
+    // ── Round 28 ────────────────────────────
     "research_parkinson",
     "research_gkvol",
     "research_rsvol",
     "research_cvar",
     "research_doweffect",
-    // ── ADR-137 Round 29 ────────────────────────────
+    // ── Round 29 ────────────────────────────
     "research_sterling",
     "research_kellyf",
     "research_ljungb",
     "research_runstest",
     "research_zeroret",
-    // ── ADR-138 Round 30 ────────────────────────────
+    // ── Round 30 ────────────────────────────
     "research_psr",
     "research_adf",
     "research_mnkendall",
     "research_bipower",
     "research_dddur",
-    // ── ADR-139 Round 31 ────────────────────────────
+    // ── Round 31 ────────────────────────────
     "research_hilltail",
     "research_archlm",
     "research_painratio",
     "research_cusum",
     "research_cfvar",
-    // ── ADR-140 Round 32 ────────────────────────────
+    // ── Round 32 ────────────────────────────
     "research_entropy",
     "research_rachev",
     "research_gpr",
     "research_pacf",
     "research_apen",
-    // ── ADR-141 Round 33 ────────────────────────────
+    // ── Round 33 ────────────────────────────
     "research_upr",
     "research_levereff",
     "research_drawdar",
     "research_varhalf",
     "research_gini",
-    // ── ADR-142 Round 34 ────────────────────────────
+    // ── Round 34 ────────────────────────────
     "research_sampen",
     "research_permen",
     "research_recfact",
     "research_kpss",
     "research_specent",
-    // ── ADR-143 Round 35 ────────────────────────────
+    // ── Round 35 ────────────────────────────
     "research_robvol",
     "research_renyient",
     "research_retquant",
     "research_msent",
     "research_ewmavol",
-    // ── ADR-144 Round 36 ────────────────────────────
+    // ── Round 36 ────────────────────────────
     "research_ksnorm",
     "research_adtest",
     "research_lmom",
     "research_kylelam",
     "research_peakover",
-    // ── ADR-145 Round 37 ────────────────────────────
+    // ── Round 37 ────────────────────────────
     "research_higuchi",
     "research_pickands",
     "research_kappa3",
     "research_lyapunov",
     "research_rankac",
-    // ── ADR-146 Round 38 ────────────────────────────
+    // ── Round 38 ────────────────────────────
     "research_bnsjump",
     "research_pproot",
     "research_mfdfa",
     "research_hillks",
     "research_tsi",
-    // ── ADR-147 Round 39 ────────────────────────────
+    // ── Round 39 ────────────────────────────
     "research_garch11",
     "research_sadf",
     "research_cordim",
     "research_skspec",
     "research_automi",
-    // ── ADR-149 Round 40 ────────────────────────────
+    // ── Round 40 ────────────────────────────
     "research_durbinwatson",
     "research_bdstest",
     "research_breuschpagan",
     "research_turnpts",
     "research_periodogram",
-    // ── ADR-150 Round 41 ────────────────────────────
+    // ── Round 41 ────────────────────────────
     "research_mcleodli",
     "research_oufit",
     "research_gph",
     "research_burgspec",
     "research_kendalltau",
-    // ── ADR-151 Round 42 ────────────────────────────
+    // ── Round 42 ────────────────────────────
     "research_squeeze",
     "research_squeezerank",
     "research_bbsqueeze",
     "research_donchian",
     "research_kama",
-    // ── ADR-152 Round 43 ────────────────────────────
+    // ── Round 43 ────────────────────────────
     "research_ichimoku",
     "research_supertrend",
     "research_keltner",
     "research_fisher",
     "research_aroon",
-    // ── ADR-153 Round 44 ────────────────────────────
+    // ── Round 44 ────────────────────────────
     "research_adx",
     "research_cci",
     "research_cmf",
     "research_mfi",
     "research_psar",
-    // ── ADR-154 Round 45 ────────────────────────────
+    // ── Round 45 ────────────────────────────
     "research_vortex",
     "research_chop",
     "research_obv",
     "research_trix",
     "research_hma",
-    // ── ADR-155 Round 46 ────────────────────────────
+    // ── Round 46 ────────────────────────────
     "research_ppo",
     "research_dpo",
     "research_kst",
     "research_ultosc",
     "research_willr",
-    // ── ADR-156 Round 47 ────────────────────────────
+    // ── Round 47 ────────────────────────────
     "research_mass",
     "research_chaikosc",
     "research_klinger",
     "research_stochrsi",
     "research_awesome",
-    // ── ADR-158 Round 48 ────────────────────────────
+    // ── Round 48 ────────────────────────────
     "research_efi",
     "research_emv",
     "research_nvi",
     "research_pvi",
     "research_coppock",
-    // ── ADR-159 Round 49 ────────────────────────────
+    // ── Round 49 ────────────────────────────
     "research_cmo",
     "research_qstick",
     "research_disparity",
     "research_bop",
     "research_schaff",
-    // ── ADR-160 Round 50 ────────────────────────────
+    // ── Round 50 ────────────────────────────
     "research_stoch",
     "research_macd",
     "research_vwap",
     "research_mcgd",
     "research_rwi",
-    // ── ADR-161 Round 51 ────────────────────────────
+    // ── Round 51 ────────────────────────────
     "research_dema",
     "research_tema",
     "research_linreg",
     "research_pivots",
     "research_heikin",
-    // ── ADR-162 cross-client AI response cache ─────
+    // ── cross-client AI response cache ─────
     "ai_response_cache",
-    // ── ADR-163 Round 52 ────────────────────────────
+    // ── Round 52 ────────────────────────────
     "research_alma",
     "research_zlema",
     "research_elderray",
     "research_tsf",
     "research_rvi",
-    // ── ADR-164 Round 53 ────────────────────────────
+    // ── Round 53 ────────────────────────────
     "research_trima",
     "research_t3",
     "research_vidya",
     "research_smi",
     "research_pvt",
-    // ── ADR-165 Round 54 ────────────────────────────
+    // ── Round 54 ────────────────────────────
     "research_ac",
     "research_chvol",
     "research_bbwidth",
     "research_elderimp",
     "research_rmi",
-    // ── ADR-166 Options Expiration Calendar ──────────
+    // ── Options Expiration Calendar ──────────
     "research_symbol_expirations",
-    // ── ADR-167 Round 55 ────────────────────────────
+    // ── Round 55 ────────────────────────────
     "research_smma",
     "research_alligator",
     "research_crsi",
     "research_seb",
     "research_imi",
-    // ── ADR-168 Round 56 ────────────────────────────
+    // ── Round 56 ────────────────────────────
     "research_gmma",
     "research_maenv",
     "research_adl",
     "research_vhf",
     "research_vroc",
-    // ── ADR-169 Round 57 ────────────────────────────
+    // ── Round 57 ────────────────────────────
     "research_kdj",
     "research_qqe",
     "research_pmo",
     "research_cfo",
     "research_tmf",
-    // ── ADR-170 Round 58 ────────────────────────────
+    // ── Round 58 ────────────────────────────
     "research_fractals",
     "research_ift_rsi",
     "research_mama",
     "research_cog",
     "research_didi",
-    // ── ADR-171 Round 59 ────────────────────────────
+    // ── Round 59 ────────────────────────────
     "research_demarker",
     "research_gator",
     "research_bw_mfi",
     "research_vwma",
     "research_stddev",
-    // ── ADR-172 Round 60 ────────────────────────────
+    // ── Round 60 ────────────────────────────
     "research_wma",
     "research_rainbow",
     "research_mesa_sine",
     "research_frama",
     "research_ibs",
-    // ── ADR-173 Round 61 ────────────────────────────
+    // ── Round 61 ────────────────────────────
     "research_laguerre_rsi",
     "research_zigzag",
     "research_pgo",
     "research_ht_trendline",
     "research_midpoint",
-    // ── ADR-174 Round 62 ────────────────────────────
+    // ── Round 62 ────────────────────────────
     "research_mass_index",
     "research_natr",
     "research_ttm_squeeze",
     "research_force_index",
     "research_trange",
-    // ── ADR-175 Round 63 ────────────────────────────
+    // ── Round 63 ────────────────────────────
     "research_linearreg_slope",
     "research_ht_dcperiod",
     "research_ht_trendmode",
     "research_accbands",
     "research_stochf",
-    // ── ADR-176 Round 64 ────────────────────────────
+    // ── Round 64 ────────────────────────────
     "research_linearreg",
     "research_linearreg_angle",
     "research_ht_dcphase",
     "research_ht_sine",
     "research_ht_phasor",
-    // ── ADR-177 Round 65 ────────────────────────────
+    // ── Round 65 ────────────────────────────
     "research_midprice",
     "research_apo",
     "research_mom",
     "research_sarext",
     "research_adxr",
-    // ── ADR-178 Round 66 ────────────────────────────
+    // ── Round 66 ────────────────────────────
     "research_avgprice",
     "research_medprice",
     "research_typprice",
     "research_wclprice",
     "research_variance",
-    // ── ADR-179 Round 67 ────────────────────────────
+    // ── Round 67 ────────────────────────────
     "research_plus_di",
     "research_minus_di",
     "research_plus_dm",
     "research_minus_dm",
     "research_dx",
-    // ── ADR-180 Round 68 ────────────────────────────
+    // ── Round 68 ────────────────────────────
     "research_roc",
     "research_rocp",
     "research_rocr",
     "research_rocr100",
     "research_correl",
-    // ── ADR-181 Round 69 ────────────────────────────
+    // ── Round 69 ────────────────────────────
     "research_min",
     "research_max",
     "research_minmax",
     "research_minindex",
     "research_maxindex",
-    // ── ADR-182 Round 70 ────────────────────────────
+    // ── Round 70 ────────────────────────────
     "research_bbands",
     "research_ad",
     "research_adosc",
     "research_sum",
     "research_linreg_intercept",
-    // ── ADR-183 Round 71 ────────────────────────────
+    // ── Round 71 ────────────────────────────
     "research_aroonosc",
     "research_minmaxindex",
     "research_macdext",
     "research_macdfix",
     "research_mavp",
-    // ── ADR-184 Round 72 ────────────────────────────
+    // ── Round 72 ────────────────────────────
     "research_cdl_doji",
     "research_cdl_hammer",
     "research_cdl_shooting_star",
     "research_cdl_engulfing",
     "research_cdl_harami",
-    // ── ADR-185 Round 73 ────────────────────────────
+    // ── Round 73 ────────────────────────────
     "research_cdl_morning_star",
     "research_cdl_evening_star",
     "research_cdl_three_black_crows",
     "research_cdl_three_white_soldiers",
     "research_cdl_dark_cloud_cover",
-    // ── ADR-186 Round 74 ────────────────────────────
+    // ── Round 74 ────────────────────────────
     "research_cdl_piercing",
     "research_cdl_dragonfly_doji",
     "research_cdl_gravestone_doji",
     "research_cdl_hanging_man",
     "research_cdl_inverted_hammer",
-    // ── ADR-187 Round 75 ────────────────────────────
+    // ── Round 75 ────────────────────────────
     "research_cdl_harami_cross",
     "research_cdl_long_legged_doji",
     "research_cdl_marubozu",
     "research_cdl_spinning_top",
     "research_cdl_tristar",
-    // ── ADR-191 Round 76 ────────────────────────────
+    // ── Round 76 ────────────────────────────
     "research_cdl_doji_star",
     "research_cdl_morning_doji_star",
     "research_cdl_evening_doji_star",
     "research_cdl_abandoned_baby",
     "research_cdl_three_inside",
-    // ── ADR-192 Round 77 ────────────────────────────
+    // ── Round 77 ────────────────────────────
     "research_cdl_belt_hold",
     "research_cdl_closing_marubozu",
     "research_cdl_high_wave",
     "research_cdl_long_line",
     "research_cdl_short_line",
-    // ── ADR-193 Round 78 ────────────────────────────
+    // ── Round 78 ────────────────────────────
     "research_cdl_counterattack",
     "research_cdl_homing_pigeon",
     "research_cdl_in_neck",
     "research_cdl_on_neck",
     "research_cdl_thrusting",
-    // ── ADR-190 Round 79 ────────────────────────────
+    // ── Round 79 ────────────────────────────
     "research_cdl_two_crows",
     "research_cdl_three_line_strike",
     "research_cdl_three_outside",
     "research_cdl_matching_low",
-    // ── ADR-190 Round 80 ────────────────────────────
+    // ── Round 80 ────────────────────────────
     "research_cdl_separating_lines",
     "research_cdl_stick_sandwich",
     "research_cdl_rickshaw_man",
     "research_cdl_takuri",
-    // ── ADR-191 Round 81/82 ────────────────────────
+    // ── Round 81/82 ────────────────────────
     "research_cdl_three_stars_in_south",
     "research_cdl_identical_three_crows",
     "research_cdl_kicking",
     "research_cdl_kicking_by_length",
     "research_cdl_ladder_bottom",
     "research_cdl_unique_three_river",
-    // ── ADR-192 Round 83/84 ────────────────────────
+    // ── Round 83/84 ────────────────────────
     "research_cdl_advance_block",
     "research_cdl_breakaway",
     "research_cdl_gap_side_side_white",
     "research_cdl_upside_gap_two_crows",
     "research_cdl_xside_gap_three_methods",
     "research_cdl_conceal_baby_swallow",
-    // ── ADR-193 Round 85/86 ────────────────────────
+    // ── Round 85/86 ────────────────────────
     "research_cdl_hikkake",
     "research_cdl_hikkake_mod",
     "research_cdl_mat_hold",
     "research_cdl_rise_fall_three_methods",
-    // ── ADR-194 Round 87/88 ────────────────────────
+    // ── Round 87/88 ────────────────────────
     "research_cdl_stalled_pattern",
     "research_cdl_tasuki_gap",
-    // ── ADR-195 Round 89/90 ────────────────────────
+    // ── Round 89/90 ────────────────────────
     "research_momrank_multi",
     "research_corrstk",
-    // ── ADR-196 Round 91/92 ────────────────────────
+    // ── Round 91/92 ────────────────────────
     "research_tlrank",
     "research_corrrank",
-    // ── ADR-197 Round 93/94 ────────────────────────
+    // ── Round 93/94 ────────────────────────
     "research_operank_delta",
     "research_divacc",
     "research_epsacc",
     "research_vrp",
-    // ── ADR-198 Round 95 ───────────────────────────
+    // ── Round 95 ───────────────────────────
     "research_short_interest_history",
     "research_shortrank_delta",
-    // ── ADR-199 Round 96 ───────────────────────────
+    // ── Round 96 ───────────────────────────
     "research_insiderconc",
-    // ── ADR-189 Round 76 ────────────────────────────
+    // ── Round 76 ────────────────────────────
     "research_modsharpe",
     "research_hsiehtest",
     "research_chowbreak",
     "research_driftburst",
     "research_hlvclust",
-    // ── ADR-190 Round 77 ────────────────────────────
+    // ── Round 77 ────────────────────────────
     "research_yangzhang",
     "research_kuiper",
     "research_dagostino",
@@ -974,7 +974,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-113 Round 6 ─────────────────────────────
+        // ── Round 6 ─────────────────────────────
         "research_world_indices" => Some(
             "CREATE TABLE IF NOT EXISTS research_world_indices (
                 snapshot_key TEXT PRIMARY KEY,
@@ -1003,7 +1003,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-114 Round 7 ─────────────────────────────
+        // ── Round 7 ─────────────────────────────
         "research_currency_rates" => Some(
             "CREATE TABLE IF NOT EXISTS research_currency_rates (
                 snapshot_key TEXT PRIMARY KEY,
@@ -1039,7 +1039,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-115 Round 8 ─────────────────────────────
+        // ── Round 8 ─────────────────────────────
         "research_hra" => Some(
             "CREATE TABLE IF NOT EXISTS research_hra (
                 symbol TEXT PRIMARY KEY,
@@ -1075,7 +1075,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-116 Round 9 ─────────────────────────────
+        // ── Round 9 ─────────────────────────────
         "research_seasonality" => Some(
             "CREATE TABLE IF NOT EXISTS research_seasonality (
                 symbol TEXT PRIMARY KEY,
@@ -1566,7 +1566,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-130 web article ingestion ──
+        // ── web article ingestion ──
         "research_web_articles" => Some(
             "CREATE TABLE IF NOT EXISTS research_web_articles (
                 symbol TEXT PRIMARY KEY,
@@ -1574,7 +1574,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-131 Round 23 ──
+        // ── Round 23 ──
         "research_autocor" => Some(
             "CREATE TABLE IF NOT EXISTS research_autocor (
                 symbol TEXT PRIMARY KEY,
@@ -1610,7 +1610,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-132 Round 24 ──
+        // ── Round 24 ──
         "research_drawup" => Some(
             "CREATE TABLE IF NOT EXISTS research_drawup (
                 symbol TEXT PRIMARY KEY,
@@ -1646,7 +1646,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-133 Round 25 ──
+        // ── Round 25 ──
         "research_downvol" => Some(
             "CREATE TABLE IF NOT EXISTS research_downvol (
                 symbol TEXT PRIMARY KEY,
@@ -1682,7 +1682,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-134 Round 26 ──
+        // ── Round 26 ──
         "research_calmar" => Some(
             "CREATE TABLE IF NOT EXISTS research_calmar (
                 symbol TEXT PRIMARY KEY,
@@ -1718,7 +1718,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-135 Round 27 ──
+        // ── Round 27 ──
         "research_omega" => Some(
             "CREATE TABLE IF NOT EXISTS research_omega (
                 symbol TEXT PRIMARY KEY,
@@ -1754,7 +1754,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-136 Round 28 ──
+        // ── Round 28 ──
         "research_parkinson" => Some(
             "CREATE TABLE IF NOT EXISTS research_parkinson (
                 symbol TEXT PRIMARY KEY,
@@ -1790,7 +1790,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-137 Round 29 ──
+        // ── Round 29 ──
         "research_sterling" => Some(
             "CREATE TABLE IF NOT EXISTS research_sterling (
                 symbol TEXT PRIMARY KEY,
@@ -1826,7 +1826,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-138 Round 30 ──
+        // ── Round 30 ──
         "research_psr" => Some(
             "CREATE TABLE IF NOT EXISTS research_psr (
                 symbol TEXT PRIMARY KEY,
@@ -1862,7 +1862,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-139 Round 31 ──
+        // ── Round 31 ──
         "research_hilltail" => Some(
             "CREATE TABLE IF NOT EXISTS research_hilltail (
                 symbol TEXT PRIMARY KEY,
@@ -1898,7 +1898,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-140 Round 32 ──
+        // ── Round 32 ──
         "research_entropy" => Some(
             "CREATE TABLE IF NOT EXISTS research_entropy (
                 symbol TEXT PRIMARY KEY,
@@ -1934,7 +1934,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-141 Round 33 ──
+        // ── Round 33 ──
         "research_upr" => Some(
             "CREATE TABLE IF NOT EXISTS research_upr (
                 symbol TEXT PRIMARY KEY,
@@ -1970,7 +1970,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-142 Round 34 ──
+        // ── Round 34 ──
         "research_sampen" => Some(
             "CREATE TABLE IF NOT EXISTS research_sampen (
                 symbol TEXT PRIMARY KEY,
@@ -2006,7 +2006,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-143 Round 35 ──
+        // ── Round 35 ──
         "research_robvol" => Some(
             "CREATE TABLE IF NOT EXISTS research_robvol (
                 symbol TEXT PRIMARY KEY,
@@ -2042,7 +2042,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-144 Round 36 ──
+        // ── Round 36 ──
         "research_ksnorm" => Some(
             "CREATE TABLE IF NOT EXISTS research_ksnorm (
                 symbol TEXT PRIMARY KEY,
@@ -2078,7 +2078,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-145 Round 37 ──
+        // ── Round 37 ──
         "research_higuchi" => Some(
             "CREATE TABLE IF NOT EXISTS research_higuchi (
                 symbol TEXT PRIMARY KEY,
@@ -2114,7 +2114,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-146 Round 38 ──
+        // ── Round 38 ──
         "research_bnsjump" => Some(
             "CREATE TABLE IF NOT EXISTS research_bnsjump (
                 symbol TEXT PRIMARY KEY,
@@ -2150,7 +2150,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-147 Round 39 ──
+        // ── Round 39 ──
         "research_garch11" => Some(
             "CREATE TABLE IF NOT EXISTS research_garch11 (
                 symbol TEXT PRIMARY KEY,
@@ -2186,7 +2186,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-149 Round 40 ──
+        // ── Round 40 ──
         "research_durbinwatson" => Some(
             "CREATE TABLE IF NOT EXISTS research_durbinwatson (
                 symbol TEXT PRIMARY KEY,
@@ -2222,7 +2222,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-150 Round 41 ──
+        // ── Round 41 ──
         "research_mcleodli" => Some(
             "CREATE TABLE IF NOT EXISTS research_mcleodli (
                 symbol TEXT PRIMARY KEY,
@@ -2258,7 +2258,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-151 Round 42 ──
+        // ── Round 42 ──
         "research_squeeze" => Some(
             "CREATE TABLE IF NOT EXISTS research_squeeze (
                 symbol TEXT PRIMARY KEY,
@@ -2294,7 +2294,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-152 Round 43 ──
+        // ── Round 43 ──
         "research_ichimoku" => Some(
             "CREATE TABLE IF NOT EXISTS research_ichimoku (
                 symbol TEXT PRIMARY KEY,
@@ -2330,7 +2330,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-153 Round 44 ──
+        // ── Round 44 ──
         "research_adx" => Some(
             "CREATE TABLE IF NOT EXISTS research_adx (
                 symbol TEXT PRIMARY KEY,
@@ -2366,7 +2366,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-154 Round 45 ──
+        // ── Round 45 ──
         "research_vortex" => Some(
             "CREATE TABLE IF NOT EXISTS research_vortex (
                 symbol TEXT PRIMARY KEY,
@@ -2402,7 +2402,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-155 Round 46 ──
+        // ── Round 46 ──
         "research_ppo" => Some(
             "CREATE TABLE IF NOT EXISTS research_ppo (
                 symbol TEXT PRIMARY KEY,
@@ -2438,7 +2438,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-156 Round 47 ──
+        // ── Round 47 ──
         "research_mass" => Some(
             "CREATE TABLE IF NOT EXISTS research_mass (
                 symbol TEXT PRIMARY KEY,
@@ -2614,7 +2614,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-162 cross-client AI response cache ──
+        // ── cross-client AI response cache ──
         "ai_response_cache" => Some(
             "CREATE TABLE IF NOT EXISTS ai_response_cache (
                 prompt_hash TEXT PRIMARY KEY,
@@ -2630,7 +2630,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 source_client TEXT NOT NULL DEFAULT ''
             )",
         ),
-        // ── ADR-163 Round 52 ────────────────────────
+        // ── Round 52 ────────────────────────
         "research_alma" => Some(
             "CREATE TABLE IF NOT EXISTS research_alma (
                 symbol TEXT PRIMARY KEY,
@@ -2666,7 +2666,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-164 Round 53 ────────────────────────
+        // ── Round 53 ────────────────────────
         "research_trima" => Some(
             "CREATE TABLE IF NOT EXISTS research_trima (
                 symbol TEXT PRIMARY KEY,
@@ -2702,7 +2702,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-165 Round 54 ────────────────────────
+        // ── Round 54 ────────────────────────
         "research_ac" => Some(
             "CREATE TABLE IF NOT EXISTS research_ac (
                 symbol TEXT PRIMARY KEY,
@@ -2990,7 +2990,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-174 Round 62 ──
+        // ── Round 62 ──
         "research_mass_index" => Some(
             "CREATE TABLE IF NOT EXISTS research_mass_index (
                 symbol TEXT PRIMARY KEY,
@@ -3026,7 +3026,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-175 Round 63 ──
+        // ── Round 63 ──
         "research_linearreg_slope" => Some(
             "CREATE TABLE IF NOT EXISTS research_linearreg_slope (
                 symbol TEXT PRIMARY KEY,
@@ -3062,7 +3062,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-176 Round 64 ──
+        // ── Round 64 ──
         "research_linearreg" => Some(
             "CREATE TABLE IF NOT EXISTS research_linearreg (
                 symbol TEXT PRIMARY KEY,
@@ -3098,7 +3098,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-177 Round 65 ──
+        // ── Round 65 ──
         "research_midprice" => Some(
             "CREATE TABLE IF NOT EXISTS research_midprice (
                 symbol TEXT PRIMARY KEY,
@@ -3134,7 +3134,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-178 Round 66 ──
+        // ── Round 66 ──
         "research_avgprice" => Some(
             "CREATE TABLE IF NOT EXISTS research_avgprice (
                 symbol TEXT PRIMARY KEY,
@@ -3170,7 +3170,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-179 Round 67 ──
+        // ── Round 67 ──
         "research_plus_di" => Some(
             "CREATE TABLE IF NOT EXISTS research_plus_di (
                 symbol TEXT PRIMARY KEY,
@@ -3206,7 +3206,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-180 Round 68 ──
+        // ── Round 68 ──
         "research_roc" => Some(
             "CREATE TABLE IF NOT EXISTS research_roc (
                 symbol TEXT PRIMARY KEY,
@@ -3242,7 +3242,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-181 Round 69 ──
+        // ── Round 69 ──
         "research_min" => Some(
             "CREATE TABLE IF NOT EXISTS research_min (
                 symbol TEXT PRIMARY KEY,
@@ -3278,7 +3278,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-182 Round 70 ──
+        // ── Round 70 ──
         "research_bbands" => Some(
             "CREATE TABLE IF NOT EXISTS research_bbands (
                 symbol TEXT PRIMARY KEY,
@@ -3314,7 +3314,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 updated_at INTEGER NOT NULL DEFAULT 0
             )",
         ),
-        // ── ADR-183 Round 71 ──
+        // ── Round 71 ──
         "research_aroonosc" => Some(
             "CREATE TABLE IF NOT EXISTS research_aroonosc (
                 symbol TEXT PRIMARY KEY,
@@ -4058,382 +4058,382 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "research_effratio" => Some("updated_at"),
         "research_wickbias" => Some("updated_at"),
         "research_volofvol" => Some("updated_at"),
-        // ── ADR-134 Round 26 ──
+        // ── Round 26 ──
         "research_calmar" => Some("updated_at"),
         "research_ulcer" => Some("updated_at"),
         "research_varratio" => Some("updated_at"),
         "research_amihud" => Some("updated_at"),
         "research_jbnorm" => Some("updated_at"),
-        // ── ADR-135 Round 27 ──
+        // ── Round 27 ──
         "research_omega" => Some("updated_at"),
         "research_dfa" => Some("updated_at"),
         "research_burke" => Some("updated_at"),
         "research_monthseas" => Some("updated_at"),
         "research_rollsprd" => Some("updated_at"),
-        // ── ADR-136 Round 28 ──
+        // ── Round 28 ──
         "research_parkinson" => Some("updated_at"),
         "research_gkvol" => Some("updated_at"),
         "research_rsvol" => Some("updated_at"),
         "research_cvar" => Some("updated_at"),
         "research_doweffect" => Some("updated_at"),
-        // ── ADR-137 Round 29 ──
+        // ── Round 29 ──
         "research_sterling" => Some("updated_at"),
         "research_kellyf" => Some("updated_at"),
         "research_ljungb" => Some("updated_at"),
         "research_runstest" => Some("updated_at"),
         "research_zeroret" => Some("updated_at"),
-        // ── ADR-138 Round 30 ──
+        // ── Round 30 ──
         "research_psr" => Some("updated_at"),
         "research_adf" => Some("updated_at"),
         "research_mnkendall" => Some("updated_at"),
         "research_bipower" => Some("updated_at"),
         "research_dddur" => Some("updated_at"),
-        // ── ADR-139 Round 31 ──
+        // ── Round 31 ──
         "research_hilltail" => Some("updated_at"),
         "research_archlm" => Some("updated_at"),
         "research_painratio" => Some("updated_at"),
         "research_cusum" => Some("updated_at"),
         "research_cfvar" => Some("updated_at"),
-        // ── ADR-140 Round 32 ──
+        // ── Round 32 ──
         "research_entropy" => Some("updated_at"),
         "research_rachev" => Some("updated_at"),
         "research_gpr" => Some("updated_at"),
         "research_pacf" => Some("updated_at"),
         "research_apen" => Some("updated_at"),
-        // ── ADR-141 Round 33 ──
+        // ── Round 33 ──
         "research_upr" => Some("updated_at"),
         "research_levereff" => Some("updated_at"),
         "research_drawdar" => Some("updated_at"),
         "research_varhalf" => Some("updated_at"),
         "research_gini" => Some("updated_at"),
-        // ── ADR-142 Round 34 ──
+        // ── Round 34 ──
         "research_sampen" => Some("updated_at"),
         "research_permen" => Some("updated_at"),
         "research_recfact" => Some("updated_at"),
         "research_kpss" => Some("updated_at"),
         "research_specent" => Some("updated_at"),
-        // ── ADR-143 Round 35 ──
+        // ── Round 35 ──
         "research_robvol" => Some("updated_at"),
         "research_renyient" => Some("updated_at"),
         "research_retquant" => Some("updated_at"),
         "research_msent" => Some("updated_at"),
         "research_ewmavol" => Some("updated_at"),
-        // ── ADR-144 Round 36 ──
+        // ── Round 36 ──
         "research_ksnorm" => Some("updated_at"),
         "research_adtest" => Some("updated_at"),
         "research_lmom" => Some("updated_at"),
         "research_kylelam" => Some("updated_at"),
         "research_peakover" => Some("updated_at"),
-        // ── ADR-145 Round 37 ──
+        // ── Round 37 ──
         "research_higuchi" => Some("updated_at"),
         "research_pickands" => Some("updated_at"),
         "research_kappa3" => Some("updated_at"),
         "research_lyapunov" => Some("updated_at"),
         "research_rankac" => Some("updated_at"),
-        // ── ADR-146 Round 38 ──
+        // ── Round 38 ──
         "research_bnsjump" => Some("updated_at"),
         "research_pproot" => Some("updated_at"),
         "research_mfdfa" => Some("updated_at"),
         "research_hillks" => Some("updated_at"),
         "research_tsi" => Some("updated_at"),
-        // ── ADR-147 Round 39 ──
+        // ── Round 39 ──
         "research_garch11" => Some("updated_at"),
         "research_sadf" => Some("updated_at"),
         "research_cordim" => Some("updated_at"),
         "research_skspec" => Some("updated_at"),
         "research_automi" => Some("updated_at"),
-        // ── ADR-149 Round 40 ──
+        // ── Round 40 ──
         "research_durbinwatson" => Some("updated_at"),
         "research_bdstest" => Some("updated_at"),
         "research_breuschpagan" => Some("updated_at"),
         "research_turnpts" => Some("updated_at"),
         "research_periodogram" => Some("updated_at"),
-        // ── ADR-150 Round 41 ──
+        // ── Round 41 ──
         "research_mcleodli" => Some("updated_at"),
         "research_oufit" => Some("updated_at"),
         "research_gph" => Some("updated_at"),
         "research_burgspec" => Some("updated_at"),
         "research_kendalltau" => Some("updated_at"),
-        // ── ADR-151 Round 42 ──
+        // ── Round 42 ──
         "research_squeeze" => Some("updated_at"),
         "research_squeezerank" => Some("updated_at"),
         "research_bbsqueeze" => Some("updated_at"),
         "research_donchian" => Some("updated_at"),
         "research_kama" => Some("updated_at"),
-        // ── ADR-152 Round 43 ──
+        // ── Round 43 ──
         "research_ichimoku" => Some("updated_at"),
         "research_supertrend" => Some("updated_at"),
         "research_keltner" => Some("updated_at"),
         "research_fisher" => Some("updated_at"),
         "research_aroon" => Some("updated_at"),
-        // ── ADR-153 Round 44 ──
+        // ── Round 44 ──
         "research_adx" => Some("updated_at"),
         "research_cci" => Some("updated_at"),
         "research_cmf" => Some("updated_at"),
         "research_mfi" => Some("updated_at"),
         "research_psar" => Some("updated_at"),
-        // ── ADR-154 Round 45 ──
+        // ── Round 45 ──
         "research_vortex" => Some("updated_at"),
         "research_chop" => Some("updated_at"),
         "research_obv" => Some("updated_at"),
         "research_trix" => Some("updated_at"),
         "research_hma" => Some("updated_at"),
-        // ── ADR-155 Round 46 ──
+        // ── Round 46 ──
         "research_ppo" => Some("updated_at"),
         "research_dpo" => Some("updated_at"),
         "research_kst" => Some("updated_at"),
         "research_ultosc" => Some("updated_at"),
         "research_willr" => Some("updated_at"),
-        // ── ADR-156 Round 47 ──
+        // ── Round 47 ──
         "research_mass" => Some("updated_at"),
         "research_chaikosc" => Some("updated_at"),
         "research_klinger" => Some("updated_at"),
         "research_stochrsi" => Some("updated_at"),
         "research_awesome" => Some("updated_at"),
-        // ── ADR-158 Round 48 ──
+        // ── Round 48 ──
         "research_efi" => Some("updated_at"),
         "research_emv" => Some("updated_at"),
         "research_nvi" => Some("updated_at"),
         "research_pvi" => Some("updated_at"),
         "research_coppock" => Some("updated_at"),
-        // ── ADR-159 Round 49 ──
+        // ── Round 49 ──
         "research_cmo" => Some("updated_at"),
         "research_qstick" => Some("updated_at"),
         "research_disparity" => Some("updated_at"),
         "research_bop" => Some("updated_at"),
         "research_schaff" => Some("updated_at"),
-        // ── ADR-160 Round 50 ──
+        // ── Round 50 ──
         "research_stoch" => Some("updated_at"),
         "research_macd" => Some("updated_at"),
         "research_vwap" => Some("updated_at"),
         "research_mcgd" => Some("updated_at"),
         "research_rwi" => Some("updated_at"),
-        // ── ADR-161 Round 51 ──
+        // ── Round 51 ──
         "research_dema" => Some("updated_at"),
         "research_tema" => Some("updated_at"),
         "research_linreg" => Some("updated_at"),
         "research_pivots" => Some("updated_at"),
         "research_heikin" => Some("updated_at"),
-        // ── ADR-162 cross-client AI response cache ──
+        // ── cross-client AI response cache ──
         "ai_response_cache" => Some("updated_at"),
-        // ── ADR-163 Round 52 ──
+        // ── Round 52 ──
         "research_alma" => Some("updated_at"),
         "research_zlema" => Some("updated_at"),
         "research_elderray" => Some("updated_at"),
         "research_tsf" => Some("updated_at"),
         "research_rvi" => Some("updated_at"),
-        // ── ADR-164 Round 53 ──
+        // ── Round 53 ──
         "research_trima" => Some("updated_at"),
         "research_t3" => Some("updated_at"),
         "research_vidya" => Some("updated_at"),
         "research_smi" => Some("updated_at"),
         "research_pvt" => Some("updated_at"),
-        // ── ADR-165 Round 54 ──
+        // ── Round 54 ──
         "research_ac" => Some("updated_at"),
         "research_chvol" => Some("updated_at"),
         "research_bbwidth" => Some("updated_at"),
         "research_elderimp" => Some("updated_at"),
         "research_rmi" => Some("updated_at"),
         "research_symbol_expirations" => Some("updated_at"),
-        // ── ADR-167 Round 55 ──
+        // ── Round 55 ──
         "research_smma" => Some("updated_at"),
         "research_alligator" => Some("updated_at"),
         "research_crsi" => Some("updated_at"),
         "research_seb" => Some("updated_at"),
         "research_imi" => Some("updated_at"),
-        // ── ADR-168 Round 56 ──
+        // ── Round 56 ──
         "research_gmma" => Some("updated_at"),
         "research_maenv" => Some("updated_at"),
         "research_adl" => Some("updated_at"),
         "research_vhf" => Some("updated_at"),
         "research_vroc" => Some("updated_at"),
-        // ── ADR-169 Round 57 ──
+        // ── Round 57 ──
         "research_kdj" => Some("updated_at"),
         "research_qqe" => Some("updated_at"),
         "research_pmo" => Some("updated_at"),
         "research_cfo" => Some("updated_at"),
         "research_tmf" => Some("updated_at"),
-        // ── ADR-170 Round 58 ──
+        // ── Round 58 ──
         "research_fractals" => Some("updated_at"),
         "research_ift_rsi" => Some("updated_at"),
         "research_mama" => Some("updated_at"),
         "research_cog" => Some("updated_at"),
         "research_didi" => Some("updated_at"),
-        // ── ADR-171 Round 59 ──
+        // ── Round 59 ──
         "research_demarker" => Some("updated_at"),
         "research_gator" => Some("updated_at"),
         "research_bw_mfi" => Some("updated_at"),
         "research_vwma" => Some("updated_at"),
         "research_stddev" => Some("updated_at"),
-        // ── ADR-172 Round 60 ──
+        // ── Round 60 ──
         "research_wma" => Some("updated_at"),
         "research_rainbow" => Some("updated_at"),
         "research_mesa_sine" => Some("updated_at"),
         "research_frama" => Some("updated_at"),
         "research_ibs" => Some("updated_at"),
-        // ── ADR-173 Round 61 ──
+        // ── Round 61 ──
         "research_laguerre_rsi" => Some("updated_at"),
         "research_zigzag" => Some("updated_at"),
         "research_pgo" => Some("updated_at"),
         "research_ht_trendline" => Some("updated_at"),
         "research_midpoint" => Some("updated_at"),
-        // ── ADR-174 Round 62 ──
+        // ── Round 62 ──
         "research_mass_index" => Some("updated_at"),
         "research_natr" => Some("updated_at"),
         "research_ttm_squeeze" => Some("updated_at"),
         "research_force_index" => Some("updated_at"),
         "research_trange" => Some("updated_at"),
-        // ── ADR-175 Round 63 ──
+        // ── Round 63 ──
         "research_linearreg_slope" => Some("updated_at"),
         "research_ht_dcperiod" => Some("updated_at"),
         "research_ht_trendmode" => Some("updated_at"),
         "research_accbands" => Some("updated_at"),
         "research_stochf" => Some("updated_at"),
-        // ── ADR-176 Round 64 ──
+        // ── Round 64 ──
         "research_linearreg" => Some("updated_at"),
         "research_linearreg_angle" => Some("updated_at"),
         "research_ht_dcphase" => Some("updated_at"),
         "research_ht_sine" => Some("updated_at"),
         "research_ht_phasor" => Some("updated_at"),
-        // ── ADR-177 Round 65 ──
+        // ── Round 65 ──
         "research_midprice" => Some("updated_at"),
         "research_apo" => Some("updated_at"),
         "research_mom" => Some("updated_at"),
         "research_sarext" => Some("updated_at"),
         "research_adxr" => Some("updated_at"),
-        // ── ADR-178 Round 66 ──
+        // ── Round 66 ──
         "research_avgprice" => Some("updated_at"),
         "research_medprice" => Some("updated_at"),
         "research_typprice" => Some("updated_at"),
         "research_wclprice" => Some("updated_at"),
         "research_variance" => Some("updated_at"),
-        // ── ADR-179 Round 67 ──
+        // ── Round 67 ──
         "research_plus_di" => Some("updated_at"),
         "research_minus_di" => Some("updated_at"),
         "research_plus_dm" => Some("updated_at"),
         "research_minus_dm" => Some("updated_at"),
         "research_dx" => Some("updated_at"),
-        // ── ADR-180 Round 68 ──
+        // ── Round 68 ──
         "research_roc" => Some("updated_at"),
         "research_rocp" => Some("updated_at"),
         "research_rocr" => Some("updated_at"),
         "research_rocr100" => Some("updated_at"),
         "research_correl" => Some("updated_at"),
-        // ── ADR-181 Round 69 ──
+        // ── Round 69 ──
         "research_min" => Some("updated_at"),
         "research_max" => Some("updated_at"),
         "research_minmax" => Some("updated_at"),
         "research_minindex" => Some("updated_at"),
         "research_maxindex" => Some("updated_at"),
-        // ── ADR-182 Round 70 ──
+        // ── Round 70 ──
         "research_bbands" => Some("updated_at"),
         "research_ad" => Some("updated_at"),
         "research_adosc" => Some("updated_at"),
         "research_sum" => Some("updated_at"),
         "research_linreg_intercept" => Some("updated_at"),
-        // ── ADR-183 Round 71 ──
+        // ── Round 71 ──
         "research_aroonosc" => Some("updated_at"),
         "research_minmaxindex" => Some("updated_at"),
         "research_macdext" => Some("updated_at"),
         "research_macdfix" => Some("updated_at"),
         "research_mavp" => Some("updated_at"),
-        // ── ADR-184 Round 72 ──
+        // ── Round 72 ──
         "research_cdl_doji" => Some("updated_at"),
         "research_cdl_hammer" => Some("updated_at"),
         "research_cdl_shooting_star" => Some("updated_at"),
         "research_cdl_engulfing" => Some("updated_at"),
         "research_cdl_harami" => Some("updated_at"),
-        // ── ADR-185 Round 73 ──
+        // ── Round 73 ──
         "research_cdl_morning_star" => Some("updated_at"),
         "research_cdl_evening_star" => Some("updated_at"),
         "research_cdl_three_black_crows" => Some("updated_at"),
         "research_cdl_three_white_soldiers" => Some("updated_at"),
         "research_cdl_dark_cloud_cover" => Some("updated_at"),
-        // ── ADR-186 Round 74 ──
+        // ── Round 74 ──
         "research_cdl_piercing" => Some("updated_at"),
         "research_cdl_dragonfly_doji" => Some("updated_at"),
         "research_cdl_gravestone_doji" => Some("updated_at"),
         "research_cdl_hanging_man" => Some("updated_at"),
         "research_cdl_inverted_hammer" => Some("updated_at"),
-        // ── ADR-187 Round 75 ──
+        // ── Round 75 ──
         "research_cdl_harami_cross" => Some("updated_at"),
         "research_cdl_long_legged_doji" => Some("updated_at"),
         "research_cdl_marubozu" => Some("updated_at"),
         "research_cdl_spinning_top" => Some("updated_at"),
         "research_cdl_tristar" => Some("updated_at"),
-        // ── ADR-191 Round 76 ──
+        // ── Round 76 ──
         "research_cdl_doji_star" => Some("updated_at"),
         "research_cdl_morning_doji_star" => Some("updated_at"),
         "research_cdl_evening_doji_star" => Some("updated_at"),
         "research_cdl_abandoned_baby" => Some("updated_at"),
         "research_cdl_three_inside" => Some("updated_at"),
-        // ── ADR-192 Round 77 ──
+        // ── Round 77 ──
         "research_cdl_belt_hold" => Some("updated_at"),
         "research_cdl_closing_marubozu" => Some("updated_at"),
         "research_cdl_high_wave" => Some("updated_at"),
         "research_cdl_long_line" => Some("updated_at"),
         "research_cdl_short_line" => Some("updated_at"),
-        // ── ADR-193 Round 78 ──
+        // ── Round 78 ──
         "research_cdl_counterattack" => Some("updated_at"),
         "research_cdl_homing_pigeon" => Some("updated_at"),
         "research_cdl_in_neck" => Some("updated_at"),
         "research_cdl_on_neck" => Some("updated_at"),
         "research_cdl_thrusting" => Some("updated_at"),
-        // ── ADR-190 Round 79 ──
+        // ── Round 79 ──
         "research_cdl_two_crows" => Some("updated_at"),
         "research_cdl_three_line_strike" => Some("updated_at"),
         "research_cdl_three_outside" => Some("updated_at"),
         "research_cdl_matching_low" => Some("updated_at"),
-        // ── ADR-190 Round 80 ──
+        // ── Round 80 ──
         "research_cdl_separating_lines" => Some("updated_at"),
         "research_cdl_stick_sandwich" => Some("updated_at"),
         "research_cdl_rickshaw_man" => Some("updated_at"),
         "research_cdl_takuri" => Some("updated_at"),
-        // ── ADR-191 Round 81/82 ──
+        // ── Round 81/82 ──
         "research_cdl_three_stars_in_south" => Some("updated_at"),
         "research_cdl_identical_three_crows" => Some("updated_at"),
         "research_cdl_kicking" => Some("updated_at"),
         "research_cdl_kicking_by_length" => Some("updated_at"),
         "research_cdl_ladder_bottom" => Some("updated_at"),
         "research_cdl_unique_three_river" => Some("updated_at"),
-        // ── ADR-192 Round 83/84 ──
+        // ── Round 83/84 ──
         "research_cdl_advance_block" => Some("updated_at"),
         "research_cdl_breakaway" => Some("updated_at"),
         "research_cdl_gap_side_side_white" => Some("updated_at"),
         "research_cdl_upside_gap_two_crows" => Some("updated_at"),
         "research_cdl_xside_gap_three_methods" => Some("updated_at"),
         "research_cdl_conceal_baby_swallow" => Some("updated_at"),
-        // ── ADR-193 Round 85/86 ──
+        // ── Round 85/86 ──
         "research_cdl_hikkake" => Some("updated_at"),
         "research_cdl_hikkake_mod" => Some("updated_at"),
         "research_cdl_mat_hold" => Some("updated_at"),
         "research_cdl_rise_fall_three_methods" => Some("updated_at"),
-        // ── ADR-194 Round 87/88 ──
+        // ── Round 87/88 ──
         "research_cdl_stalled_pattern" => Some("updated_at"),
         "research_cdl_tasuki_gap" => Some("updated_at"),
-        // ── ADR-195 Round 89/90 ──
+        // ── Round 89/90 ──
         "research_momrank_multi" => Some("updated_at"),
         "research_corrstk" => Some("updated_at"),
-        // ── ADR-196 Round 91/92 ──
+        // ── Round 91/92 ──
         "research_tlrank" => Some("updated_at"),
         "research_corrrank" => Some("updated_at"),
-        // ── ADR-197 Round 93/94 ──
+        // ── Round 93/94 ──
         "research_operank_delta" => Some("updated_at"),
         "research_divacc" => Some("updated_at"),
         "research_epsacc" => Some("updated_at"),
         "research_vrp" => Some("updated_at"),
-        // ── ADR-198 Round 95 ──
+        // ── Round 95 ──
         "research_short_interest_history" => Some("updated_at"),
         "research_shortrank_delta" => Some("updated_at"),
-        // ── ADR-199 Round 96 ──
+        // ── Round 96 ──
         "research_insiderconc" => Some("updated_at"),
-        // ── ADR-189 Round 76 ──
+        // ── Round 76 ──
         "research_modsharpe" => Some("updated_at"),
         "research_hsiehtest" => Some("updated_at"),
         "research_chowbreak" => Some("updated_at"),
         "research_driftburst" => Some("updated_at"),
         "research_hlvclust" => Some("updated_at"),
-        // ── ADR-190 Round 77 ──
+        // ── Round 77 ──
         "research_yangzhang" => Some("updated_at"),
         "research_kuiper" => Some("updated_at"),
         "research_dagostino" => Some("updated_at"),

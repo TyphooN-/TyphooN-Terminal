@@ -1042,7 +1042,7 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "AICACHE",
-        desc: "Cross-client AI response cache stats (ADR-162)",
+        desc: "Cross-client AI response cache stats",
     },
     Command {
         name: "CHAT",

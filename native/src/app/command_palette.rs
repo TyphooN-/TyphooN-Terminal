@@ -317,7 +317,7 @@ impl TyphooNApp {
                 self.tas_paused = false;
                 self.show_tas = true;
             }
-            // ── ADR-109 Godel Parity Round 2 ──
+            // ── Godel Parity Round 2 ──
             "DVD" | "DIV_HISTORY" | "DIVIDEND_HISTORY" => {
                 let sym = self
                     .charts
@@ -401,7 +401,7 @@ impl TyphooNApp {
                 self.treasury_yields_loading = true;
                 let _ = self.broker_tx.send(BrokerCmd::FetchTreasuryYields);
             }
-            // ── ADR-110 Godel Parity Round 3 ──
+            // ── Godel Parity Round 3 ──
             "FA" | "FINANCIALS" | "INCOME" | "BALANCE" | "CASHFLOW" => {
                 let sym = self
                     .charts
@@ -464,7 +464,7 @@ impl TyphooNApp {
                 self.cot_loading = true;
                 let _ = self.broker_tx.send(BrokerCmd::FetchCotReports);
             }
-            // ── ADR-111 Round 4 palette entries ──
+            // ── Round 4 palette entries ──
             "SPLT" | "SPLIT" | "SPLITS" | "STOCK_SPLIT" => {
                 let sym = self
                     .charts
@@ -597,7 +597,7 @@ impl TyphooNApp {
                     });
                 }
             }
-            // ── ADR-112 Round 5 palette entries ──
+            // ── Round 5 palette entries ──
             "INS" | "INSIDER_TRADES" | "FORM4" => {
                 let sym = self
                     .charts
@@ -729,7 +729,7 @@ impl TyphooNApp {
                     });
                 }
             }
-            // ── ADR-113 Round 6 palette entries ──
+            // ── Round 6 palette entries ──
             // (intentionally omits "INDICES" to preserve the legacy ETF dashboard below)
             "WEI" | "GLOBAL_INDICES" => {
                 self.show_wei = true;
@@ -859,7 +859,7 @@ impl TyphooNApp {
                     });
                 }
             }
-            // ── ADR-114 Round 7 palette entries ──
+            // ── Round 7 palette entries ──
             "WCR" | "CURRENCY" | "CURRENCIES" | "FX_RATES" => {
                 self.show_wcr = true;
                 if self.wcr_rates.is_empty() {
@@ -1012,7 +1012,7 @@ impl TyphooNApp {
                     });
                 }
             }
-            // ── ADR-115 Round 8 palette entries ──
+            // ── Round 8 palette entries ──
             "HRA" | "HISTORICAL_RETURNS" | "RETURN_ANALYSIS" | "RISK_ANALYSIS" => {
                 let sym = self
                     .charts
@@ -1328,7 +1328,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-117 Godel Parity Round 10 ──
+            // ── Godel Parity Round 10 ──
             "LEV" | "LEVERAGE" | "DEBT_LEVERAGE" | "SOLVENCY" => {
                 let sym = self
                     .charts
@@ -1486,7 +1486,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-118 Godel Parity Round 11 ──
+            // ── Godel Parity Round 11 ──
             "ALTZ" | "ALTMAN" | "Z_SCORE" | "BANKRUPTCY_RISK" => {
                 let sym = self
                     .charts
@@ -1800,7 +1800,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-120 Godel Parity Round 13 ──
+            // ── Godel Parity Round 13 ──
             "MOM" | "MOMENTUM" | "MOM_SCORE" | "MOMENTUM_12_1" => {
                 let sym = self
                     .charts
@@ -2411,7 +2411,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-124 Round 17 ──
+            // ── Round 17 ──
             "SIZEF" | "SIZE_FACTOR" | "SIZE_RANK" => {
                 let sym = self
                     .charts
@@ -2564,7 +2564,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-125 Round 18 ──
+            // ── Round 18 ──
             "LEVRANK" | "LEV_RANK" | "LEVERAGE_RANK" => {
                 let sym = self
                     .charts
@@ -3507,7 +3507,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-129 Round 22 palette entries ──
+            // ── Round 22 palette entries ──
             "RETSKEW" | "RET_SKEW" | "SKEWNESS" => {
                 let sym = self
                     .charts
@@ -3662,7 +3662,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-131 Round 23 ──
+            // ── Round 23 ──
             "AUTOCOR" | "AUTO_COR" | "ACF" => {
                 let sym = self
                     .charts
@@ -3817,7 +3817,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-132 Round 24 palette ──
+            // ── Round 24 palette ──
             "DRAWUP" | "DRAW_UP" | "RALLYHIST" | "RALLY_HISTORY" => {
                 let sym = self
                     .charts
@@ -3973,7 +3973,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-133 Round 25 palette ──
+            // ── Round 25 palette ──
             "DOWNVOL" | "DOWN_VOL" | "SEMIDEV" | "SORTINO" => {
                 let sym = self
                     .charts
@@ -4129,7 +4129,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-134 Round 26 palette ──
+            // ── Round 26 palette ──
             "CALMAR" | "CALMAR_RATIO" | "CALMARRATIO" => {
                 let sym = self
                     .charts
@@ -4284,7 +4284,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-135 Round 27 palette ──
+            // ── Round 27 palette ──
             "OMEGA" | "OMEGA_RATIO" | "OMEGARATIO" => {
                 let sym = self
                     .charts
@@ -4437,7 +4437,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-136 Round 28 palette ──
+            // ── Round 28 palette ──
             "PARKINSON" | "PARKINSON_VOL" | "PARKVOL" | "HL_VOL" | "RANGE_VOL" => {
                 let sym = self
                     .charts
@@ -4591,7 +4591,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-137 Round 29 palette ──
+            // ── Round 29 palette ──
             "STERLING" | "STERLING_RATIO" | "STERLINGRATIO" => {
                 let sym = self
                     .charts
@@ -4747,7 +4747,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-138 Round 30 palette ──
+            // ── Round 30 palette ──
             "PSR"
             | "PROB_SHARPE"
             | "PROBSHARPE"
@@ -4907,7 +4907,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-139 Round 31 palette ──
+            // ── Round 31 palette ──
             "HILLTAIL" | "HILL" | "HILL_TAIL" | "TAIL_INDEX" | "TAILINDEX" | "HILLESTIMATOR"
             | "POWER_LAW_TAIL" => {
                 let sym = self
@@ -5065,7 +5065,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-140 Round 32 palette ──
+            // ── Round 32 palette ──
             "ENTROPY" | "SHANNON" | "SHANNON_ENTROPY" | "SHANNONENTROPY" | "RETURN_ENTROPY"
             | "RETURNENTROPY" => {
                 let sym = self
@@ -5235,7 +5235,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-141 Round 33 palette ──
+            // ── Round 33 palette ──
             "UPR" | "UPSIDE_POTENTIAL" | "UPSIDEPOTENTIAL" | "UPSIDE_RATIO" | "UPSIDERATIO" => {
                 let sym = self
                     .charts
@@ -5396,7 +5396,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-142 Round 34 palette ──
+            // ── Round 34 palette ──
             "SAMPEN" | "SAMPLE_ENTROPY" | "SAMPLEENTROPY" => {
                 let sym = self
                     .charts
@@ -5551,7 +5551,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-143 Round 35 palette aliases ──
+            // ── Round 35 palette aliases ──
             "ROBVOL" | "ROBUST_VOL" | "ROBUSTVOL" => {
                 let sym = self
                     .charts
@@ -5860,7 +5860,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-145 Round 37 palette aliases ──
+            // ── Round 37 palette aliases ──
             "HIGUCHI" | "HIGUCHI_FD" | "FRACTAL_DIM" | "FRACTALDIM" | "HFD" => {
                 let sym = self
                     .charts
@@ -6016,7 +6016,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-146 Round 38 palette aliases ──
+            // ── Round 38 palette aliases ──
             "BNSJUMP" | "BNS_JUMP" | "JUMPTEST" | "JUMP_TEST" | "BARNDORFF" | "BIPOWERJUMP" => {
                 let sym = self
                     .charts
@@ -6172,7 +6172,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-147 Round 39 palette aliases ──
+            // ── Round 39 palette aliases ──
             "GARCH11" | "GARCH" | "GARCH_11" | "BOLLERSLEV" | "CONDVOL" | "CONDITIONAL_VOL" => {
                 let sym = self
                     .charts
@@ -6330,7 +6330,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-149 Round 40 palette aliases ──
+            // ── Round 40 palette aliases ──
             "DURBINWATSON" | "DURBIN_WATSON" | "DW" | "DWSTAT" | "DWTEST" | "RESIDAC" => {
                 let sym = self
                     .charts
@@ -6648,7 +6648,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-151 Round 42 palette aliases ──
+            // ── Round 42 palette aliases ──
             // NOTE: bare "SQUEEZE"/"DONCHIAN"/"KAMA"/"KAUFMAN" are already
             // bound to chart-overlay toggles — Round 42 research windows use
             // disambiguated aliases only.
@@ -6820,7 +6820,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-152 Round 43 palette aliases ──
+            // ── Round 43 palette aliases ──
             // Bare ICHIMOKU / SUPERTREND / KELTNER / FISHER are already bound to
             // chart-overlay toggles upstream; only disambiguated forms are used here.
             "ICHIMOKUFIT" | "ICHIMOKU_WIN" | "IKH" | "KUMO" | "TENKAN_KIJUN" => {
@@ -6985,7 +6985,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-153 Round 44 palette aliases ──
+            // ── Round 44 palette aliases ──
             // Bare ADX / CCI / PSAR are already bound to chart-overlay toggles upstream;
             // only disambiguated forms are used for ADX/CCI/PSAR research windows.
             // Bare CMF and MFI are unbound and kept as aliases.
@@ -7140,7 +7140,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-154 Round 45 palette aliases ──
+            // ── Round 45 palette aliases ──
             // Bare OBV and HMA collide with chart-overlay toggles upstream;
             // only disambiguated forms are used for OBV/HMA research windows.
             // Bare VORTEX, CHOP, TRIX are unbound and kept as aliases.
@@ -7298,7 +7298,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-155 Round 46 palette aliases ──
+            // ── Round 46 palette aliases ──
             // Bare PPO / DPO / KST / ULTOSC / WILLR are unbound upstream (verified) and kept as aliases.
             "PPO" | "PPOFIT" | "PPO_WIN" | "PCT_PRICE_OSC" | "PERCENT_PRICE_OSC" => {
                 let sym = self
@@ -7458,7 +7458,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-156 Round 47 palette aliases ──
+            // ── Round 47 palette aliases ──
             // Bare MASS / CHAIKOSC / KLINGER / STOCHRSI / AWESOME are unbound upstream (verified) and kept as aliases.
             "MASS" | "MASSFIT" | "MASS_WIN" | "MASS_INDEX" | "DORSEY_MASS" => {
                 let sym = self
@@ -7626,7 +7626,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-158 Round 48 palette aliases ──
+            // ── Round 48 palette aliases ──
             // Bare EFI / EMV / NVI / PVI / COPPOCK are unbound upstream (verified) and kept as aliases.
             "EFI" | "EFIFIT" | "EFI_WIN" | "FORCE_INDEX" | "ELDER_FORCE" => {
                 let sym = self
@@ -7938,7 +7938,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-160 Round 50 ──
+            // ── Round 50 ──
             "STOCH" | "STOCHFIT" | "STOCH_WIN" | "STOCHASTIC" | "LANE_STOCH" => {
                 let sym = self
                     .charts
@@ -8093,7 +8093,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-161 Round 51 palette aliases ──
+            // ── Round 51 palette aliases ──
             "DEMA" | "DEMAFIT" | "DEMA_WIN" | "DOUBLE_EMA" | "DOUBLE_EXPONENTIAL" => {
                 let sym = self
                     .charts
@@ -8257,7 +8257,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-163 Round 52 palette aliases ──
+            // ── Round 52 palette aliases ──
             "ALMA" | "ALMAFIT" | "ALMA_WIN" | "ARNAUD_LEGOUX" | "GAUSSIAN_MA" => {
                 let sym = self
                     .charts
@@ -8722,7 +8722,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-166 Options Expiration Calendar ──
+            // ── Options Expiration Calendar ──
             "EXPCAL"
             | "OPTCAL"
             | "EXPIRY"
@@ -8771,7 +8771,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-167 Round 55 ──
+            // ── Round 55 ──
             "SMMA" | "SMMAFIT" | "SMMA_WIN" | "WILDER_MA" | "WILDER_SMMA" | "RMA"
             | "SMOOTHED_MA" => {
                 let sym = self
@@ -9598,7 +9598,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-172 Round 60: WMA / RAINBOW / MESA_SINE / FRAMA / IBS ──
+            // ── Round 60: WMA / RAINBOW / MESA_SINE / FRAMA / IBS ──
             "WMA" | "WEIGHTED_MA" | "WMA_WIN" | "LINEAR_WEIGHTED_MA" => {
                 let sym = self
                     .charts
@@ -9918,8 +9918,8 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-174 Round 62 palette aliases ──
-            // Note: "MASS_INDEX"/"DORSEY_MASS" already claimed by ADR-156 Round 47 curvefit.
+            // ── Round 62 palette aliases ──
+            // Note: "MASS_INDEX"/"DORSEY_MASS" already claimed by Round 47 curvefit.
             "MASSINDEX" | "MI" | "MASS_INDEX_WIN" | "MINDEX" | "MASS_25" => {
                 let sym = self
                     .charts
@@ -10018,7 +10018,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // Note: "FORCE_INDEX"/"ELDER_FORCE" already claimed by ADR-158 Round 48 EFI curvefit.
+            // Note: "FORCE_INDEX"/"ELDER_FORCE" already claimed by Round 48 EFI curvefit.
             "FORCEINDEX" | "FORCE" | "FI" | "FORCE_INDEX_WIN" | "FORCE13" => {
                 let sym = self
                     .charts
@@ -10084,7 +10084,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-175 Round 63 palette aliases ──
+            // ── Round 63 palette aliases ──
             "LINEARREG_SLOPE" | "LINREG_SLOPE" | "LINREGSLOPE" | "LRSLOPE" | "SLOPE" => {
                 let sym = self
                     .charts
@@ -10252,7 +10252,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-176 Round 64 palette aliases ──
+            // ── Round 64 palette aliases ──
             "LINEARREG" | "LINEARREG_FIT" | "LINEAR_REG" | "LINEARREG_WIN" | "LINREG_FITTED" => {
                 let sym = self
                     .charts
@@ -10420,7 +10420,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-177 Round 65 palette aliases ──
+            // ── Round 65 palette aliases ──
             "MIDPRICE" | "MID_PRICE" | "MIDBAR" | "MIDBARPRICE" | "HLMIDPRICE" => {
                 let sym = self
                     .charts
@@ -10742,7 +10742,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-179 Round 67: DMI family ──
+            // ── Round 67: DMI family ──
             "PLUS_DI" | "PDI" | "DI_PLUS" | "DIPOS" | "WILDER_PDI" => {
                 let sym = self
                     .charts
@@ -10905,7 +10905,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-180 Round 68 ──
+            // ── Round 68 ──
             "ROC" | "ROC_WILDER" | "ROCWIN" | "ROCRATE" | "RATE_OF_CHANGE" => {
                 let sym = self
                     .charts
@@ -11384,7 +11384,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-183 Round 71 palette aliases ──
+            // ── Round 71 palette aliases ──
             "AROONOSC" | "AROONOSCWIN" | "AROON_OSC" | "AROONOSCILLATOR" | "AROON_DIFF" => {
                 let sym = self
                     .charts
@@ -11548,7 +11548,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-184 Round 72 — CDL* candlestick patterns ──
+            // ── Round 72 — CDL* candlestick patterns ──
             "CDLDOJI" | "CDLDOJIWIN" | "DOJI" | "DOJI_PATTERN" | "DOJI_CANDLE" => {
                 let sym = self
                     .charts
@@ -11723,7 +11723,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-185 Round 73 — CDL* 3-bar / 2-bar patterns ──
+            // ── Round 73 — CDL* 3-bar / 2-bar patterns ──
             "CDLMORNINGSTAR"
             | "MORNINGSTAR"
             | "MORNING_STAR"
@@ -11919,7 +11919,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-186 Round 74 — CDL* piercing / doji variants / hammer mirrors ──
+            // ── Round 74 — CDL* piercing / doji variants / hammer mirrors ──
             "CDLPIERCING" | "PIERCING" | "PIERCING_LINE" | "PIERCINGLINE" | "CDLPIERCINGWIN" => {
                 let sym = self
                     .charts
@@ -12105,7 +12105,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-187 Round 75 — CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
+            // ── Round 75 — CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
             "CDLHARAMICROSS"
             | "HARAMICROSS"
             | "HARAMI_CROSS"
@@ -12290,7 +12290,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-191 Round 76 — CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
+            // ── Round 76 — CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
             "CDLDOJISTAR" | "DOJISTAR" | "DOJI_STAR" | "CDLDOJISTARWIN" | "DOJISTAR_PATTERN" => {
                 let sym = self
                     .charts
@@ -12482,7 +12482,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-192 Round 77 — CDL* belt hold / closing marubozu / high wave / long line / short line ──
+            // ── Round 77 — CDL* belt hold / closing marubozu / high wave / long line / short line ──
             "CDLBELTHOLD" | "BELTHOLD" | "BELT_HOLD" | "CDLBELTHOLDWIN" | "BELT_HOLD_PATTERN" => {
                 let sym = self
                     .charts
@@ -12663,7 +12663,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-193 Round 78 — CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
+            // ── Round 78 — CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
             "CDLCOUNTERATTACK"
             | "COUNTERATTACK"
             | "COUNTER_ATTACK"
@@ -13803,7 +13803,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-189 Round 76 Quant Stats aliases ──
+            // ── Round 76 Quant Stats aliases ──
             "MODSHARPE" | "ADJSHARPE" | "ADJUSTED_SHARPE" | "PEZIER_WHITE" | "MODSHARPEWIN" => {
                 let sym = self
                     .charts
@@ -13969,7 +13969,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-190 Round 77 palette aliases (Quant Stats) ──
+            // ── Round 77 palette aliases (Quant Stats) ──
             "YANGZHANG" | "YZ_VOL" | "YZVOL" | "YZ_RANGEVOL" | "YANGZHANGWIN" => {
                 let sym = self
                     .charts
@@ -14134,7 +14134,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-130 web article ingestion + packet viewer ──
+            // ── web article ingestion + packet viewer ──
             "INGEST_RESEARCH" | "INGEST" | "RESEARCH_INGEST" | "INGESTRESEARCH" => {
                 self.show_ingest_research = true;
             }
@@ -16559,7 +16559,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── ADR-157 AI session resume + history browser ──
+            // ── AI session resume + history browser ──
             "RESUMECLAUDE" | "RESUME_CLAUDE" => {
                 if let Some(ref cache) = self.cache {
                     match typhoon_engine::core::ai_sessions::latest_for_provider(cache, "claude") {
@@ -16716,7 +16716,7 @@ impl TyphooNApp {
                 self.show_screenshots_gallery = true;
                 self.scan_screenshots();
             }
-            // ── ADR-162 cross-client AI response cache stats ──
+            // ── cross-client AI response cache stats ──
             "AICACHE" | "AI_CACHE" | "AI_RESPONSE_CACHE" | "RESPONSE_CACHE" => {
                 self.show_ai_cache = true;
                 if let Some(ref cache) = self.cache {

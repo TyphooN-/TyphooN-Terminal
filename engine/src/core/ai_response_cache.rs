@@ -1,4 +1,4 @@
-//! Cross-client AI response cache (ADR-162).
+//! Cross-client AI response cache.
 //!
 //! Deduplicates AI-provider calls across LAN-synced clients by hashing the
 //! normalised prompt tuple (provider, model, system, history, message) and
@@ -19,7 +19,7 @@
 //! by design — a trading terminal running on a single user's LAN, where the
 //! explicit goal is to share responses across the user's own devices.
 //!
-//! See ADR-162 for the full design.
+//! See for the full design.
 
 use crate::core::cache::SqliteCache as Cache;
 use rusqlite::{Connection, OptionalExtension, params};

@@ -326,7 +326,7 @@ pub(crate) enum FinancialsPeriod {
     Quarterly,
 }
 
-/// ADR-130 RESEARCH_PACKET viewer tree node — one heading row in the
+/// RESEARCH_PACKET viewer tree node — one heading row in the
 /// left-hand navigation of the packet viewer window. Depth maps to
 /// markdown header level: 2 = `## `, 3 = `### `, 4 = `#### `.
 #[derive(Clone, Debug, Default)]
@@ -944,7 +944,7 @@ pub(crate) enum BrokerCmd {
     },
     /// Fetch Yahoo quote batch for the GLCO commodities dashboard.
     FetchCommoditiesQuotes,
-    // ── ADR-109 Godel Parity Round 2 ──
+    // ── Godel Parity Round 2 ──
     /// FMP historical dividend payment schedule for a symbol.
     FetchDividendHistory {
         symbol: String,
@@ -962,7 +962,7 @@ pub(crate) enum BrokerCmd {
     },
     /// Yahoo batch quote for ^IRX/^FVX/^TNX/^TYX treasury yield ladder.
     FetchTreasuryYields,
-    // ── ADR-110 Godel Parity Round 3 ──
+    // ── Godel Parity Round 3 ──
     /// FMP full FA bundle (income + balance + cash flow × annual/quarterly).
     FetchFinancialStatements {
         symbol: String,
@@ -975,7 +975,7 @@ pub(crate) enum BrokerCmd {
     },
     /// CFTC Socrata — latest weekly Commitments of Traders (legacy futures).
     FetchCotReports,
-    // ── ADR-111 Godel Parity Round 4 ──
+    // ── Godel Parity Round 4 ──
     /// FMP historical stock split events for a symbol.
     FetchStockSplits {
         symbol: String,
@@ -1006,7 +1006,7 @@ pub(crate) enum BrokerCmd {
         index_code: String,
         fmp_key: String,
     },
-    // ── ADR-112 Godel Parity Round 5 ──
+    // ── Godel Parity Round 5 ──
     /// FMP SEC Form-4 insider trades for a symbol.
     FetchInsiderTrades {
         symbol: String,
@@ -1033,7 +1033,7 @@ pub(crate) enum BrokerCmd {
         symbol: String,
         fmp_key: String,
     },
-    // ── ADR-113 Godel Parity Round 6 ──
+    // ── Godel Parity Round 6 ──
     /// Yahoo batch-quote the global equity indices dashboard (no key).
     FetchWorldIndices,
     /// FMP market movers — top gainers/losers/most-active (single bundle).
@@ -1052,7 +1052,7 @@ pub(crate) enum BrokerCmd {
         fmp_key: String,
         risk_free_pct: f64,
     },
-    // ── ADR-114 Godel Parity Round 7 ──
+    // ── Godel Parity Round 7 ──
     /// Yahoo batch-quote the FX majors universe (no key).
     FetchCurrencyRates,
     /// FMP historical price fetch for (symbol, SPY) + OLS beta regression. The
@@ -1082,7 +1082,7 @@ pub(crate) enum BrokerCmd {
     FetchFigiIdentifiers {
         symbol: String,
     },
-    // ── ADR-115 Godel Parity Round 8 ──
+    // ── Godel Parity Round 8 ──
     /// Compute historical return / risk analysis for a symbol from cached bars.
     /// Broker handler reads cached HP rows via `get_historical_price` then calls
     /// `compute_hra_snapshot` — no network call.
@@ -1128,7 +1128,7 @@ pub(crate) enum BrokerCmd {
         current_atm_iv_pct: f64,
         history_json: String,
     },
-    // ── ADR-116 Godel Parity Round 9 ──
+    // ── Godel Parity Round 9 ──
     /// SEAG — seasonality compute over cached HP bars (pure compute).
     ComputeSeasonalitySnapshot {
         symbol: String,
@@ -1153,7 +1153,7 @@ pub(crate) enum BrokerCmd {
     ComputeVolSkewSnapshot {
         symbol: String,
     },
-    // ── ADR-117 Godel Parity Round 10 ──
+    // ── Godel Parity Round 10 ──
     /// LEV — debt leverage & coverage ratios from cached Financials + Fundamentals.
     /// `total_debt`/`cash` come from the main thread (Fundamentals) so the handler
     /// only needs to read research_financials + compute ratios.
@@ -1189,7 +1189,7 @@ pub(crate) enum BrokerCmd {
         short_ratio_reported: f64,
         bars_json: String,
     },
-    // ── ADR-118 Godel Parity Round 11 ──
+    // ── Godel Parity Round 11 ──
     /// ALTZ — classic Altman Z-score; MVE comes from the main thread (Fundamentals).
     ComputeAltmanZSnapshot {
         symbol: String,
@@ -1214,7 +1214,7 @@ pub(crate) enum BrokerCmd {
         symbol: String,
         current_price: f64,
     },
-    // ── ADR-119 Godel Parity Round 12 ──
+    // ── Godel Parity Round 12 ──
     /// MNGR — Insider activity bias over cached INS form-4 trades in a lookback window.
     ComputeInsiderActivitySnapshot {
         symbol: String,
@@ -1237,7 +1237,7 @@ pub(crate) enum BrokerCmd {
     ComputeUpdmSnapshot {
         symbol: String,
     },
-    // ── ADR-120 Godel Parity Round 13 ──
+    // ── Godel Parity Round 13 ──
     /// MOM — 12-1 month momentum score over cached HP bars.
     ComputeMomentumSnapshot {
         symbol: String,
@@ -1322,7 +1322,7 @@ pub(crate) enum BrokerCmd {
     ComputePeadSnapshot {
         symbol: String,
     },
-    // ── ADR-124 Round 17 ──
+    // ── Round 17 ──
     /// SIZEF — Size factor rank vs sector (log market cap percentile).
     ComputeSizefSnapshot {
         symbol: String,
@@ -1343,7 +1343,7 @@ pub(crate) enum BrokerCmd {
     ComputeRevrankSnapshot {
         symbol: String,
     },
-    // ── ADR-125 Round 18 ──
+    // ── Round 18 ──
     /// LEVRANK — Leverage rank vs sector peers (D/E percentile, inverted).
     ComputeLevrankSnapshot {
         symbol: String,
@@ -1364,7 +1364,7 @@ pub(crate) enum BrokerCmd {
     ComputeSurpstkSnapshot {
         symbol: String,
     },
-    // ── ADR-126 Round 19 ──
+    // ── Round 19 ──
     /// DVDRANK — Dividend growth rank vs sector peers (3y CAGR percentile).
     ComputeDvdrankSnapshot {
         symbol: String,
@@ -1385,7 +1385,7 @@ pub(crate) enum BrokerCmd {
     ComputeDesSnapshot {
         symbol: String,
     },
-    // ── ADR-127 Round 20 ──
+    // ── Round 20 ──
     /// DVDYIELDRANK — Dividend yield rank vs sector peers (non-payers filtered).
     ComputeDvdyieldrankSnapshot {
         symbol: String,
@@ -1418,7 +1418,7 @@ pub(crate) enum BrokerCmd {
     ComputeMomrankMultiSnapshot {
         symbol: String,
     },
-    // ── ADR-128 Round 21 ──
+    // ── Round 21 ──
     /// BETARANK — Beta rank vs sector peers (risk-inverted: lower beta = safer).
     ComputeBetarankSnapshot {
         symbol: String,
@@ -1469,7 +1469,7 @@ pub(crate) enum BrokerCmd {
     ComputeVrpSnapshot {
         symbol: String,
     },
-    // ── ADR-129 Round 22 ──
+    // ── Round 22 ──
     /// RETSKEW — Return distribution skewness (third standardized moment).
     ComputeRetskewSnapshot {
         symbol: String,
@@ -1490,7 +1490,7 @@ pub(crate) enum BrokerCmd {
     ComputeDayrangeSnapshot {
         symbol: String,
     },
-    // ── ADR-131 Round 23 ──
+    // ── Round 23 ──
     /// AUTOCOR — Autocorrelation of log returns at lags 1/5/10/20.
     ComputeAutocorSnapshot {
         symbol: String,
@@ -1511,7 +1511,7 @@ pub(crate) enum BrokerCmd {
     ComputeVolratioSnapshot {
         symbol: String,
     },
-    // ── ADR-132 Round 24 ──
+    // ── Round 24 ──
     /// DRAWUP — Upside rally history (mirror of DDHIST).
     ComputeDrawupSnapshot {
         symbol: String,
@@ -1532,7 +1532,7 @@ pub(crate) enum BrokerCmd {
     ComputeMrhlSnapshot {
         symbol: String,
     },
-    // ── ADR-133 Round 25 ──
+    // ── Round 25 ──
     /// DOWNVOL — Downside deviation + Sortino ratio.
     ComputeDownvolSnapshot {
         symbol: String,
@@ -1553,7 +1553,7 @@ pub(crate) enum BrokerCmd {
     ComputeVolofvolSnapshot {
         symbol: String,
     },
-    // ── ADR-134 Round 26 ──
+    // ── Round 26 ──
     /// CALMAR — Calmar ratio (annualized return / max drawdown).
     ComputeCalmarSnapshot {
         symbol: String,
@@ -1574,7 +1574,7 @@ pub(crate) enum BrokerCmd {
     ComputeJbnormSnapshot {
         symbol: String,
     },
-    // ── ADR-135 Round 27 ──
+    // ── Round 27 ──
     /// OMEGA — Omega ratio at threshold 0.
     ComputeOmegaSnapshot {
         symbol: String,
@@ -1595,7 +1595,7 @@ pub(crate) enum BrokerCmd {
     ComputeRollsprdSnapshot {
         symbol: String,
     },
-    // ── ADR-136 Round 28 ──
+    // ── Round 28 ──
     /// PARKINSON — Parkinson (1980) H-L range-based vol.
     ComputeParkinsonSnapshot {
         symbol: String,
@@ -1616,7 +1616,7 @@ pub(crate) enum BrokerCmd {
     ComputeDoweffectSnapshot {
         symbol: String,
     },
-    // ── ADR-137 Round 29 ──
+    // ── Round 29 ──
     /// STERLING — Sterling ratio (mean of N worst drawdowns).
     ComputeSterlingSnapshot {
         symbol: String,
@@ -1637,7 +1637,7 @@ pub(crate) enum BrokerCmd {
     ComputeZeroretSnapshot {
         symbol: String,
     },
-    // ── ADR-138 Round 30 ──
+    // ── Round 30 ──
     /// PSR — Probabilistic Sharpe Ratio (Lopez de Prado 2012).
     ComputePsrSnapshot {
         symbol: String,
@@ -1658,7 +1658,7 @@ pub(crate) enum BrokerCmd {
     ComputeDddurSnapshot {
         symbol: String,
     },
-    // ── ADR-139 Round 31 ──
+    // ── Round 31 ──
     /// HILLTAIL — Hill tail-index estimator.
     ComputeHilltailSnapshot {
         symbol: String,
@@ -1679,7 +1679,7 @@ pub(crate) enum BrokerCmd {
     ComputeCfvarSnapshot {
         symbol: String,
     },
-    // ── ADR-140 Round 32 ──
+    // ── Round 32 ──
     /// ENTROPY — Shannon entropy of return distribution.
     ComputeEntropySnapshot {
         symbol: String,
@@ -1700,7 +1700,7 @@ pub(crate) enum BrokerCmd {
     ComputeApenSnapshot {
         symbol: String,
     },
-    // ── ADR-141 Round 33 ──
+    // ── Round 33 ──
     /// UPR — Upside Potential Ratio.
     ComputeUprSnapshot {
         symbol: String,
@@ -1721,7 +1721,7 @@ pub(crate) enum BrokerCmd {
     ComputeGiniSnapshot {
         symbol: String,
     },
-    // ── ADR-142 Round 34 ──
+    // ── Round 34 ──
     /// SAMPEN — Sample Entropy.
     ComputeSampenSnapshot {
         symbol: String,
@@ -1742,7 +1742,7 @@ pub(crate) enum BrokerCmd {
     ComputeSpecentSnapshot {
         symbol: String,
     },
-    // ── ADR-143 Round 35 ──
+    // ── Round 35 ──
     /// ROBVOL — Robust Volatility (MAD+IQR).
     ComputeRobvolSnapshot {
         symbol: String,
@@ -1763,7 +1763,7 @@ pub(crate) enum BrokerCmd {
     ComputeEwmavolSnapshot {
         symbol: String,
     },
-    // ── ADR-144 Round 36 ──
+    // ── Round 36 ──
     /// KSNORM — Kolmogorov-Smirnov normality test.
     ComputeKsnormSnapshot {
         symbol: String,
@@ -1784,7 +1784,7 @@ pub(crate) enum BrokerCmd {
     ComputePeakoverSnapshot {
         symbol: String,
     },
-    // ── ADR-145 Round 37 ──
+    // ── Round 37 ──
     /// HIGUCHI — Higuchi fractal dimension.
     ComputeHiguchiSnapshot {
         symbol: String,
@@ -1805,7 +1805,7 @@ pub(crate) enum BrokerCmd {
     ComputeRankacSnapshot {
         symbol: String,
     },
-    // ── ADR-146 Round 38 ──
+    // ── Round 38 ──
     /// BNSJUMP — Barndorff-Nielsen-Shephard 2006 jump-test Z-statistic.
     ComputeBnsjumpSnapshot {
         symbol: String,
@@ -1826,7 +1826,7 @@ pub(crate) enum BrokerCmd {
     ComputeTsiSnapshot {
         symbol: String,
     },
-    // ── ADR-147 Round 39 ──
+    // ── Round 39 ──
     /// GARCH11 — Bollerslev 1986 GARCH(1,1) fit.
     ComputeGarch11Snapshot {
         symbol: String,
@@ -1847,7 +1847,7 @@ pub(crate) enum BrokerCmd {
     ComputeAutomiSnapshot {
         symbol: String,
     },
-    // ── ADR-149 Round 40 ──
+    // ── Round 40 ──
     /// DURBINWATSON — d-statistic for first-order residual autocorrelation.
     ComputeDurbinWatsonSnapshot {
         symbol: String,
@@ -1868,7 +1868,7 @@ pub(crate) enum BrokerCmd {
     ComputePeriodogramSnapshot {
         symbol: String,
     },
-    // ── ADR-150 Round 41 ──
+    // ── Round 41 ──
     /// MCLEODLI — McLeod-Li portmanteau on squared returns (ARCH detection).
     ComputeMcLeodLiSnapshot {
         symbol: String,
@@ -1889,7 +1889,7 @@ pub(crate) enum BrokerCmd {
     ComputeKendallTauSnapshot {
         symbol: String,
     },
-    // ── ADR-151 Round 42 ──
+    // ── Round 42 ──
     /// SQUEEZE — composite short-squeeze outlier score per symbol.
     ComputeSqueezeSnapshot {
         symbol: String,
@@ -1913,7 +1913,7 @@ pub(crate) enum BrokerCmd {
     ComputeKamaSnapshot {
         symbol: String,
     },
-    // ── ADR-152 Round 43 ──
+    // ── Round 43 ──
     /// ICHIMOKU — Ichimoku Kinko Hyo five-line cloud system.
     ComputeIchimokuSnapshot {
         symbol: String,
@@ -1934,7 +1934,7 @@ pub(crate) enum BrokerCmd {
     ComputeAroonSnapshot {
         symbol: String,
     },
-    // ── ADR-153 Round 44 ──
+    // ── Round 44 ──
     /// ADX — Wilder's Average Directional Index.
     ComputeAdxSnapshot {
         symbol: String,
@@ -1955,7 +1955,7 @@ pub(crate) enum BrokerCmd {
     ComputePsarSnapshot {
         symbol: String,
     },
-    // ── ADR-154 Round 45 ──
+    // ── Round 45 ──
     /// VORTEX — Botes & Siepman directional-movement alternative.
     ComputeVortexSnapshot {
         symbol: String,
@@ -1976,7 +1976,7 @@ pub(crate) enum BrokerCmd {
     ComputeHmaSnapshot {
         symbol: String,
     },
-    // ── ADR-155 Round 46 ──
+    // ── Round 46 ──
     /// PPO — Percentage Price Oscillator (12/26/9).
     ComputePpoSnapshot {
         symbol: String,
@@ -1997,7 +1997,7 @@ pub(crate) enum BrokerCmd {
     ComputeWillrSnapshot {
         symbol: String,
     },
-    // ── ADR-156 Round 47 ──
+    // ── Round 47 ──
     /// MASS — Donald Dorsey Mass Index (EMA9 H-L ratio, 25-bar sum).
     ComputeMassSnapshot {
         symbol: String,
@@ -2018,7 +2018,7 @@ pub(crate) enum BrokerCmd {
     ComputeAwesomeSnapshot {
         symbol: String,
     },
-    // ── ADR-158 Round 48 ──
+    // ── Round 48 ──
     /// EFI — Alexander Elder Force Index (EMA13 of volume × close change).
     ComputeEfiSnapshot {
         symbol: String,
@@ -2039,7 +2039,7 @@ pub(crate) enum BrokerCmd {
     ComputeCoppockSnapshot {
         symbol: String,
     },
-    // ── ADR-159 Round 49 ──
+    // ── Round 49 ──
     /// CMO — Tushar Chande Momentum Oscillator (raw gain/loss spread on [-100, +100]).
     ComputeCmoSnapshot {
         symbol: String,
@@ -2060,7 +2060,7 @@ pub(crate) enum BrokerCmd {
     ComputeSchaffSnapshot {
         symbol: String,
     },
-    // ── ADR-160 Round 50 ──
+    // ── Round 50 ──
     /// STOCH — George Lane Stochastic Oscillator (%K fast + %D smooth, 14/3/3).
     ComputeStochSnapshot {
         symbol: String,
@@ -2081,7 +2081,7 @@ pub(crate) enum BrokerCmd {
     ComputeRwiSnapshot {
         symbol: String,
     },
-    // ── ADR-161 Round 51 ──
+    // ── Round 51 ──
     /// DEMA — Patrick Mulloy Double Exponential MA (length 20).
     ComputeDemaSnapshot {
         symbol: String,
@@ -2102,7 +2102,7 @@ pub(crate) enum BrokerCmd {
     ComputeHeikinSnapshot {
         symbol: String,
     },
-    // ── ADR-163 Round 52 ──
+    // ── Round 52 ──
     /// ALMA — Arnaud Legoux Moving Average with Gaussian kernel (length 20).
     ComputeAlmaSnapshot {
         symbol: String,
@@ -2143,7 +2143,7 @@ pub(crate) enum BrokerCmd {
     ComputePvtSnapshot {
         symbol: String,
     },
-    // ── ADR-165 Round 54 ──
+    // ── Round 54 ──
     /// AC — Bill Williams Accelerator Oscillator (AO − SMA5(AO)).
     ComputeAcSnapshot {
         symbol: String,
@@ -2164,12 +2164,12 @@ pub(crate) enum BrokerCmd {
     ComputeRmiSnapshot {
         symbol: String,
     },
-    // ── ADR-166 Options Expiration Calendar ──
+    // ── Options Expiration Calendar ──
     /// Tier 2: compute per-symbol expiration snapshot from cached options chain.
     ComputeSymbolExpirations {
         symbol: String,
     },
-    // ── ADR-167 Round 55 ──
+    // ── Round 55 ──
     /// SMMA — Wilder's Smoothed MA (α=1/N) with close-vs-SMMA deviation label.
     ComputeSmmaSnapshot {
         symbol: String,
@@ -2190,7 +2190,7 @@ pub(crate) enum BrokerCmd {
     ComputeImiSnapshot {
         symbol: String,
     },
-    // ── ADR-168 Round 56 ──
+    // ── Round 56 ──
     /// GMMA — Guppy Multiple MA: 6 short + 6 long EMA groups with compression/gap labels.
     ComputeGmmaSnapshot {
         symbol: String,
@@ -2211,7 +2211,7 @@ pub(crate) enum BrokerCmd {
     ComputeVrocSnapshot {
         symbol: String,
     },
-    // ── ADR-169 Round 57 ──
+    // ── Round 57 ──
     /// KDJ — Chinese Stochastic variant (%K, %D, J=3K−2D on 9/3 settings).
     ComputeKdjSnapshot {
         symbol: String,
@@ -2232,7 +2232,7 @@ pub(crate) enum BrokerCmd {
     ComputeTmfSnapshot {
         symbol: String,
     },
-    // ── ADR-170 Round 58 ──
+    // ── Round 58 ──
     /// FRACTALS — Bill Williams 5-bar peak/trough structural pivot markers.
     ComputeFractalsSnapshot {
         symbol: String,
@@ -2253,7 +2253,7 @@ pub(crate) enum BrokerCmd {
     ComputeDidiSnapshot {
         symbol: String,
     },
-    // ── ADR-171 Round 59 ──
+    // ── Round 59 ──
     /// DEMARKER — Tom DeMark's DeMarker (bounded [0,1] high/low-range oscillator).
     ComputeDemarkerSnapshot {
         symbol: String,
@@ -2274,7 +2274,7 @@ pub(crate) enum BrokerCmd {
     ComputeStddevSnapshot {
         symbol: String,
     },
-    // ── ADR-172 Round 60 ──
+    // ── Round 60 ──
     /// WMA — Weighted Moving Average (linearly-weighted SMA variant).
     ComputeWmaSnapshot {
         symbol: String,
@@ -2295,7 +2295,7 @@ pub(crate) enum BrokerCmd {
     ComputeIbsSnapshot {
         symbol: String,
     },
-    // ── ADR-173 Round 61 ──
+    // ── Round 61 ──
     /// LAGUERRE_RSI — Ehlers 4-stage Laguerre filter bounded oscillator.
     ComputeLaguerreRsiSnapshot {
         symbol: String,
@@ -2316,7 +2316,7 @@ pub(crate) enum BrokerCmd {
     ComputeMidpointSnapshot {
         symbol: String,
     },
-    // ── ADR-174 Round 62 ──
+    // ── Round 62 ──
     /// MASSINDEX — Dorsey Mass Index: Σ(EMA(H-L,9) / EMA(EMA(H-L,9),9)) over 25 bars.
     ComputeMassIndexSnapshot {
         symbol: String,
@@ -2337,7 +2337,7 @@ pub(crate) enum BrokerCmd {
     ComputeTrangeSnapshot {
         symbol: String,
     },
-    // ── ADR-175 Round 63 ──
+    // ── Round 63 ──
     /// LINEARREG_SLOPE — least-squares slope of N-bar linreg on close (TA-Lib).
     ComputeLinearregSlopeSnapshot {
         symbol: String,
@@ -2358,7 +2358,7 @@ pub(crate) enum BrokerCmd {
     ComputeStochfSnapshot {
         symbol: String,
     },
-    // ── ADR-176 Round 64 ──
+    // ── Round 64 ──
     /// LINEARREG — TA-Lib Linear Regression fitted endpoint (14-bar LS).
     ComputeLinearregSnapshot {
         symbol: String,
@@ -2379,7 +2379,7 @@ pub(crate) enum BrokerCmd {
     ComputeHtPhasorSnapshot {
         symbol: String,
     },
-    // ── ADR-177 Round 65 ──
+    // ── Round 65 ──
     /// MIDPRICE — (HHV(H, 14) + LLV(L, 14)) / 2 range midpoint.
     ComputeMidpriceSnapshot {
         symbol: String,
@@ -2400,7 +2400,7 @@ pub(crate) enum BrokerCmd {
     ComputeAdxrSnapshot {
         symbol: String,
     },
-    // ── ADR-178 Round 66 ──
+    // ── Round 66 ──
     /// AVGPRICE — (open + high + low + close) / 4.
     ComputeAvgpriceSnapshot {
         symbol: String,
@@ -2421,7 +2421,7 @@ pub(crate) enum BrokerCmd {
     ComputeVarianceSnapshot {
         symbol: String,
     },
-    // ── ADR-179 Round 67 ──
+    // ── Round 67 ──
     /// PLUS_DI — Wilder's Positive Directional Indicator (period 14).
     ComputePlusDiSnapshot {
         symbol: String,
@@ -2442,7 +2442,7 @@ pub(crate) enum BrokerCmd {
     ComputeDxSnapshot {
         symbol: String,
     },
-    // ── ADR-180 Round 68 ──
+    // ── Round 68 ──
     /// ROC — raw Rate of Change `close_t − close_{t−n}` (period 10).
     ComputeRocSnapshot {
         symbol: String,
@@ -2463,7 +2463,7 @@ pub(crate) enum BrokerCmd {
     ComputeCorrelSnapshot {
         symbol: String,
     },
-    // ── ADR-181 Round 69 ──
+    // ── Round 69 ──
     /// MIN — rolling-window minimum of close (period 30).
     ComputeMinSnapshot {
         symbol: String,
@@ -2484,7 +2484,7 @@ pub(crate) enum BrokerCmd {
     ComputeMaxIndexSnapshot {
         symbol: String,
     },
-    // ── ADR-182 Round 70 — BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT ──
+    // ── Round 70 — BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT ──
     /// BBANDS — Bollinger Bands (period 20, 2σ).
     ComputeBbandsSnapshot {
         symbol: String,
@@ -2505,7 +2505,7 @@ pub(crate) enum BrokerCmd {
     ComputeLinearRegInterceptSnapshot {
         symbol: String,
     },
-    // ── ADR-183 Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP ──
+    // ── Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP ──
     /// AROONOSC — Aroon Oscillator (period 14, = aroon_up - aroon_down).
     ComputeAroonoscSnapshot {
         symbol: String,
@@ -2526,7 +2526,7 @@ pub(crate) enum BrokerCmd {
     ComputeMavpSnapshot {
         symbol: String,
     },
-    // ── ADR-184 Round 72 — CDLDOJI / CDLHAMMER / CDLSHOOTINGSTAR / CDLENGULFING / CDLHARAMI ──
+    // ── Round 72 — CDLDOJI / CDLHAMMER / CDLSHOOTINGSTAR / CDLENGULFING / CDLHARAMI ──
     /// CDLDOJI — single-bar doji pattern (body ≤ 5% range).
     ComputeCdlDojiSnapshot {
         symbol: String,
@@ -2547,7 +2547,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlHaramiSnapshot {
         symbol: String,
     },
-    // ── ADR-185 Round 73 — CDLMORNINGSTAR / CDLEVENINGSTAR / CDL3BLACKCROWS / CDL3WHITESOLDIERS / CDLDARKCLOUDCOVER ──
+    // ── Round 73 — CDLMORNINGSTAR / CDLEVENINGSTAR / CDL3BLACKCROWS / CDL3WHITESOLDIERS / CDLDARKCLOUDCOVER ──
     /// CDLMORNINGSTAR — 3-bar bullish reversal (big red, star, big green).
     ComputeCdlMorningStarSnapshot {
         symbol: String,
@@ -2568,7 +2568,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlDarkCloudCoverSnapshot {
         symbol: String,
     },
-    // ── ADR-186 Round 74 — CDLPIERCING / CDLDRAGONFLYDOJI / CDLGRAVESTONEDOJI / CDLHANGINGMAN / CDLINVERTEDHAMMER ──
+    // ── Round 74 — CDLPIERCING / CDLDRAGONFLYDOJI / CDLGRAVESTONEDOJI / CDLHANGINGMAN / CDLINVERTEDHAMMER ──
     /// CDLPIERCING — 2-bar bullish reversal (mirror of DarkCloudCover).
     ComputeCdlPiercingSnapshot {
         symbol: String,
@@ -2589,7 +2589,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlInvertedHammerSnapshot {
         symbol: String,
     },
-    // ── ADR-187 Round 75 — CDLHARAMICROSS / CDLLONGLEGGEDDOJI / CDLMARUBOZU / CDLSPINNINGTOP / CDLTRISTAR ──
+    // ── Round 75 — CDLHARAMICROSS / CDLLONGLEGGEDDOJI / CDLMARUBOZU / CDLSPINNINGTOP / CDLTRISTAR ──
     /// CDLHARAMICROSS — 2-bar harami where inside bar is a doji (stricter reversal).
     ComputeCdlHaramiCrossSnapshot {
         symbol: String,
@@ -2610,7 +2610,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlTristarSnapshot {
         symbol: String,
     },
-    // ── ADR-191 Round 76 — CDLDOJISTAR / CDLMORNINGDOJISTAR / CDLEVENINGDOJISTAR / CDLABANDONEDBABY / CDL3INSIDE ──
+    // ── Round 76 — CDLDOJISTAR / CDLMORNINGDOJISTAR / CDLEVENINGDOJISTAR / CDLABANDONEDBABY / CDL3INSIDE ──
     /// CDLDOJISTAR — 2-bar reversal precursor: prior body + doji that gaps away from prior close.
     ComputeCdlDojiStarSnapshot {
         symbol: String,
@@ -2631,7 +2631,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlThreeInsideSnapshot {
         symbol: String,
     },
-    // ── ADR-192 Round 77 — CDLBELTHOLD / CDLCLOSINGMARUBOZU / CDLHIGHWAVE / CDLLONGLINE / CDLSHORTLINE ──
+    // ── Round 77 — CDLBELTHOLD / CDLCLOSINGMARUBOZU / CDLHIGHWAVE / CDLLONGLINE / CDLSHORTLINE ──
     /// CDLBELTHOLD — single-bar long body with virtually no opening shadow.
     ComputeCdlBeltHoldSnapshot {
         symbol: String,
@@ -2652,7 +2652,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlShortLineSnapshot {
         symbol: String,
     },
-    // ── ADR-193 Round 78 — CDLCOUNTERATTACK / CDLHOMINGPIGEON / CDLINNECK / CDLONNECK / CDLTHRUSTING ──
+    // ── Round 78 — CDLCOUNTERATTACK / CDLHOMINGPIGEON / CDLINNECK / CDLONNECK / CDLTHRUSTING ──
     /// CDLCOUNTERATTACK — opposite-colour long bodies with a directional gap and a close back near the prior close.
     ComputeCdlCounterattackSnapshot {
         symbol: String,
@@ -2673,7 +2673,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlThrustingSnapshot {
         symbol: String,
     },
-    // ── ADR-190 Round 79 — CDL2CROWS / CDL3LINESTRIKE / CDL3OUTSIDE / CDLMATCHINGLOW ──
+    // ── Round 79 — CDL2CROWS / CDL3LINESTRIKE / CDL3OUTSIDE / CDLMATCHINGLOW ──
     /// CDL2CROWS — long green candle, gap-up red candle, then a second red candle that closes back inside the first body.
     ComputeCdlTwoCrowsSnapshot {
         symbol: String,
@@ -2690,7 +2690,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlMatchingLowSnapshot {
         symbol: String,
     },
-    // ── ADR-190 Round 80 — CDLSEPARATINGLINES / CDLSTICKSANDWICH / CDLRICKSHAWMAN / CDLTAKURI ──
+    // ── Round 80 — CDLSEPARATINGLINES / CDLSTICKSANDWICH / CDLRICKSHAWMAN / CDLTAKURI ──
     /// CDLSEPARATINGLINES — opposite-colour candles sharing the same open, with the second resuming trend.
     ComputeCdlSeparatingLinesSnapshot {
         symbol: String,
@@ -2707,7 +2707,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlTakuriSnapshot {
         symbol: String,
     },
-    // ── ADR-191 Round 81/82 — harder CDL* parity pack ──
+    // ── Round 81/82 — harder CDL* parity pack ──
     /// CDL3STARSINSOUTH — three descending red candles with progressively contracting downside pressure.
     ComputeCdlThreeStarsInSouthSnapshot {
         symbol: String,
@@ -2732,7 +2732,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlUniqueThreeRiverSnapshot {
         symbol: String,
     },
-    // ── ADR-192 Round 83/84 — additional multi-bar CDL* parity pack ──
+    // ── Round 83/84 — additional multi-bar CDL* parity pack ──
     /// CDLADVANCEBLOCK — three rising green candles with shrinking progress and longer upper shadows.
     ComputeCdlAdvanceBlockSnapshot {
         symbol: String,
@@ -2757,7 +2757,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlConcealBabySwallowSnapshot {
         symbol: String,
     },
-    // ── ADR-193 Round 85/86 — stateful CDL* parity pack ──
+    // ── Round 85/86 — stateful CDL* parity pack ──
     /// CDLHIKKAKE — inside-bar trap with a false break to one side.
     ComputeCdlHikkakeSnapshot {
         symbol: String,
@@ -2774,7 +2774,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlRiseFallThreeMethodsSnapshot {
         symbol: String,
     },
-    // ── ADR-194 Round 87/88 — final CDL* parity pack ──
+    // ── Round 87/88 — final CDL* parity pack ──
     /// CDLSTALLEDPATTERN — three advancing green candles where the third stalls with a small body and upper shadow.
     ComputeCdlStalledPatternSnapshot {
         symbol: String,
@@ -2783,7 +2783,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlTasukiGapSnapshot {
         symbol: String,
     },
-    // ── ADR-189 Round 76 (Quant Stats) ──
+    // ── Round 76 (Quant Stats) ──
     /// MODSHARPE — Pezier-White Adjusted Sharpe Ratio (skew/kurt adjusted).
     ComputeModSharpeSnapshot {
         symbol: String,
@@ -2804,7 +2804,7 @@ pub(crate) enum BrokerCmd {
     ComputeHlvClustSnapshot {
         symbol: String,
     },
-    // ── ADR-190 Round 77 — YANGZHANG / KUIPER / DAGOSTINO / BAIPERRON / KUPIECPOF ──
+    // ── Round 77 — YANGZHANG / KUIPER / DAGOSTINO / BAIPERRON / KUPIECPOF ──
     /// YANGZHANG — Yang-Zhang three-component range volatility estimator.
     ComputeYangZhangSnapshot {
         symbol: String,
@@ -2825,7 +2825,7 @@ pub(crate) enum BrokerCmd {
     ComputeKupiecPofSnapshot {
         symbol: String,
     },
-    // ── ADR-130 web article ingestion ──
+    // ── web article ingestion ──
     /// Parse an AI agent reply, extract any `===TYPHOON_INGEST===` fenced
     /// blocks, and merge the discovered articles into the per-symbol
     /// `research_web_articles` cache. LAN sync will propagate results
@@ -3184,7 +3184,7 @@ pub(crate) enum BrokerMsg {
     TranscriptBody(typhoon_engine::core::research::Transcript),
     /// Commodities quote batch.
     CommoditiesQuotes(Vec<typhoon_engine::core::research::CommodityQuote>),
-    // ── ADR-109 ──
+    // ── ──
     /// Dividend payment history for a symbol.
     DividendHistory(String, Vec<typhoon_engine::core::research::DividendRecord>),
     /// Forward earnings estimates for a symbol.
@@ -3196,14 +3196,14 @@ pub(crate) enum BrokerMsg {
     RatingChanges(String, Vec<typhoon_engine::core::research::RatingChange>),
     /// Treasury yield curve snapshot.
     TreasuryYields(Vec<typhoon_engine::core::research::TreasuryYield>),
-    // ── ADR-110 ──
+    // ── ──
     /// Full FA bundle for a symbol (income + balance + cash flow × annual/quarterly).
     FinancialStatementsMsg(String, typhoon_engine::core::research::FinancialStatements),
     /// Company officers + compensation feed for a symbol.
     Executives(String, Vec<typhoon_engine::core::research::Executive>),
     /// CFTC COT weekly snapshot.
     CotReports(Vec<typhoon_engine::core::research::CotReport>),
-    // ── ADR-111 ──
+    // ── ──
     /// Stock split history for a symbol.
     StockSplitsMsg(String, Vec<typhoon_engine::core::research::StockSplit>),
     /// ETF holdings (constituents) for an ETF ticker.
@@ -3219,7 +3219,7 @@ pub(crate) enum BrokerMsg {
     EsgScoresMsg(String, Vec<typhoon_engine::core::research::EsgScore>),
     /// Index members (constituents) for an index code.
     IndexMembersMsg(String, Vec<typhoon_engine::core::research::IndexMember>),
-    // ── ADR-112 ──
+    // ── ──
     /// Insider trade filings (Form 4) for a symbol.
     InsiderTradesMsg(String, Vec<typhoon_engine::core::research::InsiderTrade>),
     /// Institutional holders (13F-derived) for a symbol.
@@ -3239,7 +3239,7 @@ pub(crate) enum BrokerMsg {
         String,
         Vec<typhoon_engine::core::research::EarningsSurprise>,
     ),
-    // ── ADR-113 ──
+    // ── ──
     /// World equity index quotes (global WEI dashboard).
     WorldIndicesMsg(Vec<typhoon_engine::core::research::WorldIndex>),
     /// Market movers bundle (gainers + losers + actives).
@@ -3248,7 +3248,7 @@ pub(crate) enum BrokerMsg {
     SectorPerformanceMsg(Vec<typhoon_engine::core::research::SectorPerformance>),
     /// WACC (weighted-average cost of capital) snapshot for a symbol.
     WaccSnapshotMsg(String, typhoon_engine::core::research::WaccSnapshot),
-    // ── ADR-114 ──
+    // ── ──
     /// World currency rates bundle (FX majors + crosses + EM).
     CurrencyRatesMsg(Vec<typhoon_engine::core::research::CurrencyRate>),
     /// Rolling beta snapshot (1Y/3Y/5Y vs SPY) for a symbol.
@@ -3259,7 +3259,7 @@ pub(crate) enum BrokerMsg {
     RelativeValuationMsg(String, typhoon_engine::core::research::RelativeValuation),
     /// OpenFIGI identifier mapping for a symbol.
     FigiSnapshotMsg(String, typhoon_engine::core::research::FigiSnapshot),
-    // ── ADR-115 ──
+    // ── ──
     /// Historical return / risk analysis snapshot for a symbol.
     HraSnapshotMsg(String, typhoon_engine::core::research::HraSnapshot),
     /// Discounted cash flow (FCFF) fair-value snapshot for a symbol.
@@ -3270,7 +3270,7 @@ pub(crate) enum BrokerMsg {
     OptionsChainMsg(String, typhoon_engine::core::research::OptionsChainSnapshot),
     /// Implied-vol rank / percentile snapshot for a symbol.
     IvolSnapshotMsg(String, typhoon_engine::core::research::IvolSnapshot),
-    // ── ADR-116 ──
+    // ── ──
     /// SEAG — monthly/dow seasonality snapshot for a symbol.
     SeasonalitySnapshotMsg(String, typhoon_engine::core::research::SeasonalitySnapshot),
     /// COR — pairwise correlation matrix snapshot for a symbol.
@@ -3281,7 +3281,7 @@ pub(crate) enum BrokerMsg {
     TechnicalsSnapshotMsg(String, typhoon_engine::core::research::TechnicalSnapshot),
     /// SKEW — implied-volatility smile/skew snapshot for a symbol.
     VolSkewSnapshotMsg(String, typhoon_engine::core::research::VolatilitySkew),
-    // ── ADR-117 ──
+    // ── ──
     /// LEV — debt leverage / coverage ratios snapshot for a symbol.
     LeverageSnapshotMsg(String, typhoon_engine::core::research::LeverageSnapshot),
     /// ACRL — earnings quality (NI vs FCF) snapshot for a symbol.
@@ -3295,7 +3295,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::ShortInterestSnapshot,
     ),
-    // ── ADR-118 ──
+    // ── ──
     /// ALTZ — Altman Z-score snapshot for a symbol.
     AltmanZSnapshotMsg(String, typhoon_engine::core::research::AltmanZSnapshot),
     /// PTFS — Piotroski F-score snapshot for a symbol.
@@ -3309,7 +3309,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::PriceTargetDispersion,
     ),
-    // ── ADR-119 ──
+    // ── ──
     /// MNGR — Insider activity bias snapshot for a symbol.
     InsiderActivitySnapshotMsg(
         String,
@@ -3326,7 +3326,7 @@ pub(crate) enum BrokerMsg {
     ),
     /// UPDM — Upgrade/downgrade momentum snapshot for a symbol.
     UpdmSnapshotMsg(String, typhoon_engine::core::research::UpdmSnapshot),
-    // ── ADR-120 ──
+    // ── ──
     /// MOM — 12-1 month momentum snapshot for a symbol.
     MomentumSnapshotMsg(String, typhoon_engine::core::research::MomentumSnapshot),
     /// LIQ — Liquidity profile snapshot for a symbol.
@@ -3337,7 +3337,7 @@ pub(crate) enum BrokerMsg {
     CashCycleSnapshotMsg(String, typhoon_engine::core::research::CashCycleSnapshot),
     /// CREDIT — Unified credit score snapshot for a symbol.
     CreditSnapshotMsg(String, typhoon_engine::core::research::CreditSnapshot),
-    // ── ADR-121 ──
+    // ── ──
     /// GROWM — GARP composite snapshot for a symbol.
     GrowmSnapshotMsg(String, typhoon_engine::core::research::GrowmSnapshot),
     /// FLOW — Insider + institutional flow snapshot for a symbol.
@@ -3348,7 +3348,7 @@ pub(crate) enum BrokerMsg {
     RelvolSnapshotMsg(String, typhoon_engine::core::research::RelVolSnapshot),
     /// MARGINS — Margin trajectory snapshot for a symbol.
     MarginsSnapshotMsg(String, typhoon_engine::core::research::MarginsSnapshot),
-    // ── ADR-122 ──
+    // ── ──
     /// VAL — Value-factor composite snapshot for a symbol.
     ValSnapshotMsg(String, typhoon_engine::core::research::ValueSnapshot),
     /// QUAL — Quality-factor composite snapshot for a symbol.
@@ -3362,7 +3362,7 @@ pub(crate) enum BrokerMsg {
     ),
     /// COVG — Analyst coverage breadth + churn snapshot for a symbol.
     CovgSnapshotMsg(String, typhoon_engine::core::research::CoverageSnapshot),
-    // ── ADR-123 ──
+    // ── ──
     /// VRK — Value Rank vs sector peers snapshot for a symbol.
     VrkSnapshotMsg(String, typhoon_engine::core::research::ValueRankSnapshot),
     /// QRK — Quality Rank vs sector peers snapshot for a symbol.
@@ -3376,7 +3376,7 @@ pub(crate) enum BrokerMsg {
     ),
     /// PEAD — Post-earnings-announcement drift snapshot for a symbol.
     PeadSnapshotMsg(String, typhoon_engine::core::research::PeadSnapshot),
-    // ── ADR-124 ──
+    // ── ──
     /// SIZEF — Size factor rank vs sector snapshot for a symbol.
     SizefSnapshotMsg(String, typhoon_engine::core::research::SizeFactorSnapshot),
     /// MOMF — Momentum factor rank snapshot for a symbol.
@@ -3393,7 +3393,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::RevenueGrowthRankSnapshot,
     ),
-    // ── ADR-125 ──
+    // ── ──
     /// LEVRANK — Leverage rank vs sector peers snapshot for a symbol.
     LevrankSnapshotMsg(String, typhoon_engine::core::research::LeverageRankSnapshot),
     /// OPERANK — Operating quality rank vs sector peers snapshot for a symbol.
@@ -3413,7 +3413,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::EarningsSurpriseStreakSnapshot,
     ),
-    // ── ADR-126 ──
+    // ── ──
     /// DVDRANK — Dividend growth rank vs sector peers snapshot for a symbol.
     DvdrankSnapshotMsg(
         String,
@@ -3436,7 +3436,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::DailyEventStreakSnapshot,
     ),
-    // ── ADR-127 ──
+    // ── ──
     /// DVDYIELDRANK — Dividend yield rank vs sector peers snapshot for a symbol.
     DvdyieldrankSnapshotMsg(
         String,
@@ -3477,7 +3477,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::MomentumRankMultiSnapshot,
     ),
-    // ── ADR-128 ──
+    // ── ──
     /// BETARANK — Beta rank vs sector peers snapshot for a symbol.
     BetarankSnapshotMsg(String, typhoon_engine::core::research::BetaRankSnapshot),
     /// PEGRANK — PEG ratio rank vs sector peers snapshot for a symbol.
@@ -3529,7 +3529,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::VolRiskPremiumSnapshot,
     ),
-    // ── ADR-129 ──
+    // ── ──
     /// RETSKEW — Return distribution skewness snapshot for a symbol.
     RetskewSnapshotMsg(
         String,
@@ -3546,7 +3546,7 @@ pub(crate) enum BrokerMsg {
     RunlenSnapshotMsg(String, typhoon_engine::core::research::RunLengthSnapshot),
     /// DAYRANGE — Daily range analysis snapshot for a symbol.
     DayrangeSnapshotMsg(String, typhoon_engine::core::research::DailyRangeSnapshot),
-    // ── ADR-131 ──
+    // ── ──
     /// AUTOCOR — Autocorrelation snapshot for a symbol.
     AutocorSnapshotMsg(
         String,
@@ -3563,7 +3563,7 @@ pub(crate) enum BrokerMsg {
     ),
     /// VOLRATIO — Up/down volume ratio snapshot for a symbol.
     VolratioSnapshotMsg(String, typhoon_engine::core::research::VolumeRatioSnapshot),
-    // ── ADR-132 ──
+    // ── ──
     /// DRAWUP — Rally history snapshot for a symbol.
     DrawupSnapshotMsg(
         String,
@@ -3583,7 +3583,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::MeanReversionHalfLifeSnapshot,
     ),
-    // ── ADR-133 ──
+    // ── ──
     /// DOWNVOL — Downside deviation + Sortino snapshot for a symbol.
     DownvolSnapshotMsg(String, typhoon_engine::core::research::DownsideVolSnapshot),
     /// SHARPR — Sharpe ratio snapshot for a symbol.
@@ -3597,7 +3597,7 @@ pub(crate) enum BrokerMsg {
     WickbiasSnapshotMsg(String, typhoon_engine::core::research::WickBiasSnapshot),
     /// VOLOFVOL — Vol of rolling 20d realized vol snapshot for a symbol.
     VolofvolSnapshotMsg(String, typhoon_engine::core::research::VolOfVolSnapshot),
-    // ── ADR-134 Round 26 ──
+    // ── Round 26 ──
     CalmarSnapshotMsg(String, typhoon_engine::core::research::CalmarRatioSnapshot),
     UlcerSnapshotMsg(String, typhoon_engine::core::research::UlcerIndexSnapshot),
     VarratioSnapshotMsg(
@@ -3606,7 +3606,7 @@ pub(crate) enum BrokerMsg {
     ),
     AmihudSnapshotMsg(String, typhoon_engine::core::research::AmihudIlliqSnapshot),
     JbnormSnapshotMsg(String, typhoon_engine::core::research::JarqueBeraSnapshot),
-    // ── ADR-135 Round 27 ──
+    // ── Round 27 ──
     OmegaSnapshotMsg(String, typhoon_engine::core::research::OmegaRatioSnapshot),
     DfaSnapshotMsg(
         String,
@@ -3618,7 +3618,7 @@ pub(crate) enum BrokerMsg {
         typhoon_engine::core::research::MonthlySeasonalitySnapshot,
     ),
     RollsprdSnapshotMsg(String, typhoon_engine::core::research::RollSpreadSnapshot),
-    // ── ADR-136 Round 28 ──
+    // ── Round 28 ──
     ParkinsonSnapshotMsg(String, typhoon_engine::core::research::ParkinsonVolSnapshot),
     GkvolSnapshotMsg(
         String,
@@ -3633,7 +3633,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::DayOfWeekEffectSnapshot,
     ),
-    // ── ADR-137 Round 29 ──
+    // ── Round 29 ──
     SterlingSnapshotMsg(
         String,
         typhoon_engine::core::research::SterlingRatioSnapshot,
@@ -3645,7 +3645,7 @@ pub(crate) enum BrokerMsg {
     LjungbSnapshotMsg(String, typhoon_engine::core::research::LjungBoxSnapshot),
     RunstestSnapshotMsg(String, typhoon_engine::core::research::RunsTestSnapshot),
     ZeroretSnapshotMsg(String, typhoon_engine::core::research::ZeroReturnSnapshot),
-    // ── ADR-138 Round 30 ──
+    // ── Round 30 ──
     PsrSnapshotMsg(
         String,
         typhoon_engine::core::research::ProbabilisticSharpeSnapshot,
@@ -3660,7 +3660,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::DrawdownDurationSnapshot,
     ),
-    // ── ADR-139 Round 31 ──
+    // ── Round 31 ──
     HilltailSnapshotMsg(String, typhoon_engine::core::research::HillTailSnapshot),
     ArchlmSnapshotMsg(String, typhoon_engine::core::research::ArchLmSnapshot),
     PainratioSnapshotMsg(String, typhoon_engine::core::research::PainRatioSnapshot),
@@ -3669,199 +3669,199 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::CornishFisherSnapshot,
     ),
-    // ── ADR-140 Round 32 ──
+    // ── Round 32 ──
     EntropySnapshotMsg(String, typhoon_engine::core::research::EntropySnapshot),
     RachevSnapshotMsg(String, typhoon_engine::core::research::RachevSnapshot),
     GprSnapshotMsg(String, typhoon_engine::core::research::GprSnapshot),
     PacfSnapshotMsg(String, typhoon_engine::core::research::PacfSnapshot),
     ApenSnapshotMsg(String, typhoon_engine::core::research::ApenSnapshot),
-    // ── ADR-141 Round 33 ──
+    // ── Round 33 ──
     UprSnapshotMsg(String, typhoon_engine::core::research::UprSnapshot),
     LevereffSnapshotMsg(String, typhoon_engine::core::research::LeverEffSnapshot),
     DrawdarSnapshotMsg(String, typhoon_engine::core::research::DrawDaRSnapshot),
     VarhalfSnapshotMsg(String, typhoon_engine::core::research::VarHalfSnapshot),
     GiniSnapshotMsg(String, typhoon_engine::core::research::GiniSnapshot),
-    // ── ADR-142 Round 34 ──
+    // ── Round 34 ──
     SampenSnapshotMsg(String, typhoon_engine::core::research::SampenSnapshot),
     PermenSnapshotMsg(String, typhoon_engine::core::research::PermenSnapshot),
     RecfactSnapshotMsg(String, typhoon_engine::core::research::RecfactSnapshot),
     KpssSnapshotMsg(String, typhoon_engine::core::research::KpssSnapshot),
     SpecentSnapshotMsg(String, typhoon_engine::core::research::SpecentSnapshot),
-    // ── ADR-143 Round 35 ──
+    // ── Round 35 ──
     RobvolSnapshotMsg(String, typhoon_engine::core::research::RobVolSnapshot),
     RenyientSnapshotMsg(String, typhoon_engine::core::research::RenyientSnapshot),
     RetquantSnapshotMsg(String, typhoon_engine::core::research::RetquantSnapshot),
     MsentSnapshotMsg(String, typhoon_engine::core::research::MsentSnapshot),
     EwmavolSnapshotMsg(String, typhoon_engine::core::research::EwmaVolSnapshot),
-    // ── ADR-144 Round 36 ──
+    // ── Round 36 ──
     KsnormSnapshotMsg(String, typhoon_engine::core::research::KsnormSnapshot),
     AdtestSnapshotMsg(String, typhoon_engine::core::research::AdtestSnapshot),
     LmomSnapshotMsg(String, typhoon_engine::core::research::LmomSnapshot),
     KylelamSnapshotMsg(String, typhoon_engine::core::research::KylelamSnapshot),
     PeakoverSnapshotMsg(String, typhoon_engine::core::research::PeakoverSnapshot),
-    // ── ADR-145 Round 37 ──
+    // ── Round 37 ──
     HiguchiSnapshotMsg(String, typhoon_engine::core::research::HiguchiSnapshot),
     PickandsSnapshotMsg(String, typhoon_engine::core::research::PickandsSnapshot),
     Kappa3SnapshotMsg(String, typhoon_engine::core::research::Kappa3Snapshot),
     LyapunovSnapshotMsg(String, typhoon_engine::core::research::LyapunovSnapshot),
     RankacSnapshotMsg(String, typhoon_engine::core::research::RankacSnapshot),
-    // ── ADR-146 Round 38 ──
+    // ── Round 38 ──
     BnsjumpSnapshotMsg(String, typhoon_engine::core::research::BnsjumpSnapshot),
     PprootSnapshotMsg(String, typhoon_engine::core::research::PprootSnapshot),
     MfdfaSnapshotMsg(String, typhoon_engine::core::research::MfdfaSnapshot),
     HillksSnapshotMsg(String, typhoon_engine::core::research::HillksSnapshot),
     TsiSnapshotMsg(String, typhoon_engine::core::research::TsiSnapshot),
-    // ── ADR-147 Round 39 ──
+    // ── Round 39 ──
     Garch11SnapshotMsg(String, typhoon_engine::core::research::Garch11Snapshot),
     SadfSnapshotMsg(String, typhoon_engine::core::research::SadfSnapshot),
     CordimSnapshotMsg(String, typhoon_engine::core::research::CordimSnapshot),
     SkspecSnapshotMsg(String, typhoon_engine::core::research::SkspecSnapshot),
     AutomiSnapshotMsg(String, typhoon_engine::core::research::AutomiSnapshot),
-    // ── ADR-149 Round 40 ──
+    // ── Round 40 ──
     DurbinWatsonSnapshotMsg(String, typhoon_engine::core::research::DurbinWatsonSnapshot),
     BdsTestSnapshotMsg(String, typhoon_engine::core::research::BdsTestSnapshot),
     BreuschPaganSnapshotMsg(String, typhoon_engine::core::research::BreuschPaganSnapshot),
     TurnPtsSnapshotMsg(String, typhoon_engine::core::research::TurnPtsSnapshot),
     PeriodogramSnapshotMsg(String, typhoon_engine::core::research::PeriodogramSnapshot),
-    // ── ADR-150 Round 41 ──
+    // ── Round 41 ──
     McLeodLiSnapshotMsg(String, typhoon_engine::core::research::McLeodLiSnapshot),
     OuFitSnapshotMsg(String, typhoon_engine::core::research::OuFitSnapshot),
     GphSnapshotMsg(String, typhoon_engine::core::research::GphSnapshot),
     BurgSpecSnapshotMsg(String, typhoon_engine::core::research::BurgSpecSnapshot),
     KendallTauSnapshotMsg(String, typhoon_engine::core::research::KendallTauSnapshot),
-    // ── ADR-151 Round 42 ──
+    // ── Round 42 ──
     SqueezeSnapshotMsg(String, typhoon_engine::core::research::SqueezeSnapshot),
     SqueezeRankSnapshotMsg(String, typhoon_engine::core::research::SqueezeRankSnapshot),
     SqueezeWatchlistLoaded(Vec<typhoon_engine::core::research::SqueezeSnapshot>),
     BbsqueezeSnapshotMsg(String, typhoon_engine::core::research::BbsqueezeSnapshot),
     DonchianSnapshotMsg(String, typhoon_engine::core::research::DonchianSnapshot),
     KamaSnapshotMsg(String, typhoon_engine::core::research::KamaSnapshot),
-    // ── ADR-152 Round 43 ──
+    // ── Round 43 ──
     IchimokuSnapshotMsg(String, typhoon_engine::core::research::IchimokuSnapshot),
     SupertrendSnapshotMsg(String, typhoon_engine::core::research::SupertrendSnapshot),
     KeltnerSnapshotMsg(String, typhoon_engine::core::research::KeltnerSnapshot),
     FisherSnapshotMsg(String, typhoon_engine::core::research::FisherSnapshot),
     AroonSnapshotMsg(String, typhoon_engine::core::research::AroonSnapshot),
-    // ── ADR-153 Round 44 ──
+    // ── Round 44 ──
     AdxSnapshotMsg(String, typhoon_engine::core::research::AdxSnapshot),
     CciSnapshotMsg(String, typhoon_engine::core::research::CciSnapshot),
     CmfSnapshotMsg(String, typhoon_engine::core::research::CmfSnapshot),
     MfiSnapshotMsg(String, typhoon_engine::core::research::MfiSnapshot),
     PsarSnapshotMsg(String, typhoon_engine::core::research::PsarSnapshot),
-    // ── ADR-154 Round 45 ──
+    // ── Round 45 ──
     VortexSnapshotMsg(String, typhoon_engine::core::research::VortexSnapshot),
     ChopSnapshotMsg(String, typhoon_engine::core::research::ChopSnapshot),
     ObvSnapshotMsg(String, typhoon_engine::core::research::ObvSnapshot),
     TrixSnapshotMsg(String, typhoon_engine::core::research::TrixSnapshot),
     HmaSnapshotMsg(String, typhoon_engine::core::research::HmaSnapshot),
-    // ── ADR-155 Round 46 ──
+    // ── Round 46 ──
     PpoSnapshotMsg(String, typhoon_engine::core::research::PpoSnapshot),
     DpoSnapshotMsg(String, typhoon_engine::core::research::DpoSnapshot),
     KstSnapshotMsg(String, typhoon_engine::core::research::KstSnapshot),
     UltoscSnapshotMsg(String, typhoon_engine::core::research::UltoscSnapshot),
     WillrSnapshotMsg(String, typhoon_engine::core::research::WillrSnapshot),
-    // ── ADR-156 Round 47 ──
+    // ── Round 47 ──
     MassSnapshotMsg(String, typhoon_engine::core::research::MassSnapshot),
     ChaikoscSnapshotMsg(String, typhoon_engine::core::research::ChaikoscSnapshot),
     KlingerSnapshotMsg(String, typhoon_engine::core::research::KlingerSnapshot),
     StochRsiSnapshotMsg(String, typhoon_engine::core::research::StochRsiSnapshot),
     AwesomeSnapshotMsg(String, typhoon_engine::core::research::AwesomeSnapshot),
-    // ── ADR-158 Round 48 ──
+    // ── Round 48 ──
     EfiSnapshotMsg(String, typhoon_engine::core::research::EfiSnapshot),
     EmvSnapshotMsg(String, typhoon_engine::core::research::EmvSnapshot),
     NviSnapshotMsg(String, typhoon_engine::core::research::NviSnapshot),
     PviSnapshotMsg(String, typhoon_engine::core::research::PviSnapshot),
     CoppockSnapshotMsg(String, typhoon_engine::core::research::CoppockSnapshot),
-    // ── ADR-159 Round 49 ──
+    // ── Round 49 ──
     CmoSnapshotMsg(String, typhoon_engine::core::research::CmoSnapshot),
     QstickSnapshotMsg(String, typhoon_engine::core::research::QstickSnapshot),
     DisparitySnapshotMsg(String, typhoon_engine::core::research::DisparitySnapshot),
     BopSnapshotMsg(String, typhoon_engine::core::research::BopSnapshot),
     SchaffSnapshotMsg(String, typhoon_engine::core::research::SchaffSnapshot),
-    // ── ADR-160 Round 50 ──
+    // ── Round 50 ──
     StochSnapshotMsg(String, typhoon_engine::core::research::StochSnapshot),
     MacdSnapshotMsg(String, typhoon_engine::core::research::MacdSnapshot),
     VwapSnapshotMsg(String, typhoon_engine::core::research::VwapSnapshot),
     McgdSnapshotMsg(String, typhoon_engine::core::research::McgdSnapshot),
     RwiSnapshotMsg(String, typhoon_engine::core::research::RwiSnapshot),
-    // ── ADR-161 Round 51 ──
+    // ── Round 51 ──
     DemaSnapshotMsg(String, typhoon_engine::core::research::DemaSnapshot),
     TemaSnapshotMsg(String, typhoon_engine::core::research::TemaSnapshot),
     LinregSnapshotMsg(String, typhoon_engine::core::research::LinregSnapshot),
     PivotsSnapshotMsg(String, typhoon_engine::core::research::PivotsSnapshot),
     HeikinSnapshotMsg(String, typhoon_engine::core::research::HeikinSnapshot),
-    // ── ADR-163 Round 52 ──
+    // ── Round 52 ──
     AlmaSnapshotMsg(String, typhoon_engine::core::research::AlmaSnapshot),
     ZlemaSnapshotMsg(String, typhoon_engine::core::research::ZlemaSnapshot),
     ElderRaySnapshotMsg(String, typhoon_engine::core::research::ElderRaySnapshot),
     TsfSnapshotMsg(String, typhoon_engine::core::research::TsfSnapshot),
     RviSnapshotMsg(String, typhoon_engine::core::research::RviSnapshot),
-    // ── ADR-164 Round 53 ──
+    // ── Round 53 ──
     TrimaSnapshotMsg(String, typhoon_engine::core::research::TrimaSnapshot),
     T3SnapshotMsg(String, typhoon_engine::core::research::T3Snapshot),
     VidyaSnapshotMsg(String, typhoon_engine::core::research::VidyaSnapshot),
     SmiSnapshotMsg(String, typhoon_engine::core::research::SmiSnapshot),
     PvtSnapshotMsg(String, typhoon_engine::core::research::PvtSnapshot),
-    // ── ADR-165 Round 54 ──
+    // ── Round 54 ──
     AcSnapshotMsg(String, typhoon_engine::core::research::AcSnapshot),
     ChvolSnapshotMsg(String, typhoon_engine::core::research::ChvolSnapshot),
     BbwidthSnapshotMsg(String, typhoon_engine::core::research::BbwidthSnapshot),
     ElderImpSnapshotMsg(String, typhoon_engine::core::research::ElderImpulseSnapshot),
     RmiSnapshotMsg(String, typhoon_engine::core::research::RmiSnapshot),
-    // ── ADR-166 ──
+    // ── ──
     SymbolExpirationsMsg(
         String,
         typhoon_engine::core::research::SymbolExpirationsSnapshot,
     ),
-    // ── ADR-167 Round 55 ──
+    // ── Round 55 ──
     SmmaSnapshotMsg(String, typhoon_engine::core::research::SmmaSnapshot),
     AlligatorSnapshotMsg(String, typhoon_engine::core::research::AlligatorSnapshot),
     CrsiSnapshotMsg(String, typhoon_engine::core::research::CrsiSnapshot),
     SebSnapshotMsg(String, typhoon_engine::core::research::SebSnapshot),
     ImiSnapshotMsg(String, typhoon_engine::core::research::ImiSnapshot),
-    // ── ADR-168 Round 56 ──
+    // ── Round 56 ──
     GmmaSnapshotMsg(String, typhoon_engine::core::research::GmmaSnapshot),
     MaenvSnapshotMsg(String, typhoon_engine::core::research::MaenvSnapshot),
     AdlSnapshotMsg(String, typhoon_engine::core::research::AdlSnapshot),
     VhfSnapshotMsg(String, typhoon_engine::core::research::VhfSnapshot),
     VrocSnapshotMsg(String, typhoon_engine::core::research::VrocSnapshot),
-    // ── ADR-169 Round 57 ──
+    // ── Round 57 ──
     KdjSnapshotMsg(String, typhoon_engine::core::research::KdjSnapshot),
     QqeSnapshotMsg(String, typhoon_engine::core::research::QqeSnapshot),
     PmoSnapshotMsg(String, typhoon_engine::core::research::PmoSnapshot),
     CfoSnapshotMsg(String, typhoon_engine::core::research::CfoSnapshot),
     TmfSnapshotMsg(String, typhoon_engine::core::research::TmfSnapshot),
-    // ── ADR-170 Round 58 ──
+    // ── Round 58 ──
     FractalsSnapshotMsg(String, typhoon_engine::core::research::FractalsSnapshot),
     IftRsiSnapshotMsg(String, typhoon_engine::core::research::IftRsiSnapshot),
     MamaSnapshotMsg(String, typhoon_engine::core::research::MamaSnapshot),
     CogSnapshotMsg(String, typhoon_engine::core::research::CogSnapshot),
     DidiSnapshotMsg(String, typhoon_engine::core::research::DidiSnapshot),
-    // ── ADR-171 Round 59 ──
+    // ── Round 59 ──
     DemarkerSnapshotMsg(String, typhoon_engine::core::research::DemarkerSnapshot),
     GatorSnapshotMsg(String, typhoon_engine::core::research::GatorSnapshot),
     BwMfiSnapshotMsg(String, typhoon_engine::core::research::BwMfiSnapshot),
     VwmaSnapshotMsg(String, typhoon_engine::core::research::VwmaSnapshot),
     StddevSnapshotMsg(String, typhoon_engine::core::research::StddevSnapshot),
-    // ── ADR-172 Round 60 ──
+    // ── Round 60 ──
     WmaSnapshotMsg(String, typhoon_engine::core::research::WmaSnapshot),
     RainbowSnapshotMsg(String, typhoon_engine::core::research::RainbowSnapshot),
     MesaSineSnapshotMsg(String, typhoon_engine::core::research::MesaSineSnapshot),
     FramaSnapshotMsg(String, typhoon_engine::core::research::FramaSnapshot),
     IbsSnapshotMsg(String, typhoon_engine::core::research::IbsSnapshot),
-    // ── ADR-173 Round 61 ──
+    // ── Round 61 ──
     LaguerreRsiSnapshotMsg(String, typhoon_engine::core::research::LaguerreRsiSnapshot),
     ZigzagSnapshotMsg(String, typhoon_engine::core::research::ZigzagSnapshot),
     PgoSnapshotMsg(String, typhoon_engine::core::research::PgoSnapshot),
     HtTrendlineSnapshotMsg(String, typhoon_engine::core::research::HtTrendlineSnapshot),
     MidpointSnapshotMsg(String, typhoon_engine::core::research::MidpointSnapshot),
-    // ── ADR-174 Round 62 ──
+    // ── Round 62 ──
     MassIndexSnapshotMsg(String, typhoon_engine::core::research::MassIndexSnapshot),
     NatrSnapshotMsg(String, typhoon_engine::core::research::NatrSnapshot),
     TtmSqueezeSnapshotMsg(String, typhoon_engine::core::research::TtmSqueezeSnapshot),
     ForceIndexSnapshotMsg(String, typhoon_engine::core::research::ForceIndexSnapshot),
     TrangeSnapshotMsg(String, typhoon_engine::core::research::TrangeSnapshot),
-    // ── ADR-175 Round 63 ──
+    // ── Round 63 ──
     LinearregSlopeSnapshotMsg(
         String,
         typhoon_engine::core::research::LinearregSlopeSnapshot,
@@ -3870,7 +3870,7 @@ pub(crate) enum BrokerMsg {
     HtTrendmodeSnapshotMsg(String, typhoon_engine::core::research::HtTrendmodeSnapshot),
     AccbandsSnapshotMsg(String, typhoon_engine::core::research::AccbandsSnapshot),
     StochfSnapshotMsg(String, typhoon_engine::core::research::StochfSnapshot),
-    // ── ADR-176 Round 64 ──
+    // ── Round 64 ──
     LinearregSnapshotMsg(String, typhoon_engine::core::research::LinearregSnapshot),
     LinearregAngleSnapshotMsg(
         String,
@@ -3879,37 +3879,37 @@ pub(crate) enum BrokerMsg {
     HtDcphaseSnapshotMsg(String, typhoon_engine::core::research::HtDcphaseSnapshot),
     HtSineSnapshotMsg(String, typhoon_engine::core::research::HtSineSnapshot),
     HtPhasorSnapshotMsg(String, typhoon_engine::core::research::HtPhasorSnapshot),
-    // ── ADR-177 Round 65 ──
+    // ── Round 65 ──
     MidpriceSnapshotMsg(String, typhoon_engine::core::research::MidpriceSnapshot),
     ApoSnapshotMsg(String, typhoon_engine::core::research::ApoSnapshot),
     MomSnapshotMsg(String, typhoon_engine::core::research::MomSnapshot),
     SarextSnapshotMsg(String, typhoon_engine::core::research::SarextSnapshot),
     AdxrSnapshotMsg(String, typhoon_engine::core::research::AdxrSnapshot),
-    // ── ADR-178 Round 66 ──
+    // ── Round 66 ──
     AvgpriceSnapshotMsg(String, typhoon_engine::core::research::AvgpriceSnapshot),
     MedpriceSnapshotMsg(String, typhoon_engine::core::research::MedpriceSnapshot),
     TypPriceSnapshotMsg(String, typhoon_engine::core::research::TypPriceSnapshot),
     WclPriceSnapshotMsg(String, typhoon_engine::core::research::WclPriceSnapshot),
     VarianceSnapshotMsg(String, typhoon_engine::core::research::VarianceSnapshot),
-    // ── ADR-179 Round 67 ──
+    // ── Round 67 ──
     PlusDiSnapshotMsg(String, typhoon_engine::core::research::PlusDiSnapshot),
     MinusDiSnapshotMsg(String, typhoon_engine::core::research::MinusDiSnapshot),
     PlusDmSnapshotMsg(String, typhoon_engine::core::research::PlusDmSnapshot),
     MinusDmSnapshotMsg(String, typhoon_engine::core::research::MinusDmSnapshot),
     DxSnapshotMsg(String, typhoon_engine::core::research::DxSnapshot),
-    // ── ADR-180 Round 68 ──
+    // ── Round 68 ──
     RocSnapshotMsg(String, typhoon_engine::core::research::RocSnapshot),
     RocpSnapshotMsg(String, typhoon_engine::core::research::RocpSnapshot),
     RocrSnapshotMsg(String, typhoon_engine::core::research::RocrSnapshot),
     Rocr100SnapshotMsg(String, typhoon_engine::core::research::Rocr100Snapshot),
     CorrelSnapshotMsg(String, typhoon_engine::core::research::CorrelSnapshot),
-    // ── ADR-181 Round 69 ──
+    // ── Round 69 ──
     MinSnapshotMsg(String, typhoon_engine::core::research::MinSnapshot),
     MaxSnapshotMsg(String, typhoon_engine::core::research::MaxSnapshot),
     MinMaxSnapshotMsg(String, typhoon_engine::core::research::MinMaxSnapshot),
     MinIndexSnapshotMsg(String, typhoon_engine::core::research::MinIndexSnapshot),
     MaxIndexSnapshotMsg(String, typhoon_engine::core::research::MaxIndexSnapshot),
-    // ── ADR-182 Round 70 ──
+    // ── Round 70 ──
     BbandsSnapshotMsg(String, typhoon_engine::core::research::BbandsSnapshot),
     AdSnapshotMsg(String, typhoon_engine::core::research::AdSnapshot),
     AdoscSnapshotMsg(String, typhoon_engine::core::research::AdoscSnapshot),
@@ -3918,13 +3918,13 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::LinearRegInterceptSnapshot,
     ),
-    // ── ADR-183 Round 71 ──
+    // ── Round 71 ──
     AroonoscSnapshotMsg(String, typhoon_engine::core::research::AroonoscSnapshot),
     MinMaxIndexSnapshotMsg(String, typhoon_engine::core::research::MinMaxIndexSnapshot),
     MacdextSnapshotMsg(String, typhoon_engine::core::research::MacdextSnapshot),
     MacdfixSnapshotMsg(String, typhoon_engine::core::research::MacdfixSnapshot),
     MavpSnapshotMsg(String, typhoon_engine::core::research::MavpSnapshot),
-    // ── ADR-184 Round 72 ──
+    // ── Round 72 ──
     CdlDojiSnapshotMsg(String, typhoon_engine::core::research::CdlDojiSnapshot),
     CdlHammerSnapshotMsg(String, typhoon_engine::core::research::CdlHammerSnapshot),
     CdlShootingStarSnapshotMsg(
@@ -3933,7 +3933,7 @@ pub(crate) enum BrokerMsg {
     ),
     CdlEngulfingSnapshotMsg(String, typhoon_engine::core::research::CdlEngulfingSnapshot),
     CdlHaramiSnapshotMsg(String, typhoon_engine::core::research::CdlHaramiSnapshot),
-    // ── ADR-185 Round 73 ──
+    // ── Round 73 ──
     CdlMorningStarSnapshotMsg(
         String,
         typhoon_engine::core::research::CdlMorningStarSnapshot,
@@ -3954,7 +3954,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::CdlDarkCloudCoverSnapshot,
     ),
-    // ── ADR-186 Round 74 ──
+    // ── Round 74 ──
     CdlPiercingSnapshotMsg(String, typhoon_engine::core::research::CdlPiercingSnapshot),
     CdlDragonflyDojiSnapshotMsg(
         String,
@@ -3972,7 +3972,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::CdlInvertedHammerSnapshot,
     ),
-    // ── ADR-187 Round 75 ──
+    // ── Round 75 ──
     CdlHaramiCrossSnapshotMsg(
         String,
         typhoon_engine::core::research::CdlHaramiCrossSnapshot,
@@ -3987,7 +3987,7 @@ pub(crate) enum BrokerMsg {
         typhoon_engine::core::research::CdlSpinningTopSnapshot,
     ),
     CdlTristarSnapshotMsg(String, typhoon_engine::core::research::CdlTristarSnapshot),
-    // ── ADR-191 Round 76 ──
+    // ── Round 76 ──
     CdlDojiStarSnapshotMsg(String, typhoon_engine::core::research::CdlDojiStarSnapshot),
     CdlMorningDojiStarSnapshotMsg(
         String,
@@ -4005,7 +4005,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::CdlThreeInsideSnapshot,
     ),
-    // ── ADR-192 Round 77 ──
+    // ── Round 77 ──
     CdlBeltHoldSnapshotMsg(String, typhoon_engine::core::research::CdlBeltHoldSnapshot),
     CdlClosingMarubozuSnapshotMsg(
         String,
@@ -4014,7 +4014,7 @@ pub(crate) enum BrokerMsg {
     CdlHighWaveSnapshotMsg(String, typhoon_engine::core::research::CdlHighWaveSnapshot),
     CdlLongLineSnapshotMsg(String, typhoon_engine::core::research::CdlLongLineSnapshot),
     CdlShortLineSnapshotMsg(String, typhoon_engine::core::research::CdlShortLineSnapshot),
-    // ── ADR-193 Round 78 ──
+    // ── Round 78 ──
     CdlCounterattackSnapshotMsg(
         String,
         typhoon_engine::core::research::CdlCounterattackSnapshot,
@@ -4026,7 +4026,7 @@ pub(crate) enum BrokerMsg {
     CdlInNeckSnapshotMsg(String, typhoon_engine::core::research::CdlInNeckSnapshot),
     CdlOnNeckSnapshotMsg(String, typhoon_engine::core::research::CdlOnNeckSnapshot),
     CdlThrustingSnapshotMsg(String, typhoon_engine::core::research::CdlThrustingSnapshot),
-    // ── ADR-190 Round 79/80 ──
+    // ── Round 79/80 ──
     CdlTwoCrowsSnapshotMsg(String, typhoon_engine::core::research::CdlTwoCrowsSnapshot),
     CdlThreeLineStrikeSnapshotMsg(
         String,
@@ -4053,7 +4053,7 @@ pub(crate) enum BrokerMsg {
         typhoon_engine::core::research::CdlRickshawManSnapshot,
     ),
     CdlTakuriSnapshotMsg(String, typhoon_engine::core::research::CdlTakuriSnapshot),
-    // ── ADR-191 Round 81/82 ──
+    // ── Round 81/82 ──
     CdlThreeStarsInSouthSnapshotMsg(
         String,
         typhoon_engine::core::research::CdlThreeStarsInSouthSnapshot,
@@ -4075,7 +4075,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::CdlUniqueThreeRiverSnapshot,
     ),
-    // ── ADR-192 Round 83/84 ──
+    // ── Round 83/84 ──
     CdlAdvanceBlockSnapshotMsg(
         String,
         typhoon_engine::core::research::CdlAdvanceBlockSnapshot,
@@ -4097,7 +4097,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::CdlConcealBabySwallowSnapshot,
     ),
-    // ── ADR-193 Round 85/86 ──
+    // ── Round 85/86 ──
     CdlHikkakeSnapshotMsg(String, typhoon_engine::core::research::CdlHikkakeSnapshot),
     CdlHikkakeModSnapshotMsg(
         String,
@@ -4108,25 +4108,25 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::CdlRiseFallThreeMethodsSnapshot,
     ),
-    // ── ADR-194 Round 87/88 ──
+    // ── Round 87/88 ──
     CdlStalledPatternSnapshotMsg(
         String,
         typhoon_engine::core::research::CdlStalledPatternSnapshot,
     ),
     CdlTasukiGapSnapshotMsg(String, typhoon_engine::core::research::CdlTasukiGapSnapshot),
-    // ── ADR-189 Round 76 (Quant Stats) ──
+    // ── Round 76 (Quant Stats) ──
     ModSharpeSnapshotMsg(String, typhoon_engine::core::research::ModSharpeSnapshot),
     HsiehTestSnapshotMsg(String, typhoon_engine::core::research::HsiehTestSnapshot),
     ChowBreakSnapshotMsg(String, typhoon_engine::core::research::ChowBreakSnapshot),
     DriftBurstSnapshotMsg(String, typhoon_engine::core::research::DriftBurstSnapshot),
     HlvClustSnapshotMsg(String, typhoon_engine::core::research::HlvClustSnapshot),
-    // ── ADR-190 Round 77 (Quant Stats) ──
+    // ── Round 77 (Quant Stats) ──
     YangZhangSnapshotMsg(String, typhoon_engine::core::research::YangZhangVolSnapshot),
     KuiperSnapshotMsg(String, typhoon_engine::core::research::KuiperSnapshot),
     DagostinoSnapshotMsg(String, typhoon_engine::core::research::DagostinoSnapshot),
     BaiPerronSnapshotMsg(String, typhoon_engine::core::research::BaiPerronSnapshot),
     KupiecPofSnapshotMsg(String, typhoon_engine::core::research::KupiecPofSnapshot),
-    // ── ADR-130 ──
+    // ── ──
     /// Result of an INGEST_RESEARCH operation: per-symbol counts of
     /// newly-added articles plus any parser/write errors encountered.
     IngestResearchResult {
@@ -4677,7 +4677,7 @@ pub struct TyphooNApp {
     /// provider default when the user switches providers.
     pub(crate) ai_model: String,
     pub(crate) ai_provider: usize, // 0=Claude, 1=GPT
-    // ── ADR-157 AI session persistence ──
+    // ── AI session persistence ──
     /// Stable per-conversation UUIDs. Empty until the first turn, then reused
     /// for every subsequent save of the same conversation. Claude reuses the
     /// existing `claude_code_session_id` (a UUID) as both the --resume id and
@@ -4690,7 +4690,7 @@ pub struct TyphooNApp {
     pub(crate) ai_sessions_index: Vec<typhoon_engine::core::ai_sessions::SessionIndexEntry>,
     pub(crate) ai_sessions_viewing: Option<typhoon_engine::core::ai_sessions::AiSessionRecord>,
     pub(crate) ai_sessions_last_refresh: i64,
-    /// ADR-162 AI response cache stats window.
+    /// AI response cache stats window.
     pub(crate) show_ai_cache: bool,
     pub(crate) ai_cache_stats: typhoon_engine::core::ai_response_cache::AiResponseCacheStats,
     pub(crate) ai_cache_recent: Vec<typhoon_engine::core::ai_response_cache::AiResponseCacheEntry>,
@@ -5408,7 +5408,7 @@ pub struct TyphooNApp {
     pub(crate) tas_rows: VecDeque<(String, f64, f64, String, String)>,
     pub(crate) tas_paused: bool,
 
-    // ── ADR-109 Godel Parity Round 2 ──────────────────────────────────
+    // ── Godel Parity Round 2 ──────────────────────────────────
     /// DVD — per-symbol dividend history.
     pub(crate) show_dividend_history: bool,
     pub(crate) dividend_history_symbol: String,
@@ -5433,7 +5433,7 @@ pub struct TyphooNApp {
     pub(crate) treasury_yields_last_fetch: Option<std::time::Instant>,
     pub(crate) treasury_yields_loading: bool,
 
-    // ── ADR-110 Godel Parity Round 3 ──────────────────────────────────
+    // ── Godel Parity Round 3 ──────────────────────────────────
     /// FA — full financial statements bundle (Income / Balance / Cash Flow).
     pub(crate) show_financials: bool,
     pub(crate) financials_symbol: String,
@@ -5455,7 +5455,7 @@ pub struct TyphooNApp {
     pub(crate) cot_last_fetch: Option<std::time::Instant>,
     pub(crate) cot_filter: String,
 
-    // ── ADR-111 Godel Parity Round 4 ──────────────────────────────────
+    // ── Godel Parity Round 4 ──────────────────────────────────
     /// SPLT — historical stock split events.
     pub(crate) show_splits: bool,
     pub(crate) splits_symbol: String,
@@ -5488,7 +5488,7 @@ pub struct TyphooNApp {
     pub(crate) memb_loading: bool,
     pub(crate) memb_filter: String,
 
-    // ── ADR-112 Godel Parity Round 5 ──────────────────────────────────
+    // ── Godel Parity Round 5 ──────────────────────────────────
     /// INS — SEC Form-4 insider trades.
     pub(crate) show_insider_trades: bool,
     pub(crate) insider_symbol: String,
@@ -5520,7 +5520,7 @@ pub struct TyphooNApp {
     pub(crate) eps_surprises: Vec<typhoon_engine::core::research::EarningsSurprise>,
     pub(crate) eps_loading: bool,
 
-    // ── ADR-113 Godel Parity Round 6 ──────────────────────────────────
+    // ── Godel Parity Round 6 ──────────────────────────────────
     /// WEI — world equity indices dashboard (Yahoo index tickers, separate
     /// from the legacy ETF-based "World Indices" dashboard above).
     pub(crate) show_wei: bool,
@@ -5549,7 +5549,7 @@ pub struct TyphooNApp {
     pub(crate) wacc_snapshot: typhoon_engine::core::research::WaccSnapshot,
     pub(crate) wacc_loading: bool,
 
-    // ── ADR-114 Godel Parity Round 7 ──────────────────────────────────
+    // ── Godel Parity Round 7 ──────────────────────────────────
     /// WCR — world currency rates (FX majors + crosses + EM), Yahoo-sourced
     /// single-row snapshot. Separate state from the legacy FOREX_MATRIX
     /// dashboard which is broker-sourced.
@@ -5582,7 +5582,7 @@ pub struct TyphooNApp {
     pub(crate) figi_snapshot: typhoon_engine::core::research::FigiSnapshot,
     pub(crate) figi_loading: bool,
 
-    // ── ADR-115 Godel Parity Round 8 ──────────────────────────────────
+    // ── Godel Parity Round 8 ──────────────────────────────────
     /// HRA — historical return / risk analysis (vol, Sharpe, Sortino, drawdowns).
     pub(crate) show_hra: bool,
     pub(crate) hra_symbol: String,
@@ -5616,7 +5616,7 @@ pub struct TyphooNApp {
     pub(crate) ivol_snapshot: typhoon_engine::core::research::IvolSnapshot,
     pub(crate) ivol_loading: bool,
 
-    // ── ADR-116 Godel Parity Round 9 ──────────────────────────────────
+    // ── Godel Parity Round 9 ──────────────────────────────────
     /// SEAG — monthly + day-of-week seasonality over cached HP.
     pub(crate) show_seag: bool,
     pub(crate) seag_symbol: String,
@@ -5648,7 +5648,7 @@ pub struct TyphooNApp {
     pub(crate) skew_snapshot: typhoon_engine::core::research::VolatilitySkew,
     pub(crate) skew_loading: bool,
 
-    // ── ADR-117 Godel Parity Round 10 ──
+    // ── Godel Parity Round 10 ──
     /// LEV — debt leverage & coverage ratios from cached Financials + Fundamentals.
     pub(crate) show_lev: bool,
     pub(crate) lev_symbol: String,
@@ -5679,7 +5679,7 @@ pub struct TyphooNApp {
     pub(crate) shrt_snapshot: typhoon_engine::core::research::ShortInterestSnapshot,
     pub(crate) shrt_loading: bool,
 
-    // ── ADR-118 Godel Parity Round 11 ──
+    // ── Godel Parity Round 11 ──
     /// ALTZ — classic Altman Z-score from cached Financials + Fundamentals.
     pub(crate) show_altz: bool,
     pub(crate) altz_symbol: String,
@@ -5710,7 +5710,7 @@ pub struct TyphooNApp {
     pub(crate) ptd_snapshot: typhoon_engine::core::research::PriceTargetDispersion,
     pub(crate) ptd_loading: bool,
 
-    // ── ADR-119 Godel Parity Round 12 ──
+    // ── Godel Parity Round 12 ──
     /// MNGR — Insider activity bias over cached INS form-4 trades in a lookback window.
     pub(crate) show_mngr: bool,
     pub(crate) mngr_symbol: String,
@@ -5742,7 +5742,7 @@ pub struct TyphooNApp {
     pub(crate) updm_snapshot: typhoon_engine::core::research::UpdmSnapshot,
     pub(crate) updm_loading: bool,
 
-    // ── ADR-120 Godel Parity Round 13 ──
+    // ── Godel Parity Round 13 ──
     /// MOM — 12-1 month momentum score from cached HP bars.
     pub(crate) show_mom: bool,
     pub(crate) mom_symbol: String,
@@ -5774,7 +5774,7 @@ pub struct TyphooNApp {
     pub(crate) credit_snapshot: typhoon_engine::core::research::CreditSnapshot,
     pub(crate) credit_loading: bool,
 
-    // ── ADR-121 Godel Parity Round 14 ──
+    // ── Godel Parity Round 14 ──
     /// GROWM — GARP composite fusing cached MOM + EARM + DIVG.
     pub(crate) show_growm: bool,
     pub(crate) growm_symbol: String,
@@ -5806,7 +5806,7 @@ pub struct TyphooNApp {
     pub(crate) margins_snapshot: typhoon_engine::core::research::MarginsSnapshot,
     pub(crate) margins_loading: bool,
 
-    // ── ADR-122 Godel Parity Round 15 ─────────────────────────────────
+    // ── Godel Parity Round 15 ─────────────────────────────────
     /// VAL — Value-factor composite vs sector peers.
     pub(crate) show_val: bool,
     pub(crate) val_symbol: String,
@@ -5838,7 +5838,7 @@ pub struct TyphooNApp {
     pub(crate) covg_snapshot: typhoon_engine::core::research::CoverageSnapshot,
     pub(crate) covg_loading: bool,
 
-    // ── ADR-123 Godel Parity Round 16 ─────────────────────────────────
+    // ── Godel Parity Round 16 ─────────────────────────────────
     /// VRK — Value Rank vs sector peers.
     pub(crate) show_vrk: bool,
     pub(crate) vrk_symbol: String,
@@ -5869,7 +5869,7 @@ pub struct TyphooNApp {
     pub(crate) pead_snapshot: typhoon_engine::core::research::PeadSnapshot,
     pub(crate) pead_loading: bool,
 
-    // ── ADR-124 Godel Parity Round 17 ─────────────────────────────────
+    // ── Godel Parity Round 17 ─────────────────────────────────
     /// SIZEF — Size factor rank vs sector peers.
     pub(crate) show_sizef: bool,
     pub(crate) sizef_symbol: String,
@@ -5900,7 +5900,7 @@ pub struct TyphooNApp {
     pub(crate) revrank_snapshot: typhoon_engine::core::research::RevenueGrowthRankSnapshot,
     pub(crate) revrank_loading: bool,
 
-    // ── ADR-125 Godel Parity Round 18 ─────────────────────────────────
+    // ── Godel Parity Round 18 ─────────────────────────────────
     /// LEVRANK — Leverage rank vs sector peers (D/E percentile, inverted).
     pub(crate) show_levrank: bool,
     pub(crate) levrank_symbol: String,
@@ -6113,7 +6113,7 @@ pub struct TyphooNApp {
     pub(crate) dayrange_snapshot: typhoon_engine::core::research::DailyRangeSnapshot,
     pub(crate) dayrange_loading: bool,
 
-    // ── ADR-131 Round 23 ──
+    // ── Round 23 ──
     /// AUTOCOR — Autocorrelation at multiple lags.
     pub(crate) show_autocor: bool,
     pub(crate) autocor_symbol: String,
@@ -6144,7 +6144,7 @@ pub struct TyphooNApp {
     pub(crate) volratio_snapshot: typhoon_engine::core::research::VolumeRatioSnapshot,
     pub(crate) volratio_loading: bool,
 
-    // ── ADR-132 Round 24 ──
+    // ── Round 24 ──
     /// DRAWUP — Upside rally history (mirror of DDHIST).
     pub(crate) show_drawup: bool,
     pub(crate) drawup_symbol: String,
@@ -6175,7 +6175,7 @@ pub struct TyphooNApp {
     pub(crate) mrhl_snapshot: typhoon_engine::core::research::MeanReversionHalfLifeSnapshot,
     pub(crate) mrhl_loading: bool,
 
-    // ── ADR-133 Round 25 ──
+    // ── Round 25 ──
     /// DOWNVOL — Downside deviation + Sortino ratio.
     pub(crate) show_downvol: bool,
     pub(crate) downvol_symbol: String,
@@ -6206,7 +6206,7 @@ pub struct TyphooNApp {
     pub(crate) volofvol_snapshot: typhoon_engine::core::research::VolOfVolSnapshot,
     pub(crate) volofvol_loading: bool,
 
-    // ── ADR-134 Round 26 ──
+    // ── Round 26 ──
     pub(crate) show_calmar: bool,
     pub(crate) calmar_symbol: String,
     pub(crate) calmar_snapshot: typhoon_engine::core::research::CalmarRatioSnapshot,
@@ -6228,7 +6228,7 @@ pub struct TyphooNApp {
     pub(crate) jbnorm_snapshot: typhoon_engine::core::research::JarqueBeraSnapshot,
     pub(crate) jbnorm_loading: bool,
 
-    // ── ADR-135 Round 27 ──
+    // ── Round 27 ──
     pub(crate) show_omega: bool,
     pub(crate) omega_symbol: String,
     pub(crate) omega_snapshot: typhoon_engine::core::research::OmegaRatioSnapshot,
@@ -6250,7 +6250,7 @@ pub struct TyphooNApp {
     pub(crate) rollsprd_snapshot: typhoon_engine::core::research::RollSpreadSnapshot,
     pub(crate) rollsprd_loading: bool,
 
-    // ── ADR-136 Round 28 ──
+    // ── Round 28 ──
     pub(crate) show_parkinson: bool,
     pub(crate) parkinson_symbol: String,
     pub(crate) parkinson_snapshot: typhoon_engine::core::research::ParkinsonVolSnapshot,
@@ -6272,7 +6272,7 @@ pub struct TyphooNApp {
     pub(crate) doweffect_snapshot: typhoon_engine::core::research::DayOfWeekEffectSnapshot,
     pub(crate) doweffect_loading: bool,
 
-    // ── ADR-137 Round 29 ──
+    // ── Round 29 ──
     pub(crate) show_sterling: bool,
     pub(crate) sterling_symbol: String,
     pub(crate) sterling_snapshot: typhoon_engine::core::research::SterlingRatioSnapshot,
@@ -6294,7 +6294,7 @@ pub struct TyphooNApp {
     pub(crate) zeroret_snapshot: typhoon_engine::core::research::ZeroReturnSnapshot,
     pub(crate) zeroret_loading: bool,
 
-    // ── ADR-138 Round 30 ──
+    // ── Round 30 ──
     pub(crate) show_psr: bool,
     pub(crate) psr_symbol: String,
     pub(crate) psr_snapshot: typhoon_engine::core::research::ProbabilisticSharpeSnapshot,
@@ -6316,7 +6316,7 @@ pub struct TyphooNApp {
     pub(crate) dddur_snapshot: typhoon_engine::core::research::DrawdownDurationSnapshot,
     pub(crate) dddur_loading: bool,
 
-    // ── ADR-139 Round 31 ──
+    // ── Round 31 ──
     pub(crate) show_hilltail: bool,
     pub(crate) hilltail_symbol: String,
     pub(crate) hilltail_snapshot: typhoon_engine::core::research::HillTailSnapshot,
@@ -6338,7 +6338,7 @@ pub struct TyphooNApp {
     pub(crate) cfvar_snapshot: typhoon_engine::core::research::CornishFisherSnapshot,
     pub(crate) cfvar_loading: bool,
 
-    // ── ADR-140 Round 32 ──
+    // ── Round 32 ──
     pub(crate) show_entropy: bool,
     pub(crate) entropy_symbol: String,
     pub(crate) entropy_snapshot: typhoon_engine::core::research::EntropySnapshot,
@@ -6360,7 +6360,7 @@ pub struct TyphooNApp {
     pub(crate) apen_snapshot: typhoon_engine::core::research::ApenSnapshot,
     pub(crate) apen_loading: bool,
 
-    // ── ADR-141 Round 33 ──
+    // ── Round 33 ──
     pub(crate) show_upr: bool,
     pub(crate) upr_symbol: String,
     pub(crate) upr_snapshot: typhoon_engine::core::research::UprSnapshot,
@@ -6381,7 +6381,7 @@ pub struct TyphooNApp {
     pub(crate) gini_symbol: String,
     pub(crate) gini_snapshot: typhoon_engine::core::research::GiniSnapshot,
     pub(crate) gini_loading: bool,
-    // ── ADR-142 Round 34 ──
+    // ── Round 34 ──
     pub(crate) show_sampen: bool,
     pub(crate) sampen_symbol: String,
     pub(crate) sampen_snapshot: typhoon_engine::core::research::SampenSnapshot,
@@ -6402,7 +6402,7 @@ pub struct TyphooNApp {
     pub(crate) specent_symbol: String,
     pub(crate) specent_snapshot: typhoon_engine::core::research::SpecentSnapshot,
     pub(crate) specent_loading: bool,
-    // ── ADR-143 Round 35 ──
+    // ── Round 35 ──
     pub(crate) show_robvol: bool,
     pub(crate) robvol_symbol: String,
     pub(crate) robvol_snapshot: typhoon_engine::core::research::RobVolSnapshot,
@@ -6423,7 +6423,7 @@ pub struct TyphooNApp {
     pub(crate) ewmavol_symbol: String,
     pub(crate) ewmavol_snapshot: typhoon_engine::core::research::EwmaVolSnapshot,
     pub(crate) ewmavol_loading: bool,
-    // ── ADR-144 Round 36 ──
+    // ── Round 36 ──
     pub(crate) show_ksnorm: bool,
     pub(crate) ksnorm_symbol: String,
     pub(crate) ksnorm_snapshot: typhoon_engine::core::research::KsnormSnapshot,
@@ -6444,7 +6444,7 @@ pub struct TyphooNApp {
     pub(crate) peakover_symbol: String,
     pub(crate) peakover_snapshot: typhoon_engine::core::research::PeakoverSnapshot,
     pub(crate) peakover_loading: bool,
-    // ── ADR-145 Round 37 ──
+    // ── Round 37 ──
     pub(crate) show_higuchi: bool,
     pub(crate) higuchi_symbol: String,
     pub(crate) higuchi_snapshot: typhoon_engine::core::research::HiguchiSnapshot,
@@ -6465,7 +6465,7 @@ pub struct TyphooNApp {
     pub(crate) rankac_symbol: String,
     pub(crate) rankac_snapshot: typhoon_engine::core::research::RankacSnapshot,
     pub(crate) rankac_loading: bool,
-    // ── ADR-146 Round 38 ──
+    // ── Round 38 ──
     pub(crate) show_bnsjump: bool,
     pub(crate) bnsjump_symbol: String,
     pub(crate) bnsjump_snapshot: typhoon_engine::core::research::BnsjumpSnapshot,
@@ -6486,7 +6486,7 @@ pub struct TyphooNApp {
     pub(crate) tsi_symbol: String,
     pub(crate) tsi_snapshot: typhoon_engine::core::research::TsiSnapshot,
     pub(crate) tsi_loading: bool,
-    // ── ADR-147 Round 39 ──
+    // ── Round 39 ──
     pub(crate) show_garch11: bool,
     pub(crate) garch11_symbol: String,
     pub(crate) garch11_snapshot: typhoon_engine::core::research::Garch11Snapshot,
@@ -6507,7 +6507,7 @@ pub struct TyphooNApp {
     pub(crate) automi_symbol: String,
     pub(crate) automi_snapshot: typhoon_engine::core::research::AutomiSnapshot,
     pub(crate) automi_loading: bool,
-    // ── ADR-149 Round 40 ──
+    // ── Round 40 ──
     pub(crate) show_durbinwatson: bool,
     pub(crate) durbinwatson_symbol: String,
     pub(crate) durbinwatson_snapshot: typhoon_engine::core::research::DurbinWatsonSnapshot,
@@ -6528,7 +6528,7 @@ pub struct TyphooNApp {
     pub(crate) periodogram_symbol: String,
     pub(crate) periodogram_snapshot: typhoon_engine::core::research::PeriodogramSnapshot,
     pub(crate) periodogram_loading: bool,
-    // ── ADR-150 Round 41 ──
+    // ── Round 41 ──
     pub(crate) show_mcleodli: bool,
     pub(crate) mcleodli_symbol: String,
     pub(crate) mcleodli_snapshot: typhoon_engine::core::research::McLeodLiSnapshot,
@@ -6550,7 +6550,7 @@ pub struct TyphooNApp {
     pub(crate) kendalltau_snapshot: typhoon_engine::core::research::KendallTauSnapshot,
     pub(crate) kendalltau_loading: bool,
 
-    // ── ADR-151 Round 42 ──
+    // ── Round 42 ──
     pub(crate) show_squeeze_win: bool,
     pub(crate) squeeze_win_symbol: String,
     pub(crate) squeeze_win_snapshot: typhoon_engine::core::research::SqueezeSnapshot,
@@ -6574,7 +6574,7 @@ pub struct TyphooNApp {
     pub(crate) kama_win_symbol: String,
     pub(crate) kama_win_snapshot: typhoon_engine::core::research::KamaSnapshot,
     pub(crate) kama_win_loading: bool,
-    // ── ADR-152 Round 43 ──
+    // ── Round 43 ──
     pub(crate) show_ichimoku_win: bool,
     pub(crate) ichimoku_win_symbol: String,
     pub(crate) ichimoku_win_snapshot: typhoon_engine::core::research::IchimokuSnapshot,
@@ -6595,7 +6595,7 @@ pub struct TyphooNApp {
     pub(crate) aroon_win_symbol: String,
     pub(crate) aroon_win_snapshot: typhoon_engine::core::research::AroonSnapshot,
     pub(crate) aroon_win_loading: bool,
-    // ── ADR-153 Round 44 ──
+    // ── Round 44 ──
     pub(crate) show_adx_win: bool,
     pub(crate) adx_win_symbol: String,
     pub(crate) adx_win_snapshot: typhoon_engine::core::research::AdxSnapshot,
@@ -6616,7 +6616,7 @@ pub struct TyphooNApp {
     pub(crate) psar_win_symbol: String,
     pub(crate) psar_win_snapshot: typhoon_engine::core::research::PsarSnapshot,
     pub(crate) psar_win_loading: bool,
-    // ── ADR-154 Round 45 ──
+    // ── Round 45 ──
     pub(crate) show_vortex_win: bool,
     pub(crate) vortex_win_symbol: String,
     pub(crate) vortex_win_snapshot: typhoon_engine::core::research::VortexSnapshot,
@@ -6637,7 +6637,7 @@ pub struct TyphooNApp {
     pub(crate) hma_win_symbol: String,
     pub(crate) hma_win_snapshot: typhoon_engine::core::research::HmaSnapshot,
     pub(crate) hma_win_loading: bool,
-    // ── ADR-155 Round 46 ──
+    // ── Round 46 ──
     pub(crate) show_ppo_win: bool,
     pub(crate) ppo_win_symbol: String,
     pub(crate) ppo_win_snapshot: typhoon_engine::core::research::PpoSnapshot,
@@ -6658,7 +6658,7 @@ pub struct TyphooNApp {
     pub(crate) willr_win_symbol: String,
     pub(crate) willr_win_snapshot: typhoon_engine::core::research::WillrSnapshot,
     pub(crate) willr_win_loading: bool,
-    // ── ADR-156 Round 47 ──
+    // ── Round 47 ──
     pub(crate) show_mass_win: bool,
     pub(crate) mass_win_symbol: String,
     pub(crate) mass_win_snapshot: typhoon_engine::core::research::MassSnapshot,
@@ -6679,7 +6679,7 @@ pub struct TyphooNApp {
     pub(crate) awesome_win_symbol: String,
     pub(crate) awesome_win_snapshot: typhoon_engine::core::research::AwesomeSnapshot,
     pub(crate) awesome_win_loading: bool,
-    // ── ADR-158 Round 48 windows ──
+    // ── Round 48 windows ──
     pub(crate) show_efi_win: bool,
     pub(crate) efi_win_symbol: String,
     pub(crate) efi_win_snapshot: typhoon_engine::core::research::EfiSnapshot,
@@ -6700,7 +6700,7 @@ pub struct TyphooNApp {
     pub(crate) coppock_win_symbol: String,
     pub(crate) coppock_win_snapshot: typhoon_engine::core::research::CoppockSnapshot,
     pub(crate) coppock_win_loading: bool,
-    // ── ADR-159 Round 49 windows ──
+    // ── Round 49 windows ──
     pub(crate) show_cmo_win: bool,
     pub(crate) cmo_win_symbol: String,
     pub(crate) cmo_win_snapshot: typhoon_engine::core::research::CmoSnapshot,
@@ -6721,7 +6721,7 @@ pub struct TyphooNApp {
     pub(crate) schaff_win_symbol: String,
     pub(crate) schaff_win_snapshot: typhoon_engine::core::research::SchaffSnapshot,
     pub(crate) schaff_win_loading: bool,
-    // ── ADR-160 Round 50 windows ──
+    // ── Round 50 windows ──
     pub(crate) show_stoch_win: bool,
     pub(crate) stoch_win_symbol: String,
     pub(crate) stoch_win_snapshot: typhoon_engine::core::research::StochSnapshot,
@@ -6742,7 +6742,7 @@ pub struct TyphooNApp {
     pub(crate) rwi_win_symbol: String,
     pub(crate) rwi_win_snapshot: typhoon_engine::core::research::RwiSnapshot,
     pub(crate) rwi_win_loading: bool,
-    // ── ADR-161 Round 51 windows ──
+    // ── Round 51 windows ──
     pub(crate) show_dema_win: bool,
     pub(crate) dema_win_symbol: String,
     pub(crate) dema_win_snapshot: typhoon_engine::core::research::DemaSnapshot,
@@ -6763,7 +6763,7 @@ pub struct TyphooNApp {
     pub(crate) heikin_win_symbol: String,
     pub(crate) heikin_win_snapshot: typhoon_engine::core::research::HeikinSnapshot,
     pub(crate) heikin_win_loading: bool,
-    // ── ADR-163 Round 52 windows ──
+    // ── Round 52 windows ──
     pub(crate) show_alma_win: bool,
     pub(crate) alma_win_symbol: String,
     pub(crate) alma_win_snapshot: typhoon_engine::core::research::AlmaSnapshot,
@@ -6784,7 +6784,7 @@ pub struct TyphooNApp {
     pub(crate) rvi_win_symbol: String,
     pub(crate) rvi_win_snapshot: typhoon_engine::core::research::RviSnapshot,
     pub(crate) rvi_win_loading: bool,
-    // ── ADR-164 Round 53 windows ──
+    // ── Round 53 windows ──
     pub(crate) show_trima_win: bool,
     pub(crate) trima_win_symbol: String,
     pub(crate) trima_win_snapshot: typhoon_engine::core::research::TrimaSnapshot,
@@ -6805,7 +6805,7 @@ pub struct TyphooNApp {
     pub(crate) pvt_win_symbol: String,
     pub(crate) pvt_win_snapshot: typhoon_engine::core::research::PvtSnapshot,
     pub(crate) pvt_win_loading: bool,
-    // ── ADR-165 Round 54 windows ──
+    // ── Round 54 windows ──
     pub(crate) show_ac_win: bool,
     pub(crate) ac_win_symbol: String,
     pub(crate) ac_win_snapshot: typhoon_engine::core::research::AcSnapshot,
@@ -6827,7 +6827,7 @@ pub struct TyphooNApp {
     pub(crate) rmi_win_snapshot: typhoon_engine::core::research::RmiSnapshot,
     pub(crate) rmi_win_loading: bool,
 
-    // ── ADR-166 Options Expiration Calendar ──
+    // ── Options Expiration Calendar ──
     pub(crate) show_expcal_win: bool,
     pub(crate) expcal_win_symbol: String,
     pub(crate) expcal_win_snapshot: typhoon_engine::core::research::SymbolExpirationsSnapshot,
@@ -6836,7 +6836,7 @@ pub struct TyphooNApp {
     pub(crate) expcal_win_horizon_days: u32,
     pub(crate) expcal_win_calendar: Vec<typhoon_engine::core::research::CalendarExpiry>,
 
-    // ── ADR-167 Round 55: SMMA / ALLIGATOR / CRSI / SEB / IMI ──
+    // ── Round 55: SMMA / ALLIGATOR / CRSI / SEB / IMI ──
     pub(crate) show_smma_win: bool,
     pub(crate) smma_win_symbol: String,
     pub(crate) smma_win_snapshot: typhoon_engine::core::research::SmmaSnapshot,
@@ -6858,7 +6858,7 @@ pub struct TyphooNApp {
     pub(crate) imi_win_snapshot: typhoon_engine::core::research::ImiSnapshot,
     pub(crate) imi_win_loading: bool,
 
-    // ── ADR-168 Round 56: GMMA / MAENV / ADL / VHF / VROC ──
+    // ── Round 56: GMMA / MAENV / ADL / VHF / VROC ──
     pub(crate) show_gmma_win: bool,
     pub(crate) gmma_win_symbol: String,
     pub(crate) gmma_win_snapshot: typhoon_engine::core::research::GmmaSnapshot,
@@ -6880,7 +6880,7 @@ pub struct TyphooNApp {
     pub(crate) vroc_win_snapshot: typhoon_engine::core::research::VrocSnapshot,
     pub(crate) vroc_win_loading: bool,
 
-    // ── ADR-169 Round 57: KDJ / QQE / PMO / CFO / TMF ──
+    // ── Round 57: KDJ / QQE / PMO / CFO / TMF ──
     pub(crate) show_kdj_win: bool,
     pub(crate) kdj_win_symbol: String,
     pub(crate) kdj_win_snapshot: typhoon_engine::core::research::KdjSnapshot,
@@ -6902,7 +6902,7 @@ pub struct TyphooNApp {
     pub(crate) tmf_win_snapshot: typhoon_engine::core::research::TmfSnapshot,
     pub(crate) tmf_win_loading: bool,
 
-    // ── ADR-170 Round 58: FRACTALS / IFT_RSI / MAMA / COG / DIDI ──
+    // ── Round 58: FRACTALS / IFT_RSI / MAMA / COG / DIDI ──
     pub(crate) show_fractals_win: bool,
     pub(crate) fractals_win_symbol: String,
     pub(crate) fractals_win_snapshot: typhoon_engine::core::research::FractalsSnapshot,
@@ -6924,7 +6924,7 @@ pub struct TyphooNApp {
     pub(crate) didi_win_snapshot: typhoon_engine::core::research::DidiSnapshot,
     pub(crate) didi_win_loading: bool,
 
-    // ── ADR-171 Round 59: DEMARKER / GATOR / BW_MFI / VWMA / STDDEV ──
+    // ── Round 59: DEMARKER / GATOR / BW_MFI / VWMA / STDDEV ──
     pub(crate) show_demarker_win: bool,
     pub(crate) demarker_win_symbol: String,
     pub(crate) demarker_win_snapshot: typhoon_engine::core::research::DemarkerSnapshot,
@@ -6946,7 +6946,7 @@ pub struct TyphooNApp {
     pub(crate) stddev_win_snapshot: typhoon_engine::core::research::StddevSnapshot,
     pub(crate) stddev_win_loading: bool,
 
-    // ── ADR-172 Round 60: WMA / RAINBOW / MESA_SINE / FRAMA / IBS ──
+    // ── Round 60: WMA / RAINBOW / MESA_SINE / FRAMA / IBS ──
     pub(crate) show_wma_win: bool,
     pub(crate) wma_win_symbol: String,
     pub(crate) wma_win_snapshot: typhoon_engine::core::research::WmaSnapshot,
@@ -6968,7 +6968,7 @@ pub struct TyphooNApp {
     pub(crate) ibs_win_snapshot: typhoon_engine::core::research::IbsSnapshot,
     pub(crate) ibs_win_loading: bool,
 
-    // ── ADR-173 Round 61: LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT ──
+    // ── Round 61: LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT ──
     pub(crate) show_laguerre_rsi_win: bool,
     pub(crate) laguerre_rsi_win_symbol: String,
     pub(crate) laguerre_rsi_win_snapshot: typhoon_engine::core::research::LaguerreRsiSnapshot,
@@ -6990,7 +6990,7 @@ pub struct TyphooNApp {
     pub(crate) midpoint_win_snapshot: typhoon_engine::core::research::MidpointSnapshot,
     pub(crate) midpoint_win_loading: bool,
 
-    // ── ADR-174 Round 62: MASSINDEX / NATR / TTM_SQUEEZE / FORCE_INDEX / TRANGE ──
+    // ── Round 62: MASSINDEX / NATR / TTM_SQUEEZE / FORCE_INDEX / TRANGE ──
     pub(crate) show_mass_index_win: bool,
     pub(crate) mass_index_win_symbol: String,
     pub(crate) mass_index_win_snapshot: typhoon_engine::core::research::MassIndexSnapshot,
@@ -7012,7 +7012,7 @@ pub struct TyphooNApp {
     pub(crate) trange_win_snapshot: typhoon_engine::core::research::TrangeSnapshot,
     pub(crate) trange_win_loading: bool,
 
-    // ── ADR-175 Round 63: LINEARREG_SLOPE / HT_DCPERIOD / HT_TRENDMODE / ACCBANDS / STOCHF ──
+    // ── Round 63: LINEARREG_SLOPE / HT_DCPERIOD / HT_TRENDMODE / ACCBANDS / STOCHF ──
     pub(crate) show_linearreg_slope_win: bool,
     pub(crate) linearreg_slope_win_symbol: String,
     pub(crate) linearreg_slope_win_snapshot: typhoon_engine::core::research::LinearregSlopeSnapshot,
@@ -7034,7 +7034,7 @@ pub struct TyphooNApp {
     pub(crate) stochf_win_snapshot: typhoon_engine::core::research::StochfSnapshot,
     pub(crate) stochf_win_loading: bool,
 
-    // ── ADR-176 Round 64: LINEARREG / LINEARREG_ANGLE / HT_DCPHASE / HT_SINE / HT_PHASOR ──
+    // ── Round 64: LINEARREG / LINEARREG_ANGLE / HT_DCPHASE / HT_SINE / HT_PHASOR ──
     pub(crate) show_linearreg_win: bool,
     pub(crate) linearreg_win_symbol: String,
     pub(crate) linearreg_win_snapshot: typhoon_engine::core::research::LinearregSnapshot,
@@ -7056,7 +7056,7 @@ pub struct TyphooNApp {
     pub(crate) ht_phasor_win_snapshot: typhoon_engine::core::research::HtPhasorSnapshot,
     pub(crate) ht_phasor_win_loading: bool,
 
-    // ── ADR-177 Round 65: MIDPRICE / APO / MOM / SAREXT / ADXR ──
+    // ── Round 65: MIDPRICE / APO / MOM / SAREXT / ADXR ──
     pub(crate) show_midprice_win: bool,
     pub(crate) midprice_win_symbol: String,
     pub(crate) midprice_win_snapshot: typhoon_engine::core::research::MidpriceSnapshot,
@@ -7078,7 +7078,7 @@ pub struct TyphooNApp {
     pub(crate) adxr_win_snapshot: typhoon_engine::core::research::AdxrSnapshot,
     pub(crate) adxr_win_loading: bool,
 
-    // ── ADR-178 Round 66: AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE ──
+    // ── Round 66: AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE ──
     pub(crate) show_avgprice_win: bool,
     pub(crate) avgprice_win_symbol: String,
     pub(crate) avgprice_win_snapshot: typhoon_engine::core::research::AvgpriceSnapshot,
@@ -7099,7 +7099,7 @@ pub struct TyphooNApp {
     pub(crate) variance_win_symbol: String,
     pub(crate) variance_win_snapshot: typhoon_engine::core::research::VarianceSnapshot,
     pub(crate) variance_win_loading: bool,
-    // ── ADR-179 Round 67 ──
+    // ── Round 67 ──
     pub(crate) show_plus_di_win: bool,
     pub(crate) plus_di_win_symbol: String,
     pub(crate) plus_di_win_snapshot: typhoon_engine::core::research::PlusDiSnapshot,
@@ -7120,7 +7120,7 @@ pub struct TyphooNApp {
     pub(crate) dx_win_symbol: String,
     pub(crate) dx_win_snapshot: typhoon_engine::core::research::DxSnapshot,
     pub(crate) dx_win_loading: bool,
-    // ── ADR-180 Round 68 ──
+    // ── Round 68 ──
     pub(crate) show_roc_win: bool,
     pub(crate) roc_win_symbol: String,
     pub(crate) roc_win_snapshot: typhoon_engine::core::research::RocSnapshot,
@@ -7141,7 +7141,7 @@ pub struct TyphooNApp {
     pub(crate) correl_win_symbol: String,
     pub(crate) correl_win_snapshot: typhoon_engine::core::research::CorrelSnapshot,
     pub(crate) correl_win_loading: bool,
-    // ── ADR-181 Round 69 ──
+    // ── Round 69 ──
     pub(crate) show_min_win: bool,
     pub(crate) min_win_symbol: String,
     pub(crate) min_win_snapshot: typhoon_engine::core::research::MinSnapshot,
@@ -7162,7 +7162,7 @@ pub struct TyphooNApp {
     pub(crate) maxindex_win_symbol: String,
     pub(crate) maxindex_win_snapshot: typhoon_engine::core::research::MaxIndexSnapshot,
     pub(crate) maxindex_win_loading: bool,
-    // ── ADR-182 Round 70 ──
+    // ── Round 70 ──
     pub(crate) show_bbands_win: bool,
     pub(crate) bbands_win_symbol: String,
     pub(crate) bbands_win_snapshot: typhoon_engine::core::research::BbandsSnapshot,
@@ -7184,7 +7184,7 @@ pub struct TyphooNApp {
     pub(crate) linreg_intercept_win_snapshot:
         typhoon_engine::core::research::LinearRegInterceptSnapshot,
     pub(crate) linreg_intercept_win_loading: bool,
-    // ── ADR-183 Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP ──
+    // ── Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP ──
     pub(crate) show_aroonosc_win: bool,
     pub(crate) aroonosc_win_symbol: String,
     pub(crate) aroonosc_win_snapshot: typhoon_engine::core::research::AroonoscSnapshot,
@@ -7205,7 +7205,7 @@ pub struct TyphooNApp {
     pub(crate) mavp_win_symbol: String,
     pub(crate) mavp_win_snapshot: typhoon_engine::core::research::MavpSnapshot,
     pub(crate) mavp_win_loading: bool,
-    // ── ADR-184 Round 72 — CDL* candlestick patterns ──
+    // ── Round 72 — CDL* candlestick patterns ──
     pub(crate) show_cdl_doji_win: bool,
     pub(crate) cdl_doji_win_symbol: String,
     pub(crate) cdl_doji_win_snapshot: typhoon_engine::core::research::CdlDojiSnapshot,
@@ -7227,7 +7227,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_harami_win_symbol: String,
     pub(crate) cdl_harami_win_snapshot: typhoon_engine::core::research::CdlHaramiSnapshot,
     pub(crate) cdl_harami_win_loading: bool,
-    // ── ADR-185 Round 73 — CDL* 3-bar / 2-bar patterns ──
+    // ── Round 73 — CDL* 3-bar / 2-bar patterns ──
     pub(crate) show_cdl_morning_star_win: bool,
     pub(crate) cdl_morning_star_win_symbol: String,
     pub(crate) cdl_morning_star_win_snapshot:
@@ -7253,7 +7253,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_dark_cloud_cover_win_snapshot:
         typhoon_engine::core::research::CdlDarkCloudCoverSnapshot,
     pub(crate) cdl_dark_cloud_cover_win_loading: bool,
-    // ── ADR-186 Round 74 — CDL* piercing / doji variants / hammer mirrors ──
+    // ── Round 74 — CDL* piercing / doji variants / hammer mirrors ──
     pub(crate) show_cdl_piercing_win: bool,
     pub(crate) cdl_piercing_win_symbol: String,
     pub(crate) cdl_piercing_win_snapshot: typhoon_engine::core::research::CdlPiercingSnapshot,
@@ -7277,7 +7277,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_inverted_hammer_win_snapshot:
         typhoon_engine::core::research::CdlInvertedHammerSnapshot,
     pub(crate) cdl_inverted_hammer_win_loading: bool,
-    // ── ADR-187 Round 75 — CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
+    // ── Round 75 — CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
     pub(crate) show_cdl_harami_cross_win: bool,
     pub(crate) cdl_harami_cross_win_symbol: String,
     pub(crate) cdl_harami_cross_win_snapshot:
@@ -7301,7 +7301,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_tristar_win_symbol: String,
     pub(crate) cdl_tristar_win_snapshot: typhoon_engine::core::research::CdlTristarSnapshot,
     pub(crate) cdl_tristar_win_loading: bool,
-    // ── ADR-191 Round 76 — CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
+    // ── Round 76 — CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
     pub(crate) show_cdl_doji_star_win: bool,
     pub(crate) cdl_doji_star_win_symbol: String,
     pub(crate) cdl_doji_star_win_snapshot: typhoon_engine::core::research::CdlDojiStarSnapshot,
@@ -7326,7 +7326,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_three_inside_win_snapshot:
         typhoon_engine::core::research::CdlThreeInsideSnapshot,
     pub(crate) cdl_three_inside_win_loading: bool,
-    // ── ADR-192 Round 77 — CDL* belt hold / closing marubozu / high wave / long line / short line ──
+    // ── Round 77 — CDL* belt hold / closing marubozu / high wave / long line / short line ──
     pub(crate) show_cdl_belt_hold_win: bool,
     pub(crate) cdl_belt_hold_win_symbol: String,
     pub(crate) cdl_belt_hold_win_snapshot: typhoon_engine::core::research::CdlBeltHoldSnapshot,
@@ -7348,7 +7348,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_short_line_win_symbol: String,
     pub(crate) cdl_short_line_win_snapshot: typhoon_engine::core::research::CdlShortLineSnapshot,
     pub(crate) cdl_short_line_win_loading: bool,
-    // ── ADR-193 Round 78 — CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
+    // ── Round 78 — CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
     pub(crate) show_cdl_counterattack_win: bool,
     pub(crate) cdl_counterattack_win_symbol: String,
     pub(crate) cdl_counterattack_win_snapshot:
@@ -7371,7 +7371,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_thrusting_win_symbol: String,
     pub(crate) cdl_thrusting_win_snapshot: typhoon_engine::core::research::CdlThrustingSnapshot,
     pub(crate) cdl_thrusting_win_loading: bool,
-    // ── ADR-190 Round 79/80 — additional CDL* parity windows ──
+    // ── Round 79/80 — additional CDL* parity windows ──
     pub(crate) show_cdl_two_crows_win: bool,
     pub(crate) cdl_two_crows_win_symbol: String,
     pub(crate) cdl_two_crows_win_snapshot: typhoon_engine::core::research::CdlTwoCrowsSnapshot,
@@ -7410,7 +7410,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_takuri_win_symbol: String,
     pub(crate) cdl_takuri_win_snapshot: typhoon_engine::core::research::CdlTakuriSnapshot,
     pub(crate) cdl_takuri_win_loading: bool,
-    // ── ADR-191 Round 81/82 — harder CDL* parity windows ──
+    // ── Round 81/82 — harder CDL* parity windows ──
     pub(crate) show_cdl_three_stars_in_south_win: bool,
     pub(crate) cdl_three_stars_in_south_win_symbol: String,
     pub(crate) cdl_three_stars_in_south_win_snapshot:
@@ -7440,7 +7440,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_unique_three_river_win_snapshot:
         typhoon_engine::core::research::CdlUniqueThreeRiverSnapshot,
     pub(crate) cdl_unique_three_river_win_loading: bool,
-    // ── ADR-192 Round 83/84 — additional multi-bar CDL* parity windows ──
+    // ── Round 83/84 — additional multi-bar CDL* parity windows ──
     pub(crate) show_cdl_advance_block_win: bool,
     pub(crate) cdl_advance_block_win_symbol: String,
     pub(crate) cdl_advance_block_win_snapshot:
@@ -7470,7 +7470,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_conceal_baby_swallow_win_snapshot:
         typhoon_engine::core::research::CdlConcealBabySwallowSnapshot,
     pub(crate) cdl_conceal_baby_swallow_win_loading: bool,
-    // ── ADR-193 Round 85/86 — stateful CDL* parity windows ──
+    // ── Round 85/86 — stateful CDL* parity windows ──
     pub(crate) show_cdl_hikkake_win: bool,
     pub(crate) cdl_hikkake_win_symbol: String,
     pub(crate) cdl_hikkake_win_snapshot: typhoon_engine::core::research::CdlHikkakeSnapshot,
@@ -7488,7 +7488,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_rise_fall_three_methods_win_snapshot:
         typhoon_engine::core::research::CdlRiseFallThreeMethodsSnapshot,
     pub(crate) cdl_rise_fall_three_methods_win_loading: bool,
-    // ── ADR-194 Round 87/88 — final CDL* parity windows ──
+    // ── Round 87/88 — final CDL* parity windows ──
     pub(crate) show_cdl_stalled_pattern_win: bool,
     pub(crate) cdl_stalled_pattern_win_symbol: String,
     pub(crate) cdl_stalled_pattern_win_snapshot:
@@ -7498,7 +7498,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_tasuki_gap_win_symbol: String,
     pub(crate) cdl_tasuki_gap_win_snapshot: typhoon_engine::core::research::CdlTasukiGapSnapshot,
     pub(crate) cdl_tasuki_gap_win_loading: bool,
-    // ── ADR-189 Round 76 — Quant Stats (modsharpe / hsieh / chow / driftburst / hlvclust) ──
+    // ── Round 76 — Quant Stats (modsharpe / hsieh / chow / driftburst / hlvclust) ──
     pub(crate) show_modsharpe_win: bool,
     pub(crate) modsharpe_win_symbol: String,
     pub(crate) modsharpe_win_snapshot: typhoon_engine::core::research::ModSharpeSnapshot,
@@ -7519,7 +7519,7 @@ pub struct TyphooNApp {
     pub(crate) hlvclust_win_symbol: String,
     pub(crate) hlvclust_win_snapshot: typhoon_engine::core::research::HlvClustSnapshot,
     pub(crate) hlvclust_win_loading: bool,
-    // ── ADR-190 Round 77 — Quant Stats (yangzhang / kuiper / dagostino / baiperron / kupiecpof) ──
+    // ── Round 77 — Quant Stats (yangzhang / kuiper / dagostino / baiperron / kupiecpof) ──
     pub(crate) show_yangzhang_win: bool,
     pub(crate) yangzhang_win_symbol: String,
     pub(crate) yangzhang_win_snapshot: typhoon_engine::core::research::YangZhangVolSnapshot,
@@ -7541,7 +7541,7 @@ pub struct TyphooNApp {
     pub(crate) kupiecpof_win_snapshot: typhoon_engine::core::research::KupiecPofSnapshot,
     pub(crate) kupiecpof_win_loading: bool,
 
-    // ── ADR-130 Web article ingestion + packet viewer ──
+    // ── Web article ingestion + packet viewer ──
     /// INGEST_RESEARCH — paste-in window where the user drops an AI
     /// agent reply that contains `===TYPHOON_INGEST===` blocks.
     pub(crate) show_ingest_research: bool,

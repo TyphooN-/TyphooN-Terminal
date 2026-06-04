@@ -3247,7 +3247,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-113 Round 6 receive arms ──
+                // ── Round 6 receive arms ──
                 BrokerMsg::WorldIndicesMsg(rows) => {
                     self.wei_indices = rows.clone();
                     self.wei_loading = false;
@@ -3293,7 +3293,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-114 Godel Parity Round 7 ──
+                // ── Godel Parity Round 7 ──
                 BrokerMsg::CurrencyRatesMsg(rows) => {
                     self.wcr_rates = rows.clone();
                     self.wcr_loading = false;
@@ -3359,7 +3359,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-115 Round 8 receive arms ──
+                // ── Round 8 receive arms ──
                 BrokerMsg::HraSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.hra_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -3426,7 +3426,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-116 Round 9 receive arms ──
+                // ── Round 9 receive arms ──
                 BrokerMsg::SeasonalitySnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.seag_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -3497,7 +3497,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-117 Godel Parity Round 10 ──
+                // ── Godel Parity Round 10 ──
                 BrokerMsg::LeverageSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.lev_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -3568,7 +3568,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-118 Godel Parity Round 11 ──
+                // ── Godel Parity Round 11 ──
                 BrokerMsg::AltmanZSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.altz_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -3639,7 +3639,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-119 Godel Parity Round 12 ──
+                // ── Godel Parity Round 12 ──
                 BrokerMsg::InsiderActivitySnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.mngr_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -3908,7 +3908,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-123 Round 16 ─────────────────────────────────────────
+                // ── Round 16 ─────────────────────────────────────────
                 BrokerMsg::VrkSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.vrk_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -3975,7 +3975,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-124 Round 17 ──
+                // ── Round 17 ──
                 BrokerMsg::SizefSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.sizef_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -4043,7 +4043,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-125 Round 18 ──
+                // ── Round 18 ──
                 BrokerMsg::LevrankSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.levrank_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -4725,7 +4725,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-134 Round 26 receive ──
+                // ── Round 26 receive ──
                 BrokerMsg::CalmarSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.calmar_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -4792,7 +4792,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-135 Round 27 receive ──
+                // ── Round 27 receive ──
                 BrokerMsg::OmegaSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.omega_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -4860,7 +4860,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-136 Round 28 receive ──
+                // ── Round 28 receive ──
                 BrokerMsg::ParkinsonSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.parkinson_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -4928,7 +4928,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-137 Round 29 receive ──
+                // ── Round 29 receive ──
                 BrokerMsg::SterlingSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.sterling_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -4997,7 +4997,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-138 Round 30 receive ──
+                // ── Round 30 receive ──
                 BrokerMsg::PsrSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.psr_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -5065,7 +5065,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-139 Round 31 receive ──
+                // ── Round 31 receive ──
                 BrokerMsg::HilltailSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.hilltail_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -5133,7 +5133,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-140 Round 32 receive ──
+                // ── Round 32 receive ──
                 BrokerMsg::EntropySnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.entropy_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -5200,7 +5200,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-141 Round 33 receive ──
+                // ── Round 33 receive ──
                 BrokerMsg::UprSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.upr_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -5269,7 +5269,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-142 Round 34 receive ──
+                // ── Round 34 receive ──
                 BrokerMsg::SampenSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.sampen_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -5672,7 +5672,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-149 Round 40 receive ──
+                // ── Round 40 receive ──
                 BrokerMsg::DurbinWatsonSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.durbinwatson_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -5811,7 +5811,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // ── ADR-151 Round 42 receive arms ──
+                // ── Round 42 receive arms ──
                 BrokerMsg::SqueezeSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.squeeze_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -5897,7 +5897,7 @@ impl eframe::App for TyphooNApp {
                     }
                     let _ = snap;
                 }
-                // ── ADR-153 Round 44 receive arms ──
+                // ── Round 44 receive arms ──
                 BrokerMsg::AdxSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.adx_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -5938,7 +5938,7 @@ impl eframe::App for TyphooNApp {
                     }
                     let _ = snap;
                 }
-                // ── ADR-154 Round 45 receive arms ──
+                // ── Round 45 receive arms ──
                 BrokerMsg::VortexSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.vortex_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -5979,7 +5979,7 @@ impl eframe::App for TyphooNApp {
                     }
                     let _ = snap;
                 }
-                // ── ADR-155 Round 46 receive arms ──
+                // ── Round 46 receive arms ──
                 BrokerMsg::PpoSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.ppo_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -6020,7 +6020,7 @@ impl eframe::App for TyphooNApp {
                     }
                     let _ = snap;
                 }
-                // ── ADR-156 Round 47 receive arms ──
+                // ── Round 47 receive arms ──
                 BrokerMsg::MassSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.mass_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -6181,7 +6181,7 @@ impl eframe::App for TyphooNApp {
                     }
                     let _ = snap;
                 }
-                // ── ADR-161 Round 51 result handlers ──
+                // ── Round 51 result handlers ──
                 BrokerMsg::DemaSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.dema_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -6222,7 +6222,7 @@ impl eframe::App for TyphooNApp {
                     }
                     let _ = snap;
                 }
-                // ── ADR-163 Round 52 result handlers ──
+                // ── Round 52 result handlers ──
                 BrokerMsg::AlmaSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.alma_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -6351,7 +6351,7 @@ impl eframe::App for TyphooNApp {
                     }
                     let _ = snap;
                 }
-                // ── ADR-167 Round 55 receive arms ──
+                // ── Round 55 receive arms ──
                 BrokerMsg::SmmaSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.smma_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -6632,7 +6632,7 @@ impl eframe::App for TyphooNApp {
                     }
                     let _ = snap;
                 }
-                // ── ADR-174 Round 62 match arms ──
+                // ── Round 62 match arms ──
                 BrokerMsg::MassIndexSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.mass_index_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -6673,7 +6673,7 @@ impl eframe::App for TyphooNApp {
                     }
                     let _ = snap;
                 }
-                // ── ADR-175 Round 63 match arms ──
+                // ── Round 63 match arms ──
                 BrokerMsg::LinearregSlopeSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.linearreg_slope_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -6714,7 +6714,7 @@ impl eframe::App for TyphooNApp {
                     }
                     let _ = snap;
                 }
-                // ── ADR-176 Round 64 match arms ──
+                // ── Round 64 match arms ──
                 BrokerMsg::LinearregSnapshotMsg(sym, snap) => {
                     let sym_u = sym.to_uppercase();
                     if self.linearreg_win_symbol.eq_ignore_ascii_case(&sym_u) {

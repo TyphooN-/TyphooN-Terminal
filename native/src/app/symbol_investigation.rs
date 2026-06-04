@@ -14,7 +14,7 @@ impl TyphooNApp {
         let _ = writeln!(p, "Symbols: {}", syms.join(", "));
         let _ = writeln!(p);
 
-        // ── ADR-113 Round 6 — global market context (not per-symbol) ─────────
+        // ── Round 6 — global market context (not per-symbol) ─────────
         // WEI / MOV / INDU give the model a snapshot of risk-on/off regime,
         // leadership/laggards, and sector rotation at packet-generation time.
         if let Some(ref cache) = self.cache {
@@ -98,7 +98,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ADR-114 Round 7 — WCR world currency rates (FX regime)
+                // Round 7 — WCR world currency rates (FX regime)
                 if let Ok(Some(rates)) = rx::get_currency_rates(&conn) {
                     if !rates.is_empty() {
                         let up = rates.iter().filter(|r| r.change_pct > 0.0).count();
@@ -497,7 +497,7 @@ impl TyphooNApp {
                 }
             }
 
-            // ── Godel-parity research surfaces (ADR-108/109/110/111) ─────────
+            // ── Godel-parity research surfaces (/109/110/111) ─────────
             // Pull cached DVD/EEB/UPDG/FA/MGMT/SPLT/ANR/ESG rows into the packet
             // so the AI has the same data the user sees in the research windows.
             if let Some(ref cache) = self.cache {
@@ -817,7 +817,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-112 Round 5 — insider flow / holders / float / HP / EPS
+                    // Round 5 — insider flow / holders / float / HP / EPS
 
                     // INS — insider Form-4 flow (last ~10 filings + net summary)
                     if let Ok(Some(ins)) = rx::get_insider_trades(&conn, &sym_upper) {
@@ -970,7 +970,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-113 Round 6 — WACC snapshot (CAPM-derived cost of capital)
+                    // Round 6 — WACC snapshot (CAPM-derived cost of capital)
                     if let Ok(Some(w)) = rx::get_wacc(&conn, &sym_upper) {
                         if w.wacc_pct > 0.0 {
                             let _ = writeln!(p, "### WACC Snapshot (CAPM, as of {})", w.as_of);
@@ -996,7 +996,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-114 Round 7 — BETA rolling history (1Y / 3Y / 5Y vs SPY)
+                    // Round 7 — BETA rolling history (1Y / 3Y / 5Y vs SPY)
                     if let Ok(Some(b)) = rx::get_beta(&conn, &sym_upper) {
                         if !b.windows.is_empty() {
                             let _ = writeln!(
@@ -1025,7 +1025,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-114 Round 7 — DDM Gordon Growth fair value
+                    // Round 7 — DDM Gordon Growth fair value
                     if let Ok(Some(d)) = rx::get_ddm(&conn, &sym_upper) {
                         if d.annual_dividend > 0.0 || d.implied_price > 0.0 {
                             let _ = writeln!(p, "### Gordon Growth DDM (as of {})", d.as_of);
@@ -1051,7 +1051,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-114 Round 7 — RV relative-valuation matrix (peer Z-scores)
+                    // Round 7 — RV relative-valuation matrix (peer Z-scores)
                     if let Ok(Some(rv)) = rx::get_relative_valuation(&conn, &sym_upper) {
                         if !rv.rows.is_empty() {
                             let _ = writeln!(
@@ -1073,7 +1073,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-114 Round 7 — FIGI instrument identifiers
+                    // Round 7 — FIGI instrument identifiers
                     if let Ok(Some(f)) = rx::get_figi(&conn, &sym_upper) {
                         if !f.identifiers.is_empty() {
                             let _ = writeln!(
@@ -1112,7 +1112,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-115 Round 8 — HRA historical return / risk snapshot
+                    // Round 8 — HRA historical return / risk snapshot
                     if let Ok(Some(h)) = rx::get_hra(&conn, &sym_upper) {
                         if !h.windows.is_empty() {
                             let _ = writeln!(p, "### Historical Return / Risk (as of {})", h.as_of);
@@ -1151,7 +1151,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-115 Round 8 — DCF fair value (FCFF model)
+                    // Round 8 — DCF fair value (FCFF model)
                     if let Ok(Some(d)) = rx::get_dcf(&conn, &sym_upper) {
                         if d.implied_price > 0.0 || !d.note.is_empty() {
                             let _ = writeln!(p, "### DCF (FCFF) Fair Value (as of {})", d.as_of);
@@ -1214,7 +1214,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-115 Round 8 — SVM multi-model fair value triangulation
+                    // Round 8 — SVM multi-model fair value triangulation
                     if let Ok(Some(s)) = rx::get_svm(&conn, &sym_upper) {
                         if !s.rows.is_empty() {
                             let _ = writeln!(p, "### Stock Valuation Model (as of {})", s.as_of);
@@ -1244,7 +1244,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-115 Round 8 — OMON options chain summary (nearest expiry)
+                    // Round 8 — OMON options chain summary (nearest expiry)
                     if let Ok(Some(o)) = rx::get_options_chain(&conn, &sym_upper) {
                         if !o.expirations.is_empty() {
                             let _ = writeln!(p, "### Options Chain (OMON, as of {})", o.as_of);
@@ -1389,7 +1389,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-115 Round 8 — IVOL implied-vol rank / percentile
+                    // Round 8 — IVOL implied-vol rank / percentile
                     if let Ok(Some(iv)) = rx::get_ivol(&conn, &sym_upper) {
                         if iv.current_atm_iv_pct > 0.0 || iv.observation_count > 0 {
                             let _ = writeln!(p, "### Implied Vol Rank (as of {})", iv.as_of);
@@ -1420,7 +1420,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-116 Round 9 — SEAG seasonality (monthly + day-of-week)
+                    // Round 9 — SEAG seasonality (monthly + day-of-week)
                     if let Ok(Some(sg)) = rx::get_seasonality(&conn, &sym_upper) {
                         if !sg.months.is_empty() || !sg.dow.is_empty() {
                             let _ = writeln!(p, "### Seasonality (as of {})", sg.as_of);
@@ -1469,7 +1469,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-116 Round 9 — COR correlation matrix vs peers
+                    // Round 9 — COR correlation matrix vs peers
                     if let Ok(Some(cm)) = rx::get_correlation(&conn, &sym_upper) {
                         if !cm.cells.is_empty() {
                             let _ = writeln!(
@@ -1498,7 +1498,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-116 Round 9 — TRA total return (price + dividends)
+                    // Round 9 — TRA total return (price + dividends)
                     if let Ok(Some(tr)) = rx::get_total_return(&conn, &sym_upper) {
                         if !tr.windows.is_empty() {
                             let _ = writeln!(p, "### Total Return Analysis (as of {})", tr.as_of);
@@ -1531,7 +1531,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-116 Round 9 — TECH technical indicators (RSI/MACD/BB/ATR/ADX/Stoch)
+                    // Round 9 — TECH technical indicators (RSI/MACD/BB/ATR/ADX/Stoch)
                     if let Ok(Some(ti)) = rx::get_technicals(&conn, &sym_upper) {
                         if !ti.indicators.is_empty() {
                             let _ = writeln!(p, "### Technical Indicators (as of {})", ti.as_of);
@@ -1561,7 +1561,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-116 Round 9 — SKEW volatility skew / smile
+                    // Round 9 — SKEW volatility skew / smile
                     if let Ok(Some(sk)) = rx::get_vol_skew(&conn, &sym_upper) {
                         if !sk.expiries.is_empty() {
                             let _ = writeln!(p, "### Volatility Skew (as of {})", sk.as_of);
@@ -1617,7 +1617,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-117 Round 10 — LEV debt leverage & coverage
+                    // Round 10 — LEV debt leverage & coverage
                     if let Ok(Some(lv)) = rx::get_leverage(&conn, &sym_upper) {
                         if !lv.ratios.is_empty() {
                             let _ = writeln!(p, "### Leverage & Coverage (as of {})", lv.as_of);
@@ -1651,7 +1651,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-117 Round 10 — ACRL earnings quality (NI vs FCF)
+                    // Round 10 — ACRL earnings quality (NI vs FCF)
                     if let Ok(Some(ac)) = rx::get_accruals(&conn, &sym_upper) {
                         if !ac.periods.is_empty() {
                             let _ =
@@ -1689,7 +1689,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-117 Round 10 — RVOL realized volatility cone
+                    // Round 10 — RVOL realized volatility cone
                     if let Ok(Some(rv)) = rx::get_realized_vol(&conn, &sym_upper) {
                         if !rv.windows.is_empty() {
                             let _ =
@@ -1723,7 +1723,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-117 Round 10 — FCFY FCF yield & dividend sustainability
+                    // Round 10 — FCFY FCF yield & dividend sustainability
                     if let Ok(Some(fy)) = rx::get_fcf_yield(&conn, &sym_upper) {
                         if fy.ttm_free_cash_flow != 0.0 || !fy.periods.is_empty() {
                             let _ = writeln!(
@@ -1767,7 +1767,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-117 Round 10 — SHRT short interest & days-to-cover
+                    // Round 10 — SHRT short interest & days-to-cover
                     if let Ok(Some(si)) = rx::get_short_interest(&conn, &sym_upper) {
                         if si.shares_float > 0.0 || si.short_percent_of_float > 0.0 {
                             let _ = writeln!(
@@ -1802,7 +1802,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-118 Round 11 — ALTZ Altman Z-score
+                    // Round 11 — ALTZ Altman Z-score
                     if let Ok(Some(az)) = rx::get_altman_z(&conn, &sym_upper) {
                         if !az.components.is_empty() {
                             let _ = writeln!(p, "### Altman Z-Score (as of {})", az.as_of);
@@ -1834,7 +1834,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-118 Round 11 — PTFS Piotroski F-score
+                    // Round 11 — PTFS Piotroski F-score
                     if let Ok(Some(pf)) = rx::get_piotroski(&conn, &sym_upper) {
                         if !pf.checks.is_empty() {
                             let _ = writeln!(p, "### Piotroski F-Score (as of {})", pf.as_of);
@@ -1865,7 +1865,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-118 Round 11 — VOLE OHLC volatility estimators
+                    // Round 11 — VOLE OHLC volatility estimators
                     if let Ok(Some(ov)) = rx::get_ohlc_vol(&conn, &sym_upper) {
                         if !ov.estimators.is_empty() {
                             let _ =
@@ -1891,7 +1891,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-118 Round 11 — EPSB EPS beat streak & surprise
+                    // Round 11 — EPSB EPS beat streak & surprise
                     if let Ok(Some(eb)) = rx::get_eps_beat(&conn, &sym_upper) {
                         if eb.total_reports > 0 {
                             let _ =
@@ -1932,7 +1932,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-118 Round 11 — PTD price target dispersion & implied return
+                    // Round 11 — PTD price target dispersion & implied return
                     if let Ok(Some(pd)) = rx::get_price_target_dispersion(&conn, &sym_upper) {
                         if pd.num_analysts > 0 {
                             let _ = writeln!(p, "### Price Target Dispersion (as of {})", pd.as_of);
@@ -1966,7 +1966,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-119 Round 12 — MNGR insider activity bias
+                    // Round 12 — MNGR insider activity bias
                     if let Ok(Some(ia)) = rx::get_insider_activity(&conn, &sym_upper) {
                         if ia.total_trades > 0 {
                             let _ = writeln!(
@@ -2007,7 +2007,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-119 Round 12 — DIVG dividend growth
+                    // Round 12 — DIVG dividend growth
                     if let Ok(Some(dg)) = rx::get_divg(&conn, &sym_upper) {
                         if dg.total_payments > 0 {
                             let _ = writeln!(p, "### Dividend Growth (as of {})", dg.as_of);
@@ -2051,7 +2051,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-119 Round 12 — EARM earnings momentum trend
+                    // Round 12 — EARM earnings momentum trend
                     if let Ok(Some(em)) = rx::get_earm(&conn, &sym_upper) {
                         if em.quarters_used >= 5 {
                             let _ = writeln!(p, "### Earnings Momentum (as of {})", em.as_of);
@@ -2096,7 +2096,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-119 Round 12 — SECTR sector rotation strength
+                    // Round 12 — SECTR sector rotation strength
                     if let Ok(Some(sr)) = rx::get_sector_rotation(&conn, &sym_upper) {
                         if sr.sectors_total > 0 {
                             let _ =
@@ -2133,7 +2133,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-119 Round 12 — UPDM upgrade/downgrade momentum
+                    // Round 12 — UPDM upgrade/downgrade momentum
                     if let Ok(Some(um)) = rx::get_updm(&conn, &sym_upper) {
                         if um.total_actions > 0 {
                             let _ =
@@ -2178,7 +2178,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-120 Round 13 — MOM 12-1 month momentum score
+                    // Round 13 — MOM 12-1 month momentum score
                     if let Ok(Some(mom)) = rx::get_momentum(&conn, &sym_upper) {
                         if mom.bars_used > 0 {
                             let _ = writeln!(p, "### Momentum 12-1 (as of {})", mom.as_of);
@@ -2211,7 +2211,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-120 Round 13 — LIQ liquidity profile
+                    // Round 13 — LIQ liquidity profile
                     if let Ok(Some(lq)) = rx::get_liquidity(&conn, &sym_upper) {
                         if lq.window_days > 0 {
                             let _ = writeln!(
@@ -2243,7 +2243,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-120 Round 13 — BREAK breakout proximity
+                    // Round 13 — BREAK breakout proximity
                     if let Ok(Some(bk)) = rx::get_breakout(&conn, &sym_upper) {
                         if bk.current_price > 0.0 {
                             let _ = writeln!(p, "### Breakout Proximity (as of {})", bk.as_of);
@@ -2277,7 +2277,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-120 Round 13 — CCRL cash conversion cycle
+                    // Round 13 — CCRL cash conversion cycle
                     if let Ok(Some(cc)) = rx::get_cash_cycle(&conn, &sym_upper) {
                         if cc.periods_used > 0 {
                             let _ = writeln!(
@@ -2321,7 +2321,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ADR-120 Round 13 — CREDIT unified credit score
+                    // Round 13 — CREDIT unified credit score
                     if let Ok(Some(cr)) = rx::get_credit(&conn, &sym_upper) {
                         if cr.inputs_available > 0 {
                             let _ = writeln!(p, "### Credit Score (as of {})", cr.as_of);
@@ -2365,7 +2365,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-121 Round 14 blocks ────────────────────────────
+                    // ── Round 14 blocks ────────────────────────────
                     if let Ok(Some(gw)) = rx::get_growm(&conn, &sym_upper) {
                         if gw.inputs_available > 0 {
                             let _ = writeln!(p, "### GARP Composite — GROWM (as of {})", gw.as_of);
@@ -2561,7 +2561,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-122 Round 15 ────────────────────────────
+                    // ── Round 15 ────────────────────────────
                     if let Ok(Some(v)) = rx::get_val(&conn, &sym_upper) {
                         if v.value_label != "NO_DATA" && !v.value_label.is_empty() {
                             let _ = writeln!(
@@ -2785,7 +2785,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-123 Round 16 — rank & drift surfaces ──────────────
+                    // ── Round 16 — rank & drift surfaces ──────────────
                     if let Ok(Some(vr)) = rx::get_vrk(&conn, &sym_upper) {
                         if vr.rank_label != "NO_DATA" && !vr.rank_label.is_empty() {
                             let _ = writeln!(
@@ -2946,7 +2946,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-124 Round 17 ──
+                    // ── Round 17 ──
                     if let Ok(Some(sf)) = rx::get_sizef(&conn, &sym_upper) {
                         if sf.rank_label != "NO_DATA"
                             && sf.rank_label != "INSUFFICIENT_DATA"
@@ -3104,7 +3104,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-125 Round 18 ──
+                    // ── Round 18 ──
                     if let Ok(Some(lv)) = rx::get_levrank(&conn, &sym_upper) {
                         if lv.rank_label != "NO_DATA"
                             && lv.rank_label != "INSUFFICIENT_DATA"
@@ -3319,7 +3319,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-126 Round 19 ──
+                    // ── Round 19 ──
                     if let Ok(Some(dr)) = rx::get_dvdrank(&conn, &sym_upper) {
                         if dr.rank_label != "NO_DATA"
                             && dr.rank_label != "INSUFFICIENT_DATA"
@@ -3495,7 +3495,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-127 Round 20 ──
+                    // ── Round 20 ──
                     if let Ok(Some(dyr)) = rx::get_dvdyieldrank(&conn, &sym_upper) {
                         if dyr.rank_label != "NO_DATA"
                             && dyr.rank_label != "INSUFFICIENT_DATA"
@@ -3763,7 +3763,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-128 Round 21 ──
+                    // ── Round 21 ──
                     if let Ok(Some(br)) = rx::get_betarank(&conn, &sym_upper) {
                         if br.rank_label != "NO_DATA"
                             && br.rank_label != "INSUFFICIENT_DATA"
@@ -4119,7 +4119,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-129 Round 22 — HP return-distribution + behavior stats ──
+                    // ── Round 22 — HP return-distribution + behavior stats ──
                     if let Ok(Some(rsk)) = rx::get_retskew(&conn, &sym_upper) {
                         if rsk.skew_label != "INSUFFICIENT_DATA" && !rsk.skew_label.is_empty() {
                             let _ = writeln!(
@@ -4260,7 +4260,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-131 Round 23 HP-local research surfaces ──
+                    // ── Round 23 HP-local research surfaces ──
                     if let Ok(Some(ac)) = rx::get_autocor(&conn, &sym_upper) {
                         if ac.regime_label != "INSUFFICIENT_DATA" && !ac.regime_label.is_empty() {
                             let _ = writeln!(
@@ -4397,7 +4397,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-132 Round 24 HP-local research surfaces ──
+                    // ── Round 24 HP-local research surfaces ──
                     if let Ok(Some(du)) = rx::get_drawup(&conn, &sym_upper) {
                         if du.rally_label != "INSUFFICIENT_DATA" && !du.rally_label.is_empty() {
                             let _ = writeln!(
@@ -4535,7 +4535,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-133 Round 25 packet blocks ──
+                    // ── Round 25 packet blocks ──
                     if let Ok(Some(dv)) = rx::get_downvol(&conn, &sym_upper) {
                         if dv.sortino_label != "INSUFFICIENT_DATA" && !dv.sortino_label.is_empty() {
                             let _ = writeln!(
@@ -4674,7 +4674,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-134 Round 26 packet blocks ──
+                    // ── Round 26 packet blocks ──
                     if let Ok(Some(cm)) = rx::get_calmar(&conn, &sym_upper) {
                         if cm.calmar_label != "INSUFFICIENT_DATA" && !cm.calmar_label.is_empty() {
                             let _ = writeln!(
@@ -4795,7 +4795,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-135 Round 27 packet blocks ──
+                    // ── Round 27 packet blocks ──
                     if let Ok(Some(om)) = rx::get_omega(&conn, &sym_upper) {
                         if om.omega_label != "INSUFFICIENT_DATA" && !om.omega_label.is_empty() {
                             let omega_disp = if om.omega_ratio.is_finite() {
@@ -4946,7 +4946,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-136 Round 28 packet blocks ──
+                    // ── Round 28 packet blocks ──
                     if let Ok(Some(pk)) = rx::get_parkinson(&conn, &sym_upper) {
                         if pk.vol_label != "INSUFFICIENT_DATA" && !pk.vol_label.is_empty() {
                             let _ = writeln!(
@@ -5082,7 +5082,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-137 Round 29 packet blocks ──
+                    // ── Round 29 packet blocks ──
                     if let Ok(Some(st)) = rx::get_sterling(&conn, &sym_upper) {
                         if st.sterling_label != "INSUFFICIENT_DATA" && !st.sterling_label.is_empty()
                         {
@@ -5215,7 +5215,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-138 Round 30 packet blocks ──
+                    // ── Round 30 packet blocks ──
                     if let Ok(Some(ps)) = rx::get_psr(&conn, &sym_upper) {
                         if ps.psr_label != "INSUFFICIENT_DATA" && !ps.psr_label.is_empty() {
                             let _ = writeln!(
@@ -5351,7 +5351,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-139 Round 31 packet blocks ──
+                    // ── Round 31 packet blocks ──
                     if let Ok(Some(ht)) = rx::get_hilltail(&conn, &sym_upper) {
                         if ht.tail_label != "INSUFFICIENT_DATA" && !ht.tail_label.is_empty() {
                             let _ = writeln!(
@@ -5492,7 +5492,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-140 Round 32 packet blocks ──
+                    // ── Round 32 packet blocks ──
                     if let Ok(Some(en)) = rx::get_entropy(&conn, &sym_upper) {
                         if en.entropy_label != "INSUFFICIENT_DATA" && !en.entropy_label.is_empty() {
                             let _ = writeln!(
@@ -5623,7 +5623,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-141 Round 33 packet blocks ──
+                    // ── Round 33 packet blocks ──
                     if let Ok(Some(up)) = rx::get_upr(&conn, &sym_upper) {
                         if up.upr_label != "INSUFFICIENT_DATA" && !up.upr_label.is_empty() {
                             let _ = writeln!(
@@ -5736,7 +5736,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-142 Round 34 packet blocks ──
+                    // ── Round 34 packet blocks ──
                     if let Ok(Some(se)) = rx::get_sampen(&conn, &sym_upper) {
                         if se.sampen_label != "INSUFFICIENT_DATA"
                             && se.sampen_label != "UNDEFINED"
@@ -5989,7 +5989,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-144 Round 36 packet blocks ──
+                    // ── Round 36 packet blocks ──
                     if let Ok(Some(ks)) = rx::get_ksnorm(&conn, &sym_upper) {
                         if ks.ksnorm_label != "INSUFFICIENT_DATA" && !ks.ksnorm_label.is_empty() {
                             let _ = writeln!(
@@ -6123,7 +6123,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-145 Round 37 packet blocks ──
+                    // ── Round 37 packet blocks ──
                     if let Ok(Some(hi)) = rx::get_higuchi(&conn, &sym_upper) {
                         if hi.higuchi_label != "INSUFFICIENT_DATA" && !hi.higuchi_label.is_empty() {
                             let _ = writeln!(
@@ -6247,7 +6247,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-146 Round 38 packet blocks ──
+                    // ── Round 38 packet blocks ──
                     if let Ok(Some(bj)) = rx::get_bnsjump(&conn, &sym_upper) {
                         if bj.bnsjump_label != "INSUFFICIENT_DATA" && !bj.bnsjump_label.is_empty() {
                             let _ = writeln!(
@@ -6367,7 +6367,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-147 Round 39 packet blocks ──
+                    // ── Round 39 packet blocks ──
                     if let Ok(Some(g11)) = rx::get_garch11(&conn, &sym_upper) {
                         if g11.garch11_label != "INSUFFICIENT_DATA" && !g11.garch11_label.is_empty()
                         {
@@ -6489,7 +6489,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-149 Round 40 packet blocks ──
+                    // ── Round 40 packet blocks ──
                     if let Ok(Some(dw)) = rx::get_durbinwatson(&conn, &sym_upper) {
                         if dw.dw_label != "INSUFFICIENT_DATA" && !dw.dw_label.is_empty() {
                             let _ = writeln!(
@@ -6609,7 +6609,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-150 Round 41 packet blocks ──
+                    // ── Round 41 packet blocks ──
                     if let Ok(Some(ml)) = rx::get_mcleodli(&conn, &sym_upper) {
                         if ml.mcleodli_label != "INSUFFICIENT_DATA" && !ml.mcleodli_label.is_empty()
                         {
@@ -6743,7 +6743,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-151 Round 42 packet blocks ──
+                    // ── Round 42 packet blocks ──
                     if let Ok(Some(sq)) = rx::get_squeeze(&conn, &sym_upper) {
                         if sq.squeeze_label != "INSUFFICIENT_DATA" && !sq.squeeze_label.is_empty() {
                             let _ = writeln!(
@@ -6881,7 +6881,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-152 Round 43 packet blocks ──
+                    // ── Round 43 packet blocks ──
                     if let Ok(Some(ik)) = rx::get_ichimoku(&conn, &sym_upper) {
                         if ik.ichimoku_label != "INSUFFICIENT_DATA" && !ik.ichimoku_label.is_empty()
                         {
@@ -7033,7 +7033,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-153 Round 44 packet blocks ──
+                    // ── Round 44 packet blocks ──
                     if let Ok(Some(ax)) = rx::get_adx(&conn, &sym_upper) {
                         if ax.adx_label != "INSUFFICIENT_DATA" && !ax.adx_label.is_empty() {
                             let _ = writeln!(
@@ -7163,7 +7163,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-154 Round 45 packet blocks ──
+                    // ── Round 45 packet blocks ──
                     if let Ok(Some(vx)) = rx::get_vortex(&conn, &sym_upper) {
                         if vx.vortex_label != "INSUFFICIENT_DATA" && !vx.vortex_label.is_empty() {
                             let _ = writeln!(
@@ -7295,7 +7295,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-155 Round 46 packet blocks ──
+                    // ── Round 46 packet blocks ──
                     if let Ok(Some(pp)) = rx::get_ppo(&conn, &sym_upper) {
                         if pp.ppo_label != "INSUFFICIENT_DATA" && !pp.ppo_label.is_empty() {
                             let _ = writeln!(
@@ -7427,7 +7427,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-156 Round 47 packet blocks ──
+                    // ── Round 47 packet blocks ──
                     if let Ok(Some(ms)) = rx::get_mass(&conn, &sym_upper) {
                         if ms.mass_label != "INSUFFICIENT_DATA" && !ms.mass_label.is_empty() {
                             let _ = writeln!(
@@ -7566,7 +7566,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-158 Round 48 packet blocks ──
+                    // ── Round 48 packet blocks ──
                     if let Ok(Some(ef)) = rx::get_efi(&conn, &sym_upper) {
                         if ef.efi_label != "INSUFFICIENT_DATA" && !ef.efi_label.is_empty() {
                             let _ = writeln!(
@@ -7920,7 +7920,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-161 Round 51 research emitters ──
+                    // ── Round 51 research emitters ──
                     if let Ok(Some(dm)) = rx::get_dema(&conn, &sym_upper) {
                         if dm.dema_label != "INSUFFICIENT_DATA" && !dm.dema_label.is_empty() {
                             let _ = writeln!(
@@ -8050,7 +8050,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-163 Round 52 research emitters ──
+                    // ── Round 52 research emitters ──
                     if let Ok(Some(al)) = rx::get_alma(&conn, &sym_upper) {
                         if al.alma_label != "INSUFFICIENT_DATA" && !al.alma_label.is_empty() {
                             let _ = writeln!(
@@ -8477,7 +8477,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-167 Round 55: SMMA / ALLIGATOR / CRSI / SEB / IMI ──
+                    // ── Round 55: SMMA / ALLIGATOR / CRSI / SEB / IMI ──
                     if let Ok(Some(sm)) = rx::get_smma(&conn, &sym_upper) {
                         if sm.smma_label != "INSUFFICIENT_DATA" && !sm.smma_label.is_empty() {
                             let _ = writeln!(
@@ -8608,7 +8608,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-168 Round 56: GMMA / MAENV / ADL / VHF / VROC ──
+                    // ── Round 56: GMMA / MAENV / ADL / VHF / VROC ──
                     if let Ok(Some(gm)) = rx::get_gmma(&conn, &sym_upper) {
                         if gm.gmma_label != "INSUFFICIENT_DATA" && !gm.gmma_label.is_empty() {
                             let _ = writeln!(
@@ -8742,7 +8742,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-169 Round 57: KDJ / QQE / PMO / CFO / TMF ──
+                    // ── Round 57: KDJ / QQE / PMO / CFO / TMF ──
                     if let Ok(Some(kj)) = rx::get_kdj(&conn, &sym_upper) {
                         if kj.kdj_label != "INSUFFICIENT_DATA" && !kj.kdj_label.is_empty() {
                             let _ = writeln!(
@@ -9010,7 +9010,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-171 Round 59: DEMARKER / GATOR / BW_MFI / VWMA / STDDEV ──
+                    // ── Round 59: DEMARKER / GATOR / BW_MFI / VWMA / STDDEV ──
                     if let Ok(Some(dm)) = rx::get_demarker(&conn, &sym_upper) {
                         if dm.demarker_label != "INSUFFICIENT_DATA" && !dm.demarker_label.is_empty()
                         {
@@ -9142,7 +9142,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-172 Round 60: WMA / RAINBOW / MESA_SINE / FRAMA / IBS ──
+                    // ── Round 60: WMA / RAINBOW / MESA_SINE / FRAMA / IBS ──
                     if let Ok(Some(wm)) = rx::get_wma(&conn, &sym_upper) {
                         if wm.wma_label != "INSUFFICIENT_DATA" && !wm.wma_label.is_empty() {
                             let _ = writeln!(
@@ -9407,7 +9407,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-174 Round 62: MASSINDEX / NATR / TTM_SQUEEZE / FORCE_INDEX / TRANGE ──
+                    // ── Round 62: MASSINDEX / NATR / TTM_SQUEEZE / FORCE_INDEX / TRANGE ──
                     if let Ok(Some(mi)) = rx::get_mass_index(&conn, &sym_upper) {
                         if mi.mass_label != "INSUFFICIENT_DATA" && !mi.mass_label.is_empty() {
                             let _ = writeln!(
@@ -9539,7 +9539,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-175 Round 63 packet emitters ──
+                    // ── Round 63 packet emitters ──
                     if let Ok(Some(ls)) = rx::get_linearreg_slope(&conn, &sym_upper) {
                         if ls.slope_label != "INSUFFICIENT_DATA" && !ls.slope_label.is_empty() {
                             let _ = writeln!(
@@ -9665,7 +9665,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-176 Round 64 packet emitters ──
+                    // ── Round 64 packet emitters ──
                     if let Ok(Some(lr)) = rx::get_linearreg(&conn, &sym_upper) {
                         if lr.linearreg_label != "INSUFFICIENT_DATA"
                             && !lr.linearreg_label.is_empty()
@@ -9927,7 +9927,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-178 Round 66 packet emitters ──
+                    // ── Round 66 packet emitters ──
                     if let Ok(Some(ap)) = rx::get_avgprice(&conn, &sym_upper) {
                         if ap.avgprice_label != "INSUFFICIENT_DATA" && !ap.avgprice_label.is_empty()
                         {
@@ -10060,7 +10060,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-179 Round 67 packet emitters (DMI family) ──
+                    // ── Round 67 packet emitters (DMI family) ──
                     if let Ok(Some(pd)) = rx::get_plus_di(&conn, &sym_upper) {
                         if pd.plus_di_label != "INSUFFICIENT_DATA" && !pd.plus_di_label.is_empty() {
                             let _ = writeln!(
@@ -10190,7 +10190,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-180 Round 68 ──
+                    // ── Round 68 ──
                     if let Ok(Some(rc)) = rx::get_roc(&conn, &sym_upper) {
                         if rc.roc_label != "INSUFFICIENT_DATA" && !rc.roc_label.is_empty() {
                             let _ = writeln!(
@@ -10573,7 +10573,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-183 Round 71 emitters ──
+                    // ── Round 71 emitters ──
                     if let Ok(Some(ao)) = rx::get_aroonosc(&conn, &sym_upper) {
                         if ao.aroonosc_label != "INSUFFICIENT_DATA" && !ao.aroonosc_label.is_empty()
                         {
@@ -10708,7 +10708,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-184 Round 72 CDL* candlestick patterns ──
+                    // ── Round 72 CDL* candlestick patterns ──
                     if let Ok(Some(cd)) = rx::get_cdl_doji(&conn, &sym_upper) {
                         if cd.cdl_doji_label != "INSUFFICIENT_DATA" && !cd.cdl_doji_label.is_empty()
                         {
@@ -11287,7 +11287,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-191 Round 76 packet blocks ──
+                    // ── Round 76 packet blocks ──
                     if let Ok(Some(cds)) = rx::get_cdl_doji_star(&conn, &sym_upper) {
                         if cds.cdl_doji_star_label != "INSUFFICIENT_DATA"
                             && !cds.cdl_doji_star_label.is_empty()
@@ -11434,7 +11434,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-192 Round 77 packet blocks ──
+                    // ── Round 77 packet blocks ──
                     if let Ok(Some(cbh)) = rx::get_cdl_belt_hold(&conn, &sym_upper) {
                         if cbh.cdl_belt_hold_label != "INSUFFICIENT_DATA"
                             && !cbh.cdl_belt_hold_label.is_empty()
@@ -11580,7 +11580,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-193 Round 78 packet blocks ──
+                    // ── Round 78 packet blocks ──
                     if let Ok(Some(cca)) = rx::get_cdl_counterattack(&conn, &sym_upper) {
                         if cca.cdl_counterattack_label != "INSUFFICIENT_DATA"
                             && !cca.cdl_counterattack_label.is_empty()
@@ -12518,7 +12518,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-189 Round 76 packet blocks ──
+                    // ── Round 76 packet blocks ──
                     if let Ok(Some(ms)) = rx::get_modsharpe(&conn, &sym_upper) {
                         if ms.modsharpe_label != "INSUFFICIENT_DATA"
                             && !ms.modsharpe_label.is_empty()
@@ -12820,7 +12820,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── ADR-130 prior-ingested web research (if any) ──
+                    // ── prior-ingested web research (if any) ──
                     if let Ok(Some(ing)) = rx::get_ingested_articles(&conn, &sym_upper) {
                         if !ing.articles.is_empty() {
                             // Char limits match the news section so a long body
@@ -13034,7 +13034,7 @@ impl TyphooNApp {
             let _ = writeln!(p, "{}", user_question.trim());
         }
 
-        // ── ADR-130 Return Path: instruct the agent to emit a structured
+        // ── Return Path: instruct the agent to emit a structured
         //    ingest block so TyphooN can absorb the web-search findings
         //    back into the cache and share them across LAN peers. ──
         let _ = writeln!(p);

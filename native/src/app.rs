@@ -1197,7 +1197,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 .chain(std::iter::once(serde_json::json!({"role": "user", "content": message})))
                                 .collect();
 
-                            // ── ADR-162 cross-client AI response cache lookup ──
+                            // ── cross-client AI response cache lookup ──
                             // Compute deterministic hash over the full prompt tuple and check
                             // the LAN-synced cache before spending tokens. On hit, emit the
                             // cached response and skip the HTTP call entirely.
@@ -1244,7 +1244,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                         let text = resp.json::<serde_json::Value>().await.ok()
                                             .and_then(|j| j["content"][0]["text"].as_str().map(|s| s.to_string()))
                                             .unwrap_or_else(|| "(no response)".into());
-                                        // ADR-162: record the fresh response in the LAN-synced cache.
+                                        // record the fresh response in the LAN-synced cache.
                                         if text != "(no response)" {
                                             if let Some(cache) = cache_snapshot.as_ref() {
                                                 let preview: String = message.chars().take(400).collect();
@@ -1295,7 +1295,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                         let text = resp.json::<serde_json::Value>().await.ok()
                                             .and_then(|j| j["choices"][0]["message"]["content"].as_str().map(|s| s.to_string()))
                                             .unwrap_or_else(|| "(no response)".into());
-                                        // ADR-162: record the fresh response in the LAN-synced cache.
+                                        // record the fresh response in the LAN-synced cache.
                                         if text != "(no response)" {
                                             if let Some(cache) = cache_snapshot.as_ref() {
                                                 let preview: String = message.chars().take(400).collect();
@@ -2193,7 +2193,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             }
                         });
                     }
-                    // ── ADR-113 Round 6 handlers ──
+                    // ── Round 6 handlers ──
                     BrokerCmd::FetchWorldIndices => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -2312,7 +2312,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::WaccSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-114 Round 7 handlers ──
+                    // ── Round 7 handlers ──
                     BrokerCmd::FetchCurrencyRates => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -2420,7 +2420,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             }
                         });
                     }
-                    // ── ADR-115 Round 8 handlers ──
+                    // ── Round 8 handlers ──
                     BrokerCmd::FetchHraSnapshot { symbol, risk_free_pct } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -2515,7 +2515,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::IvolSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-116 Round 9 handlers ──
+                    // ── Round 9 handlers ──
                     BrokerCmd::ComputeSeasonalitySnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -2632,7 +2632,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::VolSkewSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-117 Godel Parity Round 10 ──
+                    // ── Godel Parity Round 10 ──
                     BrokerCmd::ComputeLeverageSnapshot { symbol, total_debt_fund, cash_fund } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -2715,7 +2715,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::ShortInterestSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-118 Godel Parity Round 11 ──
+                    // ── Godel Parity Round 11 ──
                     BrokerCmd::ComputeAltmanZSnapshot { symbol, market_value_equity } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -3336,7 +3336,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::PeadSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-124 Round 17 ──
+                    // ── Round 17 ──
                     BrokerCmd::ComputeSizefSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         use typhoon_engine::core::fundamentals;
@@ -4511,7 +4511,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::DayrangeSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-131 Round 23 handlers ──
+                    // ── Round 23 handlers ──
                     BrokerCmd::ComputeAutocorSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -4587,7 +4587,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::VolratioSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-132 Round 24 handlers ──
+                    // ── Round 24 handlers ──
                     BrokerCmd::ComputeDrawupSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -4663,7 +4663,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::MrhlSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-133 Round 25 handlers ──
+                    // ── Round 25 handlers ──
                     BrokerCmd::ComputeDownvolSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -4739,7 +4739,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::VolofvolSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-134 Round 26 handlers ──
+                    // ── Round 26 handlers ──
                     BrokerCmd::ComputeCalmarSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -4815,7 +4815,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::JbnormSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-135 Round 27 handlers ──
+                    // ── Round 27 handlers ──
                     BrokerCmd::ComputeOmegaSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -4891,7 +4891,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::RollsprdSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-136 Round 28 handlers ──
+                    // ── Round 28 handlers ──
                     BrokerCmd::ComputeParkinsonSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -4967,7 +4967,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::DoweffectSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-137 Round 29 handlers ──
+                    // ── Round 29 handlers ──
                     BrokerCmd::ComputeSterlingSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -5043,7 +5043,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::ZeroretSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-138 Round 30 handlers ──
+                    // ── Round 30 handlers ──
                     BrokerCmd::ComputePsrSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -5119,7 +5119,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::DddurSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-139 Round 31 handlers ──
+                    // ── Round 31 handlers ──
                     BrokerCmd::ComputeHilltailSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -5195,7 +5195,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::CfvarSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-140 Round 32 handlers ──
+                    // ── Round 32 handlers ──
                     BrokerCmd::ComputeEntropySnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -5271,7 +5271,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::ApenSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-141 Round 33 handlers ──
+                    // ── Round 33 handlers ──
                     BrokerCmd::ComputeUprSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -5347,7 +5347,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::GiniSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-142 Round 34 handlers ──
+                    // ── Round 34 handlers ──
                     BrokerCmd::ComputeSampenSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -5423,7 +5423,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::SpecentSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-143 Round 35 handlers ──
+                    // ── Round 35 handlers ──
                     BrokerCmd::ComputeRobvolSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -5499,7 +5499,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::EwmavolSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-144 Round 36 handlers ──
+                    // ── Round 36 handlers ──
                     BrokerCmd::ComputeKsnormSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -5575,7 +5575,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::PeakoverSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-145 Round 37 handlers ──
+                    // ── Round 37 handlers ──
                     BrokerCmd::ComputeHiguchiSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -5651,7 +5651,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::RankacSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-146 Round 38 handlers ──
+                    // ── Round 38 handlers ──
                     BrokerCmd::ComputeBnsjumpSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -5727,7 +5727,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::TsiSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-147 Round 39 handlers ──
+                    // ── Round 39 handlers ──
                     BrokerCmd::ComputeGarch11Snapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -5803,7 +5803,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::AutomiSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-149 Round 40 handlers ──
+                    // ── Round 40 handlers ──
                     BrokerCmd::ComputeDurbinWatsonSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -5954,7 +5954,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::KendallTauSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-151 Round 42 handlers ──
+                    // ── Round 42 handlers ──
                     BrokerCmd::ComputeSqueezeSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -6204,7 +6204,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::AroonSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-153 Round 44 handlers ──
+                    // ── Round 44 handlers ──
                     BrokerCmd::ComputeAdxSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -6305,7 +6305,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::PsarSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-154 Round 45 handlers ──
+                    // ── Round 45 handlers ──
                     BrokerCmd::ComputeVortexSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -6406,7 +6406,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::HmaSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-155 Round 46 handlers ──
+                    // ── Round 46 handlers ──
                     BrokerCmd::ComputePpoSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -6507,7 +6507,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::WillrSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-156 Round 47 handlers ──
+                    // ── Round 47 handlers ──
                     BrokerCmd::ComputeMassSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -6608,7 +6608,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::AwesomeSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-158 Round 48 handlers ──
+                    // ── Round 48 handlers ──
                     BrokerCmd::ComputeEfiSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -6909,7 +6909,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::RwiSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-161 Round 51 compute handlers ──
+                    // ── Round 51 compute handlers ──
                     BrokerCmd::ComputeDemaSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -7010,7 +7010,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::HeikinSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-163 Round 52 compute handlers ──
+                    // ── Round 52 compute handlers ──
                     BrokerCmd::ComputeAlmaSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -8027,7 +8027,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::MidpointSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-174 Round 62 handlers ──
+                    // ── Round 62 handlers ──
                     BrokerCmd::ComputeMassIndexSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -8128,7 +8128,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::TrangeSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-175 Round 63 handlers ──
+                    // ── Round 63 handlers ──
                     BrokerCmd::ComputeLinearregSlopeSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -8229,7 +8229,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::StochfSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-176 Round 64 handlers ──
+                    // ── Round 64 handlers ──
                     BrokerCmd::ComputeLinearregSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -8330,7 +8330,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::HtPhasorSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-177 Round 65 handlers ──
+                    // ── Round 65 handlers ──
                     BrokerCmd::ComputeMidpriceSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -8434,7 +8434,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::AdxrSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-178 Round 66: AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE ──
+                    // ── Round 66: AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE ──
                     BrokerCmd::ComputeAvgpriceSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -8535,7 +8535,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::VarianceSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-179 Round 67: PLUS_DI / MINUS_DI / PLUS_DM / MINUS_DM / DX ──
+                    // ── Round 67: PLUS_DI / MINUS_DI / PLUS_DM / MINUS_DM / DX ──
                     BrokerCmd::ComputePlusDiSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -8636,7 +8636,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::DxSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-180 Round 68 handlers ──
+                    // ── Round 68 handlers ──
                     BrokerCmd::ComputeRocSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -8737,7 +8737,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::CorrelSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-181 Round 69 handlers ──
+                    // ── Round 69 handlers ──
                     BrokerCmd::ComputeMinSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -8838,7 +8838,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::MaxIndexSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-182 Round 70 broker handlers ──
+                    // ── Round 70 broker handlers ──
                     BrokerCmd::ComputeBbandsSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -8939,7 +8939,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::LinearRegInterceptSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-183 Round 71 handlers ──
+                    // ── Round 71 handlers ──
                     BrokerCmd::ComputeAroonoscSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -9040,7 +9040,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::MavpSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-184 Round 72 CDL* handlers ──
+                    // ── Round 72 CDL* handlers ──
                     BrokerCmd::ComputeCdlDojiSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -9141,7 +9141,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::CdlHaramiSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-185 Round 73 handlers — CDL* 3-bar / 2-bar patterns ──
+                    // ── Round 73 handlers — CDL* 3-bar / 2-bar patterns ──
                     BrokerCmd::ComputeCdlMorningStarSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -9242,7 +9242,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::CdlDarkCloudCoverSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-186 Round 74 handlers — CDL* piercing / doji variants / hammer mirrors ──
+                    // ── Round 74 handlers — CDL* piercing / doji variants / hammer mirrors ──
                     BrokerCmd::ComputeCdlPiercingSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -9343,7 +9343,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::CdlInvertedHammerSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-187 Round 75 handlers — CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
+                    // ── Round 75 handlers — CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
                     BrokerCmd::ComputeCdlHaramiCrossSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -9444,7 +9444,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::CdlTristarSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-191 Round 76 handlers — CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
+                    // ── Round 76 handlers — CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
                     BrokerCmd::ComputeCdlDojiStarSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -9545,7 +9545,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::CdlThreeInsideSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-192 Round 77 handlers — CDL* belt hold / closing marubozu / high wave / long line / short line ──
+                    // ── Round 77 handlers — CDL* belt hold / closing marubozu / high wave / long line / short line ──
                     BrokerCmd::ComputeCdlBeltHoldSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -9646,7 +9646,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::CdlShortLineSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-193 Round 78 handlers — CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
+                    // ── Round 78 handlers — CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
                     BrokerCmd::ComputeCdlCounterattackSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -9747,7 +9747,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::CdlThrustingSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-190 Round 79/80 handlers — additional CDL* parity windows ──
+                    // ── Round 79/80 handlers — additional CDL* parity windows ──
                     BrokerCmd::ComputeCdlTwoCrowsSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -9908,7 +9908,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::CdlTakuriSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-191 Round 81/82 handlers — harder CDL* parity windows ──
+                    // ── Round 81/82 handlers — harder CDL* parity windows ──
                     BrokerCmd::ComputeCdlThreeStarsInSouthSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -10131,7 +10131,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             );
                         });
                     }
-                    // ── ADR-192 Round 83/84 handlers — additional multi-bar CDL* parity windows ──
+                    // ── Round 83/84 handlers — additional multi-bar CDL* parity windows ──
                     BrokerCmd::ComputeCdlAdvanceBlockSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -10282,7 +10282,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::CdlConcealBabySwallowSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-193 Round 85/86 handlers — stateful CDL* parity windows ──
+                    // ── Round 85/86 handlers — stateful CDL* parity windows ──
                     BrokerCmd::ComputeCdlHikkakeSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -10383,7 +10383,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::CdlRiseFallThreeMethodsSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-194 Round 87/88 handlers — final CDL* parity windows ──
+                    // ── Round 87/88 handlers — final CDL* parity windows ──
                     BrokerCmd::ComputeCdlStalledPatternSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -10434,7 +10434,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::CdlTasukiGapSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-189 Round 76 (Quant Stats) handlers ──
+                    // ── Round 76 (Quant Stats) handlers ──
                     BrokerCmd::ComputeModSharpeSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -10535,7 +10535,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::HlvClustSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-190 Round 77 (Quant Stats) handlers ──
+                    // ── Round 77 (Quant Stats) handlers ──
                     BrokerCmd::ComputeYangZhangSnapshot { symbol } => {
                         use typhoon_engine::core::research;
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -10636,7 +10636,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = msg_tx.send(BrokerMsg::KupiecPofSnapshotMsg(symbol, snap));
                         });
                     }
-                    // ── ADR-130 web article ingestion handler ──
+                    // ── web article ingestion handler ──
                     BrokerCmd::IngestResearchArticles { text, agent_override } => {
                         use typhoon_engine::core::{news, research};
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -14073,7 +14073,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             ai_chat_input: String::new(),
             ai_model: "claude-opus-4-5".to_string(),
             ai_provider: 0,
-            // ── ADR-157 AI session persistence defaults ──
+            // ── AI session persistence defaults ──
             ai_chat_session_id: String::new(),
             gemini_cli_session_id: String::new(),
             codex_cli_session_id: String::new(),
@@ -14627,7 +14627,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             eps_symbol: String::new(),
             eps_surprises: Vec::new(),
             eps_loading: false,
-            // ── ADR-113 Round 6 defaults ──
+            // ── Round 6 defaults ──
             show_wei: false,
             wei_indices: Vec::new(),
             wei_loading: false,
@@ -14644,7 +14644,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             wacc_symbol: String::new(),
             wacc_snapshot: typhoon_engine::core::research::WaccSnapshot::default(),
             wacc_loading: false,
-            // ── ADR-114 Round 7 defaults ──
+            // ── Round 7 defaults ──
             show_wcr: false,
             wcr_rates: Vec::new(),
             wcr_loading: false,
@@ -14665,7 +14665,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             figi_symbol: String::new(),
             figi_snapshot: typhoon_engine::core::research::FigiSnapshot::default(),
             figi_loading: false,
-            // ── ADR-115 Round 8 defaults ──
+            // ── Round 8 defaults ──
             show_hra: false,
             hra_symbol: String::new(),
             hra_snapshot: typhoon_engine::core::research::HraSnapshot::default(),
@@ -14689,7 +14689,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             ivol_symbol: String::new(),
             ivol_snapshot: typhoon_engine::core::research::IvolSnapshot::default(),
             ivol_loading: false,
-            // ── ADR-116 Round 9 defaults ──
+            // ── Round 9 defaults ──
             show_seag: false,
             seag_symbol: String::new(),
             seag_snapshot: typhoon_engine::core::research::SeasonalitySnapshot::default(),
@@ -14731,7 +14731,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             shrt_symbol: String::new(),
             shrt_snapshot: typhoon_engine::core::research::ShortInterestSnapshot::default(),
             shrt_loading: false,
-            // ── ADR-118 Round 11 defaults ──
+            // ── Round 11 defaults ──
             show_altz: false,
             altz_symbol: String::new(),
             altz_snapshot: typhoon_engine::core::research::AltmanZSnapshot::default(),
@@ -14752,7 +14752,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             ptd_symbol: String::new(),
             ptd_snapshot: typhoon_engine::core::research::PriceTargetDispersion::default(),
             ptd_loading: false,
-            // ── ADR-119 Round 12 defaults ──
+            // ── Round 12 defaults ──
             show_mngr: false,
             mngr_symbol: String::new(),
             mngr_window_days: 90,
@@ -14774,7 +14774,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             updm_symbol: String::new(),
             updm_snapshot: typhoon_engine::core::research::UpdmSnapshot::default(),
             updm_loading: false,
-            // ── ADR-120 Round 13 defaults ──
+            // ── Round 13 defaults ──
             show_mom: false,
             mom_symbol: String::new(),
             mom_snapshot: typhoon_engine::core::research::MomentumSnapshot::default(),
@@ -14796,7 +14796,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             credit_symbol: String::new(),
             credit_snapshot: typhoon_engine::core::research::CreditSnapshot::default(),
             credit_loading: false,
-            // ── ADR-121 Round 14 defaults ──
+            // ── Round 14 defaults ──
             show_growm: false,
             growm_symbol: String::new(),
             growm_snapshot: typhoon_engine::core::research::GrowmSnapshot::default(),
@@ -14818,7 +14818,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             margins_symbol: String::new(),
             margins_snapshot: typhoon_engine::core::research::MarginsSnapshot::default(),
             margins_loading: false,
-            // ── ADR-122 Round 15 defaults ──
+            // ── Round 15 defaults ──
             show_val: false,
             val_symbol: String::new(),
             val_snapshot: typhoon_engine::core::research::ValueSnapshot::default(),
@@ -14840,7 +14840,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             covg_symbol: String::new(),
             covg_snapshot: typhoon_engine::core::research::CoverageSnapshot::default(),
             covg_loading: false,
-            // ── ADR-123 Round 16 defaults ──
+            // ── Round 16 defaults ──
             show_vrk: false,
             vrk_symbol: String::new(),
             vrk_snapshot: typhoon_engine::core::research::ValueRankSnapshot::default(),
@@ -14861,7 +14861,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             pead_symbol: String::new(),
             pead_snapshot: typhoon_engine::core::research::PeadSnapshot::default(),
             pead_loading: false,
-            // ── ADR-124 Round 17 defaults ──
+            // ── Round 17 defaults ──
             show_sizef: false,
             sizef_symbol: String::new(),
             sizef_snapshot: typhoon_engine::core::research::SizeFactorSnapshot::default(),
@@ -14883,7 +14883,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             revrank_symbol: String::new(),
             revrank_snapshot: typhoon_engine::core::research::RevenueGrowthRankSnapshot::default(),
             revrank_loading: false,
-            // ── ADR-125 Round 18 defaults ──
+            // ── Round 18 defaults ──
             show_levrank: false,
             levrank_symbol: String::new(),
             levrank_snapshot: typhoon_engine::core::research::LeverageRankSnapshot::default(),
@@ -14928,7 +14928,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             des_symbol: String::new(),
             des_snapshot: typhoon_engine::core::research::DailyEventStreakSnapshot::default(),
             des_loading: false,
-            // ── ADR-127 Round 20 defaults ──
+            // ── Round 20 defaults ──
             show_dvdyieldrank: false,
             dvdyieldrank_symbol: String::new(),
             dvdyieldrank_snapshot:
@@ -14965,7 +14965,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             momrank_multi_snapshot:
                 typhoon_engine::core::research::MomentumRankMultiSnapshot::default(),
             momrank_multi_loading: false,
-            // ── ADR-128 Round 21 defaults ──
+            // ── Round 21 defaults ──
             show_betarank: false,
             betarank_symbol: String::new(),
             betarank_snapshot: typhoon_engine::core::research::BetaRankSnapshot::default(),
@@ -15019,7 +15019,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             vrp_symbol: String::new(),
             vrp_snapshot: typhoon_engine::core::research::VolRiskPremiumSnapshot::default(),
             vrp_loading: false,
-            // ── ADR-129 Round 22 defaults ──
+            // ── Round 22 defaults ──
             show_retskew: false,
             retskew_symbol: String::new(),
             retskew_snapshot: typhoon_engine::core::research::ReturnSkewnessSnapshot::default(),
@@ -15040,7 +15040,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             dayrange_symbol: String::new(),
             dayrange_snapshot: typhoon_engine::core::research::DailyRangeSnapshot::default(),
             dayrange_loading: false,
-            // ── ADR-131 Round 23 defaults ──
+            // ── Round 23 defaults ──
             show_autocor: false,
             autocor_symbol: String::new(),
             autocor_snapshot: typhoon_engine::core::research::AutocorrelationSnapshot::default(),
@@ -15061,7 +15061,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             volratio_symbol: String::new(),
             volratio_snapshot: typhoon_engine::core::research::VolumeRatioSnapshot::default(),
             volratio_loading: false,
-            // ── ADR-132 Round 24 defaults ──
+            // ── Round 24 defaults ──
             show_drawup: false,
             drawup_symbol: String::new(),
             drawup_snapshot: typhoon_engine::core::research::DrawupHistorySnapshot::default(),
@@ -15082,7 +15082,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             mrhl_symbol: String::new(),
             mrhl_snapshot: typhoon_engine::core::research::MeanReversionHalfLifeSnapshot::default(),
             mrhl_loading: false,
-            // ── ADR-133 Round 25 defaults ──
+            // ── Round 25 defaults ──
             show_downvol: false,
             downvol_symbol: String::new(),
             downvol_snapshot: typhoon_engine::core::research::DownsideVolSnapshot::default(),
@@ -15103,7 +15103,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             volofvol_symbol: String::new(),
             volofvol_snapshot: typhoon_engine::core::research::VolOfVolSnapshot::default(),
             volofvol_loading: false,
-            // ── ADR-134 Round 26 defaults ──
+            // ── Round 26 defaults ──
             show_calmar: false,
             calmar_symbol: String::new(),
             calmar_snapshot: typhoon_engine::core::research::CalmarRatioSnapshot::default(),
@@ -15124,7 +15124,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             jbnorm_symbol: String::new(),
             jbnorm_snapshot: typhoon_engine::core::research::JarqueBeraSnapshot::default(),
             jbnorm_loading: false,
-            // ── ADR-135 Round 27 defaults ──
+            // ── Round 27 defaults ──
             show_omega: false,
             omega_symbol: String::new(),
             omega_snapshot: typhoon_engine::core::research::OmegaRatioSnapshot::default(),
@@ -15146,7 +15146,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             rollsprd_symbol: String::new(),
             rollsprd_snapshot: typhoon_engine::core::research::RollSpreadSnapshot::default(),
             rollsprd_loading: false,
-            // ── ADR-136 Round 28 defaults ──
+            // ── Round 28 defaults ──
             show_parkinson: false,
             parkinson_symbol: String::new(),
             parkinson_snapshot: typhoon_engine::core::research::ParkinsonVolSnapshot::default(),
@@ -15167,7 +15167,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             doweffect_symbol: String::new(),
             doweffect_snapshot: typhoon_engine::core::research::DayOfWeekEffectSnapshot::default(),
             doweffect_loading: false,
-            // ── ADR-137 Round 29 defaults ──
+            // ── Round 29 defaults ──
             show_sterling: false,
             sterling_symbol: String::new(),
             sterling_snapshot: typhoon_engine::core::research::SterlingRatioSnapshot::default(),
@@ -15188,7 +15188,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             zeroret_symbol: String::new(),
             zeroret_snapshot: typhoon_engine::core::research::ZeroReturnSnapshot::default(),
             zeroret_loading: false,
-            // ── ADR-138 Round 30 defaults ──
+            // ── Round 30 defaults ──
             show_psr: false,
             psr_symbol: String::new(),
             psr_snapshot: typhoon_engine::core::research::ProbabilisticSharpeSnapshot::default(),
@@ -15209,7 +15209,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             dddur_symbol: String::new(),
             dddur_snapshot: typhoon_engine::core::research::DrawdownDurationSnapshot::default(),
             dddur_loading: false,
-            // ── ADR-139 Round 31 defaults ──
+            // ── Round 31 defaults ──
             show_hilltail: false,
             hilltail_symbol: String::new(),
             hilltail_snapshot: typhoon_engine::core::research::HillTailSnapshot::default(),
@@ -15230,7 +15230,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             cfvar_symbol: String::new(),
             cfvar_snapshot: typhoon_engine::core::research::CornishFisherSnapshot::default(),
             cfvar_loading: false,
-            // ── ADR-140 Round 32 defaults ──
+            // ── Round 32 defaults ──
             show_entropy: false,
             entropy_symbol: String::new(),
             entropy_snapshot: typhoon_engine::core::research::EntropySnapshot::default(),
@@ -15251,7 +15251,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             apen_symbol: String::new(),
             apen_snapshot: typhoon_engine::core::research::ApenSnapshot::default(),
             apen_loading: false,
-            // ── ADR-141 Round 33 defaults ──
+            // ── Round 33 defaults ──
             show_upr: false,
             upr_symbol: String::new(),
             upr_snapshot: typhoon_engine::core::research::UprSnapshot::default(),
@@ -15272,7 +15272,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             gini_symbol: String::new(),
             gini_snapshot: typhoon_engine::core::research::GiniSnapshot::default(),
             gini_loading: false,
-            // ── ADR-142 Round 34 defaults ──
+            // ── Round 34 defaults ──
             show_sampen: false,
             sampen_symbol: String::new(),
             sampen_snapshot: typhoon_engine::core::research::SampenSnapshot::default(),
@@ -15293,7 +15293,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             specent_symbol: String::new(),
             specent_snapshot: typhoon_engine::core::research::SpecentSnapshot::default(),
             specent_loading: false,
-            // ── ADR-143 Round 35 defaults ──
+            // ── Round 35 defaults ──
             show_robvol: false,
             robvol_symbol: String::new(),
             robvol_snapshot: typhoon_engine::core::research::RobVolSnapshot::default(),
@@ -15314,7 +15314,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             ewmavol_symbol: String::new(),
             ewmavol_snapshot: typhoon_engine::core::research::EwmaVolSnapshot::default(),
             ewmavol_loading: false,
-            // ── ADR-144 Round 36 defaults ──
+            // ── Round 36 defaults ──
             show_ksnorm: false,
             ksnorm_symbol: String::new(),
             ksnorm_snapshot: typhoon_engine::core::research::KsnormSnapshot::default(),
@@ -15335,7 +15335,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             peakover_symbol: String::new(),
             peakover_snapshot: typhoon_engine::core::research::PeakoverSnapshot::default(),
             peakover_loading: false,
-            // ── ADR-145 Round 37 defaults ──
+            // ── Round 37 defaults ──
             show_higuchi: false,
             higuchi_symbol: String::new(),
             higuchi_snapshot: typhoon_engine::core::research::HiguchiSnapshot::default(),
@@ -15356,7 +15356,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             rankac_symbol: String::new(),
             rankac_snapshot: typhoon_engine::core::research::RankacSnapshot::default(),
             rankac_loading: false,
-            // ── ADR-146 Round 38 defaults ──
+            // ── Round 38 defaults ──
             show_bnsjump: false,
             bnsjump_symbol: String::new(),
             bnsjump_snapshot: typhoon_engine::core::research::BnsjumpSnapshot::default(),
@@ -15377,7 +15377,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             tsi_symbol: String::new(),
             tsi_snapshot: typhoon_engine::core::research::TsiSnapshot::default(),
             tsi_loading: false,
-            // ── ADR-147 Round 39 defaults ──
+            // ── Round 39 defaults ──
             show_garch11: false,
             garch11_symbol: String::new(),
             garch11_snapshot: typhoon_engine::core::research::Garch11Snapshot::default(),
@@ -15398,7 +15398,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             automi_symbol: String::new(),
             automi_snapshot: typhoon_engine::core::research::AutomiSnapshot::default(),
             automi_loading: false,
-            // ── ADR-149 Round 40 defaults ──
+            // ── Round 40 defaults ──
             show_durbinwatson: false,
             durbinwatson_symbol: String::new(),
             durbinwatson_snapshot: typhoon_engine::core::research::DurbinWatsonSnapshot::default(),
@@ -15419,7 +15419,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             periodogram_symbol: String::new(),
             periodogram_snapshot: typhoon_engine::core::research::PeriodogramSnapshot::default(),
             periodogram_loading: false,
-            // ── ADR-150 Round 41 defaults ──
+            // ── Round 41 defaults ──
             show_mcleodli: false,
             mcleodli_symbol: String::new(),
             mcleodli_snapshot: typhoon_engine::core::research::McLeodLiSnapshot::default(),
@@ -15440,7 +15440,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             kendalltau_symbol: String::new(),
             kendalltau_snapshot: typhoon_engine::core::research::KendallTauSnapshot::default(),
             kendalltau_loading: false,
-            // ── ADR-151 Round 42 defaults ──
+            // ── Round 42 defaults ──
             show_squeeze_win: false,
             squeeze_win_symbol: String::new(),
             squeeze_win_snapshot: typhoon_engine::core::research::SqueezeSnapshot::default(),
@@ -15464,7 +15464,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             kama_win_symbol: String::new(),
             kama_win_snapshot: typhoon_engine::core::research::KamaSnapshot::default(),
             kama_win_loading: false,
-            // ── ADR-152 Round 43 defaults ──
+            // ── Round 43 defaults ──
             show_ichimoku_win: false,
             ichimoku_win_symbol: String::new(),
             ichimoku_win_snapshot: typhoon_engine::core::research::IchimokuSnapshot::default(),
@@ -15485,7 +15485,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             aroon_win_symbol: String::new(),
             aroon_win_snapshot: typhoon_engine::core::research::AroonSnapshot::default(),
             aroon_win_loading: false,
-            // ── ADR-153 Round 44 defaults ──
+            // ── Round 44 defaults ──
             show_adx_win: false,
             adx_win_symbol: String::new(),
             adx_win_snapshot: typhoon_engine::core::research::AdxSnapshot::default(),
@@ -15506,7 +15506,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             psar_win_symbol: String::new(),
             psar_win_snapshot: typhoon_engine::core::research::PsarSnapshot::default(),
             psar_win_loading: false,
-            // ── ADR-154 Round 45 defaults ──
+            // ── Round 45 defaults ──
             show_vortex_win: false,
             vortex_win_symbol: String::new(),
             vortex_win_snapshot: typhoon_engine::core::research::VortexSnapshot::default(),
@@ -15527,7 +15527,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             hma_win_symbol: String::new(),
             hma_win_snapshot: typhoon_engine::core::research::HmaSnapshot::default(),
             hma_win_loading: false,
-            // ── ADR-155 Round 46 defaults ──
+            // ── Round 46 defaults ──
             show_ppo_win: false,
             ppo_win_symbol: String::new(),
             ppo_win_snapshot: typhoon_engine::core::research::PpoSnapshot::default(),
@@ -15548,7 +15548,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             willr_win_symbol: String::new(),
             willr_win_snapshot: typhoon_engine::core::research::WillrSnapshot::default(),
             willr_win_loading: false,
-            // ── ADR-156 Round 47 defaults ──
+            // ── Round 47 defaults ──
             show_mass_win: false,
             mass_win_symbol: String::new(),
             mass_win_snapshot: typhoon_engine::core::research::MassSnapshot::default(),
@@ -15569,7 +15569,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             awesome_win_symbol: String::new(),
             awesome_win_snapshot: typhoon_engine::core::research::AwesomeSnapshot::default(),
             awesome_win_loading: false,
-            // ── ADR-158 Round 48 defaults ──
+            // ── Round 48 defaults ──
             show_efi_win: false,
             efi_win_symbol: String::new(),
             efi_win_snapshot: typhoon_engine::core::research::EfiSnapshot::default(),
@@ -15650,7 +15650,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             heikin_win_symbol: String::new(),
             heikin_win_snapshot: typhoon_engine::core::research::HeikinSnapshot::default(),
             heikin_win_loading: false,
-            // ── ADR-163 Round 52 defaults ──
+            // ── Round 52 defaults ──
             show_alma_win: false,
             alma_win_symbol: String::new(),
             alma_win_snapshot: typhoon_engine::core::research::AlmaSnapshot::default(),
@@ -15671,7 +15671,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             rvi_win_symbol: String::new(),
             rvi_win_snapshot: typhoon_engine::core::research::RviSnapshot::default(),
             rvi_win_loading: false,
-            // ── ADR-164 Round 53 defaults ──
+            // ── Round 53 defaults ──
             show_trima_win: false,
             trima_win_symbol: String::new(),
             trima_win_snapshot: typhoon_engine::core::research::TrimaSnapshot::default(),
@@ -15692,7 +15692,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             pvt_win_symbol: String::new(),
             pvt_win_snapshot: typhoon_engine::core::research::PvtSnapshot::default(),
             pvt_win_loading: false,
-            // ── ADR-165 Round 54 defaults ──
+            // ── Round 54 defaults ──
             show_ac_win: false,
             ac_win_symbol: String::new(),
             ac_win_snapshot: typhoon_engine::core::research::AcSnapshot::default(),
@@ -15722,7 +15722,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             expcal_win_tab: 0,
             expcal_win_horizon_days: 90,
             expcal_win_calendar: Vec::new(),
-            // ── ADR-167 Round 55 defaults ──
+            // ── Round 55 defaults ──
             show_smma_win: false,
             smma_win_symbol: String::new(),
             smma_win_snapshot: typhoon_engine::core::research::SmmaSnapshot::default(),
@@ -15743,7 +15743,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             imi_win_symbol: String::new(),
             imi_win_snapshot: typhoon_engine::core::research::ImiSnapshot::default(),
             imi_win_loading: false,
-            // ── ADR-168 Round 56 defaults ──
+            // ── Round 56 defaults ──
             show_gmma_win: false,
             gmma_win_symbol: String::new(),
             gmma_win_snapshot: typhoon_engine::core::research::GmmaSnapshot::default(),
@@ -15764,7 +15764,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             vroc_win_symbol: String::new(),
             vroc_win_snapshot: typhoon_engine::core::research::VrocSnapshot::default(),
             vroc_win_loading: false,
-            // ── ADR-169 Round 57 defaults ──
+            // ── Round 57 defaults ──
             show_kdj_win: false,
             kdj_win_symbol: String::new(),
             kdj_win_snapshot: typhoon_engine::core::research::KdjSnapshot::default(),
@@ -15785,7 +15785,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             tmf_win_symbol: String::new(),
             tmf_win_snapshot: typhoon_engine::core::research::TmfSnapshot::default(),
             tmf_win_loading: false,
-            // ── ADR-170 Round 58 defaults ──
+            // ── Round 58 defaults ──
             show_fractals_win: false,
             fractals_win_symbol: String::new(),
             fractals_win_snapshot: typhoon_engine::core::research::FractalsSnapshot::default(),
@@ -15806,7 +15806,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             didi_win_symbol: String::new(),
             didi_win_snapshot: typhoon_engine::core::research::DidiSnapshot::default(),
             didi_win_loading: false,
-            // ── ADR-171 Round 59 defaults ──
+            // ── Round 59 defaults ──
             show_demarker_win: false,
             demarker_win_symbol: String::new(),
             demarker_win_snapshot: typhoon_engine::core::research::DemarkerSnapshot::default(),
@@ -15827,7 +15827,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             stddev_win_symbol: String::new(),
             stddev_win_snapshot: typhoon_engine::core::research::StddevSnapshot::default(),
             stddev_win_loading: false,
-            // ── ADR-172 Round 60 defaults ──
+            // ── Round 60 defaults ──
             show_wma_win: false,
             wma_win_symbol: String::new(),
             wma_win_snapshot: typhoon_engine::core::research::WmaSnapshot::default(),
@@ -15848,7 +15848,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             ibs_win_symbol: String::new(),
             ibs_win_snapshot: typhoon_engine::core::research::IbsSnapshot::default(),
             ibs_win_loading: false,
-            // ── ADR-173 Round 61 defaults ──
+            // ── Round 61 defaults ──
             show_laguerre_rsi_win: false,
             laguerre_rsi_win_symbol: String::new(),
             laguerre_rsi_win_snapshot: typhoon_engine::core::research::LaguerreRsiSnapshot::default(
@@ -15871,7 +15871,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             midpoint_win_symbol: String::new(),
             midpoint_win_snapshot: typhoon_engine::core::research::MidpointSnapshot::default(),
             midpoint_win_loading: false,
-            // ── ADR-174 Round 62 defaults ──
+            // ── Round 62 defaults ──
             show_mass_index_win: false,
             mass_index_win_symbol: String::new(),
             mass_index_win_snapshot: typhoon_engine::core::research::MassIndexSnapshot::default(),
@@ -15892,7 +15892,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             trange_win_symbol: String::new(),
             trange_win_snapshot: typhoon_engine::core::research::TrangeSnapshot::default(),
             trange_win_loading: false,
-            // ── ADR-175 Round 63 defaults ──
+            // ── Round 63 defaults ──
             show_linearreg_slope_win: false,
             linearreg_slope_win_symbol: String::new(),
             linearreg_slope_win_snapshot:
@@ -15915,7 +15915,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             stochf_win_symbol: String::new(),
             stochf_win_snapshot: typhoon_engine::core::research::StochfSnapshot::default(),
             stochf_win_loading: false,
-            // ── ADR-176 Round 64 defaults ──
+            // ── Round 64 defaults ──
             show_linearreg_win: false,
             linearreg_win_symbol: String::new(),
             linearreg_win_snapshot: typhoon_engine::core::research::LinearregSnapshot::default(),
@@ -15937,7 +15937,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             ht_phasor_win_symbol: String::new(),
             ht_phasor_win_snapshot: typhoon_engine::core::research::HtPhasorSnapshot::default(),
             ht_phasor_win_loading: false,
-            // ── ADR-177 Round 65 defaults ──
+            // ── Round 65 defaults ──
             show_midprice_win: false,
             midprice_win_symbol: String::new(),
             midprice_win_snapshot: typhoon_engine::core::research::MidpriceSnapshot::default(),
@@ -15978,7 +15978,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             variance_win_symbol: String::new(),
             variance_win_snapshot: typhoon_engine::core::research::VarianceSnapshot::default(),
             variance_win_loading: false,
-            // ── ADR-179 Round 67 defaults ──
+            // ── Round 67 defaults ──
             show_plus_di_win: false,
             plus_di_win_symbol: String::new(),
             plus_di_win_snapshot: typhoon_engine::core::research::PlusDiSnapshot::default(),
@@ -15999,7 +15999,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             dx_win_symbol: String::new(),
             dx_win_snapshot: typhoon_engine::core::research::DxSnapshot::default(),
             dx_win_loading: false,
-            // ── ADR-180 Round 68 defaults ──
+            // ── Round 68 defaults ──
             show_roc_win: false,
             roc_win_symbol: String::new(),
             roc_win_snapshot: typhoon_engine::core::research::RocSnapshot::default(),
@@ -16020,7 +16020,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             correl_win_symbol: String::new(),
             correl_win_snapshot: typhoon_engine::core::research::CorrelSnapshot::default(),
             correl_win_loading: false,
-            // ── ADR-181 Round 69 defaults ──
+            // ── Round 69 defaults ──
             show_min_win: false,
             min_win_symbol: String::new(),
             min_win_snapshot: typhoon_engine::core::research::MinSnapshot::default(),
@@ -16041,7 +16041,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             maxindex_win_symbol: String::new(),
             maxindex_win_snapshot: typhoon_engine::core::research::MaxIndexSnapshot::default(),
             maxindex_win_loading: false,
-            // ── ADR-182 Round 70 defaults ──
+            // ── Round 70 defaults ──
             show_bbands_win: false,
             bbands_win_symbol: String::new(),
             bbands_win_snapshot: typhoon_engine::core::research::BbandsSnapshot::default(),
@@ -16063,7 +16063,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             linreg_intercept_win_snapshot:
                 typhoon_engine::core::research::LinearRegInterceptSnapshot::default(),
             linreg_intercept_win_loading: false,
-            // ── ADR-183 Round 71 defaults ──
+            // ── Round 71 defaults ──
             show_aroonosc_win: false,
             aroonosc_win_symbol: String::new(),
             aroonosc_win_snapshot: typhoon_engine::core::research::AroonoscSnapshot::default(),
@@ -16085,7 +16085,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             mavp_win_symbol: String::new(),
             mavp_win_snapshot: typhoon_engine::core::research::MavpSnapshot::default(),
             mavp_win_loading: false,
-            // ── ADR-184 Round 72 defaults ──
+            // ── Round 72 defaults ──
             show_cdl_doji_win: false,
             cdl_doji_win_symbol: String::new(),
             cdl_doji_win_snapshot: typhoon_engine::core::research::CdlDojiSnapshot::default(),
@@ -16108,7 +16108,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             cdl_harami_win_symbol: String::new(),
             cdl_harami_win_snapshot: typhoon_engine::core::research::CdlHaramiSnapshot::default(),
             cdl_harami_win_loading: false,
-            // ── ADR-185 Round 73 defaults — CDL* 3-bar / 2-bar patterns ──
+            // ── Round 73 defaults — CDL* 3-bar / 2-bar patterns ──
             show_cdl_morning_star_win: false,
             cdl_morning_star_win_symbol: String::new(),
             cdl_morning_star_win_snapshot:
@@ -16134,7 +16134,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             cdl_dark_cloud_cover_win_snapshot:
                 typhoon_engine::core::research::CdlDarkCloudCoverSnapshot::default(),
             cdl_dark_cloud_cover_win_loading: false,
-            // ── ADR-186 Round 74 defaults — CDL* piercing / doji variants / hammer mirrors ──
+            // ── Round 74 defaults — CDL* piercing / doji variants / hammer mirrors ──
             show_cdl_piercing_win: false,
             cdl_piercing_win_symbol: String::new(),
             cdl_piercing_win_snapshot: typhoon_engine::core::research::CdlPiercingSnapshot::default(
@@ -16160,7 +16160,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             cdl_inverted_hammer_win_snapshot:
                 typhoon_engine::core::research::CdlInvertedHammerSnapshot::default(),
             cdl_inverted_hammer_win_loading: false,
-            // ── ADR-187 Round 75 defaults — CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
+            // ── Round 75 defaults — CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
             show_cdl_harami_cross_win: false,
             cdl_harami_cross_win_symbol: String::new(),
             cdl_harami_cross_win_snapshot:
@@ -16185,7 +16185,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             cdl_tristar_win_symbol: String::new(),
             cdl_tristar_win_snapshot: typhoon_engine::core::research::CdlTristarSnapshot::default(),
             cdl_tristar_win_loading: false,
-            // ── ADR-191 Round 76 defaults — CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
+            // ── Round 76 defaults — CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
             show_cdl_doji_star_win: false,
             cdl_doji_star_win_symbol: String::new(),
             cdl_doji_star_win_snapshot:
@@ -16211,7 +16211,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             cdl_three_inside_win_snapshot:
                 typhoon_engine::core::research::CdlThreeInsideSnapshot::default(),
             cdl_three_inside_win_loading: false,
-            // ── ADR-192 Round 77 defaults — CDL* belt hold / closing marubozu / high wave / long line / short line ──
+            // ── Round 77 defaults — CDL* belt hold / closing marubozu / high wave / long line / short line ──
             show_cdl_belt_hold_win: false,
             cdl_belt_hold_win_symbol: String::new(),
             cdl_belt_hold_win_snapshot:
@@ -16237,7 +16237,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             cdl_short_line_win_snapshot:
                 typhoon_engine::core::research::CdlShortLineSnapshot::default(),
             cdl_short_line_win_loading: false,
-            // ── ADR-193 Round 78 defaults — CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
+            // ── Round 78 defaults — CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
             show_cdl_counterattack_win: false,
             cdl_counterattack_win_symbol: String::new(),
             cdl_counterattack_win_snapshot:
@@ -16388,7 +16388,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             cdl_tasuki_gap_win_snapshot:
                 typhoon_engine::core::research::CdlTasukiGapSnapshot::default(),
             cdl_tasuki_gap_win_loading: false,
-            // ── ADR-189 Round 76 defaults ──
+            // ── Round 76 defaults ──
             show_modsharpe_win: false,
             modsharpe_win_symbol: String::new(),
             modsharpe_win_snapshot: typhoon_engine::core::research::ModSharpeSnapshot::default(),
@@ -16409,7 +16409,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             hlvclust_win_symbol: String::new(),
             hlvclust_win_snapshot: typhoon_engine::core::research::HlvClustSnapshot::default(),
             hlvclust_win_loading: false,
-            // ── ADR-190 Round 77 defaults ──
+            // ── Round 77 defaults ──
             show_yangzhang_win: false,
             yangzhang_win_symbol: String::new(),
             yangzhang_win_snapshot: typhoon_engine::core::research::YangZhangVolSnapshot::default(),
@@ -16430,7 +16430,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             kupiecpof_win_symbol: String::new(),
             kupiecpof_win_snapshot: typhoon_engine::core::research::KupiecPofSnapshot::default(),
             kupiecpof_win_loading: false,
-            // ── ADR-130 defaults ──
+            // ── defaults ──
             show_ingest_research: false,
             ingest_research_text: String::new(),
             ingest_research_agent: "claude".into(),

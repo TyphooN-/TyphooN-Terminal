@@ -1450,7 +1450,7 @@ impl TyphooNApp {
                 }
                 self.ai_cache_last_refresh = now_ts;
             }
-            egui::Window::new("AI Response Cache (ADR-162)")
+            egui::Window::new("AI Response Cache")
                 .open(&mut self.show_ai_cache)
                 .resizable(true)
                 .default_size([820.0, 560.0])
