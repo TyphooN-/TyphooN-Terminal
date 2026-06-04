@@ -4,6 +4,7 @@ impl TyphooNApp {
     pub(super) fn render_symbol_screener_window(&mut self, ctx: &egui::Context) {
         // Screener — uses cached symbol data
         if self.show_screener {
+            let mut pending_action = SymbolAction::None;
             egui::Window::new("Symbol Screener")
                 .open(&mut self.show_screener)
                 .resizable(true)
@@ -133,9 +134,19 @@ impl TyphooNApp {
                                                     egui::Color32::from_rgb(180, 180, 180)
                                                 }),
                                         );
-                                        if ui.small_button("▶ Load").clicked() {
-                                            load_key = Some(key.to_string());
-                                        }
+                                        ui.horizontal(|ui| {
+                                            if ui
+                                                .small_button(egui::RichText::new("+").small())
+                                                .on_hover_text("Open new chart")
+                                                .clicked()
+                                            {
+                                                pending_action =
+                                                    SymbolAction::OpenChart(sym.to_string());
+                                            }
+                                            if ui.small_button("▶ Load").clicked() {
+                                                load_key = Some(key.to_string());
+                                            }
+                                        });
                                         ui.end_row();
                                     }
                                     // Load symbol into active chart
@@ -188,6 +199,7 @@ impl TyphooNApp {
                                 });
                         });
                 });
+            self.apply_symbol_action(pending_action);
         }
     }
 }

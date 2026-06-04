@@ -51654,9 +51654,23 @@ impl TyphooNApp {
                                         continue;
                                     }
 
-                                    let (_, sw_action) = symbol_label_with_menu(ui, &e.symbol,
-                                        egui::RichText::new(&e.symbol).monospace().strong());
-                                    if !matches!(sw_action, SymbolAction::None) { swap_pending_action = sw_action; }
+                                    ui.horizontal(|ui| {
+                                        let (_, sw_action) = symbol_label_with_menu(
+                                            ui,
+                                            &e.symbol,
+                                            egui::RichText::new(&e.symbol).monospace().strong(),
+                                        );
+                                        if !matches!(sw_action, SymbolAction::None) {
+                                            swap_pending_action = sw_action;
+                                        }
+                                        if ui
+                                            .small_button(egui::RichText::new("+").small())
+                                            .on_hover_text("Open new chart")
+                                            .clicked()
+                                        {
+                                            swap_pending_action = SymbolAction::OpenChart(e.symbol.clone());
+                                        }
+                                    });
                                     let dir_color = match e.direction.as_str() {
                                         "LONG" => ACCENT,
                                         "SHORT" => egui::Color32::from_rgb(255, 100, 100),
@@ -51809,9 +51823,21 @@ impl TyphooNApp {
                                         ui.strong("Detail");
                                         ui.end_row();
                                         for c in &self.darwinex_radar_changelog {
-                                            ui.label(
-                                                egui::RichText::new(&c.symbol).monospace().strong(),
-                                            );
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(&c.symbol)
+                                                        .monospace()
+                                                        .strong(),
+                                                );
+                                                if ui
+                                                    .small_button(egui::RichText::new("+").small())
+                                                    .on_hover_text("Open new chart")
+                                                    .clicked()
+                                                {
+                                                    radar_pending_action =
+                                                        SymbolAction::OpenChart(c.symbol.clone());
+                                                }
+                                            });
                                             let (type_color, type_label) = match c
                                                 .change_type
                                                 .as_str()
@@ -51899,14 +51925,24 @@ impl TyphooNApp {
                                         } else {
                                             egui::Color32::from_rgb(255, 100, 100)
                                         };
-                                        let (_, rd_action) = symbol_label_with_menu(
-                                            ui,
-                                            sym,
-                                            egui::RichText::new(sym).monospace().strong(),
-                                        );
-                                        if !matches!(rd_action, SymbolAction::None) {
-                                            radar_pending_action = rd_action;
-                                        }
+                                        ui.horizontal(|ui| {
+                                            let (_, rd_action) = symbol_label_with_menu(
+                                                ui,
+                                                sym,
+                                                egui::RichText::new(sym).monospace().strong(),
+                                            );
+                                            if !matches!(rd_action, SymbolAction::None) {
+                                                radar_pending_action = rd_action;
+                                            }
+                                            if ui
+                                                .small_button(egui::RichText::new("+").small())
+                                                .on_hover_text("Open new chart")
+                                                .clicked()
+                                            {
+                                                radar_pending_action =
+                                                    SymbolAction::OpenChart(sym.clone());
+                                            }
+                                        });
                                         ui.label(
                                             egui::RichText::new(sector).color(AXIS_TEXT).small(),
                                         );
