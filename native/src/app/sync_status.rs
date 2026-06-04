@@ -35,7 +35,7 @@ impl TyphooNApp {
             // but if WS just delivered the recent-window snapshot/update, the cache is in
             // sync; counting that row stale keeps auto full-tilt pinned forever and wastes
             // REST budget chasing bars the market has not printed.
-            if prefix == "kraken"
+            if matches!(prefix, "kraken" | "kraken-equities")
                 && Self::kraken_ws_pair_is_fresh_at(&self.kraken_ws_fresh_until, symbol, tf, now_ms)
             {
                 return true;

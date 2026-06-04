@@ -4587,6 +4587,10 @@ pub struct TyphooNApp {
     /// don't re-spawn streamers if the broker thread emits more lifecycle
     /// events. Resets to false when the user toggles the setting off.
     pub(crate) kraken_ws_ohlc_started: bool,
+    /// Exact WS v2 subscribe symbols already handed to the streamer pipeline.
+    /// Lets Spot start from AssetPairs and xStocks join later from the
+    /// instrument universe without duplicate subscriptions.
+    pub(crate) kraken_ws_ohlc_streamed_pairs: std::collections::HashSet<String>,
     pub(crate) crypto_fiat_quote_usd: bool,
     pub(crate) crypto_fiat_quote_usdt: bool,
     pub(crate) crypto_fiat_quote_usdc: bool,

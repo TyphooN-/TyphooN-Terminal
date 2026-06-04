@@ -449,6 +449,7 @@ impl TyphooNApp {
                                 // streamers mid-session; the next session
                                 // launches without them.
                                 self.kraken_ws_ohlc_started = false;
+                                self.kraken_ws_ohlc_streamed_pairs.clear();
                                 self.log.push_back(LogEntry::info(
                                     "Kraken WS OHLC disabled — already-running streamers stay live until next launch.",
                                 ));

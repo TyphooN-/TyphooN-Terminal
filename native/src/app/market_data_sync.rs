@@ -1557,6 +1557,13 @@ impl TyphooNApp {
         if symbol.is_empty() {
             return false;
         }
+        // WS v2 OHLC is now the primary xStocks current-bar path. Once it has
+        // delivered a fresh closed bar for this symbol/timeframe, suppress the
+        // delayed iapi history pull; keep iapi for initial cold-start/gap repair
+        // and for cases where WS has not produced this tuple yet.
+        if self.kraken_ws_pair_is_fresh(&symbol, tf) {
+            return false;
+        }
         if self.is_unresolvable_fetch_key("kraken-equities", &symbol, tf) {
             return false;
         }

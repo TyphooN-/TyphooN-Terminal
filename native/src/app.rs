@@ -16484,6 +16484,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             backfill_yahoo_chart_enabled: false,
             kraken_ws_ohlc_enabled: true,
             kraken_ws_ohlc_started: false,
+            kraken_ws_ohlc_streamed_pairs: std::collections::HashSet::new(),
             crypto_fiat_quote_usd: true,
             crypto_fiat_quote_usdt: true,
             crypto_fiat_quote_usdc: true,

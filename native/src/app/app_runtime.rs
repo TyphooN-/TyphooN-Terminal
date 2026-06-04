@@ -2242,6 +2242,7 @@ impl eframe::App for TyphooNApp {
                         "Kraken equities universe loaded: {} tradable symbols",
                         self.kraken_equity_universe_symbols.len()
                     )));
+                    self.maybe_start_kraken_ws_ohlc();
 
                     if self.auto_sec_scrape_deferred && !self.scrape_sec_running {
                         let symbols = self.sec_scrape_scope_symbols();
