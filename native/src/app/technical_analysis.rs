@@ -3707,34 +3707,24 @@ pub(super) fn draw_chart(
     if flags.supertrend {
         let st_bull_col = egui::Color32::from_rgb(0, 200, 100);
         let st_bear_col = egui::Color32::from_rgb(220, 50, 50);
-        // Draw as colored segments — bull=green, bear=red
-        let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / render_step + 1);
-        let mut prev_bull = true;
+        // Draw as colored clipped segments — bull=green, bear=red.
+        let mut prev: Option<(egui::Pos2, bool)> = None;
         for (rel_idx, _) in bars.iter().enumerate().step_by(render_step) {
             let abs_idx = start_idx + rel_idx;
-            if abs_idx >= chart.supertrend.len() {
+            let Some(v) = indicator_value_at(&chart.supertrend, abs_idx) else {
+                prev = None;
                 continue;
-            }
-            if let Some(v) = indicator_value_at(&chart.supertrend, abs_idx) {
-                let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
-                let y = price_to_y(v);
-                let is_bull = chart.supertrend_bull.get(abs_idx).copied().unwrap_or(true);
-                if is_bull != prev_bull && points.len() > 1 {
+            };
+            let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
+            let pt = egui::pos2(x, price_to_y(v));
+            let is_bull = chart.supertrend_bull.get(abs_idx).copied().unwrap_or(true);
+            if let Some((prev_pt, prev_bull)) = prev {
+                if let Some([a, b]) = clip_line_segment_to_rect(prev_pt, pt, chart_rect) {
                     let col = if prev_bull { st_bull_col } else { st_bear_col };
-                    painter.add(egui::Shape::line(
-                        std::mem::take(&mut points),
-                        egui::Stroke::new(2.0, col),
-                    ));
+                    painter.line_segment([a, b], egui::Stroke::new(2.0, col));
                 }
-                if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                    points.push(egui::pos2(x, y));
-                }
-                prev_bull = is_bull;
             }
-        }
-        if points.len() > 1 {
-            let col = if prev_bull { st_bull_col } else { st_bear_col };
-            painter.add(egui::Shape::line(points, egui::Stroke::new(2.0, col)));
+            prev = Some((pt, is_bull));
         }
     }
 
@@ -4067,16 +4057,13 @@ pub(super) fn draw_chart(
                 if bar_idx >= start_idx && bar_idx < end_idx {
                     let rel = bar_idx - start_idx;
                     let x = data_left + (rel as f32 + 0.5) * bar_w;
-                    let y = price_to_y(sma_val);
-                    if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                        let pt = egui::pos2(x, y);
-                        if let Some(p) = prev {
-                            painter.line_segment([p, pt], egui::Stroke::new(2.0, color));
+                    let pt = egui::pos2(x, price_to_y(sma_val));
+                    if let Some(prev_pt) = prev {
+                        if let Some([a, b]) = clip_line_segment_to_rect(prev_pt, pt, chart_rect) {
+                            painter.line_segment([a, b], egui::Stroke::new(2.0, color));
                         }
-                        prev = Some(pt);
-                    } else {
-                        prev = None;
                     }
+                    prev = Some(pt);
                 }
             }
         }
@@ -4102,16 +4089,13 @@ pub(super) fn draw_chart(
                 if bar_idx >= start_idx && bar_idx < end_idx {
                     let rel = bar_idx - start_idx;
                     let x = data_left + (rel as f32 + 0.5) * bar_w;
-                    let y = price_to_y(kama_val);
-                    if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                        let pt = egui::pos2(x, y);
-                        if let Some(p) = prev {
-                            painter.line_segment([p, pt], egui::Stroke::new(2.0, color));
+                    let pt = egui::pos2(x, price_to_y(kama_val));
+                    if let Some(prev_pt) = prev {
+                        if let Some([a, b]) = clip_line_segment_to_rect(prev_pt, pt, chart_rect) {
+                            painter.line_segment([a, b], egui::Stroke::new(2.0, color));
                         }
-                        prev = Some(pt);
-                    } else {
-                        prev = None;
                     }
+                    prev = Some(pt);
                 }
             }
         }
@@ -10718,7 +10702,13 @@ pub(super) fn chart_render_sample_step(len: usize, width_px: f32) -> usize {
     }
 }
 
-/// Render a single indicator series as a polyline.
+/// Render a single indicator series as clipped line segments.
+///
+/// Do not cull individual points by `y` before drawing. Price-axis zoom/pan can
+/// put both sampled endpoints outside the pane while the segment between them
+/// still crosses the visible chart. The old point-culling path dropped those
+/// crossing segments, which made overlays pop in/out while scaling the price
+/// axis or free-looking vertically.
 pub(super) fn draw_indicator_line(
     painter: &egui::Painter,
     chart_rect: egui::Rect,
@@ -10732,31 +10722,22 @@ pub(super) fn draw_indicator_line(
     width: f32,
 ) {
     let sample_step = chart_render_sample_step(bars.len(), chart_rect.width());
-    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
     let stroke = egui::Stroke::new(width, color);
+    let mut prev: Option<egui::Pos2> = None;
     for (rel_idx, _bar) in bars.iter().enumerate().step_by(sample_step) {
         let abs_idx = start_idx + rel_idx;
-        if abs_idx >= series.len() {
+        let Some(v) = indicator_value_at(series, abs_idx) else {
+            prev = None;
             continue;
-        }
-        if let Some(v) = series[abs_idx] {
-            let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
-            let y = price_to_y(v);
-            if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                points.push(egui::pos2(x, y));
-            } else if points.len() > 1 {
-                painter.add(egui::Shape::line(std::mem::take(&mut points), stroke));
-            } else {
-                points.clear();
+        };
+        let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
+        let pt = egui::pos2(x, price_to_y(v));
+        if let Some(prev_pt) = prev {
+            if let Some([a, b]) = clip_line_segment_to_rect(prev_pt, pt, chart_rect) {
+                painter.line_segment([a, b], stroke);
             }
-        } else if points.len() > 1 {
-            painter.add(egui::Shape::line(std::mem::take(&mut points), stroke));
-        } else {
-            points.clear();
         }
-    }
-    if points.len() > 1 {
-        painter.add(egui::Shape::line(points, stroke));
+        prev = Some(pt);
     }
 }
 
@@ -10764,6 +10745,45 @@ pub(super) fn draw_indicator_line(
 
 fn indicator_value_at(series: &[Option<f64>], idx: usize) -> Option<f64> {
     series.get(idx).copied().flatten()
+}
+
+fn clip_line_segment_to_rect(
+    a: egui::Pos2,
+    b: egui::Pos2,
+    rect: egui::Rect,
+) -> Option<[egui::Pos2; 2]> {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    let mut t0 = 0.0_f32;
+    let mut t1 = 1.0_f32;
+
+    for (p, q) in [
+        (-dx, a.x - rect.left()),
+        (dx, rect.right() - a.x),
+        (-dy, a.y - rect.top()),
+        (dy, rect.bottom() - a.y),
+    ] {
+        if p.abs() < f32::EPSILON {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let r = q / p;
+        if p < 0.0 {
+            t0 = t0.max(r);
+        } else {
+            t1 = t1.min(r);
+        }
+        if t0 > t1 {
+            return None;
+        }
+    }
+
+    Some([
+        egui::pos2(a.x + t0 * dx, a.y + t0 * dy),
+        egui::pos2(a.x + t1 * dx, a.y + t1 * dy),
+    ])
 }
 
 pub(super) fn parse_range(s: &str, default_lo: usize, default_hi: usize) -> (usize, usize) {
@@ -10797,6 +10817,35 @@ mod tests {
         assert_eq!(super::indicator_value_at(&series, 0), Some(1.0));
         assert_eq!(super::indicator_value_at(&series, 1), None);
         assert_eq!(super::indicator_value_at(&series, 3), None);
+    }
+
+    #[test]
+    fn indicator_line_clipping_keeps_price_scale_crossing_segments() {
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 100.0));
+        let clipped = super::clip_line_segment_to_rect(
+            egui::pos2(10.0, -50.0),
+            egui::pos2(90.0, 150.0),
+            rect,
+        )
+        .expect("segment crosses chart pane even when both sampled y values are offscreen");
+
+        assert!((clipped[0].x - 30.0).abs() < 0.001);
+        assert!((clipped[0].y - 0.0).abs() < 0.001);
+        assert!((clipped[1].x - 70.0).abs() < 0.001);
+        assert!((clipped[1].y - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn indicator_line_clipping_rejects_fully_offscreen_segments() {
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 100.0));
+        assert!(
+            super::clip_line_segment_to_rect(
+                egui::pos2(10.0, -50.0),
+                egui::pos2(90.0, -10.0),
+                rect,
+            )
+            .is_none()
+        );
     }
 
     #[test]

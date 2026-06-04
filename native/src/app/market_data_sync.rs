@@ -2173,7 +2173,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kraken_equity_symbols_for_timeframe_uses_catalog_for_broad_fallback_tfs() {
+    fn kraken_equity_symbols_for_timeframe_uses_catalog_for_native_timeframes() {
         let catalog = vec!["TNDM.EQ".to_string(), "wok".to_string(), "TNDM".to_string()];
         let demand = vec!["POM.EQ".to_string(), "array".to_string()];
 
@@ -2195,7 +2195,7 @@ mod tests {
         );
         assert_eq!(
             kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Min"),
-            vec!["ARRAY".to_string(), "POM".to_string()]
+            vec!["TNDM".to_string(), "WOK".to_string()]
         );
         assert_eq!(
             kraken_equity_symbols_for_timeframe(&[], &demand, "1Day"),
