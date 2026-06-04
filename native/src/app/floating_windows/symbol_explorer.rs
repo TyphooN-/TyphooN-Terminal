@@ -16,6 +16,16 @@ impl TyphooNApp {
                 self.kraken_pairs_requested = true;
             }
             if self.kraken_enabled
+                && self.kraken_scrape_xstocks
+                && self.kraken_equity_universe_symbols.is_empty()
+                && (!self.kraken_equity_universe_requested
+                    || chrono::Utc::now().timestamp() >= self.kraken_equity_universe_retry_after_ts)
+            {
+                let _ = self.broker_tx.send(BrokerCmd::KrakenFetchEquityUniverse);
+                self.kraken_equity_universe_requested = true;
+                self.kraken_equity_universe_retry_after_ts = chrono::Utc::now().timestamp() + 120;
+            }
+            if self.kraken_enabled
                 && self.kraken_scrape_futures
                 && self.kraken_futures_symbols.is_empty()
                 && !self.kraken_futures_requested
@@ -67,12 +77,22 @@ impl TyphooNApp {
                         Vec::with_capacity(
                             self.all_broker_assets.len()
                                 + self.kraken_pairs.len()
+                                + self.kraken_equity_universe_symbols.len()
                                 + self.kraken_futures_symbols.len()
                                 + self.tastytrade_universe_symbols.len(),
                         );
                     broker_universe_assets.extend(self.all_broker_assets.iter().cloned());
                     broker_universe_assets.extend(self.kraken_pairs.iter().map(
                         |(pair, display)| (display.clone(), pair.clone(), "crypto".to_string()),
+                    ));
+                    broker_universe_assets.extend(self.kraken_equity_universe_symbols.iter().map(
+                        |sym| {
+                            (
+                                sym.clone(),
+                                "Kraken Securities/xStock".to_string(),
+                                "us_equity".to_string(),
+                            )
+                        },
                     ));
                     broker_universe_assets.extend(self.kraken_futures_symbols.iter().map(|sym| {
                         (
@@ -334,6 +354,7 @@ impl TyphooNApp {
                                 ("alpaca", "Alpaca (cached)", sym_green),
                                 ("tastytrade", "tastytrade (cached)", sym_teal),
                                 ("kraken", "Kraken", sym_orange),
+                                ("kraken-equities", "Kraken Equities (cached)", sym_orange),
                             ];
 
                             for (source_key, label, color) in source_labels {
