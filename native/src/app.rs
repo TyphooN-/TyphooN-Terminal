@@ -44,6 +44,7 @@ mod ai;
 mod ai_processes;
 mod alpaca_sync;
 mod app_runtime;
+mod app_runtime_support;
 mod auto_compact;
 mod bar_sync;
 mod broker_fetch;
