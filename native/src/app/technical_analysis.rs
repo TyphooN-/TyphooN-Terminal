@@ -5072,12 +5072,13 @@ pub(super) fn draw_chart(
 
     // ── Extended Hours Candle (magenta, TradingView-style) ─────────────
     // When pre/post market data is available, draw a real ext hours candle.
-    // Otherwise, draw a ghost placeholder.
-    // Position flush to the right edge of the chart (no reserved slot in bar_w math,
-    // so we clamp into chart_rect instead of reserving whitespace and shifting all bars).
+    // Otherwise, draw a ghost placeholder. It belongs in the next chart slot
+    // after the last visible real candle, not pinned to the far-right edge of
+    // the chart's empty future space.
     if let Some(last) = bars.last() {
-        let next_x = (chart_rect.right() - half_body - 2.0).max(data_left + bar_w);
-        if next_x > data_left + bar_w {
+        if let Some(next_x) =
+            adjacent_projection_candle_x(data_left, bars.len(), bar_w, half_body, chart_rect)
+        {
             if chart.ext_active && chart.ext_high > 0.0 {
                 // Real extended hours candle (magenta)
                 let ext_col = egui::Color32::from_rgb(200, 50, 200); // Magenta
@@ -10763,6 +10764,24 @@ pub(super) fn chart_render_sample_step(len: usize, width_px: f32) -> usize {
     }
 }
 
+fn adjacent_projection_candle_x(
+    data_left: f32,
+    visible_real_bars: usize,
+    bar_w: f32,
+    half_body: f32,
+    chart_rect: egui::Rect,
+) -> Option<f32> {
+    if visible_real_bars == 0 || !bar_w.is_finite() || bar_w <= 0.0 {
+        return None;
+    }
+    let x = data_left + (visible_real_bars as f32 + 0.5) * bar_w;
+    if x - half_body >= chart_rect.left() && x + half_body <= chart_rect.right() {
+        Some(x)
+    } else {
+        None
+    }
+}
+
 /// Render a single indicator series as clipped line segments.
 ///
 /// Do not cull individual points by `y` before drawing. Price-axis zoom/pan can
@@ -10907,6 +10926,26 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn projection_candle_sits_in_next_slot_not_far_right_empty_space() {
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1000.0, 400.0));
+        let x = super::adjacent_projection_candle_x(0.0, 1, 10.0, 3.5, rect)
+            .expect("one empty slot after the visible bar is enough for projection candle");
+
+        assert!((x - 15.0).abs() < 0.001);
+        assert!(
+            x < rect.right() - 900.0,
+            "projection candle must not be pinned to far-right chart edge; x={x}"
+        );
+    }
+
+    #[test]
+    fn projection_candle_is_hidden_when_next_slot_is_offscreen() {
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 400.0));
+
+        assert!(super::adjacent_projection_candle_x(0.0, 10, 10.0, 3.5, rect).is_none());
     }
 
     #[test]
