@@ -2721,6 +2721,9 @@ impl TyphooNApp {
         // ── Hermes Agent CLI chat ──
         self.render_hermes_cli_window(ctx);
 
+        // ── Grok Build CLI chat ──
+        self.render_grok_cli_window(ctx);
+
         // ── ADR-157 AI Sessions history browser ──
         self.render_ai_sessions_window(ctx);
 

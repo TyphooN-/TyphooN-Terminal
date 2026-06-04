@@ -16545,6 +16545,20 @@ impl TyphooNApp {
                     }
                 }
             }
+            "GROK" | "GROK_CLI" | "GROK-BUILD" | "GROK_BUILD" | "ASKGROK" | "ASK_GROK" => {
+                match std::process::Command::new("which").arg("grok").output() {
+                    Ok(out) if out.status.success() => {
+                        self.show_grok_cli = true;
+                        self.log
+                            .push_back(LogEntry::info("Grok Build CLI detected — opening chat"));
+                    }
+                    _ => {
+                        self.log.push_back(LogEntry::err(
+                            "Grok Build CLI not found in PATH. Install/configure the grok binary first.",
+                        ));
+                    }
+                }
+            }
             // ── ADR-157 AI session resume + history browser ──
             "RESUMECLAUDE" | "RESUME_CLAUDE" => {
                 if let Some(ref cache) = self.cache {
@@ -16638,6 +16652,29 @@ impl TyphooNApp {
                         Err(e) => self
                             .log
                             .push_back(LogEntry::err(format!("RESUMEHERMES: {e}"))),
+                    }
+                } else {
+                    self.log
+                        .push_back(LogEntry::warn("Cache not ready — wait a moment and retry"));
+                }
+            }
+            "RESUMEGROK" | "RESUME_GROK" => {
+                if let Some(ref cache) = self.cache {
+                    match typhoon_engine::core::ai_sessions::latest_for_provider(cache, "grok") {
+                        Ok(Some(rec)) => {
+                            self.grok_cli_history = rec.turns.clone();
+                            self.grok_cli_session_id = rec.session_id.clone();
+                            self.show_grok_cli = true;
+                            self.log.push_back(LogEntry::info(format!(
+                                "Resumed Grok session {} ({} turns — transcript replayed as context)",
+                                rec.session_id, rec.turns.len())));
+                        }
+                        Ok(None) => self
+                            .log
+                            .push_back(LogEntry::warn("No saved Grok session to resume")),
+                        Err(e) => self
+                            .log
+                            .push_back(LogEntry::err(format!("RESUMEGROK: {e}"))),
                     }
                 } else {
                     self.log
@@ -16950,6 +16987,68 @@ impl TyphooNApp {
                     _ => {
                         self.log
                             .push_back(LogEntry::err("Hermes Agent CLI not found in PATH."));
+                    }
+                }
+            }
+            cmd if cmd.starts_with("ASKGROK ") || cmd.starts_with("ASK_GROK ") => {
+                let args = cmd
+                    .splitn(2, char::is_whitespace)
+                    .nth(1)
+                    .unwrap_or("")
+                    .trim();
+                let (syms, question) = Self::parse_ask_args(args);
+                if syms.is_empty() {
+                    self.show_grok_cli = true;
+                    self.log.push_back(LogEntry::warn(
+                        "Usage: ASKGROK SYM1[,SYM2] [optional question]",
+                    ));
+                    return;
+                }
+                match std::process::Command::new("which").arg("grok").output() {
+                    Ok(out) if out.status.success() => {
+                        let packet = self.investigate_symbols(&syms, &question);
+                        self.grok_cli_packet = Some(packet.clone());
+                        self.show_grok_cli = true;
+                        let first_user_turn = if question.is_empty() {
+                            format!(
+                                "Give me an overall read on {} — combine the research packet above with live web search for recent news/sentiment.",
+                                syms.join(", ")
+                            )
+                        } else {
+                            question.clone()
+                        };
+                        self.grok_cli_history.push((
+                            true,
+                            format!(
+                                "[Research packet loaded: {}] {}",
+                                syms.join(", "),
+                                first_user_turn
+                            ),
+                        ));
+                        if self.grok_cli_rx.is_none() {
+                            let model = self.grok_model.clone();
+                            let effort = self.grok_effort.clone();
+                            let full_prompt = Self::build_claude_prompt(
+                                Some(&packet),
+                                &self.grok_cli_history,
+                                &first_user_turn,
+                                "",
+                            );
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            self.grok_cli_rx = Some(rx);
+                            Self::spawn_grok_exec(model, effort, full_prompt, tx);
+                            self.log.push_back(LogEntry::info(format!(
+                                "Grok Build investigation dispatched: {} ({} symbols, model {}, effort {})",
+                                syms.join(", "),
+                                syms.len(),
+                                if self.grok_model.trim().is_empty() { "auto" } else { self.grok_model.as_str() },
+                                Self::grok_effort_label(&self.grok_effort)
+                            )));
+                        }
+                    }
+                    _ => {
+                        self.log
+                            .push_back(LogEntry::err("Grok Build CLI not found in PATH."));
                     }
                 }
             }

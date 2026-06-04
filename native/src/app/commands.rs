@@ -1037,6 +1037,10 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "Ask OpenAI Codex CLI with full TyphooN data packet — ASKCODEX SYM[,SYM] [question]",
     },
     Command {
+        name: "ASKGROK",
+        desc: "Ask Grok Build CLI with full TyphooN data packet — ASKGROK SYM[,SYM] [question]",
+    },
+    Command {
         name: "AICACHE",
         desc: "Cross-client AI response cache stats (ADR-162)",
     },

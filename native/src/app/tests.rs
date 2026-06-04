@@ -2294,6 +2294,49 @@ fn test_build_hermes_exec_args_includes_overrides_when_selected() {
     );
 }
 
+#[test]
+fn test_grok_effort_normalization_defaults_unknown_values() {
+    assert_eq!(TyphooNApp::normalize_grok_effort("max"), "max");
+    assert_eq!(TyphooNApp::normalize_grok_effort("bogus"), "high");
+    assert_eq!(TyphooNApp::normalize_grok_effort(""), "high");
+}
+
+#[test]
+fn test_build_grok_exec_args_uses_auto_model_when_blank_or_auto() {
+    let args = TyphooNApp::build_grok_exec_args("auto", "bogus", "hello");
+    assert_eq!(
+        args,
+        vec![
+            "--no-alt-screen".to_string(),
+            "--output-format".to_string(),
+            "plain".to_string(),
+            "--effort".to_string(),
+            "high".to_string(),
+            "--single".to_string(),
+            "hello".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn test_build_grok_exec_args_includes_model_and_effort() {
+    let args = TyphooNApp::build_grok_exec_args("grok-code-fast-1", "max", "hello");
+    assert_eq!(
+        args,
+        vec![
+            "--no-alt-screen".to_string(),
+            "--output-format".to_string(),
+            "plain".to_string(),
+            "--effort".to_string(),
+            "max".to_string(),
+            "--model".to_string(),
+            "grok-code-fast-1".to_string(),
+            "--single".to_string(),
+            "hello".to_string(),
+        ]
+    );
+}
+
 fn sample_events() -> Vec<EventRow> {
     vec![
         EventRow {

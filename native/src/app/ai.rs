@@ -1032,6 +1032,227 @@ impl TyphooNApp {
         }
     }
 
+    pub(super) fn render_grok_cli_window(&mut self, ctx: &egui::Context) {
+        if let Some(ref rx) = self.grok_cli_rx {
+            if let Ok(response) = rx.try_recv() {
+                self.maybe_queue_ingest_from_ai_response("grok", &response);
+                self.grok_cli_history.push((false, response));
+                self.grok_cli_rx = None;
+                let sid = Self::ensure_session_id(&mut self.grok_cli_session_id);
+                let model = if self.grok_model.trim().is_empty() {
+                    "auto".to_string()
+                } else {
+                    self.grok_model.clone()
+                };
+                let history = self.grok_cli_history.clone();
+                self.persist_ai_turn("grok", &sid, None, &history, &model);
+            }
+        }
+        if self.show_grok_cli {
+            let mut save_grok_transcript: Option<String> = None;
+            let mut matrix_grok_transcript: Option<String> = None;
+            let mut grok_save_after = false;
+            egui::Window::new("Grok Build CLI")
+                .open(&mut self.show_grok_cli)
+                .resizable(true)
+                .default_size([620.0, 520.0])
+                .min_width(420.0)
+                .min_height(280.0)
+                .constrain(true)
+                .show(ctx, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new("Grok Build CLI — local grok binary")
+                                .small()
+                                .color(AXIS_TEXT),
+                        );
+                        ui.separator();
+                        let prev_model = self.grok_model.clone();
+                        ui.label("Model:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.grok_model)
+                                .desired_width(140.0)
+                                .hint_text("auto"),
+                        )
+                        .on_hover_text("Empty/auto lets Grok Build pick the model; otherwise TyphooN passes --model through to `grok`.");
+                        let prev_effort = self.grok_effort.clone();
+                        ui.label("Effort:");
+                        egui::ComboBox::from_id_salt("grok_effort_picker")
+                            .selected_text(Self::grok_effort_label(&self.grok_effort))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.grok_effort, "low".to_string(), "low");
+                                ui.selectable_value(&mut self.grok_effort, "medium".to_string(), "medium");
+                                ui.selectable_value(&mut self.grok_effort, "high".to_string(), "high");
+                                ui.selectable_value(&mut self.grok_effort, "xhigh".to_string(), "xhigh");
+                                ui.selectable_value(&mut self.grok_effort, "max".to_string(), "max");
+                            });
+                        if self.grok_model != prev_model || self.grok_effort != prev_effort {
+                            self.grok_effort = Self::normalize_grok_effort(&self.grok_effort).to_string();
+                            grok_save_after = true;
+                        }
+                        if self.grok_cli_packet.is_some() {
+                            ui.label(egui::RichText::new("[packet loaded]").small().color(UP));
+                        }
+                        let has_turns = !self.grok_cli_history.is_empty();
+                        ui.add_enabled_ui(has_turns, |ui| {
+                            if ui
+                                .button("\u{1F4BE} Save")
+                                .on_hover_text("Export this Grok session to a markdown file")
+                                .clicked()
+                            {
+                                save_grok_transcript = Some(Self::format_ai_transcript(
+                                    &self.grok_cli_history,
+                                    "Grok Build CLI",
+                                    "Grok",
+                                    Some(self.grok_cli_session_id.as_str()),
+                                ));
+                            }
+                            if ui
+                                .button("\u{1F4E8} Matrix")
+                                .on_hover_text("Post this Grok session to the Community Chat room")
+                                .clicked()
+                            {
+                                matrix_grok_transcript = Some(Self::format_ai_transcript(
+                                    &self.grok_cli_history,
+                                    "Grok Build CLI",
+                                    "Grok",
+                                    Some(self.grok_cli_session_id.as_str()),
+                                ));
+                            }
+                        });
+                    });
+                    ui.separator();
+                    let scroll_h = (ui.available_height() - 60.0).max(120.0);
+                    egui::ScrollArea::vertical()
+                        .auto_shrink(false)
+                        .max_height(scroll_h)
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            if self.grok_cli_history.is_empty() {
+                                ui.vertical_centered(|ui| {
+                                    ui.add_space(40.0);
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Ask Grok anything — uses your local Grok Build CLI",
+                                        )
+                                        .color(AXIS_TEXT),
+                                    );
+                                });
+                            }
+                            for (is_user, msg) in &self.grok_cli_history {
+                                let (align, color, prefix) = if *is_user {
+                                    (
+                                        egui::Align::RIGHT,
+                                        egui::Color32::from_rgb(80, 140, 255),
+                                        "You",
+                                    )
+                                } else {
+                                    (
+                                        egui::Align::LEFT,
+                                        egui::Color32::from_rgb(100, 220, 180),
+                                        "Grok",
+                                    )
+                                };
+                                ui.with_layout(egui::Layout::top_down(align), |ui| {
+                                    ui.label(
+                                        egui::RichText::new(prefix).strong().small().color(color),
+                                    );
+                                    ui.label(egui::RichText::new(msg).small());
+                                });
+                                ui.add_space(4.0);
+                            }
+                            if self.grok_cli_rx.is_some() {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label(
+                                        egui::RichText::new("Thinking...").small().color(AXIS_TEXT),
+                                    );
+                                });
+                            }
+                        });
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.grok_cli_input)
+                                .desired_width(ui.available_width() - 60.0)
+                                .hint_text("Ask Grok..."),
+                        );
+                        let send = ui.button("Send").clicked()
+                            || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                        if send
+                            && !self.grok_cli_input.trim().is_empty()
+                            && self.grok_cli_rx.is_none()
+                        {
+                            let msg = self.grok_cli_input.trim().to_string();
+                            self.grok_cli_input.clear();
+                            self.grok_cli_history.push((true, msg.clone()));
+
+                            let lower = msg.to_lowercase();
+                            if lower == "/clear" {
+                                self.grok_cli_history.clear();
+                                self.grok_cli_history
+                                    .push((false, "(chat history cleared)".to_string()));
+                                self.grok_cli_session_id.clear();
+                                return;
+                            }
+                            if lower == "/help" {
+                                self.grok_cli_history.push((
+                                    false,
+                                    "Grok Build chat help:\n\
+                                     • Type any prompt and press Enter to ask Grok Build.\n\
+                                     • ASKGROK SYM[,SYM2] question — preload a TyphooN research packet.\n\
+                                     • Model maps to grok --model; Effort maps to grok --effort.\n\
+                                     • /clear — clear this window's transcript\n\
+                                     • /status — show local Grok status"
+                                        .to_string(),
+                                ));
+                                return;
+                            }
+                            if lower == "/status" {
+                                let count = self.grok_cli_history.iter().filter(|(u, _)| *u).count();
+                                let has_pkt = if self.grok_cli_packet.is_some() { "yes" } else { "no" };
+                                self.grok_cli_history.push((
+                                    false,
+                                    format!(
+                                        "Grok Build status:\n\
+                                         • Backend: `grok --single` subprocess\n\
+                                         • Model override: {}\n\
+                                         • Effort: {}\n\
+                                         • Research packet loaded: {has_pkt}\n\
+                                         • Messages this session: {count}",
+                                        if self.grok_model.trim().is_empty() || self.grok_model.trim() == "auto" { "(auto)" } else { self.grok_model.as_str() },
+                                        Self::grok_effort_label(&self.grok_effort),
+                                    ),
+                                ));
+                                return;
+                            }
+
+                            let full_prompt = Self::build_claude_prompt(
+                                self.grok_cli_packet.as_deref(),
+                                &self.grok_cli_history,
+                                &msg,
+                                "",
+                            );
+                            let model = self.grok_model.clone();
+                            let effort = self.grok_effort.clone();
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            self.grok_cli_rx = Some(rx);
+                            Self::spawn_grok_exec(model, effort, full_prompt, tx);
+                        }
+                    });
+                });
+            if let Some(t) = save_grok_transcript {
+                self.save_ai_session_to_file("grok_cli", &t);
+            }
+            if let Some(t) = matrix_grok_transcript {
+                self.send_ai_session_to_matrix("grok_cli", &t);
+            }
+            if grok_save_after {
+                self.save_session();
+            }
+        }
+    }
+
     pub(super) fn render_ai_sessions_window(&mut self, ctx: &egui::Context) {
         if self.show_ai_sessions {
             // Auto-refresh index every 10s while the window is open.
@@ -1178,6 +1399,14 @@ impl TyphooNApp {
                                                                 self.codex_model = rec.model.clone();
                                                             }
                                                             self.show_codex_cli = true;
+                                                        }
+                                                        "grok" => {
+                                                            self.grok_cli_history = rec.turns.clone();
+                                                            self.grok_cli_session_id = rec.session_id.clone();
+                                                            if !rec.model.trim().is_empty() {
+                                                                self.grok_model = rec.model.clone();
+                                                            }
+                                                            self.show_grok_cli = true;
                                                         }
                                                         "ai_chat" => {
                                                             self.ai_chat_history = rec.turns.clone();

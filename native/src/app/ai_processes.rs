@@ -66,7 +66,7 @@ impl TyphooNApp {
         out
     }
 
-    /// Parse the argument portion of an ASKAI/ASKCLAUDE/ASKGEMINI/ASKCODEX command.
+    /// Parse the argument portion of an ASKAI/ASKCLAUDE/ASKGEMINI/ASKCODEX/ASKGROK command.
     ///
     /// The contract is simple and predictable: the **first whitespace-separated
     /// token** is the comma-separated symbol list; **everything after the first
@@ -459,6 +459,46 @@ impl TyphooNApp {
         }
     }
 
+    pub(super) fn normalize_grok_effort(effort: &str) -> &'static str {
+        match effort.trim() {
+            "low" => "low",
+            "medium" => "medium",
+            "high" => "high",
+            "xhigh" => "xhigh",
+            "max" => "max",
+            _ => "high",
+        }
+    }
+
+    pub(super) fn grok_effort_label(effort: &str) -> &'static str {
+        match Self::normalize_grok_effort(effort) {
+            "low" => "low",
+            "medium" => "medium",
+            "high" => "high",
+            "xhigh" => "xhigh",
+            "max" => "max",
+            _ => "high",
+        }
+    }
+
+    pub(super) fn build_grok_exec_args(model: &str, effort: &str, prompt: &str) -> Vec<String> {
+        let mut args = vec![
+            "--no-alt-screen".to_string(),
+            "--output-format".to_string(),
+            "plain".to_string(),
+            "--effort".to_string(),
+            Self::normalize_grok_effort(effort).to_string(),
+        ];
+        let model = model.trim();
+        if !model.is_empty() && model != "auto" {
+            args.push("--model".to_string());
+            args.push(model.to_string());
+        }
+        args.push("--single".to_string());
+        args.push(prompt.to_string());
+        args
+    }
+
     pub(super) fn build_hermes_exec_args(model: &str, provider: &str, prompt: &str) -> Vec<String> {
         let mut args = Vec::new();
         let model = model.trim();
@@ -474,6 +514,25 @@ impl TyphooNApp {
         args.push("--oneshot".to_string());
         args.push(prompt.to_string());
         args
+    }
+
+    pub(super) fn spawn_grok_exec(
+        model: String,
+        effort: String,
+        prompt: String,
+        tx: std::sync::mpsc::Sender<String>,
+    ) {
+        let tx_on_spawn_err = tx.clone();
+        if let Err(e) = std::thread::Builder::new()
+            .name("typhoon-ai-grok-build".into())
+            .spawn(move || {
+                let args = Self::build_grok_exec_args(&model, &effort, &prompt);
+                let result = std::process::Command::new("grok").args(&args).output();
+                let _ = tx.send(Self::cli_output_response("Grok Build", result));
+            })
+        {
+            let _ = tx_on_spawn_err.send(format!("Failed to spawn Grok Build CLI worker: {e}"));
+        }
     }
 
     pub(super) fn spawn_hermes_exec(

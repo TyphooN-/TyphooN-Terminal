@@ -4661,6 +4661,15 @@ pub struct TyphooNApp {
     pub(crate) hermes_model: String,
     /// Optional Hermes provider override. Empty means use Hermes' configured default.
     pub(crate) hermes_provider: String,
+    /// Grok Build CLI chat window (local `grok` binary).
+    pub(crate) show_grok_cli: bool,
+    pub(crate) grok_cli_input: String,
+    pub(crate) grok_cli_history: Vec<(bool, String)>,
+    pub(crate) grok_cli_rx: Option<std::sync::mpsc::Receiver<String>>,
+    pub(crate) grok_cli_packet: Option<String>,
+    pub(crate) grok_cli_session_id: String,
+    pub(crate) grok_model: String,
+    pub(crate) grok_effort: String,
     pub(crate) ai_chat_history: Vec<(bool, String)>, // (is_user, message)
     pub(crate) ai_chat_input: String,
     pub(crate) ai_chat_packet: Option<String>,
