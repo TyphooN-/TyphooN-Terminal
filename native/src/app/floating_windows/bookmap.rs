@@ -132,6 +132,33 @@ pub(super) fn render_live_orderbook_heatmap(
     true
 }
 
+impl TyphooNApp {
+    pub(in crate::app) fn open_bookmap_window(&mut self, symbol: Option<String>) {
+        let resolved = symbol
+            .map(|s| normalize_market_data_symbol(&s))
+            .filter(|s| !s.is_empty())
+            .or_else(|| self.active_trade_symbol())
+            .unwrap_or_else(|| "UNKNOWN".to_string());
+
+        if self
+            .bookmap_windows
+            .iter_mut()
+            .any(|w| w.symbol.eq_ignore_ascii_case(&resolved))
+        {
+            self.log
+                .push_back(LogEntry::info(format!("Bookmap already open: {resolved}")));
+            return;
+        }
+
+        self.bookmap_windows.push(BookmapWindowState {
+            symbol: resolved.clone(),
+            open: true,
+        });
+        self.log
+            .push_back(LogEntry::info(format!("Bookmap opened: {resolved}")));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{kraken_bookmap_stream_supported, orderbook_json_matches_symbol};
