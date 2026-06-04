@@ -5173,14 +5173,20 @@ pub(super) fn draw_chart(
                     egui::pos2(lbl_rect.left(), lbl_rect.top() + 15.0),
                     lbl_rect.max,
                 );
-                painter.rect_filled(price_rect, 2.0, color);
+                painter.rect_filled(price_rect, 2.0, egui::Color32::from_rgb(12, 18, 28));
+                painter.rect_stroke(
+                    price_rect,
+                    2.0,
+                    egui::Stroke::new(1.0, color),
+                    egui::StrokeKind::Inside,
+                );
                 painter.rect_filled(timer_rect, 2.0, egui::Color32::from_rgb(12, 18, 28));
                 painter.text(
                     egui::pos2(chart_rect.right() + 4.0, price_rect.center().y),
                     egui::Align2::LEFT_CENTER,
                     &label,
                     egui::FontId::monospace(10.0),
-                    egui::Color32::BLACK,
+                    color,
                 );
                 painter.text(
                     egui::pos2(chart_rect.right() + 4.0, timer_rect.center().y),
@@ -5194,13 +5200,19 @@ pub(super) fn draw_chart(
                     egui::pos2(chart_rect.right() + 2.0, y - 8.0),
                     egui::vec2(price_axis_w - 4.0, 16.0),
                 );
-                painter.rect_filled(lbl_rect, 2.0, color);
+                painter.rect_filled(lbl_rect, 2.0, egui::Color32::from_rgb(12, 18, 28));
+                painter.rect_stroke(
+                    lbl_rect,
+                    2.0,
+                    egui::Stroke::new(1.0, color),
+                    egui::StrokeKind::Inside,
+                );
                 painter.text(
                     egui::pos2(chart_rect.right() + 4.0, y),
                     egui::Align2::LEFT_CENTER,
                     &label,
                     egui::FontId::monospace(10.0),
-                    egui::Color32::BLACK,
+                    color,
                 );
             }
         }
@@ -5242,15 +5254,45 @@ pub(super) fn draw_chart(
     if chart.live_bid > 0.0 && chart.live_ask > 0.0 {
         let bid_y = price_to_y(chart.live_bid);
         let ask_y = price_to_y(chart.live_ask);
-        let bid_col = egui::Color32::from_rgba_premultiplied(0, 200, 80, 120);
-        let ask_col = egui::Color32::from_rgba_premultiplied(220, 50, 50, 120);
+        let bid_col = egui::Color32::from_rgba_premultiplied(0, 200, 80, 150);
+        let ask_col = egui::Color32::from_rgba_premultiplied(220, 50, 50, 150);
+        let bid_text_col = egui::Color32::from_rgb(0, 220, 80);
+        let ask_text_col = egui::Color32::from_rgb(255, 90, 90);
+        let label_bg = egui::Color32::from_rgb(12, 18, 28);
+        let mut bid_label_y = bid_y.clamp(chart_rect.top() + 8.0, chart_rect.bottom() - 8.0);
+        let mut ask_label_y = ask_y.clamp(chart_rect.top() + 8.0, chart_rect.bottom() - 8.0);
+        if (bid_label_y - ask_label_y).abs() < 17.0 {
+            let mid = ((bid_label_y + ask_label_y) * 0.5)
+                .clamp(chart_rect.top() + 17.0, chart_rect.bottom() - 17.0);
+            ask_label_y = mid - 8.5;
+            bid_label_y = mid + 8.5;
+        }
         if bid_y >= chart_rect.top() && bid_y <= chart_rect.bottom() {
             painter.line_segment(
                 [
                     egui::pos2(chart_rect.left(), bid_y),
                     egui::pos2(chart_rect.right(), bid_y),
                 ],
-                egui::Stroke::new(0.5, bid_col),
+                egui::Stroke::new(0.75, bid_col),
+            );
+            let lbl_rect = egui::Rect::from_min_size(
+                egui::pos2(chart_rect.right() + 2.0, bid_label_y - 8.0),
+                egui::vec2(price_axis_w - 4.0, 16.0),
+            );
+            painter.rect_filled(lbl_rect, 2.0, label_bg);
+            painter.rect_stroke(
+                lbl_rect,
+                2.0,
+                egui::Stroke::new(1.0, bid_text_col),
+                egui::StrokeKind::Inside,
+            );
+            let label = format!("B {}", format_price(chart.live_bid));
+            painter.text(
+                egui::pos2(chart_rect.right() + 4.0, bid_label_y),
+                egui::Align2::LEFT_CENTER,
+                label,
+                egui::FontId::monospace(9.0),
+                bid_text_col,
             );
         }
         if ask_y >= chart_rect.top() && ask_y <= chart_rect.bottom() {
@@ -5259,7 +5301,26 @@ pub(super) fn draw_chart(
                     egui::pos2(chart_rect.left(), ask_y),
                     egui::pos2(chart_rect.right(), ask_y),
                 ],
-                egui::Stroke::new(0.5, ask_col),
+                egui::Stroke::new(0.75, ask_col),
+            );
+            let lbl_rect = egui::Rect::from_min_size(
+                egui::pos2(chart_rect.right() + 2.0, ask_label_y - 8.0),
+                egui::vec2(price_axis_w - 4.0, 16.0),
+            );
+            painter.rect_filled(lbl_rect, 2.0, label_bg);
+            painter.rect_stroke(
+                lbl_rect,
+                2.0,
+                egui::Stroke::new(1.0, ask_text_col),
+                egui::StrokeKind::Inside,
+            );
+            let label = format!("A {}", format_price(chart.live_ask));
+            painter.text(
+                egui::pos2(chart_rect.right() + 4.0, ask_label_y),
+                egui::Align2::LEFT_CENTER,
+                label,
+                egui::FontId::monospace(9.0),
+                ask_text_col,
             );
         }
     }
