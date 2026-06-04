@@ -174,8 +174,17 @@ impl TyphooNApp {
                             } else {
                                 egui::Color32::from_rgb(231, 76, 60)
                             };
-                            ui.label(egui::RichText::new(format!("{:.1}%", row.pct_healthy))
-                                .color(pct_color).small().strong());
+                            let pct_text = if row.total == 0 && row.unsupported > 0 {
+                                "n/a".to_string()
+                            } else {
+                                format!("{:.1}%", row.pct_healthy)
+                            };
+                            ui.label(
+                                egui::RichText::new(pct_text)
+                                    .color(pct_color)
+                                    .small()
+                                    .strong(),
+                            );
                             let note_text = cells.note;
                             let note_label = if note_text.is_empty() { "" } else { "note" };
                             let note_response = ui.label(egui::RichText::new(note_label).color(AXIS_TEXT).small());
@@ -436,6 +445,19 @@ impl TyphooNApp {
                     }
                     _ => Vec::new(),
                 };
+                if source == "kraken-equities" {
+                    if !symbols.is_empty()
+                        && !rows.iter().any(|row| row.broker == broker && row.tf == tf)
+                    {
+                        rows.push(kraken_iapi_control_plane_row(
+                            broker,
+                            tf,
+                            symbols.len() as u64,
+                        ));
+                    }
+                    continue;
+                }
+
                 for symbol in symbols {
                     if existing.contains(&format!("{source}:{symbol}:{tf}")) {
                         continue;
@@ -468,6 +490,28 @@ impl TyphooNApp {
                 }
             }
         }
+    }
+}
+
+fn kraken_iapi_control_plane_row(broker: &str, tf: &str, symbol_count: u64) -> SyncStatsRow {
+    SyncStatsRow {
+        broker: broker.to_string(),
+        tf: tf.to_string(),
+        // Kraken iapi/xStocks is the universe + quote control plane. Native iapi
+        // bars are not the source of truth for chart coverage; Merged/Alpaca/Yahoo
+        // rows show actual bar freshness. Do not count the catalog as 12k empty
+        // bar-cache rows or auto full-tilt stays pinned forever.
+        total: 0,
+        healthy: 0,
+        stale: 0,
+        empty: 0,
+        settled: 0,
+        unsupported: symbol_count,
+        note: Some(
+            "control-plane catalog loaded; chart bars are tracked by Merged/Alpaca/Yahoo lanes"
+                .to_string(),
+        ),
+        pct_healthy: 0.0,
     }
 }
 
@@ -508,5 +552,29 @@ mod tests {
         assert!(kraken_equities_merged_timeframe_supported("15Min"));
         assert!(kraken_equities_merged_timeframe_supported("1Day"));
         assert!(kraken_equities_merged_timeframe_supported("1Month"));
+    }
+
+    #[test]
+    fn kraken_iapi_control_plane_row_does_not_count_as_empty_bars() {
+        let row = kraken_iapi_control_plane_row("Kraken iapi", "1Day", 12_268);
+        assert_eq!(row.total, 0);
+        assert_eq!(row.healthy, 0);
+        assert_eq!(row.stale, 0);
+        assert_eq!(row.empty, 0);
+        assert_eq!(row.unsupported, 12_268);
+        assert!(
+            row.note
+                .as_deref()
+                .unwrap()
+                .contains("control-plane catalog")
+        );
+
+        let totals = compute_bar_sync_broker_totals(&[row]);
+        assert!(
+            totals
+                .iter()
+                .all(|(broker, _, _, _)| broker != "Kraken iapi"),
+            "control-plane-only rows stay in the table but do not pollute broker bar totals"
+        );
     }
 }

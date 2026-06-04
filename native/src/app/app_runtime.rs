@@ -48,6 +48,14 @@ fn should_auto_start_background_scope_scrape(scope: EventSource, symbol_count: u
     symbol_count > 0 && (!matches!(scope, EventSource::All) || symbol_count <= 512)
 }
 
+fn should_auto_start_kraken_fundamentals_scrape(symbol_count: usize) -> bool {
+    // Same startup-safety rule as SEC/news broad scraping: Kraken xStocks ALL is
+    // a valid manual universe scrape, but launching 12k fundamentals requests as
+    // soon as the catalog lands piles onto cache/news/SEC sync and makes the UI
+    // unusable. Keep automatic startup recovery bounded to focused/small scopes.
+    symbol_count > 0 && symbol_count <= 512
+}
+
 fn format_session_countdown(duration: chrono::Duration) -> String {
     let seconds = duration.num_seconds().max(0);
     let hours = seconds / 3_600;
@@ -1188,6 +1196,19 @@ impl eframe::App for TyphooNApp {
                             self.log.push_back(LogEntry::info(
                                 "Fundamentals auto-scrape deferred: waiting for Kraken equities universe",
                             ));
+                        } else if self.fund_source_kraken
+                            && self.kraken_enabled
+                            && self.kraken_scrape_xstocks
+                            && !should_auto_start_kraken_fundamentals_scrape(
+                                self.kraken_equity_universe_symbols.len(),
+                            )
+                        {
+                            self.auto_fundamentals_deferred = false;
+                            self.auto_fundamentals_started = false;
+                            self.log.push_back(LogEntry::info(format!(
+                                "Fundamentals auto-scrape skipped for broad Kraken xStocks universe ({} symbols); use manual Fundamentals scrape for full-universe backfill",
+                                self.kraken_equity_universe_symbols.len()
+                            )));
                         } else {
                             let db_path = cache_db_path();
                             let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
@@ -2249,21 +2270,32 @@ impl eframe::App for TyphooNApp {
                     }
 
                     if self.auto_fundamentals_deferred && !self.auto_fundamentals_started {
-                        let db_path = cache_db_path();
-                        let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
-                            db_path,
-                            use_mt5: self.fund_source_mt5,
-                            use_alpaca: self.fund_source_alpaca,
-                            use_tastytrade: self.fund_source_tastytrade,
-                            use_kraken: self.fund_source_kraken,
-                            kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
-                            force: false,
-                        });
-                        self.auto_fundamentals_deferred = false;
-                        self.auto_fundamentals_started = true;
-                        self.log.push_back(LogEntry::info(
-                            "Fundamentals deferred scrape started for selected source universes...",
-                        ));
+                        if !should_auto_start_kraken_fundamentals_scrape(
+                            self.kraken_equity_universe_symbols.len(),
+                        ) {
+                            self.auto_fundamentals_deferred = false;
+                            self.auto_fundamentals_started = false;
+                            self.log.push_back(LogEntry::info(format!(
+                                "Fundamentals deferred auto-scrape skipped for broad Kraken xStocks universe ({} symbols); use manual Fundamentals scrape for full-universe backfill",
+                                self.kraken_equity_universe_symbols.len()
+                            )));
+                        } else {
+                            let db_path = cache_db_path();
+                            let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
+                                db_path,
+                                use_mt5: self.fund_source_mt5,
+                                use_alpaca: self.fund_source_alpaca,
+                                use_tastytrade: self.fund_source_tastytrade,
+                                use_kraken: self.fund_source_kraken,
+                                kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
+                                force: false,
+                            });
+                            self.auto_fundamentals_deferred = false;
+                            self.auto_fundamentals_started = true;
+                            self.log.push_back(LogEntry::info(
+                                "Fundamentals deferred scrape started for selected source universes...",
+                            ));
+                        }
                     }
                 }
                 BrokerMsg::KrakenEquityQuote(ticker) => {
@@ -18256,6 +18288,14 @@ mod tests {
         assert!(!should_emit_alpaca_retry_queue_log(99));
         assert!(should_emit_alpaca_retry_queue_log(100));
         assert!(should_emit_alpaca_retry_queue_log(200));
+    }
+
+    #[test]
+    fn broad_kraken_fundamentals_auto_scrape_is_bounded() {
+        assert!(!should_auto_start_kraken_fundamentals_scrape(0));
+        assert!(should_auto_start_kraken_fundamentals_scrape(512));
+        assert!(!should_auto_start_kraken_fundamentals_scrape(513));
+        assert!(!should_auto_start_kraken_fundamentals_scrape(12_268));
     }
 
     #[test]

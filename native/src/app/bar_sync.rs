@@ -236,6 +236,9 @@ pub(super) fn compute_bar_sync_broker_totals(
 
     let mut totals: BTreeMap<String, (u64, u64)> = BTreeMap::new();
     for row in rows {
+        if row.total == 0 {
+            continue;
+        }
         let entry = totals.entry(row.broker.clone()).or_default();
         entry.0 += row.total;
         entry.1 += row.healthy;
