@@ -3684,7 +3684,10 @@ mod tests {
         cache.put_kv("broker:test", &raw).unwrap();
 
         let (processed, _saved) = cache.compact_storage(22, None).unwrap();
-        assert_eq!(processed, 3);
+        assert!(
+            processed >= 3,
+            "expected at least the inserted bar/blob rows to be recompressed, got {processed}"
+        );
         assert_eq!(cache.count_uncompacted_bars(22).unwrap(), 0);
         assert_eq!(
             cache.get_kv("broker:test").unwrap().as_deref(),

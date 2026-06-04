@@ -313,12 +313,19 @@ impl IapiLimiter {
                     // forever. Kraken/Cloudflare limits vary by session/IP; an
                     // old 0.66 req/s discovery was freezing future launches at
                     // crawler-idle speed and preventing AIMD from probing back
-                    // toward max intensity. Keep the learned rate as the safe
-                    // starting point, but let AIMD ramp again.
+                    // toward max intensity. Keep only recent post-429 learning;
+                    // otherwise restart at the cold safe rate instead of
+                    // replaying a stale high checkpoint into an immediate 1015.
+                    let restored_rate = restored_aimd_rate(state);
+                    let restored_rate = if recent_rate_limit || state.tuned_rate > 0.0 {
+                        restored_rate
+                    } else {
+                        restored_rate.min(config.refill_per_sec.max(config.aimd_min_rate))
+                    };
                     (
                         0,
                         EscalationState::default(),
-                        restored_aimd_rate(state),
+                        restored_rate,
                         false,
                         if recent_rate_limit {
                             state.discovered_ceiling
@@ -341,14 +348,6 @@ impl IapiLimiter {
         // probing instead of pretending it found a final ceiling. Clamp into
         // the configured band so a stale/corrupt persisted value cannot drive
         // us out of bounds.
-        let raw_starting_rate = if restored_rate > 0.0 {
-            restored_rate
-        } else {
-            config.refill_per_sec
-        };
-        let starting_rate = raw_starting_rate
-            .max(config.aimd_min_rate)
-            .min(config.aimd_max_rate);
         let starts_converged = restored_converged;
         let starting_ceiling = if persisted_ceiling > 0.0 {
             Some(
@@ -359,6 +358,17 @@ impl IapiLimiter {
         } else {
             None
         };
+        let raw_starting_rate = if restored_rate > 0.0 {
+            restored_rate
+        } else {
+            config.refill_per_sec
+        };
+        let mut starting_rate = raw_starting_rate
+            .max(config.aimd_min_rate)
+            .min(config.aimd_max_rate);
+        if let Some(ceiling) = starting_ceiling {
+            starting_rate = starting_rate.min(ceiling);
+        }
         if starts_converged {
             tracing::info!(
                 "iapi AIMD: restored tuned rate {:.2} req/s from persisted state",
@@ -985,6 +995,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restore_clamps_checkpoint_to_discovered_ceiling_during_cooldown() {
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let now_unix = chrono::Utc::now().timestamp();
+        let state = PersistedState {
+            cooldown_until_unix: now_unix + 300,
+            consecutive: 1,
+            last_arm_unix: now_unix - 5,
+            tuned_rate: 0.0,
+            checkpoint_rate: 125.0,
+            discovered_ceiling: 71.4286,
+        };
+        std::fs::write(tmp.path(), serde_json::to_string(&state).unwrap()).unwrap();
+        let cfg = IapiLimiterConfig {
+            persistence_path: Some(tmp.path().to_path_buf()),
+            refill_per_sec: 0.67,
+            aimd_max_rate: 250.0,
+            ..aimd_config()
+        };
+        let lim = IapiLimiter::new(cfg);
+        let rate = lim.current_rate_per_sec().await;
+        assert!(
+            rate <= 71.4286 + 0.001,
+            "restored rate must not exceed discovered ceiling, got {rate}"
+        );
+    }
+
+    #[tokio::test]
     async fn restore_skips_expired_cooldown() {
         let tmp = tempfile::NamedTempFile::new().expect("tempfile");
         let now_unix = chrono::Utc::now().timestamp();
@@ -1032,6 +1069,33 @@ mod tests {
         assert!(
             bucket.discovered_ceiling.is_none(),
             "stale discovered ceiling must not cap a fresh launch"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_high_checkpoint_does_not_restart_at_cloudflare_ban_rate() {
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let now_unix = chrono::Utc::now().timestamp();
+        let state = PersistedState {
+            cooldown_until_unix: now_unix - 60,
+            consecutive: 0,
+            last_arm_unix: 0,
+            tuned_rate: 0.0,
+            checkpoint_rate: 250.0,
+            discovered_ceiling: 0.0,
+        };
+        std::fs::write(tmp.path(), serde_json::to_string(&state).unwrap()).unwrap();
+        let cfg = IapiLimiterConfig {
+            persistence_path: Some(tmp.path().to_path_buf()),
+            refill_per_sec: 0.67,
+            aimd_max_rate: 250.0,
+            ..aimd_config()
+        };
+        let lim = IapiLimiter::new(cfg);
+        let rate = lim.current_rate_per_sec().await;
+        assert!(
+            rate <= 1.0,
+            "stale high checkpoint must restart conservatively, got {rate}"
         );
     }
 
@@ -1238,12 +1302,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn aimd_restores_checkpoint_rate_without_converging() {
+    async fn aimd_restores_recent_checkpoint_rate_without_converging() {
         let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let now_unix = chrono::Utc::now().timestamp();
         let persisted = PersistedState {
             cooldown_until_unix: 0,
-            consecutive: 0,
-            last_arm_unix: 0,
+            consecutive: 1,
+            last_arm_unix: now_unix - 5,
             tuned_rate: 0.0,
             checkpoint_rate: 2.25,
             discovered_ceiling: 0.0,
