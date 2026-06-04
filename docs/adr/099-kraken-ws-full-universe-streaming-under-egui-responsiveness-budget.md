@@ -60,9 +60,10 @@ cases.
 ### 2. Lighter compression on the hot write path
 
 Even with bar-close gating, the initial snapshot storm is the worst case:
-≈12k cache entries to re-pack inside the first flush window. At the
-default `BAR_ZSTD_LEVEL = 22` (encoder ~5–10 MB/s) that pegs cores for
-tens of seconds.
+≈12k cache entries to re-pack inside the first flush window. At a high
+base bar zstd level such as 22 (encoder ~5–10 MB/s) that pegs cores for
+tens of seconds; the persisted base level is user-selectable now, but the
+WS hot path still needs a fixed low-latency carve-out.
 
 `engine/src/core/cache.rs::merge_bars_fast` is the WS-only variant that
 calls `put_bars_with_level(.., 3)`. zstd-3 cuts encode time ~10–20× at

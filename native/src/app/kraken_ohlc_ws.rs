@@ -396,9 +396,9 @@ pub(super) fn spawn_kraken_ohlc_pipeline(
 /// the load-bearing perf fix for the UI lag the WS feed introduced: an
 /// active 1Min pair gets dozens of per-tick updates to the same open bucket,
 /// and persisting each one runs [`SqliteCache::merge_bars`] which decompresses
-/// the full history, re-sorts, re-serialises, and **re-zstd-22-compresses**
-/// the entire blob. With ~1500 pairs × 8 intervals that saturated every CPU
-/// core and starved egui's render thread. Deferring to bar close drops the
+/// the full history, re-sorts, re-serialises, and recompresses the entire
+/// blob. At high base zstd levels, ~1500 pairs × 8 intervals saturated every
+/// CPU core and starved egui's render thread. Deferring to bar close drops the
 /// steady-state write rate by ~60× (1 merge per closed bar per pair rather
 /// than per WS tick) while preserving the freshness semantic the REST
 /// scheduler relies on — `kraken_ws_fresh_until` still gets updated for each

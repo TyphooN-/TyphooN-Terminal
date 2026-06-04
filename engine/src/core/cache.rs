@@ -1,7 +1,7 @@
 //! SQLite-backed cache for unlimited structured storage.
 //!
 //! Replaces IndexedDB's ~50MB limit with SQLite (no practical limit).
-//! Bar data uses packed binary format (48 bytes/bar) + zstd-22 compression.
+//! Bar data uses packed binary format (48 bytes/bar) + configurable zstd compression.
 //! KV data uses JSON + zstd compression.
 //! Binary format: [u32 bar_count][per bar: i64 timestamp_ms, f64 OHLCV]
 
@@ -11,6 +11,7 @@ use chrono::Datelike;
 use rusqlite::{Connection, OpenFlags, params};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicI32, Ordering};
 use zeroize::Zeroize;
 
 /// Re-export rusqlite::Connection so callers can use BG connections without depending on rusqlite directly.
@@ -20,8 +21,25 @@ pub type BgConnection = Connection;
 const BAR_BINARY_MAGIC: &[u8; 4] = b"TTBR"; // TyphooN Terminal Bar Record
 /// Bytes per bar in binary format: i64 timestamp + 5×f64 (OHLCV) = 48 bytes
 const BYTES_PER_BAR: usize = 8 + 5 * 8; // 48
-const BAR_ZSTD_LEVEL: i32 = 3;
+pub const DEFAULT_BAR_ZSTD_LEVEL: i32 = 3;
+pub const MIN_ZSTD_LEVEL: i32 = 1;
+pub const MAX_ZSTD_LEVEL: i32 = 22;
 const KV_ZSTD_LEVEL: i32 = 3;
+static BAR_ZSTD_LEVEL: AtomicI32 = AtomicI32::new(DEFAULT_BAR_ZSTD_LEVEL);
+
+pub fn sanitize_zstd_level(level: i32) -> i32 {
+    level.clamp(MIN_ZSTD_LEVEL, MAX_ZSTD_LEVEL)
+}
+
+pub fn set_bar_zstd_level(level: i32) -> i32 {
+    let level = sanitize_zstd_level(level);
+    BAR_ZSTD_LEVEL.store(level, Ordering::Relaxed);
+    level
+}
+
+pub fn bar_zstd_level() -> i32 {
+    sanitize_zstd_level(BAR_ZSTD_LEVEL.load(Ordering::Relaxed))
+}
 const BACKUP_ZSTD_LEVEL: i32 = 22;
 const ENCRYPTED_BACKUP_MAGIC: &[u8] = b"TYPHOON-BACKUP-AESGCM-V1\0";
 const ENCRYPTED_BACKUP_ITERATIONS: u32 = 210_000;
@@ -869,7 +887,7 @@ impl SqliteCache {
                 .map_err(|_| "bar_count header slice failed")?,
         ) as i64;
         let (second_last_ts, last_ts) = get_last_two_bar_timestamps(&binary, bar_count as usize);
-        let zstd_level = BAR_ZSTD_LEVEL;
+        let zstd_level = bar_zstd_level();
         let compressed = zstd::encode_all(binary.as_slice(), zstd_level)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();
@@ -1434,7 +1452,7 @@ impl SqliteCache {
     /// recompress cold rows to zstd-22 without taxing foreground interaction.
     /// Returns the full merged dataset as JSON.
     pub fn merge_bars(&self, key: &str, new_json: &str, max_bars: usize) -> Result<String, String> {
-        self.merge_bars_with_level(key, new_json, max_bars, BAR_ZSTD_LEVEL)
+        self.merge_bars_with_level(key, new_json, max_bars, bar_zstd_level())
     }
 
     /// Hot-path merge for high-frequency writers (Kraken WS bar close). Keeps
@@ -1600,7 +1618,7 @@ impl SqliteCache {
         for (key, compressed, bar_count) in entries {
             match conn.execute(
                 "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![key, compressed, timestamp, bar_count, BAR_ZSTD_LEVEL],
+                params![key, compressed, timestamp, bar_count, bar_zstd_level()],
             ) {
                 Ok(_) => count += 1,
                 Err(e) => tracing::warn!("Batch write skip {}: {}", key, e),
@@ -3665,6 +3683,33 @@ mod tests {
 
         let q2 = cache.drain_queue("q2").unwrap();
         assert_eq!(q2, vec!["two".to_string()]);
+    }
+
+    #[test]
+    fn zstd_level_sanitizer_clamps_to_supported_range() {
+        assert_eq!(sanitize_zstd_level(9), 9);
+        assert_eq!(sanitize_zstd_level(99), MAX_ZSTD_LEVEL);
+        assert_eq!(sanitize_zstd_level(-10), MIN_ZSTD_LEVEL);
+    }
+
+    #[test]
+    fn put_bars_with_level_records_selected_zstd_level_metadata() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let json = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}]"#;
+
+        cache.put_bars_with_level("CFG:1Day", json, 7).unwrap();
+
+        let conn = cache.connection().unwrap();
+        let level: i32 = conn
+            .query_row(
+                "SELECT zstd_level FROM bar_cache WHERE key = ?1",
+                params!["CFG:1Day"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(level, 7);
+        assert_eq!(cache.get_bars("CFG:1Day").unwrap().unwrap().0, json);
     }
 
     #[test]

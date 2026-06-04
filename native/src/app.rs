@@ -11544,7 +11544,9 @@ pub struct TyphooNApp {
     mtf_cols: usize,
     /// MTF grid enabled flag.
     mtf_enabled: bool,
-    /// Auto-compact (zstd-22) scheduler — opt-out toggle. ADR-205.
+    /// Base zstd level for foreground bar-cache writes. Auto-compact can promote rows to zstd-22 later.
+    bar_zstd_level: i32,
+    /// Auto-compact (zstd-22) scheduler — opt-out toggle. ADR-089.
     auto_compact_enabled: bool,
     /// User-configured cadence/window/row threshold for the auto-compact gate.
     auto_compact_schedule: auto_compact::Schedule,
@@ -28784,6 +28786,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
             charts,
             mtf_cols: 2,
             mtf_enabled: false,
+            bar_zstd_level: typhoon_engine::core::cache::DEFAULT_BAR_ZSTD_LEVEL,
             auto_compact_enabled: true,
             auto_compact_schedule: auto_compact::Schedule::default(),
             auto_compact_last_run_ms: 0,

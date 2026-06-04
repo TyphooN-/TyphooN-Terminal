@@ -1,5 +1,16 @@
 use super::*;
 
+fn persisted_bar_zstd_level(value: &serde_json::Value, current: i32) -> i32 {
+    value["bar_zstd_level"]
+        .as_i64()
+        .map(|level| level as i32)
+        .unwrap_or(current)
+        .clamp(
+            typhoon_engine::core::cache::MIN_ZSTD_LEVEL,
+            typhoon_engine::core::cache::MAX_ZSTD_LEVEL,
+        )
+}
+
 impl TyphooNApp {
     pub(super) fn refill_market_data_sync_slots(&mut self) {
         let pending_cap = if self.full_tilt_sync_enabled() {
@@ -332,6 +343,7 @@ impl TyphooNApp {
                 .filter_map(|(_, tf)| self.enabled_sync_timeframes.contains(*tf).then(|| serde_json::json!(tf)))
                 .collect::<Vec<_>>(),
             "alpaca_historical_rpm_hint": self.alpaca_historical_rpm_hint,
+            "bar_zstd_level": self.bar_zstd_level,
             "auto_compact_enabled": self.auto_compact_enabled,
             "auto_compact_last_run_ms": self.auto_compact_last_run_ms,
             "auto_compact_cadence_days": self.auto_compact_schedule.cadence_days,
@@ -461,6 +473,9 @@ impl TyphooNApp {
         if let Some(rpm_hint) = value["alpaca_historical_rpm_hint"].as_u64() {
             self.alpaca_historical_rpm_hint = (rpm_hint as u32).min(100_000);
         }
+        self.bar_zstd_level = typhoon_engine::core::cache::set_bar_zstd_level(
+            persisted_bar_zstd_level(value, self.bar_zstd_level),
+        );
         if let Some(b) = value["auto_compact_enabled"].as_bool() {
             self.auto_compact_enabled = b;
         }
@@ -505,7 +520,7 @@ impl TyphooNApp {
     }
 
     /// Auto-compact scheduler tick. Cheap on the steady-state path: returns
-    /// immediately if the next-check throttle hasn't elapsed. ADR-205.
+    /// immediately if the next-check throttle hasn't elapsed. ADR-089.
     pub(super) fn tick_auto_compact(&mut self) {
         let now = std::time::Instant::now();
         if now < self.auto_compact_next_check_at {
@@ -3687,5 +3702,36 @@ impl TyphooNApp {
             }
         }
         self.sync_preferences_load();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::persisted_bar_zstd_level;
+
+    #[test]
+    fn persisted_bar_zstd_level_uses_saved_value() {
+        let value = serde_json::json!({ "bar_zstd_level": 9 });
+        assert_eq!(persisted_bar_zstd_level(&value, 3), 9);
+    }
+
+    #[test]
+    fn persisted_bar_zstd_level_clamps_saved_value() {
+        let high = serde_json::json!({ "bar_zstd_level": 999 });
+        let low = serde_json::json!({ "bar_zstd_level": -99 });
+        assert_eq!(
+            persisted_bar_zstd_level(&high, 3),
+            typhoon_engine::core::cache::MAX_ZSTD_LEVEL
+        );
+        assert_eq!(
+            persisted_bar_zstd_level(&low, 3),
+            typhoon_engine::core::cache::MIN_ZSTD_LEVEL
+        );
+    }
+
+    #[test]
+    fn persisted_bar_zstd_level_keeps_current_when_missing() {
+        let value = serde_json::json!({});
+        assert_eq!(persisted_bar_zstd_level(&value, 11), 11);
     }
 }

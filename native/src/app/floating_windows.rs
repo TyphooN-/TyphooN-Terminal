@@ -60721,21 +60721,60 @@ impl TyphooNApp {
                         self.render_sync_timeframe_controls(ui, &mut storage_save_after);
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
-                            if ui.button(egui::RichText::new("Compact (zstd-22)").small()).clicked() {
+                            ui.label(egui::RichText::new("Base bar zstd").color(AXIS_TEXT).small());
+                            let mut level = self.bar_zstd_level;
+                            if ui
+                                .add(
+                                    egui::Slider::new(
+                                        &mut level,
+                                        typhoon_engine::core::cache::MIN_ZSTD_LEVEL
+                                            ..=typhoon_engine::core::cache::MAX_ZSTD_LEVEL,
+                                    )
+                                    .integer()
+                                    .show_value(true),
+                                )
+                                .on_hover_text(
+                                    "Compression level for normal foreground bar-cache writes. Lower = faster sync/import writes; higher = smaller disk. Kraken WS hot writes remain fixed at zstd-3; Compact promotes rows to zstd-22.",
+                                )
+                                .changed()
+                            {
+                                self.bar_zstd_level = typhoon_engine::core::cache::set_bar_zstd_level(level);
+                                storage_save_after = true;
+                                self.log.push_back(LogEntry::info(format!(
+                                    "Base bar-cache zstd level set to {}",
+                                    self.bar_zstd_level
+                                )));
+                            }
+                            if ui.small_button("Fast 3").on_hover_text("Low CPU, larger blobs; good during broad sync.").clicked() {
+                                self.bar_zstd_level = typhoon_engine::core::cache::set_bar_zstd_level(3);
+                                storage_save_after = true;
+                            }
+                            if ui.small_button("Balanced 9").on_hover_text("Middle ground between CPU and disk size.").clicked() {
+                                self.bar_zstd_level = typhoon_engine::core::cache::set_bar_zstd_level(9);
+                                storage_save_after = true;
+                            }
+                            if ui.small_button("Max 22").on_hover_text("Smallest blobs, highest write CPU. Use with care during broad sync.").clicked() {
+                                self.bar_zstd_level = typhoon_engine::core::cache::set_bar_zstd_level(22);
+                                storage_save_after = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button(egui::RichText::new(format!("Compact (zstd-{})", auto_compact::TARGET_LEVEL)).small()).clicked() {
                                 let db_path = cache_db_path();
                                 let log_tx = self.broker_tx.clone();
                                 let size_before = size;
-                                let _ = log_tx.send(BrokerCmd::CompactStorage { db_path: db_path.clone(), level: 22 });
+                                let _ = log_tx.send(BrokerCmd::CompactStorage { db_path: db_path.clone(), level: auto_compact::TARGET_LEVEL });
                                 self.auto_compact_in_progress = true;
                                 self.auto_compact_started_ms = chrono::Utc::now().timestamp_millis();
                                 self.log.push_back(LogEntry::info(format!(
-                                    "Compacting cache at zstd-22 (current: {:.1} MB)... this may take several minutes",
+                                    "Compacting cache at zstd-{} (current: {:.1} MB)... this may take several minutes",
+                                    auto_compact::TARGET_LEVEL,
                                     size_before as f64 / 1024.0 / 1024.0
                                 )));
                             }
                             ui.label(egui::RichText::new("Recompress all data at max level. No impact on load speed.").color(AXIS_TEXT).small());
                         });
-                        // Auto-compact controls + readout (ADR-205). Manual button above always works
+                        // Auto-compact controls + readout (ADR-089). Manual button above always works
                         // regardless of this setting.
                         ui.horizontal(|ui| {
                             let auto_label = format!(
@@ -60748,7 +60787,7 @@ impl TyphooNApp {
                                     egui::RichText::new(auto_label).small(),
                                 )
                                 .on_hover_text(
-                                    "Recompress new cache entries at zstd-22 during the configured AC + idle window.",
+                                    "Promote below-target bar-cache entries to zstd-22 during the configured AC + idle window.",
                                 )
                                 .changed()
                             {

@@ -1,6 +1,6 @@
 //! Auto-compaction scheduler for the bar/KV cache.
 //!
-//! Policy is locked in by ADR-205. This module owns the gating logic and the
+//! Policy is locked in by ADR-089. This module owns the gating logic and the
 //! AC-power probe; the scheduler tick lives in the main update loop and dispatches
 //! `BrokerCmd::CompactStorage` once the gate passes.
 //!

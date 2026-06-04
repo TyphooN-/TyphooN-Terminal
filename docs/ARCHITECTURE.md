@@ -190,8 +190,8 @@ TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal 
 
 The `STORAGE` command opens a cache storage manager with:
 - View and delete data by symbol/source (color-coded by prefix: MT5, Alpaca, tastytrade, CryptoCompare, Kraken, Kraken Futures)
-- **Compact (zstd-22):** Cleanup path for legacy/raw/imported bar_cache entries that are not already stored at maximum compression. New Rust bar-cache writes are zstd-22 immediately.
-- **Auto-compact:** Configurable cadence, weekday/hour window, min-row threshold, last-run, next-window, skip-reason, and running-state readout
+- **Base bar zstd:** Runtime/persisted Storage Manager control for normal Rust bar-cache write compression (default 3, range 1-22). Kraken WS hot writes stay at zstd-3 for responsiveness.
+- **Compact / Auto-compact (zstd-22):** Manual and scheduled promotion path for configured-base, legacy/raw/imported, and WS-written bar_cache entries below the archival target. Auto-compact exposes cadence, weekday/hour window, min-row threshold, last-run, next-window, skip-reason, and running-state readout
 - **Purge All Bar Data:** Delete all bar_cache + bar_track entries (with red confirmation prompt)
 - **Purge All DARWIN Data:** Delete all DARWIN accounts, deals, positions, equity snapshots (with red confirmation prompt)
 
