@@ -1,17 +1,17 @@
 use super::*;
 
-mod command_research_foundation;
-mod command_research_round17_to34;
-mod command_research_round35_to52;
-mod command_research_round55_to68;
-mod command_research_round71_to78;
+mod candlestick_quant_models;
+mod company_fundamentals;
+mod market_structure_models;
+mod technical_indicator_models;
+mod valuation_risk_models;
 
 impl TyphooNApp {
     pub(super) fn handle_research_window_command(&mut self, cmd_upper: &String) -> bool {
-        self.handle_research_foundation_command(cmd_upper)
-            || self.handle_research_round17_to34_command(cmd_upper)
-            || self.handle_research_round35_to52_command(cmd_upper)
-            || self.handle_research_round55_to68_command(cmd_upper)
-            || self.handle_research_round71_to78_command(cmd_upper)
+        self.handle_company_fundamentals_command(cmd_upper)
+            || self.handle_valuation_risk_model_command(cmd_upper)
+            || self.handle_market_structure_model_command(cmd_upper)
+            || self.handle_technical_indicator_model_command(cmd_upper)
+            || self.handle_candlestick_quant_model_command(cmd_upper)
     }
 }
