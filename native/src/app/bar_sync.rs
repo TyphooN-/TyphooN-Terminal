@@ -213,17 +213,6 @@ pub(super) struct SyncStatsRowStatusCells {
 }
 
 pub(super) fn sync_stats_row_status_cells(row: &SyncStatsRow) -> SyncStatsRowStatusCells {
-    if sync_stats_row_is_control_plane(row) {
-        return SyncStatsRowStatusCells {
-            symbols: row.total.to_string(),
-            healthy: "---".to_string(),
-            stale_or_empty: "---".to_string(),
-            settled: "---".to_string(),
-            unsupported: "---".to_string(),
-            note: row.note.clone().unwrap_or_default(),
-        };
-    }
-
     SyncStatsRowStatusCells {
         symbols: row.total.to_string(),
         healthy: row.healthy.to_string(),
@@ -232,10 +221,6 @@ pub(super) fn sync_stats_row_status_cells(row: &SyncStatsRow) -> SyncStatsRowSta
         unsupported: row.unsupported.to_string(),
         note: row.note.clone().unwrap_or_default(),
     }
-}
-
-pub(super) fn sync_stats_row_is_control_plane(row: &SyncStatsRow) -> bool {
-    row.broker == "Kraken Equities" && row.tf == "---"
 }
 
 /// Aggregate per-broker totals from a Vec<SyncStatsRow> for the compact
@@ -248,7 +233,7 @@ pub(super) fn compute_bar_sync_broker_totals(
 
     let mut totals: BTreeMap<String, (u64, u64)> = BTreeMap::new();
     for row in rows {
-        if row.total == 0 || sync_stats_row_is_control_plane(row) {
+        if row.total == 0 {
             continue;
         }
         let entry = totals.entry(row.broker.clone()).or_default();

@@ -65,7 +65,7 @@ impl TyphooNApp {
         sort_sync_stats_rows(&mut rows);
         let (total, healthy) = rows
             .iter()
-            .filter(|row| row.broker != "Merged" && !sync_stats_row_is_control_plane(row))
+            .filter(|row| row.broker != "Merged")
             .fold((0u64, 0u64), |(t, h), row| (t + row.total, h + row.healthy));
         self.cached_bar_sync_overall_pct = if total == 0 {
             100.0
@@ -165,7 +165,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new(cells.stale_or_empty).color(AXIS_TEXT).small());
                             ui.label(egui::RichText::new(cells.settled).color(egui::Color32::from_rgb(52, 152, 219)).small());
                             ui.label(egui::RichText::new(cells.unsupported).color(egui::Color32::from_rgb(150, 150, 150)).small());
-                            let pct_color = if sync_stats_row_is_control_plane(row) || row.total == 0 {
+                            let pct_color = if row.total == 0 {
                                 egui::Color32::from_rgb(150, 150, 150)
                             } else if row.pct_healthy >= 90.0 {
                                 egui::Color32::from_rgb(26, 188, 156)
@@ -174,9 +174,7 @@ impl TyphooNApp {
                             } else {
                                 egui::Color32::from_rgb(231, 76, 60)
                             };
-                            let pct_text = if sync_stats_row_is_control_plane(row) {
-                                "---".to_string()
-                            } else if row.total == 0 && row.unsupported > 0 {
+                            let pct_text = if row.total == 0 && row.unsupported > 0 {
                                 "n/a".to_string()
                             } else {
                                 format!("{:.1}%", row.pct_healthy)
@@ -478,39 +476,6 @@ impl TyphooNApp {
                 }
             }
         }
-
-        let equities_symbol_count = if !kraken_equity_catalog_symbols.is_empty() {
-            kraken_equity_catalog_symbols.len()
-        } else {
-            kraken_equity_demand_symbols.len()
-        };
-        if equities_symbol_count > 0
-            && !rows
-                .iter()
-                .any(|row| row.broker == "Kraken Equities" && row.tf == "---")
-        {
-            rows.push(kraken_equities_control_plane_row(
-                equities_symbol_count as u64,
-            ));
-        }
-    }
-}
-
-fn kraken_equities_control_plane_row(symbol_count: u64) -> SyncStatsRow {
-    SyncStatsRow {
-        broker: "Kraken Equities".to_string(),
-        tf: "---".to_string(),
-        // Kraken Equities/xStocks catalog/quote control-plane row. Timeframe rows
-        // above show real WS/REST bar freshness; do not count the catalog itself as
-        // 12k empty bar-cache rows or auto full-tilt stays pinned forever.
-        total: symbol_count,
-        healthy: 0,
-        stale: 0,
-        empty: 0,
-        settled: 0,
-        unsupported: 0,
-        note: None,
-        pct_healthy: 0.0,
     }
 }
 
@@ -551,34 +516,5 @@ mod tests {
         assert!(kraken_equities_merged_timeframe_supported("15Min"));
         assert!(kraken_equities_merged_timeframe_supported("1Day"));
         assert!(kraken_equities_merged_timeframe_supported("1Month"));
-    }
-
-    #[test]
-    fn kraken_equities_control_plane_row_is_single_catalog_row() {
-        let row = kraken_equities_control_plane_row(12_268);
-        assert_eq!(row.broker, "Kraken Equities");
-        assert_eq!(row.tf, "---");
-        assert_eq!(row.total, 12_268);
-        assert_eq!(row.healthy, 0);
-        assert_eq!(row.stale, 0);
-        assert_eq!(row.empty, 0);
-        assert_eq!(row.unsupported, 0);
-        assert!(row.note.is_none());
-
-        let cells = sync_stats_row_status_cells(&row);
-        assert_eq!(cells.symbols, "12268");
-        assert_eq!(cells.healthy, "---");
-        assert_eq!(cells.stale_or_empty, "---");
-        assert_eq!(cells.settled, "---");
-        assert_eq!(cells.unsupported, "---");
-        assert!(cells.note.is_empty());
-
-        let totals = compute_bar_sync_broker_totals(&[row]);
-        assert!(
-            totals
-                .iter()
-                .all(|(broker, _, _, _)| broker != "Kraken Equities"),
-            "control-plane-only rows stay in the table but do not pollute broker bar totals"
-        );
     }
 }
