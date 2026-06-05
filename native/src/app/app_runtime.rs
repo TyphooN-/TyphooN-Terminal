@@ -9527,6 +9527,7 @@ impl eframe::App for TyphooNApp {
             let show_ehlers_cyber = self.show_ehlers_cyber;
             let show_ehlers_cg = self.show_ehlers_cg;
             let show_ehlers_roof = self.show_ehlers_roof;
+            let render_cache = self.cache.clone();
             let sl_price = self.sl_price;
             let tp_price = self.tp_price;
             let active_sub_pane_count = [
@@ -9768,6 +9769,13 @@ impl eframe::App for TyphooNApp {
                         }
                     }
 
+                    if let Some(cache) = render_cache.as_ref() {
+                        chart.ensure_mql_mtf_overlays_for_render(
+                            std::sync::Arc::as_ref(cache),
+                            flags.sma200,
+                            flags.kama,
+                        );
+                    }
                     let painter = ui.painter_at(cell_rect);
                     draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &self.draw_mode);
                     // Restore the cached overlay we moved out above.
@@ -9930,8 +9938,13 @@ impl eframe::App for TyphooNApp {
                 }
 
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                    // Take ownership of the cached overlay briefly so we don't clone its
-                    // String tickers every frame, then restore it.
+                    if let Some(cache) = render_cache.as_ref() {
+                        chart.ensure_mql_mtf_overlays_for_render(
+                            std::sync::Arc::as_ref(cache),
+                            flags.sma200,
+                            flags.kama,
+                        );
+                    }
                     let trade_ov = std::mem::take(&mut chart.cached_trade_overlay);
                     let painter = ui.painter_at(rect);
                     draw_chart(&painter, chart, rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &self.draw_mode);

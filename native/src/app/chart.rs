@@ -4419,6 +4419,23 @@ impl ChartState {
         }
     }
 
+    pub(crate) fn ensure_mql_mtf_overlays_for_render(
+        &mut self,
+        cache: &SqliteCache,
+        show_mtf_ma: bool,
+        show_multi_kama: bool,
+    ) {
+        if self.bars.is_empty() {
+            return;
+        }
+        if show_mtf_ma && self.mtf_sma.is_empty() {
+            self.compute_mtf_sma(cache);
+        }
+        if show_multi_kama && self.multi_kama.is_empty() {
+            self.compute_multi_kama(cache);
+        }
+    }
+
     pub(crate) fn compute_multi_kama(&mut self, cache: &SqliteCache) {
         self.multi_kama.clear();
         if self.bars.is_empty() {

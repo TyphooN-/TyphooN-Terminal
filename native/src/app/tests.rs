@@ -326,6 +326,53 @@ fn chart_mtf_overlays_load_from_merged_cache_rows() {
 }
 
 #[test]
+fn chart_ensures_mql_mtf_overlays_for_render_from_cache() {
+    let db_path = std::env::temp_dir().join(format!(
+        "typhoon-render-mtf-overlay-test-{}-{}.db",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let hour = 3_600_000i64;
+    let mut raw = Vec::new();
+    for i in 0..260i64 {
+        let close = 10.0 + i as f64 * 0.01;
+        raw.push(Bar {
+            ts_ms: i * hour,
+            open: close - 0.1,
+            high: close + 0.2,
+            low: close - 0.2,
+            close,
+            volume: 1000.0 + i as f64,
+        });
+    }
+    chart_persist_merged_equity_bars_to_cache(&cache, "WOK.EQ", "1Hour", &raw).unwrap();
+
+    let mut chart = ChartState::new("WOK", Timeframe::H1);
+    chart.bars = raw;
+    assert!(chart.mtf_sma.is_empty());
+    assert!(chart.multi_kama.is_empty());
+
+    chart.ensure_mql_mtf_overlays_for_render(&cache, true, true);
+
+    assert!(
+        chart
+            .mtf_sma
+            .iter()
+            .any(|(label, points)| label == "H1 200" && !points.is_empty()),
+        "render guard must populate MTF_MA before fallback SMA200 is drawn"
+    );
+    assert!(
+        chart
+            .multi_kama
+            .iter()
+            .any(|(label, points)| label == "H1" && !points.is_empty()),
+        "render guard must populate MultiKAMA before fallback KAMA is drawn"
+    );
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn chart_forming_bar_requires_caught_up_previous_bucket() {
     let day = 86_400_000i64;
     let now = 20 * day + 23 * 3_600_000;
