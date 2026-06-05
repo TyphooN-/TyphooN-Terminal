@@ -1,0 +1,757 @@
+use super::*;
+
+pub(super) fn draw_oscillator_pane(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    bars: &[Bar],
+    series: &[Option<f64>],
+    start_idx: usize,
+    bar_w: f32,
+    label: &str,
+    color: egui::Color32,
+    val_min: f64,
+    val_max: f64,
+    ob_level: Option<f64>,
+    os_level: Option<f64>,
+) {
+    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
+    // Sub-pane border-top separator (#444 matching old WebKit)
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), rect.top()),
+            egui::pos2(rect.right(), rect.top()),
+        ],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)),
+    );
+
+    let val_to_y = |v: f64| -> f32 {
+        let frac = (val_max - v) / (val_max - val_min);
+        rect.top() + frac as f32 * rect.height()
+    };
+
+    // OB/OS levels
+    let level_color = egui::Color32::from_rgba_premultiplied(140, 140, 160, 60);
+    if let Some(ob) = ob_level {
+        let y = val_to_y(ob);
+        painter.line_segment(
+            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+            egui::Stroke::new(0.5, level_color),
+        );
+    }
+    if let Some(os) = os_level {
+        let y = val_to_y(os);
+        painter.line_segment(
+            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+            egui::Stroke::new(0.5, level_color),
+        );
+    }
+    // Mid line
+    let mid_y = val_to_y((val_max + val_min) / 2.0);
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), mid_y),
+            egui::pos2(rect.right(), mid_y),
+        ],
+        egui::Stroke::new(0.3, GRID),
+    );
+
+    // Data line. Sub-panes share the main chart's pixel-aware decimation so
+    // dense views don't upload invisible sub-pixel oscillator vertices.
+    let sample_step = chart_render_sample_step(bars.len(), rect.width());
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
+    for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
+        let abs_idx = start_idx + rel_idx;
+        if abs_idx >= series.len() {
+            continue;
+        }
+        if let Some(v) = series[abs_idx] {
+            let x = rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+            let y = val_to_y(v).clamp(rect.top(), rect.bottom());
+            points.push(egui::pos2(x, y));
+        }
+    }
+    if points.len() > 1 {
+        painter.add(egui::Shape::line(points, egui::Stroke::new(1.5, color)));
+    }
+
+    // Label
+    painter.text(
+        egui::pos2(rect.left() + 4.0, rect.top() + 2.0),
+        egui::Align2::LEFT_TOP,
+        label,
+        egui::FontId::monospace(9.0),
+        egui::Color32::WHITE,
+    );
+}
+
+/// Draw Fisher Transform sub-pane with color-coded histogram bars.
+pub(super) fn draw_fisher_pane(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    bars: &[Bar],
+    fisher: &[Option<f64>],
+    signal: &[Option<f64>],
+    start_idx: usize,
+    bar_w: f32,
+) {
+    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
+    // Sub-pane border-top separator (#444 matching old WebKit)
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), rect.top()),
+            egui::pos2(rect.right(), rect.top()),
+        ],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)),
+    );
+
+    // Fisher typically ranges -3..3, auto-scale
+    let mut f_min = -2.0_f64;
+    let mut f_max = 2.0_f64;
+    for (rel_idx, _) in bars.iter().enumerate() {
+        let abs_idx = start_idx + rel_idx;
+        if abs_idx >= fisher.len() {
+            continue;
+        }
+        if let Some(v) = fisher[abs_idx] {
+            f_min = f_min.min(v);
+            f_max = f_max.max(v);
+        }
+    }
+    let padding = (f_max - f_min) * 0.1;
+    f_min -= padding;
+    f_max += padding;
+
+    let val_to_y = |v: f64| -> f32 {
+        let frac = (f_max - v) / (f_max - f_min);
+        rect.top() + frac as f32 * rect.height()
+    };
+
+    let sample_step = chart_render_sample_step(bars.len(), rect.width());
+
+    // Zero line. Use one primitive instead of dotted per-pixel segment spam.
+    let zero_y = val_to_y(0.0);
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), zero_y),
+            egui::pos2(rect.right(), zero_y),
+        ],
+        egui::Stroke::new(0.5, egui::Color32::from_rgb(60, 60, 60)),
+    );
+
+    // Signal line FIRST (behind Fisher — MT5: clrDarkGray/orange, width 1)
+    let mut sig_points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
+    for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
+        let abs_idx = start_idx + rel_idx;
+        if abs_idx >= signal.len() {
+            continue;
+        }
+        if let Some(v) = signal[abs_idx] {
+            let x = rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+            let y = val_to_y(v).clamp(rect.top(), rect.bottom());
+            sig_points.push(egui::pos2(x, y));
+        }
+    }
+    if sig_points.len() > 1 {
+        painter.add(egui::Shape::line(
+            sig_points,
+            egui::Stroke::new(1.0, FISHER_SIG),
+        )); // clrDarkGray signal (MT5 buffer 3)
+    }
+
+    // Fisher line — colored segments per sampled bar (MT5 exact: green when Fisher > Signal, red when < Signal)
+    // NO histogram bars — just the line (matching MT5 screenshot exactly)
+    for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
+        let abs_idx = start_idx + rel_idx;
+        let next_rel_idx = (rel_idx + sample_step).min(bars.len().saturating_sub(1));
+        let next_abs_idx = start_idx + next_rel_idx;
+        if next_abs_idx >= fisher.len() || next_rel_idx == rel_idx {
+            continue;
+        }
+        if let (Some(f0), Some(f1)) = (fisher[abs_idx], fisher[next_abs_idx]) {
+            let sig = if abs_idx < signal.len() {
+                signal[abs_idx]
+            } else {
+                None
+            };
+            // MT5: clrMediumSeaGreen when Fisher > Signal, clrOrangeRed when Fisher < Signal
+            let color = match sig {
+                Some(s) if f0 > s => FISHER_POS, // green
+                Some(_) => FISHER_NEG,           // red
+                None => {
+                    if f0 >= 0.0 {
+                        FISHER_POS
+                    } else {
+                        FISHER_NEG
+                    }
+                }
+            };
+            let x0 = rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+            let x1 = rect.left() + (next_rel_idx as f32 + 0.5) * bar_w;
+            let y0 = val_to_y(f0).clamp(rect.top(), rect.bottom());
+            let y1 = val_to_y(f1).clamp(rect.top(), rect.bottom());
+            painter.line_segment(
+                [egui::pos2(x0, y0), egui::pos2(x1, y1)],
+                egui::Stroke::new(2.0, color),
+            );
+        }
+    }
+
+    // Label with current values (MT5 style: "Ehlers Fisher transform (32) -2.037 -2.068")
+    let last_fisher = fisher.iter().rev().find_map(|v| *v);
+    let last_signal = signal.iter().rev().find_map(|v| *v);
+    let label = match (last_fisher, last_signal) {
+        (Some(f), Some(s)) => format!("Ehlers Fisher transform (32) {:.3} {:.3}", f, s),
+        (Some(f), None) => format!("Ehlers Fisher transform (32) {:.3}", f),
+        _ => "Ehlers Fisher transform (32)".to_string(),
+    };
+    painter.text(
+        egui::pos2(rect.left() + 4.0, rect.top() + 2.0),
+        egui::Align2::LEFT_TOP,
+        &label,
+        egui::FontId::monospace(9.0),
+        egui::Color32::WHITE,
+    );
+}
+
+/// Draw MACD sub-pane with two lines + histogram.
+pub(super) fn draw_macd_pane(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    bars: &[Bar],
+    macd_line: &[Option<f64>],
+    macd_signal: &[Option<f64>],
+    macd_hist: &[Option<f64>],
+    start_idx: usize,
+    bar_w: f32,
+    label: &str,
+    line_color: egui::Color32,
+    signal_color: egui::Color32,
+) {
+    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
+    // Sub-pane border-top separator (#444 matching old WebKit)
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), rect.top()),
+            egui::pos2(rect.right(), rect.top()),
+        ],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)),
+    );
+
+    // Auto-scale
+    let mut v_min = 0.0_f64;
+    let mut v_max = 0.0_f64;
+    for (rel_idx, _) in bars.iter().enumerate() {
+        let abs_idx = start_idx + rel_idx;
+        if abs_idx >= macd_line.len() {
+            continue;
+        }
+        for series in [macd_line, macd_signal, macd_hist] {
+            if let Some(Some(v)) = series.get(abs_idx) {
+                v_min = v_min.min(*v);
+                v_max = v_max.max(*v);
+            }
+        }
+    }
+    let padding = (v_max - v_min).max(0.001) * 0.1;
+    v_min -= padding;
+    v_max += padding;
+
+    let val_to_y = |v: f64| -> f32 {
+        let frac = (v_max - v) / (v_max - v_min);
+        rect.top() + frac as f32 * rect.height()
+    };
+
+    let sample_step = chart_render_sample_step(bars.len(), rect.width());
+
+    // Zero line
+    let zero_y = val_to_y(0.0);
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), zero_y),
+            egui::pos2(rect.right(), zero_y),
+        ],
+        egui::Stroke::new(0.3, GRID),
+    );
+
+    // Histogram. Preserve the strongest absolute bar in each sampled bucket so
+    // dense rendering does not hide spikes while still emitting ~pixel-count rects.
+    let hist_w = (bar_w * sample_step as f32 * 0.6).max(1.0);
+    for rel_idx in (0..bars.len()).step_by(sample_step) {
+        let bucket_end = (rel_idx + sample_step).min(bars.len());
+        let mut selected: Option<(usize, f64)> = None;
+        for bucket_rel in rel_idx..bucket_end {
+            let abs_idx = start_idx + bucket_rel;
+            if let Some(Some(v)) = macd_hist.get(abs_idx) {
+                if selected.map_or(true, |(_, cur)| v.abs() > cur.abs()) {
+                    selected = Some((bucket_rel, *v));
+                }
+            }
+        }
+        if let Some((bucket_rel, v)) = selected {
+            let x = rect.left() + (bucket_rel as f32 + 0.5) * bar_w;
+            let y = val_to_y(v);
+            // MACD histogram: teal green positive, coral red negative (TradingView/MT5 style)
+            let color = if v >= 0.0 {
+                egui::Color32::from_rgb(38, 166, 154) // #26a69a (teal green)
+            } else {
+                egui::Color32::from_rgb(239, 83, 80) // #ef5350 (coral red)
+            };
+            let (top, bottom) = if v >= 0.0 { (y, zero_y) } else { (zero_y, y) };
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(x - hist_w / 2.0, top),
+                    egui::pos2(x + hist_w / 2.0, bottom),
+                ),
+                0.0,
+                color,
+            );
+        }
+    }
+
+    // MACD line
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
+    for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
+        let abs_idx = start_idx + rel_idx;
+        if let Some(Some(v)) = macd_line.get(abs_idx) {
+            points.push(egui::pos2(
+                rect.left() + (rel_idx as f32 + 0.5) * bar_w,
+                val_to_y(*v).clamp(rect.top(), rect.bottom()),
+            ));
+        }
+    }
+    if points.len() > 1 {
+        painter.add(egui::Shape::line(
+            points,
+            egui::Stroke::new(1.5, line_color),
+        ));
+    }
+
+    // Signal line
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
+    for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
+        let abs_idx = start_idx + rel_idx;
+        if let Some(Some(v)) = macd_signal.get(abs_idx) {
+            points.push(egui::pos2(
+                rect.left() + (rel_idx as f32 + 0.5) * bar_w,
+                val_to_y(*v).clamp(rect.top(), rect.bottom()),
+            ));
+        }
+    }
+    if points.len() > 1 {
+        painter.add(egui::Shape::line(
+            points,
+            egui::Stroke::new(1.0, signal_color),
+        ));
+    }
+
+    painter.text(
+        egui::pos2(rect.left() + 4.0, rect.top() + 2.0),
+        egui::Align2::LEFT_TOP,
+        label,
+        egui::FontId::monospace(9.0),
+        egui::Color32::WHITE,
+    );
+}
+
+/// Draw volume bars sub-pane.
+pub(super) fn draw_volume_pane(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    bars: &[Bar],
+    _start_idx: usize,
+    bar_w: f32,
+) {
+    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
+    // Sub-pane border-top separator (#444 matching old WebKit)
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), rect.top()),
+            egui::pos2(rect.right(), rect.top()),
+        ],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)),
+    );
+
+    if bars.is_empty() {
+        return;
+    }
+    let max_vol = bars.iter().map(|b| b.volume).fold(0.0_f64, f64::max);
+    if max_vol <= 0.0 {
+        return;
+    }
+
+    let sample_step = chart_render_sample_step(bars.len(), rect.width());
+    let hist_w = (bar_w * sample_step as f32 * 0.7).max(1.0);
+    for rel_idx in (0..bars.len()).step_by(sample_step) {
+        let bucket_end = (rel_idx + sample_step).min(bars.len());
+        let Some((bucket_rel, b)) = bars[rel_idx..bucket_end]
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.volume.total_cmp(&b.volume))
+            .map(|(offset, b)| (rel_idx + offset, b))
+        else {
+            continue;
+        };
+        let x = rect.left() + (bucket_rel as f32 + 0.5) * bar_w;
+        let h = (b.volume / max_vol) as f32 * rect.height();
+        let color = if b.close >= b.open {
+            egui::Color32::from_rgba_premultiplied(UP.r(), UP.g(), UP.b(), 150)
+        } else {
+            egui::Color32::from_rgba_premultiplied(DOWN.r(), DOWN.g(), DOWN.b(), 150)
+        };
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(x - hist_w / 2.0, rect.bottom() - h),
+                egui::pos2(x + hist_w / 2.0, rect.bottom()),
+            ),
+            0.0,
+            color,
+        );
+    }
+
+    painter.text(
+        egui::pos2(rect.left() + 4.0, rect.top() + 2.0),
+        egui::Align2::LEFT_TOP,
+        "Volume",
+        egui::FontId::monospace(9.0),
+        egui::Color32::WHITE,
+    );
+}
+
+/// Draw Better Volume sub-pane (NNFX-style color-coded volume).
+pub(super) fn draw_better_volume_pane(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    bars: &[Bar],
+    vol_type: &[u8],
+    start_idx: usize,
+    bar_w: f32,
+) {
+    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
+    // Sub-pane border-top separator (#444 matching old WebKit)
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), rect.top()),
+            egui::pos2(rect.right(), rect.top()),
+        ],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)),
+    );
+
+    if bars.is_empty() {
+        return;
+    }
+    let max_vol = bars.iter().map(|b| b.volume).fold(0.0_f64, f64::max);
+    if max_vol <= 0.0 {
+        return;
+    }
+
+    let sample_step = chart_render_sample_step(bars.len(), rect.width());
+    let hist_w = (bar_w * sample_step as f32 * 0.7).max(1.0);
+    for rel_idx in (0..bars.len()).step_by(sample_step) {
+        let bucket_end = (rel_idx + sample_step).min(bars.len());
+        let Some((bucket_rel, b)) = bars[rel_idx..bucket_end]
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.volume.total_cmp(&b.volume))
+            .map(|(offset, b)| (rel_idx + offset, b))
+        else {
+            continue;
+        };
+        let abs_idx = start_idx + bucket_rel;
+        let x = rect.left() + (bucket_rel as f32 + 0.5) * bar_w;
+        let h = (b.volume / max_vol) as f32 * rect.height();
+        let vt = vol_type.get(abs_idx).copied().unwrap_or(5);
+        // MQL5 enum: 0=low(yellow), 1=climax_up(red), 2=climax_dn(white),
+        //            3=churn(green), 4=climax_churn(magenta), 5=normal(steelblue)
+        let color = match vt {
+            0 => BVOL_LOW,       // Yellow — low volume
+            1 => BVOL_CLIMAX_UP, // Red — climax up
+            2 => BVOL_CLIMAX_DN, // White — climax down
+            3 => BVOL_HIGH,      // Green — churn
+            4 => BVOL_CHURN,     // Magenta — climax + churn
+            _ => BVOL_NORMAL,    // SteelBlue — normal
+        };
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(x - hist_w / 2.0, rect.bottom() - h),
+                egui::pos2(x + hist_w / 2.0, rect.bottom()),
+            ),
+            0.0,
+            color,
+        );
+    }
+    // Label with current volume value (MT5 style: "BetterVol(20) 10748 0")
+    let last_vol = bars.last().map(|b| b.volume as i64).unwrap_or(0);
+    let label = format!("BetterVol(20) {} 0", last_vol);
+    painter.text(
+        egui::pos2(rect.left() + 4.0, rect.top() + 2.0),
+        egui::Align2::LEFT_TOP,
+        &label,
+        egui::FontId::monospace(9.0),
+        egui::Color32::WHITE,
+    );
+}
+
+/// Draw Stochastic sub-pane.
+pub(super) fn draw_stoch_pane(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    bars: &[Bar],
+    stoch_k: &[Option<f64>],
+    stoch_d: &[Option<f64>],
+    start_idx: usize,
+    bar_w: f32,
+    label: &str,
+) {
+    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
+    // Sub-pane border-top separator (#444 matching old WebKit)
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), rect.top()),
+            egui::pos2(rect.right(), rect.top()),
+        ],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)),
+    );
+
+    let val_to_y = |v: f64| -> f32 {
+        let frac = (100.0 - v) / 100.0;
+        rect.top() + frac as f32 * rect.height()
+    };
+
+    // OB/OS levels
+    let level_col = egui::Color32::from_rgba_premultiplied(140, 140, 160, 60);
+    for &lvl in &[80.0, 20.0] {
+        let y = val_to_y(lvl);
+        painter.line_segment(
+            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+            egui::Stroke::new(0.5, level_col),
+        );
+    }
+
+    let sample_step = chart_render_sample_step(bars.len(), rect.width());
+
+    // %K line
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
+    for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
+        if let Some(Some(v)) = stoch_k.get(start_idx + rel_idx) {
+            points.push(egui::pos2(
+                rect.left() + (rel_idx as f32 + 0.5) * bar_w,
+                val_to_y(*v).clamp(rect.top(), rect.bottom()),
+            ));
+        }
+    }
+    if points.len() > 1 {
+        painter.add(egui::Shape::line(
+            points,
+            egui::Stroke::new(1.5, STOCH_K_COL),
+        ));
+    }
+
+    // %D line
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
+    for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
+        if let Some(Some(v)) = stoch_d.get(start_idx + rel_idx) {
+            points.push(egui::pos2(
+                rect.left() + (rel_idx as f32 + 0.5) * bar_w,
+                val_to_y(*v).clamp(rect.top(), rect.bottom()),
+            ));
+        }
+    }
+    if points.len() > 1 {
+        painter.add(egui::Shape::line(
+            points,
+            egui::Stroke::new(1.0, STOCH_D_COL),
+        ));
+    }
+
+    painter.text(
+        egui::pos2(rect.left() + 4.0, rect.top() + 2.0),
+        egui::Align2::LEFT_TOP,
+        label,
+        egui::FontId::monospace(9.0),
+        egui::Color32::WHITE,
+    );
+}
+
+/// Draw ADX + DI+/DI- sub-pane.
+pub(super) fn draw_adx_pane(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    bars: &[Bar],
+    adx: &[Option<f64>],
+    di_plus: &[Option<f64>],
+    di_minus: &[Option<f64>],
+    start_idx: usize,
+    bar_w: f32,
+) {
+    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
+    // Sub-pane border-top separator (#444 matching old WebKit)
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), rect.top()),
+            egui::pos2(rect.right(), rect.top()),
+        ],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)),
+    );
+
+    // Auto-scale 0-60
+    let val_to_y = |v: f64| -> f32 {
+        let frac = (60.0 - v) / 60.0;
+        rect.top() + frac as f32 * rect.height()
+    };
+
+    // Reference line at 25
+    let y25 = val_to_y(25.0);
+    painter.line_segment(
+        [egui::pos2(rect.left(), y25), egui::pos2(rect.right(), y25)],
+        egui::Stroke::new(
+            0.5,
+            egui::Color32::from_rgba_premultiplied(140, 140, 160, 60),
+        ),
+    );
+
+    let sample_step = chart_render_sample_step(bars.len(), rect.width());
+    for (series, color, width) in [
+        (adx, ADX_COL, 1.5_f32),
+        (di_plus, DI_PLUS_COL, 1.0),
+        (di_minus, DI_MINUS_COL, 1.0),
+    ] {
+        let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len() / sample_step + 1);
+        for (rel_idx, _) in bars.iter().enumerate().step_by(sample_step) {
+            if let Some(Some(v)) = series.get(start_idx + rel_idx) {
+                points.push(egui::pos2(
+                    rect.left() + (rel_idx as f32 + 0.5) * bar_w,
+                    val_to_y(*v).clamp(rect.top(), rect.bottom()),
+                ));
+            }
+        }
+        if points.len() > 1 {
+            painter.add(egui::Shape::line(points, egui::Stroke::new(width, color)));
+        }
+    }
+
+    painter.text(
+        egui::pos2(rect.left() + 4.0, rect.top() + 2.0),
+        egui::Align2::LEFT_TOP,
+        "ADX(14)",
+        egui::FontId::monospace(9.0),
+        egui::Color32::WHITE,
+    );
+}
+
+/// Render decimation for dense chart views.
+///
+/// Keep at most ~2 samples per horizontal pixel. More than that is visually
+/// indistinguishable but expensive for egui tessellation and GPU upload.
+pub(super) fn chart_render_sample_step(len: usize, width_px: f32) -> usize {
+    if len <= 1 {
+        return 1;
+    }
+    let max_samples = ((width_px.max(1.0).ceil() as usize).saturating_mul(2)).max(1);
+    if len <= max_samples {
+        1
+    } else {
+        len.saturating_add(max_samples - 1) / max_samples
+    }
+}
+
+pub(super) fn adjacent_projection_candle_x(
+    data_left: f32,
+    visible_real_bars: usize,
+    bar_w: f32,
+    half_body: f32,
+    chart_rect: egui::Rect,
+) -> Option<f32> {
+    if visible_real_bars == 0 || !bar_w.is_finite() || bar_w <= 0.0 {
+        return None;
+    }
+    let x = data_left + (visible_real_bars as f32 + 0.5) * bar_w;
+    if x - half_body >= chart_rect.left() && x + half_body <= chart_rect.right() {
+        Some(x)
+    } else {
+        None
+    }
+}
+
+/// Render a single indicator series as clipped line segments.
+///
+/// Do not cull individual points by `y` before drawing. Price-axis zoom/pan can
+/// put both sampled endpoints outside the pane while the segment between them
+/// still crosses the visible chart. The old point-culling path dropped those
+/// crossing segments, which made overlays pop in/out while scaling the price
+/// axis or free-looking vertically.
+pub(super) fn draw_indicator_line(
+    painter: &egui::Painter,
+    chart_rect: egui::Rect,
+    data_left: f32,
+    bars: &[Bar],
+    series: &[Option<f64>],
+    start_idx: usize,
+    bar_w: f32,
+    price_to_y: &dyn Fn(f64) -> f32,
+    color: egui::Color32,
+    width: f32,
+) {
+    let sample_step = chart_render_sample_step(bars.len(), chart_rect.width());
+    let stroke = egui::Stroke::new(width, color);
+    let mut prev: Option<egui::Pos2> = None;
+    for (rel_idx, _bar) in bars.iter().enumerate().step_by(sample_step) {
+        let abs_idx = start_idx + rel_idx;
+        let Some(v) = indicator_value_at(series, abs_idx) else {
+            prev = None;
+            continue;
+        };
+        let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
+        let pt = egui::pos2(x, price_to_y(v));
+        if let Some(prev_pt) = prev {
+            if let Some([a, b]) = clip_line_segment_to_rect(prev_pt, pt, chart_rect) {
+                painter.line_segment([a, b], stroke);
+            }
+        }
+        prev = Some(pt);
+    }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+pub(super) fn indicator_value_at(series: &[Option<f64>], idx: usize) -> Option<f64> {
+    series.get(idx).copied().flatten()
+}
+
+pub(super) fn clip_line_segment_to_rect(
+    a: egui::Pos2,
+    b: egui::Pos2,
+    rect: egui::Rect,
+) -> Option<[egui::Pos2; 2]> {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    let mut t0 = 0.0_f32;
+    let mut t1 = 1.0_f32;
+
+    for (p, q) in [
+        (-dx, a.x - rect.left()),
+        (dx, rect.right() - a.x),
+        (-dy, a.y - rect.top()),
+        (dy, rect.bottom() - a.y),
+    ] {
+        if p.abs() < f32::EPSILON {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let r = q / p;
+        if p < 0.0 {
+            t0 = t0.max(r);
+        } else {
+            t1 = t1.min(r);
+        }
+        if t0 > t1 {
+            return None;
+        }
+    }
+
+    Some([
+        egui::pos2(a.x + t0 * dx, a.y + t0 * dy),
+        egui::pos2(a.x + t1 * dx, a.y + t1 * dy),
+    ])
+}
