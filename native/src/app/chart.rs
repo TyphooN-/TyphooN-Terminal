@@ -721,6 +721,8 @@ pub(crate) fn cache_source_from_key(key: &str) -> &'static str {
         "kraken"
     } else if key.starts_with("yahoo-chart:") {
         "yahoo-chart"
+    } else if key.starts_with("merged:") {
+        "merged"
     } else if key.starts_with("default:") {
         "default"
     } else {
@@ -4282,10 +4284,17 @@ impl ChartState {
                 }
             }
             let parts: Vec<&str> = s.split(':').collect();
-            parts.last().copied().unwrap_or(s).to_string()
+            parts
+                .last()
+                .copied()
+                .unwrap_or(s)
+                .replace('/', "")
+                .trim_end_matches(".EQ")
+                .to_string()
         };
 
         let prefixes = [
+            "merged:",
             "mt5:",
             "default:",
             "kraken-equities:",
@@ -4470,10 +4479,17 @@ impl ChartState {
                 }
             }
             let parts: Vec<&str> = s.split(':').collect();
-            parts.last().copied().unwrap_or(s).to_string()
+            parts
+                .last()
+                .copied()
+                .unwrap_or(s)
+                .replace('/', "")
+                .trim_end_matches(".EQ")
+                .to_string()
         };
 
         let prefixes = [
+            "merged:",
             "mt5:",
             "default:",
             "kraken-equities:",

@@ -268,6 +268,64 @@ fn chart_materializes_merged_equity_cache_from_provider_rows() {
 }
 
 #[test]
+fn chart_mtf_overlays_load_from_merged_cache_rows() {
+    let db_path = std::env::temp_dir().join(format!(
+        "typhoon-merged-mtf-overlay-test-{}-{}.db",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let hour = 3_600_000i64;
+    let mut raw = Vec::new();
+    for i in 0..220i64 {
+        let close = 10.0 + i as f64 * 0.01;
+        raw.push(Bar {
+            ts_ms: i * hour,
+            open: close - 0.1,
+            high: close + 0.2,
+            low: close - 0.2,
+            close,
+            volume: 1000.0 + i as f64,
+        });
+    }
+    chart_persist_merged_equity_bars_to_cache(&cache, "WOK.EQ", "1Hour", &raw).unwrap();
+
+    let mut chart = ChartState::new("WOK.EQ", Timeframe::H4);
+    chart.bars = raw
+        .iter()
+        .step_by(4)
+        .map(|bar| Bar {
+            ts_ms: bar.ts_ms,
+            open: bar.open,
+            high: bar.high,
+            low: bar.low,
+            close: bar.close,
+            volume: bar.volume,
+        })
+        .collect();
+
+    assert_eq!(cache_source_from_key("merged:WOK:1Hour"), "merged");
+    chart.compute_mtf_sma(&cache);
+    chart.compute_multi_kama(&cache);
+
+    assert!(
+        chart
+            .mtf_sma
+            .iter()
+            .any(|(label, points)| label == "H1 200" && !points.is_empty()),
+        "MTF 200SMA should load from merged:WOK:1Hour"
+    );
+    assert!(
+        chart
+            .multi_kama
+            .iter()
+            .any(|(label, points)| label == "H1" && !points.is_empty()),
+        "MultiKAMA should load from merged:WOK:1Hour"
+    );
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn chart_forming_bar_requires_caught_up_previous_bucket() {
     let day = 86_400_000i64;
     let now = 20 * day + 23 * 3_600_000;
