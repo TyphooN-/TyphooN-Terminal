@@ -1,4 +1,6 @@
-use super::market_data_sync::kraken_equity_symbols_for_timeframe;
+use super::market_data_sync::{
+    kraken_equity_native_symbols_for_timeframe, kraken_equity_symbols_for_timeframe,
+};
 use super::*;
 
 const BAR_SYNC_STATS_IDLE_REFRESH: std::time::Duration = std::time::Duration::from_secs(1);
@@ -35,7 +37,7 @@ impl TyphooNApp {
             // but if WS just delivered the recent-window snapshot/update, the cache is in
             // sync; counting that row stale keeps auto full-tilt pinned forever and wastes
             // REST budget chasing bars the market has not printed.
-            if prefix == "kraken"
+            if matches!(prefix, "kraken" | "kraken-equities")
                 && Self::kraken_ws_pair_is_fresh_at(&self.kraken_ws_fresh_until, symbol, tf, now_ms)
             {
                 return true;
@@ -65,7 +67,7 @@ impl TyphooNApp {
         sort_sync_stats_rows(&mut rows);
         let (total, healthy) = rows
             .iter()
-            .filter(|row| row.broker != "Merged" && !sync_stats_row_is_control_plane(row))
+            .filter(|row| row.broker != "Merged")
             .fold((0u64, 0u64), |(t, h), row| (t + row.total, h + row.healthy));
         self.cached_bar_sync_overall_pct = if total == 0 {
             100.0
@@ -136,14 +138,13 @@ impl TyphooNApp {
                 ui.separator();
 
                 egui::ScrollArea::vertical().id_salt("sync_scroll").auto_shrink(false).show(ui, |ui| {
-                    egui::Grid::new("sync_grid").striped(true).num_columns(9).min_col_width(60.0).show(ui, |ui| {
+                    egui::Grid::new("sync_grid").striped(true).num_columns(8).min_col_width(60.0).show(ui, |ui| {
                         ui.label(egui::RichText::new("Broker").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("TF").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Symbols").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Healthy").color(AXIS_TEXT).small().strong());
-                        ui.label(egui::RichText::new("Stale/Empty").color(AXIS_TEXT).small().strong());
+                        ui.label(egui::RichText::new("Needs Work").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Settled").color(AXIS_TEXT).small().strong());
-                        ui.label(egui::RichText::new("Unsupported").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("% Synced").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Note").color(AXIS_TEXT).small().strong());
                         ui.end_row();
@@ -152,7 +153,7 @@ impl TyphooNApp {
                                 "MT5"           => egui::Color32::from_rgb(26, 188, 156),
                                 "Alpaca"        => egui::Color32::from_rgb(52, 152, 219),
                                 "Tastytrade"    => egui::Color32::from_rgb(170, 100, 220),
-                                "Kraken Spot" | "Kraken iapi" | "Kraken Futures" => egui::Color32::from_rgb(255, 130, 60),
+                                "Kraken Spot" | "Kraken Equities" | "Kraken Futures" => egui::Color32::from_rgb(255, 130, 60),
                                 "Merged"        => egui::Color32::from_rgb(0, 220, 220),
                                 "Yahoo"         => egui::Color32::from_rgb(155, 89, 182),
                                 _ => AXIS_TEXT,
@@ -162,10 +163,20 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new(&row.tf).color(AXIS_TEXT).small().monospace());
                             ui.label(egui::RichText::new(cells.symbols).small());
                             ui.label(egui::RichText::new(cells.healthy).color(egui::Color32::from_rgb(26, 188, 156)).small());
-                            ui.label(egui::RichText::new(cells.stale_or_empty).color(AXIS_TEXT).small());
-                            ui.label(egui::RichText::new(cells.settled).color(egui::Color32::from_rgb(52, 152, 219)).small());
-                            ui.label(egui::RichText::new(cells.unsupported).color(egui::Color32::from_rgb(150, 150, 150)).small());
-                            let pct_color = if sync_stats_row_is_control_plane(row) || row.total == 0 {
+                            let needs_work_response = ui.label(egui::RichText::new(cells.stale_or_empty).color(AXIS_TEXT).small());
+                            if row.stale > 0 || row.empty > 0 {
+                                needs_work_response.on_hover_text(format!(
+                                    "Stale: {} cached symbol/timeframe rows have aged beyond the freshness window and need a refresh. Empty: {} expected rows have no usable bars cached yet.",
+                                    row.stale, row.empty
+                                ));
+                            }
+                            let settled_response = ui.label(egui::RichText::new(cells.settled).color(egui::Color32::from_rgb(52, 152, 219)).small());
+                            if row.settled > 0 {
+                                settled_response.on_hover_text(
+                                    "Settled: provider history/window was recently checked or exhausted; counted healthy because another refetch cannot produce newer historical bars yet."
+                                );
+                            }
+                            let pct_color = if row.total == 0 {
                                 egui::Color32::from_rgb(150, 150, 150)
                             } else if row.pct_healthy >= 90.0 {
                                 egui::Color32::from_rgb(26, 188, 156)
@@ -174,13 +185,7 @@ impl TyphooNApp {
                             } else {
                                 egui::Color32::from_rgb(231, 76, 60)
                             };
-                            let pct_text = if sync_stats_row_is_control_plane(row) {
-                                "---".to_string()
-                            } else if row.total == 0 && row.unsupported > 0 {
-                                "n/a".to_string()
-                            } else {
-                                format!("{:.1}%", row.pct_healthy)
-                            };
+                            let pct_text = format!("{:.1}%", row.pct_healthy);
                             ui.label(
                                 egui::RichText::new(pct_text)
                                     .color(pct_color)
@@ -301,7 +306,6 @@ impl TyphooNApp {
                 stale,
                 empty,
                 settled: 0,
-                unsupported: 0,
                 note: None,
                 pct_healthy,
             });
@@ -313,6 +317,7 @@ impl TyphooNApp {
             return false;
         }
         kraken_equity_full_universe_timeframe(tf)
+            || (tf == "1Month" && kraken_equity_full_universe_timeframe("1Day"))
             || (self.backfill_alpaca_kraken_equities_enabled
                 && kraken_equity_broad_fallback_timeframe(tf)
                 && alpaca_sync_target_bars(tf).is_some())
@@ -403,6 +408,7 @@ impl TyphooNApp {
         let kraken_equity_demand_symbols = self.kraken_equity_demand_symbols();
         let mut expected_sources: Vec<(&str, &str)> = vec![
             ("kraken", "Kraken Spot"),
+            ("kraken-equities", "Kraken Equities"),
             ("kraken-futures", "Kraken Futures"),
         ];
         if self.backfill_alpaca_kraken_equities_enabled {
@@ -417,11 +423,14 @@ impl TyphooNApp {
                 let Some(tf) = normalize_sync_timeframe_key(tf) else {
                     continue;
                 };
-                // Equities/iapi is the rate-limit bottleneck. Native Kraken
-                // rows remain high-TF only, while Alpaca/Yahoo assist rows can
-                // represent broad 15Min+ catalog coverage where those provider
-                // lanes are enabled.
+                // Kraken Equities/xStocks is WS-first through W1. Monthly rows
+                // are constructed-only and belong under Merged, not native Kraken
+                // provider rows. Alpaca/Yahoo assist rows remain broad 15Min+
+                // only where those provider lanes are enabled.
                 if source == "kraken-equities" && !kraken_equity_full_universe_timeframe(tf) {
+                    continue;
+                }
+                if matches!(source, "kraken" | "kraken-futures") && tf == "1Month" {
                     continue;
                 }
                 if source == "alpaca"
@@ -437,13 +446,15 @@ impl TyphooNApp {
                 let symbols: Vec<String> = match source {
                     "kraken" => spot_symbols.clone(),
                     "kraken-futures" => futures_symbols.clone(),
-                    "kraken-equities" | "alpaca" | "yahoo-chart" => {
-                        kraken_equity_symbols_for_timeframe(
-                            &kraken_equity_catalog_symbols,
-                            &kraken_equity_demand_symbols,
-                            tf,
-                        )
-                    }
+                    "kraken-equities" => kraken_equity_native_symbols_for_timeframe(
+                        &kraken_equity_demand_symbols,
+                        tf,
+                    ),
+                    "alpaca" | "yahoo-chart" => kraken_equity_symbols_for_timeframe(
+                        &kraken_equity_catalog_symbols,
+                        &kraken_equity_demand_symbols,
+                        tf,
+                    ),
                     _ => Vec::new(),
                 };
                 for symbol in symbols {
@@ -470,7 +481,6 @@ impl TyphooNApp {
                             stale: 0,
                             empty: 1,
                             settled: 0,
-                            unsupported: 0,
                             note: None,
                             pct_healthy: 0.0,
                         });
@@ -478,38 +488,6 @@ impl TyphooNApp {
                 }
             }
         }
-
-        let iapi_symbol_count = if !kraken_equity_catalog_symbols.is_empty() {
-            kraken_equity_catalog_symbols.len()
-        } else {
-            kraken_equity_demand_symbols.len()
-        };
-        if iapi_symbol_count > 0
-            && !rows
-                .iter()
-                .any(|row| row.broker == "Kraken iapi" && row.tf == "---")
-        {
-            rows.push(kraken_iapi_control_plane_row(iapi_symbol_count as u64));
-        }
-    }
-}
-
-fn kraken_iapi_control_plane_row(symbol_count: u64) -> SyncStatsRow {
-    SyncStatsRow {
-        broker: "Kraken iapi".to_string(),
-        tf: "---".to_string(),
-        // Kraken iapi/xStocks is the universe + quote control plane. Native iapi
-        // bars are not the source of truth for chart coverage; Merged/Alpaca/Yahoo
-        // rows show actual bar freshness. Do not count the catalog as 12k empty
-        // bar-cache rows or auto full-tilt stays pinned forever.
-        total: symbol_count,
-        healthy: 0,
-        stale: 0,
-        empty: 0,
-        settled: 0,
-        unsupported: 0,
-        note: None,
-        pct_healthy: 0.0,
     }
 }
 
@@ -544,40 +522,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn merged_sync_rows_skip_demand_only_low_timeframes() {
-        assert!(!kraken_equities_merged_timeframe_supported("1Min"));
-        assert!(!kraken_equities_merged_timeframe_supported("5Min"));
+    fn merged_sync_rows_support_native_and_constructed_kraken_equities_timeframes() {
+        assert!(kraken_equities_merged_timeframe_supported("1Min"));
+        assert!(kraken_equities_merged_timeframe_supported("5Min"));
         assert!(kraken_equities_merged_timeframe_supported("15Min"));
         assert!(kraken_equities_merged_timeframe_supported("1Day"));
         assert!(kraken_equities_merged_timeframe_supported("1Month"));
-    }
-
-    #[test]
-    fn kraken_iapi_control_plane_row_is_single_catalog_row() {
-        let row = kraken_iapi_control_plane_row(12_268);
-        assert_eq!(row.broker, "Kraken iapi");
-        assert_eq!(row.tf, "---");
-        assert_eq!(row.total, 12_268);
-        assert_eq!(row.healthy, 0);
-        assert_eq!(row.stale, 0);
-        assert_eq!(row.empty, 0);
-        assert_eq!(row.unsupported, 0);
-        assert!(row.note.is_none());
-
-        let cells = sync_stats_row_status_cells(&row);
-        assert_eq!(cells.symbols, "12268");
-        assert_eq!(cells.healthy, "---");
-        assert_eq!(cells.stale_or_empty, "---");
-        assert_eq!(cells.settled, "---");
-        assert_eq!(cells.unsupported, "---");
-        assert!(cells.note.is_empty());
-
-        let totals = compute_bar_sync_broker_totals(&[row]);
-        assert!(
-            totals
-                .iter()
-                .all(|(broker, _, _, _)| broker != "Kraken iapi"),
-            "control-plane-only rows stay in the table but do not pollute broker bar totals"
-        );
     }
 }

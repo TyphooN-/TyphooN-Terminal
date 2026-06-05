@@ -30,6 +30,17 @@ where
     out
 }
 
+pub(super) fn kraken_equity_native_symbols_for_timeframe(
+    demand_symbols: &[String],
+    timeframe: &str,
+) -> Vec<String> {
+    if kraken_equity_full_universe_timeframe(timeframe) {
+        normalize_kraken_equity_symbol_list(demand_symbols.iter())
+    } else {
+        Vec::new()
+    }
+}
+
 pub(super) fn kraken_equity_symbols_for_timeframe(
     catalog_symbols: &[String],
     demand_symbols: &[String],
@@ -913,21 +924,25 @@ impl TyphooNApp {
     pub(super) fn schedule_kraken_equities_universe(&mut self) -> usize {
         let catalog_symbols = self.kraken_equity_catalog_symbols();
         let demand_symbols = self.kraken_equity_demand_symbols();
-        let symbols = if catalog_symbols.is_empty() {
-            demand_symbols
+        let native_symbols = kraken_equity_native_symbols_for_timeframe(&demand_symbols, "1Day");
+        let fallback_symbols = if catalog_symbols.is_empty() {
+            demand_symbols.clone()
         } else {
-            catalog_symbols
+            catalog_symbols.clone()
         };
-        if !self.kraken_enabled || !self.kraken_full_bar_sync_enabled || symbols.is_empty() {
+        if !self.kraken_enabled
+            || !self.kraken_full_bar_sync_enabled
+            || (native_symbols.is_empty() && fallback_symbols.is_empty())
+        {
             return 0;
         }
         if self.kraken_equities_sync_pause_until_ts > chrono::Utc::now().timestamp() {
             return 0;
         }
         let enabled_timeframes = self.enabled_standard_sync_timeframes();
-        // Native iapi stays on the high-TF full-catalog lane. 15Min+ broad
-        // coverage is still a product goal, but it must come from assist
-        // providers where possible instead of consuming the entire iapi limiter.
+        // Kraken Equities is WS-first for live/current OHLC and REST/iapi remains
+        // the repair/backfill lane. Treat all enabled standard timeframes as native
+        // Kraken Equities coverage; assist providers keep their own narrower gates.
         let native_timeframes: Vec<String> = enabled_timeframes
             .iter()
             .filter(|tf| kraken_equity_full_universe_timeframe(tf))
@@ -1005,7 +1020,7 @@ impl TyphooNApp {
                 .collect();
             let mut cursor = self.kraken_equities_sync_cursor;
             let candidates = select_alpaca_sync_workset_rotating_with_stale_multiplier(
-                &symbols,
+                &native_symbols,
                 &native_timeframes,
                 &self.cached_kraken_equities_sync_state,
                 &focus_symbols,
@@ -1062,7 +1077,7 @@ impl TyphooNApp {
                 );
                 let mut cursor = self.kraken_equities_sync_cursor;
                 let candidates = select_alpaca_sync_workset_rotating(
-                    &symbols,
+                    &fallback_symbols,
                     &fallback_timeframes,
                     &self.cached_alpaca_sync_state,
                     &focus_symbols,
@@ -1122,7 +1137,7 @@ impl TyphooNApp {
                         .unwrap_or_default();
                     let mut cursor = self.kraken_equities_sync_cursor;
                     let candidates = select_alpaca_sync_workset_rotating(
-                        &symbols,
+                        &fallback_symbols,
                         &fallback_timeframes,
                         &self.cached_yahoo_chart_sync_state,
                         &focus_symbols,
@@ -1441,7 +1456,10 @@ impl TyphooNApp {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
         };
-        if !self.kraken_enabled || !self.sync_timeframe_enabled(tf) {
+        if !self.kraken_enabled
+            || !self.sync_timeframe_enabled(tf)
+            || !kraken_spot_native_timeframe(tf)
+        {
             return false;
         }
         let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
@@ -1538,13 +1556,10 @@ impl TyphooNApp {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
         };
-        // iapi delivers equity prices delayed by 15 minutes, so M1 and M5
-        // bars are illusory fidelity — they just consume budget we need for
-        // higher TFs. Per ADR-072 policy update 2026-05-26, never fetch these.
-        if matches!(tf, "1Min" | "5Min") {
-            return false;
-        }
-        if !self.kraken_enabled || !self.sync_timeframe_enabled(tf) {
+        if !self.kraken_enabled
+            || !self.sync_timeframe_enabled(tf)
+            || !kraken_equity_full_universe_timeframe(tf)
+        {
             return false;
         }
         if self.kraken_equities_sync_pause_until_ts > chrono::Utc::now().timestamp() {
@@ -1555,6 +1570,13 @@ impl TyphooNApp {
             .trim_end_matches(".EQ")
             .to_ascii_uppercase();
         if symbol.is_empty() {
+            return false;
+        }
+        // WS v2 OHLC is now the primary xStocks current-bar path. Once it has
+        // delivered a fresh closed bar for this symbol/timeframe, suppress the
+        // REST/iapi history pull; keep REST for initial cold-start/gap repair
+        // and for cases where WS has not produced this tuple yet.
+        if self.kraken_ws_pair_is_fresh(&symbol, tf) {
             return false;
         }
         if self.is_unresolvable_fetch_key("kraken-equities", &symbol, tf) {
@@ -1623,7 +1645,7 @@ impl TyphooNApp {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
         };
-        if !self.sync_timeframe_enabled(tf) {
+        if !self.sync_timeframe_enabled(tf) || tf == "1Month" {
             return false;
         }
         let symbol = typhoon_engine::core::kraken_futures::normalize_futures_symbol(symbol);
@@ -2169,7 +2191,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kraken_equity_symbols_for_timeframe_uses_catalog_for_broad_fallback_tfs() {
+    fn kraken_equity_native_symbols_for_timeframe_uses_demand_not_full_catalog() {
+        let demand = vec!["POM.EQ".to_string(), "array".to_string()];
+
+        assert_eq!(
+            kraken_equity_native_symbols_for_timeframe(&demand, "15Min"),
+            vec!["ARRAY".to_string(), "POM".to_string()]
+        );
+        assert_eq!(
+            kraken_equity_native_symbols_for_timeframe(&demand, "1Day"),
+            vec!["ARRAY".to_string(), "POM".to_string()]
+        );
+        assert_eq!(
+            kraken_equity_native_symbols_for_timeframe(&demand, "1Week"),
+            vec!["ARRAY".to_string(), "POM".to_string()]
+        );
+        assert!(kraken_equity_native_symbols_for_timeframe(&demand, "1Month").is_empty());
+    }
+
+    #[test]
+    fn kraken_equity_symbols_for_timeframe_uses_catalog_for_broad_fallback_timeframes() {
         let catalog = vec!["TNDM.EQ".to_string(), "wok".to_string(), "TNDM".to_string()];
         let demand = vec!["POM.EQ".to_string(), "array".to_string()];
 

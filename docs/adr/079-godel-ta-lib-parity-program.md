@@ -3,7 +3,7 @@
 **Status:** Implemented / continuing policy
 **Date:** 2026-04-13
 **Compacted:** 2026-05-27
-**Supersedes:** Old ADR 108 through old ADR 200 parity-round files
+**Supersedes:** obsolete parity-round notes
 
 ## Context
 

@@ -47,12 +47,15 @@ use self::public_book::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use futures_util::{SinkExt, StreamExt};
 use hmac::{Hmac, KeyInit, Mac};
 use reqwest::Client;
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::protocol::Message;
 use zeroize::Zeroizing;
 
 use self::helpers::{
@@ -65,6 +68,297 @@ type HmacSha512 = Hmac<Sha512>;
 
 const KRAKEN_BASE_URL: &str = "https://api.kraken.com";
 const KRAKEN_INTERNAL_API_BASE_URL: &str = "https://iapi.kraken.com/api/internal";
+
+const KRAKEN_WS_INSTRUMENT_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(20);
+
+async fn fetch_ws_instrument_snapshot(
+    include_tokenized_assets: bool,
+) -> Result<serde_json::Value, String> {
+    let (ws_stream, _) = connect_async(KRAKEN_WS_V2_URL)
+        .await
+        .map_err(|e| format!("Kraken WS instrument connect failed: {e}"))?;
+    let (mut sink, mut stream) = ws_stream.split();
+    let subscribe = serde_json::json!({
+        "method": "subscribe",
+        "params": {
+            "channel": "instrument",
+            "include_tokenized_assets": include_tokenized_assets,
+        },
+        "req_id": 1,
+    });
+    sink.send(Message::Text(subscribe.to_string().into()))
+        .await
+        .map_err(|e| format!("Kraken WS instrument subscribe failed: {e}"))?;
+
+    tokio::time::timeout(KRAKEN_WS_INSTRUMENT_SNAPSHOT_TIMEOUT, async move {
+        while let Some(msg) = stream.next().await {
+            let msg = msg.map_err(|e| format!("Kraken WS instrument read failed: {e}"))?;
+            let Message::Text(text) = msg else {
+                continue;
+            };
+            let value: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| format!("Kraken WS instrument JSON parse failed: {e}"))?;
+            if value.get("method").and_then(|v| v.as_str()) == Some("subscribe") {
+                if value.get("success").and_then(|v| v.as_bool()) == Some(false) {
+                    return Err(format!("Kraken WS instrument subscribe rejected: {value}"));
+                }
+                continue;
+            }
+            if value.get("channel").and_then(|v| v.as_str()) != Some("instrument") {
+                continue;
+            }
+            if value.get("type").and_then(|v| v.as_str()) != Some("snapshot") {
+                continue;
+            }
+            return value
+                .get("data")
+                .cloned()
+                .ok_or_else(|| "Kraken WS instrument snapshot missing data".to_string());
+        }
+        Err("Kraken WS instrument stream ended before snapshot".to_string())
+    })
+    .await
+    .map_err(|_| "Kraken WS instrument snapshot timed out".to_string())?
+}
+
+fn parse_tokenized_equity_markets(
+    snapshot_data: &serde_json::Value,
+) -> Result<Vec<KrakenEquityMarket>, String> {
+    let assets = snapshot_data
+        .get("assets")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "Kraken WS instrument snapshot missing assets".to_string())?;
+    let pairs = snapshot_data
+        .get("pairs")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "Kraken WS instrument snapshot missing pairs".to_string())?;
+
+    let mut underlying_by_asset: HashMap<String, String> = HashMap::new();
+    for asset in assets {
+        if asset.get("class").and_then(|v| v.as_str()) != Some("tokenized_asset") {
+            continue;
+        }
+        let Some(id) = asset.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(underlying) = asset.get("underlying_symbol").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let underlying = normalize_kraken_tokenized_underlying(underlying);
+        if !underlying.is_empty() {
+            underlying_by_asset.insert(id.to_string(), underlying);
+        }
+    }
+
+    let mut by_symbol: HashMap<String, KrakenEquityMarket> = HashMap::new();
+    for pair in pairs {
+        let Some(base) = pair.get("base").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(symbol) = underlying_by_asset.get(base).cloned() else {
+            continue;
+        };
+        let quote = pair
+            .get("quote")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if quote != "USD" {
+            continue;
+        }
+        let status = pair
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("online")
+            .to_string();
+        let tradable = matches!(status.as_str(), "online" | "post_only");
+        by_symbol
+            .entry(symbol.clone())
+            .and_modify(|market| {
+                if tradable && !market.tradable {
+                    market.tradable = true;
+                    market.status = Some(status.clone());
+                    market.instrument_status = Some("enabled".to_string());
+                }
+            })
+            .or_insert_with(|| KrakenEquityMarket {
+                symbol,
+                name: None,
+                tradable,
+                status: Some(status),
+                // TyphooN's consumer filters out `disabled`; this is a public
+                // WS instrument pair, so mark the instrument side enabled.
+                instrument_status: Some("enabled".to_string()),
+            });
+    }
+
+    let mut out: Vec<KrakenEquityMarket> = by_symbol.into_values().collect();
+    out.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+    Ok(out)
+}
+
+fn normalize_kraken_tokenized_underlying(raw: &str) -> String {
+    raw.trim()
+        .trim_end_matches(".EQ")
+        .replace('/', "")
+        .to_ascii_uppercase()
+}
+
+fn merge_equity_markets(
+    primary: Vec<KrakenEquityMarket>,
+    supplemental: Vec<KrakenEquityMarket>,
+) -> Vec<KrakenEquityMarket> {
+    let mut by_symbol: HashMap<String, KrakenEquityMarket> =
+        HashMap::with_capacity(primary.len().saturating_add(supplemental.len()));
+    for market in primary.into_iter().chain(supplemental) {
+        if market.symbol.trim().is_empty() {
+            continue;
+        }
+        by_symbol
+            .entry(market.symbol.clone())
+            .and_modify(|existing| {
+                if existing.name.is_none() {
+                    existing.name = market.name.clone();
+                }
+                existing.tradable |= market.tradable;
+                if existing.status.is_none()
+                    || (market.tradable && existing.status.as_deref() != Some("active"))
+                {
+                    existing.status = market.status.clone();
+                }
+                if existing.instrument_status.is_none()
+                    || (market.tradable && existing.instrument_status.as_deref() != Some("enabled"))
+                {
+                    existing.instrument_status = market.instrument_status.clone();
+                }
+            })
+            .or_insert(market);
+    }
+    let mut out: Vec<KrakenEquityMarket> = by_symbol.into_values().collect();
+    out.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+    out
+}
+
+async fn fetch_iapi_equity_markets(client: &Client) -> Result<Vec<KrakenEquityMarket>, String> {
+    const PAGE_SIZE: usize = 1000;
+    let mut page = 0usize;
+    let mut out = Vec::new();
+    loop {
+        // Catalog pages are heavier than ticker/history (1k rows each), so charge
+        // a higher token cost to keep their burst rate under Kraken/Cloudflare.
+        if let Err(secs) = iapi_limiter().acquire(2.0).await {
+            return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
+        }
+        let page_s = page.to_string();
+        let page_size_s = PAGE_SIZE.to_string();
+        let url = format!("{KRAKEN_INTERNAL_API_BASE_URL}/markets/all/equities");
+        let resp = client
+            .get(&url)
+            .header("Accept", "application/json")
+            .header("Referer", "https://pro.kraken.com/app/")
+            .header("Origin", "https://pro.kraken.com")
+            .header("x-handler-environment", "stable")
+            .header("x-initiated-through", "@frontend/cts-core")
+            .query(&[
+                ("delayed", "true"),
+                ("tradable", "true"),
+                ("page_size", page_size_s.as_str()),
+                ("page", page_s.as_str()),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("Kraken equity catalog request failed: {e}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS || body.contains("1015") {
+                let secs = arm_iapi_backoff(&body).await;
+                tracing::warn!(
+                    "Kraken iapi rate-limited via equity catalog (HTTP {status}); backoff {secs}s engaged"
+                );
+                return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
+            }
+            return Err(format!(
+                "Kraken equity catalog request failed: HTTP {status}: {body}"
+            ));
+        }
+        log_iapi_response_headers(resp.headers(), "catalog");
+        iapi_limiter().record_success().await;
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Kraken equity catalog parse failed: {e}"))?;
+        if let Some(errors) = body.get("errors").and_then(|v| v.as_array())
+            && !errors.is_empty()
+        {
+            let msg = errors
+                .iter()
+                .map(|e| {
+                    e.get("msg")
+                        .or_else(|| e.get("type"))
+                        .or_else(|| e.get("error"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown Kraken equity catalog error")
+                        .to_string()
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(format!("Kraken equity catalog error: {msg}"));
+        }
+        let Some(result) = body.get("result") else {
+            break;
+        };
+        let data = result
+            .get("data")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| "Kraken equity catalog: missing result.data".to_string())?;
+        if data.is_empty() {
+            break;
+        }
+        for item in data {
+            let Some(symbol) = item.get("symbol").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let symbol = symbol.trim().trim_end_matches(".EQ").to_ascii_uppercase();
+            if symbol.is_empty() {
+                continue;
+            }
+            out.push(KrakenEquityMarket {
+                symbol,
+                name: item
+                    .get("name")
+                    .or_else(|| item.get("short_name"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                tradable: item
+                    .get("tradable")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
+                status: item
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                instrument_status: item
+                    .get("instrument_status")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            });
+        }
+        let total_results = result
+            .get("total_results")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(out.len() as u64) as usize;
+        if out.len() >= total_results || data.len() < PAGE_SIZE {
+            break;
+        }
+        page += 1;
+        if page > 100 {
+            return Err("Kraken equity catalog: pagination safety limit hit".to_string());
+        }
+    }
+    out.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+    out.dedup_by(|a, b| a.symbol == b.symbol);
+    Ok(out)
+}
 
 /// Kraken broker client with HMAC-SHA512 request signing.
 pub struct KrakenBroker {
@@ -99,130 +393,27 @@ impl KrakenBroker {
         !self.api_key.is_empty() && !self.api_secret.is_empty()
     }
 
-    /// Fetch the full public Kraken Securities/equities universe from Kraken Pro's
-    /// internal market catalog. This endpoint is unauthenticated but needs the same
-    /// frontend headers Kraken Pro sends; without them iapi currently returns 404.
+    /// Fetch the full Kraken Securities/equities universe.
+    ///
+    /// Important: WS v2 `instrument` with `include_tokenized_assets=true` only
+    /// returns Kraken's tokenized/xStock pairs plus Spot instruments. It does not
+    /// return the 12k+ tradable Kraken Securities catalog. Use the iapi catalog as
+    /// the full universe authority, then merge WS instrument tokenized pairs so the
+    /// WS-native xStock symbols (`AAPLx/USD`) stay discoverable/subscribable.
     pub async fn get_equity_markets(&self) -> Result<Vec<KrakenEquityMarket>, String> {
-        const PAGE_SIZE: usize = 1000;
-        let mut page = 0usize;
-        let mut out = Vec::new();
-        loop {
-            // Catalog pages are heavier than ticker/history (1k rows each),
-            // so we charge a higher token cost to keep their burst rate down.
-            if let Err(secs) = iapi_limiter().acquire(2.0).await {
-                return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
-            }
-            let page_s = page.to_string();
-            let page_size_s = PAGE_SIZE.to_string();
-            let url = format!("{KRAKEN_INTERNAL_API_BASE_URL}/markets/all/equities");
-            let resp = self
-                .client
-                .get(&url)
-                .header("Accept", "application/json")
-                .header("Referer", "https://pro.kraken.com/app/")
-                .header("Origin", "https://pro.kraken.com")
-                .header("x-handler-environment", "stable")
-                .header("x-initiated-through", "@frontend/cts-core")
-                .query(&[
-                    ("delayed", "true"),
-                    ("tradable", "true"),
-                    ("page_size", page_size_s.as_str()),
-                    ("page", page_s.as_str()),
-                ])
-                .send()
-                .await
-                .map_err(|e| format!("Kraken equity catalog request failed: {e}"))?;
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
-                if status == reqwest::StatusCode::TOO_MANY_REQUESTS || body.contains("1015") {
-                    let secs = arm_iapi_backoff(&body).await;
-                    tracing::warn!(
-                        "Kraken iapi rate-limited via equity catalog (HTTP {status}); backoff {secs}s engaged"
-                    );
-                    return Err(format!("{IAPI_RL_PREFIX} ({secs}s remaining)"));
-                }
-                return Err(format!(
-                    "Kraken equity catalog request failed: HTTP {status}: {body}"
-                ));
-            }
-            log_iapi_response_headers(resp.headers(), "catalog");
-            iapi_limiter().record_success().await;
-            let body: serde_json::Value = resp
-                .json()
-                .await
-                .map_err(|e| format!("Kraken equity catalog parse failed: {e}"))?;
-            if let Some(errors) = body.get("errors").and_then(|v| v.as_array()) {
-                if !errors.is_empty() {
-                    let msg = errors
-                        .iter()
-                        .map(|e| {
-                            e.get("msg")
-                                .or_else(|| e.get("type"))
-                                .or_else(|| e.get("error"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown Kraken equity catalog error")
-                                .to_string()
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    return Err(format!("Kraken equity catalog error: {msg}"));
-                }
-            }
-            let Some(result) = body.get("result") else {
-                break;
-            };
-            let data = result
-                .get("data")
-                .and_then(|v| v.as_array())
-                .ok_or_else(|| "Kraken equity catalog: missing result.data".to_string())?;
-            if data.is_empty() {
-                break;
-            }
-            for item in data {
-                let Some(symbol) = item.get("symbol").and_then(|v| v.as_str()) else {
-                    continue;
-                };
-                let symbol = symbol.trim().trim_end_matches(".EQ").to_ascii_uppercase();
-                if symbol.is_empty() {
-                    continue;
-                }
-                out.push(KrakenEquityMarket {
-                    symbol,
-                    name: item
-                        .get("name")
-                        .or_else(|| item.get("short_name"))
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string),
-                    tradable: item
-                        .get("tradable")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(true),
-                    status: item
-                        .get("status")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string),
-                    instrument_status: item
-                        .get("instrument_status")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string),
-                });
-            }
-            let total_results = result
-                .get("total_results")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(out.len() as u64) as usize;
-            if out.len() >= total_results || data.len() < PAGE_SIZE {
-                break;
-            }
-            page += 1;
-            if page > 100 {
-                return Err("Kraken equity catalog: pagination safety limit hit".to_string());
+        let iapi_markets = fetch_iapi_equity_markets(self.client).await?;
+        match fetch_ws_instrument_snapshot(true)
+            .await
+            .and_then(|snapshot| parse_tokenized_equity_markets(&snapshot))
+        {
+            Ok(ws_markets) => Ok(merge_equity_markets(iapi_markets, ws_markets)),
+            Err(e) => {
+                tracing::warn!(
+                    "Kraken WS instrument tokenized catalog unavailable; using full iapi equity catalog only: {e}"
+                );
+                Ok(iapi_markets)
             }
         }
-        out.sort_by(|a, b| a.symbol.cmp(&b.symbol));
-        out.dedup_by(|a, b| a.symbol == b.symbol);
-        Ok(out)
     }
 
     /// Fetch delayed Kraken Securities/equities quote data from Kraken Pro's
@@ -1626,6 +1817,92 @@ mod tests {
         assert!((net - 0.85).abs() < 1e-9);
     }
 
+    #[test]
+    fn ws_instrument_parser_extracts_tokenized_assets_as_equity_universe() {
+        let snapshot = serde_json::json!({
+            "assets": [
+                {"id":"BTC", "class":"currency"},
+                {"id":"AAPLx", "underlying_symbol":"AAPL", "class":"tokenized_asset"},
+                {"id":"AAPLSPV", "underlying_symbol":"AAPL", "class":"tokenized_asset"},
+                {"id":"BRK.Bx", "underlying_symbol":"BRK.B", "class":"tokenized_asset"}
+            ],
+            "pairs": [
+                {"symbol":"BTC/USD", "base":"BTC", "quote":"USD", "status":"online"},
+                {"symbol":"AAPLx/USD", "base":"AAPLx", "quote":"USD", "status":"online"},
+                {"symbol":"AAPLSPV/USD", "base":"AAPLx", "quote":"USD", "status":"online"},
+                {"symbol":"BRK.Bx/USD", "base":"BRK.Bx", "quote":"USD", "status":"post_only"},
+                {"symbol":"AAPLx/EUR", "base":"AAPLx", "quote":"EUR", "status":"online"}
+            ]
+        });
+
+        let markets = parse_tokenized_equity_markets(&snapshot).unwrap();
+        let symbols: Vec<_> = markets.iter().map(|m| m.symbol.as_str()).collect();
+        assert_eq!(symbols, vec!["AAPL", "BRK.B"]);
+        assert!(markets.iter().all(|m| m.tradable));
+        assert!(
+            markets
+                .iter()
+                .all(|m| m.instrument_status.as_deref() == Some("enabled"))
+        );
+    }
+
+    #[test]
+    fn equity_market_merge_preserves_full_iapi_catalog_and_adds_ws_tokenized() {
+        let iapi = vec![
+            KrakenEquityMarket {
+                symbol: "A".into(),
+                name: Some("Agilent Technologies Inc.".into()),
+                tradable: true,
+                status: Some("active".into()),
+                instrument_status: Some("enabled".into()),
+            },
+            KrakenEquityMarket {
+                symbol: "AAPL".into(),
+                name: Some("Apple Inc.".into()),
+                tradable: true,
+                status: Some("active".into()),
+                instrument_status: Some("enabled".into()),
+            },
+        ];
+        let ws = vec![
+            KrakenEquityMarket {
+                symbol: "AAPL".into(),
+                name: None,
+                tradable: true,
+                status: Some("online".into()),
+                instrument_status: Some("enabled".into()),
+            },
+            KrakenEquityMarket {
+                symbol: "WOK".into(),
+                name: None,
+                tradable: true,
+                status: Some("online".into()),
+                instrument_status: Some("enabled".into()),
+            },
+        ];
+
+        let merged = merge_equity_markets(iapi, ws);
+        let symbols: Vec<_> = merged.iter().map(|m| m.symbol.as_str()).collect();
+        assert_eq!(symbols, vec!["A", "AAPL", "WOK"]);
+        let aapl = merged.iter().find(|m| m.symbol == "AAPL").unwrap();
+        assert_eq!(aapl.name.as_deref(), Some("Apple Inc."));
+        assert!(aapl.tradable);
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires network access — run with `cargo test -- --ignored`
+    async fn get_equity_markets_public_catalog_preserves_full_securities_universe() {
+        let broker = KrakenBroker::new(String::new(), String::new());
+        let markets = broker.get_equity_markets().await.unwrap();
+        assert!(
+            markets.len() > 12_000,
+            "expected full Kraken Securities universe, got {} markets",
+            markets.len()
+        );
+        assert!(markets.iter().any(|market| market.symbol == "AAPL"));
+        assert!(markets.iter().any(|market| market.symbol == "TSLA"));
+    }
+
     #[tokio::test]
     #[ignore] // Requires network access — run with `cargo test -- --ignored`
     async fn get_tradeable_pairs_public() {
@@ -1773,9 +2050,6 @@ impl KrakenBroker {
 // ============================================================================
 // Private WebSocket Client (Basic Implementation)
 // ============================================================================
-
-use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
 impl KrakenBroker {
     /// Connect to Kraken private WebSocket and subscribe to ownTrades + openOrders.

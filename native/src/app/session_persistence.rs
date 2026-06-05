@@ -738,6 +738,8 @@ impl TyphooNApp {
             "codex_reasoning_effort": self.codex_reasoning_effort,
             "hermes_model": self.hermes_model,
             "hermes_provider": self.hermes_provider,
+            "grok_model": self.grok_model,
+            "grok_effort": self.grok_effort,
             // Credentials: keyring-only (secure OS storage). Session stores non-secret config.
             "alpaca_enabled": self.alpaca_enabled,
             "alpaca_full_bar_sync_enabled": self.alpaca_full_bar_sync_enabled,
@@ -768,6 +770,7 @@ impl TyphooNApp {
                 "gemini_cli": self.show_gemini_cli,
                 "codex_cli": self.show_codex_cli,
                 "hermes_cli": self.show_hermes_cli,
+                "grok_cli": self.show_grok_cli,
                 "matrix_chat": self.show_matrix_chat,
                 "sec": self.show_sec,
                 "insider": self.show_insider,
@@ -3363,6 +3366,12 @@ impl TyphooNApp {
                 if let Some(provider) = v["hermes_provider"].as_str() {
                     self.hermes_provider = provider.to_string();
                 }
+                if let Some(model) = v["grok_model"].as_str() {
+                    self.grok_model = model.to_string();
+                }
+                if let Some(effort) = v["grok_effort"].as_str() {
+                    self.grok_effort = Self::normalize_grok_effort(effort).to_string();
+                }
                 // Migration fallback: load credentials from old session.json if keyring is empty.
                 // Secrets are no longer written to session.json (see save_session).
                 // Once a session has been saved under the new code these keys will be absent.
@@ -3560,6 +3569,9 @@ impl TyphooNApp {
                     }
                     if let Some(b) = w["hermes_cli"].as_bool() {
                         self.show_hermes_cli = b;
+                    }
+                    if let Some(b) = w["grok_cli"].as_bool() {
+                        self.show_grok_cli = b;
                     }
                     if let Some(b) = w["matrix_chat"].as_bool() {
                         self.show_matrix_chat = b;

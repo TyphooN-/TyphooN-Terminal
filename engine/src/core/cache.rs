@@ -24,7 +24,6 @@ const BYTES_PER_BAR: usize = 8 + 5 * 8; // 48
 pub const DEFAULT_BAR_ZSTD_LEVEL: i32 = 3;
 pub const MIN_ZSTD_LEVEL: i32 = 1;
 pub const MAX_ZSTD_LEVEL: i32 = 22;
-const KV_ZSTD_LEVEL: i32 = 3;
 static BAR_ZSTD_LEVEL: AtomicI32 = AtomicI32::new(DEFAULT_BAR_ZSTD_LEVEL);
 
 pub fn sanitize_zstd_level(level: i32) -> i32 {
@@ -511,9 +510,7 @@ impl SqliteCache {
         let deleted = conn
             .execute(
                 "DELETE FROM bar_cache
-             WHERE (key LIKE 'kraken-equities:%:1Min'
-                 OR key LIKE 'kraken-equities:%:5Min'
-                 OR key LIKE 'alpaca:%:1Min'
+             WHERE (key LIKE 'alpaca:%:1Min'
                  OR key LIKE 'alpaca:%:5Min'
                  OR key LIKE 'yahoo-chart:%:1Min'
                  OR key LIKE 'yahoo-chart:%:5Min')",
@@ -522,9 +519,7 @@ impl SqliteCache {
             .map_err(|e| format!("obsolete low-TF provider bar purge failed: {e}"))?;
         let _ = conn.execute(
             "DELETE FROM bar_track
-             WHERE (key LIKE 'kraken-equities:%:1Min'
-                 OR key LIKE 'kraken-equities:%:5Min'
-                 OR key LIKE 'alpaca:%:1Min'
+             WHERE (key LIKE 'alpaca:%:1Min'
                  OR key LIKE 'alpaca:%:5Min'
                  OR key LIKE 'yahoo-chart:%:1Min'
                  OR key LIKE 'yahoo-chart:%:5Min')",
@@ -532,9 +527,7 @@ impl SqliteCache {
         );
         let _ = conn.execute(
             "DELETE FROM kv_cache
-             WHERE (key LIKE 'kraken-equities:%:1Min'
-                 OR key LIKE 'kraken-equities:%:5Min'
-                 OR key LIKE 'alpaca:%:1Min'
+             WHERE (key LIKE 'alpaca:%:1Min'
                  OR key LIKE 'alpaca:%:5Min'
                  OR key LIKE 'yahoo-chart:%:1Min'
                  OR key LIKE 'yahoo-chart:%:5Min')",
@@ -542,9 +535,7 @@ impl SqliteCache {
         );
         let _ = conn.execute(
             "DELETE FROM sync_state
-             WHERE (key LIKE 'kraken-equities:%:1Min'
-                 OR key LIKE 'kraken-equities:%:5Min'
-                 OR key LIKE 'alpaca:%:1Min'
+             WHERE (key LIKE 'alpaca:%:1Min'
                  OR key LIKE 'alpaca:%:5Min'
                  OR key LIKE 'yahoo-chart:%:1Min'
                  OR key LIKE 'yahoo-chart:%:5Min')",
@@ -647,11 +638,10 @@ impl SqliteCache {
         }
 
         // One-shot migration: remove stale low-timeframe provider-assist bars.
-        // M1/M5 remain valid for Kraken Spot public OHLC/WS. Native Kraken
-        // Securities iapi, Alpaca assist, and Yahoo assist low-TF rows are not
-        // merge targets; they make equities look better-covered than they are
-        // and inflate startup cache work. Keep higher-TF assist rows and all
-        // Kraken Spot rows.
+        // M1/M5 remain valid for Kraken Spot and Kraken Equities/xStocks now.
+        // Alpaca/Yahoo assist low-TF rows are still not broad merge targets;
+        // they make equities look better-covered than they are and inflate
+        // startup cache work. Keep all native Kraken rows and higher-TF assists.
         let migration_marker = "__migration__purge_nonspot_provider_1m5m_2026_06__";
         let already_migrated: bool = conn
             .query_row(
@@ -663,7 +653,7 @@ impl SqliteCache {
         if !already_migrated {
             let purged = Self::purge_obsolete_low_tf_provider_bars_locked(&conn)?;
             tracing::info!(
-                "cache migration: purged {} obsolete non-spot provider M1/M5 bar entries",
+                "cache migration: purged {} obsolete provider-assist M1/M5 bar entries",
                 purged
             );
             let _ = conn.execute(
@@ -691,7 +681,7 @@ impl SqliteCache {
         if !metadata_already_migrated {
             let purged = Self::purge_obsolete_low_tf_provider_bars_locked(&conn)?;
             tracing::info!(
-                "cache migration: verified obsolete non-spot provider M1/M5 metadata purge ({} bar rows removed)",
+                "cache migration: verified obsolete provider-assist M1/M5 metadata purge ({} bar rows removed)",
                 purged
             );
             let _ = conn.execute(
@@ -1023,10 +1013,12 @@ impl SqliteCache {
 
     /// Store key-value data (fundamentals, news, etc.).
     pub fn put_kv(&self, key: &str, json_data: &str) -> Result<(), String> {
-        // Keep KV at level 3: this is the hot mutable path for AI sessions,
-        // fundamentals, broker queues, and LAN metadata. Bar storage uses zstd-22;
-        // KV can still be compacted/exported separately without stalling UI writes.
-        let compressed = zstd::encode_all(json_data.as_bytes(), KV_ZSTD_LEVEL)
+        // Use the same live zstd setting as bar ingestion so every cache write
+        // path — bars, news, SEC filings, fundamentals, broker queues, and
+        // scraped metadata — obeys the UI zstd slider instead of silently
+        // pinning KV data to a separate compression level.
+        let zstd_level = bar_zstd_level();
+        let compressed = zstd::encode_all(json_data.as_bytes(), zstd_level)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -2454,8 +2446,8 @@ impl SqliteCache {
         Ok((deleted, (before - after).max(0)))
     }
 
-    /// Delete non-Spot provider M1/M5 rows that are not valid merge/cache
-    /// targets. Kraken Spot (`kraken:*:1Min/5Min`) is intentionally preserved.
+    /// Delete provider-assist M1/M5 rows that are not valid broad merge/cache
+    /// targets. Kraken Spot and Kraken Equities/xStocks low-TF rows are preserved.
     /// Returns `(rows_deleted, bytes_freed)`.
     pub fn delete_non_spot_low_timeframe_bars(&self) -> Result<(u64, i64), String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
@@ -3758,6 +3750,36 @@ mod tests {
     }
 
     #[test]
+    fn kv_writes_obey_configured_zstd_level() {
+        let previous_level = bar_zstd_level();
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let payload = "SEC filing / news payload ".repeat(512);
+
+        set_bar_zstd_level(1);
+        cache.put_kv("news:test", &payload).unwrap();
+        let low_level_raw = cache.get_kv_raw("news:test").unwrap().unwrap().0;
+        assert_eq!(
+            low_level_raw,
+            zstd::encode_all(payload.as_bytes(), 1).unwrap()
+        );
+
+        set_bar_zstd_level(22);
+        cache.put_kv("sec:test", &payload).unwrap();
+        let high_level_raw = cache.get_kv_raw("sec:test").unwrap().unwrap().0;
+        assert_eq!(
+            high_level_raw,
+            zstd::encode_all(payload.as_bytes(), 22).unwrap()
+        );
+        assert_eq!(
+            cache.get_kv("sec:test").unwrap().as_deref(),
+            Some(payload.as_str())
+        );
+
+        set_bar_zstd_level(previous_level);
+    }
+
+    #[test]
     fn encrypted_backup_roundtrips_bar_and_kv_rows() {
         let src_db_path = temp_db_path();
         let dst_db_path = temp_db_path();
@@ -3814,7 +3836,7 @@ mod tests {
     }
 
     #[test]
-    fn obsolete_low_tf_provider_purge_keeps_spot_and_higher_tf_rows() {
+    fn obsolete_low_tf_provider_purge_keeps_native_kraken_and_higher_tf_rows() {
         let db_path = temp_db_path();
         let cache = SqliteCache::open(&db_path).unwrap();
         let json = r#"[{"timestamp":"2024-06-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}]"#;
@@ -3840,18 +3862,18 @@ mod tests {
         let purged = SqliteCache::purge_obsolete_low_tf_provider_bars_locked(&conn).unwrap();
         drop(conn);
 
-        assert_eq!(purged, 6);
+        assert_eq!(purged, 4);
         assert!(
             cache
                 .get_bars("kraken-equities:AAPL:1Min")
                 .unwrap()
-                .is_none()
+                .is_some()
         );
         assert!(
             cache
                 .get_bars("kraken-equities:AAPL:5Min")
                 .unwrap()
-                .is_none()
+                .is_some()
         );
         assert!(cache.get_bars("alpaca:AAPL:1Min").unwrap().is_none());
         assert!(cache.get_bars("alpaca:AAPL:5Min").unwrap().is_none());
@@ -3869,7 +3891,7 @@ mod tests {
         assert!(cache.get_kv("alpaca:AAPL:1Min").unwrap().is_none());
         assert!(cache.get_kv("yahoo-chart:AAPL:5Min").unwrap().is_none());
         assert!(cache.get_kv("kraken:BTC/USD:1Min").unwrap().is_some());
-        assert_eq!(cache.get_sync_ts("kraken-equities:AAPL:1Min"), 0);
+        assert_eq!(cache.get_sync_ts("kraken-equities:AAPL:1Min"), 123);
         assert_eq!(cache.get_sync_ts("alpaca:AAPL:5Min"), 0);
         assert_eq!(cache.get_sync_ts("kraken:BTC/USD:1Min"), 123);
 

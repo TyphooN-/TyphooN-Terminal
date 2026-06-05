@@ -38,29 +38,41 @@ impl TyphooNApp {
     /// The writer side gates cache persistence to closed bars and uses the fast
     /// zstd path so full-catalog snapshots/fresh closes do not block egui.
     ///
-    /// Idempotent: `kraken_ws_ohlc_started` guards against re-spawning
-    /// when KrakenPairs lands again or the caller fires this from
-    /// multiple lifecycle hooks.
+    /// Idempotent and additive: already-streamed symbols are tracked so Kraken
+    /// AssetPairs can start Spot immediately, then the xStocks instrument
+    /// universe can add its WS-native `AAPLx/USD` style pairs later without
+    /// duplicating existing streamers.
     pub(super) fn maybe_start_kraken_ws_ohlc(&mut self) -> bool {
-        if !self.kraken_enabled
-            || !self.kraken_ws_ohlc_enabled
-            || self.kraken_ws_ohlc_started
-            || self.kraken_pairs.is_empty()
-        {
+        if !self.kraken_enabled || !self.kraken_ws_ohlc_enabled {
             return false;
         }
-        let pairs = build_kraken_ws_subscribe_symbols(&self.kraken_pairs);
+        let desired = build_kraken_ws_subscribe_symbols_for_app(
+            &self.kraken_pairs,
+            &self.kraken_equity_universe_symbols,
+            self.kraken_scrape_xstocks,
+        );
+        if desired.is_empty() {
+            tracing::debug!("Kraken WS OHLC deferred: no WS-mappable Kraken pairs");
+            return false;
+        }
+        let pairs: Vec<String> = desired
+            .into_iter()
+            .filter(|pair| !self.kraken_ws_ohlc_streamed_pairs.contains(pair))
+            .collect();
         if pairs.is_empty() {
-            tracing::debug!("Kraken WS OHLC deferred: no WS-mappable Kraken Spot pairs");
             return false;
         }
         let count = pairs.len();
+        let total_after = self.kraken_ws_ohlc_streamed_pairs.len() + count;
+        for pair in &pairs {
+            self.kraken_ws_ohlc_streamed_pairs.insert(pair.clone());
+        }
         let _ = self
             .broker_tx
             .send(BrokerCmd::KrakenStartOhlcStreamers { pairs });
         self.kraken_ws_ohlc_started = true;
         self.log.push_back(LogEntry::info(format!(
-            "Kraken WS OHLC: streaming full Spot catalog: {count} pairs × 8 intervals",
+            "Kraken WS OHLC: streaming {count} additional pairs ({total_after} total) × 8 intervals",
         )));
         true
     }
@@ -72,14 +84,67 @@ impl TyphooNApp {
 /// symbol when it already contains a slash, otherwise inserts one between
 /// the base and quote derived from the legacy 8-char pair name. Deduped
 /// via BTreeSet for stable ordering and O(log n) inserts.
-pub(super) fn build_kraken_ws_subscribe_symbols(pairs: &[(String, String)]) -> Vec<String> {
+#[cfg(test)]
+fn build_kraken_ws_subscribe_symbols(pairs: &[(String, String)]) -> Vec<String> {
+    build_kraken_ws_subscribe_symbols_for_app(pairs, &[], false)
+}
+
+pub(super) fn build_kraken_ws_subscribe_symbols_for_app(
+    spot_pairs: &[(String, String)],
+    xstock_symbols: &[String],
+    include_xstocks: bool,
+) -> Vec<String> {
     let mut out = std::collections::BTreeSet::new();
-    for (pair_name, display) in pairs {
+    for (pair_name, display) in spot_pairs {
         if let Some(formatted) = format_ws_symbol(pair_name, display) {
             out.insert(formatted);
         }
     }
+    if include_xstocks {
+        for symbol in xstock_symbols {
+            if let Some(formatted) = format_xstock_ws_symbol(symbol) {
+                out.insert(formatted);
+            }
+        }
+    }
     out.into_iter().collect()
+}
+
+fn format_xstock_ws_symbol(symbol: &str) -> Option<String> {
+    let bare = symbol
+        .trim()
+        .trim_end_matches(".EQ")
+        .trim_end_matches(".eq")
+        .to_ascii_uppercase();
+    if bare.is_empty() || bare.contains('/') {
+        return None;
+    }
+    Some(format!("{bare}x/USD"))
+}
+
+fn kraken_ws_bar_cache_target(ws_symbol: &str) -> Option<WsCacheTarget> {
+    let trimmed = ws_symbol.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some((base, quote)) = trimmed.split_once('/') {
+        if quote.eq_ignore_ascii_case("USD")
+            && base.ends_with('x')
+            && base.len() > 1
+            && base[..base.len() - 1]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric())
+        {
+            let symbol = base[..base.len() - 1].to_ascii_uppercase();
+            return Some(("kraken-equities", symbol));
+        }
+    }
+    let symbol = kraken_ws_symbol_to_cache_key(trimmed);
+    if symbol.is_empty() {
+        None
+    } else {
+        Some(("kraken", symbol))
+    }
 }
 
 fn format_ws_symbol(pair_name: &str, display: &str) -> Option<String> {
@@ -96,7 +161,7 @@ fn format_ws_symbol(pair_name: &str, display: &str) -> Option<String> {
     if normalised.is_empty() {
         return None;
     }
-    const QUOTES: [&str; 12] = [
+    pub(crate) const QUOTES: [&str; 12] = [
         "USDG", "USDT", "USDC", "USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "XBT", "BTC",
     ];
     for quote in QUOTES {
@@ -180,6 +245,28 @@ mod tests {
     }
 
     #[test]
+    fn build_kraken_ws_subscribe_symbols_can_include_xstocks() {
+        let pairs = vec![("XXBTZUSD".to_string(), "XBT/USD".to_string())];
+        let xstocks = vec!["aapl".to_string(), "TSLA.EQ".to_string()];
+        let symbols = build_kraken_ws_subscribe_symbols_for_app(&pairs, &xstocks, true);
+        assert!(symbols.contains(&"AAPLx/USD".to_string()));
+        assert!(symbols.contains(&"TSLAx/USD".to_string()));
+        assert!(symbols.contains(&"XBT/USD".to_string()));
+    }
+
+    #[test]
+    fn ws_bar_cache_target_routes_tokenized_stocks_to_equity_cache() {
+        assert_eq!(
+            kraken_ws_bar_cache_target("AAPLx/USD"),
+            Some(("kraken-equities", "AAPL".to_string()))
+        );
+        assert_eq!(
+            kraken_ws_bar_cache_target("BTC/USD"),
+            Some(("kraken", "BTCUSD".to_string()))
+        );
+    }
+
+    #[test]
     fn build_kraken_ws_subscribe_symbols_filters_out_unmappable_pairs() {
         let pairs = vec![
             ("XXBTZUSD".to_string(), "XBT/USD".to_string()),
@@ -211,7 +298,7 @@ mod tests {
         let mut buffer = HashMap::new();
         // 1Min bar whose bucket runs to now+30s → still open.
         buffer.insert(
-            ("BTCUSD".into(), 1, now_ms - 30_000),
+            ("kraken".into(), "BTCUSD".into(), 1, now_ms - 30_000),
             mk_bar(1, now_ms - 30_000),
         );
         let (to_flush, remaining) = partition_closed_bars(buffer, now_ms);
@@ -229,7 +316,10 @@ mod tests {
         let mut buffer = HashMap::new();
         // 1Min bar whose bucket ended one minute ago → closed.
         let begin = now_ms - 120_000;
-        buffer.insert(("BTCUSD".into(), 1, begin), mk_bar(1, begin));
+        buffer.insert(
+            ("kraken".into(), "BTCUSD".into(), 1, begin),
+            mk_bar(1, begin),
+        );
         let (to_flush, remaining) = partition_closed_bars(buffer, now_ms);
         assert_eq!(to_flush.len(), 1, "closed bar must flush");
         assert!(remaining.is_empty(), "closed bar must leave the buffer");
@@ -241,22 +331,43 @@ mod tests {
         let mut buffer = HashMap::new();
         // Closed 1Min from two minutes ago.
         let closed_begin = now_ms - 120_000;
-        buffer.insert(("BTCUSD".into(), 1, closed_begin), mk_bar(1, closed_begin));
+        buffer.insert(
+            ("kraken".into(), "BTCUSD".into(), 1, closed_begin),
+            mk_bar(1, closed_begin),
+        );
         // Open 5Min: bucket runs to now + 4 minutes.
         let open_begin = now_ms - 60_000;
-        buffer.insert(("ETHUSD".into(), 5, open_begin), mk_bar(5, open_begin));
+        buffer.insert(
+            ("kraken".into(), "ETHUSD".into(), 5, open_begin),
+            mk_bar(5, open_begin),
+        );
         // Open 1Day: bucket started 12 hours ago, 12 hours remaining.
         let open_day_begin = now_ms - 12 * 3_600_000;
         buffer.insert(
-            ("SOLUSD".into(), 1440, open_day_begin),
+            ("kraken".into(), "SOLUSD".into(), 1440, open_day_begin),
             mk_bar(1440, open_day_begin),
         );
         let (to_flush, remaining) = partition_closed_bars(buffer, now_ms);
         assert_eq!(to_flush.len(), 1, "only the closed 1Min should flush");
-        assert!(to_flush.contains_key(&("BTCUSD".to_string(), 1, closed_begin)));
+        assert!(to_flush.contains_key(&(
+            "kraken".to_string(),
+            "BTCUSD".to_string(),
+            1,
+            closed_begin
+        )));
         assert_eq!(remaining.len(), 2, "both open bars stay buffered");
-        assert!(remaining.contains_key(&("ETHUSD".to_string(), 5, open_begin)));
-        assert!(remaining.contains_key(&("SOLUSD".to_string(), 1440, open_day_begin)));
+        assert!(remaining.contains_key(&(
+            "kraken".to_string(),
+            "ETHUSD".to_string(),
+            5,
+            open_begin
+        )));
+        assert!(remaining.contains_key(&(
+            "kraken".to_string(),
+            "SOLUSD".to_string(),
+            1440,
+            open_day_begin
+        )));
     }
 
     #[test]
@@ -277,7 +388,10 @@ mod tests {
         for i in 1..=10 {
             // Ten consecutive closed 1Min bars ending 1..=10 minutes ago.
             let begin = now_ms - (i as i64) * 60_000;
-            buffer.insert(("BTCUSD".into(), 1, begin), mk_bar(1, begin));
+            buffer.insert(
+                ("kraken".into(), "BTCUSD".into(), 1, begin),
+                mk_bar(1, begin),
+            );
         }
         let (to_flush, remaining) = partition_closed_bars(buffer, now_ms);
         assert_eq!(to_flush.len(), 10);
@@ -288,7 +402,10 @@ mod tests {
     fn grouped_ws_bar_entries_chunking_is_bounded_and_lossless() {
         let mut grouped: GroupedWsBars = HashMap::new();
         for i in 0..10 {
-            grouped.insert((format!("PAIR{i}USD"), "1Min"), (Vec::new(), i));
+            grouped.insert(
+                ("kraken".to_string(), format!("PAIR{i}USD"), "1Min"),
+                (Vec::new(), i),
+            );
         }
         let chunks = chunk_grouped_ws_bar_entries(grouped, 3);
         assert_eq!(chunks.len(), 4);
@@ -299,8 +416,14 @@ mod tests {
     #[test]
     fn grouped_ws_bar_entries_chunking_never_uses_zero_chunk_size() {
         let mut grouped: GroupedWsBars = HashMap::new();
-        grouped.insert(("BTCUSD".to_string(), "1Min"), (Vec::new(), 1));
-        grouped.insert(("ETHUSD".to_string(), "1Min"), (Vec::new(), 2));
+        grouped.insert(
+            ("kraken".to_string(), "BTCUSD".to_string(), "1Min"),
+            (Vec::new(), 1),
+        );
+        grouped.insert(
+            ("kraken".to_string(), "ETHUSD".to_string(), "1Min"),
+            (Vec::new(), 2),
+        );
         let chunks = chunk_grouped_ws_bar_entries(grouped, 0);
         assert_eq!(chunks.len(), 2);
         assert!(chunks.iter().all(|chunk| chunk.len() == 1));
@@ -329,11 +452,18 @@ const WS_BAR_MAX_GROUPS_PER_BLOCKING_FLUSH: usize = 256;
 const WS_BAR_MAX_BARS_PER_KEY: usize = 0; // 0 == unbounded (full-depth merge)
 
 /// Triple committed after a flush: `(typhoon_symbol, tf_label, last_bar_ts_ms)`.
-/// Sent to the main loop so it can mark the (symbol, tf) WS-fresh.
+/// Sent to the main loop so it can mark the (symbol, tf) WS-fresh. The symbol
+/// is source-local: Spot uses `BTCUSD`, xStocks use bare equity symbols like
+/// `AAPL` so the iapi scheduler can see the WS path is fresh.
 pub(super) type WsFreshEntry = (String, String, i64);
 
-type GroupedWsBarEntry = ((String, &'static str), (Vec<serde_json::Value>, i64));
-type GroupedWsBars = HashMap<(String, &'static str), (Vec<serde_json::Value>, i64)>;
+type WsCacheTarget = (&'static str, String);
+type WsBuffer = HashMap<(String, String, u32, i64), KrakenWsOhlcBar>;
+type GroupedWsBarEntry = (
+    (String, String, &'static str),
+    (Vec<serde_json::Value>, i64),
+);
+type GroupedWsBars = HashMap<(String, String, &'static str), (Vec<serde_json::Value>, i64)>;
 
 fn chunk_grouped_ws_bar_entries(
     grouped: GroupedWsBars,
@@ -413,7 +543,7 @@ async fn run_ws_bar_writer(
     // Last-write-wins for the same bucket, which is exactly the semantic
     // Kraken's WS uses: each new update for the open bar supersedes the
     // previous one until interval_begin rolls.
-    let mut buffer: HashMap<(String, u32, i64), KrakenWsOhlcBar> = HashMap::new();
+    let mut buffer: WsBuffer = HashMap::new();
 
     let mut flush_ticker = tokio::time::interval(WS_BAR_FLUSH_INTERVAL);
     flush_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -424,12 +554,16 @@ async fn run_ws_bar_writer(
             maybe_bar = bar_rx.recv() => {
                 match maybe_bar {
                     Some(bar) => {
-                        let cache_symbol = kraken_ws_symbol_to_cache_key(&bar.symbol);
-                        if cache_symbol.is_empty() {
+                        let Some((cache_source, cache_symbol)) = kraken_ws_bar_cache_target(&bar.symbol) else {
                             continue;
-                        }
+                        };
                         buffer.insert(
-                            (cache_symbol, bar.interval_min, bar.interval_begin_ms),
+                            (
+                                cache_source.to_string(),
+                                cache_symbol,
+                                bar.interval_min,
+                                bar.interval_begin_ms,
+                            ),
                             bar,
                         );
                     }
@@ -470,16 +604,10 @@ async fn run_ws_bar_writer(
 /// A bar is "closed" once its bucket end is at or before `now_ms`; open bars
 /// stay in the buffer so the next tick's update can supersede them (last-write
 /// -wins) and only the eventual final close value reaches the cache.
-fn partition_closed_bars(
-    buffer: HashMap<(String, u32, i64), KrakenWsOhlcBar>,
-    now_ms: i64,
-) -> (
-    HashMap<(String, u32, i64), KrakenWsOhlcBar>,
-    HashMap<(String, u32, i64), KrakenWsOhlcBar>,
-) {
+fn partition_closed_bars(buffer: WsBuffer, now_ms: i64) -> (WsBuffer, WsBuffer) {
     buffer
         .into_iter()
-        .partition(|((_, interval_min, interval_begin_ms), _)| {
+        .partition(|((_, _, interval_min, interval_begin_ms), _)| {
             ws_bar_is_closed(*interval_min, *interval_begin_ms, now_ms)
         })
 }
@@ -490,7 +618,7 @@ fn partition_closed_bars(
 async fn flush_ws_bars(
     shared_cache: &Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
     commit_tx: &mpsc::UnboundedSender<Vec<WsFreshEntry>>,
-    buffer: HashMap<(String, u32, i64), KrakenWsOhlcBar>,
+    buffer: WsBuffer,
 ) {
     let Some(cache) = shared_cache.read().ok().and_then(|g| g.clone()) else {
         return;
@@ -500,13 +628,13 @@ async fn flush_ws_bars(
     // we can report it back as the WS-fresh anchor. Startup snapshots can
     // produce ~12k groups; process them in bounded blocking chunks below.
     let mut grouped: GroupedWsBars = HashMap::new();
-    for ((cache_symbol, interval_min, interval_begin_ms), bar) in buffer {
+    for ((cache_source, cache_symbol, interval_min, interval_begin_ms), bar) in buffer {
         let Some(tf_label) = kraken_ws_interval_to_tf_label(interval_min) else {
             continue;
         };
         let json = kraken_ws_bar_to_json(&bar);
         let entry = grouped
-            .entry((cache_symbol, tf_label))
+            .entry((cache_source, cache_symbol, tf_label))
             .or_insert_with(|| (Vec::new(), 0));
         entry.0.push(json);
         if interval_begin_ms > entry.1 {
@@ -522,11 +650,11 @@ async fn flush_ws_bars(
         let cache_clone = cache.clone();
         let result = tokio::task::spawn_blocking(move || {
             let mut committed: Vec<WsFreshEntry> = Vec::with_capacity(chunk.len());
-            for ((cache_symbol, tf_label), (bars, last_bucket_ms)) in chunk {
+            for ((cache_source, cache_symbol, tf_label), (bars, last_bucket_ms)) in chunk {
                 if bars.is_empty() {
                     continue;
                 }
-                let key = format!("kraken:{cache_symbol}:{tf_label}");
+                let key = format!("{cache_source}:{cache_symbol}:{tf_label}");
                 let bars_json = match serde_json::to_string(&bars) {
                     Ok(j) => j,
                     Err(_) => continue,

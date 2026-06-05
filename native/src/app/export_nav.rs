@@ -49,6 +49,7 @@ impl TyphooNApp {
         self.show_gemini_cli = false;
         self.show_codex_cli = false;
         self.show_hermes_cli = false;
+        self.show_grok_cli = false;
         self.show_matrix_chat = false;
         self.show_reddit = false;
         self.show_bardata = false;
