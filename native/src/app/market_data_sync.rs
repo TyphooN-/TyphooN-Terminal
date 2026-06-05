@@ -31,11 +31,16 @@ where
 }
 
 pub(super) fn kraken_equity_native_symbols_for_timeframe(
+    catalog_symbols: &[String],
     demand_symbols: &[String],
     timeframe: &str,
 ) -> Vec<String> {
     if kraken_equity_full_universe_timeframe(timeframe) {
-        normalize_kraken_equity_symbol_list(demand_symbols.iter())
+        if catalog_symbols.is_empty() {
+            normalize_kraken_equity_symbol_list(demand_symbols.iter())
+        } else {
+            normalize_kraken_equity_symbol_list(catalog_symbols.iter())
+        }
     } else {
         Vec::new()
     }
@@ -46,7 +51,10 @@ pub(super) fn kraken_equity_symbols_for_timeframe(
     demand_symbols: &[String],
     timeframe: &str,
 ) -> Vec<String> {
-    if kraken_equity_broad_fallback_timeframe(timeframe) && !catalog_symbols.is_empty() {
+    if (kraken_equity_full_universe_timeframe(timeframe)
+        || kraken_equity_broad_fallback_timeframe(timeframe))
+        && !catalog_symbols.is_empty()
+    {
         normalize_kraken_equity_symbol_list(catalog_symbols.iter())
     } else {
         normalize_kraken_equity_symbol_list(demand_symbols.iter())
@@ -924,7 +932,8 @@ impl TyphooNApp {
     pub(super) fn schedule_kraken_equities_universe(&mut self) -> usize {
         let catalog_symbols = self.kraken_equity_catalog_symbols();
         let demand_symbols = self.kraken_equity_demand_symbols();
-        let native_symbols = kraken_equity_native_symbols_for_timeframe(&demand_symbols, "1Day");
+        let native_symbols =
+            kraken_equity_native_symbols_for_timeframe(&catalog_symbols, &demand_symbols, "1Day");
         let fallback_symbols = if catalog_symbols.is_empty() {
             demand_symbols.clone()
         } else {
@@ -2191,49 +2200,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kraken_equity_native_symbols_for_timeframe_uses_demand_not_full_catalog() {
-        let demand = vec!["POM.EQ".to_string(), "array".to_string()];
-
-        assert_eq!(
-            kraken_equity_native_symbols_for_timeframe(&demand, "15Min"),
-            vec!["ARRAY".to_string(), "POM".to_string()]
-        );
-        assert_eq!(
-            kraken_equity_native_symbols_for_timeframe(&demand, "1Day"),
-            vec!["ARRAY".to_string(), "POM".to_string()]
-        );
-        assert_eq!(
-            kraken_equity_native_symbols_for_timeframe(&demand, "1Week"),
-            vec!["ARRAY".to_string(), "POM".to_string()]
-        );
-        assert!(kraken_equity_native_symbols_for_timeframe(&demand, "1Month").is_empty());
-    }
-
-    #[test]
-    fn kraken_equity_symbols_for_timeframe_uses_catalog_for_broad_fallback_timeframes() {
+    fn kraken_equity_native_symbols_for_timeframe_uses_catalog_when_available() {
         let catalog = vec!["TNDM.EQ".to_string(), "wok".to_string(), "TNDM".to_string()];
         let demand = vec!["POM.EQ".to_string(), "array".to_string()];
 
         assert_eq!(
-            kraken_equity_symbols_for_timeframe(&catalog, &demand, "15Min"),
+            kraken_equity_native_symbols_for_timeframe(&catalog, &demand, "15Min"),
             vec!["TNDM".to_string(), "WOK".to_string()]
         );
         assert_eq!(
-            kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Day"),
+            kraken_equity_native_symbols_for_timeframe(&catalog, &demand, "1Day"),
             vec!["TNDM".to_string(), "WOK".to_string()]
         );
         assert_eq!(
-            kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Week"),
+            kraken_equity_native_symbols_for_timeframe(&catalog, &demand, "1Week"),
             vec!["TNDM".to_string(), "WOK".to_string()]
         );
+        assert!(kraken_equity_native_symbols_for_timeframe(&catalog, &demand, "1Month").is_empty());
         assert_eq!(
-            kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Month"),
-            vec!["TNDM".to_string(), "WOK".to_string()]
-        );
-        assert_eq!(
-            kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Min"),
+            kraken_equity_native_symbols_for_timeframe(&[], &demand, "1Day"),
             vec!["ARRAY".to_string(), "POM".to_string()]
         );
+    }
+
+    #[test]
+    fn kraken_equity_symbols_for_timeframe_uses_catalog_for_all_supported_merged_timeframes() {
+        let catalog = vec!["TNDM.EQ".to_string(), "wok".to_string(), "TNDM".to_string()];
+        let demand = vec!["POM.EQ".to_string(), "array".to_string()];
+
+        for tf in ["1Min", "5Min", "15Min", "1Day", "1Week", "1Month"] {
+            assert_eq!(
+                kraken_equity_symbols_for_timeframe(&catalog, &demand, tf),
+                vec!["TNDM".to_string(), "WOK".to_string()],
+                "{tf} should be catalog-scoped when the Kraken Equities universe is loaded"
+            );
+        }
         assert_eq!(
             kraken_equity_symbols_for_timeframe(&[], &demand, "1Day"),
             vec!["ARRAY".to_string(), "POM".to_string()]

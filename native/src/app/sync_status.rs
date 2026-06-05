@@ -447,6 +447,7 @@ impl TyphooNApp {
                     "kraken" => spot_symbols.clone(),
                     "kraken-futures" => futures_symbols.clone(),
                     "kraken-equities" => kraken_equity_native_symbols_for_timeframe(
+                        &kraken_equity_catalog_symbols,
                         &kraken_equity_demand_symbols,
                         tf,
                     ),
