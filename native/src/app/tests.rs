@@ -185,6 +185,46 @@ fn chart_equity_merge_preserves_old_assist_history_and_prefers_kraken_overlap() 
 }
 
 #[test]
+fn chart_persists_merged_equity_bars_under_merged_cache_key() {
+    let db_path = std::env::temp_dir().join(format!(
+        "typhoon-merged-cache-test-{}-{}.db",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let day = 86_400_000i64;
+    let bars = vec![
+        Bar {
+            ts_ms: day,
+            open: 1.0,
+            high: 2.0,
+            low: 0.5,
+            close: 1.5,
+            volume: 10.0,
+        },
+        Bar {
+            ts_ms: 2 * day,
+            open: 2.0,
+            high: 3.0,
+            low: 1.5,
+            close: 2.5,
+            volume: 20.0,
+        },
+    ];
+
+    chart_persist_merged_equity_bars_to_cache(&cache, "WOK.EQ", "1Day", &bars).unwrap();
+
+    let raw = cache
+        .get_bars_raw("merged:WOK:1Day")
+        .unwrap()
+        .expect("merged cache key should exist");
+    assert_eq!(raw.len(), 2);
+    assert_eq!(raw[0].0, day);
+    assert_eq!(raw[1].4, 2.5);
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn chart_forming_bar_requires_caught_up_previous_bucket() {
     let day = 86_400_000i64;
     let now = 20 * day + 23 * 3_600_000;

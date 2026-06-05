@@ -333,6 +333,31 @@ impl TyphooNApp {
         checked_or_complete_lookup: &dyn Fn(&str) -> bool,
     ) -> MergedSyncStatus {
         let mut saw_stale = false;
+        let merged_key = chart_merged_equity_cache_key(symbol, tf);
+        if let Some((bar_count, write_ts_s)) = detailed.get(merged_key.as_str()).copied() {
+            if bar_count > 0 {
+                let last_ms = self
+                    .bg
+                    .bar_ts_cache
+                    .get(&merged_key)
+                    .map(|(_, last_ms, _)| *last_ms)
+                    .filter(|last_ms| *last_ms > 0)
+                    .unwrap_or_else(|| write_ts_s.saturating_mul(1000));
+                if let Some(period_ms) = merged_sync_period_ms(tf) {
+                    let write_ms = write_ts_s.saturating_mul(1000);
+                    let recently_checked = write_ms > 0 && now_ms - write_ms <= period_ms * 24;
+                    let bar_aged_out = now_ms - last_ms > period_ms * 24;
+                    if bar_aged_out && !recently_checked && !checked_or_complete_lookup(&merged_key)
+                    {
+                        saw_stale = true;
+                    } else {
+                        return MergedSyncStatus::Healthy;
+                    }
+                } else {
+                    saw_stale = true;
+                }
+            }
+        }
         for source in ["kraken-equities", "alpaca", "yahoo-chart"] {
             if source == "kraken-equities" && !kraken_equity_full_universe_timeframe(tf) {
                 continue;

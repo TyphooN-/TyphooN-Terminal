@@ -1077,6 +1077,46 @@ pub(crate) fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &st
     keys
 }
 
+pub(crate) fn chart_merged_equity_cache_key(symbol: &str, timeframe: &str) -> String {
+    let symbol = normalize_market_data_symbol(symbol)
+        .replace('/', "")
+        .trim_end_matches(".EQ")
+        .to_ascii_uppercase();
+    format!("merged:{symbol}:{timeframe}")
+}
+
+pub(crate) fn chart_persist_merged_equity_bars_to_cache(
+    cache: &SqliteCache,
+    symbol: &str,
+    timeframe: &str,
+    bars: &[Bar],
+) -> Result<(), String> {
+    if bars.is_empty() {
+        return Ok(());
+    }
+    let json: Vec<serde_json::Value> = bars
+        .iter()
+        .filter_map(|bar| {
+            let timestamp = chrono::DateTime::from_timestamp_millis(bar.ts_ms)?.to_rfc3339();
+            Some(serde_json::json!({
+                "timestamp": timestamp,
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+                "volume": bar.volume,
+            }))
+        })
+        .collect();
+    if json.is_empty() {
+        return Ok(());
+    }
+    let key = chart_merged_equity_cache_key(symbol, timeframe);
+    let json =
+        serde_json::to_string(&json).map_err(|e| format!("serialize merged bars failed: {e}"))?;
+    cache.put_bars(&key, &json)
+}
+
 pub(crate) fn chart_load_merged_equity_bars_from_cache(
     cache: &SqliteCache,
     symbol: &str,
@@ -1095,6 +1135,8 @@ pub(crate) fn chart_load_merged_equity_bars_from_cache(
                 .collect();
             let monthly = ChartState::aggregate_daily_raw_to_monthly(daily_raw);
             if monthly.len() >= 2 {
+                let _ =
+                    chart_persist_merged_equity_bars_to_cache(cache, symbol, timeframe, &monthly);
                 return monthly;
             }
         }
@@ -1124,7 +1166,9 @@ pub(crate) fn chart_load_merged_equity_bars_from_cache(
         .iter()
         .map(|(source, raw)| (*source, raw.as_slice()))
         .collect();
-    chart_merge_equity_raw_bars(timeframe, &views)
+    let merged = chart_merge_equity_raw_bars(timeframe, &views);
+    let _ = chart_persist_merged_equity_bars_to_cache(cache, symbol, timeframe, &merged);
+    merged
 }
 
 impl ChartState {
