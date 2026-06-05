@@ -7,6 +7,27 @@ use chart_helpers::*;
 
 // ─── chart rendering ─────────────────────────────────────────────────────────
 
+fn draw_current_sma200_overlay(flags_sma200: bool, has_mtf_ma: bool) -> bool {
+    flags_sma200 && !has_mtf_ma
+}
+
+fn draw_current_kama_overlay(flags_kama: bool, has_multi_kama: bool) -> bool {
+    flags_kama && !has_multi_kama
+}
+
+fn nnfx_trend_legend_labels(
+    has_mtf_ma: bool,
+    has_multi_kama: bool,
+) -> (&'static str, &'static str) {
+    let ma_label = if has_mtf_ma { "MTF_MA" } else { "SMA200" };
+    let kama_label = if has_multi_kama {
+        "MultiKAMA"
+    } else {
+        "KAMA(10,2,30)"
+    };
+    (ma_label, kama_label)
+}
+
 /// Draw a single chart viewport into `rect` using `painter`.
 pub(super) fn draw_chart(
     painter: &egui::Painter,
@@ -921,8 +942,8 @@ pub(super) fn draw_chart(
     }
 
     // ── indicator lines ──────────────────────────────────────────────────────
-    // Current-TF SMA200: only show if NO MTF SMA data exists (MTF replaces it in NNFX mode)
-    if flags.sma200 && chart.mtf_sma.is_empty() {
+    // Current-TF SMA200: only show if NO MTF_MA data exists (MTF_MA replaces it in NNFX mode)
+    if draw_current_sma200_overlay(flags.sma200, !chart.mtf_sma.is_empty()) {
         draw_indicator_line(
             painter,
             chart_rect,
@@ -951,7 +972,7 @@ pub(super) fn draw_chart(
         );
     }
     // Current-TF KAMA: only show if NO MultiKAMA HTF data exists
-    if flags.kama && chart.multi_kama.is_empty() {
+    if draw_current_kama_overlay(flags.kama, !chart.multi_kama.is_empty()) {
         draw_indicator_line(
             painter,
             chart_rect,
@@ -2391,8 +2412,8 @@ pub(super) fn draw_chart(
         }
     }
 
-    // Redraw core NNFX trend overlays after translucent zones/volume profile so
-    // Supply/Demand rectangles cannot bury the MultiKAMA and MTF 200SMA levels.
+    // Redraw primary NNFX trend overlays after translucent zones/volume profile so
+    // Supply/Demand rectangles cannot bury the MultiKAMA and MTF_MA levels.
     if flags.sma200 && !chart.mtf_sma.is_empty() {
         for (label, projected) in &chart.mtf_sma {
             let color = match label.as_str() {
@@ -2627,15 +2648,21 @@ pub(super) fn draw_chart(
     // ── indicator legend ─────────────────────────────────────────────────────
     let ly = chart_rect.top() + 34.0;
     let mut lx = chart_rect.left() + 8.0;
+    let (ma_legend_label, kama_legend_label) =
+        nnfx_trend_legend_labels(!chart.mtf_sma.is_empty(), !chart.multi_kama.is_empty());
     if flags.sma200 {
         painter.text(
             egui::pos2(lx, ly),
             egui::Align2::LEFT_TOP,
-            "SMA200",
+            ma_legend_label,
             egui::FontId::monospace(10.0),
-            SMA200_COL,
+            if chart.mtf_sma.is_empty() {
+                SMA200_COL
+            } else {
+                egui::Color32::from_rgb(255, 0, 255)
+            },
         );
-        lx += 57.0;
+        lx += if chart.mtf_sma.is_empty() { 57.0 } else { 65.0 };
     }
     if flags.sma100 {
         painter.text(
@@ -2651,7 +2678,7 @@ pub(super) fn draw_chart(
         painter.text(
             egui::pos2(lx, ly),
             egui::Align2::LEFT_TOP,
-            "KAMA(10,2,30)",
+            kama_legend_label,
             egui::FontId::monospace(10.0),
             KAMA_COL,
         );
@@ -7188,6 +7215,26 @@ mod tests {
         assert_eq!(super::format_candle_countdown(65_000), "01:05");
         assert_eq!(super::format_candle_countdown(3_661_000), "1:01:01");
         assert_eq!(super::format_candle_countdown(90_000_000), "1d 01:00");
+    }
+
+    #[test]
+    fn nnfx_view_uses_mql_mtf_names_when_projected_overlays_exist() {
+        assert_eq!(
+            super::nnfx_trend_legend_labels(true, true),
+            ("MTF_MA", "MultiKAMA")
+        );
+        assert_eq!(
+            super::nnfx_trend_legend_labels(false, false),
+            ("SMA200", "KAMA(10,2,30)")
+        );
+    }
+
+    #[test]
+    fn nnfx_view_suppresses_generic_current_tf_lines_when_mql_mtf_overlays_exist() {
+        assert!(!super::draw_current_sma200_overlay(true, true));
+        assert!(super::draw_current_sma200_overlay(true, false));
+        assert!(!super::draw_current_kama_overlay(true, true));
+        assert!(super::draw_current_kama_overlay(true, false));
     }
 }
 
