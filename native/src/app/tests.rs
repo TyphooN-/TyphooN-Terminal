@@ -225,6 +225,49 @@ fn chart_persists_merged_equity_bars_under_merged_cache_key() {
 }
 
 #[test]
+fn chart_materializes_merged_equity_cache_from_provider_rows() {
+    let db_path = std::env::temp_dir().join(format!(
+        "typhoon-merged-materialize-test-{}-{}.db",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let cache = SqliteCache::open(&db_path).unwrap();
+    cache
+        .put_bars(
+            "yahoo-chart:WOK:1Day",
+            r#"[
+                {"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10.0},
+                {"timestamp":"2024-01-02T00:00:00+00:00","open":2.0,"high":3.0,"low":1.5,"close":2.5,"volume":20.0}
+            ]"#,
+        )
+        .unwrap();
+    cache
+        .put_bars(
+            "kraken-equities:WOK:1Day",
+            r#"[
+                {"timestamp":"2024-01-02T00:00:00+00:00","open":20.0,"high":30.0,"low":15.0,"close":25.0,"volume":200.0},
+                {"timestamp":"2024-01-03T00:00:00+00:00","open":3.0,"high":4.0,"low":2.5,"close":3.5,"volume":30.0}
+            ]"#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        chart_materialize_merged_equity_cache(&cache, "WOK.EQ", "1Day").unwrap(),
+        3
+    );
+
+    let raw = cache
+        .get_bars_raw("merged:WOK:1Day")
+        .unwrap()
+        .expect("merged cache key should exist");
+    assert_eq!(raw.len(), 3);
+    assert_eq!(raw[0].4, 1.5);
+    assert_eq!(raw[1].4, 25.0);
+    assert_eq!(raw[2].4, 3.5);
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn chart_forming_bar_requires_caught_up_previous_bucket() {
     let day = 86_400_000i64;
     let now = 20 * day + 23 * 3_600_000;

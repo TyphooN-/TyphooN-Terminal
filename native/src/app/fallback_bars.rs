@@ -268,6 +268,14 @@ pub(super) fn store_fallback_bars(
     cache
         .put_bars(&cache_key, &json)
         .map_err(|e| format!("{source} cache write failed for {symbol} {tf}: {e}"))?;
+    if valid_count > 0
+        && matches!(
+            source,
+            "kraken-equities" | "alpaca" | "yahoo-chart" | "tastytrade" | "default"
+        )
+    {
+        let _ = chart_materialize_merged_equity_cache(cache, &symbol, tf);
+    }
     Ok(valid_count)
 }
 

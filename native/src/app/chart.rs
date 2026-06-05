@@ -1117,13 +1117,33 @@ pub(crate) fn chart_persist_merged_equity_bars_to_cache(
     cache.put_bars(&key, &json)
 }
 
+pub(crate) fn chart_materialize_merged_equity_cache(
+    cache: &SqliteCache,
+    symbol: &str,
+    timeframe: &str,
+) -> Result<usize, String> {
+    let merged = chart_build_merged_equity_bars_from_cache(cache, symbol, timeframe);
+    chart_persist_merged_equity_bars_to_cache(cache, symbol, timeframe, &merged)?;
+    Ok(merged.len())
+}
+
 pub(crate) fn chart_load_merged_equity_bars_from_cache(
     cache: &SqliteCache,
     symbol: &str,
     timeframe: &str,
 ) -> Vec<Bar> {
+    let merged = chart_build_merged_equity_bars_from_cache(cache, symbol, timeframe);
+    let _ = chart_persist_merged_equity_bars_to_cache(cache, symbol, timeframe, &merged);
+    merged
+}
+
+fn chart_build_merged_equity_bars_from_cache(
+    cache: &SqliteCache,
+    symbol: &str,
+    timeframe: &str,
+) -> Vec<Bar> {
     if timeframe == "1Month" {
-        let daily = chart_load_merged_equity_bars_from_cache(cache, symbol, "1Day");
+        let daily = chart_build_merged_equity_bars_from_cache(cache, symbol, "1Day");
         if daily.len() >= 2 {
             let daily_raw = daily
                 .into_iter()
@@ -1135,8 +1155,6 @@ pub(crate) fn chart_load_merged_equity_bars_from_cache(
                 .collect();
             let monthly = ChartState::aggregate_daily_raw_to_monthly(daily_raw);
             if monthly.len() >= 2 {
-                let _ =
-                    chart_persist_merged_equity_bars_to_cache(cache, symbol, timeframe, &monthly);
                 return monthly;
             }
         }
@@ -1166,9 +1184,7 @@ pub(crate) fn chart_load_merged_equity_bars_from_cache(
         .iter()
         .map(|(source, raw)| (*source, raw.as_slice()))
         .collect();
-    let merged = chart_merge_equity_raw_bars(timeframe, &views);
-    let _ = chart_persist_merged_equity_bars_to_cache(cache, symbol, timeframe, &merged);
-    merged
+    chart_merge_equity_raw_bars(timeframe, &views)
 }
 
 impl ChartState {

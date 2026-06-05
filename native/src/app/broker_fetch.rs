@@ -467,6 +467,27 @@ fn cryptocompare_backfill_floor_ms() -> i64 {
         .unwrap_or(0)
 }
 
+fn merged_equity_materialize_target_from_cache_key(cache_key: &str) -> Option<(String, String)> {
+    let mut parts = cache_key.splitn(3, ':');
+    let source = parts.next()?;
+    if !matches!(
+        source,
+        "kraken-equities" | "alpaca" | "yahoo-chart" | "tastytrade" | "default"
+    ) {
+        return None;
+    }
+    let symbol = parts.next()?.trim();
+    let timeframe = normalize_sync_timeframe_key(parts.next()?.trim())?;
+    let symbol = normalize_market_data_symbol(symbol)
+        .replace('/', "")
+        .trim_end_matches(".EQ")
+        .to_ascii_uppercase();
+    if symbol.is_empty() {
+        return None;
+    }
+    Some((symbol, timeframe.to_string()))
+}
+
 async fn store_json_bars_in_cache(
     cache_handle: Option<std::sync::Arc<SqliteCache>>,
     cache_key: String,
@@ -496,6 +517,13 @@ async fn store_json_bars_in_cache(
                 .map(|raw| raw.len())
                 .unwrap_or(0)
         };
+        if count > 0 {
+            if let Some((symbol, timeframe)) =
+                merged_equity_materialize_target_from_cache_key(&cache_key)
+            {
+                let _ = chart_materialize_merged_equity_cache(&cache, &symbol, &timeframe);
+            }
+        }
         Ok::<usize, String>(count)
     })
     .await
