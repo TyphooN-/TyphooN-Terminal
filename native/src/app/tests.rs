@@ -149,6 +149,42 @@ fn chart_equity_source_selection_can_prefer_fresher_fallback() {
 }
 
 #[test]
+fn chart_equity_merge_preserves_old_assist_history_and_prefers_kraken_overlap() {
+    let day = 86_400_000i64;
+    let yahoo_old = vec![
+        (1 * day, 1.0, 2.0, 0.5, 1.5, 10.0),
+        (2 * day, 2.0, 3.0, 1.5, 2.5, 20.0),
+        (3 * day, 3.0, 4.0, 2.5, 3.5, 30.0),
+    ];
+    let alpaca_mid = vec![
+        (3 * day, 30.0, 31.0, 29.0, 30.5, 300.0),
+        (4 * day, 4.0, 5.0, 3.5, 4.5, 40.0),
+    ];
+    let kraken_fresh = vec![
+        (4 * day, 400.0, 401.0, 399.0, 400.5, 4000.0),
+        (5 * day, 5.0, 6.0, 4.5, 5.5, 50.0),
+    ];
+
+    let merged = chart_merge_equity_raw_bars(
+        "1Day",
+        &[
+            ("yahoo-chart", &yahoo_old),
+            ("alpaca", &alpaca_mid),
+            ("kraken-equities", &kraken_fresh),
+        ],
+    );
+
+    assert_eq!(
+        merged.iter().map(|b| b.ts_ms).collect::<Vec<_>>(),
+        vec![day, 2 * day, 3 * day, 4 * day, 5 * day]
+    );
+    assert_eq!(merged[0].close, 1.5);
+    assert_eq!(merged[2].close, 30.5);
+    assert_eq!(merged[3].close, 400.5);
+    assert_eq!(merged[4].close, 5.5);
+}
+
+#[test]
 fn chart_forming_bar_requires_caught_up_previous_bucket() {
     let day = 86_400_000i64;
     let now = 20 * day + 23 * 3_600_000;

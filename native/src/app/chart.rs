@@ -817,6 +817,88 @@ pub(crate) fn chart_bar_last_valid_ts(raw: &[(i64, f64, f64, f64, f64, f64)]) ->
         .unwrap_or(0)
 }
 
+pub(crate) fn chart_merge_bucket_ts(timeframe: &str, ts: i64) -> i64 {
+    match timeframe {
+        "1Month" => chrono::DateTime::from_timestamp_millis(ts)
+            .and_then(|dt| {
+                chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1)
+                    .and_then(|d| d.and_hms_opt(0, 0, 0))
+            })
+            .map(|ndt| ndt.and_utc().timestamp_millis())
+            .unwrap_or(ts),
+        "1Week" => chrono::DateTime::from_timestamp_millis(ts)
+            .and_then(|dt| {
+                let days_since_mon = dt.weekday().num_days_from_monday() as i64;
+                (dt.date_naive() - chrono::Duration::days(days_since_mon)).and_hms_opt(0, 0, 0)
+            })
+            .map(|ndt| ndt.and_utc().timestamp_millis())
+            .unwrap_or(ts),
+        "1Day" => chrono::DateTime::from_timestamp_millis(ts)
+            .and_then(|dt| {
+                chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), dt.day())
+                    .and_then(|d| d.and_hms_opt(0, 0, 0))
+            })
+            .map(|ndt| ndt.and_utc().timestamp_millis())
+            .unwrap_or(ts),
+        "4Hour" => ts / (4 * 3_600_000) * (4 * 3_600_000),
+        "1Hour" => ts / 3_600_000 * 3_600_000,
+        "30Min" => ts / 1_800_000 * 1_800_000,
+        "15Min" => ts / 900_000 * 900_000,
+        "5Min" => ts / 300_000 * 300_000,
+        _ => ts / 60_000 * 60_000,
+    }
+}
+
+pub(crate) fn chart_merge_equity_raw_bars(
+    timeframe: &str,
+    sources: &[(&str, &[(i64, f64, f64, f64, f64, f64)])],
+) -> Vec<Bar> {
+    let mut by_bucket: std::collections::BTreeMap<i64, (u8, Bar)> =
+        std::collections::BTreeMap::new();
+    for (source, raw) in sources {
+        let Some(rank) = chart_equity_source_rank(source) else {
+            continue;
+        };
+        if !chart_source_bars_match_timeframe(source, timeframe, raw) {
+            continue;
+        }
+        for (ts, o, h, l, c, v) in raw.iter().copied() {
+            if ts <= 0
+                || o <= 0.0
+                || h <= 0.0
+                || l <= 0.0
+                || c <= 0.0
+                || !o.is_finite()
+                || !h.is_finite()
+                || !l.is_finite()
+                || !c.is_finite()
+                || h < l
+            {
+                continue;
+            }
+            let bucket = chart_merge_bucket_ts(timeframe, ts);
+            let bar = Bar {
+                ts_ms: ts,
+                open: o,
+                high: h,
+                low: l,
+                close: c,
+                volume: v,
+            };
+            let replace = by_bucket
+                .get(&bucket)
+                .map(|(existing_rank, existing_bar)| {
+                    rank < *existing_rank || (rank == *existing_rank && ts >= existing_bar.ts_ms)
+                })
+                .unwrap_or(true);
+            if replace {
+                by_bucket.insert(bucket, (rank, bar));
+            }
+        }
+    }
+    by_bucket.into_values().map(|(_, bar)| bar).collect()
+}
+
 pub(crate) fn chart_equity_source_rank(source: &str) -> Option<u8> {
     match source {
         "kraken-equities" => Some(0),
@@ -993,6 +1075,56 @@ pub(crate) fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &st
     }
 
     keys
+}
+
+pub(crate) fn chart_load_merged_equity_bars_from_cache(
+    cache: &SqliteCache,
+    symbol: &str,
+    timeframe: &str,
+) -> Vec<Bar> {
+    if timeframe == "1Month" {
+        let daily = chart_load_merged_equity_bars_from_cache(cache, symbol, "1Day");
+        if daily.len() >= 2 {
+            let daily_raw = daily
+                .into_iter()
+                .map(|bar| {
+                    (
+                        bar.ts_ms, bar.open, bar.high, bar.low, bar.close, bar.volume,
+                    )
+                })
+                .collect();
+            let monthly = ChartState::aggregate_daily_raw_to_monthly(daily_raw);
+            if monthly.len() >= 2 {
+                return monthly;
+            }
+        }
+    }
+
+    type RawBars = Vec<(i64, f64, f64, f64, f64, f64)>;
+    let mut loaded: Vec<(&'static str, RawBars)> = Vec::new();
+    for source in [
+        "yahoo-chart",
+        "alpaca",
+        "tastytrade",
+        "kraken-equities",
+        "default",
+    ] {
+        for key in chart_source_cache_keys(source, symbol, timeframe) {
+            let Ok(Some(raw)) = cache.get_bars_raw(&key) else {
+                continue;
+            };
+            if raw.is_empty() {
+                continue;
+            }
+            loaded.push((source, raw));
+            break;
+        }
+    }
+    let views: Vec<(&str, &[(i64, f64, f64, f64, f64, f64)])> = loaded
+        .iter()
+        .map(|(source, raw)| (*source, raw.as_slice()))
+        .collect();
+    chart_merge_equity_raw_bars(timeframe, &views)
 }
 
 impl ChartState {
@@ -1658,6 +1790,31 @@ impl ChartState {
         let tf = self.timeframe.cache_suffix();
         let old_bars_empty = self.bars.is_empty();
         let old_len = self.bars.len();
+        if chart_prefers_fresh_equity_source(&sym_norm) {
+            let merged = chart_load_merged_equity_bars_from_cache(cache, &sym, tf);
+            if !merged.is_empty() {
+                self.gap_fill_timestamps.clear();
+                self.bars = merged;
+                self.primary_source = "merged";
+                self.primary_first_ts = self.bars.first().map(|bar| bar.ts_ms).unwrap_or(0);
+                if old_bars_empty {
+                    self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+                    self.manual_view_override = false;
+                    self.reset_camera_from_legacy();
+                } else {
+                    self.camera.on_data_len_changed(old_len, self.bars.len());
+                    self.sync_camera_to_legacy();
+                }
+                self.compute_indicators_gpu(gpu);
+                log.push_back(LogEntry::info(format!(
+                    "Loaded {} merged bars for {} [{}]",
+                    self.bars.len(),
+                    self.symbol,
+                    self.timeframe.label()
+                )));
+                return true;
+            }
+        }
         let mut keys_to_try = vec![
             format!("mt5:{}:{}", sym, tf),
             format!("kraken:{}:{}", sym, tf),
@@ -2082,6 +2239,36 @@ impl ChartState {
             }
             r.split(':').last().unwrap_or(r).replace('/', "")
         };
+
+        if chart_prefers_fresh_equity_source(&bare_sym) {
+            let merged = chart_load_merged_equity_bars_from_cache(cache, &bare_sym, tf);
+            if !merged.is_empty() {
+                self.gap_fill_timestamps.clear();
+                self.bars = merged;
+                self.primary_source = "merged";
+                self.primary_first_ts = self.bars.first().map(|bar| bar.ts_ms).unwrap_or(0);
+                self.compute_indicators_gpu(gpu);
+                self.compute_mtf_sma(cache);
+                self.compute_multi_kama(cache);
+                let mtf_info = if !self.mtf_sma.is_empty() || !self.multi_kama.is_empty() {
+                    format!(
+                        " | MTF_MA: {} lines, MultiKAMA: {} TFs",
+                        self.mtf_sma.len(),
+                        self.multi_kama.len()
+                    )
+                } else {
+                    String::new()
+                };
+                log.push_back(LogEntry::info(format!(
+                    "Loaded {} merged bars for {} [{}]{}",
+                    self.bars.len(),
+                    self.symbol,
+                    self.timeframe.label(),
+                    mtf_info
+                )));
+                return;
+            }
+        }
 
         // Load primary source (filter invalid bars at read time)
         match cache.get_bars_raw(&key) {
