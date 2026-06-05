@@ -139,9 +139,9 @@ pub(super) fn kraken_xstocks_session_status_at(now_utc: chrono::DateTime<chrono:
     let (session, next_label, target) = if minute_of_day < PRE {
         ("OVERNIGHT", "pre-market", boundary_today(PRE))
     } else if minute_of_day < REGULAR {
-        ("PRE", "regular", boundary_today(REGULAR))
+        ("PRE", "core", boundary_today(REGULAR))
     } else if minute_of_day < AFTER {
-        ("REGULAR", "after-hours", boundary_today(AFTER))
+        ("CORE", "after-hours", boundary_today(AFTER))
     } else if minute_of_day < OVERNIGHT {
         let label = if weekday == chrono::Weekday::Fri {
             "close"
@@ -407,11 +407,11 @@ mod tests {
         );
         assert!(
             kraken_xstocks_session_status_at(at("2026-06-01T12:00:00Z"))
-                .starts_with("Kraken xStocks PRE · next regular")
+                .starts_with("Kraken xStocks PRE · next core")
         );
         assert!(
             kraken_xstocks_session_status_at(at("2026-06-01T15:00:00Z"))
-                .starts_with("Kraken xStocks REGULAR · next after-hours")
+                .starts_with("Kraken xStocks CORE · next after-hours")
         );
         assert!(
             kraken_xstocks_session_status_at(at("2026-06-01T21:00:00Z"))
