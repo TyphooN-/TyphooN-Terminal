@@ -330,7 +330,25 @@ impl IapiLimiter {
                         .unwrap_or(false);
                     let restored_rate = restored_aimd_rate(state);
                     let restored_rate = if recent_aimd_learning || state.tuned_rate > 0.0 {
-                        restored_rate
+                        if recent_aimd_learning
+                            && state.tuned_rate <= 0.0
+                            && state.discovered_ceiling > config.aimd_min_rate
+                        {
+                            // Older persisted states may carry a precise
+                            // discovered ceiling but a floor-level checkpoint
+                            // from the post-429 decrease. Resume near the
+                            // learned safe edge instead of spending another
+                            // long session crawling from the floor.
+                            restored_rate.max(recovery_rate_after_limit(
+                                restored_rate,
+                                state.discovered_ceiling,
+                                config.aimd_decrease_factor,
+                                config.aimd_min_rate,
+                                config.aimd_low_rate_increment_per_step,
+                            ))
+                        } else {
+                            restored_rate
+                        }
                     } else {
                         restored_rate.min(config.refill_per_sec.max(config.aimd_min_rate))
                     };
@@ -1172,8 +1190,41 @@ mod tests {
             "recent checkpoint should survive cooldown expiry, got {rate}"
         );
         assert!(
-            ceiling.map(|c| (c - 0.7634).abs() < 0.0001).unwrap_or(false),
+            ceiling
+                .map(|c| (c - 0.7634).abs() < 0.0001)
+                .unwrap_or(false),
             "recent discovered ceiling should still cap the next ramp, got {ceiling:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn recent_floor_checkpoint_restores_near_discovered_ceiling() {
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let now_unix = chrono::Utc::now().timestamp();
+        let state = PersistedState {
+            cooldown_until_unix: now_unix - 60,
+            consecutive: 1,
+            // Recent 1015 learning from older limiter builds may have persisted
+            // the post-limit checkpoint at the floor even though the precise
+            // discovered ceiling was known. Startup should use that ceiling to
+            // avoid re-crawling from 0.5 req/s every run.
+            last_arm_unix: now_unix - 700,
+            tuned_rate: 0.0,
+            checkpoint_rate: 0.5,
+            discovered_ceiling: 0.7634,
+        };
+        std::fs::write(tmp.path(), serde_json::to_string(&state).unwrap()).unwrap();
+        let cfg = IapiLimiterConfig {
+            persistence_path: Some(tmp.path().to_path_buf()),
+            refill_per_sec: 0.5,
+            aimd_tuned_after: StdDuration::from_secs(30 * 60),
+            ..aimd_config()
+        };
+        let lim = IapiLimiter::new(cfg);
+        let rate = lim.current_rate_per_sec().await;
+        assert!(
+            (rate - 0.7534).abs() < 0.0001,
+            "recent floor checkpoint should restart near ceiling, got {rate}"
         );
     }
 
