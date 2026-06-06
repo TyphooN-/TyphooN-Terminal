@@ -7192,13 +7192,13 @@ mod tests {
     }
 
     #[test]
-    fn candle_countdown_rolls_forward_for_stale_bar_data() {
+    fn candle_countdown_hides_for_stale_or_closed_session_bar_data() {
         let last_bar = 1_700_000_000_000_i64;
         let now = last_bar + 17 * 60_000 + 10_000;
 
         assert_eq!(
             super::next_candle_remaining_ms_at(last_bar, super::Timeframe::M5, now),
-            Some(170_000)
+            None
         );
     }
 
@@ -7278,14 +7278,20 @@ fn now_unix_ms() -> Option<i64> {
 
 fn next_candle_remaining_ms_at(last_bar_ts_ms: i64, tf: Timeframe, now_ms: i64) -> Option<i64> {
     let interval_ms = i64::from(tf.minutes()).checked_mul(60_000)?;
-    if interval_ms <= 0 {
+    if interval_ms <= 0 || last_bar_ts_ms <= 0 || now_ms <= 0 {
         return None;
     }
+
+    // This is a candle-close countdown, not a generic next calendar boundary
+    // timer. Only show it while the latest cached bar is actually the bar that
+    // is forming now. If the market/session is closed, the latest bar is stale
+    // and must not roll forward through synthetic future buckets.
     let elapsed = now_ms.saturating_sub(last_bar_ts_ms);
-    let intervals_elapsed = elapsed / interval_ms;
-    let next_close_ms =
-        last_bar_ts_ms.checked_add((intervals_elapsed + 1).checked_mul(interval_ms)?)?;
-    Some(next_close_ms.saturating_sub(now_ms))
+    if elapsed >= interval_ms {
+        return None;
+    }
+
+    Some(interval_ms - elapsed)
 }
 
 fn next_candle_countdown_label(last_bar_ts_ms: i64, tf: Timeframe) -> Option<String> {
