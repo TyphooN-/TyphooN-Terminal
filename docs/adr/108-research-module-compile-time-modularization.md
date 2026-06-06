@@ -41,6 +41,8 @@ Initial structure:
   - market/statistical snapshot computations for IV rank, seasonality, peer correlation matrices, total return, and option volatility skew
 - `engine/src/core/research/fundamental_stats.rs`
   - fundamental leverage and earnings-quality snapshot computations (`compute_leverage_snapshot`, `compute_accruals_snapshot`)
+- `engine/src/core/research/return_risk_stats.rs`
+  - dense return-distribution and risk-statistical snapshot computations from rounds 22-39 (`RETSKEW`, `RETKURT`, `TAILR`, drawdown/run-length/range/autocorrelation/fractal/normality/tail-risk surfaces, etc.)
 
 Rules for future slices:
 
@@ -76,12 +78,13 @@ Next structural targets, in order:
 
 ## Current Extraction Ranking
 
-After extracting `providers.rs`, `storage_core.rs`, `storage_market_data.rs`, `valuation.rs`, `market_stats.rs`, and `fundamental_stats.rs`, the root research file is still the dominant target:
+After extracting `providers.rs`, `storage_core.rs`, `storage_market_data.rs`, `valuation.rs`, `market_stats.rs`, `fundamental_stats.rs`, and `return_risk_stats.rs`, the root research file is still the dominant target:
 
 | File | Lines | Notes |
 | --- | ---: | --- |
-| `engine/src/core/research/mod.rs` | ~76,966 | Still the primary compile/rust-analyzer hotspot. |
+| `engine/src/core/research/mod.rs` | ~68,904 | Still the primary compile/rust-analyzer hotspot. |
 | `engine/src/core/research/types.rs` | ~9,342 | Already extracted; leave alone unless type ownership needs cleanup. |
+| `engine/src/core/research/return_risk_stats.rs` | ~8,071 | Extracted return-distribution/risk-statistical compute slice. |
 | `engine/src/core/darwin.rs` | ~7,055 | Secondary candidate, but smaller and already has proven child-module patterns. |
 | `engine/src/broker/alpaca.rs` | ~4,467 | Broker split candidate, but lower impact than research. |
 | `engine/src/core/research/valuation.rs` | ~1,132 | Extracted valuation/market-stat compute slice. |
@@ -94,14 +97,16 @@ After extracting `providers.rs`, `storage_core.rs`, `storage_market_data.rs`, `v
 Next best research slice is not another provider fetcher; it is a semantic compute/storage family from the remaining root file. Good candidates:
 
 1. `research/storage.rs` for schema/create/upsert/get helper families once the public API surface is inventoried.
-2. `research/quant_stats.rs` for the dense return/risk/statistical compute family currently clustered around the 13k-22k range.
-3. `research/indicator_snapshots.rs` for the large TA-style `compute_*_snapshot` families around 22k-31k, coordinated with existing `technical.rs` so indicator naming/parity stays clean.
+2. `research/indicator_snapshots.rs` for the large TA-style `compute_*_snapshot` families around 22k-31k, coordinated with existing `technical.rs` so indicator naming/parity stays clean.
+3. `research/storage_quant_snapshots.rs` for round 22+ schema/upsert/get helpers once the current compute extraction has settled.
 
 Do not start with a full `typhoon-research` crate split yet. The module is still entangled with `crate::core::{fundamentals, sec_filing, cache}` and LAN/broker infrastructure; crate extraction should come after at least two more semantic submodule cuts and API re-export stabilization.
 
 ## Consequences
 
 Positive:
+
+- Return-distribution/risk-statistical compute edits no longer require editing the root research file.
 
 - Market-stat compute edits no longer require editing the root research file.
 - Fundamental leverage/accrual compute edits no longer require editing the root research file.
