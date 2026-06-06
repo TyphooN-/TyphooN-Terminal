@@ -46,8 +46,21 @@ pub(super) fn should_auto_start_background_scope_scrape(
     // auto-starting a 12k-symbol SEC sweep on startup turns chart interaction
     // into molasses: the scrape pounds SQLite/EDGAR while egui is trying to
     // render and apply camera drags. Keep automatic startup scrapes bounded;
-    // manual ALL still goes through the full universe at click time.
+    // manual ALL is separately gated during heavy market-data catch-up.
     symbol_count > 0 && (!matches!(scope, EventSource::All) || symbol_count <= 512)
+}
+
+pub(super) fn should_start_manual_background_scope_scrape(
+    scope: EventSource,
+    symbol_count: usize,
+    heavy_sync_in_progress: bool,
+) -> bool {
+    // Manual ALL remains a real full-universe scrape when the app is idle, but
+    // a 12k-symbol News/SEC sweep during bar catch-up steals SQLite/network/UI
+    // budget from the sync path the user is watching. Focused/small scopes are
+    // still allowed so active-symbol research isn't blocked.
+    symbol_count > 0
+        && (!heavy_sync_in_progress || !matches!(scope, EventSource::All) || symbol_count <= 512)
 }
 
 pub(super) fn should_auto_start_kraken_fundamentals_scrape(symbol_count: usize) -> bool {
@@ -489,6 +502,35 @@ mod tests {
         assert!(!should_auto_start_background_scope_scrape(
             EventSource::All,
             0
+        ));
+    }
+
+    #[test]
+    fn manual_background_scope_scrape_blocks_large_all_during_heavy_sync() {
+        assert!(should_start_manual_background_scope_scrape(
+            EventSource::All,
+            12_000,
+            false
+        ));
+        assert!(!should_start_manual_background_scope_scrape(
+            EventSource::All,
+            12_000,
+            true
+        ));
+        assert!(should_start_manual_background_scope_scrape(
+            EventSource::All,
+            12,
+            true
+        ));
+        assert!(should_start_manual_background_scope_scrape(
+            EventSource::Kraken,
+            12_000,
+            true
+        ));
+        assert!(!should_start_manual_background_scope_scrape(
+            EventSource::All,
+            0,
+            false
         ));
     }
 

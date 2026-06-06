@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::app_runtime_support::should_start_manual_background_scope_scrape;
 
 impl TyphooNApp {
     pub(super) fn render_scrape_darwinia_windows(&mut self, ctx: &egui::Context) {
@@ -865,15 +866,30 @@ impl TyphooNApp {
                     );
                 } else {
                     let symbol_count = symbols.len();
-                    let db_path = cache_db_path();
-                    let _ = self
-                        .broker_tx
-                        .send(BrokerCmd::SecScrape { db_path, symbols });
-                    self.scrape_sec_running = true;
-                    self.scrape_sec_last_msg = format!(
-                        "scraping Scope {} ({} symbols)...",
-                        scrape_status_sec_scope_label, symbol_count
-                    );
+                    if !should_start_manual_background_scope_scrape(
+                        self.broker_scope,
+                        symbol_count,
+                        self.heavy_sync_in_progress,
+                    ) {
+                        self.scrape_sec_last_msg = format!(
+                            "deferred: Scope {} scrape waits for market-data catch-up",
+                            scrape_status_sec_scope_label
+                        );
+                        self.log.push_back(LogEntry::warn(format!(
+                            "SEC EDGAR scrape deferred during market-data catch-up for Scope {} ({} symbols); use Active scope or retry after sync settles",
+                            scrape_status_sec_scope_label, symbol_count
+                        )));
+                    } else {
+                        let db_path = cache_db_path();
+                        let _ = self
+                            .broker_tx
+                            .send(BrokerCmd::SecScrape { db_path, symbols });
+                        self.scrape_sec_running = true;
+                        self.scrape_sec_last_msg = format!(
+                            "scraping Scope {} ({} symbols)...",
+                            scrape_status_sec_scope_label, symbol_count
+                        );
+                    }
                 }
             }
         }

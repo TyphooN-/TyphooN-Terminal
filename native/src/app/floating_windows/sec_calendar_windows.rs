@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::app_runtime_support::should_start_manual_background_scope_scrape;
 
 impl TyphooNApp {
     pub(super) fn render_sec_calendar_windows(&mut self, ctx: &egui::Context) {
@@ -502,19 +503,34 @@ impl TyphooNApp {
                 let symbols = self.sec_scrape_scope_symbols();
                 let symbol_count = symbols.len();
                 if symbol_count > 0 {
-                    let db_path = cache_db_path();
-                    let _ = self
-                        .broker_tx
-                        .send(BrokerCmd::SecScrape { db_path, symbols });
-                    self.scrape_sec_running = true;
-                    self.scrape_sec_last_msg = format!(
-                        "scraping Scope {} ({} symbols)...",
-                        sec_scope_label, symbol_count
-                    );
-                    self.log.push_back(LogEntry::info(format!(
-                        "SEC EDGAR scrape initiated for Scope {} ({} symbols)...",
-                        sec_scope_label, symbol_count
-                    )));
+                    if !should_start_manual_background_scope_scrape(
+                        self.broker_scope,
+                        symbol_count,
+                        self.heavy_sync_in_progress,
+                    ) {
+                        self.scrape_sec_last_msg = format!(
+                            "deferred: Scope {} scrape waits for market-data catch-up",
+                            sec_scope_label
+                        );
+                        self.log.push_back(LogEntry::warn(format!(
+                            "SEC EDGAR scrape deferred during market-data catch-up for Scope {} ({} symbols); use Active scope or retry after sync settles",
+                            sec_scope_label, symbol_count
+                        )));
+                    } else {
+                        let db_path = cache_db_path();
+                        let _ = self
+                            .broker_tx
+                            .send(BrokerCmd::SecScrape { db_path, symbols });
+                        self.scrape_sec_running = true;
+                        self.scrape_sec_last_msg = format!(
+                            "scraping Scope {} ({} symbols)...",
+                            sec_scope_label, symbol_count
+                        );
+                        self.log.push_back(LogEntry::info(format!(
+                            "SEC EDGAR scrape initiated for Scope {} ({} symbols)...",
+                            sec_scope_label, symbol_count
+                        )));
+                    }
                 } else {
                     self.scrape_sec_last_msg =
                         format!("skipped: Scope {} has no symbols", sec_scope_label);
