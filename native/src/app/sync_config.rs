@@ -17,10 +17,10 @@ pub(super) const TASTYTRADE_BACKGROUND_SCAN_LIMIT: usize = 192;
 /// in force so we do not turn a large universe into duplicate request storms.
 pub(super) const FULL_TILT_SYNC_INTERVAL_SECS: u64 = 1;
 pub(super) const BALANCED_SYNC_INTERVAL_SECS: u64 = 60;
-pub(super) const ALPACA_FULL_TILT_QUEUE_WINDOW: usize = 64;
-pub(super) const ALPACA_FULL_TILT_BATCH_SIZE: usize = 32;
+pub(super) const ALPACA_FULL_TILT_QUEUE_WINDOW: usize = 160;
+pub(super) const ALPACA_FULL_TILT_BATCH_SIZE: usize = 120;
 pub(super) const ALPACA_FULL_TILT_FETCH_PERMITS: usize = 8;
-pub(super) const ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2_048;
+pub(super) const ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 4_096;
 pub(super) const KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW: usize = 256;
 pub(super) const KRAKEN_SPOT_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2_048;
 pub(super) const KRAKEN_EQUITIES_FULL_TILT_QUEUE_WINDOW: usize = 96;
@@ -43,8 +43,8 @@ pub(super) const TASTYTRADE_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 1024;
 
 pub(super) const YAHOO_CHART_QUEUE_WINDOW: usize = 12;
 pub(super) const YAHOO_CHART_BATCH_SIZE: usize = 1;
-pub(super) const YAHOO_CHART_FULL_TILT_QUEUE_WINDOW: usize = 24;
-pub(super) const YAHOO_CHART_FULL_TILT_BATCH_SIZE: usize = 2;
+pub(super) const YAHOO_CHART_FULL_TILT_QUEUE_WINDOW: usize = 48;
+pub(super) const YAHOO_CHART_FULL_TILT_BATCH_SIZE: usize = 4;
 
 /// Largest `MAX_BARS` value that can safely cross the MT5 demand.txt / MQL5
 /// boundary. This is a provider-maximum sentinel, not a local history target:

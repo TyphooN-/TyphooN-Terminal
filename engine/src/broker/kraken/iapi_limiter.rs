@@ -623,8 +623,12 @@ impl IapiLimiter {
                     );
                     bucket.discovered_ceiling = Some(merged);
                 }
-                let new_rate = (bucket.current_rate * self.config.aimd_decrease_factor)
-                    .max(self.config.aimd_min_rate);
+                let new_rate = recovery_rate_after_limit(
+                    bucket.current_rate,
+                    merged,
+                    self.config.aimd_decrease_factor,
+                    self.config.aimd_min_rate,
+                );
                 if (new_rate - bucket.current_rate).abs() >= 0.001 {
                     tracing::warn!(
                         "iapi AIMD: rate ↓ {:.2} → {:.2} req/s after {}",
@@ -811,6 +815,24 @@ fn interval_precision_ceiling_candidate(
         return 0.0;
     }
     interval_to_rate(failed_interval + interval_step_secs.max(0.001))
+}
+
+fn recovery_rate_after_limit(
+    failed_rate: f64,
+    discovered_ceiling: f64,
+    decrease_factor: f64,
+    min_rate: f64,
+) -> f64 {
+    let multiplicative = (failed_rate * decrease_factor).max(min_rate);
+    if discovered_ceiling.is_finite() && discovered_ceiling > min_rate {
+        // After precision-based ceiling discovery, restart just below the known
+        // safe edge instead of throwing away the whole learned ramp. This avoids
+        // every restart crawling from 0.50 req/s for minutes when Cloudflare only
+        // rejected the next 0.01s pacing step.
+        let near_ceiling = discovered_ceiling * 0.90;
+        return multiplicative.max(near_ceiling).min(discovered_ceiling);
+    }
+    multiplicative
 }
 
 fn restored_aimd_rate(state: &PersistedState) -> f64 {
@@ -1182,9 +1204,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn aimd_halves_rate_on_429() {
+    async fn aimd_recovers_near_discovered_ceiling_after_429() {
         let lim = IapiLimiter::new(aimd_config());
-        // Push rate up to ~3.0 first so the halving is observable.
+        // Push rate up first so precision ceiling discovery has useful headroom.
         for _ in 0..2 {
             tokio::time::sleep(StdDuration::from_millis(12)).await;
             lim.acquire(1.0).await.expect("free");
@@ -1193,9 +1215,10 @@ mod tests {
         assert!(before > 1.0, "expected rate > 1, got {before}");
         lim.record_rate_limited("Too Many Requests").await;
         let after = lim.current_rate_per_sec().await;
+        let ceiling = interval_precision_ceiling_candidate(before, None, 0.25);
         assert!(
-            (after - before * 0.5).abs() < 0.05,
-            "rate should halve: before={before} after={after}"
+            after >= ceiling * 0.90 && after <= ceiling,
+            "rate should restart just under discovered ceiling: before={before} ceiling={ceiling} after={after}"
         );
     }
 
