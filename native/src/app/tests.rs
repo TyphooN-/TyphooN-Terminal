@@ -3026,7 +3026,7 @@ fn chart_state_forming_bar_fast_path() {
 }
 
 #[test]
-fn chart_state_early_out_snapshot() {
+fn chart_state_tracks_render_snapshot_fields_without_skipping_paint() {
     let mut chart = ChartState::new("TEST", Timeframe::M5);
     chart.bars.push(Bar {
         ts_ms: 1000,
@@ -3038,11 +3038,12 @@ fn chart_state_early_out_snapshot() {
     });
     chart.mark_structural_change();
 
-    // Simulate what draw_chart would do after a successful render
+    // These fields are retained for data/change diagnostics. draw_chart must
+    // still paint every frame because egui has no retained chart render target;
+    // skipping paint causes closed-market charts to blank/flicker on hover/pan.
     chart.last_rendered_gen = chart.visible_bars_gen;
     chart.last_rendered_bar_ts = chart.last_visible_bar_ts;
 
-    // Same gen + ts should early-out
     assert_eq!(chart.visible_bars_gen, chart.last_rendered_gen);
     assert_eq!(chart.last_visible_bar_ts, chart.last_rendered_bar_ts);
 }

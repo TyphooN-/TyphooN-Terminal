@@ -68,18 +68,11 @@ pub(super) fn draw_chart(
     alerts: &[(f64, String)],
     draw_mode: &DrawMode,
 ) {
-    // ── Performance early-out for live Kraken WS updates ───────────────────
-    // Fast path: if nothing changed since last render, skip everything.
-    if !chart.manual_view_override
-        && !chart.is_dragging
-        && !chart.is_scaling_price
-        && !chart.forming_bar_dirty
-        && chart.visible_bars_gen == chart.last_rendered_gen
-        && chart.last_visible_bar_ts == chart.last_rendered_bar_ts
-        && chart.visible_bars_gen > 0
-    {
-        return;
-    }
+    // Do not early-return for a stable chart. egui is immediate-mode: if this
+    // function skips painting for a frame, the chart area can be left blank or
+    // appear to flicker when the closed-market/auto-source chart is merely being
+    // hovered, price-scaled, or panned. The old `last_rendered_*` fast path was
+    // only safe with a retained render target, which we do not have here.
 
     // Heavy sync early-out: do near-O(1) work only during backfill
     if chart.heavy_sync_in_progress {
