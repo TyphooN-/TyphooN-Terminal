@@ -1441,6 +1441,8 @@ pub async fn fetch_fmp_sector_performance(
 /// This is a pure derivation: it does NOT hit the network.  Callers should
 /// fetch the inputs first (profile, financials, yield curve) then pass them in.
 mod valuation;
+#[cfg(test)]
+pub(crate) use valuation::ols_regression;
 pub use valuation::*;
 
 async fn fetch_yahoo_options_payload(

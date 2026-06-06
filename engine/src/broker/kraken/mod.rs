@@ -46,8 +46,9 @@ pub use self::ws_v2_book::{
     build_book_subscribe_frame, build_book_unsubscribe_frame, parse_book_message,
 };
 pub use self::ws_v2_ticker::{
-    KRAKEN_WS_V2_TICKER_CHANNEL, KrakenWsTicker, build_ticker_subscribe_frame,
-    build_ticker_unsubscribe_frame, parse_ticker_message,
+    KRAKEN_WS_V2_TICKER_CHANNEL, KrakenTickerStreamerEvent, KrakenWsTicker,
+    build_ticker_subscribe_frame, build_ticker_subscribe_frames, build_ticker_unsubscribe_frame,
+    parse_ticker_message, run_ticker_streamer,
 };
 
 use self::equities::{

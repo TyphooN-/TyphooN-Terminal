@@ -91,7 +91,10 @@ pub async fn fetch_currency_rates(client: &reqwest::Client) -> Result<Vec<Curren
 /// Returns (beta, alpha_per_period, r_squared, correlation, n).
 /// Pure function, no I/O. Daily returns expected; alpha is per-period
 /// (caller annualizes as needed).
-fn ols_regression(symbol_returns: &[f64], market_returns: &[f64]) -> (f64, f64, f64, f64, usize) {
+pub(crate) fn ols_regression(
+    symbol_returns: &[f64],
+    market_returns: &[f64],
+) -> (f64, f64, f64, f64, usize) {
     let n = symbol_returns.len().min(market_returns.len());
     if n < 10 {
         return (0.0, 0.0, 0.0, 0.0, n);
