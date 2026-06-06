@@ -3,18 +3,29 @@ use super::market_data_sync::{
 };
 use super::*;
 
-const BAR_SYNC_STATS_IDLE_REFRESH: std::time::Duration = std::time::Duration::from_secs(1);
-const BAR_SYNC_STATS_HEAVY_REFRESH: std::time::Duration = std::time::Duration::from_secs(15);
+const BAR_SYNC_STATS_VISIBLE_REFRESH: std::time::Duration = std::time::Duration::from_secs(1);
+const BAR_SYNC_STATS_HIDDEN_REFRESH: std::time::Duration = std::time::Duration::from_secs(15);
+const BAR_SYNC_STATS_HEAVY_REFRESH: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn bar_sync_stats_refresh_interval(
+    heavy_sync_in_progress: bool,
+    sync_status_visible: bool,
+) -> std::time::Duration {
+    if heavy_sync_in_progress {
+        BAR_SYNC_STATS_HEAVY_REFRESH
+    } else if sync_status_visible {
+        BAR_SYNC_STATS_VISIBLE_REFRESH
+    } else {
+        BAR_SYNC_STATS_HIDDEN_REFRESH
+    }
+}
 
 impl TyphooNApp {
     #[inline]
     pub(super) fn refresh_bar_sync_rows_if_stale(&mut self) {
         let now = std::time::Instant::now();
-        let refresh_interval = if self.heavy_sync_in_progress {
-            BAR_SYNC_STATS_HEAVY_REFRESH
-        } else {
-            BAR_SYNC_STATS_IDLE_REFRESH
-        };
+        let refresh_interval =
+            bar_sync_stats_refresh_interval(self.heavy_sync_in_progress, self.show_sync_status);
         if !self.cached_bar_sync_rows.is_empty()
             && now.duration_since(self.cached_bar_sync_rows_last) < refresh_interval
         {
@@ -554,5 +565,27 @@ mod tests {
         assert!(kraken_equities_merged_timeframe_supported("15Min"));
         assert!(kraken_equities_merged_timeframe_supported("1Day"));
         assert!(kraken_equities_merged_timeframe_supported("1Month"));
+    }
+
+    #[test]
+    fn bar_sync_refresh_keeps_visible_fast_but_hidden_background_slow() {
+        assert_eq!(
+            bar_sync_stats_refresh_interval(false, true),
+            BAR_SYNC_STATS_VISIBLE_REFRESH
+        );
+        assert_eq!(
+            bar_sync_stats_refresh_interval(false, false),
+            BAR_SYNC_STATS_HIDDEN_REFRESH
+        );
+        assert_eq!(
+            bar_sync_stats_refresh_interval(true, true),
+            BAR_SYNC_STATS_HEAVY_REFRESH
+        );
+        assert_eq!(
+            bar_sync_stats_refresh_interval(true, false),
+            BAR_SYNC_STATS_HEAVY_REFRESH
+        );
+        assert!(BAR_SYNC_STATS_HIDDEN_REFRESH > BAR_SYNC_STATS_VISIBLE_REFRESH);
+        assert!(BAR_SYNC_STATS_HEAVY_REFRESH > BAR_SYNC_STATS_HIDDEN_REFRESH);
     }
 }
