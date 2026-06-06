@@ -27,6 +27,9 @@ impl eframe::App for TyphooNApp {
         let perf_pre_broker_ms;
         let perf_broker_drain_ms;
         let perf_after_broker_started;
+        let perf_post_broker_setup_ms;
+        let perf_chrome_panels_ms;
+        let perf_floating_windows_ms;
         // Track user activity for the auto-compact idle gate. Any input event in
         // the frame counts as activity. Cheap — `events` is always queried below.
         if ctx.input(|i| !i.events.is_empty()) {
@@ -8084,27 +8087,31 @@ impl eframe::App for TyphooNApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
 
+        let post_broker_setup_started = std::time::Instant::now();
         self.drain_web_client_commands(ctx);
 
         self.sync_cross_timeframe_drawings();
 
         let pointer_over_floating = self.handle_runtime_input(ctx);
+        perf_post_broker_setup_ms = post_broker_setup_started.elapsed().as_secs_f64() * 1000.0;
 
+        let chrome_panels_started = std::time::Instant::now();
         self.render_menu_bar(ctx);
-
         self.render_symbol_timeframe_toolbar(ctx);
         self.render_symbol_autocomplete_dropdown(ctx);
 
         self.render_tab_bar(ctx);
-
         self.render_bottom_panels(ctx);
 
         self.render_right_panel(ctx);
+        perf_chrome_panels_ms = chrome_panels_started.elapsed().as_secs_f64() * 1000.0;
 
         // ── floating windows ─────────────────────────────────────────────────
         // Always call draw_floating_windows so close buttons work.
         // Performance: all DARWIN data reads from self.bg (background-computed).
+        let floating_windows_started = std::time::Instant::now();
         self.draw_floating_windows(ctx);
+        perf_floating_windows_ms = floating_windows_started.elapsed().as_secs_f64() * 1000.0;
 
         // ── central panel (chart area) ────────────────────────────────────────
         // ── Drawing toolbar (horizontal top bar, TradingView style) ─────────
@@ -12150,12 +12157,21 @@ impl eframe::App for TyphooNApp {
 
         let update_ms = now_instant.elapsed().as_secs_f64() * 1000.0;
         if update_ms >= 250.0 {
+            let render_residual_ms = (render_after_broker_ms
+                - perf_post_broker_setup_ms
+                - perf_chrome_panels_ms
+                - perf_floating_windows_ms)
+                .max(0.0);
             tracing::warn!(
-                "UI frame stall detail: update_ms={:.2} pre_broker_ms={:.2} broker_drain_ms={:.2} render_after_broker_ms={:.2} session_save_ms={:.2} msgs_drained={} pending_fetches={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={}",
+                "UI frame stall detail: update_ms={:.2} pre_broker_ms={:.2} broker_drain_ms={:.2} render_after_broker_ms={:.2} post_broker_setup_ms={:.2} chrome_panels_ms={:.2} floating_windows_ms={:.2} render_residual_ms={:.2} session_save_ms={:.2} msgs_drained={} pending_fetches={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={}",
                 update_ms,
                 perf_pre_broker_ms,
                 perf_broker_drain_ms,
                 render_after_broker_ms,
+                perf_post_broker_setup_ms,
+                perf_chrome_panels_ms,
+                perf_floating_windows_ms,
+                render_residual_ms,
                 session_save_ms,
                 msgs_drained,
                 self.total_pending_market_data_fetches(),
