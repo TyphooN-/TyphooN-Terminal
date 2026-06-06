@@ -350,13 +350,14 @@ impl TyphooNApp {
 
     pub(super) fn reload_symbol_auto(&mut self, symbol: &str, tf: Timeframe) {
         if let Some(ref cache) = self.cache {
-            let chart_type = self
+            let (chart_type, source_override) = self
                 .charts
                 .get(self.active_tab)
-                .map(|c| c.chart_type)
-                .unwrap_or(ChartType::Candle);
+                .map(|c| (c.chart_type, c.source_override))
+                .unwrap_or((ChartType::Candle, ""));
             let mut chart = ChartState::new(symbol, tf);
             chart.chart_type = chart_type;
+            chart.source_override = source_override;
             let cache_ref = Arc::as_ref(cache);
             let mut gpu = self.gpu_indicators.take();
             let load_succeeded = chart.try_load(cache_ref, &mut self.log, gpu.as_mut());

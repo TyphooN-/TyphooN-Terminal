@@ -82,6 +82,11 @@ pub struct IapiLimiterConfig {
     /// configured pacing resolution. This keeps probing above 0.01s pacing
     /// controlled instead of jumping straight to `aimd_max_rate`.
     pub aimd_increment_per_step: f64,
+    /// Low-rate additive req/s increment used below 1 req/s. At iapi's observed
+    /// equity-history ceiling, interval-step probing makes ~0.014 req/s jumps
+    /// (0.840 → 0.855), which is coarser than the useful decision boundary.
+    /// Probe that final band directly in hundredth-req/s increments instead.
+    pub aimd_low_rate_increment_per_step: f64,
     /// Multiplicative decrease applied to the rate on each 429. Default
     /// 0.5 (TCP-style halving) — aggressive enough to back off hard
     /// when Cloudflare pushes back, gentle enough that occasional false
@@ -122,6 +127,7 @@ impl Default for IapiLimiterConfig {
             aimd_max_rate: 250.0,
             aimd_increase_interval: Duration::from_secs(10),
             aimd_increment_per_step: 5.0,
+            aimd_low_rate_increment_per_step: 0.01,
             aimd_decrease_factor: 0.5,
             aimd_resolution: 0.01,
             aimd_tuned_after: Duration::from_secs(30 * 60),
@@ -457,6 +463,7 @@ impl IapiLimiter {
                         bucket.current_rate,
                         self.config.aimd_resolution,
                         self.config.aimd_increment_per_step,
+                        self.config.aimd_low_rate_increment_per_step,
                         effective_max,
                     );
                     if (new_rate - bucket.current_rate).abs() >= 0.000_001 {
@@ -628,6 +635,7 @@ impl IapiLimiter {
                     merged,
                     self.config.aimd_decrease_factor,
                     self.config.aimd_min_rate,
+                    self.config.aimd_low_rate_increment_per_step,
                 );
                 if (new_rate - bucket.current_rate).abs() >= 0.001 {
                     tracing::warn!(
@@ -777,10 +785,15 @@ fn next_rate_for_shorter_interval(
     current_rate: f64,
     interval_step_secs: f64,
     additive_rate_step: f64,
+    low_rate_step: f64,
     max_rate: f64,
 ) -> f64 {
     if !current_rate.is_finite() || current_rate <= 0.0 {
         return max_rate.max(0.0);
+    }
+    if current_rate < 1.0 {
+        let rate_step = low_rate_step.max(0.001);
+        return (current_rate + rate_step).min(max_rate);
     }
     let step = interval_step_secs.max(0.001);
     let current_interval = rate_to_interval_secs(current_rate);
@@ -822,14 +835,15 @@ fn recovery_rate_after_limit(
     discovered_ceiling: f64,
     decrease_factor: f64,
     min_rate: f64,
+    low_rate_step: f64,
 ) -> f64 {
     let multiplicative = (failed_rate * decrease_factor).max(min_rate);
     if discovered_ceiling.is_finite() && discovered_ceiling > min_rate {
-        // After precision-based ceiling discovery, restart just below the known
-        // safe edge instead of throwing away the whole learned ramp. This avoids
-        // every restart crawling from 0.50 req/s for minutes when Cloudflare only
-        // rejected the next 0.01s pacing step.
-        let near_ceiling = discovered_ceiling * 0.90;
+        // After precision-based ceiling discovery, restart one final-band probe
+        // below the known safe edge instead of throwing away the whole learned
+        // ramp. For the observed ~0.84 req/s iapi ceiling this resumes around
+        // 0.83 req/s, then probes 0.84/0.85 in 0.01 req/s steps.
+        let near_ceiling = (discovered_ceiling - low_rate_step.max(0.001)).max(min_rate);
         return multiplicative.max(near_ceiling).min(discovered_ceiling);
     }
     multiplicative
@@ -871,6 +885,7 @@ mod tests {
             aimd_max_rate: 100.0,
             aimd_increase_interval: StdDuration::from_secs(1),
             aimd_increment_per_step: 1.0,
+            aimd_low_rate_increment_per_step: 0.01,
             aimd_decrease_factor: 0.5,
             aimd_resolution: 0.01,
             aimd_tuned_after: StdDuration::from_secs(60),
@@ -1138,6 +1153,7 @@ mod tests {
             aimd_max_rate: 5.0,
             aimd_increase_interval: StdDuration::from_millis(10),
             aimd_increment_per_step: 1.0,
+            aimd_low_rate_increment_per_step: 0.01,
             aimd_decrease_factor: 0.5,
             // Tests use coarse 250ms pacing steps so ramp behaviour stays fast;
             // production default remains 10ms interval precision.
@@ -1436,12 +1452,12 @@ mod tests {
     fn aimd_interval_ramp_switches_to_additive_above_resolution_floor() {
         let max_rate = 250.0;
         let at_resolution = interval_to_rate(0.01);
-        let first = next_rate_for_shorter_interval(at_resolution, 0.01, 5.0, max_rate);
+        let first = next_rate_for_shorter_interval(at_resolution, 0.01, 5.0, 0.01, max_rate);
         assert!(
             (first - 105.0).abs() < 1e-9,
             "should add static req/s above 0.01s pacing, got {first}"
         );
-        let second = next_rate_for_shorter_interval(first, 0.01, 5.0, max_rate);
+        let second = next_rate_for_shorter_interval(first, 0.01, 5.0, 0.01, max_rate);
         assert!(
             (second - 110.0).abs() < 1e-9,
             "should continue static probing, got {second}"
@@ -1450,7 +1466,7 @@ mod tests {
 
     #[test]
     fn aimd_interval_ramp_does_not_jump_straight_to_high_max_rate() {
-        let next = next_rate_for_shorter_interval(100.0, 0.01, 5.0, 1_000.0);
+        let next = next_rate_for_shorter_interval(100.0, 0.01, 5.0, 0.01, 1_000.0);
         assert!(
             (next - 105.0).abs() < 1e-9,
             "0.01s pacing should add one rate step, not jump to max; got {next}"

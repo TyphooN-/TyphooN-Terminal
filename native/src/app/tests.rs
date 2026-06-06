@@ -225,6 +225,46 @@ fn chart_persists_merged_equity_bars_under_merged_cache_key() {
 }
 
 #[test]
+fn chart_source_override_loads_requested_provider_rows() {
+    let db_path = std::env::temp_dir().join(format!(
+        "typhoon-source-override-test-{}-{}.db",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let cache = SqliteCache::open(&db_path).unwrap();
+    cache
+        .put_bars(
+            "alpaca:WOK:1Day",
+            r#"[
+                {"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10.0},
+                {"timestamp":"2024-01-02T00:00:00+00:00","open":2.0,"high":3.0,"low":1.5,"close":2.5,"volume":20.0}
+            ]"#,
+        )
+        .unwrap();
+    cache
+        .put_bars(
+            "yahoo-chart:WOK:1Day",
+            r#"[
+                {"timestamp":"2024-01-01T00:00:00+00:00","open":10.0,"high":20.0,"low":5.0,"close":15.0,"volume":100.0},
+                {"timestamp":"2024-01-02T00:00:00+00:00","open":20.0,"high":30.0,"low":15.0,"close":25.0,"volume":200.0}
+            ]"#,
+        )
+        .unwrap();
+
+    let mut chart = ChartState::new("WOK.EQ", Timeframe::D1);
+    chart.source_override = "yahoo-chart";
+    let mut log = std::collections::VecDeque::new();
+
+    assert!(chart.try_load(&cache, &mut log, None));
+    assert_eq!(chart.source_override, "yahoo-chart");
+    assert_eq!(chart.primary_source, "yahoo-chart");
+    assert_eq!(chart.bars.len(), 2);
+    assert_eq!(chart.bars[0].close, 15.0);
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn chart_materializes_merged_equity_cache_from_provider_rows() {
     let db_path = std::env::temp_dir().join(format!(
         "typhoon-merged-materialize-test-{}-{}.db",

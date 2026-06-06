@@ -196,20 +196,59 @@ impl TyphooNApp {
                         let source_state = self
                             .charts
                             .get(self.active_tab)
-                            .map(|c| (c.symbol.clone(), c.primary_source))
-                            .unwrap_or_else(|| (self.symbol_input.trim().to_string(), ""));
-                        let source_label = if source_state.1.is_empty() {
-                            "Auto".to_string()
+                            .map(|c| (c.symbol.clone(), c.primary_source, c.source_override))
+                            .unwrap_or_else(|| (self.symbol_input.trim().to_string(), "", ""));
+                        let mut selected_source = source_state.2;
+                        let source_label = if selected_source.is_empty() {
+                            if source_state.1.is_empty() {
+                                "Auto".to_string()
+                            } else {
+                                format!("Auto → {}", cache_source_label(source_state.1))
+                            }
+                        } else if selected_source == "merged" {
+                            "Merged".to_string()
                         } else {
-                            format!("Auto → {}", cache_source_label(source_state.1))
+                            cache_source_label(selected_source).to_string()
                         };
-                        ui.label(
-                            egui::RichText::new(source_label)
-                                .color(AXIS_TEXT)
-                                .monospace()
-                                .small(),
-                        )
-                        .on_hover_text("Chart data source is auto-detected from broker/source priority and available cache coverage");
+                        egui::ComboBox::from_id_salt("chart_source_combo")
+                            .selected_text(
+                                egui::RichText::new(source_label)
+                                    .color(AXIS_TEXT)
+                                    .monospace()
+                                    .small(),
+                            )
+                            .width(120.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut selected_source, "", "Auto");
+                                ui.separator();
+                                ui.selectable_value(&mut selected_source, "merged", "Merged");
+                                for (source, label) in CHART_SOURCE_ORDER {
+                                    ui.selectable_value(&mut selected_source, source, label);
+                                }
+                            });
+                        if selected_source != source_state.2 {
+                            if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                                chart.source_override = selected_source;
+                            }
+                            self.reload_symbol_auto(&source_state.0, cur_tf);
+                            self.log.push_back(LogEntry::info(format!(
+                                "Chart source {} for {} {}",
+                                if selected_source.is_empty() {
+                                    "set to Auto".to_string()
+                                } else {
+                                    format!(
+                                        "forced to {}",
+                                        if selected_source == "merged" {
+                                            "Merged"
+                                        } else {
+                                            cache_source_label(selected_source)
+                                        }
+                                    )
+                                },
+                                source_state.0,
+                                cur_tf.label()
+                            )));
+                        }
 
                         let orderbook_symbol = bare_symbol_from_key(&source_state.0)
                             .trim_end_matches(".EQ")
@@ -469,7 +508,7 @@ impl TyphooNApp {
                                         AXIS_TEXT
                                     };
                                     ui.label(
-                                        egui::RichText::new(format!("[Session {}]", session))
+                                        egui::RichText::new(format!("[{}]", session))
                                             .color(session_color)
                                             .small(),
                                     );

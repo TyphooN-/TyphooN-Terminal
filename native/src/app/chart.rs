@@ -304,6 +304,9 @@ pub(crate) struct ChartState {
     pub(crate) timeframe: Timeframe,
     /// Cache source that most recently populated `bars` ("mt5", "alpaca", etc).
     pub(crate) primary_source: &'static str,
+    /// User-forced chart source for debugging provider-specific cache rows.
+    /// Empty means automatic source selection.
+    pub(crate) source_override: &'static str,
     /// Chart rendering style.
     pub(crate) chart_type: ChartType,
     /// Logarithmic price scale (vs linear).
@@ -1195,6 +1198,7 @@ impl ChartState {
             symbol: symbol.into(),
             timeframe: tf,
             primary_source: "",
+            source_override: "",
             chart_type: ChartType::Candle,
             log_scale: false,
             sma_slow_period: 200,
@@ -1852,6 +1856,103 @@ impl ChartState {
         let tf = self.timeframe.cache_suffix();
         let old_bars_empty = self.bars.is_empty();
         let old_len = self.bars.len();
+        let source_override = self.source_override;
+        if source_override == "merged" {
+            let merged = chart_load_merged_equity_bars_from_cache(cache, &sym, tf);
+            if !merged.is_empty() {
+                self.gap_fill_timestamps.clear();
+                self.bars = merged;
+                self.primary_source = "merged";
+                self.source_override = source_override;
+                self.primary_first_ts = self.bars.first().map(|bar| bar.ts_ms).unwrap_or(0);
+                if old_bars_empty {
+                    self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+                    self.manual_view_override = false;
+                    self.reset_camera_from_legacy();
+                } else {
+                    self.camera.on_data_len_changed(old_len, self.bars.len());
+                    self.sync_camera_to_legacy();
+                }
+                self.compute_indicators_gpu(gpu);
+                log.push_back(LogEntry::info(format!(
+                    "Loaded {} merged bars for {} [{}]",
+                    self.bars.len(),
+                    self.symbol,
+                    self.timeframe.label()
+                )));
+            } else {
+                self.bars.clear();
+                self.primary_source = "";
+                self.source_override = source_override;
+                self.gap_fill_timestamps.clear();
+                self.compute_indicators_gpu(gpu);
+            }
+            return true;
+        }
+        if !source_override.is_empty() {
+            let mut result: Option<Vec<(i64, f64, f64, f64, f64, f64)>> = None;
+            for key in chart_source_cache_keys(source_override, &sym, tf) {
+                match cache.get_bars_raw(&key) {
+                    Ok(Some(raw))
+                        if !raw.is_empty()
+                            && chart_source_bars_match_timeframe(source_override, tf, &raw) =>
+                    {
+                        result = Some(raw);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(raw) = result {
+                self.gap_fill_timestamps.clear();
+                self.bars = raw
+                    .into_iter()
+                    .filter(|(ts, o, h, l, c, _v)| {
+                        *ts > 0
+                            && *o > 0.0
+                            && *h > 0.0
+                            && *l > 0.0
+                            && *c > 0.0
+                            && o.is_finite()
+                            && h.is_finite()
+                            && l.is_finite()
+                            && c.is_finite()
+                            && *h >= *l
+                    })
+                    .map(|(ts, o, h, l, c, v)| Bar {
+                        ts_ms: ts,
+                        open: o,
+                        high: h,
+                        low: l,
+                        close: c,
+                        volume: v,
+                    })
+                    .collect();
+                self.primary_source = if self.bars.is_empty() {
+                    ""
+                } else {
+                    source_override
+                };
+                self.source_override = source_override;
+                self.primary_first_ts = self.bars.first().map(|bar| bar.ts_ms).unwrap_or(0);
+                if old_bars_empty {
+                    self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+                    self.manual_view_override = false;
+                    self.reset_camera_from_legacy();
+                } else {
+                    self.camera.on_data_len_changed(old_len, self.bars.len());
+                    self.sync_camera_to_legacy();
+                }
+                self.compute_indicators_gpu(gpu);
+            } else {
+                self.bars.clear();
+                self.primary_source = "";
+                self.source_override = source_override;
+                self.gap_fill_timestamps.clear();
+                self.compute_indicators_gpu(gpu);
+            }
+            return true;
+        }
         if chart_prefers_fresh_equity_source(&sym_norm) {
             let merged = chart_load_merged_equity_bars_from_cache(cache, &sym, tf);
             if !merged.is_empty() {
