@@ -7,6 +7,55 @@ mod news;
 mod research_compute;
 mod storage;
 
+fn kraken_ws_v2_book_state_json(
+    display_symbol: &str,
+    state: &typhoon_engine::broker::kraken::KrakenWsBookState,
+    checksum: Option<u32>,
+    status: &str,
+) -> String {
+    let timestamp = state
+        .last_ts_ms
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default();
+    let bids: Vec<serde_json::Value> = state
+        .bids
+        .iter()
+        .map(|level| {
+            serde_json::json!({
+                "price": level.price,
+                "size": level.qty,
+                "price_text": level.price_text,
+                "size_text": level.qty_text,
+            })
+        })
+        .collect();
+    let asks: Vec<serde_json::Value> = state
+        .asks
+        .iter()
+        .map(|level| {
+            serde_json::json!({
+                "price": level.price,
+                "size": level.qty,
+                "price_text": level.price_text,
+                "size_text": level.qty_text,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "symbol": display_symbol,
+        "ws_symbol": state.symbol,
+        "timestamp": timestamp,
+        "depth": state.depth,
+        "checksum": checksum,
+        "server_checksum": state.last_checksum,
+        "checksum_status": status,
+        "bids": bids,
+        "asks": asks,
+    })
+    .to_string()
+}
+
 pub(super) fn spawn_broker_message_processor(
     broker_cmd_rx: tokio::sync::mpsc::UnboundedReceiver<BrokerCmd>,
     broker_msg_tx: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
@@ -3303,39 +3352,94 @@ When the question touches recent news, sentiment, or prices, combine the researc
                 }
                 BrokerCmd::KrakenStartOrderbookWs { symbol, depth } => {
                     let msg_tx = broker_msg_tx_clone.clone();
-                    if typhoon_engine::core::kraken::to_kraken_pair_lossy(&symbol).is_none() {
+                    let Some(ws_symbol) = typhoon_engine::core::kraken::resolve_kraken_ws_pair(
+                        &kraken_public_client,
+                        &symbol,
+                    )
+                    .await
+                    else {
                         let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                            "Kraken orderbook WS skipped: {symbol} is not a Kraken spot pair"
+                            "Kraken WS v2 book skipped: {symbol} is not a Kraken spot pair"
                         )));
                         continue;
-                    }
-                    let stream_result = if let Some(ref kb) = kraken_broker {
-                        kb.start_public_orderbook_ws(&symbol, depth).await
-                    } else {
-                        let kb = typhoon_engine::broker::kraken::KrakenBroker::new(
-                            String::new(),
-                            String::new(),
-                        );
-                        kb.start_public_orderbook_ws(&symbol, depth).await
                     };
-                    match stream_result {
-                        Ok(mut rx) => {
-                            let stream_tx = msg_tx.clone();
-                            tokio::spawn(async move {
-                                while let Some(update) = rx.recv().await {
-                                    let _ = stream_tx.send(BrokerMsg::KrakenOrderbookUpdate(update));
+                    let depth = depth.clamp(10, 500);
+                    let (book_tx, mut book_rx) = tokio::sync::mpsc::channel::<
+                        typhoon_engine::broker::kraken::KrakenWsBookDelta,
+                    >(1024);
+                    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<
+                        typhoon_engine::broker::kraken::KrakenBookStreamerEvent,
+                    >();
+                    let streamer_symbol = ws_symbol.clone();
+                    tokio::spawn(async move {
+                        typhoon_engine::broker::kraken::run_book_streamer(
+                            vec![streamer_symbol],
+                            depth,
+                            book_tx,
+                            event_tx,
+                        )
+                        .await;
+                    });
+                    let event_msg_tx = msg_tx.clone();
+                    let event_symbol = ws_symbol.clone();
+                    tokio::spawn(async move {
+                        while let Some(event) = event_rx.recv().await {
+                            let text = match event {
+                                typhoon_engine::broker::kraken::KrakenBookStreamerEvent::Connected { depth } => {
+                                    format!("Kraken WS v2 book connected: {event_symbol} depth {depth}")
                                 }
-                            });
-                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                                "Kraken orderbook WS started: {symbol} depth {depth}"
-                            )));
+                                typhoon_engine::broker::kraken::KrakenBookStreamerEvent::Subscribed { depth, batches } => {
+                                    format!("Kraken WS v2 book subscribed: {event_symbol} depth {depth} ({batches} batch)")
+                                }
+                                typhoon_engine::broker::kraken::KrakenBookStreamerEvent::SubscribeFailed { depth, reason } => {
+                                    format!("Kraken WS v2 book subscribe failed: {event_symbol} depth {depth}: {reason}")
+                                }
+                                typhoon_engine::broker::kraken::KrakenBookStreamerEvent::Disconnected { depth, reason } => {
+                                    format!("Kraken WS v2 book disconnected: {event_symbol} depth {depth}: {reason}")
+                                }
+                            };
+                            let _ = event_msg_tx.send(BrokerMsg::OrderResult(text));
                         }
-                        Err(e) => {
-                            let _ = msg_tx.send(BrokerMsg::Error(format!(
-                                "Kraken orderbook WS failed: {e}"
-                            )));
+                    });
+                    let update_msg_tx = msg_tx.clone();
+                    let display_symbol = symbol.clone();
+                    let state_symbol = ws_symbol.clone();
+                    tokio::spawn(async move {
+                        let mut state = typhoon_engine::broker::kraken::KrakenWsBookState::new(
+                            state_symbol.clone(),
+                            depth,
+                        );
+                        while let Some(delta) = book_rx.recv().await {
+                            match state.apply_delta_with_checksum(&delta) {
+                                Ok(checksum) => {
+                                    let text = kraken_ws_v2_book_state_json(
+                                        &display_symbol,
+                                        &state,
+                                        checksum,
+                                        "ok",
+                                    );
+                                    let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
+                                }
+                                Err(err) => {
+                                    let text = kraken_ws_v2_book_state_json(
+                                        &display_symbol,
+                                        &state,
+                                        Some(err.actual),
+                                        "checksum_mismatch",
+                                    );
+                                    let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
+                                    let _ = update_msg_tx.send(BrokerMsg::Error(format!(
+                                        "Kraken WS v2 book checksum mismatch for {}: expected {}, actual {}; stream closed for resubscribe",
+                                        err.symbol, err.expected, err.actual
+                                    )));
+                                    break;
+                                }
+                            }
                         }
-                    }
+                    });
+                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                        "Kraken WS v2 book starting: {ws_symbol} depth {depth}"
+                    )));
                 }
                 BrokerCmd::KrakenCloseAll => {
                     if let Some(ref kb) = kraken_broker {

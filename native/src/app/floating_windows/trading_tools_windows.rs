@@ -411,7 +411,16 @@ impl TyphooNApp {
                             } else if let Ok(v) = serde_json::from_str::<serde_json::Value>(&self.orderbook_result) {
                                 let sym = v["symbol"].as_str().unwrap_or("?");
                                 let ts  = v["timestamp"].as_str().unwrap_or("");
-                                ui.label(egui::RichText::new(format!("{} — {}", sym, ts)).strong().small());
+                                let checksum_status = v["checksum_status"].as_str().unwrap_or("");
+                                let checksum = v["checksum"].as_u64();
+                                let header = if checksum_status.is_empty() {
+                                    format!("{} — {}", sym, ts)
+                                } else if let Some(checksum) = checksum {
+                                    format!("{} — {} · checksum {} ({})", sym, ts, checksum, checksum_status)
+                                } else {
+                                    format!("{} — {} · checksum {}", sym, ts, checksum_status)
+                                };
+                                ui.label(egui::RichText::new(header).strong().small());
                                 ui.separator();
                                 let bids = v["bids"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
                                 let asks = v["asks"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);

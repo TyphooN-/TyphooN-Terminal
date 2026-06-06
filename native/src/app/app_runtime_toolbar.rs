@@ -266,7 +266,7 @@ impl TyphooNApp {
                             let color = if is_streaming { ACCENT } else { AXIS_TEXT };
                             if ui
                                 .small_button(egui::RichText::new(label).color(color).monospace())
-                                .on_hover_text("Open Kraken Level 2 DOM; starts live public order-book WebSocket for the active symbol")
+                                .on_hover_text("Open Kraken WebSocket v2 Level 2 DOM for the active symbol; validates CRC32 book checksums and stops on drift")
                                 .clicked()
                             {
                                 self.show_orderbook_window = true;
