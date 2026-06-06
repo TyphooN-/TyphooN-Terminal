@@ -21,6 +21,13 @@ Source audit:
   - still uses public WebSocket v1 endpoint `wss://ws.kraken.com`
   - subscribes to v1 `book` / `book-N`
   - parses v1 array frames with `as`/`bs` snapshot keys and `a`/`b` delta keys
+- `engine/src/broker/kraken/ws_v2.rs`
+  - shared v2 endpoints, request ids, frame builders, ACK parsing, numeric/timestamp helpers
+- `engine/src/broker/kraken/ws_v2_ticker.rs`
+  - v2 `ticker` parser, subscribe batching, reconnecting public streamer foundation
+- `engine/src/broker/kraken/ws_v2_book.rs`
+  - v2 `book` parser/state helper, subscribe batching, reconnecting public streamer foundation
+  - checksum validation/resync is still pending
 - `engine/src/broker/kraken/private_ws.rs`
   - private account feed is v1 shape: `ownTrades` and `openOrders`
   - no v2 `executions` or `balances` channel parser yet
@@ -37,7 +44,7 @@ Kraken WebSocket v2 documentation exposes more than we currently consume:
 - Instruments: `instrument` on `wss://ws.kraken.com/v2` — snapshot path already implemented
 - Authenticated account streams: `balances` and `executions` on `wss://ws-auth.kraken.com/v2`
 
-Conclusion: we do **not** support 100% of Kraken WebSocket v2. We support OHLC and one-shot instrument snapshot; order book support exists but is v1 L2; private user-stream support exists but is v1 private WS.
+Conclusion: we do **not** support 100% of Kraken WebSocket v2. We support OHLC and one-shot instrument snapshot; v2 ticker/book parser and streamer foundations now exist; private user-stream support is still v1 private WS.
 
 ## Decision
 
@@ -114,8 +121,8 @@ Native side:
 | --- | --- | --- | --- |
 | `ohlc` | Implemented and full-universe streamed | Keep; share future common v2 helpers only if low-risk | Done / preserve |
 | `instrument` | One-shot snapshot implemented | Keep; optionally move parsing to channel module | Done / cleanup |
-| `ticker` L1 | Missing | Active/focused symbols; drives quote cards/watchlist/last-price/top-of-book | P1 |
-| `book` L2 | v1 implementation exists | v2 implementation with checksum; replace v1 public book path | P1 |
+| `ticker` L1 | Parser + reconnecting public streamer foundation implemented | Native active/focused-symbol supervisor; quote cards/watchlist/last-price/top-of-book wiring | P1 |
+| `book` L2 | Parser + reconnecting public streamer foundation implemented; v1 book path still exists | Checksum/resync; native active/focused-symbol supervisor; replace v1 public book path | P1 |
 | `trade` | Missing | Active/focused symbols; time-and-sales, tick feed, last-trade updates | P2 |
 | `level3` L3 | Missing | Authenticated, opt-in, depth/symbol-budgeted visible order book | P2/P3 |
 | `balances` | Missing in v2; private v1 account paths exist | Authenticated v2 balances stream | P2 |
@@ -149,6 +156,8 @@ Verification:
 - `cargo check -p typhoon-engine`
 
 ### Phase 1 — L1 ticker
+
+Status: engine parser + stream driver foundation implemented. Native subscription reconciliation and UI wiring pending.
 
 Implement `ws_v2_ticker.rs` and native active-symbol streamer.
 
@@ -189,6 +198,8 @@ Verification:
 - Live smoke behind config flag: subscribe to `BTC/USD`, wait for snapshot/update, assert bid/ask or last exists.
 
 ### Phase 2 — L2 order book v2 replacement
+
+Status: engine parser/state helper + stream driver foundation implemented. CRC32 checksum validation, resync policy, and native replacement wiring pending.
 
 Implement `ws_v2_book.rs` and replace `public_book.rs` v1 path.
 
