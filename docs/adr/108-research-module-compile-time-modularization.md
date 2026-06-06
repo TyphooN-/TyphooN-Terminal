@@ -37,6 +37,8 @@ Initial structure:
   - v2-v5 SQLite market/fundamentals cache helpers for dividends, estimates, ratings, financials, executives, splits, holdings, recommendations, targets, ESG, index members, insider/institutional holders, shares float, historical prices, and earnings surprises
 - `engine/src/core/research/valuation.rs`
   - valuation and market-stat snapshot computations (`compute_wacc_snapshot`, beta/DDM/relative valuation/HRA/DCF/SVM) plus closely related option-expiry parsing helpers
+- `engine/src/core/research/market_stats.rs`
+  - market/statistical snapshot computations for IV rank, seasonality, peer correlation matrices, total return, and option volatility skew
 
 Rules for future slices:
 
@@ -56,7 +58,7 @@ Next structural targets, in order:
    - keep `storage_market_data.rs` focused on v2-v5 market/fundamentals cache helpers.
 2. Then split remaining research compute families into semantic modules:
    - risk/correlation surfaces
-   - market/seasonality surfaces
+   - high-volume return distribution/statistical surfaces
    - TA/indicator parity surfaces
 3. Extract shared lightweight domain types to a small crate only when needed to break cycles.
 4. Extract `typhoon-research` once dependencies on `crate::core::fundamentals` and `crate::core::sec_filing` have been inverted or moved to shared crates.
@@ -72,15 +74,16 @@ Next structural targets, in order:
 
 ## Current Extraction Ranking
 
-After extracting `providers.rs`, `storage_core.rs`, `storage_market_data.rs`, and `valuation.rs`, the root research file is still the dominant target:
+After extracting `providers.rs`, `storage_core.rs`, `storage_market_data.rs`, `valuation.rs`, and `market_stats.rs`, the root research file is still the dominant target:
 
 | File | Lines | Notes |
 | --- | ---: | --- |
-| `engine/src/core/research/mod.rs` | ~77,948 | Still the primary compile/rust-analyzer hotspot. |
+| `engine/src/core/research/mod.rs` | ~77,265 | Still the primary compile/rust-analyzer hotspot. |
 | `engine/src/core/research/types.rs` | ~9,342 | Already extracted; leave alone unless type ownership needs cleanup. |
 | `engine/src/core/darwin.rs` | ~7,055 | Secondary candidate, but smaller and already has proven child-module patterns. |
 | `engine/src/broker/alpaca.rs` | ~4,467 | Broker split candidate, but lower impact than research. |
 | `engine/src/core/research/valuation.rs` | ~1,132 | Extracted valuation/market-stat compute slice. |
+| `engine/src/core/research/market_stats.rs` | ~689 | Extracted IV/seasonality/correlation/total-return/vol-skew compute slice. |
 | `engine/src/core/research/storage_market_data.rs` | ~661 | Extracted v2-v5 market/fundamentals storage slice. |
 | `engine/src/core/research/storage_core.rs` | ~501 | Extracted first-generation storage slice; keep as low-level cache helper boundary. |
 | `engine/src/core/research/providers.rs` | ~390 | Extracted first provider slice. |
@@ -97,7 +100,8 @@ Do not start with a full `typhoon-research` crate split yet. The module is still
 
 Positive:
 
-- Valuation/market-stat compute edits no longer require editing the root research file.
+- Market-stat compute edits no longer require editing the root research file.
+- Valuation compute edits no longer require editing the root research file.
 - V2-v5 market/fundamentals cache edits no longer require editing the root research file.
 - First-generation storage/cache edits no longer require editing the root research file.
 - DTO/constant edits no longer require editing the root 80k+ line research file.
