@@ -83,13 +83,33 @@ impl KrakenWsBookState {
     }
 
     pub fn apply_delta(&mut self, delta: &KrakenWsBookDelta) {
-        self.apply_delta_with_checksum(delta).ok();
+        self.apply_delta_unchecked(delta);
     }
 
     pub fn apply_delta_with_checksum(
         &mut self,
         delta: &KrakenWsBookDelta,
     ) -> Result<Option<u32>, KrakenWsBookChecksumError> {
+        let mut next = self.clone();
+        next.apply_delta_unchecked(delta);
+        let Some(expected) = delta.checksum else {
+            *self = next;
+            return Ok(None);
+        };
+        let actual = next.compute_checksum();
+        if u64::from(actual) == expected {
+            *self = next;
+            Ok(Some(actual))
+        } else {
+            Err(KrakenWsBookChecksumError {
+                symbol: delta.symbol.clone(),
+                expected,
+                actual,
+            })
+        }
+    }
+
+    fn apply_delta_unchecked(&mut self, delta: &KrakenWsBookDelta) {
         self.symbol = delta.symbol.clone();
         if delta.is_snapshot {
             self.bids.clear();
@@ -103,19 +123,6 @@ impl KrakenWsBookState {
         }
         self.last_checksum = delta.checksum;
         self.last_ts_ms = delta.ts_ms;
-        let Some(expected) = delta.checksum else {
-            return Ok(None);
-        };
-        let actual = self.compute_checksum();
-        if u64::from(actual) == expected {
-            Ok(Some(actual))
-        } else {
-            Err(KrakenWsBookChecksumError {
-                symbol: self.symbol.clone(),
-                expected,
-                actual,
-            })
-        }
     }
 
     pub fn compute_checksum(&self) -> u32 {
@@ -577,6 +584,9 @@ mod tests {
         assert_eq!(err.symbol, "BTC/USD");
         assert_eq!(err.expected, u64::from(expected).saturating_add(1));
         assert_eq!(err.actual, expected);
+        assert_eq!(state.last_checksum, Some(u64::from(expected)));
+        assert_eq!(state.bids[0].price_text, "100.0");
+        assert_eq!(state.asks[0].price_text, "100.5000");
     }
 
     #[test]
