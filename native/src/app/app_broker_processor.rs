@@ -3364,77 +3364,93 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         continue;
                     };
                     let depth = depth.clamp(10, 500);
-                    let (book_tx, mut book_rx) = tokio::sync::mpsc::channel::<
-                        typhoon_engine::broker::kraken::KrakenWsBookDelta,
-                    >(1024);
-                    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<
-                        typhoon_engine::broker::kraken::KrakenBookStreamerEvent,
-                    >();
-                    let streamer_symbol = ws_symbol.clone();
-                    tokio::spawn(async move {
-                        typhoon_engine::broker::kraken::run_book_streamer(
-                            vec![streamer_symbol],
-                            depth,
-                            book_tx,
-                            event_tx,
-                        )
-                        .await;
-                    });
-                    let event_msg_tx = msg_tx.clone();
-                    let event_symbol = ws_symbol.clone();
-                    tokio::spawn(async move {
-                        while let Some(event) = event_rx.recv().await {
-                            let text = match event {
-                                typhoon_engine::broker::kraken::KrakenBookStreamerEvent::Connected { depth } => {
-                                    format!("Kraken WS v2 book connected: {event_symbol} depth {depth}")
-                                }
-                                typhoon_engine::broker::kraken::KrakenBookStreamerEvent::Subscribed { depth, batches } => {
-                                    format!("Kraken WS v2 book subscribed: {event_symbol} depth {depth} ({batches} batch)")
-                                }
-                                typhoon_engine::broker::kraken::KrakenBookStreamerEvent::SubscribeFailed { depth, reason } => {
-                                    format!("Kraken WS v2 book subscribe failed: {event_symbol} depth {depth}: {reason}")
-                                }
-                                typhoon_engine::broker::kraken::KrakenBookStreamerEvent::Disconnected { depth, reason } => {
-                                    format!("Kraken WS v2 book disconnected: {event_symbol} depth {depth}: {reason}")
-                                }
-                            };
-                            let _ = event_msg_tx.send(BrokerMsg::OrderResult(text));
-                        }
-                    });
                     let update_msg_tx = msg_tx.clone();
                     let display_symbol = symbol.clone();
                     let state_symbol = ws_symbol.clone();
                     tokio::spawn(async move {
-                        let mut state = typhoon_engine::broker::kraken::KrakenWsBookState::new(
-                            state_symbol.clone(),
-                            depth,
-                        );
-                        while let Some(delta) = book_rx.recv().await {
-                            match state.apply_delta_with_checksum(&delta) {
-                                Ok(checksum) => {
-                                    let text = kraken_ws_v2_book_state_json(
-                                        &display_symbol,
-                                        &state,
-                                        checksum,
-                                        "ok",
-                                    );
-                                    let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
-                                }
-                                Err(err) => {
-                                    let text = kraken_ws_v2_book_state_json(
-                                        &display_symbol,
-                                        &state,
-                                        Some(err.actual),
-                                        "checksum_mismatch",
-                                    );
-                                    let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
-                                    let _ = update_msg_tx.send(BrokerMsg::Error(format!(
-                                        "Kraken WS v2 book checksum mismatch for {}: expected {}, actual {}; stream closed for resubscribe",
-                                        err.symbol, err.expected, err.actual
-                                    )));
-                                    break;
+                        let mut resubscribe_count: u32 = 0;
+                        loop {
+                            let (book_tx, mut book_rx) = tokio::sync::mpsc::channel::<
+                                typhoon_engine::broker::kraken::KrakenWsBookDelta,
+                            >(1024);
+                            let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<
+                                typhoon_engine::broker::kraken::KrakenBookStreamerEvent,
+                            >();
+                            let streamer_symbol = state_symbol.clone();
+                            let streamer_handle = tokio::spawn(async move {
+                                typhoon_engine::broker::kraken::run_book_streamer(
+                                    vec![streamer_symbol],
+                                    depth,
+                                    book_tx,
+                                    event_tx,
+                                )
+                                .await;
+                            });
+                            let mut state = typhoon_engine::broker::kraken::KrakenWsBookState::new(
+                                state_symbol.clone(),
+                                depth,
+                            );
+                            let mut retry_after_mismatch = false;
+                            loop {
+                                tokio::select! {
+                                    maybe_delta = book_rx.recv() => {
+                                        let Some(delta) = maybe_delta else { break; };
+                                        match state.apply_delta_with_checksum(&delta) {
+                                            Ok(checksum) => {
+                                                let text = kraken_ws_v2_book_state_json(
+                                                    &display_symbol,
+                                                    &state,
+                                                    checksum,
+                                                    "ok",
+                                                );
+                                                let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
+                                            }
+                                            Err(err) => {
+                                                let text = kraken_ws_v2_book_state_json(
+                                                    &display_symbol,
+                                                    &state,
+                                                    Some(err.actual),
+                                                    "checksum_mismatch",
+                                                );
+                                                let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
+                                                resubscribe_count = resubscribe_count.saturating_add(1);
+                                                let _ = update_msg_tx.send(BrokerMsg::Error(format!(
+                                                    "Kraken WS v2 book checksum mismatch for {}: expected {}, actual {}; resubscribing snapshot attempt {}",
+                                                    err.symbol, err.expected, err.actual, resubscribe_count
+                                                )));
+                                                retry_after_mismatch = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    maybe_event = event_rx.recv() => {
+                                        let Some(event) = maybe_event else { continue; };
+                                        let text = match event {
+                                            typhoon_engine::broker::kraken::KrakenBookStreamerEvent::Connected { depth } => {
+                                                format!("Kraken WS v2 book connected: {state_symbol} depth {depth}")
+                                            }
+                                            typhoon_engine::broker::kraken::KrakenBookStreamerEvent::Subscribed { depth, batches } => {
+                                                format!("Kraken WS v2 book subscribed: {state_symbol} depth {depth} ({batches} batch)")
+                                            }
+                                            typhoon_engine::broker::kraken::KrakenBookStreamerEvent::SubscribeFailed { depth, reason } => {
+                                                format!("Kraken WS v2 book subscribe failed: {state_symbol} depth {depth}: {reason}")
+                                            }
+                                            typhoon_engine::broker::kraken::KrakenBookStreamerEvent::Disconnected { depth, reason } => {
+                                                format!("Kraken WS v2 book disconnected: {state_symbol} depth {depth}: {reason}")
+                                            }
+                                        };
+                                        let _ = update_msg_tx.send(BrokerMsg::OrderResult(text));
+                                    }
                                 }
                             }
+                            streamer_handle.abort();
+                            if !retry_after_mismatch {
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                            let _ = update_msg_tx.send(BrokerMsg::OrderResult(format!(
+                                "Kraken WS v2 book resubscribing: {state_symbol} depth {depth}"
+                            )));
                         }
                     });
                     let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
