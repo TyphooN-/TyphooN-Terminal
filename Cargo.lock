@@ -6019,6 +6019,7 @@ dependencies = [
  "base64",
  "calamine",
  "chrono",
+ "crc32fast",
  "dbus-secret-service-keyring-store",
  "flate2",
  "futures-util",

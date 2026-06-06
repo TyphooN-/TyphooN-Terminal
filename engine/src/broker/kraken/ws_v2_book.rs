@@ -17,10 +17,32 @@ const KRAKEN_WS_BOOK_SUBSCRIBE_FRAME_DELAY: Duration = Duration::from_millis(20)
 const KRAKEN_WS_BOOK_SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(120);
 const KRAKEN_WS_BOOK_PING_INTERVAL: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct KrakenWsBookLevel {
     pub price: f64,
     pub qty: f64,
+    pub price_text: String,
+    pub qty_text: String,
+}
+
+impl KrakenWsBookLevel {
+    pub fn new(price: f64, qty: f64) -> Self {
+        Self {
+            price,
+            qty,
+            price_text: format_decimal_for_book_level(price),
+            qty_text: format_decimal_for_book_level(qty),
+        }
+    }
+
+    fn from_wire(price: f64, qty: f64, price_text: String, qty_text: String) -> Self {
+        Self {
+            price,
+            qty,
+            price_text,
+            qty_text,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +83,13 @@ impl KrakenWsBookState {
     }
 
     pub fn apply_delta(&mut self, delta: &KrakenWsBookDelta) {
+        self.apply_delta_with_checksum(delta).ok();
+    }
+
+    pub fn apply_delta_with_checksum(
+        &mut self,
+        delta: &KrakenWsBookDelta,
+    ) -> Result<Option<u32>, KrakenWsBookChecksumError> {
         self.symbol = delta.symbol.clone();
         if delta.is_snapshot {
             self.bids.clear();
@@ -74,7 +103,31 @@ impl KrakenWsBookState {
         }
         self.last_checksum = delta.checksum;
         self.last_ts_ms = delta.ts_ms;
+        let Some(expected) = delta.checksum else {
+            return Ok(None);
+        };
+        let actual = self.compute_checksum();
+        if u64::from(actual) == expected {
+            Ok(Some(actual))
+        } else {
+            Err(KrakenWsBookChecksumError {
+                symbol: self.symbol.clone(),
+                expected,
+                actual,
+            })
+        }
     }
+
+    pub fn compute_checksum(&self) -> u32 {
+        compute_book_checksum(&self.bids, &self.asks)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KrakenWsBookChecksumError {
+    pub symbol: String,
+    pub expected: u64,
+    pub actual: u32,
 }
 
 pub fn build_book_subscribe_frame(symbols: &[String], depth: usize, snapshot: bool) -> String {
@@ -271,19 +324,81 @@ fn parse_levels(levels: &[serde_json::Value]) -> Vec<KrakenWsBookLevel> {
 
 fn parse_level(level: &serde_json::Value) -> Option<KrakenWsBookLevel> {
     if let Some(obj) = level.as_object() {
-        return Some(KrakenWsBookLevel {
-            price: obj.get("price").and_then(ws_v2_json_f64)?,
-            qty: obj
-                .get("qty")
-                .or_else(|| obj.get("quantity"))
-                .and_then(ws_v2_json_f64)?,
-        });
+        let price_value = obj.get("price")?;
+        let qty_value = obj.get("qty").or_else(|| obj.get("quantity"))?;
+        return Some(KrakenWsBookLevel::from_wire(
+            ws_v2_json_f64(price_value)?,
+            ws_v2_json_f64(qty_value)?,
+            json_decimal_text(price_value)?,
+            json_decimal_text(qty_value)?,
+        ));
     }
     let arr = level.as_array()?;
-    Some(KrakenWsBookLevel {
-        price: arr.first().and_then(ws_v2_json_f64)?,
-        qty: arr.get(1).and_then(ws_v2_json_f64)?,
-    })
+    let price_value = arr.first()?;
+    let qty_value = arr.get(1)?;
+    Some(KrakenWsBookLevel::from_wire(
+        ws_v2_json_f64(price_value)?,
+        ws_v2_json_f64(qty_value)?,
+        json_decimal_text(price_value)?,
+        json_decimal_text(qty_value)?,
+    ))
+}
+
+fn json_decimal_text(value: &serde_json::Value) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        return Some(text.to_string());
+    }
+    if value.is_number() {
+        return Some(value.to_string());
+    }
+    None
+}
+
+pub fn compute_book_checksum(bids: &[KrakenWsBookLevel], asks: &[KrakenWsBookLevel]) -> u32 {
+    let mut payload = String::new();
+    for level in asks.iter().take(10) {
+        push_checksum_level(&mut payload, level);
+    }
+    for level in bids.iter().take(10) {
+        push_checksum_level(&mut payload, level);
+    }
+    crc32fast::hash(payload.as_bytes())
+}
+
+fn push_checksum_level(payload: &mut String, level: &KrakenWsBookLevel) {
+    payload.push_str(&checksum_decimal_component(&level.price_text));
+    payload.push_str(&checksum_decimal_component(&level.qty_text));
+}
+
+fn checksum_decimal_component(raw: &str) -> String {
+    let normalized_source = if raw.contains(['e', 'E']) {
+        raw.parse::<f64>()
+            .ok()
+            .map(format_decimal_for_book_level)
+            .unwrap_or_else(|| raw.to_string())
+    } else {
+        raw.to_string()
+    };
+    let mut compact = normalized_source
+        .trim()
+        .trim_start_matches('+')
+        .replace('.', "");
+    while compact.starts_with('0') && compact.len() > 1 {
+        compact.remove(0);
+    }
+    if compact.is_empty() {
+        "0".to_string()
+    } else {
+        compact
+    }
+}
+
+fn format_decimal_for_book_level(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.1}")
+    } else {
+        value.to_string()
+    }
 }
 
 fn apply_levels(side: &mut Vec<KrakenWsBookLevel>, levels: &[KrakenWsBookLevel], is_bid: bool) {
@@ -295,10 +410,10 @@ fn apply_levels(side: &mut Vec<KrakenWsBookLevel>, levels: &[KrakenWsBookLevel],
             if level.qty <= 0.0 {
                 side.remove(existing_idx);
             } else {
-                side[existing_idx] = *level;
+                side[existing_idx] = level.clone();
             }
         } else if level.qty > 0.0 {
-            side.push(*level);
+            side.push(level.clone());
         }
     }
     if is_bid {
@@ -406,28 +521,75 @@ mod tests {
     }
 
     #[test]
+    fn checksum_decimal_component_preserves_wire_precision() {
+        assert_eq!(checksum_decimal_component("0.05000000"), "5000000");
+        assert_eq!(checksum_decimal_component("67100.0"), "671000");
+        assert_eq!(checksum_decimal_component("+001.2300"), "12300");
+    }
+
+    #[test]
+    fn book_checksum_uses_asks_then_bids_top_ten_payload() {
+        let asks = vec![
+            KrakenWsBookLevel::from_wire(100.5, 0.05000000, "100.5000".into(), "0.05000000".into()),
+            KrakenWsBookLevel::from_wire(101.0, 1.0, "101.0".into(), "1.00000000".into()),
+        ];
+        let bids = vec![KrakenWsBookLevel::from_wire(
+            100.0,
+            2.5,
+            "100.0".into(),
+            "2.50000000".into(),
+        )];
+        let expected_payload = "1005000500000010101000000001000250000000";
+        assert_eq!(
+            compute_book_checksum(&bids, &asks),
+            crc32fast::hash(expected_payload.as_bytes())
+        );
+    }
+
+    #[test]
+    fn book_state_validates_matching_checksum_and_reports_mismatch() {
+        let mut state = KrakenWsBookState::new("BTC/USD", 10);
+        let mut delta = KrakenWsBookDelta {
+            symbol: "BTC/USD".into(),
+            bids: vec![KrakenWsBookLevel::from_wire(
+                100.0,
+                2.5,
+                "100.0".into(),
+                "2.50000000".into(),
+            )],
+            asks: vec![KrakenWsBookLevel::from_wire(
+                100.5,
+                0.05,
+                "100.5000".into(),
+                "0.05000000".into(),
+            )],
+            checksum: None,
+            ts_ms: None,
+            is_snapshot: true,
+        };
+        let expected = compute_book_checksum(&delta.bids, &delta.asks);
+        delta.checksum = Some(u64::from(expected));
+        assert_eq!(state.apply_delta_with_checksum(&delta), Ok(Some(expected)));
+
+        let mut bad = delta.clone();
+        bad.checksum = Some(u64::from(expected).saturating_add(1));
+        let err = state.apply_delta_with_checksum(&bad).unwrap_err();
+        assert_eq!(err.symbol, "BTC/USD");
+        assert_eq!(err.expected, u64::from(expected).saturating_add(1));
+        assert_eq!(err.actual, expected);
+    }
+
+    #[test]
     fn book_state_applies_snapshot_then_deltas() {
         let mut state = KrakenWsBookState::new("BTC/USD", 2);
         state.apply_delta(&KrakenWsBookDelta {
             symbol: "BTC/USD".into(),
             bids: vec![
-                KrakenWsBookLevel {
-                    price: 100.0,
-                    qty: 1.0,
-                },
-                KrakenWsBookLevel {
-                    price: 99.0,
-                    qty: 1.0,
-                },
-                KrakenWsBookLevel {
-                    price: 98.0,
-                    qty: 1.0,
-                },
+                KrakenWsBookLevel::new(100.0, 1.0),
+                KrakenWsBookLevel::new(99.0, 1.0),
+                KrakenWsBookLevel::new(98.0, 1.0),
             ],
-            asks: vec![KrakenWsBookLevel {
-                price: 101.0,
-                qty: 1.0,
-            }],
+            asks: vec![KrakenWsBookLevel::new(101.0, 1.0)],
             checksum: Some(1),
             ts_ms: None,
             is_snapshot: true,
@@ -437,14 +599,8 @@ mod tests {
 
         state.apply_delta(&KrakenWsBookDelta {
             symbol: "BTC/USD".into(),
-            bids: vec![KrakenWsBookLevel {
-                price: 100.0,
-                qty: 0.0,
-            }],
-            asks: vec![KrakenWsBookLevel {
-                price: 100.5,
-                qty: 2.0,
-            }],
+            bids: vec![KrakenWsBookLevel::new(100.0, 0.0)],
+            asks: vec![KrakenWsBookLevel::new(100.5, 2.0)],
             checksum: Some(2),
             ts_ms: None,
             is_snapshot: false,

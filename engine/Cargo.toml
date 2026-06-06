@@ -27,6 +27,7 @@ rcgen = "0.14"            # Self-signed TLS cert generation for LAN sync (update
 native-tls = "0.2"       # TLS connector/acceptor for wss://
 tokio-native-tls = "0.3" # Async TLS wrapper for tokio
 futures-util = "0.3"
+crc32fast = "1.5.0"
 async-trait = "0.1"
 rusqlite = { workspace = true, features = ["bundled"] }
 # System keyring for credential storage (keyring 4.x split crates)
