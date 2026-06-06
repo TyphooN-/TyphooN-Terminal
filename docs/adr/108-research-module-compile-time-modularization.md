@@ -29,6 +29,8 @@ Initial structure:
   - public research DTOs and constants formerly at the top of `mod.rs`
 - `engine/src/core/research/technical.rs`
   - TECH compute surface (`compute_technical_indicators`) and direct dependencies
+- `engine/src/core/research/providers.rs`
+  - small external provider fetchers for Finnhub, FMP transcript endpoints, and Yahoo quotes
 
 Rules for future slices:
 
