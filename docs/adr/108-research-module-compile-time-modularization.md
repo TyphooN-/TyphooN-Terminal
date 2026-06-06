@@ -33,6 +33,8 @@ Initial structure:
   - small external provider fetchers for Finnhub, FMP transcript endpoints, and Yahoo quotes
 - `engine/src/core/research/storage_core.rs`
   - first-generation SQLite schema/helpers for profiles, peers, earnings, press, sentiment, transcripts, and IPO calendar
+- `engine/src/core/research/storage_market_data.rs`
+  - v2-v5 SQLite market/fundamentals cache helpers for dividends, estimates, ratings, financials, executives, splits, holdings, recommendations, targets, ESG, index members, insider/institutional holders, shares float, historical prices, and earnings surprises
 
 Rules for future slices:
 
@@ -47,8 +49,9 @@ Rules for future slices:
 Next structural targets, in order:
 
 1. Continue extracting storage families:
-   - `research/storage_market_data.rs` for v2 market-data cache helpers (dividends, estimates, ratings, financials, splits, holdings, recommendations, targets, ESG, index members, insider/institutional holders, historical price, surprises, world indices, movers, sector performance, WACC/beta/DDM/relative valuation/FIGI/HRA/DCF/SVM/options/IVOL/seasonality/correlation).
+   - next storage slices should be smaller migration/version families (`storage_market_rates.rs`, `storage_quant_snapshots.rs`, `storage_indicator_snapshots.rs`) rather than one giant all-storage dump.
    - keep `storage_core.rs` focused on first-generation DES/PEERS/EARNINGS/PRESS/SENTIMENT/TRANSCRIPTS/IPO cache helpers.
+   - keep `storage_market_data.rs` focused on v2-v5 market/fundamentals cache helpers.
 2. Then split research compute families into semantic modules:
    - valuation/risk composites
    - market/seasonality/correlation surfaces
@@ -67,14 +70,15 @@ Next structural targets, in order:
 
 ## Current Extraction Ranking
 
-After extracting `providers.rs` and `storage_core.rs`, the root research file is still the dominant target:
+After extracting `providers.rs`, `storage_core.rs`, and `storage_market_data.rs`, the root research file is still the dominant target:
 
 | File | Lines | Notes |
 | --- | ---: | --- |
-| `engine/src/core/research/mod.rs` | ~79,729 | Still the primary compile/rust-analyzer hotspot. |
+| `engine/src/core/research/mod.rs` | ~79,071 | Still the primary compile/rust-analyzer hotspot. |
 | `engine/src/core/research/types.rs` | ~9,342 | Already extracted; leave alone unless type ownership needs cleanup. |
 | `engine/src/core/darwin.rs` | ~7,055 | Secondary candidate, but smaller and already has proven child-module patterns. |
 | `engine/src/broker/alpaca.rs` | ~4,467 | Broker split candidate, but lower impact than research. |
+| `engine/src/core/research/storage_market_data.rs` | ~663 | Extracted v2-v5 market/fundamentals storage slice. |
 | `engine/src/core/research/storage_core.rs` | ~501 | Extracted first-generation storage slice; keep as low-level cache helper boundary. |
 | `engine/src/core/research/providers.rs` | ~390 | Extracted first provider slice. |
 
@@ -90,6 +94,7 @@ Do not start with a full `typhoon-research` crate split yet. The module is still
 
 Positive:
 
+- V2-v5 market/fundamentals cache edits no longer require editing the root research file.
 - First-generation storage/cache edits no longer require editing the root research file.
 - DTO/constant edits no longer require editing the root 80k+ line research file.
 - TECH compute edits are isolated into a small module.
