@@ -39,6 +39,8 @@ Initial structure:
   - valuation and market-stat snapshot computations (`compute_wacc_snapshot`, beta/DDM/relative valuation/HRA/DCF/SVM) plus closely related option-expiry parsing helpers
 - `engine/src/core/research/market_stats.rs`
   - market/statistical snapshot computations for IV rank, seasonality, peer correlation matrices, total return, and option volatility skew
+- `engine/src/core/research/fundamental_stats.rs`
+  - fundamental leverage and earnings-quality snapshot computations (`compute_leverage_snapshot`, `compute_accruals_snapshot`)
 
 Rules for future slices:
 
@@ -74,11 +76,11 @@ Next structural targets, in order:
 
 ## Current Extraction Ranking
 
-After extracting `providers.rs`, `storage_core.rs`, `storage_market_data.rs`, `valuation.rs`, and `market_stats.rs`, the root research file is still the dominant target:
+After extracting `providers.rs`, `storage_core.rs`, `storage_market_data.rs`, `valuation.rs`, `market_stats.rs`, and `fundamental_stats.rs`, the root research file is still the dominant target:
 
 | File | Lines | Notes |
 | --- | ---: | --- |
-| `engine/src/core/research/mod.rs` | ~77,265 | Still the primary compile/rust-analyzer hotspot. |
+| `engine/src/core/research/mod.rs` | ~76,966 | Still the primary compile/rust-analyzer hotspot. |
 | `engine/src/core/research/types.rs` | ~9,342 | Already extracted; leave alone unless type ownership needs cleanup. |
 | `engine/src/core/darwin.rs` | ~7,055 | Secondary candidate, but smaller and already has proven child-module patterns. |
 | `engine/src/broker/alpaca.rs` | ~4,467 | Broker split candidate, but lower impact than research. |
@@ -87,6 +89,7 @@ After extracting `providers.rs`, `storage_core.rs`, `storage_market_data.rs`, `v
 | `engine/src/core/research/storage_market_data.rs` | ~661 | Extracted v2-v5 market/fundamentals storage slice. |
 | `engine/src/core/research/storage_core.rs` | ~501 | Extracted first-generation storage slice; keep as low-level cache helper boundary. |
 | `engine/src/core/research/providers.rs` | ~390 | Extracted first provider slice. |
+| `engine/src/core/research/fundamental_stats.rs` | ~305 | Extracted leverage/accrual compute slice. |
 
 Next best research slice is not another provider fetcher; it is a semantic compute/storage family from the remaining root file. Good candidates:
 
@@ -101,6 +104,7 @@ Do not start with a full `typhoon-research` crate split yet. The module is still
 Positive:
 
 - Market-stat compute edits no longer require editing the root research file.
+- Fundamental leverage/accrual compute edits no longer require editing the root research file.
 - Valuation compute edits no longer require editing the root research file.
 - V2-v5 market/fundamentals cache edits no longer require editing the root research file.
 - First-generation storage/cache edits no longer require editing the root research file.
