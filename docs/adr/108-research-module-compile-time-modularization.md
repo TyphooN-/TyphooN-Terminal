@@ -52,8 +52,10 @@ Next structural targets, in order:
 2. Extract shared lightweight domain types to a small crate only when needed to break cycles.
 3. Extract `typhoon-research` once dependencies on `crate::core::fundamentals` and `crate::core::sec_filing` have been inverted or moved to shared crates.
 4. Keep broker/cache hot paths out of the research crate so a Kraken/Alpaca sync edit does not invalidate heavy research code.
-5. Evaluate `sccache` only when installed/configured on the machine; do not set `rustc-wrapper` to a missing binary.
-   - 2026-06-06 check: `sccache` is not installed on this workstation, so no Cargo config change should be made yet.
+5. Use `sccache` as the local rustc wrapper when installed/configured on the machine; do not set `rustc-wrapper` to a missing binary.
+   - 2026-06-06 check: `sccache 0.15.0` is installed at `/usr/bin/sccache` with a local disk cache at `/home/typhoon/.cache/sccache`.
+   - `.cargo/config.toml` now sets `rustc-wrapper = "sccache"` under `[build]`.
+   - Verification: normal incremental `cargo check -p typhoon-engine` completed in 10.18s but was non-cacheable because Cargo incremental compilation is enabled; `CARGO_INCREMENTAL=0 cargo check -p typhoon-engine` executed through sccache with 2 Rust cache misses and no cache errors. Do not disable incremental globally for local dev; use `CARGO_INCREMENTAL=0` for CI/clean multi-branch cache reuse.
 6. Keep `tokio-tungstenite` TLS cleanup gated behind LAN-sync verification, because LAN sync currently uses native-tls self-signed certificate handling.
    - `tokio-tungstenite` is still pulled with `native-tls` through `engine/Cargo.toml`.
    - `engine/src/core/lan_sync.rs` directly builds `native_tls::TlsAcceptor` / `TlsConnector`, wraps with `tokio_native_tls`, passes `Connector::NativeTls`, and reads peer certificates through `MaybeTlsStream::NativeTls`.
@@ -69,6 +71,7 @@ After extracting `providers.rs`, the root research file is still the dominant ta
 | `engine/src/core/research/types.rs` | ~9,342 | Already extracted; leave alone unless type ownership needs cleanup. |
 | `engine/src/core/darwin.rs` | ~7,055 | Secondary candidate, but smaller and already has proven child-module patterns. |
 | `engine/src/broker/alpaca.rs` | ~4,467 | Broker split candidate, but lower impact than research. |
+
 Next best research slice is not another provider fetcher; it is a semantic compute/storage family from the remaining root file. Good candidates:
 
 1. `research/storage.rs` for schema/create/upsert/get helper families once the public API surface is inventoried.
