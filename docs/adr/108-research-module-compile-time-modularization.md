@@ -53,7 +53,29 @@ Next structural targets, in order:
 3. Extract `typhoon-research` once dependencies on `crate::core::fundamentals` and `crate::core::sec_filing` have been inverted or moved to shared crates.
 4. Keep broker/cache hot paths out of the research crate so a Kraken/Alpaca sync edit does not invalidate heavy research code.
 5. Evaluate `sccache` only when installed/configured on the machine; do not set `rustc-wrapper` to a missing binary.
+   - 2026-06-06 check: `sccache` is not installed on this workstation, so no Cargo config change should be made yet.
 6. Keep `tokio-tungstenite` TLS cleanup gated behind LAN-sync verification, because LAN sync currently uses native-tls self-signed certificate handling.
+   - `tokio-tungstenite` is still pulled with `native-tls` through `engine/Cargo.toml`.
+   - `engine/src/core/lan_sync.rs` directly builds `native_tls::TlsAcceptor` / `TlsConnector`, wraps with `tokio_native_tls`, passes `Connector::NativeTls`, and reads peer certificates through `MaybeTlsStream::NativeTls`.
+   - That means TLS cleanup is real but not a safe quick flag flip; migrate LAN sync to rustls or isolate LAN sync behind a feature before removing native-tls.
+
+## Current Extraction Ranking
+
+After extracting `providers.rs`, the root research file is still the dominant target:
+
+| File | Lines | Notes |
+| --- | ---: | --- |
+| `engine/src/core/research/mod.rs` | ~80,224 | Still the primary compile/rust-analyzer hotspot. |
+| `engine/src/core/research/types.rs` | ~9,342 | Already extracted; leave alone unless type ownership needs cleanup. |
+| `engine/src/core/darwin.rs` | ~7,055 | Secondary candidate, but smaller and already has proven child-module patterns. |
+| `engine/src/broker/alpaca.rs` | ~4,467 | Broker split candidate, but lower impact than research. |
+Next best research slice is not another provider fetcher; it is a semantic compute/storage family from the remaining root file. Good candidates:
+
+1. `research/storage.rs` for schema/create/upsert/get helper families once the public API surface is inventoried.
+2. `research/quant_stats.rs` for the dense return/risk/statistical compute family currently clustered around the 13k-22k range.
+3. `research/indicator_snapshots.rs` for the large TA-style `compute_*_snapshot` families around 22k-31k, coordinated with existing `technical.rs` so indicator naming/parity stays clean.
+
+Do not start with a full `typhoon-research` crate split yet. The module is still entangled with `crate::core::{fundamentals, sec_filing, cache}` and LAN/broker infrastructure; crate extraction should come after at least two more semantic submodule cuts and API re-export stabilization.
 
 ## Consequences
 
