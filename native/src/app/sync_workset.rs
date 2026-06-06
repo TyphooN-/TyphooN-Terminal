@@ -663,40 +663,43 @@ pub(super) fn select_alpaca_sync_workset_rotating_with_stale_multiplier(
             }
         }
 
-        for offset in 0..background_scan_limit {
-            let symbol_idx = (symbol_start + offset) % total_symbols;
-            collect_sync_candidate_for_timeframe(
-                &symbols[symbol_idx],
-                tf,
-                state_map,
-                focus_symbols,
-                no_data_keys,
-                backfill_complete_pairs,
-                &mut staged_selected,
-                now_s,
-                background_stale_periods,
-                target_bars_for_tf,
-                &mut missing,
-                &mut stale,
-                &mut backfill,
-            );
+        let mut scanned = 0usize;
+        while scanned < total_symbols {
+            for offset in 0..background_scan_limit.min(total_symbols - scanned) {
+                let symbol_idx = (symbol_start + scanned + offset) % total_symbols;
+                collect_sync_candidate_for_timeframe(
+                    &symbols[symbol_idx],
+                    tf,
+                    state_map,
+                    focus_symbols,
+                    no_data_keys,
+                    backfill_complete_pairs,
+                    &mut staged_selected,
+                    now_s,
+                    background_stale_periods,
+                    target_bars_for_tf,
+                    &mut missing,
+                    &mut stale,
+                    &mut backfill,
+                );
+            }
+
+            if !(missing.is_empty() && stale.is_empty() && backfill.is_empty()) {
+                *cursor = (symbol_start + scanned + background_scan_limit) % total_symbols;
+
+                let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
+                sort_sync_bucket(&mut missing);
+                sort_sync_bucket(&mut stale);
+                sort_sync_bucket(&mut backfill);
+
+                take_sync_bucket(&mut selected, &mut missing, batch_size);
+                take_sync_bucket(&mut selected, &mut stale, batch_size);
+                take_sync_bucket(&mut selected, &mut backfill, batch_size);
+                return selected;
+            }
+
+            scanned = scanned.saturating_add(background_scan_limit);
         }
-
-        if missing.is_empty() && stale.is_empty() && backfill.is_empty() {
-            continue;
-        }
-
-        *cursor = (symbol_start + background_scan_limit) % total_symbols;
-
-        let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
-        sort_sync_bucket(&mut missing);
-        sort_sync_bucket(&mut stale);
-        sort_sync_bucket(&mut backfill);
-
-        take_sync_bucket(&mut selected, &mut missing, batch_size);
-        take_sync_bucket(&mut selected, &mut stale, batch_size);
-        take_sync_bucket(&mut selected, &mut backfill, batch_size);
-        return selected;
     }
 
     *cursor = (symbol_start + background_scan_limit) % total_symbols;
@@ -1339,6 +1342,59 @@ mod tests {
                 (&"MSFT".to_string(), &"1Week".to_string()),
                 (&"QQQ".to_string(), &"1Week".to_string()),
             ]
+        );
+        assert_eq!(cursor, 0);
+    }
+
+    #[test]
+    fn select_alpaca_sync_workset_rotating_keeps_global_high_tf_priority_across_slices() {
+        let now_s = 1_700_000_000i64;
+        let symbols = vec![
+            "AAPL".to_string(),
+            "MSFT".to_string(),
+            "QQQ".to_string(),
+            "TSLA".to_string(),
+        ];
+        let timeframes = vec!["1Month".to_string(), "1Week".to_string()];
+        let mut state = HashMap::new();
+        for symbol in ["AAPL", "MSFT"] {
+            state.insert(
+                (symbol.to_string(), "1Month".to_string()),
+                SyncCacheState {
+                    last_bar_ts_s: now_s,
+                    write_ts_s: now_s,
+                    bar_count: i64::from(u32::MAX),
+                },
+            );
+        }
+        let mut cursor = 0usize;
+
+        let selected = select_alpaca_sync_workset_rotating(
+            &symbols,
+            &timeframes,
+            &state,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            2,
+            0,
+            2,
+            &mut cursor,
+            now_s,
+            alpaca_sync_target_bars,
+        );
+
+        assert_eq!(
+            selected
+                .iter()
+                .map(|c| (&c.symbol, &c.timeframe))
+                .collect::<Vec<_>>(),
+            vec![
+                (&"QQQ".to_string(), &"1Month".to_string()),
+                (&"TSLA".to_string(), &"1Month".to_string()),
+            ],
+            "later missing 1Month symbols must be scheduled before lower-TF work in an already-complete cursor slice"
         );
         assert_eq!(cursor, 0);
     }
