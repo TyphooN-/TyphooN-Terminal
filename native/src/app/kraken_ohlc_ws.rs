@@ -33,15 +33,18 @@ impl TyphooNApp {
     ///
     /// Kraken REST is still the deep-history/backfill source, but the public WS
     /// can deliver far more fresh bars per second than the paced REST endpoint.
-    /// Do not narrow this to active/watchlist symbols: the product goal is a
+    /// Do not narrow Spot to active/watchlist symbols: the product goal is a
     /// fully synced Kraken Spot dataset wherever Kraken exposes the pair on WS.
-    /// The writer side gates cache persistence to closed bars and uses the fast
-    /// zstd path so full-catalog snapshots/fresh closes do not block egui.
+    /// xStocks are different: Kraken/Cloudflare cannot sustain full 12k-symbol
+    /// native history/streaming pressure, so WS xStocks stay demand-scoped
+    /// (held/open/watchlist/native-repair symbols) while Alpaca/Yahoo/Merged own
+    /// broad equity completion. The writer side gates cache persistence to closed
+    /// bars and uses the fast zstd path so startup snapshots/fresh closes do not
+    /// block egui.
     ///
     /// Idempotent and additive: already-streamed symbols are tracked so Kraken
-    /// AssetPairs can start Spot immediately, then the xStocks instrument
-    /// universe can add its WS-native `AAPLx/USD` style pairs later without
-    /// duplicating existing streamers.
+    /// AssetPairs can start Spot immediately, then demand-scoped xStocks can be
+    /// added later without duplicating existing streamers.
     pub(super) fn maybe_start_kraken_ws_ohlc(&mut self) -> bool {
         if !self.kraken_enabled || !self.kraken_ws_ohlc_enabled {
             return false;
@@ -49,6 +52,7 @@ impl TyphooNApp {
         let desired = build_kraken_ws_subscribe_symbols_for_app(
             &self.kraken_pairs,
             &self.kraken_equity_universe_symbols,
+            &self.kraken_equity_demand_symbols(),
             self.kraken_scrape_xstocks,
         );
         if desired.is_empty() {
@@ -86,12 +90,13 @@ impl TyphooNApp {
 /// via BTreeSet for stable ordering and O(log n) inserts.
 #[cfg(test)]
 fn build_kraken_ws_subscribe_symbols(pairs: &[(String, String)]) -> Vec<String> {
-    build_kraken_ws_subscribe_symbols_for_app(pairs, &[], false)
+    build_kraken_ws_subscribe_symbols_for_app(pairs, &[], &[], false)
 }
 
 pub(super) fn build_kraken_ws_subscribe_symbols_for_app(
     spot_pairs: &[(String, String)],
-    xstock_symbols: &[String],
+    _xstock_catalog_symbols: &[String],
+    xstock_demand_symbols: &[String],
     include_xstocks: bool,
 ) -> Vec<String> {
     let mut out = std::collections::BTreeSet::new();
@@ -101,6 +106,11 @@ pub(super) fn build_kraken_ws_subscribe_symbols_for_app(
         }
     }
     if include_xstocks {
+        let xstock_symbols = if xstock_demand_symbols.is_empty() {
+            &[]
+        } else {
+            xstock_demand_symbols
+        };
         for symbol in xstock_symbols {
             if let Some(formatted) = format_xstock_ws_symbol(symbol) {
                 out.insert(formatted);
@@ -248,10 +258,29 @@ mod tests {
     fn build_kraken_ws_subscribe_symbols_can_include_xstocks() {
         let pairs = vec![("XXBTZUSD".to_string(), "XBT/USD".to_string())];
         let xstocks = vec!["aapl".to_string(), "TSLA.EQ".to_string()];
-        let symbols = build_kraken_ws_subscribe_symbols_for_app(&pairs, &xstocks, true);
+        let symbols = build_kraken_ws_subscribe_symbols_for_app(&pairs, &xstocks, &xstocks, true);
         assert!(symbols.contains(&"AAPLx/USD".to_string()));
         assert!(symbols.contains(&"TSLAx/USD".to_string()));
         assert!(symbols.contains(&"XBT/USD".to_string()));
+    }
+
+    #[test]
+    fn build_kraken_ws_subscribe_symbols_scopes_xstocks_to_demand() {
+        let pairs = vec![("XXBTZUSD".to_string(), "XBT/USD".to_string())];
+        let catalog_xstocks = vec!["AAPL".to_string(), "MSFT".to_string(), "WOK.EQ".to_string()];
+        let demand_xstocks = vec!["wok".to_string()];
+
+        let symbols = build_kraken_ws_subscribe_symbols_for_app(
+            &pairs,
+            &catalog_xstocks,
+            &demand_xstocks,
+            true,
+        );
+
+        assert!(symbols.contains(&"WOKx/USD".to_string()));
+        assert!(symbols.contains(&"XBT/USD".to_string()));
+        assert!(!symbols.contains(&"AAPLx/USD".to_string()));
+        assert!(!symbols.contains(&"MSFTx/USD".to_string()));
     }
 
     #[test]
