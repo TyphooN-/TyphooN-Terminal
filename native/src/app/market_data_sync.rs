@@ -46,6 +46,18 @@ pub(super) fn kraken_equity_native_symbols_for_timeframe(
     }
 }
 
+pub(super) fn kraken_equity_native_history_symbols(
+    _catalog_symbols: &[String],
+    demand_symbols: &[String],
+) -> Vec<String> {
+    // Kraken Equities/xStocks catalog scope belongs to WS/current coverage and
+    // Sync Status/control-plane visibility. Historical iapi is Cloudflare-bound
+    // at <1 req/s and a catalog × timeframe sweep turns into multi-day work plus
+    // 1015 backoffs, which starves the faster Alpaca/Yahoo assist and Merged
+    // completion path. Keep iapi native history as focused/held/watchlist repair.
+    normalize_kraken_equity_symbol_list(demand_symbols.iter())
+}
+
 pub(super) fn kraken_equity_symbols_for_timeframe(
     catalog_symbols: &[String],
     demand_symbols: &[String],
@@ -934,7 +946,7 @@ impl TyphooNApp {
         let catalog_symbols = self.kraken_equity_catalog_symbols();
         let demand_symbols = self.kraken_equity_demand_symbols();
         let native_symbols =
-            kraken_equity_native_symbols_for_timeframe(&catalog_symbols, &demand_symbols, "1Day");
+            kraken_equity_native_history_symbols(&catalog_symbols, &demand_symbols);
         let fallback_symbols = if catalog_symbols.is_empty() {
             demand_symbols.clone()
         } else {
@@ -2257,6 +2269,50 @@ mod tests {
         assert_eq!(
             normalize_kraken_equity_symbol_list(raw.iter()),
             vec!["TNDM".to_string(), "WOK".to_string()]
+        );
+    }
+
+    fn symbols(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn kraken_equity_native_history_uses_demand_symbols_not_full_catalog() {
+        let catalog = symbols(&["AAPL", "MSFT", "NVDA", "TSLA"]);
+        let demand = symbols(&["WOK.EQ", "AAPLx/USD"]);
+
+        let selected = kraken_equity_native_history_symbols(&catalog, &demand);
+
+        assert_eq!(selected, symbols(&["AAPLXUSD", "WOK"]));
+    }
+
+    #[test]
+    fn kraken_equity_native_history_does_not_fallback_to_catalog_when_demand_is_empty() {
+        let catalog = symbols(&["AAPL", "MSFT"]);
+        let demand = Vec::new();
+
+        let selected = kraken_equity_native_history_symbols(&catalog, &demand);
+
+        assert!(
+            selected.is_empty(),
+            "iapi history must not chase the whole xStocks catalog when there is no active demand"
+        );
+    }
+
+    #[test]
+    fn kraken_equity_status_and_assist_helpers_still_use_catalog_for_broad_coverage() {
+        let catalog = symbols(&["MSFT", "AAPL"]);
+        let demand = symbols(&["WOK.EQ"]);
+
+        assert_eq!(
+            kraken_equity_native_symbols_for_timeframe(&catalog, &demand, "1Day"),
+            symbols(&["AAPL", "MSFT"]),
+            "status/control-plane native rows should still expose catalog coverage"
+        );
+        assert_eq!(
+            kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Month"),
+            symbols(&["AAPL", "MSFT"]),
+            "assist/merged broad lanes should still rotate over the catalog"
         );
     }
 
