@@ -5136,9 +5136,16 @@ pub struct TyphooNApp {
     /// Cursor-limited broad sync rotation. Each refill scans only a bounded slice
     /// of the broker universe in high-timeframe-first order, while the pending
     /// fetch sets keep foreground/manual and background requests deduplicated.
+    ///
+    /// Keep independent cursors for native Kraken Equities/iapi and the fast
+    /// Alpaca/Yahoo assist lanes. Sharing the iapi cursor made Cloudflare-bound
+    /// native repair, Alpaca batches, and Yahoo requests advance one another's
+    /// symbol windows, slowing broad Merged coverage convergence.
     pub(crate) alpaca_sync_cursor: usize,
     pub(crate) kraken_spot_sync_cursors: [usize; 4],
     pub(crate) kraken_equities_sync_cursor: usize,
+    pub(crate) kraken_equities_alpaca_sync_cursor: usize,
+    pub(crate) yahoo_chart_sync_cursor: usize,
     pub(crate) kraken_futures_sync_cursors: [usize; 4],
     pub(crate) tastytrade_sync_cursor: usize,
     /// Alpaca retry queue — persisted across restarts via cache KV at `alpaca:retry_queue`.

@@ -649,6 +649,8 @@ impl TyphooNApp {
             alpaca_sync_cursor: 0,
             kraken_spot_sync_cursors: [0; 4],
             kraken_equities_sync_cursor: 0,
+            kraken_equities_alpaca_sync_cursor: 0,
+            yahoo_chart_sync_cursor: 0,
             kraken_futures_sync_cursors: [0; 4],
             tastytrade_sync_cursor: 0,
             alpaca_retry_queue: Vec::new(),

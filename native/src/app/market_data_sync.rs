@@ -1097,7 +1097,7 @@ impl TyphooNApp {
                         .iter()
                         .map(|retry| alpaca_fetch_key(&retry.symbol, &retry.timeframe)),
                 );
-                let mut cursor = self.kraken_equities_sync_cursor;
+                let mut cursor = self.kraken_equities_alpaca_sync_cursor;
                 let candidates = select_alpaca_sync_workset_rotating(
                     &fallback_symbols,
                     &fallback_timeframes,
@@ -1117,7 +1117,7 @@ impl TyphooNApp {
                     now_s,
                     alpaca_sync_target_bars,
                 );
-                self.kraken_equities_sync_cursor = cursor;
+                self.kraken_equities_alpaca_sync_cursor = cursor;
                 dispatched += self.queue_alpaca_batch_fetches_from_candidates(candidates);
             }
         }
@@ -1157,7 +1157,7 @@ impl TyphooNApp {
                         .get("yahoo-chart")
                         .cloned()
                         .unwrap_or_default();
-                    let mut cursor = self.kraken_equities_sync_cursor;
+                    let mut cursor = self.yahoo_chart_sync_cursor;
                     let candidates = select_alpaca_sync_workset_rotating(
                         &fallback_symbols,
                         &fallback_timeframes,
@@ -1173,7 +1173,7 @@ impl TyphooNApp {
                         now_s,
                         alpaca_sync_target_bars,
                     );
-                    self.kraken_equities_sync_cursor = cursor;
+                    self.yahoo_chart_sync_cursor = cursor;
                     for candidate in candidates {
                         if self.queue_yahoo_chart_fetch(&candidate.symbol, &candidate.timeframe) {
                             dispatched += 1;
