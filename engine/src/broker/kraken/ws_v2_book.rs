@@ -1,11 +1,21 @@
-//! Kraken WebSocket v2 book (Level 2) parser and state helpers.
+//! Kraken WebSocket v2 book (Level 2) parser, state helpers, and stream driver.
+
+use std::time::Duration;
 
 use super::ws_v2::{
-    build_ws_v2_subscribe_frame, build_ws_v2_unsubscribe_frame, ws_v2_frame_is_channel,
-    ws_v2_json_f64, ws_v2_json_u64, ws_v2_timestamp_ms,
+    KRAKEN_WS_V2_PUBLIC_URL, build_ws_v2_subscribe_frame, build_ws_v2_unsubscribe_frame,
+    next_ws_v2_req_id, ws_v2_frame_is_channel, ws_v2_json_f64, ws_v2_json_u64, ws_v2_timestamp_ms,
 };
+use futures_util::{SinkExt, StreamExt};
+use tokio::sync::mpsc;
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
 pub const KRAKEN_WS_V2_BOOK_CHANNEL: &str = "book";
+
+const KRAKEN_WS_BOOK_SUBSCRIBE_BATCH: usize = 250;
+const KRAKEN_WS_BOOK_SUBSCRIBE_FRAME_DELAY: Duration = Duration::from_millis(20);
+const KRAKEN_WS_BOOK_SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(120);
+const KRAKEN_WS_BOOK_PING_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KrakenWsBookLevel {
@@ -31,6 +41,14 @@ pub struct KrakenWsBookState {
     pub depth: usize,
     pub last_checksum: Option<u64>,
     pub last_ts_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KrakenBookStreamerEvent {
+    Connected { depth: usize },
+    Subscribed { depth: usize, batches: usize },
+    SubscribeFailed { depth: usize, reason: String },
+    Disconnected { depth: usize, reason: String },
 }
 
 impl KrakenWsBookState {
@@ -66,6 +84,17 @@ pub fn build_book_subscribe_frame(symbols: &[String], depth: usize, snapshot: bo
     build_ws_v2_subscribe_frame(KRAKEN_WS_V2_BOOK_CHANNEL, symbols, params)
 }
 
+pub fn build_book_subscribe_frames(
+    symbols: &[String],
+    depth: usize,
+    snapshot: bool,
+) -> Vec<String> {
+    symbols
+        .chunks(KRAKEN_WS_BOOK_SUBSCRIBE_BATCH)
+        .map(|batch| build_book_subscribe_frame(batch, depth, snapshot))
+        .collect()
+}
+
 pub fn build_book_unsubscribe_frame(symbols: &[String]) -> String {
     build_ws_v2_unsubscribe_frame(KRAKEN_WS_V2_BOOK_CHANNEL, symbols)
 }
@@ -88,6 +117,126 @@ pub fn parse_book_message(text: &str) -> Vec<KrakenWsBookDelta> {
     data.iter()
         .filter_map(|entry| parse_book_entry(entry, is_snapshot))
         .collect()
+}
+
+pub async fn run_book_streamer(
+    symbols: Vec<String>,
+    depth: usize,
+    book_tx: mpsc::Sender<KrakenWsBookDelta>,
+    event_tx: mpsc::UnboundedSender<KrakenBookStreamerEvent>,
+) {
+    if symbols.is_empty() || depth == 0 || book_tx.is_closed() {
+        return;
+    }
+    let mut consecutive_failures: u32 = 0;
+    loop {
+        if book_tx.is_closed() {
+            return;
+        }
+        match run_book_streamer_once(&symbols, depth, &book_tx, &event_tx).await {
+            Ok(()) => consecutive_failures = 0,
+            Err(reason) => {
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                let _ = event_tx.send(KrakenBookStreamerEvent::Disconnected { depth, reason });
+            }
+        }
+        tokio::time::sleep(compute_book_reconnect_backoff(consecutive_failures)).await;
+    }
+}
+
+async fn run_book_streamer_once(
+    symbols: &[String],
+    depth: usize,
+    book_tx: &mpsc::Sender<KrakenWsBookDelta>,
+    event_tx: &mpsc::UnboundedSender<KrakenBookStreamerEvent>,
+) -> Result<(), String> {
+    let (ws_stream, _) = connect_async(KRAKEN_WS_V2_PUBLIC_URL)
+        .await
+        .map_err(|e| format!("book ws connect failed: {e}"))?;
+    let (mut sink, mut stream) = ws_stream.split();
+    let _ = event_tx.send(KrakenBookStreamerEvent::Connected { depth });
+
+    let frames = build_book_subscribe_frames(symbols, depth, true);
+    let batches = frames.len();
+    let subscribe_fut = async {
+        for frame in &frames {
+            sink.send(Message::Text(frame.clone().into()))
+                .await
+                .map_err(|e| format!("book ws subscribe send failed: {e}"))?;
+            tokio::time::sleep(KRAKEN_WS_BOOK_SUBSCRIBE_FRAME_DELAY).await;
+        }
+        Ok::<(), String>(())
+    };
+
+    match tokio::time::timeout(KRAKEN_WS_BOOK_SUBSCRIBE_TIMEOUT, subscribe_fut).await {
+        Ok(Ok(())) => {
+            let _ = event_tx.send(KrakenBookStreamerEvent::Subscribed { depth, batches });
+        }
+        Ok(Err(reason)) => {
+            let _ = event_tx.send(KrakenBookStreamerEvent::SubscribeFailed {
+                depth,
+                reason: reason.clone(),
+            });
+            return Err(reason);
+        }
+        Err(_) => {
+            let reason = "book subscribe burst timed out".to_string();
+            let _ = event_tx.send(KrakenBookStreamerEvent::SubscribeFailed {
+                depth,
+                reason: reason.clone(),
+            });
+            return Err(reason);
+        }
+    }
+
+    let mut ping_ticker = tokio::time::interval(KRAKEN_WS_BOOK_PING_INTERVAL);
+    ping_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ping_ticker.tick().await;
+
+    loop {
+        if book_tx.is_closed() {
+            return Ok(());
+        }
+        tokio::select! {
+            msg = stream.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        for delta in parse_book_message(&text) {
+                            if book_tx.send(delta).await.is_err() {
+                                return Ok(());
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Ping(payload))) => {
+                        let _ = sink.send(Message::Pong(payload)).await;
+                    }
+                    Some(Ok(Message::Pong(_))) | Some(Ok(Message::Binary(_)))
+                    | Some(Ok(Message::Frame(_))) => {}
+                    Some(Ok(Message::Close(_))) => return Err("book ws closed by server".into()),
+                    Some(Err(e)) => return Err(format!("book ws read error: {e}")),
+                    None => return Err("book ws stream ended".into()),
+                }
+            }
+            _ = ping_ticker.tick() => {
+                let ping = serde_json::json!({
+                    "method": "ping",
+                    "req_id": next_ws_v2_req_id(),
+                }).to_string();
+                if sink.send(Message::Text(ping.into())).await.is_err() {
+                    return Err("book ws ping send failed".into());
+                }
+            }
+        }
+    }
+}
+
+fn compute_book_reconnect_backoff(consecutive_failures: u32) -> Duration {
+    if consecutive_failures == 0 {
+        Duration::from_millis(250)
+    } else {
+        let exp = consecutive_failures.min(6);
+        Duration::from_secs(2_u64.saturating_pow(exp))
+    }
 }
 
 fn parse_book_entry(entry: &serde_json::Value, is_snapshot: bool) -> Option<KrakenWsBookDelta> {
@@ -180,6 +329,28 @@ mod tests {
         assert_eq!(value["params"]["symbol"][0], "BTC/USD");
         assert_eq!(value["params"]["depth"], 10);
         assert_eq!(value["params"]["snapshot"], true);
+    }
+
+    #[test]
+    fn book_subscribe_frames_batch_at_250_symbols() {
+        let symbols: Vec<String> = (0..501).map(|i| format!("PAIR{i}/USD")).collect();
+        let frames = build_book_subscribe_frames(&symbols, 25, true);
+        assert_eq!(frames.len(), 3);
+        let first: serde_json::Value = serde_json::from_str(&frames[0]).unwrap();
+        assert_eq!(first["params"]["symbol"].as_array().unwrap().len(), 250);
+        assert_eq!(first["params"]["depth"], 25);
+        let third: serde_json::Value = serde_json::from_str(&frames[2]).unwrap();
+        assert_eq!(third["params"]["symbol"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn book_reconnect_backoff_is_bounded() {
+        assert_eq!(
+            compute_book_reconnect_backoff(0),
+            Duration::from_millis(250)
+        );
+        assert_eq!(compute_book_reconnect_backoff(1), Duration::from_secs(2));
+        assert_eq!(compute_book_reconnect_backoff(9), Duration::from_secs(64));
     }
 
     #[test]
