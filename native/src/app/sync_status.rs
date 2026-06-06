@@ -5,7 +5,11 @@ use super::*;
 
 const BAR_SYNC_STATS_VISIBLE_REFRESH: std::time::Duration = std::time::Duration::from_secs(1);
 const BAR_SYNC_STATS_HIDDEN_REFRESH: std::time::Duration = std::time::Duration::from_secs(15);
-const BAR_SYNC_STATS_HEAVY_REFRESH: std::time::Duration = std::time::Duration::from_secs(30);
+// Broad xStocks/Merged coverage refresh scans the whole catalog across enabled
+// timeframes. During heavy sync the scheduler has its own cached worksets; the
+// Sync Status snapshot is informational and should not burn the UI thread every
+// 30s while 10k+ symbols are catching up.
+const BAR_SYNC_STATS_HEAVY_REFRESH: std::time::Duration = std::time::Duration::from_secs(120);
 
 fn bar_sync_stats_refresh_interval(
     heavy_sync_in_progress: bool,
@@ -586,6 +590,7 @@ mod tests {
             BAR_SYNC_STATS_HEAVY_REFRESH
         );
         assert!(BAR_SYNC_STATS_HIDDEN_REFRESH > BAR_SYNC_STATS_VISIBLE_REFRESH);
+        assert!(BAR_SYNC_STATS_HEAVY_REFRESH >= std::time::Duration::from_secs(120));
         assert!(BAR_SYNC_STATS_HEAVY_REFRESH > BAR_SYNC_STATS_HIDDEN_REFRESH);
     }
 }

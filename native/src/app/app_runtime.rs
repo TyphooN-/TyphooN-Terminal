@@ -266,7 +266,9 @@ impl eframe::App for TyphooNApp {
 
         // Refresh the cached Sync Status coverage % so auto-full-tilt sees
         // current data even when the Sync Status window isn't open. The
-        // compute call self-throttles to ≤1Hz so this is cheap.
+        // compute call self-throttles by mode; broad heavy-sync snapshots are
+        // deliberately slower because they scan the full xStocks/Merged matrix
+        // on the UI thread.
         if self.cache_loaded {
             self.refresh_bar_sync_rows_if_stale();
         }
