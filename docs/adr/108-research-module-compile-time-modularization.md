@@ -31,6 +31,8 @@ Initial structure:
   - TECH compute surface (`compute_technical_indicators`) and direct dependencies
 - `engine/src/core/research/providers.rs`
   - small external provider fetchers for Finnhub, FMP transcript endpoints, and Yahoo quotes
+- `engine/src/core/research/storage_core.rs`
+  - first-generation SQLite schema/helpers for profiles, peers, earnings, press, sentiment, transcripts, and IPO calendar
 
 Rules for future slices:
 
@@ -44,15 +46,17 @@ Rules for future slices:
 
 Next structural targets, in order:
 
-1. Continue splitting research compute families into semantic modules:
+1. Continue extracting storage families:
+   - `research/storage_market_data.rs` for v2 market-data cache helpers (dividends, estimates, ratings, financials, splits, holdings, recommendations, targets, ESG, index members, insider/institutional holders, historical price, surprises, world indices, movers, sector performance, WACC/beta/DDM/relative valuation/FIGI/HRA/DCF/SVM/options/IVOL/seasonality/correlation).
+   - keep `storage_core.rs` focused on first-generation DES/PEERS/EARNINGS/PRESS/SENTIMENT/TRANSCRIPTS/IPO cache helpers.
+2. Then split research compute families into semantic modules:
    - valuation/risk composites
    - market/seasonality/correlation surfaces
    - TA/indicator parity surfaces
-   - SQLite schema/helper families
-2. Extract shared lightweight domain types to a small crate only when needed to break cycles.
-3. Extract `typhoon-research` once dependencies on `crate::core::fundamentals` and `crate::core::sec_filing` have been inverted or moved to shared crates.
-4. Keep broker/cache hot paths out of the research crate so a Kraken/Alpaca sync edit does not invalidate heavy research code.
-5. Use `sccache` as the local rustc wrapper when installed/configured on the machine; do not set `rustc-wrapper` to a missing binary.
+3. Extract shared lightweight domain types to a small crate only when needed to break cycles.
+4. Extract `typhoon-research` once dependencies on `crate::core::fundamentals` and `crate::core::sec_filing` have been inverted or moved to shared crates.
+5. Keep broker/cache hot paths out of the research crate so a Kraken/Alpaca sync edit does not invalidate heavy research code.
+6. Use `sccache` as the local rustc wrapper when installed/configured on the machine; do not set `rustc-wrapper` to a missing binary.
    - 2026-06-06 check: `sccache 0.15.0` is installed at `/usr/bin/sccache` with a local disk cache at `/home/typhoon/.cache/sccache`.
    - `.cargo/config.toml` now sets `rustc-wrapper = "sccache"` under `[build]`.
    - Verification: normal incremental `cargo check -p typhoon-engine` completed in 10.18s but was non-cacheable because Cargo incremental compilation is enabled; `CARGO_INCREMENTAL=0 cargo check -p typhoon-engine` executed through sccache with 2 Rust cache misses and no cache errors. Do not disable incremental globally for local dev; use `CARGO_INCREMENTAL=0` for CI/clean multi-branch cache reuse.
@@ -63,14 +67,16 @@ Next structural targets, in order:
 
 ## Current Extraction Ranking
 
-After extracting `providers.rs`, the root research file is still the dominant target:
+After extracting `providers.rs` and `storage_core.rs`, the root research file is still the dominant target:
 
 | File | Lines | Notes |
 | --- | ---: | --- |
-| `engine/src/core/research/mod.rs` | ~80,224 | Still the primary compile/rust-analyzer hotspot. |
+| `engine/src/core/research/mod.rs` | ~79,729 | Still the primary compile/rust-analyzer hotspot. |
 | `engine/src/core/research/types.rs` | ~9,342 | Already extracted; leave alone unless type ownership needs cleanup. |
 | `engine/src/core/darwin.rs` | ~7,055 | Secondary candidate, but smaller and already has proven child-module patterns. |
 | `engine/src/broker/alpaca.rs` | ~4,467 | Broker split candidate, but lower impact than research. |
+| `engine/src/core/research/storage_core.rs` | ~501 | Extracted first-generation storage slice; keep as low-level cache helper boundary. |
+| `engine/src/core/research/providers.rs` | ~390 | Extracted first provider slice. |
 
 Next best research slice is not another provider fetcher; it is a semantic compute/storage family from the remaining root file. Good candidates:
 
@@ -84,6 +90,7 @@ Do not start with a full `typhoon-research` crate split yet. The module is still
 
 Positive:
 
+- First-generation storage/cache edits no longer require editing the root research file.
 - DTO/constant edits no longer require editing the root 80k+ line research file.
 - TECH compute edits are isolated into a small module.
 - The public API remains compatible for downstream callers.
