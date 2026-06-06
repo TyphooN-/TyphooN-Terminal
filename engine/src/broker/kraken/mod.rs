@@ -12,6 +12,9 @@ mod ohlc_ws;
 mod order_types;
 mod private_ws;
 mod public_book;
+mod ws_v2;
+mod ws_v2_book;
+mod ws_v2_ticker;
 
 pub use self::equities::{
     IAPI_RATE_LIMITED_ERR_PREFIX, KrakenEquityBar, KrakenEquityMarket, KrakenEquityTicker,
@@ -31,6 +34,20 @@ pub use self::order_types::{KrakenConditionalClose, KrakenOrderRequest};
 pub use self::private_ws::{
     KrakenOrder, KrakenPrivateWs, KrakenTrade, parse_open_orders_message, parse_own_trades_message,
     parse_own_trades_messages,
+};
+pub use self::ws_v2::{
+    KRAKEN_WS_V2_AUTH_URL, KRAKEN_WS_V2_LEVEL3_URL, KRAKEN_WS_V2_PUBLIC_URL, KrakenWsV2Ack,
+    build_ws_v2_subscribe_frame, build_ws_v2_unsubscribe_frame, parse_ws_v2_ack,
+    parse_ws_v2_channel_type, ws_v2_frame_is_channel, ws_v2_json_f64, ws_v2_json_i64,
+    ws_v2_json_u64, ws_v2_timestamp_ms,
+};
+pub use self::ws_v2_book::{
+    KRAKEN_WS_V2_BOOK_CHANNEL, KrakenWsBookDelta, KrakenWsBookLevel, KrakenWsBookState,
+    build_book_subscribe_frame, build_book_unsubscribe_frame, parse_book_message,
+};
+pub use self::ws_v2_ticker::{
+    KRAKEN_WS_V2_TICKER_CHANNEL, KrakenWsTicker, build_ticker_subscribe_frame,
+    build_ticker_unsubscribe_frame, parse_ticker_message,
 };
 
 use self::equities::{
