@@ -11,6 +11,26 @@ fn persisted_bar_zstd_level(value: &serde_json::Value, current: i32) -> i32 {
         )
 }
 
+fn reordered_right_panel_sections(
+    order: &[RightPanelSectionId],
+    dragged: RightPanelSectionId,
+    target: RightPanelSectionId,
+    after_target: bool,
+) -> Option<Vec<RightPanelSectionId>> {
+    if dragged == target {
+        return None;
+    }
+    let mut next = order.to_vec();
+    let from = next.iter().position(|s| *s == dragged)?;
+    let item = next.remove(from);
+    let mut to = next.iter().position(|s| *s == target)?;
+    if after_target {
+        to += 1;
+    }
+    next.insert(to.min(next.len()), item);
+    Some(next)
+}
+
 impl TyphooNApp {
     pub(super) fn refill_market_data_sync_slots(&mut self) {
         let pending_cap = if self.full_tilt_sync_enabled() {
@@ -82,21 +102,11 @@ impl TyphooNApp {
         target: RightPanelSectionId,
         after_target: bool,
     ) {
-        if dragged == target {
-            return;
-        }
-        let mut order = self.normalized_right_panel_order();
-        let Some(from) = order.iter().position(|s| *s == dragged) else {
+        let order = self.normalized_right_panel_order();
+        let Some(order) = reordered_right_panel_sections(&order, dragged, target, after_target)
+        else {
             return;
         };
-        let item = order.remove(from);
-        let Some(mut to) = order.iter().position(|s| *s == target) else {
-            return;
-        };
-        if after_target {
-            to += 1;
-        }
-        order.insert(to.min(order.len()), item);
         if order != self.right_panel_order {
             self.right_panel_order = order;
             self.session_dirty_since
@@ -123,9 +133,17 @@ impl TyphooNApp {
         };
         let pointer_down = ui.input(|i| i.pointer.primary_down());
         if !pointer_down {
-            if dragged != section && response.hovered() {
+            // `Response::hovered()` can be false on the release frame while egui is
+            // painting the foreground drag preview / temporary window decoration.
+            // Hit-test against the header rect directly so dropping a dragged
+            // section on a visible header commits the reorder reliably.
+            let released_over_target = ui
+                .input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()))
+                .map(|pos| response.rect.contains(pos))
+                .unwrap_or(false);
+            if dragged != section && released_over_target {
                 let after_target = ui
-                    .input(|i| i.pointer.hover_pos())
+                    .input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()))
                     .map(|pos| pos.y > response.rect.center().y)
                     .unwrap_or(false);
                 self.move_right_panel_section(dragged, section, after_target);
@@ -3719,7 +3737,7 @@ impl TyphooNApp {
 
 #[cfg(test)]
 mod tests {
-    use super::persisted_bar_zstd_level;
+    use super::{RightPanelSectionId, persisted_bar_zstd_level, reordered_right_panel_sections};
 
     #[test]
     fn persisted_bar_zstd_level_uses_saved_value() {
@@ -3745,5 +3763,73 @@ mod tests {
     fn persisted_bar_zstd_level_keeps_current_when_missing() {
         let value = serde_json::json!({});
         assert_eq!(persisted_bar_zstd_level(&value, 11), 11);
+    }
+
+    #[test]
+    fn right_panel_reorder_moves_dragged_section_before_or_after_target() {
+        use RightPanelSectionId::{
+            MtfGrid, News, Orders, Positions, RecentFills, Risk, Trading, Watchlist,
+        };
+
+        let order = vec![
+            Trading,
+            Positions,
+            RecentFills,
+            Orders,
+            Watchlist,
+            Risk,
+            News,
+            MtfGrid,
+        ];
+
+        assert_eq!(
+            reordered_right_panel_sections(&order, Watchlist, Positions, false).unwrap(),
+            vec![
+                Trading,
+                Watchlist,
+                Positions,
+                RecentFills,
+                Orders,
+                Risk,
+                News,
+                MtfGrid
+            ]
+        );
+        assert_eq!(
+            reordered_right_panel_sections(&order, Watchlist, Positions, true).unwrap(),
+            vec![
+                Trading,
+                Positions,
+                Watchlist,
+                RecentFills,
+                Orders,
+                Risk,
+                News,
+                MtfGrid
+            ]
+        );
+        assert_eq!(
+            reordered_right_panel_sections(&order, Positions, Watchlist, true).unwrap(),
+            vec![
+                Trading,
+                RecentFills,
+                Orders,
+                Watchlist,
+                Positions,
+                Risk,
+                News,
+                MtfGrid
+            ]
+        );
+    }
+
+    #[test]
+    fn right_panel_reorder_ignores_noop_and_missing_targets() {
+        use RightPanelSectionId::{Positions, Trading, Watchlist};
+
+        let order = vec![Trading, Positions];
+        assert!(reordered_right_panel_sections(&order, Trading, Trading, false).is_none());
+        assert!(reordered_right_panel_sections(&order, Watchlist, Trading, false).is_none());
+        assert!(reordered_right_panel_sections(&order, Trading, Watchlist, false).is_none());
     }
 }
