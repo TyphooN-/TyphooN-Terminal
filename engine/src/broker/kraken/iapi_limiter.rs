@@ -310,20 +310,26 @@ impl IapiLimiter {
                     )
                 }
                 Some(state) => {
-                    let recent_rate_limit = state.last_arm_unix > 0
-                        && state.last_arm_unix <= now_unix
-                        && (now_unix - state.last_arm_unix) as u64
-                            <= config.escalation_reset_after.as_secs();
-                    // Once the persisted cooldown/escalation window is gone, do
-                    // not keep a stale empirical ceiling or "converged" latch
-                    // forever. Kraken/Cloudflare limits vary by session/IP; an
-                    // old 0.66 req/s discovery was freezing future launches at
-                    // crawler-idle speed and preventing AIMD from probing back
-                    // toward max intensity. Keep only recent post-429 learning;
-                    // otherwise restart at the cold safe rate instead of
-                    // replaying a stale high checkpoint into an immediate 1015.
+                    let age_secs = (state.last_arm_unix > 0 && state.last_arm_unix <= now_unix)
+                        .then_some((now_unix - state.last_arm_unix) as u64);
+                    // Keep empirical AIMD learning longer than the escalation
+                    // counter. The 1015 cooldown itself is 600s; if the user
+                    // restarts shortly after that window expires, dropping the
+                    // learned ~0.75 req/s checkpoint forces another long crawl
+                    // from 0.5 req/s and another ceiling probe. `aimd_tuned_after`
+                    // is a bounded learning TTL here: long enough to survive a
+                    // cooldown/restart cycle, short enough that stale IP/session
+                    // observations do not freeze future launches forever.
+                    let recent_aimd_learning = age_secs
+                        .map(|age| {
+                            age <= config
+                                .escalation_reset_after
+                                .max(config.aimd_tuned_after)
+                                .as_secs()
+                        })
+                        .unwrap_or(false);
                     let restored_rate = restored_aimd_rate(state);
-                    let restored_rate = if recent_rate_limit || state.tuned_rate > 0.0 {
+                    let restored_rate = if recent_aimd_learning || state.tuned_rate > 0.0 {
                         restored_rate
                     } else {
                         restored_rate.min(config.refill_per_sec.max(config.aimd_min_rate))
@@ -333,7 +339,7 @@ impl IapiLimiter {
                         EscalationState::default(),
                         restored_rate,
                         false,
-                        if recent_rate_limit {
+                        if recent_aimd_learning {
                             state.discovered_ceiling
                         } else {
                             0.0
@@ -1133,6 +1139,41 @@ mod tests {
         assert!(
             rate <= 1.0,
             "stale high checkpoint must restart conservatively, got {rate}"
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_cooldown_keeps_recent_discovered_ceiling_learning() {
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let now_unix = chrono::Utc::now().timestamp();
+        let state = PersistedState {
+            cooldown_until_unix: now_unix - 60,
+            consecutive: 1,
+            // Older than the escalation reset window, but still inside the
+            // AIMD learning TTL. This is the normal "restart shortly after a
+            // 600s Cloudflare 1015 backoff elapsed" case.
+            last_arm_unix: now_unix - 700,
+            tuned_rate: 0.0,
+            checkpoint_rate: 0.7534,
+            discovered_ceiling: 0.7634,
+        };
+        std::fs::write(tmp.path(), serde_json::to_string(&state).unwrap()).unwrap();
+        let cfg = IapiLimiterConfig {
+            persistence_path: Some(tmp.path().to_path_buf()),
+            refill_per_sec: 0.5,
+            aimd_tuned_after: StdDuration::from_secs(30 * 60),
+            ..aimd_config()
+        };
+        let lim = IapiLimiter::new(cfg);
+        let rate = lim.current_rate_per_sec().await;
+        let ceiling = lim.bucket.lock().await.discovered_ceiling;
+        assert!(
+            (rate - 0.7534).abs() < 0.0001,
+            "recent checkpoint should survive cooldown expiry, got {rate}"
+        );
+        assert!(
+            ceiling.map(|c| (c - 0.7634).abs() < 0.0001).unwrap_or(false),
+            "recent discovered ceiling should still cap the next ramp, got {ceiling:?}"
         );
     }
 
