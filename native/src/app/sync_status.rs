@@ -11,14 +11,19 @@ const BAR_SYNC_STATS_HIDDEN_REFRESH: std::time::Duration = std::time::Duration::
 // 30s while 10k+ symbols are catching up.
 const BAR_SYNC_STATS_HEAVY_REFRESH: std::time::Duration = std::time::Duration::from_secs(120);
 
-fn bar_sync_stats_refresh_interval(
+fn bar_sync_stats_refresh_interval_for_broad_symbol_count(
     heavy_sync_in_progress: bool,
     sync_status_visible: bool,
+    broad_symbol_count: usize,
 ) -> std::time::Duration {
     if heavy_sync_in_progress {
         BAR_SYNC_STATS_HEAVY_REFRESH
     } else if sync_status_visible {
-        BAR_SYNC_STATS_VISIBLE_REFRESH
+        if broad_symbol_count > 2_048 {
+            BAR_SYNC_STATS_HIDDEN_REFRESH
+        } else {
+            BAR_SYNC_STATS_VISIBLE_REFRESH
+        }
     } else {
         BAR_SYNC_STATS_HIDDEN_REFRESH
     }
@@ -28,12 +33,25 @@ impl TyphooNApp {
     #[inline]
     pub(super) fn refresh_bar_sync_rows_if_stale(&mut self) {
         let now = std::time::Instant::now();
-        let refresh_interval =
-            bar_sync_stats_refresh_interval(self.heavy_sync_in_progress, self.show_sync_status);
+        let refresh_interval = bar_sync_stats_refresh_interval_for_broad_symbol_count(
+            self.heavy_sync_in_progress,
+            self.show_sync_status,
+            self.kraken_equity_catalog_symbol_count(),
+        );
         if !self.cached_bar_sync_rows.is_empty()
             && now.duration_since(self.cached_bar_sync_rows_last) < refresh_interval
         {
             return;
+        }
+        if self.cache.is_some()
+            && (self.bg.cache_stats.is_none() || self.bg.detailed_stats.is_empty())
+        {
+            if let Err(e) = self.refresh_storage_snapshot_from_cache() {
+                self.log.push_back(LogEntry::err(format!(
+                    "Sync Status cache metadata refresh failed: {}",
+                    e
+                )));
+            }
         }
         let now_ms = chrono::Utc::now().timestamp_millis();
         let checked_or_complete_lookup = |key: &str| -> bool {
@@ -124,10 +142,7 @@ impl TyphooNApp {
             .scroll([false, true])
             .show(ctx, |ui| {
                 ui.label(egui::RichText::new("Bar sync % per broker / timeframe").color(AXIS_TEXT).small());
-                ui.label(egui::RichText::new("healthy = last bar within 24× TF period · stale beyond · empty = cached blob has no bars").color(AXIS_TEXT).small());
-                if self.alpaca_enabled {
-                    self.render_alpaca_sync_profile_controls(ui, &mut sync_save_after, "sync_status");
-                }
+                ui.label(egui::RichText::new("healthy = fresh or provider-settled · unhealthy = stale or empty").color(AXIS_TEXT).small());
                 self.render_sync_timeframe_controls(ui, &mut sync_save_after);
                 ui.separator();
 
@@ -153,15 +168,21 @@ impl TyphooNApp {
                 ui.separator();
 
                 egui::ScrollArea::vertical().id_salt("sync_scroll").auto_shrink(false).show(ui, |ui| {
-                    egui::Grid::new("sync_grid").striped(true).num_columns(8).min_col_width(60.0).show(ui, |ui| {
+                    if rows.is_empty() {
+                        ui.label(
+                            egui::RichText::new("Cache metadata is still loading; sync health will appear after the storage snapshot is available.")
+                                .color(AXIS_TEXT)
+                                .small(),
+                        );
+                        return;
+                    }
+                    egui::Grid::new("sync_grid").striped(true).num_columns(6).min_col_width(60.0).show(ui, |ui| {
                         ui.label(egui::RichText::new("Broker").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("TF").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Symbols").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Healthy").color(AXIS_TEXT).small().strong());
-                        ui.label(egui::RichText::new("Needs Work").color(AXIS_TEXT).small().strong());
-                        ui.label(egui::RichText::new("Settled").color(AXIS_TEXT).small().strong());
+                        ui.label(egui::RichText::new("Unhealthy").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("% Synced").color(AXIS_TEXT).small().strong());
-                        ui.label(egui::RichText::new("Note").color(AXIS_TEXT).small().strong());
                         ui.end_row();
                         for row in &rows {
                             let broker_color = match row.broker.as_str() {
@@ -177,19 +198,19 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new(&row.broker).color(broker_color).small().monospace().strong());
                             ui.label(egui::RichText::new(&row.tf).color(AXIS_TEXT).small().monospace());
                             ui.label(egui::RichText::new(cells.symbols).small());
-                            ui.label(egui::RichText::new(cells.healthy).color(egui::Color32::from_rgb(26, 188, 156)).small());
-                            let needs_work_response = ui.label(egui::RichText::new(cells.stale_or_empty).color(AXIS_TEXT).small());
-                            if row.stale > 0 || row.empty > 0 {
-                                needs_work_response.on_hover_text(format!(
-                                    "Stale: {} cached symbol/timeframe rows have aged beyond the freshness window and need a refresh. Empty: {} expected rows have no usable bars cached yet.",
-                                    row.stale, row.empty
+                            let healthy_response = ui.label(egui::RichText::new(cells.healthy).color(egui::Color32::from_rgb(26, 188, 156)).small());
+                            if row.settled > 0 {
+                                healthy_response.on_hover_text(format!(
+                                    "Includes {} settled row(s): provider history/window was recently checked or exhausted, so refetching now is not expected to produce newer historical bars.",
+                                    row.settled
                                 ));
                             }
-                            let settled_response = ui.label(egui::RichText::new(cells.settled).color(egui::Color32::from_rgb(52, 152, 219)).small());
-                            if row.settled > 0 {
-                                settled_response.on_hover_text(
-                                    "Settled: provider history/window was recently checked or exhausted; counted healthy because another refetch cannot produce newer historical bars yet."
-                                );
+                            let unhealthy_response = ui.label(egui::RichText::new(cells.stale_or_empty).color(AXIS_TEXT).small());
+                            if row.stale > 0 || row.empty > 0 {
+                                unhealthy_response.on_hover_text(format!(
+                                    "Unhealthy = stale + empty. Stale: {} cached symbol/timeframe rows have aged beyond the freshness window and need a refresh/check. Empty: {} expected rows have no usable bars cached yet.",
+                                    row.stale, row.empty
+                                ));
                             }
                             let pct_color = if row.total == 0 {
                                 egui::Color32::from_rgb(150, 150, 150)
@@ -207,12 +228,6 @@ impl TyphooNApp {
                                     .small()
                                     .strong(),
                             );
-                            let note_text = cells.note;
-                            let note_label = if note_text.is_empty() { "" } else { "note" };
-                            let note_response = ui.label(egui::RichText::new(note_label).color(AXIS_TEXT).small());
-                            if !note_text.is_empty() {
-                                note_response.on_hover_text(note_text);
-                            }
                             ui.end_row();
                         }
                     });
@@ -429,7 +444,9 @@ impl TyphooNApp {
 
     fn add_expected_kraken_sync_rows(&self, rows: &mut Vec<SyncStatsRow>) {
         let timeframes = self.enabled_standard_sync_timeframes();
-        if timeframes.is_empty() {
+        if timeframes.is_empty()
+            || (self.bg.cache_stats.is_none() && self.bg.detailed_stats.is_empty())
+        {
             return;
         }
         let existing: std::collections::HashSet<String> = self
@@ -574,20 +591,29 @@ mod tests {
     #[test]
     fn bar_sync_refresh_keeps_visible_fast_but_hidden_background_slow() {
         assert_eq!(
-            bar_sync_stats_refresh_interval(false, true),
+            bar_sync_stats_refresh_interval_for_broad_symbol_count(false, true, 0),
             BAR_SYNC_STATS_VISIBLE_REFRESH
         );
         assert_eq!(
-            bar_sync_stats_refresh_interval(false, false),
+            bar_sync_stats_refresh_interval_for_broad_symbol_count(false, false, 0),
             BAR_SYNC_STATS_HIDDEN_REFRESH
         );
         assert_eq!(
-            bar_sync_stats_refresh_interval(true, true),
+            bar_sync_stats_refresh_interval_for_broad_symbol_count(true, true, 0),
             BAR_SYNC_STATS_HEAVY_REFRESH
         );
         assert_eq!(
-            bar_sync_stats_refresh_interval(true, false),
+            bar_sync_stats_refresh_interval_for_broad_symbol_count(true, false, 0),
             BAR_SYNC_STATS_HEAVY_REFRESH
+        );
+        assert_eq!(
+            bar_sync_stats_refresh_interval_for_broad_symbol_count(false, true, 12_312),
+            BAR_SYNC_STATS_HIDDEN_REFRESH,
+            "visible Sync Status should not rebuild 12k-symbol broad coverage every second"
+        );
+        assert_eq!(
+            bar_sync_stats_refresh_interval_for_broad_symbol_count(false, true, 128),
+            BAR_SYNC_STATS_VISIBLE_REFRESH
         );
         assert!(BAR_SYNC_STATS_HIDDEN_REFRESH > BAR_SYNC_STATS_VISIBLE_REFRESH);
         assert!(BAR_SYNC_STATS_HEAVY_REFRESH >= std::time::Duration::from_secs(120));

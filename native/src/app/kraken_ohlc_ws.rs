@@ -35,15 +35,14 @@ impl TyphooNApp {
     /// can deliver far more fresh bars per second than the paced REST endpoint.
     /// Do not narrow Spot to active/watchlist symbols: the product goal is a
     /// fully synced Kraken Spot dataset wherever Kraken exposes the pair on WS.
-    /// xStocks are different: Kraken/Cloudflare cannot sustain full 12k-symbol
-    /// native history/streaming pressure, so WS xStocks stay demand-scoped
-    /// (held/open/watchlist/native-repair symbols) while Alpaca/Yahoo/Merged own
-    /// broad equity completion. The writer side gates cache persistence to closed
-    /// bars and uses the fast zstd path so startup snapshots/fresh closes do not
-    /// block egui.
+    /// xStocks get the same treatment now: subscribe the full Kraken Equities
+    /// catalog on WS as the fastest fresh-bar source, while REST iapi remains
+    /// paced/demand-biased for deep history and Cloudflare safety. The writer
+    /// side gates cache persistence to closed bars and uses the fast zstd path
+    /// so startup snapshots/fresh closes do not block egui.
     ///
     /// Idempotent and additive: already-streamed symbols are tracked so Kraken
-    /// AssetPairs can start Spot immediately, then demand-scoped xStocks can be
+    /// AssetPairs can start Spot immediately, then full-catalog xStocks can be
     /// added later without duplicating existing streamers.
     pub(super) fn maybe_start_kraken_ws_ohlc(&mut self) -> bool {
         if !self.kraken_enabled || !self.kraken_ws_ohlc_enabled {
@@ -95,7 +94,7 @@ fn build_kraken_ws_subscribe_symbols(pairs: &[(String, String)]) -> Vec<String> 
 
 pub(super) fn build_kraken_ws_subscribe_symbols_for_app(
     spot_pairs: &[(String, String)],
-    _xstock_catalog_symbols: &[String],
+    xstock_catalog_symbols: &[String],
     xstock_demand_symbols: &[String],
     include_xstocks: bool,
 ) -> Vec<String> {
@@ -106,10 +105,10 @@ pub(super) fn build_kraken_ws_subscribe_symbols_for_app(
         }
     }
     if include_xstocks {
-        let xstock_symbols = if xstock_demand_symbols.is_empty() {
-            &[]
-        } else {
+        let xstock_symbols = if xstock_catalog_symbols.is_empty() {
             xstock_demand_symbols
+        } else {
+            xstock_catalog_symbols
         };
         for symbol in xstock_symbols {
             if let Some(formatted) = format_xstock_ws_symbol(symbol) {
@@ -265,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn build_kraken_ws_subscribe_symbols_scopes_xstocks_to_demand() {
+    fn build_kraken_ws_subscribe_symbols_streams_full_xstock_catalog_first() {
         let pairs = vec![("XXBTZUSD".to_string(), "XBT/USD".to_string())];
         let catalog_xstocks = vec!["AAPL".to_string(), "MSFT".to_string(), "WOK.EQ".to_string()];
         let demand_xstocks = vec!["wok".to_string()];
@@ -277,10 +276,10 @@ mod tests {
             true,
         );
 
+        assert!(symbols.contains(&"AAPLx/USD".to_string()));
+        assert!(symbols.contains(&"MSFTx/USD".to_string()));
         assert!(symbols.contains(&"WOKx/USD".to_string()));
         assert!(symbols.contains(&"XBT/USD".to_string()));
-        assert!(!symbols.contains(&"AAPLx/USD".to_string()));
-        assert!(!symbols.contains(&"MSFTx/USD".to_string()));
     }
 
     #[test]
@@ -469,6 +468,21 @@ const WS_BAR_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 /// merging/compressing, which converts a CPU burst into unbounded memory growth.
 const WS_BAR_CHANNEL_CAPACITY: usize = 65_536;
 
+/// Maximum raw bars to hold in the writer coalescing buffer before forcing a
+/// closed-bar flush. Full-universe Kraken startup snapshots are mostly closed
+/// historical bars; waiting only for the wall-clock ticker lets millions of
+/// unique buckets accumulate in RAM. This threshold converts snapshot ingress
+/// into bounded chunks and backpressures WS readers while cache writes catch up.
+const WS_BAR_MAX_BUFFERED_BUCKETS: usize = 16_384;
+
+/// Large full-catalog universes must not start every interval at once: each
+/// Kraken OHLC subscription asks for a startup snapshot. 12k+ pairs × 8
+/// intervals can manufacture tens of millions of bars in a few seconds and OOM
+/// the terminal. Keep full coverage, but stage intervals so each snapshot wave
+/// can be parsed, backpressured, and persisted before the next wave starts.
+const WS_LARGE_UNIVERSE_INTERVAL_STAGGER: Duration = Duration::from_secs(120);
+const WS_LARGE_UNIVERSE_PAIR_THRESHOLD: usize = 5_000;
+
 /// Maximum grouped `(symbol, timeframe)` merges to process in one blocking task.
 /// Keeps startup snapshot persistence in bounded slices so tokio can schedule
 /// other blocking work and the writer can report WS-fresh progress incrementally.
@@ -530,11 +544,15 @@ pub(super) fn spawn_kraken_ohlc_pipeline(
         return;
     }
     let (bar_tx, bar_rx) = mpsc::channel::<KrakenWsOhlcBar>(WS_BAR_CHANNEL_CAPACITY);
-    for &interval_min in KRAKEN_WS_OHLC_INTERVALS_MIN {
+    let stagger_large_universe = pairs.len() >= WS_LARGE_UNIVERSE_PAIR_THRESHOLD;
+    for (interval_idx, &interval_min) in KRAKEN_WS_OHLC_INTERVALS_MIN.iter().enumerate() {
         let pairs = pairs.clone();
         let bar_tx = bar_tx.clone();
         let status_tx = status_tx.clone();
         tokio::spawn(async move {
+            if stagger_large_universe && interval_idx > 0 {
+                tokio::time::sleep(WS_LARGE_UNIVERSE_INTERVAL_STAGGER * interval_idx as u32).await;
+            }
             run_ohlc_streamer(interval_min, pairs, bar_tx, status_tx).await;
         });
     }
@@ -595,6 +613,15 @@ async fn run_ws_bar_writer(
                             ),
                             bar,
                         );
+                        if buffer.len() >= WS_BAR_MAX_BUFFERED_BUCKETS {
+                            let now_ms = chrono::Utc::now().timestamp_millis();
+                            let (to_flush, remaining) =
+                                partition_closed_bars(std::mem::take(&mut buffer), now_ms);
+                            buffer = remaining;
+                            if !to_flush.is_empty() {
+                                flush_ws_bars(&shared_cache, &commit_tx, to_flush).await;
+                            }
+                        }
                     }
                     None => break, // every streamer dropped its sender → shut down
                 }

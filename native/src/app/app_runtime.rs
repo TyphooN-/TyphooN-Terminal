@@ -1245,10 +1245,11 @@ impl eframe::App for TyphooNApp {
         let broker_drain_max = 48;
         let broker_drain_started = std::time::Instant::now();
         let broker_drain_budget = if self.heavy_sync_in_progress {
-            std::time::Duration::from_millis(5)
+            std::time::Duration::from_millis(4)
         } else {
             std::time::Duration::from_millis(8)
         };
+        let mut market_data_refill_requested = false;
         while msgs_drained < broker_drain_max
             && broker_drain_started.elapsed() < broker_drain_budget
             && let Ok(msg) = self.broker_rx.try_recv()
@@ -7819,7 +7820,7 @@ impl eframe::App for TyphooNApp {
                     if !source_has_terminal_settlement
                         && matches!(source.as_str(), "kraken" | "kraken-futures" | "tastytrade")
                     {
-                        self.refill_market_data_sync_slots();
+                        market_data_refill_requested = true;
                     }
                 }
                 BrokerMsg::AlpacaFetchSettled {
@@ -7830,12 +7831,12 @@ impl eframe::App for TyphooNApp {
                     self.settle_market_data_fetch("alpaca", &symbol, &timeframe);
                     if success {
                         self.alpaca_retry_drain(&symbol, &timeframe);
-                        self.refill_market_data_sync_slots();
+                        market_data_refill_requested = true;
                     }
                 }
                 BrokerMsg::KrakenFetchSettled { symbol, timeframe } => {
                     self.settle_market_data_fetch("kraken", &symbol, &timeframe);
-                    self.refill_market_data_sync_slots();
+                    market_data_refill_requested = true;
                 }
                 BrokerMsg::KrakenBackfillComplete {
                     symbol,
@@ -7874,7 +7875,7 @@ impl eframe::App for TyphooNApp {
                 }
                 BrokerMsg::KrakenFuturesFetchSettled { symbol, timeframe } => {
                     self.settle_market_data_fetch("kraken-futures", &symbol, &timeframe);
-                    self.refill_market_data_sync_slots();
+                    market_data_refill_requested = true;
                 }
                 BrokerMsg::KrakenFuturesBackfillComplete {
                     symbol,
@@ -7898,7 +7899,7 @@ impl eframe::App for TyphooNApp {
                 }
                 BrokerMsg::TastytradeFetchSettled { symbol, timeframe } => {
                     self.settle_market_data_fetch("tastytrade", &symbol, &timeframe);
-                    self.refill_market_data_sync_slots();
+                    market_data_refill_requested = true;
                 }
                 BrokerMsg::TastytradeBackfillComplete {
                     symbol,
@@ -8076,6 +8077,9 @@ impl eframe::App for TyphooNApp {
                     msg_elapsed.as_secs_f64() * 1000.0
                 );
             }
+        }
+        if market_data_refill_requested {
+            self.refill_market_data_sync_slots();
         }
         perf_broker_drain_ms = broker_drain_started.elapsed().as_secs_f64() * 1000.0;
         perf_after_broker_started = std::time::Instant::now();

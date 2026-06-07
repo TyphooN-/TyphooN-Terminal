@@ -59,34 +59,39 @@ pub(super) fn alpaca_effective_historical_rpm(rpm_hint: u32, observed_rpm: u32) 
 pub(super) fn alpaca_sync_capacity_for_rpm(rpm: u32) -> AlpacaSyncCapacity {
     match rpm {
         0..=300 => AlpacaSyncCapacity {
-            fetch_permits: 4,
-            queue_window: 8,
-            batch_size: 6,
-            foreground_reserve: 3,
+            // Basic/API-header-default Alpaca still has enough historical
+            // budget for broad assist sync when we use the multi-symbol stock
+            // bars endpoint. Keep permits bounded by the detected tier, but
+            // feed the scheduler enough symbols to create useful batch calls
+            // instead of dribbling 6 symbols per tick across a 12k catalog.
+            fetch_permits: 8,
+            queue_window: 64,
+            batch_size: 32,
+            foreground_reserve: 4,
         },
         301..=1_500 => AlpacaSyncCapacity {
-            fetch_permits: 6,
-            queue_window: 12,
-            batch_size: 8,
-            foreground_reserve: 3,
+            fetch_permits: 8,
+            queue_window: 96,
+            batch_size: 48,
+            foreground_reserve: 4,
         },
         1_501..=4_000 => AlpacaSyncCapacity {
             fetch_permits: 10,
-            queue_window: 20,
-            batch_size: 14,
+            queue_window: 160,
+            batch_size: 80,
             foreground_reserve: 4,
         },
         4_001..=7_000 => AlpacaSyncCapacity {
             fetch_permits: 12,
-            queue_window: 24,
-            batch_size: 18,
-            foreground_reserve: 5,
+            queue_window: 240,
+            batch_size: 120,
+            foreground_reserve: 6,
         },
         _ => AlpacaSyncCapacity {
             fetch_permits: 16,
-            queue_window: 32,
-            batch_size: 24,
-            foreground_reserve: 6,
+            queue_window: 320,
+            batch_size: 160,
+            foreground_reserve: 8,
         },
     }
 }
@@ -186,6 +191,32 @@ mod tests {
         assert!(plus.fetch_permits > basic.fetch_permits);
         assert!(plus.queue_window > basic.queue_window);
         assert!(plus.batch_size > basic.batch_size);
+    }
+
+    #[test]
+    fn basic_alpaca_capacity_feeds_batch_endpoint_for_broad_assist_sync() {
+        let basic = alpaca_sync_capacity_for_rpm(200);
+
+        assert_eq!(basic.fetch_permits, 8);
+        assert_eq!(basic.queue_window, 64);
+        assert_eq!(basic.batch_size, 32);
+        assert!(
+            basic.batch_size > basic.fetch_permits,
+            "scheduler should feed multi-symbol batch calls, not one symbol per worker"
+        );
+    }
+
+    #[test]
+    fn alpaca_capacity_is_monotonic_across_detected_tiers() {
+        let tiers = [200, 1_000, 3_000, 5_000, 10_000];
+        let mut previous = alpaca_sync_capacity_for_rpm(tiers[0]);
+        for rpm in tiers.into_iter().skip(1) {
+            let next = alpaca_sync_capacity_for_rpm(rpm);
+            assert!(next.fetch_permits >= previous.fetch_permits, "rpm={rpm}");
+            assert!(next.queue_window >= previous.queue_window, "rpm={rpm}");
+            assert!(next.batch_size >= previous.batch_size, "rpm={rpm}");
+            previous = next;
+        }
     }
 
     #[test]

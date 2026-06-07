@@ -41,13 +41,6 @@ impl TyphooNApp {
                                         self.show_sync_status = true;
                                     }
                                 });
-                                if self.alpaca_enabled {
-                                    self.render_alpaca_sync_profile_controls(
-                                        ui,
-                                        &mut storage_save_after,
-                                        "storage_manager",
-                                    );
-                                }
                                 self.render_sync_timeframe_controls(ui, &mut storage_save_after);
                                 ui.add_space(4.0);
                                 ui.horizontal(|ui| {

@@ -59,11 +59,14 @@ impl TyphooNApp {
                 return;
             } // too soon — skip
         }
-        if let Some(ref cache) = self.cache {
-            let _ = cache.put_kv(key, json);
-        }
         self.kv_write_hashes.insert(key, hash);
         self.kv_write_times.insert(key, now);
+        if let Some(cache) = self.cache.clone() {
+            let json = json.to_string();
+            self.rt_handle.spawn_blocking(move || {
+                let _ = cache.put_kv(key, &json);
+            });
+        }
     }
 
     /// Get all "active" symbols: chart tabs + open positions from ticked brokers + watchlist.

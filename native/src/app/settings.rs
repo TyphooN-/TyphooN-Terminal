@@ -144,6 +144,10 @@ impl TyphooNApp {
                         }
                     }
                 });
+                if self.alpaca_enabled {
+                    ui.add_space(4.0);
+                    self.render_alpaca_sync_profile_controls(ui, &mut settings_save_after, "settings");
+                }
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     let connect_label = if self.broker_connected {

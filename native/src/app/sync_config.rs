@@ -43,8 +43,9 @@ pub(super) const TASTYTRADE_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 1024;
 
 pub(super) const YAHOO_CHART_QUEUE_WINDOW: usize = 12;
 pub(super) const YAHOO_CHART_BATCH_SIZE: usize = 1;
-pub(super) const YAHOO_CHART_FULL_TILT_QUEUE_WINDOW: usize = 48;
-pub(super) const YAHOO_CHART_FULL_TILT_BATCH_SIZE: usize = 4;
+pub(super) const YAHOO_CHART_FULL_TILT_QUEUE_WINDOW: usize = 72;
+pub(super) const YAHOO_CHART_FULL_TILT_BATCH_SIZE: usize = 6;
+pub(super) const YAHOO_CHART_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2_048;
 
 /// Largest `MAX_BARS` value that can safely cross the MT5 demand.txt / MQL5
 /// boundary. This is a provider-maximum sentinel, not a local history target:
@@ -104,6 +105,9 @@ mod tests {
         assert!(ALPACA_FULL_TILT_QUEUE_WINDOW >= 64);
         assert!(ALPACA_FULL_TILT_BATCH_SIZE >= 32);
         assert!(ALPACA_FULL_TILT_FETCH_PERMITS >= 8);
+        assert!(YAHOO_CHART_FULL_TILT_QUEUE_WINDOW >= 72);
+        assert!(YAHOO_CHART_FULL_TILT_BATCH_SIZE >= 6);
+        assert!(YAHOO_CHART_FULL_TILT_BACKGROUND_SCAN_LIMIT >= 2_048);
         assert!(KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW > KRAKEN_SPOT_QUEUE_WINDOW);
         assert!(KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW > KRAKEN_FUTURES_QUEUE_WINDOW);
         assert!(TASTYTRADE_FULL_TILT_QUEUE_WINDOW >= 64);

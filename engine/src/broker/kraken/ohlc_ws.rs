@@ -38,6 +38,12 @@ const KRAKEN_WS_PING_INTERVAL: Duration = Duration::from_secs(30);
 /// not drip-feed the full universe: low timeframe catch-up depends on the WS
 /// snapshots landing immediately after AssetPairs discovery.
 const KRAKEN_WS_SUBSCRIBE_FRAME_DELAY: Duration = Duration::from_millis(20);
+/// During full-universe startup, Kraken begins sending snapshot payloads as
+/// soon as each subscribe frame is accepted. Drain until the connection is idle
+/// for this long before sending the next subscribe frame, so snapshots are
+/// backpressured by the bounded writer instead of piling up behind a 51-frame
+/// subscribe burst.
+const KRAKEN_WS_SUBSCRIBE_DRAIN_IDLE: Duration = Duration::from_millis(50);
 /// How long the subscribe-burst can take before we time it out and treat
 /// the connection as broken. Sized so even the 13k/250 = 52 batches at
 /// 1 frame/sec stay well under it.
@@ -406,10 +412,45 @@ async fn run_ohlc_streamer_once(
             sink.send(Message::Text(frame.clone().into()))
                 .await
                 .map_err(|e| format!("ws subscribe send failed: {e}"))?;
-            // Brief pace so we don't trip Kraken's per-connection burst limit
-            // on the subscribe storm. 20ms × 52 batches ≈ 1.0s for a 13k
-            // universe per interval, while still allowing all interval
-            // streamers to get their initial snapshots online quickly.
+
+            // Kraken starts sending snapshot data immediately after each
+            // subscribe frame. Do not send all 51 full-universe frames before
+            // reading: that creates an unbounded startup burst. Drain until the
+            // socket goes briefly idle; if the downstream writer is saturated,
+            // `bar_tx.send(...).await` backpressures this loop and naturally
+            // slows further subscriptions without shrinking universe coverage.
+            loop {
+                match tokio::time::timeout(KRAKEN_WS_SUBSCRIBE_DRAIN_IDLE, stream.next()).await {
+                    Ok(Some(Ok(Message::Text(text)))) => {
+                        if is_heartbeat_or_status(&text) || is_subscribe_ack(&text) {
+                            continue;
+                        }
+                        for bar in parse_ohlc_message(&text) {
+                            if bar_tx.send(bar).await.is_err() {
+                                return Ok::<(), String>(());
+                            }
+                        }
+                    }
+                    Ok(Some(Ok(Message::Ping(payload)))) => {
+                        let _ = sink.send(Message::Pong(payload)).await;
+                    }
+                    Ok(Some(Ok(Message::Pong(_))))
+                    | Ok(Some(Ok(Message::Binary(_))))
+                    | Ok(Some(Ok(Message::Frame(_)))) => {}
+                    Ok(Some(Ok(Message::Close(_)))) => {
+                        return Err("ws closed by server during subscribe".to_string());
+                    }
+                    Ok(Some(Err(e))) => {
+                        return Err(format!("ws read error during subscribe: {e}"));
+                    }
+                    Ok(None) => {
+                        return Err("ws stream ended during subscribe".to_string());
+                    }
+                    Err(_) => break,
+                }
+            }
+
+            // Brief pace so we don't trip Kraken's per-connection burst limit.
             tokio::time::sleep(KRAKEN_WS_SUBSCRIBE_FRAME_DELAY).await;
         }
         Ok::<(), String>(())

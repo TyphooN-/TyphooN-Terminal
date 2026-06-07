@@ -854,6 +854,14 @@ impl TyphooNApp {
         out
     }
 
+    pub(super) fn kraken_equity_catalog_symbol_count(&self) -> usize {
+        if !self.kraken_enabled || !self.kraken_scrape_xstocks {
+            0
+        } else {
+            self.kraken_equity_universe_symbols.len()
+        }
+    }
+
     pub(super) fn kraken_equity_catalog_symbols(&self) -> Vec<String> {
         if !self.kraken_enabled || !self.kraken_scrape_xstocks {
             return Vec::new();
@@ -1137,7 +1145,11 @@ impl TyphooNApp {
                     YAHOO_CHART_BATCH_SIZE
                 };
                 let yahoo_foreground_slots = if full_tilt { 2 } else { 1 };
-                let yahoo_scan_limit = if full_tilt { 1024 } else { 128 };
+                let yahoo_scan_limit = if full_tilt {
+                    YAHOO_CHART_FULL_TILT_BACKGROUND_SCAN_LIMIT
+                } else {
+                    128
+                };
                 let available_slots = yahoo_queue_window
                     .saturating_sub(self.pending_yahoo_chart_fetches.len())
                     .min(yahoo_batch_limit);
@@ -2307,7 +2319,7 @@ mod tests {
         assert_eq!(
             kraken_equity_native_symbols_for_timeframe(&catalog, &demand, "1Day"),
             symbols(&["AAPL", "MSFT"]),
-            "status/control-plane native rows should still expose catalog coverage"
+            "status/control-plane native rows should expose catalog WS coverage"
         );
         assert_eq!(
             kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Month"),
