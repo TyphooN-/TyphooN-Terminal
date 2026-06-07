@@ -413,6 +413,22 @@ fn chart_ensures_mql_mtf_overlays_for_render_from_cache() {
 }
 
 #[test]
+fn heavy_sync_mtf_overlay_render_policy_only_refreshes_focused_cell() {
+    assert!(ChartState::should_ensure_mql_mtf_overlays_for_render(
+        false, true, false
+    ));
+    assert!(ChartState::should_ensure_mql_mtf_overlays_for_render(
+        true, false, false
+    ));
+    assert!(ChartState::should_ensure_mql_mtf_overlays_for_render(
+        true, true, true
+    ));
+    assert!(!ChartState::should_ensure_mql_mtf_overlays_for_render(
+        true, true, false
+    ));
+}
+
+#[test]
 fn chart_forming_bar_requires_caught_up_previous_bucket() {
     let day = 86_400_000i64;
     let now = 20 * day + 23 * 3_600_000;

@@ -4613,6 +4613,14 @@ impl ChartState {
         }
     }
 
+    pub(crate) fn should_ensure_mql_mtf_overlays_for_render(
+        heavy_sync_in_progress: bool,
+        mtf_enabled: bool,
+        is_focused: bool,
+    ) -> bool {
+        !heavy_sync_in_progress || !mtf_enabled || is_focused
+    }
+
     pub(crate) fn compute_multi_kama(&mut self, cache: &SqliteCache) {
         self.multi_kama.clear();
         if self.bars.is_empty() {

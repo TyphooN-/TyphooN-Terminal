@@ -9666,7 +9666,7 @@ impl eframe::App for TyphooNApp {
                     let cell_rect = egui::Rect::from_min_size(
                         egui::pos2(
                             available.left() + col as f32 * cell_w,
-                            available.top()  + row as f32 * cell_h,
+                            group_top + row as f32 * cell_h,
                         ),
                         egui::vec2(cell_w - 2.0, cell_h - 2.0),
                     );
@@ -9782,12 +9782,18 @@ impl eframe::App for TyphooNApp {
                         }
                     }
 
-                    if let Some(cache) = render_cache.as_ref() {
-                        chart.ensure_mql_mtf_overlays_for_render(
-                            std::sync::Arc::as_ref(cache),
-                            flags.sma200,
-                            flags.kama,
-                        );
+                    if ChartState::should_ensure_mql_mtf_overlays_for_render(
+                        self.heavy_sync_in_progress,
+                        self.mtf_enabled,
+                        is_focused,
+                    ) {
+                        if let Some(cache) = render_cache.as_ref() {
+                            chart.ensure_mql_mtf_overlays_for_render(
+                                std::sync::Arc::as_ref(cache),
+                                flags.sma200,
+                                flags.kama,
+                            );
+                        }
                     }
                     let painter = ui.painter_at(cell_rect);
                     draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &self.draw_mode);
