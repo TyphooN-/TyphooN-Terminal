@@ -20,7 +20,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use typhoon_engine::broker::kraken::{
     KRAKEN_WS_OHLC_INTERVALS_MIN, KrakenOhlcStreamerEvent, KrakenWsOhlcBar, kraken_ws_bar_to_json,
-    kraken_ws_interval_to_tf_label, kraken_ws_symbol_to_cache_key, run_ohlc_streamer,
+    kraken_ws_interval_to_tf_label, kraken_ws_symbol_to_cache_key, run_ohlc_streamer_with_snapshot,
     ws_bar_is_closed,
 };
 use typhoon_engine::core::cache::SqliteCache;
@@ -304,6 +304,17 @@ mod tests {
         assert!(symbols.iter().all(|s| s.contains('/')));
     }
 
+    #[test]
+    fn large_universe_disables_initial_ws_snapshots() {
+        assert!(kraken_ws_should_request_initial_snapshot(
+            WS_LARGE_UNIVERSE_PAIR_THRESHOLD - 1
+        ));
+        assert!(!kraken_ws_should_request_initial_snapshot(
+            WS_LARGE_UNIVERSE_PAIR_THRESHOLD
+        ));
+        assert!(!kraken_ws_should_request_initial_snapshot(12_741));
+    }
+
     fn mk_bar(interval_min: u32, interval_begin_ms: i64) -> KrakenWsOhlcBar {
         KrakenWsOhlcBar {
             symbol: "BTC/USD".into(),
@@ -544,16 +555,24 @@ pub(super) fn spawn_kraken_ohlc_pipeline(
         return;
     }
     let (bar_tx, bar_rx) = mpsc::channel::<KrakenWsOhlcBar>(WS_BAR_CHANNEL_CAPACITY);
-    let stagger_large_universe = pairs.len() >= WS_LARGE_UNIVERSE_PAIR_THRESHOLD;
+    let large_universe = pairs.len() >= WS_LARGE_UNIVERSE_PAIR_THRESHOLD;
+    let snapshot_initial = kraken_ws_should_request_initial_snapshot(pairs.len());
     for (interval_idx, &interval_min) in KRAKEN_WS_OHLC_INTERVALS_MIN.iter().enumerate() {
         let pairs = pairs.clone();
         let bar_tx = bar_tx.clone();
         let status_tx = status_tx.clone();
         tokio::spawn(async move {
-            if stagger_large_universe && interval_idx > 0 {
+            if large_universe && interval_idx > 0 {
                 tokio::time::sleep(WS_LARGE_UNIVERSE_INTERVAL_STAGGER * interval_idx as u32).await;
             }
-            run_ohlc_streamer(interval_min, pairs, bar_tx, status_tx).await;
+            run_ohlc_streamer_with_snapshot(
+                interval_min,
+                pairs,
+                snapshot_initial,
+                bar_tx,
+                status_tx,
+            )
+            .await;
         });
     }
     // Drop the original sender so the writer's rx.recv() resolves to None
@@ -563,6 +582,10 @@ pub(super) fn spawn_kraken_ohlc_pipeline(
     tokio::spawn(async move {
         run_ws_bar_writer(shared_cache, bar_rx, commit_tx, None).await;
     });
+}
+
+fn kraken_ws_should_request_initial_snapshot(pair_count: usize) -> bool {
+    pair_count < WS_LARGE_UNIVERSE_PAIR_THRESHOLD
 }
 
 /// Drain the merged bar channel, buffer by (symbol, interval, bucket),

@@ -93,6 +93,21 @@ pub(crate) fn next_req_id() -> u64 {
 /// stay under Kraken's per-frame symbol cap. Each returned string is one
 /// JSON message ready to send on the WS.
 pub fn build_subscribe_frames(interval_min: u32, symbols: &[String]) -> Vec<String> {
+    build_subscribe_frames_with_snapshot(interval_min, symbols, true)
+}
+
+/// Build subscribe frames with explicit snapshot control.
+///
+/// Kraken's default OHLC snapshot is useful for small/demand sets, but a full
+/// 12k+ xStocks catalog can return hundreds of historical bars per symbol for
+/// one interval. That is millions of bars before the app reaches live updates,
+/// so large full-catalog startup must be able to subscribe live-only and leave
+/// deep repair/backfill to the paced REST/assist lanes.
+pub fn build_subscribe_frames_with_snapshot(
+    interval_min: u32,
+    symbols: &[String],
+    snapshot: bool,
+) -> Vec<String> {
     if symbols.is_empty() {
         return Vec::new();
     }
@@ -104,7 +119,7 @@ pub fn build_subscribe_frames(interval_min: u32, symbols: &[String]) -> Vec<Stri
                 "channel": "ohlc",
                 "symbol": batch,
                 "interval": interval_min,
-                "snapshot": true,
+                "snapshot": snapshot,
             },
             "req_id": next_req_id(),
         });
@@ -357,15 +372,29 @@ pub async fn run_ohlc_streamer(
     bar_tx: mpsc::Sender<KrakenWsOhlcBar>,
     event_tx: mpsc::UnboundedSender<KrakenOhlcStreamerEvent>,
 ) {
-    if pairs.is_empty() || bar_tx.is_closed() {
+    run_ohlc_streamer_with_snapshot(interval_min, pairs, true, bar_tx, event_tx).await;
+}
+
+/// Same as [`run_ohlc_streamer`], but lets callers disable the initial Kraken
+/// OHLC snapshot for very large universes where startup history would exceed
+/// memory budgets. Live updates still stream normally after subscribe.
+pub async fn run_ohlc_streamer_with_snapshot(
+    interval_min: u32,
+    pairs: Vec<String>,
+    snapshot: bool,
+    bar_tx: mpsc::Sender<KrakenWsOhlcBar>,
+    event_tx: mpsc::UnboundedSender<KrakenOhlcStreamerEvent>,
+) {
+    if pairs.is_empty() {
         return;
     }
-    let mut consecutive_failures: u32 = 0;
+    let mut consecutive_failures = 0u32;
     loop {
         if bar_tx.is_closed() {
             return;
         }
-        let one_pass = run_ohlc_streamer_once(interval_min, &pairs, &bar_tx, &event_tx).await;
+        let one_pass =
+            run_ohlc_streamer_once(interval_min, &pairs, snapshot, &bar_tx, &event_tx).await;
         match one_pass {
             Ok(()) => {
                 consecutive_failures = 0;
@@ -391,6 +420,7 @@ pub async fn run_ohlc_streamer(
 async fn run_ohlc_streamer_once(
     interval_min: u32,
     pairs: &[String],
+    snapshot: bool,
     bar_tx: &mpsc::Sender<KrakenWsOhlcBar>,
     event_tx: &mpsc::UnboundedSender<KrakenOhlcStreamerEvent>,
 ) -> Result<(), String> {
@@ -405,7 +435,7 @@ async fn run_ohlc_streamer_once(
     // connection. A bad-batch NACK is rare and usually indicates a single
     // delisted symbol; the per-batch ACK loop is the slow path so we just
     // log and move on.
-    let frames = build_subscribe_frames(interval_min, pairs);
+    let frames = build_subscribe_frames_with_snapshot(interval_min, pairs, snapshot);
     let batches = frames.len();
     let subscribe_fut = async {
         for frame in &frames {
@@ -578,6 +608,13 @@ mod tests {
         assert_eq!(v["params"]["interval"], 60);
         assert_eq!(v["params"]["snapshot"], true);
         assert!(v["req_id"].is_number());
+    }
+
+    #[test]
+    fn build_subscribe_frames_can_disable_initial_snapshot() {
+        let frames = build_subscribe_frames_with_snapshot(1, &["AAPLx/USD".to_string()], false);
+        let v: serde_json::Value = serde_json::from_str(&frames[0]).unwrap();
+        assert_eq!(v["params"]["snapshot"], false);
     }
 
     #[test]
