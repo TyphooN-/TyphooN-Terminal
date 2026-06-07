@@ -1142,6 +1142,65 @@ pub(crate) fn chart_load_merged_equity_bars_from_cache(
     merged
 }
 
+#[cfg(target_os = "linux")]
+fn chart_process_rss_mb() -> Option<f64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            let kb = rest.split_whitespace().next()?.parse::<f64>().ok()?;
+            return Some(kb / 1024.0);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn chart_process_rss_mb() -> Option<f64> {
+    None
+}
+
+fn chart_rss_label(rss_mb: Option<f64>) -> String {
+    rss_mb
+        .map(|rss| format!("{rss:.1} MB"))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn chart_log_merged_cache_load_start(
+    log: &mut std::collections::VecDeque<LogEntry>,
+    context: &str,
+    symbol: &str,
+    timeframe: &str,
+) -> (std::time::Instant, Option<f64>) {
+    let rss = chart_process_rss_mb();
+    let msg = format!(
+        "Merged cache load start ({context}): {symbol} [{timeframe}] rss={}",
+        chart_rss_label(rss)
+    );
+    tracing::info!("{msg}");
+    log.push_back(LogEntry::info(msg));
+    (std::time::Instant::now(), rss)
+}
+
+fn chart_log_merged_cache_load_done(
+    log: &mut std::collections::VecDeque<LogEntry>,
+    context: &str,
+    symbol: &str,
+    timeframe: &str,
+    bars: usize,
+    started_at: std::time::Instant,
+    rss_before_mb: Option<f64>,
+) {
+    let rss_after_mb = chart_process_rss_mb();
+    let msg = format!(
+        "Merged cache load done ({context}): {bars} bars for {symbol} [{timeframe}] load_ms={:.2} rss={} → {}",
+        started_at.elapsed().as_secs_f64() * 1000.0,
+        chart_rss_label(rss_before_mb),
+        chart_rss_label(rss_after_mb)
+    );
+    tracing::info!("{msg}");
+    log.push_back(LogEntry::info(msg));
+}
+
 fn chart_build_merged_equity_bars_from_cache(
     cache: &SqliteCache,
     symbol: &str,
@@ -1858,7 +1917,22 @@ impl ChartState {
         let old_len = self.bars.len();
         let source_override = self.source_override;
         if source_override == "merged" {
+            let (load_started_at, load_rss_before) = chart_log_merged_cache_load_start(
+                log,
+                "source_override",
+                &sym,
+                self.timeframe.label(),
+            );
             let merged = chart_load_merged_equity_bars_from_cache(cache, &sym, tf);
+            chart_log_merged_cache_load_done(
+                log,
+                "source_override",
+                &sym,
+                self.timeframe.label(),
+                merged.len(),
+                load_started_at,
+                load_rss_before,
+            );
             if !merged.is_empty() {
                 self.gap_fill_timestamps.clear();
                 self.bars = merged;
@@ -1874,12 +1948,6 @@ impl ChartState {
                     self.sync_camera_to_legacy();
                 }
                 self.compute_indicators_gpu(gpu);
-                log.push_back(LogEntry::info(format!(
-                    "Loaded {} merged bars for {} [{}]",
-                    self.bars.len(),
-                    self.symbol,
-                    self.timeframe.label()
-                )));
             } else {
                 self.bars.clear();
                 self.primary_source = "";
@@ -1954,7 +2022,22 @@ impl ChartState {
             return true;
         }
         if chart_prefers_fresh_equity_source(&sym_norm) {
+            let (load_started_at, load_rss_before) = chart_log_merged_cache_load_start(
+                log,
+                "fresh_equity_auto",
+                &sym,
+                self.timeframe.label(),
+            );
             let merged = chart_load_merged_equity_bars_from_cache(cache, &sym, tf);
+            chart_log_merged_cache_load_done(
+                log,
+                "fresh_equity_auto",
+                &sym,
+                self.timeframe.label(),
+                merged.len(),
+                load_started_at,
+                load_rss_before,
+            );
             if !merged.is_empty() {
                 self.gap_fill_timestamps.clear();
                 self.bars = merged;
@@ -1969,12 +2052,6 @@ impl ChartState {
                     self.sync_camera_to_legacy();
                 }
                 self.compute_indicators_gpu(gpu);
-                log.push_back(LogEntry::info(format!(
-                    "Loaded {} merged bars for {} [{}]",
-                    self.bars.len(),
-                    self.symbol,
-                    self.timeframe.label()
-                )));
                 return true;
             }
         }
@@ -2404,7 +2481,22 @@ impl ChartState {
         };
 
         if chart_prefers_fresh_equity_source(&bare_sym) {
+            let (load_started_at, load_rss_before) = chart_log_merged_cache_load_start(
+                log,
+                "restored_cache",
+                &bare_sym,
+                self.timeframe.label(),
+            );
             let merged = chart_load_merged_equity_bars_from_cache(cache, &bare_sym, tf);
+            chart_log_merged_cache_load_done(
+                log,
+                "restored_cache",
+                &bare_sym,
+                self.timeframe.label(),
+                merged.len(),
+                load_started_at,
+                load_rss_before,
+            );
             if !merged.is_empty() {
                 self.gap_fill_timestamps.clear();
                 self.bars = merged;
@@ -2413,22 +2505,6 @@ impl ChartState {
                 self.compute_indicators_gpu(gpu);
                 self.compute_mtf_sma(cache);
                 self.compute_multi_kama(cache);
-                let mtf_info = if !self.mtf_sma.is_empty() || !self.multi_kama.is_empty() {
-                    format!(
-                        " | MTF_MA: {} lines, MultiKAMA: {} TFs",
-                        self.mtf_sma.len(),
-                        self.multi_kama.len()
-                    )
-                } else {
-                    String::new()
-                };
-                log.push_back(LogEntry::info(format!(
-                    "Loaded {} merged bars for {} [{}]{}",
-                    self.bars.len(),
-                    self.symbol,
-                    self.timeframe.label(),
-                    mtf_info
-                )));
                 return;
             }
         }
