@@ -12174,8 +12174,9 @@ impl eframe::App for TyphooNApp {
                 - perf_chrome_panels_ms
                 - perf_floating_windows_ms)
                 .max(0.0);
+            let rss_mb = crate::app::market_data_sync::current_process_rss_mb();
             tracing::warn!(
-                "UI frame stall detail: update_ms={:.2} pre_broker_ms={:.2} broker_drain_ms={:.2} render_after_broker_ms={:.2} post_broker_setup_ms={:.2} chrome_panels_ms={:.2} floating_windows_ms={:.2} render_residual_ms={:.2} session_save_ms={:.2} msgs_drained={} pending_fetches={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={}",
+                "UI frame stall detail: update_ms={:.2} pre_broker_ms={:.2} broker_drain_ms={:.2} render_after_broker_ms={:.2} post_broker_setup_ms={:.2} chrome_panels_ms={:.2} floating_windows_ms={:.2} render_residual_ms={:.2} session_save_ms={:.2} msgs_drained={} pending_fetches={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} rss_mb={}",
                 update_ms,
                 perf_pre_broker_ms,
                 perf_broker_drain_ms,
@@ -12187,6 +12188,7 @@ impl eframe::App for TyphooNApp {
                 session_save_ms,
                 msgs_drained,
                 self.total_pending_market_data_fetches(),
+                rss_mb,
                 self.heavy_sync_in_progress,
                 self.news_loading,
                 self.scrape_fund_running,
@@ -12204,13 +12206,15 @@ impl eframe::App for TyphooNApp {
         if now_instant.duration_since(self.perf_last_report) >= std::time::Duration::from_secs(5) {
             if self.perf_slow_frame_count > 0 || self.perf_broker_msgs_drained > 0 {
                 let pending_fetches = self.total_pending_market_data_fetches();
+                let rss_mb = crate::app::market_data_sync::current_process_rss_mb();
                 if self.perf_max_update_ms >= 250.0 {
                     tracing::warn!(
-                        "UI frame stall: max_update_ms={:.2} slow_frames={} broker_msgs={} pending_fetches={} deferred_chart_loads={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} log_entries={}",
+                        "UI frame stall: max_update_ms={:.2} slow_frames={} broker_msgs={} pending_fetches={} deferred_chart_loads={} rss_mb={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} log_entries={}",
                         self.perf_max_update_ms,
                         self.perf_slow_frame_count,
                         self.perf_broker_msgs_drained,
                         pending_fetches,
+                        rss_mb,
                         self.deferred_chart_loads.len(),
                         self.heavy_sync_in_progress,
                         self.news_loading,

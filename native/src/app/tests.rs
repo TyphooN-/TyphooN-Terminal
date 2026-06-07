@@ -5,6 +5,22 @@ fn test_bar(ts_ms: i64) -> (i64, f64, f64, f64, f64, f64) {
 }
 
 #[test]
+fn alpaca_batch_fetch_supports_every_standard_timeframe_for_broad_equity_assist() {
+    for timeframe in [
+        "1Min", "M1", "5Min", "M5", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week", "1Month",
+        "MN1",
+    ] {
+        assert!(
+            TyphooNApp::alpaca_batch_fetch_supported(timeframe),
+            "{timeframe} should use Alpaca's multi-symbol bars endpoint"
+        );
+    }
+    assert_eq!(TyphooNApp::alpaca_batch_fetch_chunk_symbols("1Min"), 8);
+    assert_eq!(TyphooNApp::alpaca_batch_fetch_chunk_symbols("1Hour"), 16);
+    assert_eq!(TyphooNApp::alpaca_batch_fetch_chunk_symbols("1Month"), 50);
+}
+
+#[test]
 fn chart_source_cadence_rejects_monthly_bars_mislabeled_as_daily() {
     let day = 86_400_000i64;
     let monthly_as_daily: Vec<_> = (0..36).map(|i| test_bar(i * 30 * day)).collect();

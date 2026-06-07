@@ -34,6 +34,7 @@ pub(super) async fn run_alpaca_batch_fetch_task(
         "4Hour" | "H4" => "4Hour",
         "1Day" | "D1" => "1Day",
         "1Week" | "W1" => "1Week",
+        "1Month" | "MN1" => "1Month",
         _ => "1Day",
     };
     let symbols: Vec<String> = symbols
@@ -51,7 +52,7 @@ pub(super) async fn run_alpaca_batch_fetch_task(
         .get_stock_bars_batch_targeted(&symbols, tf_alpaca, limit)
         .await;
     match result {
-        Ok((bars_by_symbol, outcome)) => {
+        Ok((mut bars_by_symbol, outcome)) => {
             if matches!(
                 outcome,
                 typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedEmpty
@@ -71,7 +72,7 @@ pub(super) async fn run_alpaca_batch_fetch_task(
                 return;
             }
             for symbol in &symbols {
-                let new_bars = bars_by_symbol.get(symbol).cloned().unwrap_or_default();
+                let new_bars = bars_by_symbol.remove(symbol).unwrap_or_default();
                 if new_bars.is_empty() {
                     // A successful multi-symbol response can omit symbols that have
                     // no rows for that timeframe/window. Do not explode a broad
@@ -467,6 +468,7 @@ fn cryptocompare_backfill_floor_ms() -> i64 {
         .unwrap_or(0)
 }
 
+#[allow(dead_code)]
 fn merged_equity_materialize_target_from_cache_key(cache_key: &str) -> Option<(String, String)> {
     let mut parts = cache_key.splitn(3, ':');
     let source = parts.next()?;
@@ -518,11 +520,10 @@ async fn store_json_bars_in_cache(
                 .unwrap_or(0)
         };
         if count > 0 {
-            if let Some((symbol, timeframe)) =
-                merged_equity_materialize_target_from_cache_key(&cache_key)
-            {
-                let _ = chart_materialize_merged_equity_cache(&cache, &symbol, &timeframe);
-            }
+            // Do NOT materialize merged on every provider write.
+            // Materialization is expensive (full rebuild + persist) and causes
+            // massive temporary allocations + CPU spikes during broad sync.
+            // Let chart reads trigger on-demand materialization instead.
         }
         Ok::<usize, String>(count)
     })

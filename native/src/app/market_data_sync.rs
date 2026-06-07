@@ -1,14 +1,49 @@
 use super::*;
 
 const ALPACA_BATCH_FETCH_MAX_SYMBOLS: usize = 50;
-pub(super) const BACKGROUND_RETRY_PENDING_FETCH_CAP: usize = 64;
+const ALPACA_BATCH_FETCH_INTRADAY_SYMBOLS: usize = 16;
+const ALPACA_BATCH_FETCH_LOW_TF_SYMBOLS: usize = 8;
+pub(super) const BACKGROUND_RETRY_PENDING_FETCH_CAP: usize = 256;
+
+/// When process RSS exceeds this threshold we pause new background (non-focus)
+/// market data fetches. Focus charts and explicit user actions are still allowed.
+/// 18 GB on a 32 GB system leaves headroom for the rest of the desktop.
+const HEAVY_SYNC_RSS_PAUSE_MB: u64 = 18_000;
+pub(super) fn current_process_rss_mb() -> u64 {
+    // Lightweight /proc/self/status read — no extra dependencies.
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        for line in status.lines() {
+            if line.starts_with("VmRSS:") {
+                if let Some(kb_str) = line.split_whitespace().nth(1) {
+                    if let Ok(kb) = kb_str.parse::<u64>() {
+                        return kb / 1024;
+                    }
+                }
+            }
+        }
+    }
+    0
+}
+
 
 pub(super) fn background_retry_dispatch_allowed(pending_fetches: usize) -> bool {
     pending_fetches < BACKGROUND_RETRY_PENDING_FETCH_CAP
 }
 
 fn background_market_data_fetch_allowed(focus: bool, pending_fetches: usize) -> bool {
-    focus || pending_fetches < BACKGROUND_RETRY_PENDING_FETCH_CAP
+    if focus {
+        return true;
+    }
+    if pending_fetches >= BACKGROUND_RETRY_PENDING_FETCH_CAP {
+        return false;
+    }
+    // Memory backpressure: pause broad background work when RSS is already high.
+    // Focus charts and explicit user actions bypass this check.
+    let rss_mb = current_process_rss_mb();
+    if rss_mb > 0 && rss_mb >= HEAVY_SYNC_RSS_PAUSE_MB {
+        return false;
+    }
+    true
 }
 
 pub(super) fn normalize_kraken_equity_symbol_list<'a, I>(symbols: I) -> Vec<String>
@@ -1331,11 +1366,32 @@ impl TyphooNApp {
         });
     }
 
-    fn alpaca_batch_fetch_supported(timeframe: &str) -> bool {
+    pub(super) fn alpaca_batch_fetch_supported(timeframe: &str) -> bool {
         matches!(
             normalize_sync_timeframe_key(timeframe),
-            Some("15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week")
+            Some(
+                "1Min"
+                    | "5Min"
+                    | "15Min"
+                    | "30Min"
+                    | "1Hour"
+                    | "4Hour"
+                    | "1Day"
+                    | "1Week"
+                    | "1Month"
+            )
         )
+    }
+
+    pub(super) fn alpaca_batch_fetch_chunk_symbols(timeframe: &str) -> usize {
+        match normalize_sync_timeframe_key(timeframe) {
+            // Dense payloads can otherwise put several workers into 100k+ bar
+            // JSON/decompression/merge paths at once. Keep the multi-symbol
+            // endpoint, but bound per-request RSS by timeframe.
+            Some("1Min" | "5Min") => ALPACA_BATCH_FETCH_LOW_TF_SYMBOLS,
+            Some("15Min" | "30Min" | "1Hour") => ALPACA_BATCH_FETCH_INTRADAY_SYMBOLS,
+            _ => ALPACA_BATCH_FETCH_MAX_SYMBOLS,
+        }
     }
 
     fn queue_alpaca_batch_fetches_from_candidates(
@@ -1368,7 +1424,8 @@ impl TyphooNApp {
             dispatched += 1;
         }
         for (timeframe, symbols) in by_tf {
-            for chunk in symbols.chunks(ALPACA_BATCH_FETCH_MAX_SYMBOLS) {
+            let chunk_symbols = Self::alpaca_batch_fetch_chunk_symbols(&timeframe);
+            for chunk in symbols.chunks(chunk_symbols) {
                 let _ = self.broker_tx.send(BrokerCmd::AlpacaFetchBarsBatch {
                     symbols: chunk.to_vec(),
                     timeframe: timeframe.clone(),
@@ -2345,6 +2402,8 @@ mod tests {
             false,
             BACKGROUND_RETRY_PENDING_FETCH_CAP
         ));
+        // RSS guard is environment-dependent; we only assert the pending_fetches path here.
+
         assert!(background_market_data_fetch_allowed(true, 0));
         assert!(background_market_data_fetch_allowed(
             true,

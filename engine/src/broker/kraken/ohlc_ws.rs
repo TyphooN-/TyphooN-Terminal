@@ -150,6 +150,18 @@ pub fn build_unsubscribe_frame(interval_min: u32, symbols: &[String]) -> Option<
 /// vec for non-OHLC frames (heartbeats, subscribe ACKs, system status). Only
 /// the `ohlc` channel produces bar output.
 pub fn parse_ohlc_message(text: &str) -> Vec<KrakenWsOhlcBar> {
+    parse_ohlc_message_with_snapshot_policy(text, true)
+}
+
+/// Parse an OHLC frame while optionally dropping startup snapshots before
+/// expanding their `data` array into per-bar structs. Large Kraken Securities
+/// universes subscribe with `snapshot=false`, but this guard is deliberately
+/// defensive: if Kraken, a proxy, or a reconnect path still delivers snapshot
+/// frames, the app must not enqueue millions of historical buckets and OOM.
+pub fn parse_ohlc_message_with_snapshot_policy(
+    text: &str,
+    accept_snapshots: bool,
+) -> Vec<KrakenWsOhlcBar> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
         return Vec::new();
     };
@@ -162,6 +174,9 @@ pub fn parse_ohlc_message(text: &str) -> Vec<KrakenWsOhlcBar> {
         return Vec::new();
     }
     let is_snapshot = obj.get("type").and_then(|v| v.as_str()) == Some("snapshot");
+    if is_snapshot && !accept_snapshots {
+        return Vec::new();
+    }
     let Some(data) = obj.get("data").and_then(|v| v.as_array()) else {
         return Vec::new();
     };
@@ -455,7 +470,7 @@ async fn run_ohlc_streamer_once(
                         if is_heartbeat_or_status(&text) || is_subscribe_ack(&text) {
                             continue;
                         }
-                        for bar in parse_ohlc_message(&text) {
+                        for bar in parse_ohlc_message_with_snapshot_policy(&text, snapshot) {
                             if bar_tx.send(bar).await.is_err() {
                                 return Ok::<(), String>(());
                             }
@@ -529,7 +544,7 @@ async fn run_ohlc_streamer_once(
                         if is_heartbeat_or_status(&text) || is_subscribe_ack(&text) {
                             continue;
                         }
-                        for bar in parse_ohlc_message(&text) {
+                        for bar in parse_ohlc_message_with_snapshot_policy(&text, snapshot) {
                             if bar_tx.send(bar).await.is_err() {
                                 // Consumer is gone — clean shutdown.
                                 return Ok(());
@@ -685,6 +700,22 @@ mod tests {
         assert_eq!(bars[0].interval_begin_ms, expected_ms);
         assert_eq!(bars[1].symbol, "ETH/USD");
         assert!(bars[1].vwap.is_none()); // missing vwap → None
+    }
+
+    #[test]
+    fn parse_ohlc_message_can_drop_snapshot_frames_for_live_only_large_universe() {
+        let text = r#"{
+            "channel": "ohlc",
+            "type": "snapshot",
+            "data": [{
+                "symbol": "AAPLx/USD",
+                "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5,
+                "volume": 10.0, "trades": 3,
+                "interval_begin": "2026-05-23T19:00:00Z", "interval": 1
+            }]
+        }"#;
+        assert!(parse_ohlc_message_with_snapshot_policy(text, false).is_empty());
+        assert_eq!(parse_ohlc_message_with_snapshot_policy(text, true).len(), 1);
     }
 
     #[test]

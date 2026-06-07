@@ -83,15 +83,16 @@ pub(super) fn kraken_equity_full_universe_timeframe(tf: &str) -> bool {
     )
 }
 
-/// Broad Kraken-equity coverage target for non-native assist sources. 1Min/5Min
-/// are kept demand/focus scoped because provider access/window limits make them
-/// freshness assists, not realistic 13k-symbol backlog-fill lanes. 15Min+ should
-/// rotate over the whole Kraken equity catalog when Alpaca/Yahoo are
-/// enabled so Sync Status does not stay permanently bare below D1.
+/// Broad Kraken-equity coverage target for non-native assist sources. The sync
+/// goal is full-catalog, high-timeframe-first convergence across every enabled
+/// timeframe/source: MN1 -> W1 -> D1 -> H4 -> H1 -> M30 -> M15 -> M5 -> M1.
+/// Provider windows still cap how deep low-timeframe history can go, but they
+/// should not keep low-timeframe rows permanently demand-scoped when full sync
+/// is explicitly enabled.
 pub(super) fn kraken_equity_broad_fallback_timeframe(tf: &str) -> bool {
     matches!(
         tf,
-        "15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week" | "1Month"
+        "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week" | "1Month"
     )
 }
 
@@ -135,9 +136,9 @@ mod tests {
     }
 
     #[test]
-    fn kraken_equity_broad_fallback_sync_starts_at_15min() {
-        assert!(!kraken_equity_broad_fallback_timeframe("1Min"));
-        assert!(!kraken_equity_broad_fallback_timeframe("5Min"));
+    fn kraken_equity_broad_fallback_sync_covers_all_standard_timeframes() {
+        assert!(kraken_equity_broad_fallback_timeframe("1Min"));
+        assert!(kraken_equity_broad_fallback_timeframe("5Min"));
         assert!(kraken_equity_broad_fallback_timeframe("15Min"));
         assert!(kraken_equity_broad_fallback_timeframe("4Hour"));
         assert!(kraken_equity_broad_fallback_timeframe("1Day"));
