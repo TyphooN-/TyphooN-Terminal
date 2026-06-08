@@ -543,41 +543,24 @@ pub(super) fn spawn_broker_message_processor(
                                 let next_open = v["next_open"].as_str().unwrap_or("—");
                                 let next_close = v["next_close"].as_str().unwrap_or("—");
 
-                                // Robust target selection: prefer the one that is actually in the future.
-                                // This fixes the "wrong open/closed timing" when the broker returns
-                                // a stale next_close/next_open relative to the is_open flag.
-                                let mut target = if is_open { next_close } else { next_open };
-                                let mut target_dt = chrono::DateTime::parse_from_rfc3339(target).ok()
+                                // Session-aware label (pre-market / core / after-hours /
+                                // closed) instead of a binary OPEN/CLOSED. Alpaca's clock
+                                // `is_open` only flags the core session, so the old text read
+                                // "US equities CLOSED" all through pre-market; this overlays the
+                                // fixed ET session windows while keeping Alpaca's holiday and
+                                // half-day accuracy via is_open/next_open.
+                                let next_open_utc = chrono::DateTime::parse_from_rfc3339(next_open)
+                                    .ok()
                                     .map(|dt| dt.with_timezone(&chrono::Utc));
-
-                                if target_dt.map_or(true, |dt| dt <= chrono::Utc::now()) {
-                                    // Chosen target is in the past — flip to the other one
-                                    target = if is_open { next_open } else { next_close };
-                                    target_dt = chrono::DateTime::parse_from_rfc3339(target).ok()
-                                        .map(|dt| dt.with_timezone(&chrono::Utc));
-                                }
-
-                                let countdown = target_dt
-                                    .map(|dt| dt - chrono::Utc::now())
-                                    .filter(|d| d.num_seconds() > 0)
-                                    .map(|d| {
-                                        let hours = d.num_hours();
-                                        let minutes = (d.num_minutes() % 60).abs();
-                                        if hours >= 24 {
-                                            format!("{}d {}h", hours / 24, hours % 24)
-                                        } else if hours > 0 {
-                                            format!("{}h {}m", hours, minutes)
-                                        } else {
-                                            format!("{}m", minutes.max(1))
-                                        }
-                                    })
-                                    .unwrap_or_else(|| "—".to_string());
-
-                                let msg = if is_open {
-                                    format!("US equities OPEN · closes in {countdown}")
-                                } else {
-                                    format!("US equities CLOSED · opens in {countdown}")
-                                };
+                                let next_close_utc = chrono::DateTime::parse_from_rfc3339(next_close)
+                                    .ok()
+                                    .map(|dt| dt.with_timezone(&chrono::Utc));
+                                let msg = crate::app::app_runtime_support::us_equities_session_status_at(
+                                    chrono::Utc::now(),
+                                    is_open,
+                                    next_open_utc,
+                                    next_close_utc,
+                                );
                                 let _ = broker_msg_tx_clone.send(BrokerMsg::MarketClock(msg));
                             }
                             Err(e) => {

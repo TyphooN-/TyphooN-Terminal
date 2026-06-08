@@ -187,6 +187,87 @@ pub(super) fn kraken_xstocks_session_status_now() -> String {
     kraken_xstocks_session_status_at(chrono::Utc::now())
 }
 
+/// Session-aware status for the regular US-equities market clock (Alpaca
+/// `/v2/clock`). Unlike Kraken xStocks (24/5 with an overnight session), the
+/// regular US market has four states: pre-market (4:00–9:30 ET), core/regular
+/// (9:30–16:00, Alpaca `is_open`), after-hours (16:00–20:00), and CLOSED
+/// (20:00–4:00 ET, weekends, holidays — there is no regular-market overnight
+/// session). Alpaca's `is_open`/`next_open` give holiday and half-day accuracy;
+/// the pre-market and after-hours overlays come from the fixed ET boundaries.
+/// Fixes the old binary label that read "US equities CLOSED" all through
+/// pre-market.
+pub(super) fn us_equities_session_status_at(
+    now_utc: chrono::DateTime<chrono::Utc>,
+    is_open: bool,
+    next_open: Option<chrono::DateTime<chrono::Utc>>,
+    next_close: Option<chrono::DateTime<chrono::Utc>>,
+) -> String {
+    use chrono::{Datelike, Timelike};
+
+    let now_et = now_utc.naive_utc() + chrono::Duration::seconds(us_eastern_offset_seconds(now_utc));
+    let weekday = now_et.weekday();
+    let minute_of_day = now_et.hour() as i64 * 60 + now_et.minute() as i64;
+    const PRE: i64 = 4 * 60;
+    const CORE: i64 = 9 * 60 + 30;
+    const AFTER: i64 = 16 * 60;
+    const CLOSE: i64 = 20 * 60;
+    let day_start = now_et.date().and_hms_opt(0, 0, 0).unwrap_or(now_et);
+    let et_date_of = |dt: chrono::DateTime<chrono::Utc>| {
+        (dt.naive_utc() + chrono::Duration::seconds(us_eastern_offset_seconds(dt))).date()
+    };
+
+    // Core hours are authoritative from Alpaca's clock (covers holidays and
+    // early-close half-days that fixed ET boundaries would miss).
+    if is_open {
+        let target = next_close
+            .map(|nc| nc - now_utc)
+            .unwrap_or_else(|| (day_start + chrono::Duration::minutes(AFTER)) - now_et);
+        return format!(
+            "US equities OPEN · closes in {}",
+            format_session_countdown(target)
+        );
+    }
+
+    // A regular trading day still has its core open ahead ⇒ Alpaca's next_open is
+    // on today's ET date. This separates a normal weekday from weekends/holidays
+    // without shipping a local holiday table.
+    let core_opens_today = next_open.map_or(false, |o| et_date_of(o) == now_et.date());
+
+    if core_opens_today && (PRE..CORE).contains(&minute_of_day) {
+        let target = next_open
+            .map(|o| o - now_utc)
+            .unwrap_or_else(|| (day_start + chrono::Duration::minutes(CORE)) - now_et);
+        return format!(
+            "US equities PRE-MARKET · Core in {}",
+            format_session_countdown(target)
+        );
+    }
+
+    let is_weekday = !matches!(weekday, chrono::Weekday::Sat | chrono::Weekday::Sun);
+    if is_weekday && !core_opens_today && (AFTER..CLOSE).contains(&minute_of_day) {
+        let target = (day_start + chrono::Duration::minutes(CLOSE)) - now_et;
+        return format!(
+            "US equities AFTER-HOURS · closes in {}",
+            format_session_countdown(target)
+        );
+    }
+
+    // Closed: overnight (20:00–04:00 ET), weekends, holidays. Count down to the
+    // next regular session — pre-market (4:00 ET) on Alpaca's next trading day.
+    let target = match next_open {
+        Some(o) => {
+            let o_et = o.naive_utc() + chrono::Duration::seconds(us_eastern_offset_seconds(o));
+            let pre_et = o_et.date().and_hms_opt(4, 0, 0).unwrap_or(o_et);
+            pre_et - now_et
+        }
+        None => (day_start + chrono::Duration::minutes(PRE) + chrono::Duration::days(1)) - now_et,
+    };
+    format!(
+        "US equities CLOSED · opens in {}",
+        format_session_countdown(target)
+    )
+}
+
 pub(super) fn broker_msg_kind(msg: &BrokerMsg) -> &'static str {
     match msg {
         BrokerMsg::Connected(_) => "Connected",
@@ -456,6 +537,70 @@ mod tests {
         assert!(
             kraken_xstocks_session_status_at(sunday_open).starts_with("Kraken xStocks OVERNIGHT")
         );
+    }
+
+    #[test]
+    fn us_equities_session_status_labels_pre_core_after_and_closed() {
+        // June 2026 is EDT (UTC-4); 2026-06-08 is a Monday. Alpaca next_open/
+        // next_close are RFC3339 with the ET offset.
+        let at = |ts: &str| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        let open_today = Some(at("2026-06-08T13:30:00Z")); // 09:30 ET Mon
+        let close_today = Some(at("2026-06-08T20:00:00Z")); // 16:00 ET Mon
+        let open_tomorrow = Some(at("2026-06-09T13:30:00Z")); // 09:30 ET Tue
+
+        // 08:35 ET Monday — pre-market, core opens in 55m.
+        assert_eq!(
+            us_equities_session_status_at(at("2026-06-08T12:35:00Z"), false, open_today, close_today),
+            "US equities PRE-MARKET · Core in 55m"
+        );
+        // 11:00 ET Monday — core open, closes at 16:00 (5h).
+        assert_eq!(
+            us_equities_session_status_at(at("2026-06-08T15:00:00Z"), true, open_tomorrow, close_today),
+            "US equities OPEN · closes in 5h 0m"
+        );
+        // 17:00 ET Monday — after-hours, closes (8 PM) in 3h.
+        assert_eq!(
+            us_equities_session_status_at(at("2026-06-08T21:00:00Z"), false, open_tomorrow, None),
+            "US equities AFTER-HOURS · closes in 3h 0m"
+        );
+        // 22:00 ET Monday — overnight = CLOSED for the regular market, reopens
+        // pre-market 04:00 Tue (6h).
+        assert!(
+            us_equities_session_status_at(at("2026-06-09T02:00:00Z"), false, open_tomorrow, None)
+                .starts_with("US equities CLOSED · opens in 6h")
+        );
+    }
+
+    #[test]
+    fn us_equities_session_status_closed_on_weekend_and_holiday() {
+        let at = |ts: &str| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        // Saturday noon ET — closed until Monday's pre-market; next_open is Monday.
+        let saturday = us_equities_session_status_at(
+            at("2026-06-06T16:00:00Z"),
+            false,
+            Some(at("2026-06-08T13:30:00Z")),
+            None,
+        );
+        assert!(saturday.starts_with("US equities CLOSED · opens in 1d"), "got {saturday}");
+
+        // Holiday at noon ET (is_open=false, next_open is a *later* day) must read
+        // CLOSED, not PRE-MARKET or AFTER-HOURS — the trading-day gate comes from
+        // Alpaca's next_open, not a local clock.
+        let holiday_noon = us_equities_session_status_at(
+            at("2026-06-08T16:00:00Z"),
+            false,
+            Some(at("2026-06-09T13:30:00Z")),
+            None,
+        );
+        assert!(holiday_noon.starts_with("US equities CLOSED"), "got {holiday_noon}");
     }
 
     #[test]
