@@ -2374,7 +2374,6 @@ impl SqliteCache {
     pub fn delete_broker_data(&self, broker_prefix: &str) -> Result<u64, String> {
         let broker = match broker_prefix.to_ascii_lowercase().as_str() {
             "alpaca" => "alpaca",
-            "tastytrade" => "tastytrade",
             "mt5" => "mt5",
             other => return Err(format!("Unsupported broker purge target: {other}")),
         };

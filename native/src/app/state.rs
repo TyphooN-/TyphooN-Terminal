@@ -132,7 +132,6 @@ pub(crate) enum EventSource {
     All,
     Alpaca,
     Darwinex,
-    Tasty,
     Kraken,
     Positions,
 }

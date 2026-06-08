@@ -96,15 +96,6 @@ impl Default for DataSourceManager {
                     asset_classes: vec!["crypto".into()],
                 },
                 DataSourceEntry {
-                    id: "tastytrade".into(),
-                    cache_prefix: "tastytrade".into(),
-                    label: "tastytrade".into(),
-                    priority: 5,
-                    healthy: true,
-                    last_success_ts: 0,
-                    asset_classes: vec!["equity".into(), "options".into()],
-                },
-                DataSourceEntry {
                     id: "alpaca".into(),
                     cache_prefix: "alpaca".into(),
                     label: "Alpaca (delayed fallback)".into(),
@@ -252,9 +243,8 @@ mod tests {
         assert_eq!(candidates[1], "kraken:EURUSD:1Hour");
         assert_eq!(candidates[2], "kraken-futures:EURUSD:1Hour");
         assert_eq!(candidates[3], "cryptocompare:EURUSD:1Hour");
-        assert_eq!(candidates[4], "tastytrade:EURUSD:1Hour");
-        assert_eq!(candidates[5], "alpaca:EURUSD:1Hour");
-        assert_eq!(candidates[6], "EURUSD:1Hour"); // bare key
+        assert_eq!(candidates[4], "alpaca:EURUSD:1Hour");
+        assert_eq!(candidates[5], "EURUSD:1Hour"); // bare key
     }
 
     #[test]

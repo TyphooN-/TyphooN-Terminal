@@ -96,7 +96,6 @@ mod symbol_investigation_return_path;
 mod sync_config;
 mod sync_status;
 mod sync_workset;
-mod tastytrade_sync;
 mod technical_analysis;
 mod technical_indicators;
 mod tool_windows;

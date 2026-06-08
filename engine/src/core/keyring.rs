@@ -7,7 +7,7 @@
 //! - Windows: Credential Manager.
 //!
 //! Service name: "typhoon-terminal"
-//! Credentials stored: broker API keys, Finnhub key, tastytrade creds.
+//! Credentials stored: broker API keys, Finnhub key.
 
 use std::sync::OnceLock;
 
@@ -80,8 +80,6 @@ pub mod keys {
     pub const ALPACA_API_KEY: &str = "alpaca_api_key";
     pub const ALPACA_SECRET: &str = "alpaca_secret";
     pub const FINNHUB_KEY: &str = "finnhub_api_key";
-    pub const TT_USERNAME: &str = "tastytrade_username";
-    pub const TT_PASSWORD: &str = "tastytrade_password";
     pub const FRED_KEY: &str = "fred_api_key";
     pub const LAN_SYNC_PASS: &str = "lan_sync_passphrase";
     pub const DISCORD_WEBHOOK: &str = "discord_webhook";
@@ -118,8 +116,6 @@ mod tests {
         assert!(!keys::ALPACA_API_KEY.is_empty());
         assert!(!keys::ALPACA_SECRET.is_empty());
         assert!(!keys::FINNHUB_KEY.is_empty());
-        assert!(!keys::TT_USERNAME.is_empty());
-        assert!(!keys::TT_PASSWORD.is_empty());
         assert!(!keys::FRED_KEY.is_empty());
         assert!(!keys::LAN_SYNC_PASS.is_empty());
     }
