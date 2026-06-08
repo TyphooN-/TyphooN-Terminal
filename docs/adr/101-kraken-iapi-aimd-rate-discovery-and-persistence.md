@@ -1,6 +1,6 @@
 # ADR-101: Kraken iapi AIMD Rate Discovery and Persistence
 
-**Status:** Accepted | **Date:** 2026-05-27
+**Status:** Accepted (updated 2026-06-08 — measured ~6 req/s ceiling; see addendum) | **Date:** 2026-05-27
 
 ## Context
 
@@ -37,10 +37,11 @@ AIMD means Additive Increase / Multiplicative Decrease:
   rate (`aimd_decrease_factor`, currently 0.5), drains tokens, and arms a
   cooldown;
 - the live rate is clamped by configured floor/ceiling bounds so it cannot fall
-  to zero or ramp without limit. The default ceiling is intentionally a safety
-  cap, not a statement of the provider's maximum; clean sessions may need to
-  probe beyond 5 req/s, and `TYPHOON_KRAKEN_IAPI_AIMD_MAX_RATE` can raise or
-  lower the cap for controlled experiments.
+  to zero or ramp without limit. The default ceiling is a safety cap.
+  **Caveat (2026-06-08): the measured real ceiling is ~6 req/s — see the addendum
+  below before raising it.** `TYPHOON_KRAKEN_IAPI_AIMD_MAX_RATE` exists for
+  controlled experiments only; raising it for throughput trips escalating 1015
+  bans.
 
 The limiter persists three separate concepts:
 
@@ -92,6 +93,47 @@ inside an active Cloudflare backoff does not immediately hammer iapi again.
   distinct: checkpoint is provisional; tuned is stable/converged.
 - **Con:** AIMD cannot fix artificial backlog by itself. Scheduler demand shaping
   and fallback data sources remain necessary for full Kraken Securities coverage.
+
+## Update 2026-06-08: Measured iapi Ceiling (~6 req/s) and Concurrent-429 Coalescing
+
+When native iapi history was widened to sweep the full ~12.7k xStocks catalog
+(ADR-102), it drove the first *sustained* iapi load instead of the prior
+demand-only trickle. That measurement corrected two earlier assumptions baked
+into this ADR:
+
+- **The real Cloudflare ceiling for equity-history iapi is ~6–7 req/s, not "5+
+  and probe higher."** An earlier session appeared to "ramp clean to 40 req/s,"
+  but that was at trickle volume (a few calls per 10 s) where Cloudflare never
+  actually saw 40. Under sustained catalog load, iapi returned HTTP 429 at
+  ~11 req/s and `discovered_ceiling` settled near 6–7. **iapi is fundamentally a
+  ~6 req/s lane.** Do **not** raise `aimd_max_rate` /
+  `TYPHOON_KRAKEN_IAPI_AIMD_MAX_RATE` to "go faster" — it only trips escalating
+  1015 bans (which hit the same IP used to trade Kraken). A full ~100k
+  (symbol, tf) sweep is therefore *hours*; the only real speedup is fewer
+  requests (timeframe derivation), not a higher cap.
+
+- **A single overshoot must not compound into a multi-hour ban.** The token
+  bucket lets a burst (up to `capacity`) fire before the multiplicative decrease
+  lands, so several requests 429 within milliseconds. The escalation counter
+  incremented once *per 429*, so one overshoot drove the window to
+  `cloudflare_backoff_secs × 2^n` — a capped **1-hour ban**. `EscalationState`
+  now records the armed deadline (`armed_until_unix`): while a backoff armed by a
+  sibling of the same overshoot is still active, further 429s keep `consecutive`
+  instead of compounding. Genuine repeat overshoots — only possible after the
+  backoff expires, since `acquire()` short-circuits during it — still escalate
+  one step each.
+
+Config now reflects the measured edge: `aimd_max_rate` 10, `capacity` 4,
+`aimd_increase_interval` 10 s, and the native equity-fetch concurrency
+(`KRAKEN_EQUITIES_FETCH_PERMITS`, native side) 8 — sized to ~6 req/s × round-trip
+so the bucket, not a wide permit pool, is the governor and an overshoot fires few
+concurrent calls. An interim experiment (cap 120 / 48 permits / 3 s ramp) caused
+exactly the 1-hour ban above and was reverted.
+
+**Regression guard:** any future "make Kraken equities sync faster" work must not
+raise the iapi rate cap or permit count past the ~6 req/s envelope. Reduce request
+count (derive 4Hour/5Min/15Min/30Min from 1Hour/1Min) or lean harder on the
+non-iapi breadth lanes (Alpaca/Yahoo, ADR-102) instead.
 
 ## Relationship to Other ADRs
 

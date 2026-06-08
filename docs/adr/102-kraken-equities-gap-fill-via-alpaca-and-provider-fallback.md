@@ -1,6 +1,6 @@
 # ADR-102: Kraken Equities Gap Fill via Alpaca and Provider Fallback
 
-**Status:** Accepted / partially implemented | **Date:** 2026-05-27
+**Status:** Accepted / partially implemented (updated 2026-06-08 — native iapi now sweeps full catalog; see addendum) | **Date:** 2026-05-27
 
 ## Context
 
@@ -379,6 +379,42 @@ Historical implementation items that remain relevant as regression checks:
    used.
 5. Tests should cover mapping, merge precedence, provider tombstones, and the
    high-TF catalog vs intraday demand denominator rule.
+
+## Update 2026-06-08: Native iapi Sweeps the Full Catalog (as a slow depth-filler)
+
+The earlier invariant — "native Kraken intraday stays demand-scoped; native
+catalog only for durable high timeframes" — has been relaxed.
+`kraken_equity_native_history_symbols` now returns the full catalog
+(catalog-first, demand-fallback before the catalog has loaded), so native iapi
+history sweeps every enabled timeframe, not just high-TF. The merged three-source
+model is unchanged and remains the data-gathering contract:
+
+> **Alpaca + Kraken iapi + Yahoo → Merged** (deduped by timestamp at read time;
+> native Kraken authoritative where present; assist providers fill the rest).
+
+Critically, widening native scope does **not** make native iapi a primary breadth
+source. iapi is Cloudflare-hard-capped at ~6 req/s (ADR-101), so the full-catalog
+native sweep is a **slow, AIMD-paced background depth-filler** that fills high
+timeframes first (the workset selector is high-TF-first) and only reaches broad
+native intraday after hours. **Alpaca and Yahoo remain the primary
+breadth/intraday lanes** because they are not iapi-bound — they carry most of the
+~12.7k universe, and the `Merged` column stays chart-usable without native iapi
+ever being complete.
+
+Regression checks added here:
+
+1. Do **not** "speed up" native iapi by raising its rate or permit budget — it is
+   a ~6 req/s wall (ADR-101). Widening native *scope* is fine; raising native
+   *rate* is not.
+2. A transient iapi HTTP 500 (`type: Internal error`, common per-symbol across a
+   broad sweep) must apply a *per-symbol* cooldown, never a global
+   equities-lane pause — one flaky symbol must not freeze the other ~12k. Only
+   IP-wide 1015/429 warrants a global pause.
+3. WS OHLC snapshots for the full xStocks subscription are requested only for the
+   bounded high timeframes (1Hour–1Week) and live-only below, so the snapshot
+   burst cannot OOM on the ~12k-symbol catalog. The WS path only serves the small
+   set of genuinely WS-tradeable xStock tokens anyway; the broad catalog is an
+   iapi/assist concern, not a WS one.
 
 ## Current policy / provider-gated design questions
 
