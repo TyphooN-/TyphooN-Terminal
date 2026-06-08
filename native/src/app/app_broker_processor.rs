@@ -72,12 +72,6 @@ pub(super) fn spawn_broker_message_processor(
     rt_handle.spawn(async move {
         let mut cmd_rx = broker_cmd_rx;
         let mut broker: Option<AlpacaBroker> = None;
-        let mut tt_broker: Option<typhoon_engine::broker::tastytrade::TastytradeBroker> = None;
-        let tt_dx_token: Arc<
-            tokio::sync::Mutex<Option<typhoon_engine::broker::dxlink::DxLinkToken>>,
-        > = Arc::new(tokio::sync::Mutex::new(None));
-        let tt_dx_backoff_until: Arc<tokio::sync::Mutex<Option<std::time::Instant>>> =
-            Arc::new(tokio::sync::Mutex::new(None));
         let mut kraken_broker: Option<typhoon_engine::broker::kraken::KrakenBroker> = None;
         let mut kraken_ws_broker: Option<typhoon_engine::broker::kraken::KrakenBroker> = None;
         // Pre-acquire and per-endpoint spacing are now owned by the
@@ -111,7 +105,6 @@ pub(super) fn spawn_broker_message_processor(
             .timeout(std::time::Duration::from_secs(20))
             .build()
             .unwrap_or_default();
-        let tastytrade_fetch_permits = Arc::new(tokio::sync::Semaphore::new(2));
         // Cached Yahoo session for watchlist extended hours (avoid re-auth every cycle)
         let mut yahoo_session: Option<fundamentals::YahooSession> = None;
         let mut yahoo_session_created: std::time::Instant = std::time::Instant::now();
@@ -648,24 +641,6 @@ pub(super) fn spawn_broker_message_processor(
                         }
                     }
 
-                    // Search tastytrade (if connected)
-                    if let Some(ref tb) = tt_broker {
-                        if tb.is_authenticated() {
-                            if let Ok(results) = tb.search_symbols(&q).await {
-                                for item in results.iter().take(10) {
-                                    let sym = item["symbol"].as_str().unwrap_or("").to_string();
-                                    let desc = item["description"].as_str().unwrap_or("").to_string();
-                                    if !sym.is_empty() {
-                                        // Deduplicate in O(1): skip if already from Alpaca/tastytrade.
-                                        if suggestion_symbols.insert(sym.to_uppercase()) {
-                                            all_suggestions.push((sym, desc, "tastytrade".into()));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                     // Search common Kraken crypto symbols by pattern.
                     {
                         let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT",
@@ -909,14 +884,6 @@ pub(super) fn spawn_broker_message_processor(
                         match b.oco_order(&symbol, qty, &side, tp_price, sl_price, None).await {
                             Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("OCO {} {} {} @ TP:{} SL:{}: {}", side, qty, symbol, tp_price, sl_price, r.status))); }
                             Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("OCO failed: {}", e))); }
-                        }
-                    }
-                }
-                BrokerCmd::TastytradeCancelOrder { order_id } => {
-                    if let Some(ref mut tt) = tt_broker {
-                        match tt.cancel_order(&order_id).await {
-                            Ok(_) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Tastytrade order {} cancelled", order_id))); }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Tastytrade cancel failed: {}", e))); }
                         }
                     }
                 }
@@ -1284,176 +1251,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix send: {}", e))); }
                         }
                     });
-                }
-                BrokerCmd::TastytradeEquityOrder { symbol, qty, side, order_type, price } => {
-                    if let Some(ref tb) = tt_broker {
-                        match tb.place_equity_order(&symbol, qty as i64, &side, &order_type, price, "GTC").await {
-                            Ok(r) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("tastytrade: {} {} {} {} — order {}", side, qty, symbol, order_type, &r[..r.len().min(60)])));
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("tastytrade order failed: {}", e))); }
-                        }
-                    }
-                }
-                BrokerCmd::TastytradeClosePosition { symbol } => {
-                    if let Some(ref tb) = tt_broker {
-                        match tb.close_equity_position(&symbol).await {
-                            Ok(_) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("tastytrade: closed position {symbol}")));
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("tastytrade close {symbol}: {e}"))); }
-                        }
-                    } else {
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error("tastytrade: not connected".into()));
-                    }
-                }
-                BrokerCmd::TastytradeClosePositionQty { symbol, qty } => {
-                    if let Some(ref tb) = tt_broker {
-                        let result = match qty {
-                            Some(q) => tb.close_equity_position_qty(&symbol, q).await,
-                            None => tb.close_equity_position(&symbol).await,
-                        };
-                        match result {
-                            Ok(_) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
-                                    "tastytrade: closed {}{}",
-                                    symbol,
-                                    qty.map(|q| format!(" qty {}", q)).unwrap_or_default()
-                                )));
-                            }
-                            Err(e) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                    "tastytrade close {}: {}",
-                                    symbol, e
-                                )));
-                            }
-                        }
-                    } else {
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error("tastytrade: not connected".into()));
-                    }
-                }
-                BrokerCmd::TastytradeCloseAll => {
-                    if let Some(ref tb) = tt_broker {
-                        match tb.close_all_equity_positions().await {
-                            Ok(count) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
-                                    "tastytrade: closed {} position(s)",
-                                    count
-                                )));
-                            }
-                            Err(e) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                    "tastytrade close all: {}",
-                                    e
-                                )));
-                            }
-                        }
-                    } else {
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error("tastytrade: not connected".into()));
-                    }
-                }
-                BrokerCmd::TastytradeCancelLiveExits { symbol } => {
-                    if let Some(ref tb) = tt_broker {
-                        match tb.cancel_live_exit_orders_for_symbol(&symbol).await {
-                            Ok(cancelled) => {
-                                if cancelled > 0 {
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
-                                        "tastytrade: cancelled {} stale exit order(s) for {}",
-                                        cancelled, symbol
-                                    )));
-                                }
-                            }
-                            Err(e) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                    "tastytrade stale exit cleanup {}: {}",
-                                    symbol, e
-                                )));
-                            }
-                        }
-                    }
-                }
-                BrokerCmd::TastytradeSyncExits {
-                    symbol,
-                    sl_price,
-                    tp_price,
-                    wait_for_position,
-                    wait_for_qty_at_most,
-                } => {
-                    if let Some(ref tb) = tt_broker {
-                        if wait_for_position || wait_for_qty_at_most.is_some() {
-                            let mut found = false;
-                            for _ in 0..12 {
-                                match tb.get_positions().await {
-                                    Ok(positions)
-                                        if positions.iter().any(|p| {
-                                            p.symbol.eq_ignore_ascii_case(&symbol)
-                                                && p.quantity.abs() > 0.0
-                                                && wait_for_qty_at_most
-                                                    .map(|max_qty| p.quantity.abs() <= max_qty + 1e-8)
-                                                    .unwrap_or(true)
-                                        }) =>
-                                    {
-                                        found = true;
-                                        break;
-                                    }
-                                    Ok(_) => {
-                                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                                    }
-                                    Err(e) => {
-                                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                            "tastytrade exit sync {}: position poll failed: {}",
-                                            symbol, e
-                                        )));
-                                        break;
-                                    }
-                                }
-                            }
-                            if !found {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                    "tastytrade exit sync {}: position not visible at target size yet",
-                                    symbol
-                                )));
-                                continue;
-                            }
-                        }
-                        match tb.sync_equity_position_exits(&symbol, sl_price, tp_price).await {
-                            Ok(summary) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
-                                    format!("tastytrade exits {}: {}", symbol, summary),
-                                ));
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::TastytradePositions(
-                                    tb.get_positions()
-                                        .await
-                                        .unwrap_or_default()
-                                        .iter()
-                                        .map(|p| PositionInfo {
-                                            symbol: p.symbol.clone(),
-                                            qty: p.quantity.abs(),
-                                            side: if p.quantity_direction == "Long" {
-                                                "long".into()
-                                            } else {
-                                                "short".into()
-                                            },
-                                            avg_entry_price: p.average_open_price,
-                                            market_value: p.mark_price.unwrap_or(p.close_price)
-                                                * p.quantity.abs(),
-                                            unrealized_pl: p.unrealized_pnl.unwrap_or(0.0),
-                                            asset_class: p.instrument_type.clone(),
-                                            asset_id: String::new(),
-                                        })
-                                        .collect(),
-                                ));
-                            }
-                            Err(e) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                    "tastytrade exit sync failed for {}: {}",
-                                    symbol, e
-                                )));
-                            }
-                        }
-                    } else {
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error("tastytrade: not connected".into()));
-                    }
                 }
                 BrokerCmd::AlpacaTrailingStop { symbol, qty, side, trail_percent } => {
                     if let Some(ref b) = broker {
@@ -2602,15 +2399,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             }
                         }
                     }
-                    if use_tastytrade {
-                        if let Some(ref tt) = tt_broker {
-                            if let Ok(positions) = tt.get_positions().await {
-                                extra_tickers.extend(positions.iter()
-                                    .filter(|p| p.instrument_type == "Equity")
-                                    .map(|p| p.symbol.clone()));
-                            }
-                        }
-                    }
                     let msg_tx = broker_msg_tx_clone.clone();
                     let shared_cache_broker = shared_cache_broker.clone();
                     let _ = std::thread::Builder::new()
@@ -3532,22 +3320,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             let _ = broker_msg_tx_clone.send(BrokerMsg::FundamentalsProgress("Alpaca not connected — skipping".into()));
                         }
                     }
-                    if use_tastytrade {
-                        if let Some(ref tt) = tt_broker {
-                            match tt.get_positions().await {
-                                Ok(positions) => {
-                                    let syms: Vec<String> = positions.iter()
-                                        .filter(|p| p.instrument_type == "Equity")
-                                        .map(|p| p.symbol.clone()).collect();
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::FundamentalsProgress(format!("TastyTrade: {} equity positions", syms.len())));
-                                    extra_tickers.extend(syms);
-                                }
-                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::FundamentalsProgress(format!("TastyTrade positions failed: {}", e))); }
-                            }
-                        } else {
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::FundamentalsProgress("TastyTrade not connected — skipping".into()));
-                        }
-                    }
                     if use_kraken {
                         let syms = normalize_kraken_equity_symbol_list(kraken_equity_symbols.iter());
                         if syms.is_empty() {
@@ -3809,13 +3581,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             }
                         }
                     }
-                    if use_tastytrade {
-                        if let Some(ref tt) = tt_broker {
-                            if let Ok(positions) = tt.get_positions().await {
-                                extra_tickers.extend(positions.iter().filter(|p| p.instrument_type == "Equity").map(|p| p.symbol.clone()));
-                            }
-                        }
-                    }
                     let msg_tx = broker_msg_tx_clone.clone();
                     let shared_cache_broker = shared_cache_broker.clone();
                     let _ = std::thread::Builder::new()
@@ -3881,67 +3646,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         importing_flag.clone(),
                         shared_cache_broker.clone(),
                     );
-                }
-                BrokerCmd::StartDxLinkStream { symbols } => {
-                    if let Some(ref tb) = tt_broker {
-                        let msg_tx = broker_msg_tx_clone.clone();
-                        let symbol_count = symbols.len();
-                        let paused = tt_dx_backoff_until
-                            .lock()
-                            .await
-                            .as_ref()
-                            .copied()
-                            .is_some_and(|until| until > std::time::Instant::now());
-                        if paused {
-                            let _ = msg_tx.send(BrokerMsg::Error(
-                                "DXLink token failed: tastytrade market data is paused after a recent token failure"
-                                    .into(),
-                            ));
-                            continue;
-                        }
-                        match tb.get_streaming_token().await {
-                            Ok(dx_token) => {
-                                *tt_dx_backoff_until.lock().await = None;
-                                match typhoon_engine::broker::dxlink::subscribe_quotes(&dx_token, symbols).await {
-                                    Ok(mut rx) => {
-                                        let _ = msg_tx.send(BrokerMsg::OrderResult(
-                                            format!("DXLink stream started for {} symbols", symbol_count)
-                                        ));
-                                        tokio::spawn(async move {
-                                            while let Some(q) = rx.recv().await {
-                                                if msg_tx.send(BrokerMsg::StreamQuoteTick {
-                                                    symbol: q.symbol,
-                                                    bid: q.bid,
-                                                    ask: q.ask,
-                                                }).is_err() {
-                                                    break; // UI dropped
-                                                }
-                                            }
-                                        });
-                                    }
-                                    Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("DXLink stream failed: {e}"))); }
-                                }
-                            }
-                            Err(e) => {
-                                *tt_dx_backoff_until.lock().await = Some(
-                                    std::time::Instant::now()
-                                        + std::time::Duration::from_secs(
-                                            tastytrade_sync_backoff_secs(&e) as u64,
-                                        ),
-                                );
-                                let msg = if tastytrade_quote_streamer_customer_missing(&e) {
-                                    tastytrade_quote_streamer_customer_missing_message(
-                                        "current", &e,
-                                    )
-                                } else {
-                                    format!("DXLink token failed: {e}")
-                                };
-                                let _ = msg_tx.send(BrokerMsg::Error(msg));
-                            }
-                        }
-                    } else {
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error("Connect tastytrade first for DXLink stream".into()));
-                    }
                 }
                 BrokerCmd::Mt5Sync {
                     sources,
@@ -4753,241 +4457,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                         Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Fetch filing failed: {}", e))); }
                     }
-                }
-                BrokerCmd::TastytradeConnect { username, password, sandbox } => {
-                    use typhoon_engine::broker::tastytrade::TastytradeBroker;
-                    let msg_tx = broker_msg_tx_clone.clone();
-                    let mut tb = TastytradeBroker::new(sandbox);
-                    match tb.login(&username, &password).await {
-                        Ok(_session) => {
-                            let Some(acct) = tb.account_number().map(str::to_string) else {
-                                *tt_dx_token.lock().await = None;
-                                *tt_dx_backoff_until.lock().await = None;
-                                let env = if sandbox { "sandbox" } else { "production" };
-                                let detail = tb
-                                    .last_accounts_error()
-                                    .map(str::to_string)
-                                    .unwrap_or_else(|| {
-                                        "no accounts were returned by /customers/me/accounts".to_string()
-                                    });
-                                tt_broker = None;
-                                let _ = msg_tx.send(BrokerMsg::Error(format!(
-                                    "tastytrade {env} login authenticated, but no trading account could be selected. Detail: {detail}. If you see a customer record but no account, attach a trading account to this {env} user on https://developer.tastytrade.com (sandbox) or your live account."
-                                )));
-                                continue;
-                            };
-                            let mut token_preflight_error: Option<String> = None;
-                            match tb.get_streaming_token().await {
-                                Ok(dx_token) => {
-                                    *tt_dx_token.lock().await = Some(dx_token);
-                                    *tt_dx_backoff_until.lock().await = None;
-                                }
-                                Err(e) if tastytrade_quote_streamer_customer_missing(&e) => {
-                                    *tt_dx_token.lock().await = None;
-                                    *tt_dx_backoff_until.lock().await = Some(
-                                        std::time::Instant::now()
-                                            + std::time::Duration::from_secs(
-                                                tastytrade_sync_backoff_secs(&e) as u64,
-                                            ),
-                                    );
-                                    tt_broker = None;
-                                    let _ = msg_tx.send(BrokerMsg::Error(
-                                        tastytrade_quote_streamer_customer_missing_message(
-                                            if sandbox { "sandbox" } else { "production" },
-                                            &e,
-                                        ),
-                                    ));
-                                    continue;
-                                }
-                                Err(e) => {
-                                    *tt_dx_token.lock().await = None;
-                                    *tt_dx_backoff_until.lock().await = Some(
-                                        std::time::Instant::now()
-                                            + std::time::Duration::from_secs(
-                                                tastytrade_sync_backoff_secs(&e) as u64,
-                                            ),
-                                    );
-                                    token_preflight_error =
-                                        Some(format!("DXLink token failed: {e}"));
-                                }
-                            }
-                            let _ = msg_tx.send(BrokerMsg::Connected(format!(
-                                "tastytrade {} — account {}",
-                                if sandbox { "Sandbox" } else { "Production" },
-                                acct
-                            )));
-                            if let Some(e) = token_preflight_error {
-                                let _ = msg_tx.send(BrokerMsg::Error(e));
-                            }
-                            // Fetch balances
-                            if let Ok(bal) = tb.get_balances().await {
-                                let _ = msg_tx.send(BrokerMsg::TastytradeBalances(bal.clone()));
-                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                                    "tastytrade: NLV ${:.2}, BP ${:.2}, Cash ${:.2}",
-                                    bal.net_liquidating_value, bal.equity_buying_power, bal.cash_balance
-                                )));
-                            }
-                            // Fetch and convert positions to unified format
-                            if let Ok(positions) = tb.get_positions().await {
-                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                                    "tastytrade: {} open positions", positions.len()
-                                )));
-                                let unified: Vec<PositionInfo> = positions.iter().map(|p| PositionInfo {
-                                    symbol: p.symbol.clone(),
-                                    qty: p.quantity.abs(),
-                                    side: if p.quantity_direction == "Long" { "long".into() } else { "short".into() },
-                                    avg_entry_price: p.average_open_price,
-                                    market_value: p.mark_price.unwrap_or(p.close_price) * p.quantity.abs(),
-                                    unrealized_pl: p.unrealized_pnl.unwrap_or(0.0),
-                                    asset_class: p.instrument_type.clone(),
-                                    asset_id: String::new(),
-                                }).collect();
-                                let _ = msg_tx.send(BrokerMsg::TastytradePositions(unified));
-                            }
-                            match tb.get_market_data_universe_symbols().await {
-                                Ok(symbols) => {
-                                    let _ = msg_tx.send(BrokerMsg::TastytradeUniverse(symbols));
-                                }
-                                Err(e) => {
-                                    let _ = msg_tx.send(BrokerMsg::Error(format!(
-                                        "tastytrade universe failed: {}",
-                                        e
-                                    )));
-                                }
-                            }
-                            tt_broker = Some(tb);
-                        }
-                        Err(e) => {
-                            let _ = msg_tx.send(BrokerMsg::Error(format!("tastytrade login failed: {}", e)));
-                        }
-                    }
-                }
-                BrokerCmd::TastytradeGetUniverse => {
-                    if let Some(ref tb) = tt_broker {
-                        match tb.get_market_data_universe_symbols().await {
-                            Ok(symbols) => {
-                                let _ = broker_msg_tx_clone
-                                    .send(BrokerMsg::TastytradeUniverse(symbols));
-                            }
-                            Err(e) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                    "tastytrade universe failed: {}",
-                                    e
-                                )));
-                            }
-                        }
-                    } else {
-                        let _ = broker_msg_tx_clone
-                            .send(BrokerMsg::OrderResult("tastytrade: connect first".into()));
-                    }
-                }
-                BrokerCmd::TastytradeGetBalances => {
-                    if let Some(ref tb) = tt_broker {
-                        match tb.get_balances().await {
-                            Ok(bal) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::TastytradeBalances(bal));
-                            }
-                            Err(e) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                    "tastytrade balances: {}",
-                                    e
-                                )));
-                            }
-                        }
-                    }
-                }
-                BrokerCmd::TastytradePositions => {
-                    if let Some(ref tb) = tt_broker {
-                        match tb.get_positions().await {
-                            Ok(positions) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
-                                    "tastytrade: {} positions", positions.len()
-                                )));
-                                // Convert to unified PositionInfo for chart overlay
-                                let unified: Vec<PositionInfo> = positions.iter().map(|p| PositionInfo {
-                                    symbol: p.symbol.clone(),
-                                    qty: p.quantity.abs(),
-                                    side: if p.quantity_direction == "Long" { "long".into() } else { "short".into() },
-                                    avg_entry_price: p.average_open_price,
-                                    market_value: p.mark_price.unwrap_or(p.close_price) * p.quantity.abs(),
-                                    unrealized_pl: p.unrealized_pnl.unwrap_or(0.0),
-                                    asset_class: p.instrument_type.clone(),
-                                    asset_id: String::new(),
-                                }).collect();
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::TastytradePositions(unified));
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    } else {
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("tastytrade: connect first".into()));
-                    }
-                }
-                BrokerCmd::TastytradeOptionChain { symbol } => {
-                    if let Some(ref tb) = tt_broker {
-                        match tb.get_option_chain(&symbol).await {
-                            Ok(expirations) => {
-                                let total_strikes: usize = expirations.iter().map(|e| e.strikes.len()).sum();
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
-                                    "tastytrade: {} option chain — {} expirations, {} strikes",
-                                    symbol, expirations.len(), total_strikes
-                                )));
-                                // Store to KV for UI display
-                                if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                                    if let Ok(json) = serde_json::to_string(&expirations) {
-                                        let _ = cache.put_kv(&format!("tt:options:{}", symbol), &json);
-                                    }
-                                }
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("tastytrade option chain: {}", e))); }
-                        }
-                    } else {
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("tastytrade: connect first".into()));
-                    }
-                }
-                BrokerCmd::TastyTradeFetchBars { symbol, timeframe, backfill_complete } => {
-                    if let Some(ref tb) = tt_broker {
-                        let broker = tb.clone();
-                        let dx_token_cache = tt_dx_token.clone();
-                        let dx_backoff_until = tt_dx_backoff_until.clone();
-                        let msg_tx = broker_msg_tx_clone.clone();
-                        let shared_cache = shared_cache_broker.clone();
-                        let permits = tastytrade_fetch_permits.clone();
-                        tokio::spawn(async move {
-                            let Ok(_permit) = permits.acquire_owned().await else {
-                                let _ = msg_tx.send(BrokerMsg::TastytradeFetchSettled {
-                                    symbol,
-                                    timeframe,
-                                });
-                                return;
-                            };
-                            run_tastytrade_fetch_task(
-                                broker,
-                                dx_token_cache,
-                                dx_backoff_until,
-                                shared_cache,
-                                msg_tx,
-                                symbol,
-                                timeframe,
-                                backfill_complete,
-                            )
-                            .await;
-                        });
-                    } else {
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("tastytrade: connect first for DXLink bars".into()));
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::TastytradeFetchSettled {
-                            symbol,
-                            timeframe,
-                        });
-                    }
-                }
-                cmd @ (
-                    BrokerCmd::FredFetch { .. }
-                    | BrokerCmd::FetchEconCalendar { .. }
-                    | BrokerCmd::FetchCongressTrades
-                    | BrokerCmd::SendNotification { .. }
-                ) => {
-                    external_feeds::handle_external_feed_command(cmd, broker_msg_tx_clone.clone())
-                        .await;
                 }
                 BrokerCmd::StartStream { trade_symbols, quote_symbols } => {
                     if let Some(ref b) = broker {
