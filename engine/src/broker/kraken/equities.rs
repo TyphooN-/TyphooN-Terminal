@@ -70,6 +70,11 @@ pub struct KrakenEquityMarket {
     pub tradable: bool,
     pub status: Option<String>,
     pub instrument_status: Option<String>,
+    /// `overnight_trading_support` from the iapi catalog: `Some(true)` when the
+    /// symbol participates in the overnight (Blue Ocean ATS) session, `Some(false)`
+    /// when it trades pre/core/after only, `None` when unknown (e.g. WS-derived
+    /// rows that don't carry the field). Drives the per-symbol session label.
+    pub overnight_trading: Option<bool>,
 }
 
 pub(super) fn parse_json_number(value: &serde_json::Value) -> Option<f64> {

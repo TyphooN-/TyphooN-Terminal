@@ -1884,6 +1884,15 @@ impl eframe::App for TyphooNApp {
                     if !self.kraken_enabled {
                         continue;
                     }
+                    // Symbols the iapi catalog marks as not overnight-tradeable
+                    // (Some(false)). Unknown/None defaults to overnight-enabled, so
+                    // only the explicit opt-outs land here.
+                    self.kraken_equity_no_overnight = markets
+                        .iter()
+                        .filter(|market| market.overnight_trading == Some(false))
+                        .map(|market| market.symbol.trim_end_matches(".EQ").to_ascii_uppercase())
+                        .filter(|symbol| !symbol.is_empty())
+                        .collect();
                     let mut symbols: Vec<String> = markets
                         .into_iter()
                         .filter(|market| {

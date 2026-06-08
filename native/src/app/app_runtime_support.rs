@@ -113,7 +113,10 @@ pub(super) fn us_eastern_offset_seconds(now_utc: chrono::DateTime<chrono::Utc>) 
     }
 }
 
-pub(super) fn kraken_xstocks_session_status_at(now_utc: chrono::DateTime<chrono::Utc>) -> String {
+pub(super) fn kraken_xstocks_session_status_at(
+    now_utc: chrono::DateTime<chrono::Utc>,
+    overnight_enabled: bool,
+) -> String {
     use chrono::{Datelike, Timelike};
 
     let now_et =
@@ -149,6 +152,22 @@ pub(super) fn kraken_xstocks_session_status_at(now_utc: chrono::DateTime<chrono:
         );
     }
 
+    // Symbols without overnight (Blue Ocean ATS) support are CLOSED during the
+    // 20:00–04:00 ET overnight window — they trade pre/core/after only. Driven by
+    // the catalog `overnight_trading_support` flag.
+    let in_overnight_window = minute_of_day >= OVERNIGHT || minute_of_day < PRE;
+    if in_overnight_window && !overnight_enabled {
+        let target = if minute_of_day < PRE {
+            boundary_today(PRE)
+        } else {
+            boundary_today(PRE) + chrono::Duration::days(1)
+        };
+        return format!(
+            "Kraken xStocks CLOSED · opens pre-market in {}",
+            format_session_countdown(target - now_et)
+        );
+    }
+
     let (session, next_label, target) = if minute_of_day < PRE {
         ("OVERNIGHT", "pre-market", boundary_today(PRE))
     } else if minute_of_day < REGULAR {
@@ -156,7 +175,8 @@ pub(super) fn kraken_xstocks_session_status_at(now_utc: chrono::DateTime<chrono:
     } else if minute_of_day < AFTER {
         ("CORE", "after-hours", boundary_today(AFTER))
     } else if minute_of_day < OVERNIGHT {
-        let label = if weekday == chrono::Weekday::Fri {
+        // No overnight session ⇒ the next boundary is the 8 PM close, not overnight.
+        let label = if weekday == chrono::Weekday::Fri || !overnight_enabled {
             "close"
         } else {
             "overnight"
@@ -183,8 +203,8 @@ pub(super) fn kraken_xstocks_session_status_at(now_utc: chrono::DateTime<chrono:
     }
 }
 
-pub(super) fn kraken_xstocks_session_status_now() -> String {
-    kraken_xstocks_session_status_at(chrono::Utc::now())
+pub(super) fn kraken_xstocks_session_status_now(overnight_enabled: bool) -> String {
+    kraken_xstocks_session_status_at(chrono::Utc::now(), overnight_enabled)
 }
 
 /// Session-aware status for the regular US-equities market clock (Alpaca
@@ -496,24 +516,55 @@ mod tests {
         };
 
         assert!(
-            kraken_xstocks_session_status_at(at("2026-06-01T07:30:00Z"))
+            kraken_xstocks_session_status_at(at("2026-06-01T07:30:00Z"), true)
                 .starts_with("Kraken xStocks OVERNIGHT · next pre-market")
         );
         assert!(
-            kraken_xstocks_session_status_at(at("2026-06-01T12:00:00Z"))
+            kraken_xstocks_session_status_at(at("2026-06-01T12:00:00Z"), true)
                 .starts_with("Kraken xStocks PRE · next core")
         );
         assert!(
-            kraken_xstocks_session_status_at(at("2026-06-01T15:00:00Z"))
+            kraken_xstocks_session_status_at(at("2026-06-01T15:00:00Z"), true)
                 .starts_with("Kraken xStocks CORE · next after-hours")
         );
         assert!(
-            kraken_xstocks_session_status_at(at("2026-06-01T21:00:00Z"))
+            kraken_xstocks_session_status_at(at("2026-06-01T21:00:00Z"), true)
                 .starts_with("Kraken xStocks AFTER · next overnight")
         );
         assert!(
-            kraken_xstocks_session_status_at(at("2026-06-02T01:00:00Z"))
+            kraken_xstocks_session_status_at(at("2026-06-02T01:00:00Z"), true)
                 .starts_with("Kraken xStocks OVERNIGHT · next pre-market")
+        );
+    }
+
+    #[test]
+    fn kraken_xstocks_session_status_closes_overnight_window_without_overnight_support() {
+        let at = |ts: &str| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        // 21:00 UTC = 17:00 ET (after-hours): a no-overnight symbol counts down to
+        // the 8 PM close, not to an overnight session.
+        assert!(
+            kraken_xstocks_session_status_at(at("2026-06-01T21:00:00Z"), false)
+                .starts_with("Kraken xStocks AFTER · closes"),
+            "no-overnight after-hours should close at 8 PM"
+        );
+        // 01:00 UTC Tue = 21:00 ET Mon (overnight window) and 07:30 UTC = 03:30 ET
+        // (overnight window): a no-overnight symbol is CLOSED until pre-market.
+        assert!(
+            kraken_xstocks_session_status_at(at("2026-06-02T01:00:00Z"), false)
+                .starts_with("Kraken xStocks CLOSED · opens pre-market")
+        );
+        assert!(
+            kraken_xstocks_session_status_at(at("2026-06-01T07:30:00Z"), false)
+                .starts_with("Kraken xStocks CLOSED · opens pre-market")
+        );
+        // Core hours are unaffected by overnight support.
+        assert!(
+            kraken_xstocks_session_status_at(at("2026-06-01T15:00:00Z"), false)
+                .starts_with("Kraken xStocks CORE · next after-hours")
         );
     }
 
@@ -530,12 +581,15 @@ mod tests {
             .with_timezone(&chrono::Utc);
 
         assert!(
-            kraken_xstocks_session_status_at(friday_after)
+            kraken_xstocks_session_status_at(friday_after, true)
                 .starts_with("Kraken xStocks AFTER · closes")
         );
-        assert!(kraken_xstocks_session_status_at(saturday).starts_with("Kraken xStocks CLOSED"));
         assert!(
-            kraken_xstocks_session_status_at(sunday_open).starts_with("Kraken xStocks OVERNIGHT")
+            kraken_xstocks_session_status_at(saturday, true).starts_with("Kraken xStocks CLOSED")
+        );
+        assert!(
+            kraken_xstocks_session_status_at(sunday_open, true)
+                .starts_with("Kraken xStocks OVERNIGHT")
         );
     }
 

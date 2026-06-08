@@ -4976,6 +4976,10 @@ pub struct TyphooNApp {
     pub(crate) auto_full_tilt_active: bool,
     /// Full tradable Kraken Securities/equities symbol universe from the internal public catalog.
     pub(crate) kraken_equity_universe_symbols: Vec<String>,
+    /// Equity symbols whose iapi `overnight_trading_support` is disabled — they
+    /// trade pre/core/after only (CLOSED 8 PM–4 AM ET), not the full 24/5 cycle.
+    /// Absence ⇒ overnight-enabled (the common case); drives the session label.
+    pub(crate) kraken_equity_no_overnight: std::collections::HashSet<String>,
     pub(crate) kraken_equity_universe_requested: bool,
     pub(crate) kraken_equity_universe_retry_after_ts: i64,
     pub(crate) kraken_equities_sync_pause_until_ts: i64,

@@ -485,7 +485,13 @@ impl TyphooNApp {
                                         )
                                         .is_some();
                                     if self.kraken_connected && kraken_equity_pair {
-                                        Some(kraken_xstocks_session_status_now())
+                                        // Per-symbol session: symbols without overnight
+                                        // support (catalog `overnight_trading_support`)
+                                        // close 8 PM–4 AM ET instead of trading 24/5.
+                                        let overnight_enabled = !self
+                                            .kraken_equity_no_overnight
+                                            .contains(&bare_equity_symbol);
+                                        Some(kraken_xstocks_session_status_now(overnight_enabled))
                                     } else if self.kraken_connected && kraken_crypto_pair {
                                         Some("24/7".to_string())
                                     } else if self.broker_connected && !self.market_clock_status.is_empty()

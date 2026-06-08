@@ -208,6 +208,9 @@ fn parse_tokenized_equity_markets(
                 // TyphooN's consumer filters out `disabled`; this is a public
                 // WS instrument pair, so mark the instrument side enabled.
                 instrument_status: Some("enabled".to_string()),
+                // WS instrument pairs don't carry overnight support; the iapi
+                // catalog does, and the merge keeps that value.
+                overnight_trading: None,
             });
     }
 
@@ -250,6 +253,9 @@ fn merge_equity_markets(
                 {
                     existing.instrument_status = market.instrument_status.clone();
                 }
+                // Prefer a known overnight-support value (iapi catalog) over an
+                // unknown one (WS-derived rows carry None).
+                existing.overnight_trading = existing.overnight_trading.or(market.overnight_trading);
             })
             .or_insert(market);
     }
@@ -361,6 +367,10 @@ async fn fetch_iapi_equity_markets(client: &Client) -> Result<Vec<KrakenEquityMa
                     .get("instrument_status")
                     .and_then(|v| v.as_str())
                     .map(str::to_string),
+                overnight_trading: item
+                    .get("overnight_trading_support")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.eq_ignore_ascii_case("enabled")),
             });
         }
         let total_results = result
@@ -1875,6 +1885,7 @@ mod tests {
                 tradable: true,
                 status: Some("active".into()),
                 instrument_status: Some("enabled".into()),
+                overnight_trading: Some(true),
             },
             KrakenEquityMarket {
                 symbol: "AAPL".into(),
@@ -1882,6 +1893,7 @@ mod tests {
                 tradable: true,
                 status: Some("active".into()),
                 instrument_status: Some("enabled".into()),
+                overnight_trading: Some(false),
             },
         ];
         let ws = vec![
@@ -1891,6 +1903,7 @@ mod tests {
                 tradable: true,
                 status: Some("online".into()),
                 instrument_status: Some("enabled".into()),
+                overnight_trading: None,
             },
             KrakenEquityMarket {
                 symbol: "WOK".into(),
@@ -1898,6 +1911,7 @@ mod tests {
                 tradable: true,
                 status: Some("online".into()),
                 instrument_status: Some("enabled".into()),
+                overnight_trading: None,
             },
         ];
 
@@ -1907,6 +1921,12 @@ mod tests {
         let aapl = merged.iter().find(|m| m.symbol == "AAPL").unwrap();
         assert_eq!(aapl.name.as_deref(), Some("Apple Inc."));
         assert!(aapl.tradable);
+        // iapi's known overnight value survives the merge with the WS row's None.
+        assert_eq!(aapl.overnight_trading, Some(false));
+        assert_eq!(
+            merged.iter().find(|m| m.symbol == "A").unwrap().overnight_trading,
+            Some(true)
+        );
     }
 
     #[tokio::test]
