@@ -331,6 +331,10 @@ pub(crate) struct ChartState {
     /// Live bid/ask from streaming quotes (for spread line rendering).
     pub(crate) live_bid: f64,
     pub(crate) live_ask: f64,
+    /// When `live_bid`/`live_ask` were last refreshed from a streaming quote.
+    /// The spread lines are hidden once this goes stale so a frozen quote isn't
+    /// drawn next to a live (differently-priced) last/candle.
+    pub(crate) live_quote_at: Option<std::time::Instant>,
     // Extended hours candle (pre/post market)
     pub(crate) ext_open: f64,
     pub(crate) ext_high: f64,
@@ -1277,6 +1281,7 @@ impl ChartState {
             compare_bars: Vec::new(),
             live_bid: 0.0,
             live_ask: 0.0,
+            live_quote_at: None,
             ext_open: 0.0,
             ext_high: 0.0,
             ext_low: 0.0,

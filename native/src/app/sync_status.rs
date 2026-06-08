@@ -43,16 +43,13 @@ impl TyphooNApp {
         {
             return;
         }
-        if self.cache.is_some()
-            && (self.bg.cache_stats.is_none() || self.bg.detailed_stats.is_empty())
-        {
-            if let Err(e) = self.refresh_storage_snapshot_from_cache() {
-                self.log.push_back(LogEntry::err(format!(
-                    "Sync Status cache metadata refresh failed: {}",
-                    e
-                )));
-            }
-        }
+        // NOTE: do NOT synchronously refresh the storage snapshot here. That
+        // path (`detailed_stats_with_size`) walks the entire ~86k-row bar_cache
+        // table and, run on the render thread, produced multi-second
+        // `floating_windows` stalls at startup. The background thread populates
+        // `bg.cache_stats` + `bg.detailed_stats` every ~3s from its own
+        // connection (zero render-thread I/O); until then we compute over
+        // whatever is loaded and the table fills in within a cycle.
         let now_ms = chrono::Utc::now().timestamp_millis();
         let checked_or_complete_lookup = |key: &str| -> bool {
             let mut parts = key.splitn(3, ':');

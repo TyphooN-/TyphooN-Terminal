@@ -4326,6 +4326,16 @@ pub struct TyphooNApp {
     pub(crate) session_dirty_since: Option<std::time::Instant>,
     /// Last time we scanned session state for incremental persistence.
     pub(crate) session_last_scan_at: std::time::Instant,
+    /// Monotonic write sequence for session persistence. Bumped on the UI thread
+    /// each time a snapshot is issued to disk; paired with `session_write_gate`
+    /// so a late background autosave can never clobber a newer synchronous save.
+    pub(crate) session_save_seq: u64,
+    /// Highest session-write sequence already persisted to disk. Shared with the
+    /// off-thread autosave worker to keep disk writes strictly newest-wins.
+    pub(crate) session_write_gate: Arc<std::sync::Mutex<u64>>,
+    /// True while an off-thread session autosave is running; coalesces the
+    /// per-frame incremental save so redundant writers don't pile up.
+    pub(crate) session_save_in_flight: Arc<std::sync::atomic::AtomicBool>,
 
     // ── indicator overlay toggles ────────────────────────────────────────
     pub(crate) show_sma200: bool,

@@ -964,7 +964,11 @@ impl eframe::App for TyphooNApp {
                 || self.show_storage
                 || self.show_cache_stats
                 || self.show_darwin_accounts
-                || self.show_darwin_portfolio;
+                || self.show_darwin_portfolio
+                // Sync Status reads bg.detailed_stats/cache_stats; keep feeding it
+                // (instead of dropping the snapshot during heavy sync) now that it
+                // no longer has a synchronous render-thread refresh fallback.
+                || self.show_sync_status;
             if !self.heavy_sync_in_progress || bg_window_visible {
                 // Auto-populate darwinex_radar_data from BG-loaded specs so Darwinex scope
                 // filtering works without requiring manual DARWINEXRADAR command.
@@ -1045,6 +1049,7 @@ impl eframe::App for TyphooNApp {
                                         if mid > 0.0 {
                                             chart.live_bid = bid;
                                             chart.live_ask = ask;
+                                            chart.live_quote_at = Some(std::time::Instant::now());
                                             if let Some(bar) = chart.bars.last_mut() {
                                                 bar.close = mid;
                                                 bar.high = bar.high.max(mid);
@@ -2005,6 +2010,7 @@ impl eframe::App for TyphooNApp {
                             if chart_bare == symbol {
                                 chart.live_bid = ticker.bid;
                                 chart.live_ask = ticker.ask;
+                                chart.live_quote_at = Some(std::time::Instant::now());
                                 if let Some(bar) = chart.bars.last_mut() {
                                     bar.close = last;
                                     bar.high = bar.high.max(last);
@@ -7595,6 +7601,7 @@ impl eframe::App for TyphooNApp {
                             if chart.symbol.contains(&symbol) {
                                 chart.live_bid = bid;
                                 chart.live_ask = ask;
+                                chart.live_quote_at = Some(std::time::Instant::now());
                                 if let Some(bar) = chart.bars.last_mut() {
                                     bar.close = last;
                                     bar.high = bar.high.max(last);

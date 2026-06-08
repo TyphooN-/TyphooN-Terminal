@@ -1790,6 +1790,31 @@ impl TyphooNApp {
         let _ = std::fs::write(path, json);
     }
 
+    /// Persist a session snapshot (session.json + the `app:sync_preferences` KV
+    /// row), newest-wins. `seq` is the snapshot's monotonic write sequence; the
+    /// shared `gate` holds the highest sequence already written, so a stale
+    /// (lower-seq) write that lost a race against a newer one is dropped instead
+    /// of clobbering it. Safe to call from a blocking worker or the UI thread —
+    /// the `put_kv` here is what contends with bulk bar-sync writers, which is
+    /// exactly why the per-frame autosave runs this off the render thread.
+    fn persist_session_to_disk(
+        gate: &std::sync::Mutex<u64>,
+        seq: u64,
+        session_json: &str,
+        pref_json: &str,
+        cache: Option<&Arc<SqliteCache>>,
+    ) {
+        let mut persisted = gate.lock().unwrap_or_else(|p| p.into_inner());
+        if seq <= *persisted {
+            return;
+        }
+        Self::write_session_json(session_json);
+        if let Some(cache) = cache {
+            let _ = cache.put_kv("app:sync_preferences", pref_json);
+        }
+        *persisted = seq;
+    }
+
     pub(super) fn mark_session_snapshot_clean(&mut self) {
         self.session_last_saved_json = self.build_session_json();
         self.session_dirty_since = None;
@@ -1864,8 +1889,34 @@ impl TyphooNApp {
             ctx.request_repaint_after(save_debounce - dirty_for);
             return;
         }
-        Self::write_session_json(&json);
-        self.sync_preferences_save();
+        // A prior off-thread autosave is still writing. Don't pile up a second
+        // worker or block the render thread — leave the dirty flag set and retry
+        // next scan so the newest state is what eventually lands on disk.
+        if self
+            .session_save_in_flight
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            ctx.request_repaint_after(scan_interval);
+            return;
+        }
+        // Build the small (~6 KB) preference blob on the UI thread (cheap), then
+        // hand the session.json write + SQLite put_kv to a blocking worker. The
+        // render thread no longer waits on the shared cache write mutex — held
+        // for seconds by bulk bar-sync writers — which was the dominant source
+        // of the multi-second frame stalls.
+        self.session_save_seq += 1;
+        let seq = self.session_save_seq;
+        let pref_json =
+            serde_json::to_string(&self.build_sync_preferences_value()).unwrap_or_default();
+        let gate = self.session_write_gate.clone();
+        let in_flight = self.session_save_in_flight.clone();
+        let cache = self.cache.clone();
+        let json_for_disk = json.clone();
+        in_flight.store(true, std::sync::atomic::Ordering::Release);
+        self.rt_handle.spawn_blocking(move || {
+            Self::persist_session_to_disk(&gate, seq, &json_for_disk, &pref_json, cache.as_ref());
+            in_flight.store(false, std::sync::atomic::Ordering::Release);
+        });
         self.session_last_saved_json = json;
         self.session_dirty_since = None;
     }
@@ -1950,10 +2001,21 @@ impl TyphooNApp {
                 }
             }
         });
-        // Session JSON write is fast (no DBUS) — keep on UI thread for atomicity
+        // Explicit save stays synchronous (atomic on the UI thread), but routes
+        // through the write gate with a fresh, highest sequence so it always
+        // wins over an in-flight background autosave that may finish afterward.
         let json = self.build_session_json();
-        Self::write_session_json(&json);
-        self.sync_preferences_save();
+        self.session_save_seq += 1;
+        let seq = self.session_save_seq;
+        let pref_json =
+            serde_json::to_string(&self.build_sync_preferences_value()).unwrap_or_default();
+        Self::persist_session_to_disk(
+            &self.session_write_gate,
+            seq,
+            &json,
+            &pref_json,
+            self.cache.as_ref(),
+        );
         self.session_last_saved_json = json;
         self.session_dirty_since = None;
         self.session_last_scan_at = std::time::Instant::now();

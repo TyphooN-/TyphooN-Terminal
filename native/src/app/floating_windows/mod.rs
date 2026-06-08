@@ -113,6 +113,21 @@ fn sortable_header(
 
 impl TyphooNApp {
     pub(super) fn draw_floating_windows(&mut self, ctx: &egui::Context) {
+        // Per-window render timing: names the culprit when a single floating
+        // window blows the frame budget (a synchronous cache scan, an
+        // un-virtualized list, etc.). Each render early-returns on its show_*
+        // flag, so this only fires for windows that are actually open —
+        // diagnostic for the rare multi-second `floating_windows_ms` spikes.
+        macro_rules! timed_window {
+            ($name:literal, $call:expr) => {{
+                let _t = std::time::Instant::now();
+                $call;
+                let _ms = _t.elapsed().as_secs_f64() * 1000.0;
+                if _ms > 500.0 {
+                    tracing::warn!("slow floating window: {} took {:.0}ms", $name, _ms);
+                }
+            }};
+        }
         // Settings
         // Save credentials to keyring + SQLite fallback when Settings window closes
         if self.was_settings_open && !self.show_settings {
@@ -234,15 +249,15 @@ impl TyphooNApp {
         self.render_backtest_window(ctx);
 
         // Screener — uses cached symbol data
-        self.render_symbol_screener_window(ctx);
+        timed_window!("symbol_screener", self.render_symbol_screener_window(ctx));
 
         // Symbols Explorer — all-encompassing symbol browser with broker hierarchy
-        self.render_symbol_explorer_window(ctx);
+        timed_window!("symbol_explorer", self.render_symbol_explorer_window(ctx));
 
         self.render_optimizer_window(ctx);
 
         // News
-        self.render_news_window(ctx);
+        timed_window!("news", self.render_news_window(ctx));
 
         // ── Godel parity research windows (ADR-107) ───────────────────────
         self.render_research_adr107_windows(ctx);
@@ -425,7 +440,7 @@ impl TyphooNApp {
         // Macro data windows
         self.render_macro_windows(ctx);
         // SEC, macro calendar, earnings, and congressional-trade windows
-        self.render_sec_calendar_windows(ctx);
+        timed_window!("sec_calendar", self.render_sec_calendar_windows(ctx));
 
         // SwapHarvest, Darwinex Radar, scrape status, and earnings windows
         self.render_scrape_darwinia_windows(ctx);
@@ -440,7 +455,7 @@ impl TyphooNApp {
         self.render_risk_journal_windows(ctx);
 
         // Cache stats, storage manager, and LAN sync windows
-        self.render_storage_sync_windows(ctx);
+        timed_window!("storage_sync", self.render_storage_sync_windows(ctx));
 
         // Object list, command reference, and data-window overlays
         self.render_workspace_reference_windows(ctx);

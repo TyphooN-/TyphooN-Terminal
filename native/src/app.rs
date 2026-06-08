@@ -202,6 +202,9 @@ impl TyphooNApp {
             session_last_saved_json: String::new(),
             session_dirty_since: None,
             session_last_scan_at: std::time::Instant::now(),
+            session_save_seq: 0,
+            session_write_gate: Arc::new(std::sync::Mutex::new(0)),
+            session_save_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             // ── NNFX default preset (matching old WebKit defaults) ──
             show_sma200: true,
             show_sma100: false,

@@ -2188,7 +2188,13 @@ pub(super) fn draw_chart(
     }
 
     // ── Bid/Ask spread lines (live streaming quotes) ──────────────────────
-    if chart.live_bid > 0.0 && chart.live_ask > 0.0 {
+    // Hide the spread lines once the streaming quote goes stale (>30s without a
+    // tick) so a frozen bid/ask isn't drawn as if live next to a moving candle —
+    // the source of the "ask/bid/last decoupled" confusion.
+    let quote_fresh = chart
+        .live_quote_at
+        .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
+    if quote_fresh && chart.live_bid > 0.0 && chart.live_ask > 0.0 {
         let bid_y = price_to_y(chart.live_bid);
         let ask_y = price_to_y(chart.live_ask);
         let bid_col = egui::Color32::from_rgba_premultiplied(0, 200, 80, 150);
