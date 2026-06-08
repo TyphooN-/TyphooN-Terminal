@@ -1,0 +1,81 @@
+# UI Responsiveness & Sync — Implementation Status
+
+_Last updated: 2026-06-08_
+
+Investigation + fixes for the reported symptoms: UI lag / stalls, `ask/bid/last`
+decoupling, and "improve data sync." This doc records what shipped, the root
+cause, and the pros/cons of pushing further.
+
+## Root cause
+
+The native UI's "UI frame stall detail" logs were dominated by `session_save_ms`
+— regularly **4.4s**, spiking to **18–23s**, firing every ~6s. `session.json` is
+only ~6.6 KB, so serialization was never the cost. The time was the **write
+path** blocking on the cache's single write connection.
+
+`SqliteCache` (`engine/src/core/cache.rs`) has one `conn: Mutex<Connection>`
+(WAL, `busy_timeout=5s`, `wal_autocheckpoint=2000`) shared by all Rust writers.
+The Rust write path is already lock-lean — `put_bars` / `put_bars_with_level` /
+`merge_bars` compress **outside** the lock and hold `conn` only for a single-row
+INSERT. The real blocker is an **external process**: `BarCacheWriter` (the MT5 EA
+under Wine) writes the same SQLite file with `journal_mode=DELETE` + **exclusive**
+write locks. While it is mid-transaction, every Rust write blocks on
+`SQLITE_BUSY` up to `busy_timeout` — **5s = the 4.4s stalls**. The 18–23s cases
+stack a BCW hold + waiters queued on the single `conn` mutex.
+
+The per-frame session autosave was doing its `put_kv` on the **render thread**,
+so it inherited that 5s block. That one contention point also amplified the
+other two symptoms: a frozen render thread can't drain quote ticks (bid/ask go
+stale vs. last), and it steals the write lock from the sync pipeline.
+
+## Shipped (branch: `master`)
+
+| # | Change | Files | Effect |
+|---|--------|-------|--------|
+| **P0** | Off-thread session autosave | `session_persistence.rs`, `state.rs`, `app.rs` | Per-frame autosave builds the ~6 KB JSON on the UI thread, then does the disk write + `put_kv` via `spawn_blocking`. Coalesced (`session_save_in_flight`) + sequence-gated (`session_write_gate`) so a late background write can't clobber a synchronous `save_session`. **Removes the 4.4s/18–23s render-thread stalls.** |
+| **P2** | Floating-window render timing | `floating_windows/mod.rs` | `timed_window!` macro logs `slow floating window: <name> took <ms>` when any single window render >500ms. Diagnostic to attribute the rare 12–16s `floating_windows_ms` spikes (cause not yet identified statically). |
+| **A** | Startup DB-walk off render thread | `sync_status.rs`, `app_runtime.rs` | Removed the synchronous `refresh_storage_snapshot_from_cache` fallback (full ~86k-row `bar_cache` scan) from the per-frame `refresh_bar_sync_rows_if_stale`. The BG thread populates `cache_stats`/`detailed_stats` from its own connection; `show_sync_status` added to the BG-snapshot allowlist so the window stays fed during heavy sync. |
+| **C** | Stale bid/ask guard | `chart.rs`, `app_runtime.rs`, `technical_analysis.rs` | `ChartState.live_quote_at` stamps quote receipt; the spread lines are hidden once the quote is **>30s stale**, so a frozen bid/ask isn't drawn as "live" next to a moving candle. Addresses the decoupling display. |
+
+### How to verify
+Run a release build and watch the logs / chart:
+- `session_save_ms` should be ~0 every frame; the multi-second `session_save`
+  stall lines gone.
+- Stale bid/ask spread lines disappear instead of freezing far from `last`.
+- If a 12–16s spike recurs, the new `slow floating window: <name>` line names
+  the culprit window → targeted fix (virtualization / off-thread query).
+
+## Pushing further — pros/cons
+
+### B — write-coalescing queue (DECLINED, low priority)
+Batch the many small `put_bars` into grouped `put_compressed_batch` transactions
+to cut how often Rust writers collide with BarCacheWriter's lock.
+
+- **Cons (why declined):** The visible bar-write sites each write **one
+  symbol×TF per call** and are **API-rate-limited** (`app_broker_processor.rs:4598`
+  Alpaca `FetchAllBars` is explicitly sequential; kraken-equities is gated by the
+  iapi ~6 req/s wall). Sparse, rate-limited writes have **no burst to coalesce**.
+  A cross-task queue would also risk **bar-data correctness** (`merge_bars` is a
+  read-modify-write that can't be naively batched). `put_compressed_batch` is
+  currently dead code.
+- **Pros (if revisited):** Only worth it if the Yahoo/Alpaca *breadth* path
+  actually bursts — unverified. Gate the decision on a **bar-writes/sec counter**
+  during a sweep before building anything.
+- **Net:** P0 already removed the UI-thread impact; sync throughput is
+  API-bound. Not worth the complexity/risk now.
+
+### Startup DB-walk (DONE — was item A)
+Shipped above. Pro: removes a real render-thread full-table scan. Con: the Sync
+Status window may show stale/partial rows for up to one ~3s BG cycle at startup
+(acceptable vs. a multi-second freeze).
+
+### Secondary, not yet done
+- `pre_broker_ms` steady ~290ms tax: profile what runs before broker-drain each
+  frame (likely a per-frame full scan); throttle/cache it.
+- 12–16s `floating_windows` spikes: blocked on the P2 instrumentation naming the
+  window; fix is likely `ScrollArea::show_rows` virtualization or an off-thread
+  query for that specific window.
+
+## Related
+- ADR-107 (no user-interacting sync throttle), `docs/PERFORMANCE.md`,
+  `docs/floating-windows-perf-plan.md`.
