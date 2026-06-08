@@ -12168,13 +12168,17 @@ impl eframe::App for TyphooNApp {
         let session_save_ms = session_save_started.elapsed().as_secs_f64() * 1000.0;
 
         let update_ms = now_instant.elapsed().as_secs_f64() * 1000.0;
+        // Sampled once per frame and shared by both perf-stall logs below (the
+        // per-frame detail warn and the 5s summary). Reading /proc VmRSS is a
+        // few microseconds — negligible against the frame budget.
+        let rss_mb = crate::app::market_data_sync::current_process_rss_mb();
+
         if update_ms >= 250.0 {
             let render_residual_ms = (render_after_broker_ms
                 - perf_post_broker_setup_ms
                 - perf_chrome_panels_ms
                 - perf_floating_windows_ms)
                 .max(0.0);
-            let rss_mb = crate::app::market_data_sync::current_process_rss_mb();
             tracing::warn!(
                 "UI frame stall detail: update_ms={:.2} pre_broker_ms={:.2} broker_drain_ms={:.2} render_after_broker_ms={:.2} post_broker_setup_ms={:.2} chrome_panels_ms={:.2} floating_windows_ms={:.2} render_residual_ms={:.2} session_save_ms={:.2} msgs_drained={} pending_fetches={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} rss_mb={}",
                 update_ms,
@@ -12188,12 +12192,12 @@ impl eframe::App for TyphooNApp {
                 session_save_ms,
                 msgs_drained,
                 self.total_pending_market_data_fetches(),
-                rss_mb,
                 self.heavy_sync_in_progress,
                 self.news_loading,
                 self.scrape_fund_running,
                 self.scrape_sec_running,
                 self.auto_compact_in_progress,
+                rss_mb,
             );
         }
         if update_ms > 16.7 {
@@ -12206,7 +12210,6 @@ impl eframe::App for TyphooNApp {
         if now_instant.duration_since(self.perf_last_report) >= std::time::Duration::from_secs(5) {
             if self.perf_slow_frame_count > 0 || self.perf_broker_msgs_drained > 0 {
                 let pending_fetches = self.total_pending_market_data_fetches();
-                let rss_mb = crate::app::market_data_sync::current_process_rss_mb();
                 if self.perf_max_update_ms >= 250.0 {
                     tracing::warn!(
                         "UI frame stall: max_update_ms={:.2} slow_frames={} broker_msgs={} pending_fetches={} deferred_chart_loads={} rss_mb={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} log_entries={}",
@@ -12214,8 +12217,8 @@ impl eframe::App for TyphooNApp {
                         self.perf_slow_frame_count,
                         self.perf_broker_msgs_drained,
                         pending_fetches,
-                        rss_mb,
                         self.deferred_chart_loads.len(),
+                        rss_mb,
                         self.heavy_sync_in_progress,
                         self.news_loading,
                         self.scrape_fund_running,
