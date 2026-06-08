@@ -324,6 +324,9 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [105](docs/adr/105-performance-optimization-plan.md) | Performance Optimization Plan |
 | [106](docs/adr/106-remove-stooq-daily-fallback.md) | Remove Stooq Daily Fallback |
 | [107](docs/adr/107-no-user-interacting-sync-throttle.md) | No `user_interacting` Sync Throttle |
+| [108](docs/adr/108-research-module-compile-time-modularization.md) | Research Module Compile-Time Modularization |
+| [109](docs/adr/109-kraken-websocket-v2-market-depth-completion.md) | Kraken WebSocket v2 Market Depth Completion |
+| [110](docs/adr/110-market-session-status-xstocks-24-5-and-us-equities.md) | Market Session Status Display (xStocks 24/5 + US Equities) |
 
 ---
 
