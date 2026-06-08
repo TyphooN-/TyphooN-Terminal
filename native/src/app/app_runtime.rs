@@ -2109,24 +2109,19 @@ impl eframe::App for TyphooNApp {
                             pause
                         );
                     } else if error.contains("HTTP 500") && error.contains("Internal error") {
-                        // Kraken's internal equities history endpoint sometimes returns a
-                        // transient JSON 500 (`type: Internal error`) for valid xStock
-                        // symbols/timeframes. Treat it like temporary endpoint instability,
-                        // not a user-visible per-fetch failure: pause new equity-history
-                        // dispatches briefly and let queued requests drain quietly.
-                        let now = chrono::Utc::now().timestamp();
-                        let pause = 300;
-                        if now + pause > self.kraken_equities_sync_pause_until_ts {
-                            self.kraken_equities_sync_pause_until_ts = now + pause;
-                            self.kraken_equities_sync_pause_reason =
-                                "Kraken equities history temporarily unavailable (HTTP 500)"
-                                    .to_string();
-                        }
+                        // Kraken's internal equities history endpoint returns transient
+                        // JSON 500s (`type: Internal error`) for individual valid xStock
+                        // symbols/timeframes. Across a full-catalog sweep these are common,
+                        // so this must NOT pause the whole equities lane — a global freeze
+                        // would let one flaky symbol stall the other ~12k. Hold just this
+                        // (symbol, tf) out of the rotation via its per-symbol cooldown; the
+                        // cursor moves on and the iapi limiter stays busy. Only genuine
+                        // IP-wide 1015/429 (handled above) warrants a global pause.
+                        self.mark_fetch_queued("kraken-equities", &symbol, &timeframe);
                         tracing::debug!(
-                            "Kraken equities: {} {} skipped — iapi HTTP 500/Internal error; paused {}s",
+                            "Kraken equities: {} {} skipped — iapi HTTP 500/Internal error (per-symbol cooldown)",
                             symbol,
-                            timeframe,
-                            pause
+                            timeframe
                         );
                     } else {
                         self.log.push_back(LogEntry::err(error));

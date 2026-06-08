@@ -82,15 +82,23 @@ pub(super) fn kraken_equity_native_symbols_for_timeframe(
 }
 
 pub(super) fn kraken_equity_native_history_symbols(
-    _catalog_symbols: &[String],
+    catalog_symbols: &[String],
     demand_symbols: &[String],
 ) -> Vec<String> {
-    // Kraken Equities/xStocks catalog scope belongs to WS/current coverage and
-    // Sync Status/control-plane visibility. Historical iapi is Cloudflare-bound
-    // at <1 req/s and a catalog × timeframe sweep turns into multi-day work plus
-    // 1015 backoffs, which starves the faster Alpaca/Yahoo assist and Merged
-    // completion path. Keep iapi native history as focused/held/watchlist repair.
-    normalize_kraken_equity_symbol_list(demand_symbols.iter())
+    // Sweep the full xStocks catalog through native iapi history, matching the
+    // catalog scope the Sync Status rows (`kraken_equity_native_symbols_for_timeframe`)
+    // already advertise. This was demand-only while iapi was Cloudflare-bound to
+    // <1 req/s — a catalog × timeframe sweep was multi-day and tripped 1015
+    // backoffs, so the broad universe was delegated to Alpaca/Yahoo assist. The
+    // iapi limiter now sustains ~40 req/s (AIMD-governed, halves on any 429),
+    // which clears the ~100k (symbol, tf) backlog in well under an hour, so
+    // native history owns the catalog again and only falls back to demand
+    // symbols before the catalog has loaded.
+    if catalog_symbols.is_empty() {
+        normalize_kraken_equity_symbol_list(demand_symbols.iter())
+    } else {
+        normalize_kraken_equity_symbol_list(catalog_symbols.iter())
+    }
 }
 
 pub(super) fn kraken_equity_symbols_for_timeframe(
@@ -2346,26 +2354,27 @@ mod tests {
     }
 
     #[test]
-    fn kraken_equity_native_history_uses_demand_symbols_not_full_catalog() {
+    fn kraken_equity_native_history_sweeps_full_catalog_when_loaded() {
         let catalog = symbols(&["AAPL", "MSFT", "NVDA", "TSLA"]);
         let demand = symbols(&["WOK.EQ", "AAPLx/USD"]);
 
         let selected = kraken_equity_native_history_symbols(&catalog, &demand);
 
-        assert_eq!(selected, symbols(&["AAPLXUSD", "WOK"]));
+        // iapi now sustains ~40 req/s, so native history owns the whole catalog
+        // (normalized + sorted) rather than just the demand subset.
+        assert_eq!(selected, symbols(&["AAPL", "MSFT", "NVDA", "TSLA"]));
     }
 
     #[test]
-    fn kraken_equity_native_history_does_not_fallback_to_catalog_when_demand_is_empty() {
-        let catalog = symbols(&["AAPL", "MSFT"]);
-        let demand = Vec::new();
+    fn kraken_equity_native_history_falls_back_to_demand_before_catalog_loads() {
+        let catalog: Vec<String> = Vec::new();
+        let demand = symbols(&["WOK.EQ", "AAPLx/USD"]);
 
         let selected = kraken_equity_native_history_symbols(&catalog, &demand);
 
-        assert!(
-            selected.is_empty(),
-            "iapi history must not chase the whole xStocks catalog when there is no active demand"
-        );
+        // Until the catalog has loaded, repair the active/held/watchlist set so
+        // open charts still backfill instead of waiting on the universe fetch.
+        assert_eq!(selected, symbols(&["AAPLXUSD", "WOK"]));
     }
 
     #[test]
