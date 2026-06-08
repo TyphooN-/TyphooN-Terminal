@@ -115,10 +115,15 @@ pub struct IapiLimiterConfig {
 impl Default for IapiLimiterConfig {
     fn default() -> Self {
         Self {
-            capacity: 8.0,
-            // Cold-start / re-probe floor. Set to the rate clean sessions have
-            // historically sustained on iapi (≈5 req/s) so a reset doesn't crawl
-            // up from sub-1 req/s for ~20 min; AIMD still halves on any 429.
+            // Small bucket: near the ~6 req/s iapi ceiling a large burst just
+            // fires several requests over the limit at once, each a 429. Keeping
+            // capacity low bounds how many concurrent calls can overshoot before
+            // the rate decrease lands (the escalation coalescer handles the rest).
+            capacity: 4.0,
+            // Cold-start / re-probe floor. Live probing showed the real iapi
+            // ceiling is ~6 req/s (sustained 7+ Cloudflare-1015'd), so start just
+            // under it rather than crawling up from sub-1 req/s; AIMD still
+            // halves on any 429.
             refill_per_sec: 5.0,
             default_backoff_secs: 90,
             cloudflare_backoff_secs: 600,
@@ -127,20 +132,18 @@ impl Default for IapiLimiterConfig {
             persistence_path: None,
             aimd_enabled: true,
             aimd_min_rate: 0.5,
-            // Operational ceiling for the full xStocks catalog sweep. 40 req/s
-            // ran clean with zero 429s but only at trickle volume (demand-only),
-            // so the real Cloudflare limit was never actually probed. With the
-            // catalog driving sustained traffic, let AIMD climb toward 120 and
-            // discover the true edge: if Cloudflare 1015s below 120, the ssthresh
-            // (`discovered_ceiling`) pins the converged rate just under it after a
-            // single backoff; if it tolerates 120, that clears the ~100k
-            // (symbol, tf) backlog in ~14 min. zstd-3 writes (outside the cache
-            // lock) keep this CPU/lock-cheap well past 120 req/s.
-            aimd_max_rate: 120.0,
-            // Reach the ceiling in ~1 min, not ~8: at trickle volume the 10s step
-            // crawled 5→40 over five minutes. A 3s step finds the real ceiling
-            // (or 120) fast, which is the whole point of a full-universe sweep.
-            aimd_increase_interval: Duration::from_secs(3),
+            // Operational ceiling. An earlier 120 guard was a mistake: driving
+            // the catalog at sustained volume, Cloudflare 1015'd at ~11 req/s and
+            // the discovered ceiling settled near 6–7 req/s — the "clean ramp to
+            // 40" was a mirage at trickle volume. Cap the guard just above the
+            // real edge; the persisted `discovered_ceiling` pins the converged
+            // rate below it. iapi is fundamentally a ~6 req/s lane, so a full
+            // ~100k-fetch sweep is hours, not minutes — request reduction (TF
+            // derivation), not a higher cap, is the only real speedup.
+            aimd_max_rate: 10.0,
+            // Gentle approach: we start (~5) right under the ceiling, so a slow
+            // step probes the last req/s without lunging past it into a 1015.
+            aimd_increase_interval: Duration::from_secs(10),
             aimd_increment_per_step: 5.0,
             aimd_low_rate_increment_per_step: 0.01,
             aimd_decrease_factor: 0.5,
@@ -194,6 +197,12 @@ struct TokenBucket {
 struct EscalationState {
     consecutive: u32,
     last_arm: Option<Instant>,
+    /// Unix deadline of the backoff most recently armed. Concurrent 429s from a
+    /// single overshoot (the bucket lets a burst fire before the rate decrease
+    /// lands) all observe this future deadline and coalesce into one escalation
+    /// instead of compounding — without it, ~8 simultaneous 429s drove the
+    /// window to `base × 2^7` (a capped 1-hour ban) on one overshoot.
+    armed_until_unix: i64,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Default)]
@@ -318,6 +327,9 @@ impl IapiLimiter {
                         EscalationState {
                             consecutive: state.consecutive,
                             last_arm,
+                            // Coalesce any burst that fires the instant a
+                            // restored in-flight ban expires.
+                            armed_until_unix: state.cooldown_until_unix,
                         },
                         restored_aimd_rate(state),
                         state.tuned_rate > 0.0,
@@ -598,9 +610,23 @@ impl IapiLimiter {
             self.config.default_backoff_secs
         };
         let now = Instant::now();
+        let now_unix = chrono::Utc::now().timestamp();
         let (chosen_secs, consecutive) = {
             let mut esc = self.escalation.lock().expect("escalation mutex poisoned");
-            let consecutive = if esc
+            // Coalesce concurrent 429s from a single overshoot. The token bucket
+            // lets a burst fire before the multiplicative-decrease lands, so up
+            // to `capacity` requests can 429 within milliseconds. Escalating once
+            // per 429 turned one overshoot into an hour-long ban (600 × 2^7,
+            // capped). If a backoff armed under this same lock by a sibling of the
+            // same overshoot is still active, this 429 is that same event: keep
+            // `consecutive`, only extend the window. Real repeat overshoots can
+            // only happen after the backoff expires (acquire() short-circuits
+            // while it is active), at which point `armed_until_unix` is in the
+            // past and escalation resumes.
+            let same_overshoot = now_unix < esc.armed_until_unix;
+            let consecutive = if same_overshoot {
+                esc.consecutive.max(1)
+            } else if esc
                 .last_arm
                 .map(|t| now.saturating_duration_since(t) < self.config.escalation_reset_after)
                 .unwrap_or(false)
@@ -618,9 +644,10 @@ impl IapiLimiter {
             let mult: u64 = 1u64 << shift;
             let secs = (base as u64).saturating_mul(mult);
             let capped = (secs as i64).min(self.config.max_backoff_secs);
+            // Record the armed deadline so concurrent siblings coalesce above.
+            esc.armed_until_unix = esc.armed_until_unix.max(now_unix.saturating_add(capped));
             (capped, consecutive)
         };
-        let now_unix = chrono::Utc::now().timestamp();
         let until = now_unix.saturating_add(chosen_secs);
         // CAS-bump cooldown_until — never shrink an active longer window.
         let mut current = self.cooldown_until_unix.load(Ordering::Relaxed);
@@ -805,6 +832,7 @@ impl Default for EscalationState {
         Self {
             consecutive: 0,
             last_arm: None,
+            armed_until_unix: 0,
         }
     }
 }
@@ -998,15 +1026,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn consecutive_arms_escalate_within_window() {
+    async fn concurrent_arms_coalesce_into_one_escalation() {
+        // A burst of 429s from one overshoot lands while the first backoff is
+        // still armed, so they must NOT compound — keep the single base window
+        // instead of doubling per call (the bug that produced 1-hour bans).
         let lim = IapiLimiter::new(fast_config());
         let first = lim.record_rate_limited("Too Many Requests").await;
         let second = lim.record_rate_limited("Too Many Requests").await;
         let third = lim.record_rate_limited("Too Many Requests").await;
-        // first=90, second>=180, third>=360 (allowing for the clock-tick
-        // difference between arm time and the read on the line below).
-        assert!(second >= first * 2 - 2, "first={first} second={second}");
-        assert!(third >= second * 2 - 2, "second={second} third={third}");
+        assert!((89..=90).contains(&first), "got {first}");
+        assert_eq!(second, first, "concurrent arm must not escalate: {first}/{second}");
+        assert_eq!(third, first, "concurrent arm must not escalate: {first}/{third}");
+    }
+
+    #[tokio::test]
+    async fn separated_overshoots_escalate_once_each() {
+        // A distinct overshoot after the armed window clears is a real repeat —
+        // it escalates by one (not coalesced).
+        let mut cfg = fast_config();
+        cfg.default_backoff_secs = 1; // tiny so the armed window clears fast
+        let lim = IapiLimiter::new(cfg);
+        let first = lim.record_rate_limited("Too Many Requests").await;
+        assert_eq!(first, 1, "got {first}");
+        tokio::time::sleep(StdDuration::from_millis(1_100)).await;
+        let second = lim.record_rate_limited("Too Many Requests").await;
+        assert_eq!(second, 2, "a fresh overshoot after the window escalates once");
     }
 
     #[tokio::test]
@@ -1014,11 +1058,13 @@ mod tests {
         let mut cfg = fast_config();
         cfg.max_backoff_secs = 500;
         let lim = IapiLimiter::new(cfg);
+        // 30 arms from one overshoot burst coalesce to a single base window,
+        // nowhere near the cap — the cascade that produced hour-long bans.
         for _ in 0..30 {
             lim.record_rate_limited("Too Many Requests").await;
         }
         let remaining = lim.remaining_backoff_secs().unwrap();
-        assert!(remaining <= 500, "got {remaining}");
+        assert!(remaining <= 91, "burst must coalesce to one base window, got {remaining}");
     }
 
     #[tokio::test]
