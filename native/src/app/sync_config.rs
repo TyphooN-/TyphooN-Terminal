@@ -29,12 +29,12 @@ pub(super) const KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 8192;
 /// Concurrent in-flight iapi equity-history fetches. The engine-side
 /// `iapi_limiter` token bucket is the real rate governor (≤ `aimd_max_rate`
 /// req/s); this only needs to be high enough that the bucket — not a tiny
-/// semaphore — is the binding constraint. At ~40 req/s and ~300 ms/round-trip
-/// that is ≈12 concurrent, so 16 gives headroom without letting iapi work
-/// starve UI-visible broker messages. (Was 2, which capped throughput at
-/// ~6 req/s regardless of the bucket and left the AIMD ramp probing a ceiling
-/// it could never actually drive.)
-pub(super) const KRAKEN_EQUITIES_FETCH_PERMITS: usize = 16;
+/// semaphore — is the binding constraint. Size it to the AIMD ceiling × typical
+/// round-trip: ~120 req/s × ~0.4 s ≈ 48 concurrent. Beyond that the bucket
+/// paces dispatch anyway, so extra permits just park on the token wait.
+/// (Was 2, which capped throughput at ~6 req/s regardless of the bucket and
+/// left the AIMD ramp probing a ceiling it could never actually drive.)
+pub(super) const KRAKEN_EQUITIES_FETCH_PERMITS: usize = 48;
 // Per-call iapi spacing (was KRAKEN_EQUITIES_HISTORY_MIN_INTERVAL_MS) and the
 // flat post-429 pause (was KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS) are now
 // owned by the engine-side `iapi_limiter` (token bucket + escalating

@@ -127,14 +127,20 @@ impl Default for IapiLimiterConfig {
             persistence_path: None,
             aimd_enabled: true,
             aimd_min_rate: 0.5,
-            // Operational ceiling for the equity-history backfill. The previous
-            // 250 guard was never validated: the broker only ran 2 concurrent
-            // fetches, so AIMD ramped to 250 without Cloudflare ever pushing
-            // back. With real concurrency (16 permits) 40 req/s is the cap AIMD
-            // probes toward — fast enough to clear the xStocks backlog, low
-            // enough to keep IP-level 1015 risk moderate.
-            aimd_max_rate: 40.0,
-            aimd_increase_interval: Duration::from_secs(10),
+            // Operational ceiling for the full xStocks catalog sweep. 40 req/s
+            // ran clean with zero 429s but only at trickle volume (demand-only),
+            // so the real Cloudflare limit was never actually probed. With the
+            // catalog driving sustained traffic, let AIMD climb toward 120 and
+            // discover the true edge: if Cloudflare 1015s below 120, the ssthresh
+            // (`discovered_ceiling`) pins the converged rate just under it after a
+            // single backoff; if it tolerates 120, that clears the ~100k
+            // (symbol, tf) backlog in ~14 min. zstd-3 writes (outside the cache
+            // lock) keep this CPU/lock-cheap well past 120 req/s.
+            aimd_max_rate: 120.0,
+            // Reach the ceiling in ~1 min, not ~8: at trickle volume the 10s step
+            // crawled 5→40 over five minutes. A 3s step finds the real ceiling
+            // (or 120) fast, which is the whole point of a full-universe sweep.
+            aimd_increase_interval: Duration::from_secs(3),
             aimd_increment_per_step: 5.0,
             aimd_low_rate_increment_per_step: 0.01,
             aimd_decrease_factor: 0.5,
