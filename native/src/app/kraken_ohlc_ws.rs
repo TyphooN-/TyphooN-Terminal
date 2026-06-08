@@ -315,6 +315,50 @@ mod tests {
         assert!(!kraken_ws_should_request_initial_snapshot(12_741));
     }
 
+    #[test]
+    fn small_universe_plan_snapshots_every_interval_immediately() {
+        let plan = plan_kraken_ws_streamers(WS_LARGE_UNIVERSE_PAIR_THRESHOLD - 1);
+        assert_eq!(plan.len(), KRAKEN_WS_OHLC_INTERVALS_MIN.len());
+        assert!(
+            plan.iter()
+                .all(|&(_, snapshot, delay)| snapshot && delay.is_zero()),
+            "small universe must snapshot every interval with no stagger: {plan:?}"
+        );
+        // Every served interval is represented exactly once.
+        for &interval_min in KRAKEN_WS_OHLC_INTERVALS_MIN {
+            assert_eq!(
+                plan.iter().filter(|&&(m, _, _)| m == interval_min).count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn large_universe_plan_snapshots_only_bounded_high_timeframes() {
+        let plan = plan_kraken_ws_streamers(12_714);
+        assert_eq!(plan.len(), KRAKEN_WS_OHLC_INTERVALS_MIN.len());
+        for &(interval_min, snapshot, delay) in &plan {
+            if interval_min >= 60 {
+                assert!(snapshot, "high TF {interval_min} must snapshot");
+            } else {
+                assert!(!snapshot, "low TF {interval_min} must be live-only");
+                assert!(delay.is_zero(), "live-only TF {interval_min} starts now");
+            }
+        }
+        // Snapshot waves are ordered highest-TF-first and staggered so each
+        // drains before the next: 1Week@0, 1Day@1×, 4Hour@2×, 1Hour@3×.
+        let wave = |interval_min: u32| {
+            plan.iter()
+                .find(|&&(m, _, _)| m == interval_min)
+                .map(|&(_, _, delay)| delay)
+                .expect("interval present")
+        };
+        assert_eq!(wave(10080), Duration::ZERO);
+        assert_eq!(wave(1440), WS_LARGE_UNIVERSE_INTERVAL_STAGGER);
+        assert_eq!(wave(240), WS_LARGE_UNIVERSE_INTERVAL_STAGGER * 2);
+        assert_eq!(wave(60), WS_LARGE_UNIVERSE_INTERVAL_STAGGER * 3);
+    }
+
     fn mk_bar(interval_min: u32, interval_begin_ms: i64) -> KrakenWsOhlcBar {
         KrakenWsOhlcBar {
             symbol: "BTC/USD".into(),
@@ -555,24 +599,15 @@ pub(super) fn spawn_kraken_ohlc_pipeline(
         return;
     }
     let (bar_tx, bar_rx) = mpsc::channel::<KrakenWsOhlcBar>(WS_BAR_CHANNEL_CAPACITY);
-    let large_universe = pairs.len() >= WS_LARGE_UNIVERSE_PAIR_THRESHOLD;
-    let snapshot_initial = kraken_ws_should_request_initial_snapshot(pairs.len());
-    for (interval_idx, &interval_min) in KRAKEN_WS_OHLC_INTERVALS_MIN.iter().enumerate() {
+    for (interval_min, snapshot, startup_delay) in plan_kraken_ws_streamers(pairs.len()) {
         let pairs = pairs.clone();
         let bar_tx = bar_tx.clone();
         let status_tx = status_tx.clone();
         tokio::spawn(async move {
-            if large_universe && interval_idx > 0 {
-                tokio::time::sleep(WS_LARGE_UNIVERSE_INTERVAL_STAGGER * interval_idx as u32).await;
+            if !startup_delay.is_zero() {
+                tokio::time::sleep(startup_delay).await;
             }
-            run_ohlc_streamer_with_snapshot(
-                interval_min,
-                pairs,
-                snapshot_initial,
-                bar_tx,
-                status_tx,
-            )
-            .await;
+            run_ohlc_streamer_with_snapshot(interval_min, pairs, snapshot, bar_tx, status_tx).await;
         });
     }
     // Drop the original sender so the writer's rx.recv() resolves to None
@@ -586,6 +621,64 @@ pub(super) fn spawn_kraken_ohlc_pipeline(
 
 fn kraken_ws_should_request_initial_snapshot(pair_count: usize) -> bool {
     pair_count < WS_LARGE_UNIVERSE_PAIR_THRESHOLD
+}
+
+/// `true` for the timeframes whose Kraken WS startup snapshot is *bounded* even
+/// across the full xStocks catalog: 1Hour and up. xStocks are newly-listed
+/// tokenized equities, so their hourly/4-hour/daily/weekly history is at most a
+/// few hundred bars per symbol — safe to snapshot for all ~12k pairs. The
+/// sub-hour intervals (1Min/5Min/15Min/30Min) can each carry hundreds-to-tens-
+/// of-thousands of bars per symbol; a full-catalog snapshot of those is the OOM
+/// risk that `07a1ce3` disabled, so for large universes they stay live-only and
+/// fill once the market is trading.
+fn kraken_ws_interval_is_bounded_snapshot_tf(interval_min: u32) -> bool {
+    interval_min >= 60
+}
+
+/// Plan the per-interval streamer schedule as `(interval_min, request_snapshot,
+/// startup_delay)`.
+///
+/// Small universes (Kraken Spot, < `WS_LARGE_UNIVERSE_PAIR_THRESHOLD` pairs)
+/// snapshot every interval immediately — this is what gets Spot to ~96% synced,
+/// because the snapshot delivers each pair's recent history on subscribe.
+///
+/// Large universes (the full xStocks catalog) would OOM on a full 1Min snapshot
+/// burst, so only the bounded high-timeframe snapshots (1Hour…1Week) are
+/// requested; the low timeframes subscribe live-only and fill once the market is
+/// trading. The snapshot waves are staggered — highest timeframe (smallest
+/// payload) first — so each drains under the writer's backpressure before the
+/// next begins. Live-only intervals carry no startup burst, so they start
+/// immediately regardless of the stagger.
+fn plan_kraken_ws_streamers(pairs_len: usize) -> Vec<(u32, bool, Duration)> {
+    if kraken_ws_should_request_initial_snapshot(pairs_len) {
+        return KRAKEN_WS_OHLC_INTERVALS_MIN
+            .iter()
+            .map(|&interval_min| (interval_min, true, Duration::ZERO))
+            .collect();
+    }
+    // Live-only low timeframes: no snapshot, no startup burst, start now.
+    let mut plan: Vec<(u32, bool, Duration)> = KRAKEN_WS_OHLC_INTERVALS_MIN
+        .iter()
+        .copied()
+        .filter(|&interval_min| !kraken_ws_interval_is_bounded_snapshot_tf(interval_min))
+        .map(|interval_min| (interval_min, false, Duration::ZERO))
+        .collect();
+    // Bounded high-timeframe snapshots: highest TF first (smallest payload), one
+    // staggered wave each so the writer can persist before the next lands.
+    let mut snapshot_intervals: Vec<u32> = KRAKEN_WS_OHLC_INTERVALS_MIN
+        .iter()
+        .copied()
+        .filter(|&interval_min| kraken_ws_interval_is_bounded_snapshot_tf(interval_min))
+        .collect();
+    snapshot_intervals.sort_unstable_by(|a, b| b.cmp(a));
+    for (wave, interval_min) in snapshot_intervals.into_iter().enumerate() {
+        plan.push((
+            interval_min,
+            true,
+            WS_LARGE_UNIVERSE_INTERVAL_STAGGER * wave as u32,
+        ));
+    }
+    plan
 }
 
 /// Drain the merged bar channel, buffer by (symbol, interval, bucket),

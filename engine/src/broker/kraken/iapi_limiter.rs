@@ -116,7 +116,10 @@ impl Default for IapiLimiterConfig {
     fn default() -> Self {
         Self {
             capacity: 8.0,
-            refill_per_sec: 0.67,
+            // Cold-start / re-probe floor. Set to the rate clean sessions have
+            // historically sustained on iapi (≈5 req/s) so a reset doesn't crawl
+            // up from sub-1 req/s for ~20 min; AIMD still halves on any 429.
+            refill_per_sec: 5.0,
             default_backoff_secs: 90,
             cloudflare_backoff_secs: 600,
             max_backoff_secs: 3600,
@@ -124,7 +127,13 @@ impl Default for IapiLimiterConfig {
             persistence_path: None,
             aimd_enabled: true,
             aimd_min_rate: 0.5,
-            aimd_max_rate: 250.0,
+            // Operational ceiling for the equity-history backfill. The previous
+            // 250 guard was never validated: the broker only ran 2 concurrent
+            // fetches, so AIMD ramped to 250 without Cloudflare ever pushing
+            // back. With real concurrency (16 permits) 40 req/s is the cap AIMD
+            // probes toward — fast enough to clear the xStocks backlog, low
+            // enough to keep IP-level 1015 risk moderate.
+            aimd_max_rate: 40.0,
             aimd_increase_interval: Duration::from_secs(10),
             aimd_increment_per_step: 5.0,
             aimd_low_rate_increment_per_step: 0.01,
@@ -387,6 +396,23 @@ impl IapiLimiter {
             )
         } else {
             None
+        };
+        // A persisted rate above the current safety ceiling was learned under a
+        // higher ceiling or at unrealistic concurrency (e.g. the old 250 req/s
+        // checkpoint that the 2-permit broker could never actually drive). Drop
+        // it and re-probe from `refill_per_sec` so AIMD rediscovers the real
+        // Cloudflare ceiling under the current concurrency model instead of
+        // resuming at a rate that was never validated.
+        let restored_rate = if restored_rate > config.aimd_max_rate {
+            tracing::info!(
+                "iapi AIMD: discarding stale persisted rate {:.2} req/s above ceiling {:.2} req/s — re-probing from {:.2} req/s",
+                restored_rate,
+                config.aimd_max_rate,
+                config.refill_per_sec
+            );
+            0.0
+        } else {
+            restored_rate
         };
         let raw_starting_rate = if restored_rate > 0.0 {
             restored_rate
@@ -1157,6 +1183,39 @@ mod tests {
         assert!(
             rate <= 1.0,
             "stale high checkpoint must restart conservatively, got {rate}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_checkpoint_above_lowered_ceiling_reprobes_from_floor() {
+        // Production regression: a 250 req/s checkpoint was persisted from a
+        // session that ramped to the old guard without real concurrency, and the
+        // user restarts inside the AIMD learning TTL (recent_aimd_learning=true)
+        // so the restore path would otherwise resume at 250 → clamp to the new
+        // 40 ceiling → blast 40 req/s on launch. The persisted rate is above the
+        // ceiling, so it must be discarded and re-probed from refill_per_sec.
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let now_unix = chrono::Utc::now().timestamp();
+        let state = PersistedState {
+            cooldown_until_unix: now_unix - 60,
+            consecutive: 0,
+            last_arm_unix: now_unix - 5, // recent → recent_aimd_learning = true
+            tuned_rate: 0.0,
+            checkpoint_rate: 250.0,
+            discovered_ceiling: 0.0,
+        };
+        std::fs::write(tmp.path(), serde_json::to_string(&state).unwrap()).unwrap();
+        let cfg = IapiLimiterConfig {
+            persistence_path: Some(tmp.path().to_path_buf()),
+            refill_per_sec: 5.0,
+            aimd_max_rate: 40.0,
+            ..aimd_config()
+        };
+        let lim = IapiLimiter::new(cfg);
+        let rate = lim.current_rate_per_sec().await;
+        assert!(
+            (rate - 5.0).abs() < 1e-6,
+            "stale 250 checkpoint above the 40 ceiling must re-probe from refill_per_sec (5.0), not resume at the ceiling, got {rate}"
         );
     }
 

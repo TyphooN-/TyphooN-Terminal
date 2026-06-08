@@ -98,7 +98,8 @@ pub(super) fn spawn_broker_message_processor(
         // Kraken Securities/iapi history is slower and can include synchronous cache work.
         // Keep it off the broker command loop and cap it separately so broad equities
         // sync cannot starve UI-visible broker messages (SEC scanner, order state, etc.).
-        let kraken_equity_fetch_permits = Arc::new(tokio::sync::Semaphore::new(2));
+        let kraken_equity_fetch_permits =
+            Arc::new(tokio::sync::Semaphore::new(KRAKEN_EQUITIES_FETCH_PERMITS));
         let kraken_public_client = reqwest::Client::builder()
             .user_agent("TyphooN-Terminal/1.0")
             .pool_max_idle_per_host(KRAKEN_PUBLIC_FETCH_PERMITS * 2)
