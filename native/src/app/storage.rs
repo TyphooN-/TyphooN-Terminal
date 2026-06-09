@@ -528,13 +528,6 @@ impl TyphooNApp {
                     .small()
                     .color(AXIS_TEXT),
             );
-            if !self.bg.accounts.is_empty() {
-                ui.label(
-                    egui::RichText::new(format!("| {} DARWIN accounts", self.bg.accounts.len()))
-                        .small()
-                        .color(AXIS_TEXT),
-                );
-            }
 
             let can_bulk = !filter_is_empty && total > 0;
             if self.storage_delete_filtered_confirm {

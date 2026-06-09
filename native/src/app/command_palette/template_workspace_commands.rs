@@ -46,49 +46,7 @@ impl TyphooNApp {
             }
             other => {
                 // Commands with arguments
-                if other.starts_with("DELETE_DARWIN ") {
-                    let ticker = other
-                        .splitn(2, ' ')
-                        .nth(1)
-                        .unwrap_or("")
-                        .trim()
-                        .to_uppercase();
-                    if ticker.is_empty() {
-                        self.log.push_back(LogEntry::warn(
-                            "Usage: DELETE_DARWIN TICKER (e.g. DELETE_DARWIN CKUC)",
-                        ));
-                    } else {
-                        // Immediately remove from in-memory UI state
-                        self.bg.accounts.retain(|a| a.darwin_ticker != ticker);
-                        self.bg.account_details.retain(|d| d.ticker != ticker);
-
-                        // Write blacklist + update KV (fast)
-                        if let Some(ref cache) = self.cache {
-                            let _ = cache.put_kv(&format!("darwin:deleted:{}", ticker), "1");
-                            let _ = cache.put_kv(
-                                "darwin:account_details",
-                                &serde_json::to_string(&self.bg.account_details)
-                                    .unwrap_or_default(),
-                            );
-
-                            // Offload SQL DELETE through the app runtime's blocking pool.
-                            let cache = cache.clone();
-                            let ticker_clone = ticker.clone();
-                            self.rt_handle.spawn_blocking(move || {
-                                if let Ok(conn) = cache.connection() {
-                                    let _ = typhoon_engine::core::darwin::delete_darwin_account(
-                                        &conn,
-                                        &ticker_clone,
-                                    );
-                                }
-                            });
-                        }
-                        self.log.push_back(LogEntry::info(format!(
-                            "Deleting DARWIN {} (background)...",
-                            ticker
-                        )));
-                    }
-                } else if other.starts_with("SAVE_TEMPLATE ") || other.starts_with("TEMPLATE_SAVE ")
+                if other.starts_with("SAVE_TEMPLATE ") || other.starts_with("TEMPLATE_SAVE ")
                 {
                     let name = other.splitn(2, ' ').nth(1).unwrap_or("").trim().to_string();
                     if name.is_empty() {

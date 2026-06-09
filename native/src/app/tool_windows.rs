@@ -749,32 +749,6 @@ impl TyphooNApp {
                             total_contrib += monthly * 12.0;
                         }
                     }
-                    let has_curve = self.bg.equity_curve.len() >= 30;
-                    if ui
-                        .add_enabled(has_curve, egui::Button::new("Use My Equity Curve"))
-                        .on_hover_text(
-                            "Pre-fill principal and annual return from your actual DARWIN portfolio history",
-                        )
-                        .clicked()
-                    {
-                        let curve = &self.bg.equity_curve;
-                        if let (Some(first), Some(last)) = (curve.first(), curve.last()) {
-                            let first_val = first.1.max(1.0);
-                            let last_val = last.1;
-                            let n_days = curve.len() as f64;
-                            let n_years = (n_days / 252.0).max(1.0 / 252.0);
-                            let total_return = last_val / first_val;
-                            let cagr = total_return.powf(1.0 / n_years) - 1.0;
-                            self.ci_principal = format!("{:.2}", last_val);
-                            self.ci_rate = format!("{:.2}", cagr * 100.0);
-                            self.log.push_back(LogEntry::info(format!(
-                                "Prefilled from equity curve: ${:.0} @ {:.2}% CAGR over {:.1}y",
-                                last_val,
-                                cagr * 100.0,
-                                n_years
-                            )));
-                        }
-                    }
                 });
                 if !self.ci_result.is_empty() {
                     ui.separator();

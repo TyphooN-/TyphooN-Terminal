@@ -613,11 +613,6 @@ impl TyphooNApp {
                             } else {
                                 "GPU Indicators: CPU fallback"
                             };
-                            let gpu_dar = if self.gpu_darwin.is_some() {
-                                "GPU DARWIN Analytics: Active"
-                            } else {
-                                "GPU DARWIN: CPU fallback"
-                            };
                             ui.label(
                                 egui::RichText::new(gpu_ind)
                                     .color(if self.gpu_indicators.is_some() {
@@ -625,11 +620,6 @@ impl TyphooNApp {
                                     } else {
                                         DOWN
                                     })
-                                    .small(),
-                            );
-                            ui.label(
-                                egui::RichText::new(gpu_dar)
-                                    .color(if self.gpu_darwin.is_some() { UP } else { DOWN })
                                     .small(),
                             );
                         });

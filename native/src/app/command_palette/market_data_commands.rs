@@ -24,13 +24,6 @@ impl TyphooNApp {
                         symbols.insert(sym.clone());
                     }
                 }
-                // DARWIN/MT5 position symbols
-                for pos in &self.bg.open_positions {
-                    let sym = pos.symbol.replace('/', "");
-                    if !sym.is_empty() {
-                        symbols.insert(sym);
-                    }
-                }
                 // Alpaca position symbols
                 for pos in &self.live_positions {
                     if !pos.symbol.is_empty() {
