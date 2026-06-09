@@ -1,6 +1,6 @@
 # TyphooN-Terminal
 
-A native desktop trading terminal + TUI CLI with full risk management, multi-timeframe charting, and hedged martingale support — built in pure Rust with native GPU rendering (egui + wgpu) for MT5/Darwinex, Alpaca, tastytrade, Kraken, and CryptoCompare-backed market data.
+A native desktop trading terminal + TUI CLI with full risk management, multi-timeframe charting, and hedged martingale support — built in pure Rust with native GPU rendering (egui + wgpu) for Alpaca and Kraken market data.
 
 **License:** [BUSL 1.1](LICENSE) ([Commercial](COMMERCIAL.md))
 
@@ -18,8 +18,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Drawing Tools** | 89 drawing and annotation types |
 | **Harmonic Patterns** | 10 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives) |
 | **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
-| **Data Sources** | MT5 (Darwinex), Alpaca, tastytrade, Kraken Spot/xStocks, Kraken Futures, CryptoCompare |
-| **DARWIN Analytics** | 88 functions wired (VaR, correlation, equity, streaks, Monte Carlo, stress tests, rebalance, floating equity, D-Score, tax lots, CAGR, recovery factor, divergence index, risk budget, replication quality, performance attribution) |
+| **Data Sources** | Alpaca, Kraken Spot/xStocks, Kraken Futures |
 | **Cost** | Free for personal use ([commercial licensing](COMMERCIAL.md) available) |
 
 ---
@@ -38,7 +37,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **WebSocket Streaming** | Real-time trades/quotes via Alpaca WebSocket, Time & Sales |
 | **Options Chain** | Full Greeks, strike/expiry/bid/ask via Alpaca options API |
 | **Stock Screener** | Filter by price, volume, sector, change%, tradable/shortable flags |
-| **Command Palette** | ~ (tilde) Quake-console: DARWIN, BACKTEST, RISK_CALC, SCREENER, EXPORT_CSV |
+| **Command Palette** | ~ (tilde) Quake-console: BACKTEST, RISK_CALC, SCREENER, EXPORT_CSV |
 | **Watchlist** | Multi-symbol quote monitor with live prices and daily change |
 | **LAN Sync** | TLS/PBKDF2 LAN sync plus headless server/client deployment |
 | **Storage Manager** | View, delete, compact (zstd-22), and schedule idle auto-compaction by symbol/source |
@@ -108,7 +107,6 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Economic Calendar** | Finnhub economic events: FOMC, NFP, CPI, PMI with impact ratings (~ →ECON) |
 | **Kraken Primary Market Data** | Public Spot/xStocks universe sync with no API key; async OHLCV queueing paced to Kraken's public limits with cooldown |
 | **Kraken Futures Market Data** | Public futures instrument discovery + async OHLCV sync under `kraken-futures:SYMBOL:TF`; no API key needed |
-| **CryptoCompare Deep History** | BTC from 2010, ETH from 2015, 2000 bars/request — extends history before exchange listings where available |
 | **Weekend Crypto Live** | Adaptive polling: 60s (M1), 2.5min (M15), 5min (H1+) — magenta-colored weekend candles |
 | **Chart Right Margin** | 5-bar right margin (MT5 chart shift style) for price action breathing room |
 | **Unusual Volume Scanner** | Detect abnormal volume spikes across symbols (~ →UNUSUAL_VOLUME) |
@@ -327,6 +325,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [108](docs/adr/108-research-module-compile-time-modularization.md) | Research Module Compile-Time Modularization |
 | [109](docs/adr/109-kraken-websocket-v2-market-depth-completion.md) | Kraken WebSocket v2 Market Depth Completion |
 | [110](docs/adr/110-market-session-status-xstocks-24-5-and-us-equities.md) | Market Session Status Display (xStocks 24/5 + US Equities) |
+| [111](docs/adr/111-broker-scope-reduction-kraken-alpaca-only.md) | Broker Scope Reduction — Kraken + Alpaca Only (Darwin/MT5/Tastytrade deprecated to branches) |
 
 ---
 
@@ -335,15 +334,13 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | Feature | TyphooN Terminal | OpenBB | Godel | UnusualWhales | TradingView |
 |---------|-----------------|--------|-------|---------------|-------------|
 | **Native GPU Rendering** | Yes (wgpu) | No (Python) | No (Web) | No (Web) | No (Web) |
-| **Trading Execution** | 3 brokers | No | No | No | 1 broker |
-| **DARWIN Analytics** | 88 functions | No | No | No | No |
+| **Trading Execution** | 2 brokers | No | No | No | 1 broker |
 | **MQL5 Compiler** | Yes | No | No | No | PineScript |
 | **FRED Economic Data** | Yes | Yes | No | No | No |
 | **SEC Filings** | Yes | Yes | Yes | No | No |
 | **Congressional Trades** | Yes | Yes | No | Yes | No |
 | **Harmonic Patterns** | 10 Carney | No | No | No | Community |
 | **Walk-Forward Optimizer** | Yes (5 strategies) | No | No | No | No |
-| **Deep Crypto History** | 2010+ (CryptoCompare) | Yes | No | No | Yes |
 | **Weekend Crypto Live** | Yes (60s polling) | No | No | No | Yes |
 | **Anomaly Scanner** | 4-dim (VaR+EV+ATR+SEC) | No | No | Options only | No |
 | **Storage Cost** | Free (local SQLite) | Free | $80-118/mo | $30-60/mo | $0-60/mo |
@@ -371,9 +368,8 @@ cd native && cargo build --release  # production
 cd cli && ./typhoon.sh              # Interactive TUI
 ./typhoon.sh --positions            # Print positions and exit
 ./typhoon.sh --account              # Print account and exit
-./typhoon.sh --accounts             # All accounts (Alpaca + MT5 imports)
+./typhoon.sh --accounts             # All accounts (Alpaca)
 ./typhoon.sh -s BTC/USD             # Start with specific symbol
-./typhoon.sh --import-mt5 DARWIN_EUR:/path/to/statement.csv
 ./typhoon.sh --export-cache backup.typhoon-backup --cache-backup-passphrase "$PASS"
 ./typhoon.sh --import-cache backup.typhoon-backup --cache-backup-passphrase "$PASS"
 ./typhoon.sh --lan-server --cache-dir /mnt/nas/typhoon-cache
@@ -399,7 +395,6 @@ MCP clients can run `typhoon-cli --mcp-server` (or `cargo run -q -p typhoon-cli 
 | Cancel all orders | `:cancelall` |
 | Order history | `:history 20` |
 | Chart symbol | `:chart BTC/USD H4` |
-| Import MT5 | `:import DARWIN_EUR /path.csv` |
 | Cache backup | `--export-cache PATH` / `--import-cache PATH` |
 | MCP research packets | `--mcp-server` |
 
@@ -407,9 +402,9 @@ MCP clients can run `typhoon-cli --mcp-server` (or `cargo run -q -p typhoon-cli 
 
 ## Brokers
 
-**Alpaca Markets** — stocks, ETFs, options, and crypto via REST + WebSocket streaming. IEX (free) or SIP (paid) market data.
+TyphooN-Terminal trades **Alpaca + Kraken**. The historical **MT5/Darwinex** (DARWIN portfolio + BarCacheWriter EA bridge), **tastytrade**, and **CryptoCompare** (deep crypto history) integrations have been deprecated and removed from the active codebase — see [ADR-111](docs/adr/111-broker-scope-reduction-kraken-alpaca-only.md). Their full code is preserved on the `deprecated/darwin`, `deprecated/mt5`, `deprecated/tastytrade`, and `deprecated/cryptocompare` branches for possible future restoration; they are not built or maintained in the interim. (The MQL5/PineScript→WASM compiler is a separate language tool and is retained.)
 
-**tastytrade** — account, positions, orders, option chains, quote snapshots, market metrics, and DXLink historical bars.
+**Alpaca Markets** — stocks, ETFs, options, and crypto via REST + WebSocket streaming. IEX (free) or SIP (paid) market data.
 
 **Kraken** — public Spot/xStocks and Futures market data without keys, plus authenticated Spot REST trading for crypto/xStocks accounts.
 
