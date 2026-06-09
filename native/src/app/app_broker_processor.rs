@@ -121,7 +121,6 @@ pub(super) fn spawn_broker_message_processor(
                     BrokerCmd::FetchEconCalendar { .. } => Some("CALENDAR"),
                     BrokerCmd::FetchCongressTrades => Some("CONGRESS_TRADES"),
                     BrokerCmd::FredFetch { .. } => Some("FRED_DATA"),
-                    BrokerCmd::DarwinImportAll { .. } => Some("DARWIN_IMPORT"),
                     // FetchFilingContent NOT forwarded — SEC EDGAR is public, fetch directly
                     // BrokerCmd::FetchFilingContent { .. } => Some("SEC_FILING"),
                     _ => None,
@@ -4148,55 +4147,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         // panic unwind).
                     });
                 }
-                BrokerCmd::DarwinFtpScan { ftp_dir, min_days } => {
-                    let msg_tx = broker_msg_tx_clone.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let _ = msg_tx.send(BrokerMsg::OrderResult("DARWIN FTP scan started...".into()));
-                        let ftp_path = std::path::Path::new(&ftp_dir);
-                        match darwin_ftp::scan_universe(ftp_path, min_days, Some(&|done, total| {
-                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!("FTP scan: {}/{} DARWINs...", done, total)));
-                        })) {
-                            Ok(results) => {
-                                let count = results.len();
-                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!("FTP scan complete: {} DARWINs with {}+ days", count, min_days)));
-                                let _ = msg_tx.send(BrokerMsg::DarwinFtpScanResult(results));
-                            }
-                            Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("FTP scan failed: {}", e))); }
-                        }
-                    });
-                }
-                BrokerCmd::DarwinGpuScan { ftp_dir, min_days } => {
-                    let msg_tx = broker_msg_tx_clone.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let _ = msg_tx.send(BrokerMsg::OrderResult("GPU scan: reading FTP return files...".into()));
-                        let ftp_path = std::path::Path::new(&ftp_dir);
-                        match darwin_ftp::list_all_darwins(ftp_path) {
-                            Ok(tickers) => {
-                                let mut all_returns: Vec<(String, Vec<f32>)> = Vec::new();
-                                let total = tickers.len();
-                                for (i, ticker) in tickers.iter().enumerate() {
-                                    if i % 5000 == 0 {
-                                        let _ = msg_tx.send(BrokerMsg::OrderResult(format!("GPU scan: reading {}/{}...", i, total)));
-                                    }
-                                    let return_path = ftp_path.join(ticker).join("RETURN");
-                                    if !return_path.is_file() { continue; }
-                                    if let Ok(returns) = darwin_ftp::read_return_file(ftp_path, ticker) {
-                                        if returns.len() >= min_days {
-                                            let daily = darwin_ftp::compute_daily_returns_from_ftp(&returns);
-                                            let daily_f32: Vec<f32> = daily.iter().map(|&r| r as f32).collect();
-                                            if !daily_f32.is_empty() {
-                                                all_returns.push((ticker.clone(), daily_f32));
-                                            }
-                                        }
-                                    }
-                                }
-                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!("GPU scan: {} DARWINs read, sending to GPU...", all_returns.len())));
-                                let _ = msg_tx.send(BrokerMsg::DarwinFtpReturns(all_returns));
-                            }
-                            Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("GPU scan failed: {}", e))); }
-                        }
-                    });
-                }
                 BrokerCmd::AlpacaFetchBars { symbol, timeframe, db_path: _, backfill_complete } => {
                     if let Some(ref b) = broker {
                         let broker = b.clone();
@@ -4486,7 +4436,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     | BrokerCmd::LanSyncConnect { .. }
                     | BrokerCmd::LanSyncStop
                     | BrokerCmd::LanResyncBars
-                    | BrokerCmd::LanResyncDarwin
                 ) => {
                     lan_sync::handle_lan_sync_command(
                         cmd,

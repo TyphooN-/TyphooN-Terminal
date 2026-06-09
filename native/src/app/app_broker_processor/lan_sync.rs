@@ -169,18 +169,6 @@ pub(super) async fn handle_lan_sync_command(
                     .send(BrokerMsg::Error("Not connected to LAN server".into()));
             }
         }
-        BrokerCmd::LanResyncDarwin => {
-            let guard = lan_remote_tx_ref.lock().await;
-            if let Some(ref tx) = *guard {
-                let _ = tx.send("RESYNC_DARWIN".to_string());
-                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
-                    "LAN resync DARWIN requested...".into(),
-                ));
-            } else {
-                let _ = broker_msg_tx_clone
-                    .send(BrokerMsg::Error("Not connected to LAN server".into()));
-            }
-        }
         _ => unreachable!("non-LAN-sync command routed to LAN sync handler"),
     }
 }
