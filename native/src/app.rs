@@ -2830,8 +2830,6 @@ impl TyphooNApp {
             session_last_autosave: std::time::Instant::now(),
             metrics_last_update: std::time::Instant::now() - std::time::Duration::from_secs(5),
             lan_remote_last_poll: std::time::Instant::now() - std::time::Duration::from_secs(5),
-            broker_positions_last_poll: std::time::Instant::now()
-                - std::time::Duration::from_secs(60),
             kraken_positions_last_poll: std::time::Instant::now()
                 - std::time::Duration::from_secs(60),
             kraken_position_quotes_last_poll: std::time::Instant::now()

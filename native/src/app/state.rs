@@ -7591,7 +7591,6 @@ pub struct TyphooNApp {
     pub(crate) session_last_autosave: std::time::Instant,
     pub(crate) metrics_last_update: std::time::Instant,
     pub(crate) lan_remote_last_poll: std::time::Instant,
-    pub(crate) broker_positions_last_poll: std::time::Instant,
     pub(crate) kraken_positions_last_poll: std::time::Instant,
     pub(crate) kraken_position_quotes_last_poll: std::time::Instant,
     /// Last REST `TradesHistory` fetch. The `ownTrades` WebSocket already
