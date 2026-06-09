@@ -144,104 +144,6 @@ impl TyphooNApp {
                     }
                 }
             }
-            "DARWINVAR" | "DARWINVAROUTLIERS" | "VAROUTLIERS" => {
-                // DARWIN VaR outlier scanner: IQR detection on per-DARWIN var_95 values,
-                // plus flagging against Darwinex corridor (3.25% – 6.5% of equity).
-                use typhoon_engine::core::var;
-                if self.bg.per_darwin_var.len() < 4 {
-                    self.log.push_back(LogEntry::warn(format!(
-                        "Need 4+ DARWINs with VaR data (have {}). Load DARWIN daily returns first.",
-                        self.bg.per_darwin_var.len()
-                    )));
-                } else {
-                    // Flat distribution — all DARWINs in one "sector" since they're all strategies.
-                    // Industry mirrors sector (no finer classification exists for DARWINs).
-                    let data: Vec<(String, String, String, f64)> = self
-                        .bg
-                        .per_darwin_var
-                        .iter()
-                        .filter(|(_, vr)| vr.var_95 > 0.0)
-                        .map(|(ticker, vr)| {
-                            (
-                                ticker.clone(),
-                                "DARWIN".to_string(),
-                                "DARWIN".to_string(),
-                                vr.var_95,
-                            )
-                        })
-                        .collect();
-                    let (outliers, stats) = var::detect_outliers(&data, 1.5);
-
-                    // Darwinex corridor: 3.25% - 6.5% of equity.
-                    // Assumes var_95 is expressed as % of equity (typical for Darwinex VaR).
-                    const CORRIDOR_LOW: f64 = 3.25;
-                    const CORRIDOR_HIGH: f64 = 6.50;
-                    let below: Vec<&str> = data
-                        .iter()
-                        .filter(|(_, _, _, v)| *v < CORRIDOR_LOW)
-                        .map(|(s, _, _, _)| s.as_str())
-                        .collect();
-                    let above: Vec<&str> = data
-                        .iter()
-                        .filter(|(_, _, _, v)| *v > CORRIDOR_HIGH)
-                        .map(|(s, _, _, _)| s.as_str())
-                        .collect();
-
-                    self.log.push_back(LogEntry::info(format!(
-                        "DARWIN VaR outliers: {} IQR-flagged from {} DARWINs | Corridor violations: {} below {:.2}%, {} above {:.2}%",
-                        outliers.len(), data.len(), below.len(), CORRIDOR_LOW, above.len(), CORRIDOR_HIGH
-                    )));
-                    if !below.is_empty() {
-                        self.log.push_back(LogEntry::warn(format!(
-                            "Below corridor: {}",
-                            below.join(", ")
-                        )));
-                    }
-                    if !above.is_empty() {
-                        self.log.push_back(LogEntry::err(format!(
-                            "Above corridor (rule violation): {}",
-                            above.join(", ")
-                        )));
-                    }
-
-                    self.darwinex_outliers = outliers;
-                    self.darwinex_sector_stats = stats;
-                    self.darwinex_multi_outliers = Vec::new();
-                    self.show_darwinex_outliers = true;
-                    self.outlier_scroll_pending = true;
-
-                    // ADR-094: Show VaR corridor gauge as result card
-                    let avg_var =
-                        data.iter().map(|(_, _, _, v)| v).sum::<f64>() / data.len().max(1) as f64;
-                    self.result_card = Some((
-                        ResultCard::Gauge {
-                            title: "DARWIN VaR Corridor".to_string(),
-                            label: "Avg VaR95".to_string(),
-                            value: avg_var,
-                            min: 0.0,
-                            max: 10.0,
-                            danger_low: CORRIDOR_LOW,
-                            danger_high: CORRIDOR_HIGH,
-                        },
-                        std::time::Instant::now(),
-                    ));
-
-                    // ADR-094: Toast for corridor violations
-                    if !above.is_empty() {
-                        self.toasts.push(Toast {
-                            message: format!(
-                                "VaR CORRIDOR BREACH: {} above 6.5%",
-                                above.join(", ")
-                            ),
-                            color: egui::Color32::from_rgb(255, 80, 80),
-                            created: std::time::Instant::now(),
-                            duration: std::time::Duration::from_secs(30),
-                            dismissable: true,
-                            dismissed: false,
-                        });
-                    }
-                }
-            }
             "EVOUTLIERS" | "EV_OUTLIERS" => {
                 // Enterprise value outlier scanner: IQR detection on EV, grouped by sector.
                 // Respects the global broker_scope filter.
@@ -302,12 +204,10 @@ impl TyphooNApp {
                         fund_owned.len()
                     )));
                 } else if let Some(ref cache) = self.cache {
-                    // Compute VaR/Ask ratio from bar cache + tick specs (DWEX Portfolio Risk Man formula)
-                    let tick_specs = if let Some(conn) = cache.try_connection() {
-                        darwin::load_tick_specs(&conn).unwrap_or_default()
-                    } else {
-                        std::collections::HashMap::new()
-                    };
+                    // Compute VaR/Ask ratio from bar cache. Tick-scale specs are no longer
+                    // available (Darwinex removed) — default tick_scale to 1.0 per symbol.
+                    let tick_specs: std::collections::HashMap<String, f64> =
+                        std::collections::HashMap::new();
                     let mut var_data: Vec<(String, String, String, f64)> = Vec::new();
                     let mut no_bars = 0usize;
 
@@ -479,30 +379,6 @@ impl TyphooNApp {
                         self.show_darwinex_outliers = true;
                         self.outlier_scroll_pending = true;
                     }
-                }
-            }
-            "DARWINIA_SCAN" | "DARWIN_SCAN" | "GPU_SCAN" => {
-                if self.darwin_ftp_dir.is_empty() {
-                    self.log
-                        .push_back(LogEntry::warn("Set Darwinex FTP Dir in Settings first"));
-                } else if self.gpu_darwin.is_some() {
-                    // GPU available — use GPU-accelerated scan
-                    let _ = self.broker_tx.send(BrokerCmd::DarwinGpuScan {
-                        ftp_dir: self.darwin_ftp_dir.clone(),
-                        min_days: 90,
-                    });
-                    self.log.push_back(LogEntry::info(
-                        "DarwinIA scan started (GPU, 50K DARWINs)...",
-                    ));
-                } else {
-                    // CPU fallback
-                    let _ = self.broker_tx.send(BrokerCmd::DarwinFtpScan {
-                        ftp_dir: self.darwin_ftp_dir.clone(),
-                        min_days: 90,
-                    });
-                    self.log.push_back(LogEntry::info(
-                        "DarwinIA scan started (CPU fallback, no GPU)...",
-                    ));
                 }
             }
             _ => return false,
