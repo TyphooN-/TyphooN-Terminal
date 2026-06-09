@@ -335,10 +335,7 @@ impl TyphooNApp {
                         }
                     }
                     // Broker target selector (only show when any enabled broker can place orders)
-                    if self.alpaca_order_available()
-                        || self.tastytrade_order_available()
-                        || self.kraken_order_available()
-                    {
+                    if self.alpaca_order_available() || self.kraken_order_available() {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("Broker").color(AXIS_TEXT).small());
                             egui::ComboBox::from_id_salt("order_broker_combo")

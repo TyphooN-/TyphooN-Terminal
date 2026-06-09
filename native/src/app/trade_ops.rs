@@ -537,13 +537,6 @@ impl TyphooNApp {
         self.kraken_futures_backfill_complete_dirty_since = None;
     }
 
-    pub(super) fn tastytrade_backfill_complete_load(&mut self) {
-        self.tastytrade_backfill_complete_pairs =
-            self.load_backfill_complete_pairs_from_kv("tastytrade:backfill_complete_pairs");
-        self.tastytrade_backfill_complete_loaded = true;
-        self.tastytrade_backfill_complete_dirty_since = None;
-    }
-
     pub(super) fn kraken_backfill_complete_mark(
         &mut self,
         symbol: &str,
@@ -619,43 +612,6 @@ impl TyphooNApp {
         changed
     }
 
-    pub(super) fn tastytrade_backfill_complete_mark(
-        &mut self,
-        symbol: &str,
-        timeframe: &str,
-        bar_count: usize,
-        target_bars: usize,
-    ) -> bool {
-        if !self.tastytrade_backfill_complete_loaded {
-            self.tastytrade_backfill_complete_load();
-        }
-        let timeframe = normalize_sync_timeframe_key(timeframe)
-            .unwrap_or(timeframe)
-            .to_string();
-        let symbol = normalize_market_data_symbol(symbol);
-        let key = alpaca_fetch_key(&symbol.replace('/', ""), &timeframe);
-        let entry = AlpacaBackfillCompletePair {
-            symbol,
-            timeframe,
-            marked_at: chrono::Utc::now().timestamp(),
-            bar_count: bar_count as i64,
-            target_bars: target_bars as i64,
-        };
-        let changed = match self.tastytrade_backfill_complete_pairs.get(&key) {
-            Some(existing) => {
-                existing.bar_count != entry.bar_count || existing.target_bars != entry.target_bars
-            }
-            None => true,
-        };
-        if changed {
-            self.tastytrade_backfill_complete_pairs.insert(key, entry);
-            if self.tastytrade_backfill_complete_dirty_since.is_none() {
-                self.tastytrade_backfill_complete_dirty_since = Some(std::time::Instant::now());
-            }
-        }
-        changed
-    }
-
     pub(super) fn flush_kraken_backfill_complete_marks(&mut self, force: bool) {
         let flush_ready = |dirty_since: std::time::Instant, heavy_sync: bool| {
             let age = std::time::Instant::now().saturating_duration_since(dirty_since);
@@ -677,15 +633,6 @@ impl TyphooNApp {
                     &self.kraken_futures_backfill_complete_pairs,
                 );
                 self.kraken_futures_backfill_complete_dirty_since = None;
-            }
-        }
-        if let Some(dirty_since) = self.tastytrade_backfill_complete_dirty_since {
-            if flush_ready(dirty_since, self.heavy_sync_in_progress) {
-                self.save_backfill_complete_pairs_to_kv(
-                    "tastytrade:backfill_complete_pairs",
-                    &self.tastytrade_backfill_complete_pairs,
-                );
-                self.tastytrade_backfill_complete_dirty_since = None;
             }
         }
     }
@@ -916,16 +863,11 @@ impl TyphooNApp {
             add(&c.symbol, &mut syms, &mut seen);
         }
         // Broker positions are foreground sync targets only while that broker's
-        // positions are displayed. If the navbar hides Alpaca/Tasty/Kraken
+        // positions are displayed. If the navbar hides Alpaca/Kraken
         // positions, those symbols should stop consuming update slots unless
         // they are also open chart tabs, open orders, or watchlist entries.
         if self.show_alpaca_positions {
             for p in &self.live_positions {
-                add(&p.symbol, &mut syms, &mut seen);
-            }
-        }
-        if self.show_tt_positions {
-            for p in &self.tt_positions {
                 add(&p.symbol, &mut syms, &mut seen);
             }
         }
@@ -1029,12 +971,8 @@ impl TyphooNApp {
             c.symbol.hash(&mut h);
         }
         self.show_alpaca_positions.hash(&mut h);
-        self.show_tt_positions.hash(&mut h);
         self.show_kr_positions.hash(&mut h);
         for p in &self.live_positions {
-            p.symbol.hash(&mut h);
-        }
-        for p in &self.tt_positions {
             p.symbol.hash(&mut h);
         }
         for p in &self.kr_positions {
@@ -1267,8 +1205,8 @@ impl TyphooNApp {
         }
 
         let account_snapshots = self.selected_trade_account_snapshots();
-        let (send_alpaca, send_tt, send_kraken) = self.selected_live_broker_targets();
-        let required_snapshots = send_alpaca as usize + send_tt as usize + send_kraken as usize;
+        let (send_alpaca, send_kraken) = self.selected_live_broker_targets();
+        let required_snapshots = send_alpaca as usize + send_kraken as usize;
         if !matches!(cfg.order_mode, risk::OrderMode::Fixed)
             && account_snapshots.len() < required_snapshots
         {
@@ -1391,10 +1329,6 @@ impl TyphooNApp {
         self.alpaca_enabled && self.broker_connected
     }
 
-    pub(super) fn tastytrade_order_available(&self) -> bool {
-        self.tastytrade_enabled && self.tt_connected
-    }
-
     pub(super) fn kraken_order_available(&self) -> bool {
         self.kraken_enabled && self.kraken_connected
     }
@@ -1420,13 +1354,12 @@ impl TyphooNApp {
         };
     }
 
-    pub(super) fn selected_live_broker_targets(&self) -> (bool, bool, bool) {
+    pub(super) fn selected_live_broker_targets(&self) -> (bool, bool) {
         let send_alpaca = self.alpaca_order_available()
             && matches!(self.order_broker, OrderBroker::Alpaca);
-        let send_tt = false;
         let send_kraken =
             self.kraken_order_available() && matches!(self.order_broker, OrderBroker::Kraken);
-        (send_alpaca, send_tt, send_kraken)
+        (send_alpaca, send_kraken)
     }
 
     pub(super) fn alpaca_trade_account_snapshot(&self) -> Option<TradeAccountSnapshot> {
@@ -1617,7 +1550,6 @@ impl TyphooNApp {
             &[
                 "kraken",
                 "kraken-futures",
-                "tastytrade",
                 "alpaca",
                 "mt5",
                 "default",
@@ -1666,7 +1598,7 @@ impl TyphooNApp {
         let timeframes = [
             "quote", "1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day",
         ];
-        let sources = ["kraken-equities", "tastytrade", "alpaca", "default", "mt5"];
+        let sources = ["kraken-equities", "alpaca", "default", "mt5"];
         let mut symbols = Vec::new();
         let mut push_symbol = |candidate: String| {
             let candidate = candidate.trim().replace('/', "").to_ascii_uppercase();
@@ -2131,7 +2063,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn selected_trade_account_snapshots(&self) -> Vec<TradeAccountSnapshot> {
-        let (send_alpaca, send_tt, send_kraken) = self.selected_live_broker_targets();
+        let (send_alpaca, send_kraken) = self.selected_live_broker_targets();
         let mut snapshots = Vec::new();
         if send_alpaca && let Some(snap) = self.alpaca_trade_account_snapshot() {
             snapshots.push(snap);
@@ -2180,9 +2112,8 @@ impl TyphooNApp {
                     pos.side.eq_ignore_ascii_case("short")
                 }
         };
-        let (send_alpaca, send_tt, send_kraken) = self.selected_live_broker_targets();
+        let (send_alpaca, send_kraken) = self.selected_live_broker_targets();
         (send_alpaca && self.live_positions.iter().any(same_side))
-            || (send_tt && self.tt_positions.iter().any(same_side))
             || (send_kraken && self.kr_positions.iter().any(same_side))
             || (send_kraken && wants_long && self.kraken_spot_balance_for_pair(symbol).is_some())
     }
@@ -2204,9 +2135,8 @@ impl TyphooNApp {
                 }
                 && (pos.avg_entry_price - sl).abs() <= tick_size * 0.5
         };
-        let (send_alpaca, send_tt, send_kraken) = self.selected_live_broker_targets();
+        let (send_alpaca, send_kraken) = self.selected_live_broker_targets();
         (send_alpaca && self.live_positions.iter().any(at_break_even))
-            || (send_tt && self.tt_positions.iter().any(at_break_even))
             || (send_kraken && self.kr_positions.iter().any(at_break_even))
             || (send_kraken
                 && wants_long
@@ -2219,8 +2149,8 @@ impl TyphooNApp {
 
     pub(super) fn close_all_selected_brokers(&mut self) {
         self.resolve_order_broker();
-        let (send_alpaca, send_tt, send_kraken) = self.selected_live_broker_targets();
-        if !send_alpaca && !send_tt && !send_kraken {
+        let (send_alpaca, send_kraken) = self.selected_live_broker_targets();
+        if !send_alpaca && !send_kraken {
             self.log.push_back(LogEntry::warn(
                 "Close All: no broker connected for selected target",
             ));
@@ -2300,8 +2230,8 @@ impl TyphooNApp {
         } else {
             "sell".to_string()
         };
-        let (send_alpaca, send_tt, send_kraken) = self.selected_live_broker_targets();
-        if !send_alpaca && !send_tt && !send_kraken {
+        let (send_alpaca, send_kraken) = self.selected_live_broker_targets();
+        if !send_alpaca && !send_kraken {
             self.log.push_back(LogEntry::warn(
                 "Open Trade: no broker connected for selected target",
             ));
@@ -2383,8 +2313,8 @@ impl TyphooNApp {
             return;
         }
 
-        let (send_alpaca, send_tt, send_kraken) = self.selected_live_broker_targets();
-        if !send_alpaca && !send_tt && !send_kraken {
+        let (send_alpaca, send_kraken) = self.selected_live_broker_targets();
+        if !send_alpaca && !send_kraken {
             self.log.push_back(LogEntry::warn(format!(
                 "{reason}: no broker connected for selected target"
             )));

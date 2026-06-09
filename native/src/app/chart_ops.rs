@@ -161,8 +161,8 @@ impl TyphooNApp {
             ));
             return;
         };
-        let (send_alpaca, send_tt, send_kraken) = self.selected_live_broker_targets();
-        if !send_alpaca && !send_tt && !send_kraken {
+        let (send_alpaca, send_kraken) = self.selected_live_broker_targets();
+        if !send_alpaca && !send_kraken {
             self.log.push_back(LogEntry::warn(
                 "Close Partial: no broker connected for selected target",
             ));
@@ -973,7 +973,7 @@ impl TyphooNApp {
         }
         overlay.markers.sort_by_key(|m| m.bar_idx);
 
-        // Live broker position lines (Alpaca + tastytrade + Kraken).
+        // Live broker position lines (Alpaca + Kraken).
         // Kraken spot crypto balances are inventory rather than broker
         // `PositionInfo` rows, but the chart still needs a visible holding
         // entry line when cost basis is known.
@@ -982,17 +982,12 @@ impl TyphooNApp {
         } else {
             Box::new(std::iter::empty())
         };
-        let tt_iter: Box<dyn Iterator<Item = &PositionInfo>> = if self.show_tt_positions {
-            Box::new(self.tt_positions.iter())
-        } else {
-            Box::new(std::iter::empty())
-        };
         let kr_iter: Box<dyn Iterator<Item = &PositionInfo>> = if self.show_kr_positions {
             Box::new(self.kr_positions.iter())
         } else {
             Box::new(std::iter::empty())
         };
-        let all_broker_positions = alpaca_iter.chain(tt_iter).chain(kr_iter);
+        let all_broker_positions = alpaca_iter.chain(kr_iter);
         // `bare_upper` is already computed once at the top of this function;
         // recomputing it inside the loop allocated a new String per broker position.
         // Short-circuit on a no-alloc equality check before paying for the substring
