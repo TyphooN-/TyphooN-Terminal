@@ -1829,13 +1829,8 @@ impl TyphooNApp {
             return false;
         }
         self.mark_fetch_queued("tastytrade", &symbol, tf);
-        let resolved_symbol = self.resolve_tastytrade_symbol(&symbol);
-        let _ = self.broker_tx.send(BrokerCmd::TastyTradeFetchBars {
-            symbol: resolved_symbol,
-            timeframe: tf.to_string(),
-            backfill_complete,
-        });
-        true
+        let _ = backfill_complete;
+        false
     }
 
     pub(super) fn settle_market_data_fetch(&mut self, source: &str, symbol: &str, timeframe: &str) {
@@ -2211,7 +2206,7 @@ impl TyphooNApp {
             scan_limit,
             &mut cursor,
             now_s,
-            tastytrade_sync_target_bars,
+            alpaca_sync_target_bars,
         );
         self.tastytrade_sync_cursor = cursor;
         let mut dispatched = 0usize;

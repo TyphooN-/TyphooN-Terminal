@@ -206,46 +206,6 @@ impl TyphooNApp {
                 )));
             }
         }
-        if send_tt {
-            if let Some(pos) = self
-                .tt_positions
-                .iter()
-                .find(|pos| pos.symbol.eq_ignore_ascii_case(&symbol))
-            {
-                let half_qty = (pos.qty.abs() / 2.0).floor() as i64;
-                if half_qty > 0 {
-                    let remaining_qty = pos.qty.abs() - half_qty as f64;
-                    let _ = self.broker_tx.send(BrokerCmd::TastytradeClosePositionQty {
-                        symbol: symbol.clone(),
-                        qty: Some(half_qty),
-                    });
-                    if remaining_qty > 0.0 && (sl.is_some() || tp.is_some()) {
-                        let _ = self.broker_tx.send(BrokerCmd::TastytradeSyncExits {
-                            symbol: symbol.clone(),
-                            sl_price: sl,
-                            tp_price: tp,
-                            wait_for_position: true,
-                            wait_for_qty_at_most: Some(remaining_qty),
-                        });
-                    }
-                    any = true;
-                    self.log.push_back(LogEntry::info(format!(
-                        "Close Partial: tastytrade {} {}",
-                        symbol, half_qty
-                    )));
-                } else {
-                    self.log.push_back(LogEntry::warn(format!(
-                        "Close Partial: tastytrade {} is too small to halve cleanly",
-                        symbol
-                    )));
-                }
-            } else {
-                self.log.push_back(LogEntry::warn(format!(
-                    "Close Partial: no tastytrade position found for {}",
-                    symbol
-                )));
-            }
-        }
         if send_kraken {
             if let Some(pos) = self
                 .kr_positions

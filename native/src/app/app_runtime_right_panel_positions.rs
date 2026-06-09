@@ -375,17 +375,7 @@ impl TyphooNApp {
                     });
                     ui.separator();
                 }
-                if let Some(sym) = close_sym {
-                    let _ = self.broker_tx.send(
-                        BrokerCmd::TastytradeClosePositionQty {
-                            symbol: sym.clone(),
-                            qty: None,
-                        },
-                    );
-                    self.log.push_back(LogEntry::info(format!(
-                        "Tastytrade: closing {sym} at market"
-                    )));
-                }
+                let _ = &close_sym;
                 if !matches!(tt_action, SymbolAction::None) {
                     self.deferred_symbol_action = tt_action;
                 }

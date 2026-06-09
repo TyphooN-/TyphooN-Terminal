@@ -117,18 +117,6 @@ impl TyphooNApp {
                             self.broker_scope = EventSource::All;
                         }
                     }
-                    let tt_before = self.tastytrade_enabled;
-                    if ui.checkbox(&mut self.tastytrade_enabled, "Enable tastytrade").on_hover_text("When off: no manual/startup connection, positions/balances, or tastytrade bar sync. Stored data is left untouched.").changed() {
-                        settings_save_after = true;
-                        if tt_before && !self.tastytrade_enabled {
-                            self.tt_connected = false;
-                            self.tt_positions.clear();
-                            self.tt_balances = None;
-                            self.pending_tastytrade_fetches.clear();
-                            self.tastytrade_full_bar_sync_enabled = false;
-                            self.log.push_back(LogEntry::info("tastytrade disabled — stopped UI-side broker activity. Existing cache data was not deleted."));
-                        }
-                    }
                     let kr_before = self.kraken_enabled;
                     if ui.checkbox(&mut self.kraken_enabled, "Enable Kraken").on_hover_text("When off: no startup login, private REST/WS account sync, Kraken Spot/Equities/Futures bar sync, or Kraken order buttons. Stored data is left untouched.").changed() {
                         settings_save_after = true;
@@ -190,18 +178,6 @@ impl TyphooNApp {
                                     saved_credentials.push("fred_key");
                                 }
                             }
-                            if !self.tt_username.is_empty() {
-                                if let Err(e) = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username) {
-                                    self.log.push_back(LogEntry::warn(format!("Keyring store tt_username failed: {}", e)));
-                                } else {
-                                    saved_credentials.push("tt_username");
-                                }
-                                if let Err(e) = keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password) {
-                                    self.log.push_back(LogEntry::warn(format!("Keyring store tt_password failed: {}", e)));
-                                } else {
-                                    saved_credentials.push("tt_password");
-                                }
-                            }
                             if !saved_credentials.is_empty() {
                                 self.log.push_back(LogEntry::info(format!(
                                     "Credentials saved to keyring: {}",
@@ -216,42 +192,6 @@ impl TyphooNApp {
                                 bar_requests_per_minute: self.alpaca_effective_historical_rpm(),
                                 fetch_permits: capacity.fetch_permits,
                             });
-                        }
-                    }
-                    // tastytrade connect button — quotes + metrics via REST, no historical bars
-                    if !self.tt_username.is_empty() && !self.tt_password.is_empty() {
-                        let tt_label = if self.tt_connected {
-                            egui::RichText::new("tastytrade Connected").color(UP)
-                        } else {
-                            egui::RichText::new("Connect tastytrade")
-                        };
-                        if ui.add_enabled(self.tastytrade_enabled, egui::Button::new(tt_label)).clicked() && !self.tt_connected {
-                            let mut saved_credentials: Vec<&'static str> = Vec::new();
-                            if let Err(e) = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username) {
-                                self.log.push_back(LogEntry::warn(format!("Keyring store tt_username failed: {}", e)));
-                            } else {
-                                saved_credentials.push("tt_username");
-                            }
-                            if let Err(e) = keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password) {
-                                self.log.push_back(LogEntry::warn(format!("Keyring store tt_password failed: {}", e)));
-                            } else {
-                                saved_credentials.push("tt_password");
-                            }
-                            if !saved_credentials.is_empty() {
-                                self.log.push_back(LogEntry::info(format!(
-                                    "Credentials saved to keyring: {}",
-                                    saved_credentials.join(", ")
-                                )));
-                            }
-                            let _ = self.broker_tx.send(BrokerCmd::TastytradeConnect {
-                                username: self.tt_username.clone(),
-                                password: self.tt_password.clone(),
-                                sandbox: self.tt_sandbox,
-                            });
-                            self.log.push_back(LogEntry::info(format!(
-                                "tastytrade {} — connecting...",
-                                if self.tt_sandbox { "Sandbox" } else { "Production" }
-                            )));
                         }
                     }
                     // Kraken connect button

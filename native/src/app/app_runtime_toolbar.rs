@@ -530,30 +530,6 @@ impl TyphooNApp {
                                         .small(),
                                     );
                                 }
-                                if self.tt_connected {
-                                    let mode = if self.tt_sandbox { "Sandbox" } else { "Live" };
-                                    let color = if self.tt_sandbox {
-                                        egui::Color32::WHITE
-                                    } else {
-                                        UP
-                                    };
-                                    if let Some(ref bal) = self.tt_balances {
-                                        ui.label(
-                                            egui::RichText::new(format!(
-                                                "[tastytrade ({}) ${:.0}]",
-                                                mode, bal.net_liquidating_value
-                                            ))
-                                            .color(color)
-                                            .small(),
-                                        );
-                                    } else {
-                                        ui.label(
-                                            egui::RichText::new(format!("[tastytrade ({})]", mode))
-                                                .color(color)
-                                                .small(),
-                                        );
-                                    }
-                                }
                                 if let Some(ref acct) = self.live_account {
                                     let mode = if self.broker_paper { "Paper" } else { "Live" };
                                     let color = if self.broker_paper {

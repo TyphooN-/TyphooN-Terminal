@@ -352,13 +352,6 @@ impl TyphooNApp {
                                             "Alpaca",
                                         );
                                     }
-                                    if self.tastytrade_order_available() {
-                                        ui.selectable_value(
-                                            &mut self.order_broker,
-                                            OrderBroker::Tastytrade,
-                                            "tastytrade",
-                                        );
-                                    }
                                     if self.kraken_order_available() {
                                         ui.selectable_value(
                                             &mut self.order_broker,

@@ -198,9 +198,6 @@ impl TyphooNApp {
                         expiry,
                     });
                     self.option_chain_sym = sym.clone();
-                    let _ = self
-                        .broker_tx
-                        .send(BrokerCmd::TastytradeOptionChain { symbol: sym });
                     self.show_option_chain = true;
                     self.log.push_back(LogEntry::info(format!(
                         "Fetching option chain for {}...",
@@ -232,30 +229,6 @@ impl TyphooNApp {
                     self.stream_active = true;
                     self.log
                         .push_back(LogEntry::info(format!("Starting stream for {}", sym)));
-                }
-            }
-            "DXLINK_STREAM" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    let _ = self.broker_tx.send(BrokerCmd::StartDxLinkStream {
-                        symbols: vec![sym.clone()],
-                    });
-                    self.log.push_back(LogEntry::info(format!(
-                        "Starting DXLink stream for {}",
-                        sym
-                    )));
                 }
             }
             "CORRELATION" => self.show_correlation = true,
@@ -409,11 +382,10 @@ impl TyphooNApp {
                 rows.sort_by_key(|r| r.days_until);
 
                 self.log.push_back(LogEntry::info(format!(
-                    "Event Calendar: {} upcoming events | Alpaca {} • Darwinex {} • Tasty {}",
+                    "Event Calendar: {} upcoming events | Alpaca {} • Darwinex {}",
                     rows.len(),
                     alpaca_syms.len(),
-                    darwinex_syms.len(),
-                    tasty_syms.len()
+                    darwinex_syms.len()
                 )));
                 if rows.is_empty() {
                     self.log.push_back(LogEntry::warn("No events found. Run EVSCRAPE/FUNDAMENTALS first to populate earnings/dividend dates."));

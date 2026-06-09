@@ -115,63 +115,7 @@ impl TyphooNApp {
                     ui.radio_value(&mut self.tt_sandbox, true, "Sandbox");
                     ui.radio_value(&mut self.tt_sandbox, false, "Production");
                 });
-                if ui.checkbox(&mut self.tastytrade_enabled, "Enable tastytrade").changed() {
-                    settings_save_after = true;
-                    if !self.tastytrade_enabled {
-                        self.tt_connected = false;
-                        self.tt_positions.clear();
-                        self.tt_balances = None;
-                        self.pending_tastytrade_fetches.clear();
-                        self.log.push_back(LogEntry::info("tastytrade disabled — no broker activity. Cache data preserved."));
-                    }
-                }
-                if ui.add_enabled(self.tastytrade_enabled, egui::Button::new("Connect tastytrade")).clicked() {
-                    if self.tt_username.is_empty() || self.tt_password.is_empty() {
-                        self.log
-                            .push_back(LogEntry::warn("Enter tastytrade username and password"));
-                    } else {
-                        let mut saved_credentials: Vec<&'static str> = Vec::new();
-                        if let Err(e) =
-                            keyring::store(keyring::keys::TT_USERNAME, &self.tt_username)
-                        {
-                            self.log.push_back(LogEntry::warn(format!(
-                                "Keyring store tt_username failed: {}",
-                                e
-                            )));
-                        } else {
-                            saved_credentials.push("tt_username");
-                        }
-                        if let Err(e) =
-                            keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password)
-                        {
-                            self.log.push_back(LogEntry::warn(format!(
-                                "Keyring store tt_password failed: {}",
-                                e
-                            )));
-                        } else {
-                            saved_credentials.push("tt_password");
-                        }
-                        if !saved_credentials.is_empty() {
-                            self.log.push_back(LogEntry::info(format!(
-                                "Credentials saved to keyring: {}",
-                                saved_credentials.join(", ")
-                            )));
-                        }
-                        let _ = self.broker_tx.send(BrokerCmd::TastytradeConnect {
-                            username: self.tt_username.clone(),
-                            password: self.tt_password.clone(),
-                            sandbox: self.tt_sandbox,
-                        });
-                        self.log.push_back(LogEntry::info(format!(
-                            "tastytrade {} — connecting...",
-                            if self.tt_sandbox {
-                                "Sandbox"
-                            } else {
-                                "Production"
-                            }
-                        )));
-                    }
-                }
+                let _ = &mut self.tt_sandbox;
                 ui.add_space(10.0);
                 ui.heading("Data APIs");
                 ui.separator();

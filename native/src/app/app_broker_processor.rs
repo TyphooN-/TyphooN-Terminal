@@ -2384,7 +2384,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     );
                 }
                 BrokerCmd::NewsScrapeAll {
-                    use_mt5, use_alpaca, use_tastytrade, use_kraken,
+                    use_mt5, use_alpaca, use_kraken,
                     marketaux_key, alpha_vantage_key, fmp_key,
                     finnhub_key, cryptopanic_key,
                 } => {
@@ -3297,7 +3297,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     db_path: _,
                     use_mt5,
                     use_alpaca,
-                    use_tastytrade,
                     use_kraken,
                     kraken_equity_symbols,
                     force,
@@ -3572,7 +3571,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         });
                     });
                 }
-                BrokerCmd::ResearchScrape { use_mt5, use_alpaca, use_tastytrade, finnhub_key, fmp_key } => {
+                BrokerCmd::ResearchScrape { use_mt5, use_alpaca, finnhub_key, fmp_key } => {
                     let mut extra_tickers: Vec<String> = Vec::new();
                     if use_alpaca {
                         if let Some(ref b) = broker {
@@ -4457,6 +4456,15 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                         Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Fetch filing failed: {}", e))); }
                     }
+                }
+                cmd @ (
+                    BrokerCmd::FredFetch { .. }
+                    | BrokerCmd::FetchEconCalendar { .. }
+                    | BrokerCmd::FetchCongressTrades
+                    | BrokerCmd::SendNotification { .. }
+                ) => {
+                    external_feeds::handle_external_feed_command(cmd, broker_msg_tx_clone.clone())
+                        .await;
                 }
                 BrokerCmd::StartStream { trade_symbols, quote_symbols } => {
                     if let Some(ref b) = broker {

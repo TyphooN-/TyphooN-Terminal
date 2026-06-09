@@ -227,12 +227,12 @@ mod tests {
     #[test]
     fn default_sources_ordered() {
         let mgr = DataSourceManager::default();
-        assert_eq!(mgr.sources.len(), 6);
+        assert_eq!(mgr.sources.len(), 5);
         assert_eq!(mgr.sources[0].id, "mt5-darwinex");
         assert_eq!(mgr.sources[0].priority, 1);
         assert_eq!(mgr.sources[1].id, "kraken");
         assert_eq!(mgr.sources[2].id, "kraken-futures");
-        assert_eq!(mgr.sources[5].id, "alpaca");
+        assert_eq!(mgr.sources[4].id, "alpaca");
     }
 
     #[test]
@@ -296,7 +296,7 @@ mod tests {
         let mgr = DataSourceManager::default();
         let json = serde_json::to_string(&mgr).unwrap();
         let back: DataSourceManager = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.sources.len(), 6);
+        assert_eq!(back.sources.len(), 5);
         assert_eq!(back.health_timeout_secs, 900);
     }
 
@@ -319,7 +319,7 @@ mod tests {
     fn status_summary() {
         let mgr = DataSourceManager::default();
         let summary = mgr.status_summary();
-        assert_eq!(summary.len(), 6);
+        assert_eq!(summary.len(), 5);
         assert!(summary[0].2); // mt5 healthy
     }
 
@@ -377,6 +377,6 @@ mod tests {
         mgr.mark_success("nonexistent");
         mgr.mark_failure("nonexistent");
         // No panic, no change
-        assert_eq!(mgr.sources.len(), 6);
+        assert_eq!(mgr.sources.len(), 5);
     }
 }

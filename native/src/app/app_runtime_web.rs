@@ -144,32 +144,6 @@ impl TyphooNApp {
                                     }
                                 }
                             }
-                            "tastytrade" => {
-                                let _ = self.broker_tx.send(BrokerCmd::TastytradeEquityOrder {
-                                    symbol: symbol.clone(),
-                                    qty: qty as i64,
-                                    side: if lower_side == "buy" {
-                                        "Buy to Open"
-                                    } else {
-                                        "Sell to Open"
-                                    }
-                                    .into(),
-                                    order_type: if lower_type == "market" {
-                                        "Market"
-                                    } else {
-                                        "Limit"
-                                    }
-                                    .into(),
-                                    price: limit_price,
-                                });
-                                typhoon_web_protocol::WebMsg::OrderResult {
-                                    ok: true,
-                                    message: format!(
-                                        "{} {} {} {} dispatched to Tastytrade",
-                                        lower_side, qty, symbol, lower_type
-                                    ),
-                                }
-                            }
                             "kraken" => {
                                 if !self.kraken_enabled {
                                     typhoon_web_protocol::WebMsg::OrderResult {
@@ -286,18 +260,6 @@ impl TyphooNApp {
                                     message: format!("Cancel {} dispatched to Alpaca", order_id),
                                 }
                             }
-                            "tastytrade" => {
-                                let _ = self.broker_tx.send(BrokerCmd::TastytradeCancelOrder {
-                                    order_id: order_id.clone(),
-                                });
-                                typhoon_web_protocol::WebMsg::OrderResult {
-                                    ok: true,
-                                    message: format!(
-                                        "Cancel {} dispatched to tastytrade",
-                                        order_id
-                                    ),
-                                }
-                            }
                             "kraken" => {
                                 let _ = self.broker_tx.send(BrokerCmd::KrakenCancelOrder {
                                     txid: order_id.clone(),
@@ -331,17 +293,6 @@ impl TyphooNApp {
                                 typhoon_web_protocol::WebMsg::OrderResult {
                                     ok: true,
                                     message: format!("Close {} dispatched to Alpaca", symbol),
-                                }
-                            }
-                            "tastytrade" => {
-                                let _ =
-                                    self.broker_tx.send(BrokerCmd::TastytradeClosePositionQty {
-                                        symbol: symbol.clone(),
-                                        qty: None,
-                                    });
-                                typhoon_web_protocol::WebMsg::OrderResult {
-                                    ok: true,
-                                    message: format!("Close {} dispatched to Tastytrade", symbol),
                                 }
                             }
                             "kraken" => {
