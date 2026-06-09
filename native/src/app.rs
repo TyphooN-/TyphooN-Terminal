@@ -145,8 +145,6 @@ impl TyphooNApp {
         // Flag: true while DARWIN XLSX import is running — background thread skips DB queries
         let importing_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let lan_client_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let shared_ftp_dir: std::sync::Arc<std::sync::Mutex<String>> =
-            std::sync::Arc::new(std::sync::Mutex::new(String::new()));
 
         app_broker_processor::spawn_broker_message_processor(
             _broker_cmd_rx,
@@ -282,11 +280,6 @@ impl TyphooNApp {
             mt5_provider_depth_saturation: std::collections::HashMap::new(),
             mt5_backtest_expand_symbols: std::collections::HashMap::new(),
             mt5_demand_txt_last_hash: 0,
-            darwin_ftp_dir: String::new(),
-            shared_ftp_dir: shared_ftp_dir.clone(),
-            dwx_driver: None,
-            dwx_logged_in: false,
-            dwx_config: typhoon_engine::core::darwin_web::DarwinWebConfig::default(),
             data_sources: typhoon_engine::core::data_source::DataSourceManager::default(),
             dwx_last_update: None,
             dwx_rx: None,
@@ -2891,7 +2884,6 @@ impl TyphooNApp {
         app_background::spawn_darwin_background_refresh(
             &mut app,
             shared_cache.clone(),
-            shared_ftp_dir.clone(),
             lan_client_flag.clone(),
             importing_flag_bg,
         );
