@@ -19,7 +19,6 @@ impl TyphooNApp {
                         self.fund_source_kraken,
                     ),
                     EventSource::Alpaca => (false, true, false),
-                    EventSource::Darwinex => (true, false, false),
                     EventSource::Kraken => (false, false, true),
                     EventSource::Positions => (
                         self.fund_source_mt5,
@@ -250,12 +249,11 @@ impl TyphooNApp {
                     }
                     "ALL" => (EventSource::All, "ALL"),
                     "ALPACA" => (EventSource::Alpaca, "ALPACA"),
-                    "DARWINEX" | "DARWIN" => (EventSource::Darwinex, "DARWINEX"),
                     "KRAKEN" | "KR" => (EventSource::Kraken, "KRAKEN"),
                     "POSITIONS" | "POS" => (EventSource::Positions, "POSITIONS"),
                     other => {
                         self.log.push_back(LogEntry::err(format!(
-                            "Unknown SCOPE '{other}'. Valid: ALL, ALPACA, DARWINEX, KRAKEN, POSITIONS"
+                            "Unknown SCOPE '{other}'. Valid: ALL, ALPACA, KRAKEN, POSITIONS"
                         )));
                         return true;
                     }
@@ -271,11 +269,6 @@ impl TyphooNApp {
                     EventSource::Alpaca => {
                         self.fund_source_mt5 = false;
                         self.fund_source_alpaca = true;
-                        self.fund_source_kraken = false;
-                    }
-                    EventSource::Darwinex => {
-                        self.fund_source_mt5 = true;
-                        self.fund_source_alpaca = false;
                         self.fund_source_kraken = false;
                     }
                     EventSource::Kraken => {

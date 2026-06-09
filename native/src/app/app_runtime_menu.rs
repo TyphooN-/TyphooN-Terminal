@@ -368,12 +368,11 @@ impl TyphooNApp {
                         );
                         // Broker scope indicator — click to cycle through scopes.
                         // Shows the current global filter so the trader always knows what
-                        // data universe they're looking at (All / enabled brokers / Darwinex).
+                        // data universe they're looking at (All / enabled brokers).
                         ui.separator();
                         let (scope_lbl, scope_col) = match self.broker_scope {
                             EventSource::All => ("ALL", egui::Color32::from_rgb(140, 140, 160)),
                             EventSource::Alpaca => ("ALPACA", egui::Color32::from_rgb(255, 160, 60)),
-                            EventSource::Darwinex => ("DARWINEX", egui::Color32::from_rgb(100, 180, 255)),
                             EventSource::Kraken => ("KRAKEN", egui::Color32::from_rgb(0, 170, 160)),
                             EventSource::Positions => ("POSITIONS", egui::Color32::from_rgb(80, 220, 120)),
                         };
@@ -385,16 +384,12 @@ impl TyphooNApp {
                         .fill(scope_col);
                         if ui
                             .add(scope_btn)
-                            .on_hover_text("Left-click: cycle ALL, Darwinex, and enabled brokers. Right-click: open scope settings.")
+                            .on_hover_text("Left-click: cycle ALL and enabled brokers. Right-click: open scope settings.")
                             .clicked()
                         {
                             let mut scope_cycle = vec![EventSource::All];
                             if self.alpaca_enabled {
                                 scope_cycle.push(EventSource::Alpaca);
-                            }
-                            // Darwinex is useful as a scope because we know its tradable asset universe.
-                            if self.darwinex_enabled {
-                                scope_cycle.push(EventSource::Darwinex);
                             }
                             if self.kraken_enabled {
                                 scope_cycle.push(EventSource::Kraken);
@@ -415,11 +410,6 @@ impl TyphooNApp {
                                 EventSource::Alpaca => {
                                     self.fund_source_mt5 = false;
                                     self.fund_source_alpaca = true;
-                                    self.fund_source_kraken = false;
-                                }
-                                EventSource::Darwinex => {
-                                    self.fund_source_mt5 = true;
-                                    self.fund_source_alpaca = false;
                                     self.fund_source_kraken = false;
                                 }
                                 EventSource::Kraken => {
