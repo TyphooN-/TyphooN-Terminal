@@ -54,10 +54,6 @@ impl TyphooNApp {
         if self.kraken_full_bar_sync_enabled {
             let _ = self.schedule_kraken_futures_universe_sectors();
         }
-        if self.tt_connected && self.tastytrade_full_bar_sync_enabled {
-            let symbols = self.tastytrade_sync_symbols();
-            let _ = self.schedule_tastytrade_symbols(&symbols);
-        }
         if self.broker_connected && self.alpaca_full_bar_sync_enabled {
             self.maybe_request_alpaca_asset_universe();
             let equity_syms = self.alpaca_equity_rotation_symbols();

@@ -341,18 +341,6 @@ impl eframe::App for TyphooNApp {
             let _ = self.schedule_kraken_futures_universe_sectors();
         }
 
-        if now_instant.duration_since(self.tastytrade_universe_last_schedule)
-            >= self.market_data_sync_interval()
-            && self.cache_loaded
-            && self.lan_sync_mode != "client"
-            && self.tastytrade_enabled
-            && self.tt_connected
-        {
-            self.tastytrade_universe_last_schedule = now_instant;
-            let symbols = self.tastytrade_sync_symbols();
-            let _ = self.schedule_tastytrade_symbols(&symbols);
-        }
-
         // ── Screenshot: issue capture command ────────────────────────────
         if self.screenshot_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
