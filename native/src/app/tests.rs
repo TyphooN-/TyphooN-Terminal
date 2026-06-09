@@ -744,28 +744,6 @@ fn normalize_market_data_symbol_strips_darwin_suffixes_only() {
     assert_eq!(normalize_market_data_symbol("BTC/USD"), "BTC/USD");
 }
 
-#[test]
-fn tastytrade_sync_backoff_scales_by_error_type() {
-    assert_eq!(
-        tastytrade_sync_backoff_secs("Streaming token request failed: 404 Not Found"),
-        30 * 60
-    );
-    assert_eq!(
-        tastytrade_sync_backoff_secs("tastytrade public watchlists: HTTP 502 Bad Gateway"),
-        5 * 60
-    );
-    assert_eq!(
-        tastytrade_sync_backoff_secs("DXLink token failed: 401 Unauthorized"),
-        15 * 60
-    );
-    assert_eq!(
-        tastytrade_sync_backoff_secs(
-            "Streaming token request failed at https://api.cert.tastyworks.com/api-quote-tokens: 404 Not Found — {\"error\":{\"code\":\"quote_streamer.customer_not_found_error\",\"message\":\"You must be a customer to access quotes\"}}",
-        ),
-        24 * 60 * 60
-    );
-}
-
 /// Create synthetic test bars (ascending prices).
 fn make_bars(n: usize) -> Vec<Bar> {
     (0..n)
@@ -1747,7 +1725,7 @@ fn test_chart_state_reload_match_requires_source_for_loaded_chart() {
     chart.primary_source = "kraken-equities";
     assert!(chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "alpaca"));
     assert!(chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "yahoo-chart"));
-    assert!(!chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "tastytrade"));
+    assert!(!chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "kraken"));
 }
 
 #[test]
