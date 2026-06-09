@@ -105,11 +105,6 @@ pub(super) fn trade_marker_price_key(price: f64) -> i64 {
     (price * 100000.0) as i64
 }
 
-#[inline]
-pub(super) fn trade_marker_volume_key(volume: f64) -> i64 {
-    (volume * 100000.0) as i64
-}
-
 pub(super) fn add_trade_marker_volume(
     marker_map: &mut std::collections::HashMap<(usize, bool, i64), (f64, u32, String)>,
     bar_idx: usize,
@@ -129,28 +124,6 @@ pub(super) fn add_trade_marker_volume(
         }
         entry.2.push_str(ticker);
     }
-}
-
-pub(super) fn darwin_marker_signature(
-    account: &str,
-    fallback_ticker: &str,
-    bar_idx: usize,
-    is_buy: bool,
-    price_key: i64,
-    volume: f64,
-) -> (String, usize, bool, i64, i64) {
-    let owner = if account.is_empty() {
-        fallback_ticker
-    } else {
-        account
-    };
-    (
-        owner.to_string(),
-        bar_idx,
-        is_buy,
-        price_key,
-        trade_marker_volume_key(volume),
-    )
 }
 
 impl TyphooNApp {
@@ -680,15 +653,6 @@ impl TyphooNApp {
         let first_ts = chart.bars.first().map(|b| b.ts_ms).unwrap_or(0);
         let last_ts = chart.bars.last().map(|b| b.ts_ms).unwrap_or(0);
 
-        // Parse MQL5 time string "YYYY.MM.DD HH:MM:SS" to epoch ms
-        let parse_time = |s: &str| -> i64 {
-            // "2024.10.08 16:47:19" → chrono parse
-            let s = s.replace('.', "-");
-            chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
-                .map(|dt| dt.and_utc().timestamp_millis())
-                .unwrap_or(0)
-        };
-
         // Tolerance based on timeframe (a deal can be slightly after the last bar)
         let tf_tolerance_ms: i64 = match chart.timeframe {
             Timeframe::MN1 => 35 * 86_400_000, // 35 days
@@ -713,140 +677,10 @@ impl TyphooNApp {
             }
         };
 
-        // Collect deals from all DARWIN accounts matching this symbol
-        use std::collections::{HashMap, HashSet};
+        // Trade-marker accumulator shared by broker fills below.
+        use std::collections::HashMap;
         let bare_upper = bare_sym.to_uppercase();
         let mut marker_map: HashMap<(usize, bool, i64), (f64, u32, String)> = HashMap::new(); // (bar_idx, is_buy, price_cents) → (total_vol, count, ticker)
-        let mut darwin_closed_position_markers: HashSet<(String, usize, bool, i64, i64)> =
-            HashSet::new();
-
-        if self.show_darwin_positions {
-            for det in &self.bg.account_details {
-                // Check closed positions (have SL/TP)
-                for pos in &det.closed_positions {
-                    if !symbol_matches_no_alloc(&pos.symbol, &bare_upper) {
-                        continue;
-                    }
-                    let ticker = det.ticker.clone();
-                    // Entry arrow
-                    let ts = parse_time(&pos.open_time);
-                    if let Some(bar_idx) = find_bar(ts) {
-                        let is_buy = pos.pos_type == "buy";
-                        let price_key = trade_marker_price_key(pos.open_price);
-                        add_trade_marker_volume(
-                            &mut marker_map,
-                            bar_idx,
-                            is_buy,
-                            price_key,
-                            pos.volume,
-                            &ticker,
-                        );
-                        darwin_closed_position_markers.insert(darwin_marker_signature(
-                            &pos.account,
-                            &ticker,
-                            bar_idx,
-                            is_buy,
-                            price_key,
-                            pos.volume,
-                        ));
-                    }
-                    // Exit arrow (opposite direction)
-                    if !pos.close_time.is_empty() {
-                        let ts = parse_time(&pos.close_time);
-                        if let Some(bar_idx) = find_bar(ts) {
-                            let is_buy = pos.pos_type != "buy";
-                            let price_key = trade_marker_price_key(pos.close_price);
-                            add_trade_marker_volume(
-                                &mut marker_map,
-                                bar_idx,
-                                is_buy,
-                                price_key,
-                                pos.volume,
-                                &ticker,
-                            );
-                            darwin_closed_position_markers.insert(darwin_marker_signature(
-                                &pos.account,
-                                &ticker,
-                                bar_idx,
-                                is_buy,
-                                price_key,
-                                pos.volume,
-                            ));
-                        }
-                    }
-                }
-                // Check recent deals
-                for deal in &det.recent_deals {
-                    if !symbol_matches_no_alloc(&deal.symbol, &bare_upper) {
-                        continue;
-                    }
-                    if deal.direction.is_empty() {
-                        continue;
-                    } // skip balance entries
-                    let ts = parse_time(&deal.time);
-                    if let Some(bar_idx) = find_bar(ts) {
-                        let is_buy = deal.deal_type == "buy";
-                        let price_key = trade_marker_price_key(deal.price);
-                        let signature = darwin_marker_signature(
-                            &deal.account,
-                            &det.ticker,
-                            bar_idx,
-                            is_buy,
-                            price_key,
-                            deal.volume,
-                        );
-                        if darwin_closed_position_markers.contains(&signature) {
-                            continue;
-                        }
-                        add_trade_marker_volume(
-                            &mut marker_map,
-                            bar_idx,
-                            is_buy,
-                            price_key,
-                            deal.volume,
-                            &det.ticker,
-                        );
-                    }
-                }
-
-                // Open position lines (entry, SL, TP)
-                for pos in &det.open_positions {
-                    if !symbol_matches_no_alloc(&pos.symbol, &bare_upper) {
-                        continue;
-                    }
-                    let is_buy = pos.side == "buy";
-                    overlay.position_lines.push(PositionLine {
-                        price: pos.avg_price,
-                        volume: pos.total_volume,
-                        is_buy,
-                        line_type: 0, // entry
-                    });
-                }
-            }
-        } // show_darwin_positions
-
-        // Also check portfolio-level open positions (aggregated across all DARWINs)
-        if self.show_darwin_positions {
-            for pos in &self.bg.open_positions {
-                if !symbol_matches_no_alloc(&pos.symbol, &bare_upper) {
-                    continue;
-                }
-                let is_buy = pos.side == "buy";
-                // Only add if not already covered by per-account positions
-                let already = overlay
-                    .position_lines
-                    .iter()
-                    .any(|pl| (pl.price - pos.avg_price).abs() < 0.0001 && pl.is_buy == is_buy);
-                if !already {
-                    overlay.position_lines.push(PositionLine {
-                        price: pos.avg_price,
-                        volume: pos.total_volume,
-                        is_buy,
-                        line_type: 0,
-                    });
-                }
-            }
-        }
 
         // Broker fills — add to marker map before conversion. Alpaca currently
         // enters through `recent_fills`; Kraken keeps a full REST + private-WS
