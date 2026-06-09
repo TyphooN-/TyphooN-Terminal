@@ -9,7 +9,7 @@
 //! - Command palette (~ tilde, Quake-style console)
 //! - Symbol/timeframe selector
 //! - MTF grid mode
-//! - Floating windows: Settings, DARWIN, Risk, Backtest, Screener, News, etc.
+//! - Floating windows: Settings, Risk, Backtest, Screener, News, etc.
 //! - Right panel: positions, orders, risk
 //! - Bottom panel: log messages
 
@@ -28,8 +28,6 @@ use typhoon_engine::broker::alpaca::{
 };
 use typhoon_engine::core::backtest;
 use typhoon_engine::core::cache::{BgConnection, SqliteCache};
-use typhoon_engine::core::darwin;
-use typhoon_engine::core::darwin_ftp;
 use typhoon_engine::core::fundamentals;
 use typhoon_engine::core::keyring;
 use typhoon_engine::core::margin;
@@ -142,7 +140,7 @@ impl TyphooNApp {
         let (broker_tx, _broker_cmd_rx) = mpsc::unbounded_channel::<BrokerCmd>();
         let (broker_msg_tx, broker_rx) = mpsc::unbounded_channel::<BrokerMsg>();
 
-        // Flag: true while DARWIN XLSX import is running — background thread skips DB queries
+        // Flag: true while a heavy bulk import is running — background thread skips DB queries
         let importing_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let lan_client_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
@@ -270,8 +268,6 @@ impl TyphooNApp {
             polyline_points: Vec::new(),
             multi_click_points: Vec::new(),
             brush_points: Vec::new(),
-            darwin_import_ticker: String::new(),
-            darwin_xlsx_dir: String::new(),
             mt5_db_paths: [String::new(), String::new(), String::new(), String::new()],
             mt5_heartbeats: Vec::new(),
             mt5_gap_requests: Vec::new(),
@@ -281,14 +277,11 @@ impl TyphooNApp {
             mt5_backtest_expand_symbols: std::collections::HashMap::new(),
             mt5_demand_txt_last_hash: 0,
             data_sources: typhoon_engine::core::data_source::DataSourceManager::default(),
-            dwx_last_update: None,
-            dwx_rx: None,
             broker_api_key: String::new(),
             broker_secret: String::new(),
             broker_paper: true,
             alpaca_full_bar_sync_enabled: false,
             alpaca_enabled: true,
-            darwinex_enabled: true,
             kraken_full_bar_sync_enabled: false,
             finnhub_key: String::new(),
             fred_key: String::new(),
@@ -440,8 +433,6 @@ impl TyphooNApp {
             watchlist_input: String::new(),
             show_settings: false,
             was_settings_open: false,
-            show_darwin_accounts: false,
-            show_darwin_portfolio: false,
             show_risk_calc: false,
             show_compound_calc: false,
             ci_principal: String::new(),
@@ -500,7 +491,7 @@ impl TyphooNApp {
             show_hv_cone: false,
             show_sector_heatmap: false,
             show_dividends: false,
-            broker_scope: EventSource::Darwinex, // matches fund_source defaults (mt5=true, alpaca=false, tasty=false)
+            broker_scope: EventSource::All,
             cached_scope_syms: None,
             cached_scope_key: None,
             bg_rev: 0,
@@ -588,7 +579,6 @@ impl TyphooNApp {
             storage_delete_filtered_confirm: false,
             storage_prune_disabled_kraken_quotes_confirm: false,
             storage_purge_bars_confirm: false,
-            storage_purge_darwin_confirm: false,
             storage_purge_broker_confirm: None,
             storage_purge_timeframe_confirm: false,
             storage_purge_news_age_idx: 4,
@@ -655,13 +645,6 @@ impl TyphooNApp {
             show_indicators_panel: false,
             show_data_window: false,
             show_alerts: false,
-            show_swap_harvest: false,
-            swap_harvest_results: None,
-            swap_harvest_filter: String::new(),
-            swap_harvest_dir_filter: String::new(),
-            show_darwinex_radar: false,
-            darwinex_radar_data: Vec::new(),
-            darwinex_radar_changelog: Vec::new(),
             fund_source_mt5: true,
             fund_source_alpaca: false,
             fund_source_kraken: true,
@@ -680,19 +663,11 @@ impl TyphooNApp {
             scrape_sec_started_at: None,
             scrape_sec_last_msg: String::new(),
             auto_sec_scrape_deferred: false,
-            scrape_darwin_running: false,
-            scrape_darwin_last_msg: String::new(),
             web_server_running: false,
             kv_write_hashes: std::collections::HashMap::new(),
             kv_write_times: std::collections::HashMap::new(),
             web_cmd_rx: None,
             web_msg_tx: None,
-            show_darwin_browser: false,
-            ftp_scan_results: Vec::new(),
-            ftp_detail_ticker: String::new(),
-            ftp_detail_avail: None,
-            ftp_detail_summary: None,
-            ftp_detail_returns: Vec::new(),
             show_ev_scanner: false,
             show_earnings_calendar: false,
             show_dividend_calendar: false,
@@ -727,7 +702,6 @@ impl TyphooNApp {
             watchlist_sort: SortState::default(),
             watchlist_cache_tried: false,
             sec_sort: SortState::default(),
-            darwin_browser_sort: SortState::default(),
             insider_sort: SortState::default(),
             alerts: Vec::new(),
             alert_price_input: String::new(),
@@ -2767,7 +2741,6 @@ impl TyphooNApp {
             live_positions: Vec::new(),
             kr_positions: Vec::new(),
             kraken_equity_quote_meta: std::collections::BTreeMap::new(),
-            show_darwin_positions: true,
             show_alpaca_positions: true,
             show_kr_positions: true,
             show_kraken_trade_history: false,
@@ -2795,15 +2768,12 @@ impl TyphooNApp {
             sl_enabled: false,
             tp_enabled: false,
             recent_fills: Vec::new(),
-            darwin_view: 0,
-            darwin_aum: std::collections::HashMap::new(),
             bg: BgDarwinData::default(),
             bg_rx: {
                 // Channel created here; tx passed to background thread below
                 let (_placeholder_tx, rx) = std::sync::mpsc::sync_channel(1);
                 rx
             },
-            gpu_darwin: None,
             gpu_indicators: None,
             indicators_dirty: false,
             metrics_registry: None,
@@ -2894,15 +2864,11 @@ impl TyphooNApp {
             let queue = Arc::new(render_state.queue.clone());
             let storage_limit = device.limits().max_storage_buffers_per_shader_stage;
             if storage_limit >= 6 {
-                app.gpu_darwin = Some(gpu_compute::GpuDarwinAnalytics::new(
-                    device.clone(),
-                    queue.clone(),
-                ));
                 app.gpu_indicators =
                     Some(gpu_compute::GpuCompute::new(device.clone(), queue.clone()));
                 app.gpu_backtester = Some(gpu_compute::GpuBacktester::new(device, queue));
                 app.log.push_back(LogEntry::info(
-                    "GPU compute initialized (indicators + DARWIN analytics + backtester)",
+                    "GPU compute initialized (indicators + backtester)",
                 ));
             } else {
                 app.log.push_back(LogEntry::warn(format!(
