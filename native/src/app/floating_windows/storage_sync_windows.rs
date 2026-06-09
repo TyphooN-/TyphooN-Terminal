@@ -294,7 +294,6 @@ impl TyphooNApp {
                                     } else {
                                         if ui.button(egui::RichText::new("Purge All Bar Data").color(egui::Color32::from_rgb(231, 76, 60)).small()).clicked() {
                                             self.storage_purge_bars_confirm = true;
-                                            self.storage_purge_darwin_confirm = false;
                                             self.storage_purge_broker_confirm = None;
                                             self.storage_purge_timeframe_confirm = false;
                                             self.storage_purge_news_confirm = false;
@@ -371,7 +370,6 @@ impl TyphooNApp {
                                             {
                                                 self.storage_purge_broker_confirm = Some(prefix.to_string());
                                                 self.storage_purge_bars_confirm = false;
-                                                self.storage_purge_darwin_confirm = false;
                                                 self.storage_purge_timeframe_confirm = false;
                                                 self.storage_purge_news_confirm = false;
                                             }
@@ -448,7 +446,6 @@ impl TyphooNApp {
                                     {
                                         self.storage_purge_timeframe_confirm = true;
                                         self.storage_purge_bars_confirm = false;
-                                        self.storage_purge_darwin_confirm = false;
                                         self.storage_purge_broker_confirm = None;
                                         self.storage_purge_news_confirm = false;
                                     }
@@ -602,47 +599,8 @@ impl TyphooNApp {
                                     {
                                         self.storage_purge_news_confirm = true;
                                         self.storage_purge_bars_confirm = false;
-                                        self.storage_purge_darwin_confirm = false;
                                         self.storage_purge_broker_confirm = None;
                                         self.storage_purge_timeframe_confirm = false;
-                                    }
-                                });
-                                // Purge All DARWIN Data
-                                ui.horizontal(|ui| {
-                                    if self.storage_purge_darwin_confirm {
-                                        ui.label(egui::RichText::new("This will delete ALL DARWIN accounts, deals, positions & equity. This is NOT reversible!").color(egui::Color32::from_rgb(231, 76, 60)).small());
-                                        if ui.button(egui::RichText::new("Yes, Delete All DARWIN Data").color(egui::Color32::from_rgb(231, 76, 60)).small()).clicked() {
-                                            self.storage_purge_darwin_confirm = false;
-                                            if let Some(cache) = self.cache.clone() {
-                                                let result = cache.delete_all_darwin();
-                                                match result {
-                                                    Ok(n) => {
-                                                        let size_now = cache
-                                                            .stats()
-                                                            .ok()
-                                                            .map(|(_, _, bytes)| format_bytes_human(bytes))
-                                                            .unwrap_or_else(|| "?".to_string());
-                                                        self.log.push_back(LogEntry::info(format!(
-                                                            "Purged all DARWIN data: {} rows deleted, DB now {}",
-                                                            n, size_now
-                                                        )));
-                                                    }
-                                                    Err(e) => self.log.push_back(LogEntry::err(format!("Purge DARWIN failed: {}", e))),
-                                                }
-                                                self.refresh_storage_snapshot_after_action("DARWIN purge");
-                                            }
-                                        }
-                                        if ui.small_button(egui::RichText::new("Cancel").small()).clicked() {
-                                            self.storage_purge_darwin_confirm = false;
-                                        }
-                                    } else {
-                                        if ui.button(egui::RichText::new("Purge All DARWIN Data").color(egui::Color32::from_rgb(231, 76, 60)).small()).clicked() {
-                                            self.storage_purge_darwin_confirm = true;
-                                            self.storage_purge_bars_confirm = false;
-                                            self.storage_purge_broker_confirm = None;
-                                            self.storage_purge_timeframe_confirm = false;
-                                            self.storage_purge_news_confirm = false;
-                                        }
                                     }
                                 });
                             }
@@ -917,7 +875,7 @@ impl TyphooNApp {
                                     }
                                 } else {
                                     ui.label(egui::RichText::new(format!("Syncing from {} — read-only view of server data", self.lan_sync_host)).color(AXIS_TEXT).small());
-                                    ui.label(egui::RichText::new("Receiving: MT5 bars, Alpaca positions/orders, DARWIN analytics, crypto, fundamentals, SEC, news, FRED").color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new("Receiving: MT5 bars, Alpaca positions/orders, crypto, fundamentals, SEC, news, FRED").color(AXIS_TEXT).small());
                                     // Sync status: local vs remote
                                     if let Some((bar_count, kv_count, file_size)) = self.bg.cache_stats {
                                         ui.label(egui::RichText::new(format!(
@@ -932,21 +890,12 @@ impl TyphooNApp {
                                             let _ = self.broker_tx.send(BrokerCmd::LanResyncBars);
                                             self.log.push_back(LogEntry::info("Requesting bar resync from LAN server..."));
                                         }
-                                        if ui.button(egui::RichText::new("Resync DARWIN Analytics").small()).clicked() {
-                                            let _ = self.broker_tx.send(BrokerCmd::LanResyncDarwin);
-                                            self.log.push_back(LogEntry::info("Requesting DARWIN analytics resync from LAN server..."));
-                                        }
                                         if ui.button(egui::RichText::new("Resync Positions").small()).clicked() {
                                             // Force reload of positions from KV cache immediately
                                             if let Some(ref cache) = self.cache {
                                                 if let Ok(Some(json)) = cache.get_kv("broker:positions") {
                                                     if let Ok(pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
                                                         self.live_positions = pos;
-                                                    }
-                                                }
-                                                if let Ok(Some(json)) = cache.get_kv("darwin:open_positions") {
-                                                    if let Ok(pos) = serde_json::from_str::<Vec<darwin::PortfolioOpenPosition>>(&json) {
-                                                        self.bg.open_positions = pos;
                                                     }
                                                 }
                                             }
