@@ -28,7 +28,6 @@ sha2 = "0.11"
 hmac = "0.13"
 pbkdf2 = "0.13"
 base64 = "0.22"
-thirtyfour = { version = "0.37", default-features = false }
 mql5-compiler = { path = "mql5-compiler" }
 typhoon-engine = { path = "engine" }
 typhoon-web-server = { path = "web-server" }

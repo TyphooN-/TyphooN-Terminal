@@ -73,9 +73,6 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 # Custom allocator — mimalloc is 5-15% faster than system malloc on small alloc heavy workloads
 mimalloc = { version = "0.1", default-features = false }
 
-# Selenium WebDriver for Darwinex Zero scraping (ADR-093)
-thirtyfour = { workspace = true, default-features = false, features = ["reqwest", "rustls"] }
-
 # Windows AC-power probe for ADR-205 idle auto-compact gate
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Power"] }
