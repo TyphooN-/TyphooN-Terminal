@@ -239,7 +239,7 @@ impl TyphooNApp {
             "SECTOR_HEATMAP" => self.show_sector_heatmap = true,
             "DIVSCREEN" => self.show_dividends = true,
             s if s.starts_with("SCOPE") => {
-                // SCOPE [ALL|ALPACA|DARWINEX|KRAKEN] — global broker filter for fundamentals.
+                // SCOPE [ALL|ALPACA|KRAKEN] — global broker filter for fundamentals.
                 let arg = s.trim_start_matches("SCOPE").trim();
                 let (new_scope, label) = match arg {
                     "" => {
@@ -291,7 +291,7 @@ impl TyphooNApp {
             "EVENTS" => {
                 // Comprehensive upcoming events view for actively traded symbols.
                 // Aggregates earnings / ex-dividend / dividend-payment dates from
-                // fundamentals, tags each row by broker tradeability (Alpaca / Darwinex / Tasty).
+                // fundamentals, tags each row by broker tradeability (Alpaca / Kraken).
                 use chrono::NaiveDate;
                 let today = chrono::Utc::now().date_naive();
 

@@ -582,7 +582,7 @@ impl TyphooNApp {
         )));
     }
 
-    /// Build trade overlay for a chart: DARWIN deals as arrows + open position lines.
+    /// Build trade overlay for a chart: broker fills as arrows + open position lines.
     /// Aggregates same-price entries at same bar into single markers.
     pub(super) fn build_trade_overlay(&self, chart: &ChartState) -> TradeOverlay {
         let mut overlay = TradeOverlay::default();
@@ -658,7 +658,7 @@ impl TyphooNApp {
 
         // Broker fills — add to marker map before conversion. Alpaca currently
         // enters through `recent_fills`; Kraken keeps a full REST + private-WS
-        // trade deque. Both paths feed the same chart arrows as DARWIN deals.
+        // trade deque. Both paths feed the same chart arrows.
         if self.show_alpaca_positions {
             for (sym, side, qty, price, time) in &self.recent_fills {
                 let fill_sym = sym.replace('/', "").to_uppercase();

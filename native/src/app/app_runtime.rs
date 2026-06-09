@@ -827,7 +827,7 @@ impl eframe::App for TyphooNApp {
             ctx.set_global_style(style);
         }
 
-        // ── drain background DARWIN data ─────────────────────────────────
+        // ── drain background data ────────────────────────────────────────
         // Keep this bounded: a backend burst must not monopolize the render thread.
         // The channel carries full snapshots, so newest wins; apply at most one per frame.
         if let Ok(mut data) = self.bg_rx.try_recv() {
@@ -7733,7 +7733,7 @@ impl eframe::App for TyphooNApp {
 
         // ── floating windows ─────────────────────────────────────────────────
         // Always call draw_floating_windows so close buttons work.
-        // Performance: all DARWIN data reads from self.bg (background-computed).
+        // Performance: all background data reads from self.bg (background-computed).
         let floating_windows_started = std::time::Instant::now();
         self.draw_floating_windows(ctx);
         perf_floating_windows_ms = floating_windows_started.elapsed().as_secs_f64() * 1000.0;

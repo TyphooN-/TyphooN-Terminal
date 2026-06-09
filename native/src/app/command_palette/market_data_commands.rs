@@ -5,7 +5,7 @@ impl TyphooNApp {
         match cmd_upper {
             "BARDATA" | "FETCH_ALL" | "FULL_HISTORY" => {
                 // Download ALL available bars for ALL symbols from ALL connected brokers
-                // Collects: chart tab symbols, watchlist symbols, DARWIN position symbols, Alpaca positions
+                // Collects: chart tab symbols, watchlist symbols, Alpaca positions
                 let all_tfs =
                     self.filtered_sync_timeframes(["1Day", "1Week", "1Hour", "4Hour", "1Month"]);
                 let mut symbols: std::collections::HashSet<String> =

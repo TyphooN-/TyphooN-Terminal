@@ -945,7 +945,7 @@ impl TyphooNApp {
     /// Populate `mt5_gap_requests` in two passes:
     ///
     /// **Pass 1 (watched):** the (sym, tf) pairs coming from chart tabs
-    /// and DARWIN positions get aggressive gap-fill — threshold 2×TF and
+    /// get aggressive gap-fill — threshold 2×TF and
     /// an empty-cache entry triggers a full backfill. These are the pairs
     /// the user is actively looking at, so responsiveness matters most.
     ///
@@ -1303,9 +1303,7 @@ impl TyphooNApp {
     }
 
     /// Collect the set of (SYMBOL, TF) pairs the terminal actually wants
-    /// bars for — driven by currently open chart tabs plus DARWIN open
-    /// positions (which fall back to a minimal TF set because they may not
-    /// have a chart tab open but still need regular bar updates).
+    /// bars for — driven by currently open chart tabs.
     ///
     /// Returns (pairs, bare_symbols). Crypto + ETF symbols are filtered
     /// out (those come from non-MT5 data sources). Emitting only the TFs
