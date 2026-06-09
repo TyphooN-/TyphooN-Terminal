@@ -366,15 +366,6 @@ impl TyphooNApp {
                                             "Kraken",
                                         );
                                     }
-                                    if self.alpaca_order_available()
-                                        && self.tastytrade_order_available()
-                                    {
-                                        ui.selectable_value(
-                                            &mut self.order_broker,
-                                            OrderBroker::Both,
-                                            "Both",
-                                        );
-                                    }
                                 });
                         });
                     }

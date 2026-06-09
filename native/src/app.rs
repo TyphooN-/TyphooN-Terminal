@@ -2793,7 +2793,6 @@ impl TyphooNApp {
             live_account: None,
             live_positions: Vec::new(),
             tt_positions: Vec::new(),
-            tt_balances: None,
             kr_positions: Vec::new(),
             kraken_equity_quote_meta: std::collections::BTreeMap::new(),
             show_darwin_positions: true,

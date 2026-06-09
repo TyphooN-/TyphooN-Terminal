@@ -438,7 +438,6 @@ impl RiskMode {
 pub(crate) enum OrderBroker {
     Alpaca,
     Kraken,
-    Both,
 }
 
 impl OrderBroker {
@@ -446,7 +445,6 @@ impl OrderBroker {
         match self {
             OrderBroker::Alpaca => "Alpaca",
             OrderBroker::Kraken => "Kraken",
-            OrderBroker::Both => "Both",
         }
     }
 }
@@ -7534,7 +7532,6 @@ pub struct TyphooNApp {
     /// Live positions.
     pub(crate) live_positions: Vec<PositionInfo>,
     pub(crate) tt_positions: Vec<PositionInfo>,
-    pub(crate) tt_balances: Option<TastyBalances>,
     pub(crate) kr_positions: Vec<PositionInfo>,
     pub(crate) kraken_equity_quote_meta: std::collections::BTreeMap<String, KrakenEquityQuoteMeta>,
     /// Position visibility toggles (still synced, just hidden in UI)

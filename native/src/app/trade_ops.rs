@@ -1178,10 +1178,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn trade_symbol_spec(&self, symbol: &str, last_price: f64) -> risk::SymbolSpec {
-        let uses_whole_units = matches!(
-            self.order_broker,
-            OrderBroker::Tastytrade | OrderBroker::Both
-        );
+        let uses_whole_units = false;
         let upper = symbol.to_ascii_uppercase();
         let known_crypto = self.live_positions.iter().any(|p| {
             p.symbol.eq_ignore_ascii_case(symbol) && p.asset_class.eq_ignore_ascii_case("crypto")
@@ -1405,9 +1402,7 @@ impl TyphooNApp {
     pub(super) fn order_broker_available(&self, broker: OrderBroker) -> bool {
         match broker {
             OrderBroker::Alpaca => self.alpaca_order_available(),
-            OrderBroker::Tastytrade => self.tastytrade_order_available(),
             OrderBroker::Kraken => self.kraken_order_available(),
-            OrderBroker::Both => self.alpaca_order_available() && self.tastytrade_order_available(),
         }
     }
 
@@ -1420,8 +1415,6 @@ impl TyphooNApp {
             OrderBroker::Kraken
         } else if self.alpaca_order_available() {
             OrderBroker::Alpaca
-        } else if self.tastytrade_order_available() {
-            OrderBroker::Tastytrade
         } else {
             self.order_broker
         };
@@ -1429,12 +1422,8 @@ impl TyphooNApp {
 
     pub(super) fn selected_live_broker_targets(&self) -> (bool, bool, bool) {
         let send_alpaca = self.alpaca_order_available()
-            && matches!(self.order_broker, OrderBroker::Alpaca | OrderBroker::Both);
-        let send_tt = self.tastytrade_order_available()
-            && matches!(
-                self.order_broker,
-                OrderBroker::Tastytrade | OrderBroker::Both
-            );
+            && matches!(self.order_broker, OrderBroker::Alpaca);
+        let send_tt = false;
         let send_kraken =
             self.kraken_order_available() && matches!(self.order_broker, OrderBroker::Kraken);
         (send_alpaca, send_tt, send_kraken)
@@ -1451,20 +1440,6 @@ impl TyphooNApp {
             equity: acct.equity,
             buying_power: acct.buying_power,
             margin_used: acct.initial_margin,
-        })
-    }
-
-    pub(super) fn tastytrade_trade_account_snapshot(&self) -> Option<TradeAccountSnapshot> {
-        self.tt_balances.as_ref().map(|bal| TradeAccountSnapshot {
-            broker: "tastytrade",
-            balance: if bal.cash_balance > 0.0 {
-                bal.cash_balance
-            } else {
-                bal.net_liquidating_value
-            },
-            equity: bal.net_liquidating_value,
-            buying_power: bal.equity_buying_power,
-            margin_used: bal.maintenance_requirement,
         })
     }
 
@@ -2161,9 +2136,6 @@ impl TyphooNApp {
         if send_alpaca && let Some(snap) = self.alpaca_trade_account_snapshot() {
             snapshots.push(snap);
         }
-        if send_tt && let Some(snap) = self.tastytrade_trade_account_snapshot() {
-            snapshots.push(snap);
-        }
         if send_kraken && let Some(snap) = self.kraken_trade_account_snapshot() {
             snapshots.push(snap);
         }
@@ -2272,18 +2244,6 @@ impl TyphooNApp {
             });
             any = true;
         }
-        if send_tt
-            && self
-                .tt_positions
-                .iter()
-                .any(|pos| pos.symbol.eq_ignore_ascii_case(&symbol))
-        {
-            let _ = self.broker_tx.send(BrokerCmd::TastytradeClosePositionQty {
-                symbol: symbol.clone(),
-                qty: None,
-            });
-            any = true;
-        }
         if send_kraken {
             if self
                 .kr_positions
@@ -2378,40 +2338,6 @@ impl TyphooNApp {
             }
         }
 
-        if send_tt {
-            let action = if plan.side_idx == 0 {
-                "Buy to Open".to_string()
-            } else {
-                "Sell to Open".to_string()
-            };
-            let _ = self.broker_tx.send(BrokerCmd::TastytradeEquityOrder {
-                symbol: plan.symbol.clone(),
-                qty: plan.qty.floor() as i64,
-                side: action,
-                order_type: "Market".to_string(),
-                price: None,
-            });
-            self.log.push_back(LogEntry::info(format!(
-                "Open Trade: tastytrade market {} {} {}",
-                side_label,
-                plan.qty.floor() as i64,
-                plan.symbol
-            )));
-            let _ = self.broker_tx.send(BrokerCmd::TastytradeSyncExits {
-                symbol: plan.symbol.clone(),
-                sl_price: Some(plan.sl),
-                tp_price: Some(plan.tp),
-                wait_for_position: true,
-                wait_for_qty_at_most: None,
-            });
-            self.log.push_back(LogEntry::info(format!(
-                "Open Trade: tastytrade exit sync queued for {} (sl={} tp={})",
-                plan.symbol,
-                format_price(plan.sl),
-                format_price(plan.tp)
-            )));
-        }
-
         if send_kraken {
             let _ = self.broker_tx.send(BrokerCmd::KrakenPlaceOrder {
                 pair: plan.symbol.clone(),
@@ -2470,15 +2396,6 @@ impl TyphooNApp {
                 symbol: symbol.clone(),
                 sl_price: sl,
                 tp_price: tp,
-                wait_for_qty_at_most: None,
-            });
-        }
-        if send_tt {
-            let _ = self.broker_tx.send(BrokerCmd::TastytradeSyncExits {
-                symbol: symbol.clone(),
-                sl_price: sl,
-                tp_price: tp,
-                wait_for_position: false,
                 wait_for_qty_at_most: None,
             });
         }
