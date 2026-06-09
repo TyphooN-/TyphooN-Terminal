@@ -12,16 +12,13 @@ impl TyphooNApp {
             .unwrap_or(false)
             || !self.bg.open_positions.is_empty();
         let alpaca_positions_available = self.alpaca_enabled;
-        let tt_positions_available = self.tastytrade_enabled;
         let kr_positions_available = self.kraken_enabled;
         let show_darwin_positions = darwin_positions_available && self.show_darwin_positions;
         let show_alpaca_positions = alpaca_positions_available && self.show_alpaca_positions;
-        let show_tt_positions = tt_positions_available && self.show_tt_positions;
         let show_kr_positions = kr_positions_available && self.show_kr_positions;
         let position_source_count = [
             darwin_positions_available,
             alpaca_positions_available,
-            tt_positions_available,
             kr_positions_available,
         ]
         .into_iter()
@@ -37,17 +34,12 @@ impl TyphooNApp {
         } else {
             0
         };
-        let tt_count = if show_tt_positions {
-            self.tt_positions.len()
-        } else {
-            0
-        };
         let kr_count = if show_kr_positions {
             self.kr_positions.len()
         } else {
             0
         };
-        let pos_count = darwin_count + alpaca_count + tt_count + kr_count;
+        let pos_count = darwin_count + alpaca_count + kr_count;
         let (pos_stale_lbl, pos_stale_col) = self.staleness_badge(self.positions_last_update_ts);
         let pos_header = format!("☰ Positions ({})  •  {}", pos_count, pos_stale_lbl);
         let positions_section = egui::CollapsingHeader::new(
@@ -74,12 +66,6 @@ impl TyphooNApp {
                         ui.checkbox(
                             &mut self.show_alpaca_positions,
                             egui::RichText::new("Alpaca").small(),
-                        );
-                    }
-                    if tt_positions_available {
-                        ui.checkbox(
-                            &mut self.show_tt_positions,
-                            egui::RichText::new("Tasty").small(),
                         );
                     }
                     if kr_positions_available {
@@ -309,75 +295,6 @@ impl TyphooNApp {
                 }
                 if !matches!(lp_action, SymbolAction::None) {
                     self.deferred_symbol_action = lp_action;
-                }
-            }
-            // tastytrade positions
-            if show_tt_positions && !self.tt_positions.is_empty() {
-                has_positions = true;
-                let mut close_sym: Option<String> = None;
-                let mut tt_action = SymbolAction::None;
-                for pos in &self.tt_positions {
-                    let side_c = if pos.side == "long" { UP } else { DOWN };
-                    let side_label = if pos.side == "long" { "Long" } else { "Short" };
-                    let current_price = if pos.qty.abs() > f64::EPSILON {
-                        Some(pos.market_value.abs() / pos.qty.abs())
-                    } else {
-                        None
-                    };
-                    ui.horizontal_wrapped(|ui| {
-                        let (_, act) = symbol_label_with_menu(
-                            ui,
-                            &pos.symbol,
-                            egui::RichText::new(&pos.symbol).small().strong(),
-                        );
-                        if !matches!(act, SymbolAction::None) {
-                            tt_action = act;
-                        }
-                        ui.label(
-                            egui::RichText::new(format!("[Tasty] {}", side_label))
-                                .color(side_c)
-                                .small(),
-                        );
-                        ui.label(
-                            egui::RichText::new(format!("{:.2}", pos.qty)).small(),
-                        );
-                        let pl_c = if pos.unrealized_pl >= 0.0 { UP } else { DOWN };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "${:.2}",
-                                pos.unrealized_pl
-                            ))
-                            .color(pl_c)
-                            .small(),
-                        );
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "entry {}  cur {}",
-                                format_price(pos.avg_entry_price),
-                                current_price
-                                    .map(format_price)
-                                    .unwrap_or_else(|| "—".to_string())
-                            ))
-                            .color(AXIS_TEXT)
-                            .small(),
-                        );
-                        // Close button — submits a market order in the opposite direction.
-                        if ui
-                            .small_button("X")
-                            .on_hover_text(format!(
-                                "Close {} position at market",
-                                pos.symbol
-                            ))
-                            .clicked()
-                        {
-                            close_sym = Some(pos.symbol.clone());
-                        }
-                    });
-                    ui.separator();
-                }
-                let _ = &close_sym;
-                if !matches!(tt_action, SymbolAction::None) {
-                    self.deferred_symbol_action = tt_action;
                 }
             }
             if show_kr_positions && !self.kr_positions.is_empty() {
