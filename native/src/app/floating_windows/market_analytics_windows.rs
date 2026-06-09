@@ -378,11 +378,7 @@ impl TyphooNApp {
                             let oc_dim   = egui::Color32::from_rgb(80, 80, 100);
                             ui.horizontal(|ui| {
                                 ui.label(egui::RichText::new(format!("Option Chain: {}", sym)).strong());
-                                if ui.button("Refresh").clicked() && !sym.is_empty() {
-                                    let _ = self.broker_tx.send(BrokerCmd::TastytradeOptionChain { symbol: sym.clone() });
-                                    self.log.push_back(LogEntry::info(format!("Refreshing option chain for {}...", sym)));
-                                }
-                                ui.label(egui::RichText::new("via tastytrade").color(oc_dim).small());
+                                let _ = oc_dim;
                             });
                             ui.separator();
 

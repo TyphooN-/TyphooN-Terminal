@@ -328,8 +328,6 @@ pub(super) fn broker_msg_kind(msg: &BrokerMsg) -> &'static str {
         BrokerMsg::KrakenBackfillComplete { .. } => "KrakenBackfillComplete",
         BrokerMsg::KrakenFuturesFetchSettled { .. } => "KrakenFuturesFetchSettled",
         BrokerMsg::KrakenFuturesBackfillComplete { .. } => "KrakenFuturesBackfillComplete",
-        BrokerMsg::TastytradeBackfillComplete { .. } => "TastytradeBackfillComplete",
-        BrokerMsg::TastytradeFetchSettled { .. } => "TastytradeFetchSettled",
         BrokerMsg::AlpacaRateLimitObserved { .. } => "AlpacaRateLimitObserved",
         BrokerMsg::SymbolSuggestions(_) => "SymbolSuggestions",
         BrokerMsg::WatchlistQuotes(_) => "WatchlistQuotes",
@@ -337,8 +335,6 @@ pub(super) fn broker_msg_kind(msg: &BrokerMsg) -> &'static str {
         BrokerMsg::EconCalendarData(_) => "EconCalendarData",
         BrokerMsg::CongressData(_) => "CongressData",
         BrokerMsg::UnusualVolumeResults(_) => "UnusualVolumeResults",
-        BrokerMsg::TastytradePositions(_) => "TastytradePositions",
-        BrokerMsg::TastytradeBalances(_) => "TastytradeBalances",
         BrokerMsg::KrakenPositions(_) => "KrakenPositions",
         BrokerMsg::AllAssets(_) => "AllAssets",
         BrokerMsg::RecentFills(_) => "RecentFills",
@@ -349,7 +345,6 @@ pub(super) fn broker_msg_kind(msg: &BrokerMsg) -> &'static str {
         BrokerMsg::KrakenBalances(_) => "KrakenBalances",
         BrokerMsg::KrakenPairs(_) => "KrakenPairs",
         BrokerMsg::KrakenFuturesInstruments(_) => "KrakenFuturesInstruments",
-        BrokerMsg::TastytradeUniverse(_) => "TastytradeUniverse",
         _ => "Other",
     }
 }

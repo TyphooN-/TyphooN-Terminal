@@ -1944,8 +1944,6 @@ impl TyphooNApp {
             ),
             (keyring::keys::FINNHUB_KEY.into(), self.finnhub_key.clone()),
             (keyring::keys::FRED_KEY.into(), self.fred_key.clone()),
-            (keyring::keys::TT_USERNAME.into(), self.tt_username.clone()),
-            (keyring::keys::TT_PASSWORD.into(), self.tt_password.clone()),
             (
                 keyring::keys::LAN_SYNC_PASS.into(),
                 self.lan_sync_passphrase.clone(),

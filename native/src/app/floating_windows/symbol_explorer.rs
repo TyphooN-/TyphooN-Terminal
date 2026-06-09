@@ -33,15 +33,6 @@ impl TyphooNApp {
                 let _ = self.broker_tx.send(BrokerCmd::KrakenFuturesGetInstruments);
                 self.kraken_futures_requested = true;
             }
-            if self.tastytrade_enabled
-                && self.tt_connected
-                && self.tastytrade_universe_symbols.is_empty()
-                && !self.tastytrade_universe_requested
-                && chrono::Utc::now().timestamp() >= self.tastytrade_universe_retry_after_ts
-            {
-                let _ = self.broker_tx.send(BrokerCmd::TastytradeGetUniverse);
-                self.tastytrade_universe_requested = true;
-            }
             egui::Window::new("Symbol Explorer")
                 .open(&mut show_symbols)
                 .resizable(true)

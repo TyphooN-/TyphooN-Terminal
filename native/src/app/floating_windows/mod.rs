@@ -136,8 +136,6 @@ impl TyphooNApp {
                 (keyring::keys::ALPACA_SECRET, self.broker_secret.as_str()),
                 (keyring::keys::FINNHUB_KEY, self.finnhub_key.as_str()),
                 (keyring::keys::FRED_KEY, self.fred_key.as_str()),
-                (keyring::keys::TT_USERNAME, self.tt_username.as_str()),
-                (keyring::keys::TT_PASSWORD, self.tt_password.as_str()),
                 (
                     keyring::keys::LAN_SYNC_PASS,
                     self.lan_sync_passphrase.as_str(),

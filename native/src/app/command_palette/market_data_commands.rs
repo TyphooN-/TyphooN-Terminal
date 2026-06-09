@@ -153,17 +153,6 @@ impl TyphooNApp {
                             }
                         }
 
-                        // tastytrade: bars + option chain (if connected and not already cached)
-                        if self.tt_connected {
-                            for tf in &missing_tfs {
-                                if self.queue_tastytrade_fetch(&sym, tf) {
-                                    fetched_count += 1;
-                                }
-                            }
-                            let _ = self.broker_tx.send(BrokerCmd::TastytradeOptionChain {
-                                symbol: sym.clone(),
-                            });
-                        }
                     }
 
                     // Update progress tracking and open window
