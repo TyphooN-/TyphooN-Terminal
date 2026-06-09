@@ -48,20 +48,6 @@ impl TyphooNApp {
                     ui.label("CryptoPanic Token:");
                     ui.add(egui::TextEdit::singleline(&mut self.cryptopanic_key).desired_width(250.0).password(true).hint_text("free at cryptopanic.com → API"));
                     ui.end_row();
-                    if self.tastytrade_enabled {
-                        ui.label("tastytrade User:");
-                        ui.add(egui::TextEdit::singleline(&mut self.tt_username).desired_width(250.0));
-                        ui.end_row();
-                        ui.label("tastytrade Pass:");
-                        ui.add(egui::TextEdit::singleline(&mut self.tt_password).desired_width(250.0).password(true));
-                        ui.end_row();
-                        ui.label("tastytrade Mode:");
-                        ui.horizontal(|ui| {
-                            ui.radio_value(&mut self.tt_sandbox, true, "Sandbox");
-                            ui.radio_value(&mut self.tt_sandbox, false, "Production");
-                        });
-                        ui.end_row();
-                    }
                     if self.kraken_enabled {
                         ui.label("Kraken REST API Key:");
                         ui.add(egui::TextEdit::singleline(&mut self.kraken_api_key).desired_width(250.0).password(true));
@@ -331,15 +317,6 @@ impl TyphooNApp {
                     };
                     ui.label(format!("Alpaca: REST API + WebSocket — {} ({})", alpaca_status, alpaca_mode));
                 }
-                if self.tastytrade_enabled {
-                    let tt_status = if self.tt_connected { "Connected" } else { "Disconnected" };
-                    let tt_mode = if self.tastytrade_full_bar_sync_enabled {
-                        "full tastytrade universe bar sync enabled"
-                    } else {
-                        "light sync: open charts/positions/orders/watchlist only"
-                    };
-                    ui.label(format!("tastytrade: REST API — {} ({})", tt_status, tt_mode));
-                }
                 if self.kraken_enabled {
                     let kraken_status = if self.kraken_connected { "Connected" } else { "Disconnected" };
                     let kraken_mode = if self.kraken_full_bar_sync_enabled {
@@ -475,22 +452,6 @@ impl TyphooNApp {
                         settings_save_after = true;
                         self.all_broker_assets_fetched = false;
                         self.pending_alpaca_fetches.clear();
-                    }
-
-                    let tt_resp = ui
-                        .add_enabled(
-                            self.tastytrade_enabled,
-                            egui::Checkbox::new(
-                                &mut self.tastytrade_full_bar_sync_enabled,
-                                "tastytrade full bar sync",
-                            ),
-                        )
-                        .on_hover_text(
-                            "Explicit opt-in for rotating through the tastytrade universe. Off keeps light sync: open charts, positions, open orders, and watchlist only.",
-                        );
-                    if tt_resp.changed() {
-                        settings_save_after = true;
-                        self.pending_tastytrade_fetches.clear();
                     }
                 });
                 ui.label(
