@@ -326,8 +326,6 @@ impl TyphooNApp {
             "alpaca_enabled": self.alpaca_enabled,
             "alpaca_full_bar_sync_enabled": self.alpaca_full_bar_sync_enabled,
             "darwinex_enabled": self.darwinex_enabled,
-            "tastytrade_enabled": self.tastytrade_enabled,
-            "tastytrade_full_bar_sync_enabled": self.tastytrade_full_bar_sync_enabled,
             "kraken_enabled": self.kraken_enabled,
             "kraken_full_bar_sync_enabled": self.kraken_full_bar_sync_enabled,
             "kraken_scrape_xstocks": self.kraken_scrape_xstocks,
@@ -375,17 +373,11 @@ impl TyphooNApp {
         if let Some(enabled) = value["alpaca_full_bar_sync_enabled"].as_bool() {
             self.alpaca_full_bar_sync_enabled = enabled;
         }
-        if let Some(enabled) = value["tastytrade_full_bar_sync_enabled"].as_bool() {
-            self.tastytrade_full_bar_sync_enabled = enabled;
-        }
         if let Some(enabled) = value["kraken_full_bar_sync_enabled"].as_bool() {
             self.kraken_full_bar_sync_enabled = enabled;
         }
         if let Some(enabled) = value["darwinex_enabled"].as_bool() {
             self.darwinex_enabled = enabled;
-        }
-        if let Some(enabled) = value["tastytrade_enabled"].as_bool() {
-            self.tastytrade_enabled = enabled;
         }
         if let Some(enabled) = value["kraken_enabled"].as_bool() {
             self.kraken_enabled = enabled;
@@ -658,7 +650,6 @@ impl TyphooNApp {
             "kraken_scrape_crypto_crosses": self.kraken_scrape_crypto_crosses,
             "kraken_scrape_futures": self.kraken_scrape_futures,
             "alpaca_full_bar_sync_enabled": self.alpaca_full_bar_sync_enabled,
-            "tastytrade_full_bar_sync_enabled": self.tastytrade_full_bar_sync_enabled,
             "kraken_full_bar_sync_enabled": self.kraken_full_bar_sync_enabled,
             "backfill_cryptocompare_enabled": self.backfill_cryptocompare_enabled,
             "backfill_alpaca_kraken_equities_enabled": self.backfill_alpaca_kraken_equities_enabled,
@@ -731,7 +722,6 @@ impl TyphooNApp {
             "lan_server_enabled": self.lan_server_enabled,
             "show_darwin_positions": self.show_darwin_positions,
             "show_alpaca_positions": self.show_alpaca_positions,
-            "show_tt_positions": self.show_tt_positions,
             "show_kr_positions": self.show_kr_positions,
             "snap_enabled": self.snap_enabled,
             "cross_tf_drawings": self.cross_tf_drawings,
@@ -756,12 +746,9 @@ impl TyphooNApp {
             "alpaca_enabled": self.alpaca_enabled,
             "alpaca_full_bar_sync_enabled": self.alpaca_full_bar_sync_enabled,
             "darwinex_enabled": self.darwinex_enabled,
-            "tastytrade_enabled": self.tastytrade_enabled,
-            "tastytrade_full_bar_sync_enabled": self.tastytrade_full_bar_sync_enabled,
             "kraken_enabled": self.kraken_enabled,
             "kraken_full_bar_sync_enabled": self.kraken_full_bar_sync_enabled,
             "broker_paper": self.broker_paper,
-            "tt_sandbox": self.tt_sandbox,
             "sl_enabled": self.sl_enabled,
             "tp_enabled": self.tp_enabled,
             "windows": {
@@ -3463,33 +3450,17 @@ impl TyphooNApp {
                         self.broker_secret = bs.to_string();
                     }
                 }
-                if self.tt_username.is_empty() {
-                    if let Some(tu) = v["tt_username"].as_str() {
-                        self.tt_username = tu.to_string();
-                    }
-                }
-                if self.tt_password.is_empty() {
-                    if let Some(tp) = v["tt_password"].as_str() {
-                        self.tt_password = tp.to_string();
-                    }
-                }
                 if let Some(enabled) = v["alpaca_enabled"].as_bool() {
                     self.alpaca_enabled = enabled;
                 }
                 if let Some(enabled) = v["alpaca_full_bar_sync_enabled"].as_bool() {
                     self.alpaca_full_bar_sync_enabled = enabled;
                 }
-                if let Some(enabled) = v["tastytrade_full_bar_sync_enabled"].as_bool() {
-                    self.tastytrade_full_bar_sync_enabled = enabled;
-                }
                 if let Some(enabled) = v["kraken_full_bar_sync_enabled"].as_bool() {
                     self.kraken_full_bar_sync_enabled = enabled;
                 }
                 if let Some(enabled) = v["darwinex_enabled"].as_bool() {
                     self.darwinex_enabled = enabled;
-                }
-                if let Some(enabled) = v["tastytrade_enabled"].as_bool() {
-                    self.tastytrade_enabled = enabled;
                 }
                 if let Some(enabled) = v["kraken_enabled"].as_bool() {
                     self.kraken_enabled = enabled;
@@ -3504,9 +3475,6 @@ impl TyphooNApp {
                     self.backfill_yahoo_chart_enabled = enabled;
                 }
 
-                if let Some(ts) = v["tt_sandbox"].as_bool() {
-                    self.tt_sandbox = ts;
-                }
                 if let Some(bp) = v["broker_paper"].as_bool() {
                     self.broker_paper = bp;
                 }
@@ -3535,9 +3503,6 @@ impl TyphooNApp {
                 }
                 if let Some(b) = v["show_alpaca_positions"].as_bool() {
                     self.show_alpaca_positions = b;
-                }
-                if let Some(b) = v["show_tt_positions"].as_bool() {
-                    self.show_tt_positions = b;
                 }
                 if let Some(b) = v["show_kr_positions"].as_bool() {
                     self.show_kr_positions = b;
