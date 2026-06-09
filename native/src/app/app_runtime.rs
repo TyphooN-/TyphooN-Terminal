@@ -2360,7 +2360,6 @@ impl eframe::App for TyphooNApp {
                             self.dispatch_kraken_equity_ticker(&pair);
                             let mut queued_equity_tf = false;
                             queued_equity_tf |= self.queue_kraken_equity_fetch(&pair, active_tf);
-                            queued_equity_tf |= self.queue_tastytrade_fetch(&pair, active_tf);
                             queued_equity_tf |= self.queue_alpaca_fetch(&pair, active_tf);
                             if queued_equity_tf {
                                 queued += 1;
@@ -2368,7 +2367,6 @@ impl eframe::App for TyphooNApp {
                             if active_tf != "1Day" {
                                 let mut queued_equity_day = false;
                                 queued_equity_day |= self.queue_kraken_equity_fetch(&pair, "1Day");
-                                queued_equity_day |= self.queue_tastytrade_fetch(&pair, "1Day");
                                 queued_equity_day |= self.queue_alpaca_fetch(&pair, "1Day");
                                 if queued_equity_day {
                                     queued += 1;

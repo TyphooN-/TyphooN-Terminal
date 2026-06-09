@@ -568,7 +568,6 @@ impl TyphooNApp {
             "alpaca" => &mut self.pending_alpaca_fetches,
             "kraken" => &mut self.pending_kraken_fetches,
             "kraken-futures" => &mut self.pending_kraken_futures_fetches,
-            "tastytrade" => &mut self.pending_tastytrade_fetches,
             "yahoo-chart" => &mut self.pending_yahoo_chart_fetches,
             _ => &mut self.pending_alpaca_fetches,
         }
@@ -578,7 +577,6 @@ impl TyphooNApp {
         self.pending_alpaca_fetches.len()
             + self.pending_kraken_fetches.len()
             + self.pending_kraken_futures_fetches.len()
-            + self.pending_tastytrade_fetches.len()
             + self.pending_yahoo_chart_fetches.len()
     }
 
@@ -623,12 +621,6 @@ impl TyphooNApp {
                     .insert((symbol.clone(), tf.to_string()), state);
                 self.cached_kraken_equities_sync_state_rev = Some(self.bg_rev);
             }
-            "tastytrade" => {
-                self.cached_tastytrade_sync_state
-                    .insert((symbol.clone(), tf.to_string()), state);
-                self.cached_tastytrade_sync_state_rev = Some(self.bg_rev);
-                self.cached_tastytrade_symbols.insert(symbol);
-            }
             "yahoo-chart" => {
                 self.cached_yahoo_chart_sync_state
                     .insert((symbol.clone(), tf.to_string()), state);
@@ -667,9 +659,6 @@ impl TyphooNApp {
                 if self.kraken_enabled {
                     queued |= self.queue_kraken_fetch(&symbol, tf);
                     queued |= self.queue_kraken_equity_fetch(&symbol, tf);
-                }
-                if self.tt_connected {
-                    queued |= self.queue_tastytrade_fetch(&symbol, tf);
                 }
                 if self.broker_connected {
                     queued |= self.queue_alpaca_fetch(&symbol, tf);
@@ -1266,82 +1255,12 @@ impl TyphooNApp {
         dispatched
     }
 
-    pub(super) fn tastytrade_sync_symbols(&self) -> Vec<String> {
-        let mut seen = std::collections::HashSet::new();
-        let mut out = Vec::new();
-        let mut tasty_available: std::collections::HashSet<String> =
-            self.cached_tastytrade_symbols.clone();
-        tasty_available.extend(
-            self.tastytrade_universe_symbols
-                .iter()
-                .map(|symbol| normalize_market_data_symbol(symbol).replace('/', ""))
-                .filter(|symbol| !symbol.is_empty()),
-        );
-        tasty_available.extend(
-            self.tt_positions
-                .iter()
-                .map(|pos| normalize_market_data_symbol(&pos.symbol).replace('/', ""))
-                .filter(|symbol| !symbol.is_empty()),
-        );
-        for symbol in &self.tastytrade_universe_symbols {
-            let symbol = normalize_market_data_symbol(symbol);
-            if !symbol.is_empty() && seen.insert(symbol.clone()) {
-                out.push(symbol);
-            }
-        }
-        for pos in &self.tt_positions {
-            let symbol = normalize_market_data_symbol(&pos.symbol);
-            if !symbol.is_empty() && seen.insert(symbol.clone()) {
-                out.push(symbol);
-            }
-        }
-        for chart in &self.charts {
-            let symbol = normalize_market_data_symbol(&chart.symbol);
-            let bare = symbol.replace('/', "");
-            if !symbol.is_empty() && tasty_available.contains(&bare) && seen.insert(symbol.clone())
-            {
-                out.push(symbol);
-            }
-        }
-        for symbol in &self.user_watchlist {
-            let symbol = normalize_market_data_symbol(symbol);
-            let bare = symbol.replace('/', "");
-            if !symbol.is_empty() && tasty_available.contains(&bare) && seen.insert(symbol.clone())
-            {
-                out.push(symbol);
-            }
-        }
-        out.sort();
-        out
-    }
-
-    pub(super) fn tastytrade_has_symbol(&self, symbol: &str) -> bool {
-        let target = normalize_market_data_symbol(symbol)
-            .replace('/', "")
-            .to_ascii_uppercase();
-        if target.is_empty() {
-            return false;
-        }
-        self.cached_tastytrade_symbols.contains(&target)
-            || self.tastytrade_universe_symbols.iter().any(|candidate| {
-                normalize_market_data_symbol(candidate)
-                    .replace('/', "")
-                    .eq_ignore_ascii_case(&target)
-            })
-            || self.tt_positions.iter().any(|pos| {
-                normalize_market_data_symbol(&pos.symbol)
-                    .replace('/', "")
-                    .eq_ignore_ascii_case(&target)
-            })
-    }
-
     pub(super) fn alpaca_focus_symbols(&self) -> std::collections::HashSet<String> {
         self.cached_active_symbols
             .iter()
             .map(|sym| normalize_market_data_symbol(sym).replace('/', ""))
             .filter(|sym| !sym.is_empty())
             .filter(|sym| !self.cached_mt5_symbols.contains(sym))
-            .filter(|sym| !self.cached_tastytrade_symbols.contains(sym))
             .collect()
     }
 
@@ -1783,56 +1702,6 @@ impl TyphooNApp {
         true
     }
 
-    pub(super) fn resolve_tastytrade_symbol(&self, symbol: &str) -> String {
-        let target = normalize_market_data_symbol(symbol).replace('/', "");
-        for candidate in self
-            .tastytrade_universe_symbols
-            .iter()
-            .map(String::as_str)
-            .chain(self.user_watchlist.iter().map(String::as_str))
-            .chain(self.charts.iter().map(|chart| chart.symbol.as_str()))
-            .chain(self.tt_positions.iter().map(|pos| pos.symbol.as_str()))
-        {
-            let normalized = normalize_market_data_symbol(candidate).replace('/', "");
-            if !normalized.is_empty() && normalized.eq_ignore_ascii_case(&target) {
-                return candidate.to_string();
-            }
-        }
-        symbol.to_string()
-    }
-
-    pub(super) fn queue_tastytrade_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
-        let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
-            return false;
-        };
-        if !self.tastytrade_enabled || !self.tt_connected || !self.sync_timeframe_enabled(tf) {
-            return false;
-        }
-        let symbol = normalize_market_data_symbol(symbol);
-        if symbol.is_empty() {
-            return false;
-        }
-        if self.is_unresolvable_fetch_key("tastytrade", &symbol, tf) {
-            return false;
-        }
-        if self.is_fetch_on_cooldown("tastytrade", &symbol, tf) {
-            return false;
-        }
-        if !self.tastytrade_backfill_complete_loaded {
-            self.tastytrade_backfill_complete_load();
-        }
-        let fetch_key = alpaca_fetch_key(&symbol.replace('/', ""), tf);
-        let backfill_complete = self
-            .tastytrade_backfill_complete_pairs
-            .contains_key(&fetch_key);
-        if !self.pending_tastytrade_fetches.insert(fetch_key) {
-            return false;
-        }
-        self.mark_fetch_queued("tastytrade", &symbol, tf);
-        let _ = backfill_complete;
-        false
-    }
-
     pub(super) fn settle_market_data_fetch(&mut self, source: &str, symbol: &str, timeframe: &str) {
         self.pending_fetches_for_source_mut(source)
             .remove(&alpaca_fetch_key(symbol, timeframe));
@@ -2132,92 +2001,6 @@ impl TyphooNApp {
         dispatched
     }
 
-    pub(super) fn schedule_tastytrade_symbols(&mut self, symbols: &[String]) -> usize {
-        if !self.tastytrade_enabled || !self.tt_connected || symbols.is_empty() {
-            return 0;
-        }
-        if chrono::Utc::now().timestamp() < self.tastytrade_sync_pause_until_ts {
-            return 0;
-        }
-        if self.tastytrade_universe_symbols.is_empty()
-            && self.tt_positions.is_empty()
-            && self.cached_tastytrade_symbols.is_empty()
-        {
-            return 0;
-        }
-        let timeframes = self.enabled_standard_sync_timeframes();
-        if timeframes.is_empty() {
-            return 0;
-        }
-        let full_tilt = self.full_tilt_sync_enabled();
-        let queue_window = if full_tilt {
-            TASTYTRADE_FULL_TILT_QUEUE_WINDOW
-        } else {
-            8usize
-        };
-        let batch_limit = if full_tilt {
-            TASTYTRADE_FULL_TILT_BATCH_SIZE
-        } else {
-            3usize
-        };
-        let foreground_slots = if full_tilt { 4usize } else { 1usize };
-        let available_slots = queue_window
-            .saturating_sub(self.pending_tastytrade_fetches.len())
-            .min(batch_limit);
-        if available_slots == 0 {
-            return 0;
-        }
-        if self.cached_tastytrade_sync_state_rev != Some(self.bg_rev)
-            && (!self.heavy_sync_in_progress || self.cached_tastytrade_sync_state.is_empty())
-        {
-            let previous = self.cached_tastytrade_sync_state.clone();
-            let mut rebuilt = self.build_source_cache_state_map("tastytrade:");
-            merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
-            self.cached_tastytrade_sync_state = rebuilt;
-            self.cached_tastytrade_sync_state_rev = Some(self.bg_rev);
-        }
-        if !self.tastytrade_backfill_complete_loaded {
-            self.tastytrade_backfill_complete_load();
-        }
-        self.ensure_unresolvable_fetch_key_index();
-        let focus_symbols = self.market_data_focus_symbols();
-        let empty_no_data_keys = std::collections::HashSet::new();
-        let no_data_keys = self
-            .unresolvable_fetch_keys_by_broker
-            .get("tastytrade")
-            .unwrap_or(&empty_no_data_keys);
-        let now_s = chrono::Utc::now().timestamp();
-        let scan_limit = if full_tilt {
-            TASTYTRADE_FULL_TILT_BACKGROUND_SCAN_LIMIT
-        } else {
-            TASTYTRADE_BACKGROUND_SCAN_LIMIT
-        };
-        let mut cursor = self.tastytrade_sync_cursor;
-        let candidates = select_alpaca_sync_workset_rotating(
-            symbols,
-            &timeframes,
-            &self.cached_tastytrade_sync_state,
-            &focus_symbols,
-            no_data_keys,
-            &self.tastytrade_backfill_complete_pairs,
-            &self.pending_tastytrade_fetches,
-            available_slots,
-            foreground_slots,
-            scan_limit,
-            &mut cursor,
-            now_s,
-            alpaca_sync_target_bars,
-        );
-        self.tastytrade_sync_cursor = cursor;
-        let mut dispatched = 0usize;
-        for candidate in candidates {
-            if self.queue_tastytrade_fetch(&candidate.symbol, &candidate.timeframe) {
-                dispatched += 1;
-            }
-        }
-        dispatched
-    }
-
     pub(super) fn maybe_request_alpaca_asset_universe(&mut self) {
         if self.alpaca_enabled
             && self.alpaca_full_bar_sync_enabled
@@ -2231,7 +2014,6 @@ impl TyphooNApp {
 
     pub(super) fn alpaca_equity_rotation_symbols(&self) -> Vec<String> {
         let mt5_covered = &self.cached_mt5_symbols;
-        let tasty_covered = &self.cached_tastytrade_symbols;
         let mut equity_set: std::collections::HashSet<String> =
             std::collections::HashSet::with_capacity(self.all_broker_assets.len() + 64);
         let mut equity_syms: Vec<String> = Vec::with_capacity(self.all_broker_assets.len() + 64);
@@ -2241,10 +2023,7 @@ impl TyphooNApp {
                 continue;
             }
             let su = sym.to_uppercase();
-            if Self::demand_is_crypto(&su)
-                || mt5_covered.contains(&su)
-                || tasty_covered.contains(&su)
-            {
+            if Self::demand_is_crypto(&su) || mt5_covered.contains(&su) {
                 continue;
             }
             if equity_set.insert(su.clone()) {
@@ -2253,10 +2032,7 @@ impl TyphooNApp {
         }
         for chart in &self.charts {
             let bare = bare_symbol_from_key(&chart.symbol).to_uppercase();
-            if Self::demand_is_crypto(&bare)
-                || mt5_covered.contains(&bare)
-                || tasty_covered.contains(&bare)
-            {
+            if Self::demand_is_crypto(&bare) || mt5_covered.contains(&bare) {
                 continue;
             }
             if equity_set.insert(bare.clone()) {
@@ -2265,10 +2041,7 @@ impl TyphooNApp {
         }
         for wl in &self.user_watchlist {
             let wlu = wl.to_uppercase();
-            if Self::demand_is_crypto(&wlu)
-                || mt5_covered.contains(&wlu)
-                || tasty_covered.contains(&wlu)
-            {
+            if Self::demand_is_crypto(&wlu) || mt5_covered.contains(&wlu) {
                 continue;
             }
             if equity_set.insert(wlu.clone()) {

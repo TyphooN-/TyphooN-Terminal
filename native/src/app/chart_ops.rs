@@ -299,12 +299,6 @@ impl TyphooNApp {
                 return true;
             }
         }
-        if self.tt_connected
-            && self.tastytrade_has_symbol(symbol)
-            && self.queue_tastytrade_fetch(symbol, tf_key)
-        {
-            return true;
-        }
         self.queue_alpaca_fetch(symbol, tf_key)
     }
 
@@ -331,7 +325,6 @@ impl TyphooNApp {
                 let kraken_symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
                 let kraken_supported =
                     typhoon_engine::core::kraken::to_kraken_pair_lossy(&kraken_symbol).is_some();
-                let tasty_supported = self.tt_connected && self.tastytrade_has_symbol(symbol);
                 if !self.sync_timeframe_enabled(tf_key) {
                     self.log.push_back(LogEntry::warn(format!(
                         "No cached data for {} {} — sync for {} is disabled",
@@ -344,14 +337,6 @@ impl TyphooNApp {
                     if queued {
                         self.log.push_back(LogEntry::info(format!(
                             "No cached data for {} {} — fetching from Kraken...",
-                            symbol,
-                            tf.label()
-                        )));
-                    }
-                } else if tasty_supported {
-                    if self.queue_tastytrade_fetch(symbol, tf_key) {
-                        self.log.push_back(LogEntry::info(format!(
-                            "No cached data for {} {} — fetching from tastytrade...",
                             symbol,
                             tf.label()
                         )));
