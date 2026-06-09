@@ -83,22 +83,6 @@ impl TyphooNApp {
                     .collect(),
             ),
             EventSource::Kraken => Some(self.kraken_scope_symbols()),
-            EventSource::Darwinex => {
-                if self.darwinex_radar_data.is_empty() {
-                    // Specs not loaded yet — don't filter (show all fundamentals)
-                    None
-                } else {
-                    Some(
-                        self.darwinex_radar_data
-                            .iter()
-                            .filter(|(_, _, _, trade_mode, _, _, _, _, _)| *trade_mode != 0)
-                            .map(|(sym, _, _, _, _, _, _, _, _)| {
-                                sym.split('.').next().unwrap_or(sym.as_str()).to_uppercase()
-                            })
-                            .collect(),
-                    )
-                }
-            }
             EventSource::Positions => {
                 // All symbols with open positions across any broker
                 let mut syms = std::collections::HashSet::new();
@@ -708,11 +692,10 @@ impl TyphooNApp {
 
         for r in rows {
             let src_ok = match source_filter {
-                EventSource::All => r.in_alpaca || r.in_darwinex || r.in_kraken,
+                EventSource::All => r.in_alpaca || r.in_kraken,
                 EventSource::Alpaca => r.in_alpaca,
-                EventSource::Darwinex => r.in_darwinex,
                 EventSource::Kraken => r.in_kraken,
-                EventSource::Positions => r.in_alpaca || r.in_darwinex || r.in_kraken,
+                EventSource::Positions => r.in_alpaca || r.in_kraken,
             };
             let kind_ok = match r.kind {
                 EventKind::Earnings => show_earnings,
@@ -766,7 +749,6 @@ impl TyphooNApp {
         match self.broker_scope {
             EventSource::All => "ALL",
             EventSource::Alpaca => "ALPACA",
-            EventSource::Darwinex => "DARWINEX",
             EventSource::Kraken => "KRAKEN",
             EventSource::Positions => "POSITIONS",
         }
