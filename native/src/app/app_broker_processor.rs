@@ -1,6 +1,5 @@
 use super::*;
 
-mod darwin_handlers;
 mod external_feeds;
 mod lan_sync;
 mod news;
@@ -3280,18 +3279,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 .send(BrokerMsg::Error(format!("Kraken futures instruments: {}", e)));
                         }
                     }
-                }
-                cmd @ (
-                    BrokerCmd::DarwinImportAll { .. }
-                    | BrokerCmd::ExportDarwinData
-                    | BrokerCmd::ImportDarwinData { .. }
-                ) => {
-                    darwin_handlers::handle_darwin_command(
-                        cmd,
-                        broker_msg_tx_clone.clone(),
-                        importing_flag.clone(),
-                        shared_cache_broker.clone(),
-                    );
                 }
                 BrokerCmd::FundamentalsScrape {
                     db_path: _,

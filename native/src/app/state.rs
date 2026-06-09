@@ -130,7 +130,6 @@ pub(crate) fn yahoo_extended_quote_time_is_fresh(ext_time: i64, regular_time: i6
 pub(crate) enum EventSource {
     All,
     Alpaca,
-    Darwinex,
     Kraken,
     Positions,
 }
@@ -163,75 +162,16 @@ pub(crate) struct EventRow {
     pub(crate) kind: EventKind,
     pub(crate) detail: String, // yield%, previous EPS, etc.
     pub(crate) in_alpaca: bool,
-    pub(crate) in_darwinex: bool,
     pub(crate) in_kraken: bool,
-}
-
-/// Cached per-account analytics (computed in background thread).
-#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct AccountDetailCache {
-    pub(crate) ticker: String,
-    pub(crate) summary: Option<darwin::DarwinAccountSummary>,
-    pub(crate) var_stats: Option<darwin::VaRResult>,
-    pub(crate) monthly_returns: Vec<darwin::MonthlyReturn>,
-    pub(crate) streaks: Option<darwin::StreakAnalysis>,
-    pub(crate) hourly_pnl: Vec<darwin::HourlyPnL>,
-    pub(crate) equity_curve: Vec<(String, f64)>,
-    pub(crate) pnl_by_symbol: Vec<(String, f64, f64, f64, i64)>,
-    pub(crate) day_of_week: Vec<darwin::DayOfWeekPnL>,
-    pub(crate) hold_time: Option<darwin::HoldTimeStats>,
-    pub(crate) kelly: Option<darwin::KellyResult>,
-    pub(crate) cost_analysis: Option<darwin::CostAnalysis>,
-    pub(crate) dscore: Option<darwin::DScoreEstimate>,
-    pub(crate) slippage: Option<darwin::SlippageStats>,
-    pub(crate) mae_mfe: Option<darwin::MAEMFEResult>,
-    pub(crate) sizing_efficiency: Vec<darwin::SizingEfficiency>,
-    pub(crate) symbol_rotation: Vec<darwin::SymbolActivity>,
-    pub(crate) open_positions: Vec<darwin::DarwinOpenPosition>,
-    pub(crate) pyramiding: Vec<darwin::PyramidingAnalysis>,
-    pub(crate) bursts: Vec<darwin::TradingBurst>,
-    pub(crate) autocorrelation: Option<darwin::AutocorrelationResult>,
-    pub(crate) recent_deals: Vec<darwin::DarwinDeal>,
-    pub(crate) closed_positions: Vec<darwin::DarwinPosition>,
-    pub(crate) equity_snapshots: Vec<darwin::FloatingEquitySnapshot>,
-    pub(crate) benchmark: Option<darwin::BenchmarkComparison>,
-    pub(crate) sector_classification: Vec<(String, String)>,
-    pub(crate) rolling_var: Vec<darwin::RollingVaR>,
-    // FTP DARWIN quote data (investor product performance)
-    pub(crate) ftp_summary: Option<darwin_ftp::DarwinFtpSummary>,
-    pub(crate) ftp_equity_curve: Vec<(f64, f64)>, // (day_index, quote_price) from RETURN cumulative
-    pub(crate) ftp_drawdown_curve: Vec<(f64, f64)>, // (day_index, drawdown_pct) from RETURN
-    // Per-DARWIN daily returns (for weekly best/worst computation)
-    pub(crate) daily_returns: Vec<darwin::DailyReturn>,
-    // Advanced DARWIN metrics
-    pub(crate) cagr: f64,
-    pub(crate) recovery_factor: f64,
-    pub(crate) dd_duration: (usize, usize, f64), // (max, current, avg)
-    pub(crate) divergence: Vec<darwin::DivergencePoint>,
-    pub(crate) performance_attribution: Vec<darwin::SymbolAttribution>,
-    pub(crate) dscore_components: Option<darwin::DScoreComponents>,
-    pub(crate) investment_velocity: Vec<(String, f64)>,
-    pub(crate) tax_lots: Option<darwin::TaxSummary>,
-    pub(crate) investor_flow: Vec<darwin::InvestorFlow>,
 }
 
 /// Background-computed data — populated by background thread, read by render thread.
 /// This eliminates SQLite queries from the render loop.
 #[derive(Default, Clone)]
 pub(crate) struct BgDarwinData {
-    pub(crate) portfolio: Option<darwin::PortfolioSummary>,
-    pub(crate) accounts: Vec<darwin::DarwinAccount>,
     pub(crate) cache_stats: Option<(i64, i64, i64)>,
     pub(crate) sec_filings: Vec<sec_filing::SecFiling>,
     pub(crate) sec_alerts: Vec<sec_filing::FilingAlert>,
-    // Heavy analytics cached
-    pub(crate) daily_returns: Vec<darwin::DailyReturn>,
-    pub(crate) var_stats: Option<darwin::VaRResult>,
-    pub(crate) correlations: Vec<darwin::CorrelationEntry>,
-    pub(crate) exposure: Vec<darwin::PortfolioSymbolExposure>,
-    pub(crate) equity_curve: Vec<(String, f64)>,
-    pub(crate) open_positions: Vec<darwin::PortfolioOpenPosition>,
-    pub(crate) trade_overlaps: Vec<darwin::TradeOverlap>,
     pub(crate) detailed_stats: Vec<(String, i64, i64)>,
     /// Per-key compressed blob size in bytes. Populated alongside `detailed_stats`
     /// from the same BG query so Storage Manager can show per-row KB/MB/GB
@@ -246,60 +186,15 @@ pub(crate) struct BgDarwinData {
     /// when thousands of entries need decompression. Storage Manager and the
     /// crypto backfill window both read directly from this map.
     pub(crate) bar_ts_cache: std::collections::HashMap<String, (i64, i64, i64)>,
-    // ── Heavy analytics that froze the UI when computed in render thread ──
-    pub(crate) optimal_allocation: Vec<darwin::OptimalAllocation>,
-    pub(crate) rebalance: Option<darwin::RebalanceDashboard>,
-    pub(crate) monte_carlo: Option<darwin::MonteCarloResult>,
-    pub(crate) stress_tests: Vec<darwin::StressTestResult>,
-    pub(crate) margin_call_sim: Option<darwin::MarginCallSimulation>,
-
-    // ── NEW fields: per-account details (DARWIN Accounts window) ──
-    pub(crate) account_details: Vec<AccountDetailCache>,
-
-    pub(crate) rolling_var: Vec<darwin::RollingVaR>,
-    pub(crate) drawdown_dashboard: Option<darwin::CombinedDrawdownDashboard>,
-    pub(crate) exposure_treemap: Option<darwin::TreemapNode>,
-    pub(crate) timing_divergences: Vec<darwin::TimingDivergence>,
-    pub(crate) var_forecast: Option<darwin::VaRForecast>,
-    pub(crate) conditional_var: Vec<darwin::ConditionalVaR>,
-    pub(crate) market_regime: Option<darwin::MarketRegime>,
-    pub(crate) regime_performance: Vec<darwin::RegimePerformance>,
-    pub(crate) tail_risk: Option<darwin::TailRiskMetrics>,
-    pub(crate) seasonal_analysis: Vec<darwin::SeasonalPattern>,
-    pub(crate) sector_exposure: Vec<darwin::SectorExposure>,
-    pub(crate) liquidity_risk: Vec<darwin::LiquidityRisk>,
-    pub(crate) floating_equity: Option<darwin::FloatingEquityDashboard>,
-
-    // ── VaR Multiplier window ──
-    pub(crate) var_multipliers: Vec<darwin::DarwinVaRMultiplier>,
-    pub(crate) per_darwin_var: Vec<(String, darwin::VaRResult)>,
-
-    // ── Symbol Overlap window ──
-    pub(crate) symbol_overlaps: Vec<darwin::SymbolOverlap>,
 
     // ── SEC / Insider ──
     pub(crate) insider_trades: std::collections::HashMap<String, Vec<sec_filing::InsiderTrade>>,
     pub(crate) sec_content_stats: (usize, usize), // (total_filings, indexed_content)
 
-    // ── DARWIN risk alerts ──
-    pub(crate) darwin_alerts: Vec<darwin::AlertCondition>,
-
     // ── Fundamentals (cached from background thread) ──
     pub(crate) all_fundamentals: Vec<fundamentals::Fundamentals>,
     pub(crate) upcoming_earnings: Vec<(String, String, String)>,
     pub(crate) upcoming_dividends: Vec<(String, String, String, Option<f64>)>,
-
-    // ── DARWIN analytics: drawdown attribution + signal decay ──
-    pub(crate) drawdown_attribution: Vec<darwin::DrawdownAttribution>,
-    pub(crate) signal_decay: Vec<darwin::SignalDecay>,
-    pub(crate) risk_budget: Vec<darwin::RiskBudget>,
-
-    // ── DARWIN analytics: rolling correlation + diversification ──
-    pub(crate) rolling_correlations: Vec<darwin::RollingCorrelation>,
-    pub(crate) low_correlation_darwins: Vec<darwin::DiversificationCandidate>,
-
-    // ── Darwinex symbol specs (for scope filtering) ──
-    pub(crate) darwinex_specs: Vec<(String, String, String, i32, f64, f64, f64, f64, String)>,
 }
 
 /// Bottom panel mode.
@@ -603,13 +498,6 @@ pub(crate) enum BrokerCmd {
         db_path: std::path::PathBuf,
         backfill_complete: bool,
     },
-    /// Import all MT5 XLSX trade history files from a directory (any server).
-    /// Account ID derived from filename: e.g. "THA.xlsx" → "THA", "MyAccount_2024.xlsx" → "MYACCOUNT".
-    /// Works with Darwinex, Axion, OANDA, or any MT5 server export.
-    DarwinImportAll {
-        dir: PathBuf,
-        db_path: PathBuf,
-    },
     /// Sync bar data from MT5 BarCacheWriter databases into main cache.
     /// Uses shared Arc<SqliteCache> — no second connection opened.
     Mt5Sync {
@@ -641,16 +529,6 @@ pub(crate) enum BrokerCmd {
         use_alpaca: bool,
         finnhub_key: String,
         fmp_key: String,
-    },
-    /// Scan DARWIN FTP universe (non-blocking, heavy I/O).
-    DarwinFtpScan {
-        ftp_dir: String,
-        min_days: usize,
-    },
-    /// Scan DARWIN FTP and compute stats on GPU.
-    DarwinGpuScan {
-        ftp_dir: String,
-        min_days: usize,
     },
     /// Fetch SEC filing document content from EDGAR URL.
     FetchFilingContent {
@@ -705,17 +583,9 @@ pub(crate) enum BrokerCmd {
     LanSyncStop,
     /// Request resync of bar data from LAN server.
     LanResyncBars,
-    /// Request resync of DARWIN data from LAN server.
-    LanResyncDarwin,
     /// Scan unusual volume (background, heavy DB reads).
     ScanUnusualVolume {
         keys: Vec<(String, i64)>,
-    },
-    /// Export all DARWIN data to JSON.
-    ExportDarwinData,
-    /// Import DARWIN data from JSON string.
-    ImportDarwinData {
-        json: String,
     },
     /// Place market order via Alpaca.
     AlpacaMarketOrder {
@@ -2957,10 +2827,6 @@ pub(crate) enum BrokerMsg {
     JsonResult(String, String), // (label, formatted text)
     /// Fundamentals scrape progress update.
     FundamentalsProgress(String),
-    /// DARWIN FTP scan results.
-    DarwinFtpScanResult(Vec<darwin_ftp::DarwinFtpSummary>),
-    /// Raw return data ready for GPU upload (ticker, daily_returns_f32).
-    DarwinFtpReturns(Vec<(String, Vec<f32>)>),
     /// Bars fetched from a broker and stored in cache. The UI only reloads the
     /// active chart when the source/symbol/timeframe actually match.
     BarsFetched {
@@ -4333,12 +4199,6 @@ pub struct TyphooNApp {
     /// In-progress brush/freehand points (accumulated while mouse held down).
     pub(crate) brush_points: Vec<(usize, f64)>,
 
-    /// DARWIN XLSX import ticker input.
-    pub(crate) darwin_import_ticker: String,
-    /// Directory containing DARWIN XLSX files for auto-import.
-    /// Files are named by ticker: "THA.xlsx", "THB.xlsx", etc.
-    pub(crate) darwin_xlsx_dir: String,
-
     /// MT5 BarCacheWriter database paths (up to 4 sources).
     /// Each path points to a `typhoon_mt5_cache.db` in an MT5 Wine prefix or native install.
     /// Data is synced from these sources into the main cache on startup and on demand.
@@ -4402,30 +4262,8 @@ pub struct TyphooNApp {
     /// real content will match) at boot.
     pub(crate) mt5_demand_txt_last_hash: u64,
 
-    /// Darwinex FTP data directory (contains DARWIN CSV files for correlation scanning).
-    pub(crate) darwin_ftp_dir: String,
-    /// Shared FTP dir for background thread access.
-    pub(crate) shared_ftp_dir: std::sync::Arc<std::sync::Mutex<String>>,
-
-    // ── Darwinex Zero Web Scraping (ADR-093) ────────────────────────
-    /// WebDriver handle for Selenium browser (None if not logged in).
-    pub(crate) dwx_driver: Option<std::sync::Arc<tokio::sync::Mutex<thirtyfour::WebDriver>>>,
-    /// Whether the Selenium browser is currently logged in to darwinexzero.com.
-    pub(crate) dwx_logged_in: bool,
-    /// Darwinex web scraping configuration (managed DARWINs, schedule, etc.).
-    pub(crate) dwx_config: typhoon_engine::core::darwin_web::DarwinWebConfig,
     /// ADR-038 Phase 2: Pluggable data source manager.
     pub(crate) data_sources: typhoon_engine::core::data_source::DataSourceManager,
-    /// Last scrape result (live snapshots + correlation).
-    pub(crate) dwx_last_update: Option<typhoon_engine::core::darwin_web::DarwinWebUpdate>,
-    /// Receiver for async scrape results from background task.
-    /// Contains: (result, optional WebDriver to store on success).
-    pub(crate) dwx_rx: Option<
-        std::sync::mpsc::Receiver<(
-            Result<typhoon_engine::core::darwin_web::DarwinWebUpdate, String>,
-            Option<std::sync::Arc<tokio::sync::Mutex<thirtyfour::WebDriver>>>,
-        )>,
-    >,
 
     /// Broker connection fields (Alpaca).
     pub(crate) broker_api_key: String,
@@ -4436,7 +4274,6 @@ pub struct TyphooNApp {
     /// owned positions, open-order symbols, and the user's watchlist.
     pub(crate) alpaca_full_bar_sync_enabled: bool,
     pub(crate) alpaca_enabled: bool,
-    pub(crate) darwinex_enabled: bool,
 
     /// Broker connection fields (Kraken).
     pub(crate) kraken_full_bar_sync_enabled: bool,
@@ -4749,8 +4586,6 @@ pub struct TyphooNApp {
     // ── floating window visibility ───────────────────────────────────────
     pub(crate) show_settings: bool,
     pub(crate) was_settings_open: bool,
-    pub(crate) show_darwin_accounts: bool,
-    pub(crate) show_darwin_portfolio: bool,
     pub(crate) show_risk_calc: bool,
     pub(crate) show_compound_calc: bool,
     pub(crate) ci_principal: String,
@@ -4812,8 +4647,8 @@ pub struct TyphooNApp {
     pub(crate) show_sector_heatmap: bool,
     pub(crate) show_dividends: bool,
     /// Global broker scope filter applied to all fundamental-based commands
-    /// (OUTLIERS, EVOUTLIERS, DARWINVAR, DIVSCREEN, SECTOR_HEATMAP, HV_CONE, EV viewer, etc.).
-    /// All = no filter. Use `SCOPE [ALL|ALPACA|DARWINEX|TASTY]` command to change.
+    /// (OUTLIERS, EVOUTLIERS, DIVSCREEN, SECTOR_HEATMAP, HV_CONE, EV viewer, etc.).
+    /// All = no filter. Use `SCOPE [ALL|ALPACA|KRAKEN]` command to change.
     pub(crate) broker_scope: EventSource,
     /// Cached broker scope HashSet. Invalidated by `(bg_rev, broker_scope)` pair —
     /// only recomputed when fundamentals/specs load (bg_rev bumped) or scope changes.
@@ -4962,7 +4797,6 @@ pub struct TyphooNApp {
     pub(crate) storage_delete_filtered_confirm: bool,
     pub(crate) storage_prune_disabled_kraken_quotes_confirm: bool,
     pub(crate) storage_purge_bars_confirm: bool,
-    pub(crate) storage_purge_darwin_confirm: bool,
     pub(crate) storage_purge_broker_confirm: Option<String>,
     pub(crate) storage_purge_timeframe_confirm: bool,
     /// Slider position for the news age-purge tool (index into the
@@ -5093,13 +4927,6 @@ pub struct TyphooNApp {
     pub(crate) show_indicators_panel: bool,
     pub(crate) show_data_window: bool,
     pub(crate) show_alerts: bool,
-    pub(crate) show_swap_harvest: bool,
-    pub(crate) swap_harvest_results: Option<typhoon_engine::core::darwin::SwapHarvestResult>,
-    pub(crate) swap_harvest_filter: String,
-    pub(crate) swap_harvest_dir_filter: String, // "", "LONG", "SHORT", "BOTH"
-    pub(crate) show_darwinex_radar: bool,
-    pub(crate) darwinex_radar_data: Vec<(String, String, String, i32, f64, f64, f64, f64, String)>, // (symbol, sector, industry, trade_mode, swap_l, swap_s, vol_min, margin, desc)
-    pub(crate) darwinex_radar_changelog: Vec<typhoon_engine::core::darwin::RadarChange>,
     // Fundamentals symbol source settings
     pub(crate) fund_source_mt5: bool,
     pub(crate) fund_source_alpaca: bool,
@@ -5124,8 +4951,6 @@ pub struct TyphooNApp {
     pub(crate) scrape_sec_last_msg: String,
     /// Startup auto SEC scrape was deferred because Scope had no symbols yet.
     pub(crate) auto_sec_scrape_deferred: bool,
-    pub(crate) scrape_darwin_running: bool,
-    pub(crate) scrape_darwin_last_msg: String,
     // Web server (phone access over LAN)
     pub(crate) web_server_running: bool,
     /// Hash-based dedup for broker KV writes — skip put_kv if content unchanged
@@ -5135,19 +4960,6 @@ pub struct TyphooNApp {
     pub(crate) web_cmd_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<typhoon_web_protocol::WebCmd>>,
     pub(crate) web_msg_tx: Option<tokio::sync::broadcast::Sender<typhoon_web_protocol::WebMsg>>,
-    // DARWIN FTP browser
-    /// DARWIN FTP browser window visibility.
-    pub(crate) show_darwin_browser: bool,
-    /// Cached FTP scan results (from broker channel).
-    pub(crate) ftp_scan_results: Vec<darwin_ftp::DarwinFtpSummary>,
-    /// DARWIN FTP detail: ticker being viewed.
-    pub(crate) ftp_detail_ticker: String,
-    /// DARWIN FTP detail: availability data.
-    pub(crate) ftp_detail_avail: Option<darwin_ftp::DarwinDataAvailability>,
-    /// DARWIN FTP detail: return summary.
-    pub(crate) ftp_detail_summary: Option<darwin_ftp::DarwinFtpSummary>,
-    /// DARWIN FTP detail: daily returns for equity curve plot.
-    pub(crate) ftp_detail_returns: Vec<darwin_ftp::ReturnPoint>,
     // Fundamentals windows
     pub(crate) show_ev_scanner: bool,
     pub(crate) show_earnings_calendar: bool,
@@ -5180,7 +4992,6 @@ pub struct TyphooNApp {
     /// Sort states for data tables.
     pub(crate) ev_sort: SortState,
     pub(crate) sec_sort: SortState,
-    pub(crate) darwin_browser_sort: SortState,
     pub(crate) insider_sort: SortState,
     pub(crate) outlier_sort: SortState,
     /// Sort state for the single-metric outlier table (VAROUTLIER/EVOUTLIER/ATROUTLIER).
@@ -7502,7 +7313,6 @@ pub struct TyphooNApp {
     pub(crate) kr_positions: Vec<PositionInfo>,
     pub(crate) kraken_equity_quote_meta: std::collections::BTreeMap<String, KrakenEquityQuoteMeta>,
     /// Position visibility toggles (still synced, just hidden in UI)
-    pub(crate) show_darwin_positions: bool,
     pub(crate) show_alpaca_positions: bool,
     pub(crate) show_kr_positions: bool,
     pub(crate) show_kraken_trade_history: bool,
@@ -7546,19 +7356,11 @@ pub struct TyphooNApp {
     /// Recent fills (symbol, side, qty, price, time).
     pub(crate) recent_fills: Vec<(String, String, f64, f64, String)>,
 
-    // ── DARWIN portfolio view selector ─────────────────────────────────
-    /// Which DARWIN view is selected in the portfolio dropdown.
-    pub(crate) darwin_view: usize,
-    /// Per-DARWIN AuM (Assets under Management) input — keyed by ticker.
-    pub(crate) darwin_aum: std::collections::HashMap<String, String>,
-    /// Frame number when DARWIN windows last queried the DB.
     /// Latest background-computed data. Updated by draining bg_rx each frame.
     pub(crate) bg: BgDarwinData,
     /// Receiver for background data snapshots.
     pub(crate) bg_rx: std::sync::mpsc::Receiver<BgDarwinData>,
 
-    /// GPU DARWIN analytics engine (compute shaders for batch stats/correlation).
-    pub(crate) gpu_darwin: Option<gpu_compute::GpuDarwinAnalytics>,
     pub(crate) gpu_indicators: Option<gpu_compute::GpuCompute>,
     /// Set true when indicator periods change in the UI; cleared after recompute.
     pub(crate) indicators_dirty: bool,
