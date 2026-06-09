@@ -768,7 +768,7 @@ fn extract_xml_value(body: &str, tag: &str) -> Option<String> {
 
 // ── Portfolio-wide Scraper ──────────────────────────────────────────
 
-/// Scrape SEC filings for all portfolio symbols (from darwin_deals + kv_cache).
+/// Scrape SEC filings for all portfolio symbols (from broker/user state + kv_cache).
 /// All DB access happens in spawn_blocking; HTTP is async.
 pub async fn scrape_all_portfolio_symbols(
     db_path: PathBuf,
@@ -793,19 +793,6 @@ pub async fn scrape_all_portfolio_symbols(
             let conn = open_conn(&db)?;
             let mut sym_set: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-            // From darwin_deals
-            if let Ok(mut stmt) = conn.prepare(
-            "SELECT DISTINCT symbol FROM darwin_deals WHERE symbol != '' AND symbol IS NOT NULL"
-        ) {
-            if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
-                for row in rows.flatten() {
-                    if let Some(sym) = normalize_sec_equity_symbol(&row) {
-                        sym_set.insert(sym);
-                    }
-                }
-            }
-        }
-
             // From legacy/current full-symbol imports. Do not treat every
             // `kraken-equities:*` bar-cache key as a SEC target: the Kraken cache
             // can contain the broad exchange universe, which would turn "Scrape
@@ -829,7 +816,7 @@ pub async fn scrape_all_portfolio_symbols(
             // broad cached equities universe.
             if let Ok(mut stmt) = conn.prepare(
                 "SELECT value FROM kv_cache
-                 WHERE key IN ('broker:watchlist', 'broker:positions', 'broker:kr_positions', 'darwin:open_positions')",
+                 WHERE key IN ('broker:watchlist', 'broker:positions', 'broker:kr_positions')",
             ) {
                 if let Ok(rows) = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0)) {
                     for row in rows.flatten() {

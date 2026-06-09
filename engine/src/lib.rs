@@ -1,6 +1,6 @@
 //! TyphooN Terminal Engine — shared library crate.
 //!
-//! Core trading engine: broker, cache, risk, DARWIN analytics, backtest, screener.
+//! Core trading engine: broker, cache, risk, backtest, screener.
 //! Used by the native GPU renderer (egui + wgpu) in `native/`.
 
 pub mod broker;

@@ -1,7 +1,6 @@
 // ── Syncable Tables (whitelist) ────────────────────────────────────
 
 pub(super) const SYNCABLE_TABLES: &[&str] = &[
-    "darwin_equity_snapshots",
     "sec_filings",
     "sec_insider_trades",
     "sec_filing_alerts",
@@ -537,17 +536,6 @@ pub(super) const SYNCABLE_TABLES: &[&str] = &[
 /// Returns the CREATE TABLE statement for a syncable table (whitelist only).
 pub(super) fn create_table_sql(table: &str) -> Option<&'static str> {
     match table {
-        "darwin_equity_snapshots" => Some(
-            "CREATE TABLE IF NOT EXISTS darwin_equity_snapshots (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp INTEGER NOT NULL,
-                darwin_ticker TEXT NOT NULL,
-                closed_balance REAL NOT NULL DEFAULT 0,
-                unrealized_pnl REAL NOT NULL DEFAULT 0,
-                floating_equity REAL NOT NULL DEFAULT 0,
-                open_position_count INTEGER NOT NULL DEFAULT 0
-            )",
-        ),
         "sec_filings" => Some(
             "CREATE TABLE IF NOT EXISTS sec_filings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3769,7 +3757,6 @@ pub(super) fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "sec_insider_trades" => Some("created_at"),
         "sec_filing_alerts" => Some("created_at"),
         "sec_filing_content" => Some("fetched_at"),
-        "darwin_equity_snapshots" => Some("timestamp"),
         "fundamentals" => Some("updated_at"),
         "quarterly_financials" => Some("updated_at"),
         "institutional_holders" => Some("updated_at"),

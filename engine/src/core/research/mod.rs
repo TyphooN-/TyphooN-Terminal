@@ -10,7 +10,7 @@
 //! All functions take an existing reqwest::Client so callers control the HTTP stack
 //! (rate limiting, user-agent, timeouts).
 //!
-//! Research results are cached in SQLite so MT5/Darwinex symbols only need to hit
+//! Research results are cached in SQLite so symbols only need to hit
 //! the APIs once per scrape cycle — the DES/PEERS/EARNINGS/PRESS/SENTIMENT/
 //! TRANSCRIPTS windows read from cache first and fall back to live fetch.
 

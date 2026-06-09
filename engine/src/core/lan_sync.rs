@@ -109,16 +109,6 @@ pub enum SyncMessage {
     },
     Ping,
     Pong,
-    // ── DARWIN data sync (opt-in) ──
-    /// Request DARWIN snapshot (deals, positions, equity) for all accounts.
-    RequestDarwinData,
-    /// Server response: serialized DARWIN data (JSON blob, zstd + base64 encoded).
-    DarwinData {
-        data: String,
-        accounts: usize,
-        deals: usize,
-        positions: usize,
-    },
     /// Server stats pushed to client on connect and periodically.
     SyncStats {
         bytes_sent: u64,
@@ -408,9 +398,7 @@ pub struct SyncStatus {
     pub bytes_sent: u64,          // total bytes sent
     pub bytes_received: u64,      // total bytes received
     pub entries_synced: usize,    // bar entries synced
-    pub darwin_synced: bool,      // whether DARWIN data has been synced
     pub uptime_secs: u64,         // seconds since start
-    pub send_darwin: bool,        // server: opt-in to send DARWIN data to clients
     pub cert_fingerprint: String, // SHA-256 fingerprint of the TLS certificate (hex)
     pub client_ips: Vec<String>,  // server: list of connected client IP addresses
 }
@@ -426,9 +414,7 @@ impl Default for SyncStatus {
             bytes_sent: 0,
             bytes_received: 0,
             entries_synced: 0,
-            darwin_synced: false,
             uptime_secs: 0,
-            send_darwin: false,
             cert_fingerprint: String::new(),
             client_ips: Vec::new(),
         }
@@ -722,45 +708,6 @@ async fn handle_client_tls(
                     s.bytes_sent += bytes_total;
                 }
             }
-            SyncMessage::RequestDarwinData => {
-                // Export DARWIN tables via read connection (doesn't block writes)
-                let cache_clone = cache.clone();
-                let darwin_result = tokio::task::spawn_blocking(move || {
-                    if let Ok(conn) = cache_clone.read_connection() {
-                        crate::core::darwin::export_darwin_data(&conn).ok()
-                    } else {
-                        None
-                    }
-                })
-                .await
-                .ok()
-                .flatten();
-
-                if let Some((json, n_acct, n_deals, n_pos)) = darwin_result {
-                    let compressed =
-                        zstd::encode_all(json.as_bytes(), 3).unwrap_or_else(|_| json.into_bytes());
-                    let encoded = base64::Engine::encode(
-                        &base64::engine::general_purpose::STANDARD,
-                        &compressed,
-                    );
-                    if let Ok(msg) = send_msg(&SyncMessage::DarwinData {
-                        data: encoded,
-                        accounts: n_acct,
-                        deals: n_deals,
-                        positions: n_pos,
-                    }) {
-                        let _ = sink.send(msg).await;
-                    }
-                    tracing::info!(
-                        "LAN sync: sent DARWIN data ({} accounts, {} deals, {} positions)",
-                        n_acct,
-                        n_deals,
-                        n_pos
-                    );
-                } else {
-                    tracing::warn!("LAN sync: DARWIN export failed or cache unavailable");
-                }
-            }
             SyncMessage::RequestKvData { since_ts } => {
                 // Send KV cache entries as binary batch (incremental if since_ts > 0)
                 // NEVER sync machine-local config keys: LAN topology and credentials are
@@ -775,10 +722,6 @@ async fn handle_client_tls(
                     kv_local_keys.iter().any(|&lk| k == lk)
                         || k.starts_with("cred:")
                         || k.starts_with("quote:")            // 851 individual bid/ask entries — huge churn
-                        || k.starts_with("darwin:daily_returns")  // huge (100KB+), client computes locally
-                        || k.starts_with("darwin:correlations")   // N×N matrix, client computes locally
-                        || k.starts_with("darwin:exposure")       // client computes locally
-                        || k == "darwin:insider_trades"            // large, client has SEC data via table sync
                         || k == "client:demand"                   // per-machine demand list
                         || k.starts_with("lan:") // all LAN config is per-machine
                 };
@@ -863,7 +806,6 @@ async fn handle_client_tls(
                     "KRAKEN_BACKFILL",
                     "CRYPTOCOMPARE",
                     "MT5_SYNC",
-                    "DARWIN_IMPORT",
                     "FETCH_BARS",
                     "FINNHUB_NEWS",
                     "ECON_CALENDAR",
@@ -1273,50 +1215,6 @@ async fn client_sync_loop(
         }
     }
 
-    // 8b. Request DARWIN data (accounts, deals, positions)
-    sink.send(send_msg(&SyncMessage::RequestDarwinData)?)
-        .await
-        .map_err(|e| format!("Send RequestDarwinData failed: {e}"))?;
-
-    match read_next(stream).await? {
-        SyncMessage::DarwinData {
-            data,
-            accounts,
-            deals,
-            positions,
-        } => {
-            // Decompress and import
-            let compressed =
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data)
-                    .map_err(|e| format!("Base64 decode DARWIN data failed: {e}"))?;
-            let json_bytes = zstd::decode_all(std::io::Cursor::new(&compressed))
-                .unwrap_or_else(|_| compressed.clone());
-            let json = String::from_utf8_lossy(&json_bytes);
-
-            let cache_clone = cache.clone();
-            let json_owned = json.to_string();
-            let _ = tokio::task::spawn_blocking(move || {
-                if let Ok(conn) = cache_clone.connection() {
-                    match crate::core::darwin::import_darwin_data(&conn, &json_owned) {
-                        Ok((na, nd, np)) => {
-                            tracing::info!("LAN sync: imported DARWIN data — {} accounts, {} deals, {} positions", na, nd, np);
-                        }
-                        Err(e) => { tracing::warn!("LAN sync: DARWIN import failed: {e}"); }
-                    }
-                }
-            }).await;
-            tracing::info!(
-                "LAN sync: DARWIN data received ({} accounts, {} deals, {} positions)",
-                accounts,
-                deals,
-                positions
-            );
-        }
-        other => {
-            tracing::warn!("LAN sync: expected DarwinData, got {:?}", other);
-        }
-    }
-
     // 8c. Request KV cache entries (fundamentals, news, SEC filings, FRED, etc.)
     // Incremental: send last known KV sync timestamp; 0 = full sync
     let kv_since_ts = cache.get_sync_ts("kv_cache");
@@ -1712,7 +1610,6 @@ async fn client_sync_loop(
                                     expecting_kv_binary = true;
                                     let kv_since = cache.get_sync_ts("kv_cache");
                                     let _ = sink.send(send_msg(&SyncMessage::RequestKvData { since_ts: kv_since })?).await;
-                                    // NOTE: DARWIN deals NOT re-synced here — analytics come via KV.
                                     tracing::info!("LAN sync: incremental re-sync triggered after '{}' completion", cmd);
                                 }
                                 Ok(SyncMessage::TableSyncData { table, rows_json }) => {
@@ -1749,22 +1646,6 @@ async fn client_sync_loop(
                                         tracing::debug!("LAN sync: KV re-sync received 0 entries");
                                     }
                                 }
-                                Ok(SyncMessage::DarwinData { data, accounts: _, deals: _, positions: _ }) => {
-                                    // Decode: base64 → zstd decompress → JSON (same as initial sync)
-                                    if let Ok(compressed) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data) {
-                                        let json_bytes = zstd::decode_all(std::io::Cursor::new(&compressed))
-                                            .unwrap_or_else(|_| compressed.clone());
-                                        let json = String::from_utf8_lossy(&json_bytes);
-                                        if let Ok(conn) = cache.connection() {
-                                            match crate::core::darwin::import_darwin_data(&conn, &json) {
-                                                Ok((a, d, p)) => tracing::info!("LAN sync: DARWIN re-sync: {a} accounts, {d} deals, {p} positions"),
-                                                Err(e) => tracing::warn!("LAN sync: DARWIN re-import failed: {e}"),
-                                            }
-                                        }
-                                    } else {
-                                        tracing::warn!("LAN sync: DARWIN re-sync base64 decode failed");
-                                    }
-                                }
                                 _ => {}
                             }
                         }
@@ -1784,11 +1665,6 @@ async fn client_sync_loop(
                         // Client-side: re-request all bar metadata and entries from server
                         tracing::info!("LAN sync: resync bars requested — sending RequestMeta");
                         let _ = sink.send(send_msg(&SyncMessage::RequestMeta)?).await;
-                    }
-                    "RESYNC_DARWIN" => {
-                        // Client-side: re-request DARWIN data from server
-                        tracing::info!("LAN sync: resync DARWIN requested");
-                        let _ = sink.send(send_msg(&SyncMessage::RequestDarwinData)?).await;
                     }
                     _ => {
                         // Forward to server as RemoteRequest
@@ -1829,10 +1705,6 @@ async fn client_sync_loop(
                     }).collect();
                     let _ = sink.send(send_msg(&SyncMessage::RequestTableSync { tables: table_requests })?).await;
                 }
-                // NOTE: DARWIN deal import removed from periodic resync.
-                // All DARWIN analytics (positions, VaR, exposure, etc.) now sync via KV cache.
-                // The 45K deal import was 20+ seconds of CPU and produced wrong results on client.
-                // DARWIN deals only imported during initial sync (for table completeness).
             }
         }
     }
@@ -1841,7 +1713,7 @@ async fn client_sync_loop(
 }
 
 async fn read_next(stream: &mut WsStream) -> Result<SyncMessage, String> {
-    // 5-minute timeout: DARWIN export for 45K+ deals requires serialization + zstd
+    // 5-minute timeout: large table/KV exports require serialization + zstd
     // compression + base64 encoding which can take 60-120s on large databases.
     // The previous 60s timeout caused "Timeout waiting for message" during initial sync.
     match tokio::time::timeout(std::time::Duration::from_secs(300), stream.next()).await {

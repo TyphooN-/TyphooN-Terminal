@@ -922,7 +922,7 @@ pub fn find_stat_arb_pairs(
 
 // ── Risk Budget ──────────────────────────────────────────────────────
 
-/// Risk contribution per DARWIN/asset.
+/// Risk contribution per asset.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskBudgetEntry {
     pub name: String,

@@ -467,10 +467,9 @@ fn unpack_bars_tail(data: &[u8], tail: usize) -> Result<String, String> {
 ///
 /// Uses two connections for concurrency under WAL mode:
 /// - `conn` (Mutex): exclusive write path — put_bars, put_kv, delete, compact, etc.
-///   Also used by the bg thread for DARWIN queries (which do CREATE TABLE IF NOT EXISTS).
 /// - `read_conn` (Mutex): dedicated read path — get_bars_raw, detailed_stats, stats, etc.
 ///   Never blocked by writes. The bg thread and UI thread can read simultaneously with
-///   the write connection held by Mt5Sync or compaction.
+///   the write connection held by compaction.
 ///
 /// SQLite WAL mode allows unlimited concurrent readers + one writer. The two Mutexes
 /// are independent — a write lock on `conn` does NOT block reads on `read_conn`.
@@ -1880,7 +1879,7 @@ impl SqliteCache {
     }
 
     /// Get a lock on the underlying connection for direct SQL operations.
-    /// Used by darwin import to run table creation and batch inserts.
+    /// Used for direct table creation and batch inserts.
     pub fn connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
         self.conn.lock().map_err(|e| format!("Lock failed: {e}"))
     }
@@ -2339,32 +2338,6 @@ impl SqliteCache {
             Ok(_) => Ok(deleted),
             Err(e) => Err(format!(
                 "Deleted {deleted} bar rows but reclaim failed: {e}"
-            )),
-        }
-    }
-
-    /// Delete ALL DARWIN data (accounts, deals, positions, equity snapshots).
-    /// Returns the total number of rows deleted across all tables.
-    /// Runs VACUUM to reclaim freed pages and shrink the DB file on disk.
-    pub fn delete_all_darwin(&self) -> Result<u64, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let mut total = 0u64;
-        // Table names are compile-time constants, not user input — safe for format!()
-        for table in &[
-            "darwin_deals",
-            "darwin_positions",
-            "darwin_equity_snapshots",
-            "darwin_accounts",
-        ] {
-            let deleted = conn
-                .execute(&format!("DELETE FROM {}", table), [])
-                .unwrap_or(0) as u64;
-            total += deleted;
-        }
-        match Self::reclaim_space_locked(&conn, &self.db_path) {
-            Ok(_) => Ok(total),
-            Err(e) => Err(format!(
-                "Deleted {total} DARWIN rows but reclaim failed: {e}"
             )),
         }
     }
@@ -3470,13 +3443,13 @@ mod tests {
         let cache = SqliteCache::open(&db_path).unwrap();
 
         cache.put_kv("cred:alpaca", "{}").unwrap();
-        cache.put_kv("cred:darwinex", "{}").unwrap();
+        cache.put_kv("cred:kraken", "{}").unwrap();
         cache.put_kv("other:thing", "{}").unwrap();
 
         let keys = cache.list_kv_keys("cred:").unwrap();
         assert_eq!(keys.len(), 2);
         assert!(keys.contains(&"cred:alpaca".to_string()));
-        assert!(keys.contains(&"cred:darwinex".to_string()));
+        assert!(keys.contains(&"cred:kraken".to_string()));
     }
 
     #[test]
