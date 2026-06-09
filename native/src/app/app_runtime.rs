@@ -190,16 +190,6 @@ impl eframe::App for TyphooNApp {
             let _ = self.broker_tx.send(BrokerCmd::KrakenFuturesGetInstruments);
             self.kraken_futures_requested = true;
         }
-        if self.cache_loaded
-            && self.tastytrade_enabled
-            && self.tt_connected
-            && !self.tastytrade_universe_requested
-            && chrono::Utc::now().timestamp() >= self.tastytrade_universe_retry_after_ts
-            && self.lan_sync_mode != "client"
-        {
-            let _ = self.broker_tx.send(BrokerCmd::TastytradeGetUniverse);
-            self.tastytrade_universe_requested = true;
-        }
 
         // Periodic crypto bar refresh (every ~60 seconds at 4fps = every 240 frames)
         // Periodic crypto bar refresh (~60s) — works on both server and LAN client
@@ -469,8 +459,6 @@ impl eframe::App for TyphooNApp {
                     (keyring::keys::ALPACA_SECRET, "alpaca_secret"),
                     (keyring::keys::FINNHUB_KEY, "finnhub_key"),
                     (keyring::keys::FRED_KEY, "fred_key"),
-                    (keyring::keys::TT_USERNAME, "tt_username"),
-                    (keyring::keys::TT_PASSWORD, "tt_password"),
                     (keyring::keys::LAN_SYNC_PASS, "lan_sync_pass"),
                     (keyring::keys::DISCORD_WEBHOOK, "discord_webhook"),
                     (keyring::keys::PUSHOVER_TOKEN, "pushover_token"),
@@ -529,8 +517,6 @@ impl eframe::App for TyphooNApp {
                         k if k == keyring::keys::ALPACA_SECRET => self.broker_secret = val.clone(),
                         k if k == keyring::keys::FINNHUB_KEY => self.finnhub_key = val.clone(),
                         k if k == keyring::keys::FRED_KEY => self.fred_key = val.clone(),
-                        k if k == keyring::keys::TT_USERNAME => self.tt_username = val.clone(),
-                        k if k == keyring::keys::TT_PASSWORD => self.tt_password = val.clone(),
                         k if k == keyring::keys::LAN_SYNC_PASS => {
                             self.lan_sync_passphrase = val.clone()
                         }
@@ -1716,38 +1702,6 @@ impl eframe::App for TyphooNApp {
                     self.detect_mt5_gaps();
                     self.write_mt5_demand_txt();
                 }
-                BrokerMsg::TastytradePositions(pos) => {
-                    if !self.tastytrade_enabled {
-                        continue;
-                    }
-                    self.positions_last_update_ts = chrono::Utc::now().timestamp();
-                    let prev_symbols: std::collections::HashSet<String> = self
-                        .tt_positions
-                        .iter()
-                        .filter(|p| p.qty.abs() > 0.0)
-                        .map(|p| p.symbol.to_ascii_uppercase())
-                        .collect();
-                    let next_symbols: std::collections::HashSet<String> = pos
-                        .iter()
-                        .filter(|p| p.qty.abs() > 0.0)
-                        .map(|p| p.symbol.to_ascii_uppercase())
-                        .collect();
-                    for symbol in prev_symbols.difference(&next_symbols) {
-                        let _ = self.broker_tx.send(BrokerCmd::TastytradeCancelLiveExits {
-                            symbol: symbol.clone(),
-                        });
-                    }
-                    if let Ok(json) = serde_json::to_string(&pos) {
-                        self.put_kv_dedup("broker:tt_positions", &json);
-                    }
-                    self.tt_positions = pos;
-                }
-                BrokerMsg::TastytradeBalances(bal) => {
-                    if !self.tastytrade_enabled {
-                        continue;
-                    }
-                    self.tt_balances = Some(bal);
-                }
                 BrokerMsg::KrakenPositions(mut pos) => {
                     if !self.kraken_enabled {
                         continue;
@@ -1813,14 +1767,6 @@ impl eframe::App for TyphooNApp {
                     if is_trade && self.alpaca_enabled && self.broker_connected {
                         let _ = self.broker_tx.send(BrokerCmd::GetPositions);
                         let _ = self.broker_tx.send(BrokerCmd::GetOrders);
-                    }
-                    if is_trade
-                        && self.tastytrade_enabled
-                        && self.tt_connected
-                        && msg.to_ascii_lowercase().contains("tastytrade")
-                    {
-                        let _ = self.broker_tx.send(BrokerCmd::TastytradePositions);
-                        let _ = self.broker_tx.send(BrokerCmd::TastytradeGetBalances);
                     }
                     if is_trade
                         && self.kraken_enabled
@@ -2510,15 +2456,6 @@ impl eframe::App for TyphooNApp {
                     self.kraken_futures_requested = true;
                     self.kraken_futures_symbols = symbols;
                     self.refill_market_data_sync_slots();
-                }
-                BrokerMsg::TastytradeUniverse(symbols) => {
-                    self.log.push_back(LogEntry::info(format!(
-                        "tastytrade: {} market-data symbols loaded",
-                        symbols.len()
-                    )));
-                    self.tastytrade_universe_requested = true;
-                    self.tastytrade_universe_retry_after_ts = 0;
-                    self.tastytrade_universe_symbols = symbols;
                 }
                 BrokerMsg::FredData(series, yields) => {
                     self.fred_data = series;
@@ -7906,30 +7843,6 @@ impl eframe::App for TyphooNApp {
                         )));
                     }
                 }
-                BrokerMsg::TastytradeFetchSettled { symbol, timeframe } => {
-                    self.settle_market_data_fetch("tastytrade", &symbol, &timeframe);
-                    market_data_refill_requested = true;
-                }
-                BrokerMsg::TastytradeBackfillComplete {
-                    symbol,
-                    timeframe,
-                    bar_count,
-                    target_bars,
-                } => {
-                    let changed = self.tastytrade_backfill_complete_mark(
-                        &symbol,
-                        &timeframe,
-                        bar_count,
-                        target_bars,
-                    );
-                    if changed {
-                        let marker_count = self.tastytrade_backfill_complete_pairs.len();
-                        self.log.push_back(LogEntry::info(format!(
-                            "tastytrade {} {}: marked backfill-complete at {}/{} bars — full history exhausted; automated sync will keep it current ({} marked)",
-                            symbol, timeframe, bar_count, target_bars, marker_count
-                        )));
-                    }
-                }
                 BrokerMsg::AlpacaRateLimitObserved { historical_rpm } => {
                     if historical_rpm > 0 && self.alpaca_historical_rpm_observed != historical_rpm {
                         self.alpaca_historical_rpm_observed = historical_rpm;
@@ -11395,8 +11308,6 @@ impl eframe::App for TyphooNApp {
                 (keyring::keys::ALPACA_SECRET, &self.broker_secret),
                 (keyring::keys::FINNHUB_KEY, &self.finnhub_key),
                 (keyring::keys::FRED_KEY, &self.fred_key),
-                (keyring::keys::TT_USERNAME, &self.tt_username),
-                (keyring::keys::TT_PASSWORD, &self.tt_password),
                 (keyring::keys::CRYPTOPANIC_KEY, &self.cryptopanic_key),
             ]
             .iter()
@@ -11821,17 +11732,6 @@ impl eframe::App for TyphooNApp {
 
         // Poll tastytrade positions every ~60 seconds so terminal-managed exit changes
         // and broker fills eventually converge back into the unified position view.
-        if now_instant.duration_since(self.broker_positions_last_poll)
-            >= std::time::Duration::from_secs(60)
-            && self.tastytrade_enabled
-            && self.tt_connected
-            && !self.lan_client_enabled
-            && self.cache_loaded
-        {
-            self.broker_positions_last_poll = now_instant;
-            let _ = self.broker_tx.send(BrokerCmd::TastytradePositions);
-            let _ = self.broker_tx.send(BrokerCmd::TastytradeGetBalances);
-        }
         if now_instant.duration_since(self.kraken_positions_last_poll)
             >= std::time::Duration::from_secs(60)
             && self.kraken_enabled
