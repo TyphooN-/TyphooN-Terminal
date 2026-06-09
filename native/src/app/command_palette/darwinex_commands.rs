@@ -36,13 +36,6 @@ impl TyphooNApp {
                         }
                     }
                 }
-                if self.show_tt_positions {
-                    for pos in &self.tt_positions {
-                        if seen.insert(pos.symbol.clone()) {
-                            symbols.push(pos.symbol.clone());
-                        }
-                    }
-                }
                 if self.show_kr_positions {
                     for pos in &self.kr_positions {
                         if seen.insert(pos.symbol.clone()) {

@@ -69,8 +69,7 @@ impl TyphooNApp {
                             self.all_broker_assets.len()
                                 + self.kraken_pairs.len()
                                 + self.kraken_equity_universe_symbols.len()
-                                + self.kraken_futures_symbols.len()
-                                + self.tastytrade_universe_symbols.len(),
+                                + self.kraken_futures_symbols.len(),
                         );
                     broker_universe_assets.extend(self.all_broker_assets.iter().cloned());
                     broker_universe_assets.extend(self.kraken_pairs.iter().map(
@@ -92,15 +91,6 @@ impl TyphooNApp {
                             "future".to_string(),
                         )
                     }));
-                    broker_universe_assets.extend(self.tastytrade_universe_symbols.iter().map(
-                        |sym| {
-                            (
-                                sym.clone(),
-                                "tastytrade market-data symbol".to_string(),
-                                "tastytrade".to_string(),
-                            )
-                        },
-                    ));
 
                     // PERF: return &str slices instead of a heap-allocated Vec<&str>.
                     // Called once per detailed_stats entry (~500/frame when explorer open).
@@ -343,7 +333,6 @@ impl TyphooNApp {
                             let source_labels: &[(&str, &str, egui::Color32)] = &[
                                 ("mt5", "MT5 (Darwinex)", sym_gold),
                                 ("alpaca", "Alpaca (cached)", sym_green),
-                                ("tastytrade", "tastytrade (cached)", sym_teal),
                                 ("kraken", "Kraken", sym_orange),
                                 ("kraken-equities", "Kraken Equities (cached)", sym_orange),
                             ];

@@ -96,27 +96,6 @@ impl TyphooNApp {
                     }
                 }
                 ui.add_space(10.0);
-                ui.heading("tastytrade");
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("Username:");
-                    ui.add(egui::TextEdit::singleline(&mut self.tt_username).desired_width(200.0));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Password:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.tt_password)
-                            .desired_width(200.0)
-                            .password(true),
-                    );
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Mode:");
-                    ui.radio_value(&mut self.tt_sandbox, true, "Sandbox");
-                    ui.radio_value(&mut self.tt_sandbox, false, "Production");
-                });
-                let _ = &mut self.tt_sandbox;
-                ui.add_space(10.0);
                 ui.heading("Data APIs");
                 ui.separator();
                 egui::Grid::new("api_keys_grid")

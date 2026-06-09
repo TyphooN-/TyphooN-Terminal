@@ -75,21 +75,6 @@ impl TyphooNApp {
                                         }
                                     }
                                 }
-                                if self.tastytrade_enabled {
-                                    for sym in &self.tastytrade_universe_symbols {
-                                        if sym.contains(&query)
-                                            && !suggestions
-                                                .iter()
-                                                .any(|(s, _, _)| s.eq_ignore_ascii_case(sym))
-                                        {
-                                            suggestions.push((
-                                                sym.clone(),
-                                                String::new(),
-                                                "tastytrade".to_string(),
-                                            ));
-                                        }
-                                    }
-                                }
                                 // From Kraken tradeable pairs (if loaded)
                                 for (pair_name, display_name) in &self.kraken_pairs {
                                     let pn = pair_name.to_uppercase();
@@ -345,7 +330,6 @@ impl TyphooNApp {
                             let active_entry = self
                                 .live_positions
                                 .iter()
-                                .chain(self.tt_positions.iter())
                                 .find_map(|pos| {
                                     let pos_symbol = bare_symbol_from_key(&pos.symbol).to_ascii_uppercase();
                                     (pos_symbol == active_symbol
@@ -390,7 +374,7 @@ impl TyphooNApp {
                             ui.separator();
                             // Determine if we have any data source (broker, MT5, LAN, API keys)
                             let has_broker =
-                                self.broker_connected || self.tt_connected || self.kraken_connected;
+                                self.broker_connected || self.kraken_connected;
                             let has_mt5 = !self.mt5_db_paths.iter().all(|p| p.is_empty());
                             let has_lan = self.lan_sync_mode == "client" || self.lan_sync_mode == "server";
                             let has_api = !self.finnhub_key.is_empty() || !self.fred_key.is_empty();
@@ -408,10 +392,6 @@ impl TyphooNApp {
                                 }
                                 if self.kraken_connected {
                                     sources.push("Kraken (REST + WS)".into());
-                                }
-                                if self.tt_connected {
-                                    let mode = if self.tt_sandbox { "Sandbox" } else { "Live" };
-                                    sources.push(format!("tastytrade ({})", mode));
                                 }
                                 if !self.mt5_db_paths.iter().all(|p| p.is_empty()) {
                                     sources.push("MT5".into());

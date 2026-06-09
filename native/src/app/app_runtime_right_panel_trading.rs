@@ -375,7 +375,6 @@ impl TyphooNApp {
                             let active_pos = self
                                 .live_positions
                                 .iter()
-                                .chain(self.tt_positions.iter())
                                 .chain(self.kr_positions.iter())
                                 .find(|pos| pos.symbol.contains(chart_symbol));
                             let account_snaps: Vec<_> = self
@@ -383,7 +382,6 @@ impl TyphooNApp {
                                 .into_iter()
                                 .filter(|snap| match snap.broker {
                                     "Alpaca" => self.show_alpaca_positions,
-                                    "tastytrade" | "Tastytrade" | "Tasty" => self.show_tt_positions,
                                     "Kraken" => self.show_kr_positions,
                                     _ => true,
                                 })

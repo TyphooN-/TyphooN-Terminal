@@ -105,9 +105,6 @@ impl TyphooNApp {
                 for p in &self.live_positions {
                     syms.insert(p.symbol.replace('/', "").to_uppercase());
                 }
-                for p in &self.tt_positions {
-                    syms.insert(p.symbol.replace('/', "").to_uppercase());
-                }
                 for p in &self.kr_positions {
                     syms.insert(p.symbol.replace('/', "").to_uppercase());
                 }
@@ -137,8 +134,6 @@ impl TyphooNApp {
                         raw.insert(sym.clone());
                     }
                 }
-                raw.extend(self.tastytrade_universe_symbols.iter().cloned());
-                raw.extend(self.cached_tastytrade_symbols.iter().cloned());
                 raw.extend(self.news_focus_symbols());
             }
             _ => {
@@ -160,12 +155,6 @@ impl TyphooNApp {
         let mut syms = self.news_focus_symbols();
         syms.extend(self.mtf_grid_news_symbols());
         for p in &self.live_positions {
-            let s = p.symbol.trim().to_ascii_uppercase();
-            if !s.is_empty() {
-                syms.insert(s);
-            }
-        }
-        for p in &self.tt_positions {
             let s = p.symbol.trim().to_ascii_uppercase();
             if !s.is_empty() {
                 syms.insert(s);
@@ -199,8 +188,6 @@ impl TyphooNApp {
                         raw.insert(sym.clone());
                     }
                 }
-                raw.extend(self.tastytrade_universe_symbols.iter().cloned());
-                raw.extend(self.cached_tastytrade_symbols.iter().cloned());
                 raw.extend(self.active_news_scrape_symbols());
             }
             _ => raw.extend(self.active_news_scrape_symbols()),
@@ -800,17 +787,12 @@ impl TyphooNApp {
             .iter()
             .filter(|p| matches_sym(p))
             .collect();
-        let tt: Vec<&PositionInfo> = self
-            .tt_positions
-            .iter()
-            .filter(|p| matches_sym(p))
-            .collect();
         let kr: Vec<&PositionInfo> = self
             .kr_positions
             .iter()
             .filter(|p| matches_sym(p))
             .collect();
-        if alpaca.is_empty() && tt.is_empty() && kr.is_empty() {
+        if alpaca.is_empty() && kr.is_empty() {
             return String::new();
         }
 
@@ -856,9 +838,6 @@ impl TyphooNApp {
         };
         for p in &alpaca {
             emit_lot(&mut out, "Alpaca", p);
-        }
-        for p in &tt {
-            emit_lot(&mut out, "tastytrade", p);
         }
         for p in &kr {
             emit_lot(&mut out, "Kraken", p);

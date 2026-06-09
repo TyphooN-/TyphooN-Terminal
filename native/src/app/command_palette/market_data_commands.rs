@@ -37,12 +37,6 @@ impl TyphooNApp {
                         symbols.insert(pos.symbol.clone());
                     }
                 }
-                // tastytrade position symbols
-                for pos in &self.tt_positions {
-                    if !pos.symbol.is_empty() {
-                        symbols.insert(pos.symbol.clone());
-                    }
-                }
                 // Full Alpaca broker universe (12K+ symbols)
                 for (sym, _name, _class) in &self.all_broker_assets {
                     symbols.insert(sym.replace('/', "").to_uppercase());

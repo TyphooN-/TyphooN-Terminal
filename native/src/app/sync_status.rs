@@ -81,9 +81,6 @@ impl TyphooNApp {
                 "kraken-futures" => self
                     .kraken_futures_backfill_complete_pairs
                     .contains_key(&fetch_key),
-                "tastytrade" => self
-                    .tastytrade_backfill_complete_pairs
-                    .contains_key(&fetch_key),
                 _ => false,
             }
         };
@@ -245,14 +242,6 @@ impl TyphooNApp {
                         "Yahoo Chart sync paused for {}s: {}",
                         self.yahoo_chart_sync_pause_until_ts - now,
                         self.yahoo_chart_sync_pause_reason
-                    )).color(egui::Color32::from_rgb(231, 76, 60)).small());
-                }
-                if self.tastytrade_sync_pause_until_ts > now {
-                    ui.separator();
-                    ui.label(egui::RichText::new(format!(
-                        "tastytrade sync paused for {}s: {}",
-                        self.tastytrade_sync_pause_until_ts - now,
-                        self.tastytrade_sync_pause_reason
                     )).color(egui::Color32::from_rgb(231, 76, 60)).small());
                 }
             });
