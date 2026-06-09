@@ -9,6 +9,6 @@ Rules:
 3. If work follows an existing architecture, update the existing ADR instead of creating a new one.
 4. Historical per-round detail lives in git history; the top-level ADR set should stay readable.
 
-Current count: 107 ADRs after adding provider-lane, gap-fill, iapi AIMD, async indicator dispatch, performance-plan, Stooq fallback removal, and the no-`user_interacting` sync-throttle decision while compacting older execution-log ADRs.
+Current count: 111 ADRs. ADR-111 records the broker & data-source scope reduction to **Kraken + Alpaca only** — Darwin/Darwinex, MT5/BarCacheWriter, Tastytrade, and CryptoCompare are deprecated to `deprecated/*` branches (preserved as restore points, not built or maintained in the interim).
 
 See the root README ADR Index for the numbered list.
