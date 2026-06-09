@@ -40,8 +40,6 @@ impl TyphooNApp {
 
     pub(super) fn close_all_windows(&mut self) {
         self.show_settings = false;
-        self.show_darwin_accounts = false;
-        self.show_darwin_portfolio = false;
         self.show_risk_calc = false;
         self.show_compound_calc = false;
         self.show_ai_chat = false;
@@ -91,10 +89,7 @@ impl TyphooNApp {
         self.show_indicators_panel = false;
         self.show_data_window = false;
         self.show_alerts = false;
-        self.show_swap_harvest = false;
-        self.show_darwinex_radar = false;
         self.show_scrape_status = false;
-        self.show_darwin_browser = false;
         self.show_ev_scanner = false;
         self.show_earnings_calendar = false;
         self.show_dividend_calendar = false;

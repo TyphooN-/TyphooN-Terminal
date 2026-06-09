@@ -260,9 +260,6 @@ impl TyphooNApp {
             "earnings": self.show_earnings_calendar,
             "dividends": self.show_dividend_calendar,
             "darwinex_outliers": self.show_darwinex_outliers,
-            "darwinex_radar": self.show_darwinex_radar,
-            "swap_harvest": self.show_swap_harvest,
-            "darwin_browser": self.show_darwin_browser,
             "stress_test": self.show_stress_test,
             "volume_profile": self.show_volume_profile,
             "hv_cone": self.show_hv_cone,
@@ -293,9 +290,6 @@ impl TyphooNApp {
         set_bool!("earnings", show_earnings_calendar);
         set_bool!("dividends", show_dividend_calendar);
         set_bool!("darwinex_outliers", show_darwinex_outliers);
-        set_bool!("darwinex_radar", show_darwinex_radar);
-        set_bool!("swap_harvest", show_swap_harvest);
-        set_bool!("darwin_browser", show_darwin_browser);
         set_bool!("stress_test", show_stress_test);
         set_bool!("volume_profile", show_volume_profile);
         set_bool!("hv_cone", show_hv_cone);
