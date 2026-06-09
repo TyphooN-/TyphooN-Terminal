@@ -117,27 +117,6 @@ impl eframe::App for TyphooNApp {
                     Some(normalize_market_data_symbol(sym))
                 })
                 .collect();
-            // Tastytrade bar keys are `tastytrade:{SYM}:{TF}` (3-part, no
-            // metadata sub-prefix in use). Same scan, same revision gate.
-            self.cached_tastytrade_symbols = self
-                .bg
-                .detailed_stats
-                .iter()
-                .filter_map(|(k, _, _)| {
-                    let rest = k.strip_prefix("tastytrade:")?;
-                    let mut it = rest.split(':');
-                    let sym = it.next()?;
-                    let _tf = it.next()?;
-                    if it.next().is_some() || sym.is_empty() {
-                        return None;
-                    }
-                    Some(
-                        normalize_market_data_symbol(sym)
-                            .replace('/', "")
-                            .to_ascii_uppercase(),
-                    )
-                })
-                .collect();
             self.cached_mt5_symbols_rev = Some(self.bg_rev);
         }
         if self.cached_alpaca_sync_state_rev != Some(self.bg_rev)
@@ -416,7 +395,6 @@ impl eframe::App for TyphooNApp {
             self.alpaca_backfill_complete_load();
             self.kraken_backfill_complete_load();
             self.kraken_futures_backfill_complete_load();
-            self.tastytrade_backfill_complete_load();
             if !self.alpaca_no_data_pairs.is_empty() {
                 self.log.push_back(LogEntry::info(format!(
                     "Loaded {} Alpaca no-data mark(s) from cache",
@@ -990,13 +968,6 @@ impl eframe::App for TyphooNApp {
                             }
                         }
                     }
-                    if self.tastytrade_enabled {
-                        if let Ok(Some(json)) = cache.get_kv("broker:tt_positions") {
-                            if let Ok(pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
-                                self.tt_positions = pos;
-                            }
-                        }
-                    }
                     if self.kraken_enabled {
                         if let Ok(Some(json)) = cache.get_kv("broker:kr_positions") {
                             if let Ok(mut pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
@@ -1250,16 +1221,6 @@ impl eframe::App for TyphooNApp {
                         let _ = self.broker_tx.send(BrokerCmd::KrakenFetchOpenOrders);
                         // Start private WebSocket for real-time ownTrades / openOrders.
                         let _ = self.broker_tx.send(BrokerCmd::KrakenStartPrivateWs);
-                    } else if s.contains("tastytrade") {
-                        if !self.tastytrade_enabled {
-                            continue;
-                        }
-                        self.tt_connected = true;
-                        self.tastytrade_universe_symbols.clear();
-                        self.tastytrade_universe_requested = false;
-                        self.tastytrade_universe_retry_after_ts = 0;
-                        self.tastytrade_sync_pause_until_ts = 0;
-                        self.tastytrade_sync_pause_reason.clear();
                     } else {
                         if !self.alpaca_enabled {
                             continue;
@@ -1467,28 +1428,6 @@ impl eframe::App for TyphooNApp {
                             60
                         };
                         self.kraken_equity_universe_retry_after_ts = now + backoff;
-                    } else if e.starts_with("tastytrade connection unavailable:")
-                        || e.starts_with("tastytrade market data unavailable:")
-                    {
-                        self.tt_connected = false;
-                        self.tt_positions.clear();
-                        self.tastytrade_universe_symbols.clear();
-                        self.tastytrade_universe_requested = false;
-                        self.tastytrade_universe_retry_after_ts =
-                            now + tastytrade_sync_backoff_secs(&e);
-                        self.tastytrade_sync_pause_until_ts =
-                            now + tastytrade_sync_backoff_secs(&e);
-                        self.tastytrade_sync_pause_reason = e.clone();
-                    } else if e.starts_with("tastytrade universe failed:") {
-                        self.tastytrade_universe_requested = false;
-                        self.tastytrade_universe_retry_after_ts =
-                            now + tastytrade_sync_backoff_secs(&e);
-                    } else if e.starts_with("DXLink token failed:")
-                        || e.starts_with("DXLink stream failed:")
-                    {
-                        self.tastytrade_sync_pause_until_ts =
-                            now + tastytrade_sync_backoff_secs(&e);
-                        self.tastytrade_sync_pause_reason = e.clone();
                     } else if e.contains("Yahoo Chart HTTP 429") {
                         let pause = 300; // 5 minutes backoff on Yahoo rate limit
                         if now + pause > self.yahoo_chart_sync_pause_until_ts {
@@ -7699,7 +7638,6 @@ impl eframe::App for TyphooNApp {
                         .unwrap_or(false);
                     let source_label = match source.as_str() {
                         "alpaca" => "Alpaca",
-                        "tastytrade" => "tastytrade",
                         "mt5" => "MT5",
                         "kraken" => "Kraken",
                         "kraken-futures" => "Kraken Futures",
@@ -7722,17 +7660,13 @@ impl eframe::App for TyphooNApp {
                     }
                     let source_has_terminal_settlement = matches!(
                         source.as_str(),
-                        "alpaca" | "kraken" | "kraken-futures" | "tastytrade"
+                        "alpaca" | "kraken" | "kraken-futures"
                     );
                     if !source_has_terminal_settlement {
                         self.settle_market_data_fetch(&source, &symbol, &timeframe);
                     }
                     if source_has_terminal_settlement {
                         self.note_cached_sync_success(&source, &symbol, &timeframe, count);
-                    }
-                    if source == "tastytrade" {
-                        self.tastytrade_sync_pause_until_ts = 0;
-                        self.tastytrade_sync_pause_reason.clear();
                     }
                     if source == "alpaca" {
                         // Any newly-written bars supersede prior no-data tombstones.
@@ -7750,7 +7684,7 @@ impl eframe::App for TyphooNApp {
                         self.queue_chart_reload(self.active_tab);
                     }
                     if !source_has_terminal_settlement
-                        && matches!(source.as_str(), "kraken" | "kraken-futures" | "tastytrade")
+                        && matches!(source.as_str(), "kraken" | "kraken-futures")
                     {
                         market_data_refill_requested = true;
                     }
@@ -11339,8 +11273,6 @@ impl eframe::App for TyphooNApp {
                     "alpaca".to_string(),
                     if self.broker_connected { 1.0 } else { 0.0 },
                 ));
-                snap.broker_connected
-                    .push(("tt".to_string(), if self.tt_connected { 1.0 } else { 0.0 }));
 
                 // Account equity from live account
                 if let Some(ref acct) = self.live_account {
@@ -11716,7 +11648,7 @@ impl eframe::App for TyphooNApp {
             }
         }
 
-        // Poll tastytrade positions every ~60 seconds so terminal-managed exit changes
+        // Poll Kraken positions every ~60 seconds so terminal-managed exit changes
         // and broker fills eventually converge back into the unified position view.
         if now_instant.duration_since(self.kraken_positions_last_poll)
             >= std::time::Duration::from_secs(60)
