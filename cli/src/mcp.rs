@@ -15,7 +15,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use typhoon_engine::core::cache::SqliteCache;
-use typhoon_engine::core::{darwin, fundamentals, sec_filing, var};
+use typhoon_engine::core::{fundamentals, sec_filing, var};
 
 const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
 const SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
@@ -507,7 +507,6 @@ impl McpServer {
             "Kraken",
             symbol,
         ));
-        rows.extend(load_darwin_positions(&self.cache, symbol));
 
         if rows.is_empty() {
             return;
@@ -1015,32 +1014,6 @@ fn load_broker_positions(
                 mv = p.market_value,
                 pnl = p.unrealized_pl,
                 pct = unreal_pct
-            )
-        })
-        .collect()
-}
-
-fn load_darwin_positions(cache: &SqliteCache, symbol: &str) -> Vec<String> {
-    let Ok(Some(json)) = cache.get_kv("darwin:open_positions") else {
-        return Vec::new();
-    };
-    let positions: Vec<darwin::PortfolioOpenPosition> =
-        serde_json::from_str(&json).unwrap_or_default();
-    positions
-        .iter()
-        .filter(|p| p.symbol.eq_ignore_ascii_case(symbol) && p.total_volume != 0.0)
-        .map(|p| {
-            format!(
-                "**DARWIN** - {} {:.4} @ avg {:.4}; notional {:.2}; DARWINs {}",
-                p.side,
-                p.total_volume,
-                p.avg_price,
-                p.notional,
-                p.darwin_breakdown
-                    .iter()
-                    .map(|(ticker, volume, avg)| format!("{ticker} {volume:.2}@{avg:.4}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
             )
         })
         .collect()
