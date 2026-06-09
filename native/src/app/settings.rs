@@ -97,12 +97,6 @@ impl TyphooNApp {
                             self.log.push_back(LogEntry::info("Alpaca disabled — stopped UI-side login/sync/position/order activity. Existing cache data was not deleted."));
                         }
                     }
-                    if ui.checkbox(&mut self.darwinex_enabled, "Enable Darwinex").on_hover_text("When off: hides Darwinex from the Scope cycle and disables Darwinex-scoped discovery. Stored/imported data is left untouched.").changed() {
-                        settings_save_after = true;
-                        if !self.darwinex_enabled && self.broker_scope == EventSource::Darwinex {
-                            self.broker_scope = EventSource::All;
-                        }
-                    }
                     let kr_before = self.kraken_enabled;
                     if ui.checkbox(&mut self.kraken_enabled, "Enable Kraken").on_hover_text("When off: no startup login, private REST/WS account sync, Kraken Spot/Equities/Futures bar sync, or Kraken order buttons. Stored data is left untouched.").changed() {
                         settings_save_after = true;
@@ -283,7 +277,7 @@ impl TyphooNApp {
                 ui.separator();
                 ui.label(egui::RichText::new("Select which brokers to pull stock tickers from for Yahoo fundamentals scrape.").color(AXIS_TEXT).small());
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.fund_source_mt5, "MT5 / Darwinex");
+                    ui.checkbox(&mut self.fund_source_mt5, "MT5");
                     ui.checkbox(&mut self.fund_source_alpaca, "Alpaca");
                     ui.checkbox(&mut self.fund_source_kraken, "Kraken");
                 });
@@ -294,7 +288,6 @@ impl TyphooNApp {
                     self.fund_source_kraken,
                 ) {
                     (false, true, false) => EventSource::Alpaca,
-                    (true, false, false) => EventSource::Darwinex,
                     (false, false, true) => EventSource::Kraken,
                     _ => EventSource::All,
                 };
@@ -606,121 +599,6 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.mt5_auto_sync, "Auto-sync every 30s")
                         .on_hover_text("Matches BarCacheWriter's 30s write cadence. Silent — no log spam.");
                 });
-
-                if self.darwinex_enabled {
-                ui.add_space(10.0);
-                ui.heading("Darwinex");
-                ui.separator();
-                ui.label("Correlation limit: 0.95 / 45d");
-                ui.label("Margin accounts: 100%");
-                ui.add_space(5.0);
-                ui.horizontal(|ui| {
-                    ui.label("FTP Dir:");
-                    let r = ui.add(egui::TextEdit::singleline(&mut self.darwin_ftp_dir).desired_width(300.0).hint_text("/path/to/darwinex/ftp"));
-                    if r.lost_focus() { settings_save_after = true; }
-                    if ui.button("Browse").clicked() {
-                        if let Some(dir) = rfd::FileDialog::new()
-                            .set_title("Select Darwinex FTP Directory")
-                            .pick_folder()
-                        {
-                            self.darwin_ftp_dir = dir.display().to_string();
-                            if let Ok(mut d) = self.shared_ftp_dir.lock() { *d = self.darwin_ftp_dir.clone(); }
-                            settings_save_after = true;
-                        }
-                    }
-                    if !self.darwin_ftp_dir.is_empty() {
-                        let exists = std::path::Path::new(&self.darwin_ftp_dir).is_dir();
-                        let (icon, col) = if exists { ("\u{25CF}", UP) } else { ("\u{25CF}", DOWN) };
-                        ui.label(egui::RichText::new(icon).color(col));
-                    }
-                });
-                ui.label(egui::RichText::new("Contains DARWIN CSV data for FTP scanner, D-Score, investor flow, price series.").color(AXIS_TEXT).small());
-                ui.horizontal(|ui| {
-                    if ui.button("Import ExportSymbols CSV").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("CSV", &["csv"])
-                            .set_title("Import ExportSymbols.mq5 CSV")
-                            .pick_file()
-                        {
-                            match std::fs::read_to_string(&path) {
-                                Ok(csv) => {
-                                    let normalized = darwin::normalize_imported_symbols_csv(&csv);
-                                    let imported = normalized.lines().count();
-                                    if imported == 0 {
-                                        self.log.push_back(LogEntry::err(format!(
-                                            "Import failed: {} is not a valid ExportSymbols CSV",
-                                            path.display()
-                                        )));
-                                    } else if let Some(ref cache) = self.cache {
-                                        match cache.put_kv("darwin:imported_symbols_csv", &csv) {
-                                            Ok(()) => {
-                                                if let Some(conn) = cache.try_connection() {
-                                                    self.darwinex_radar_data =
-                                                        darwin::load_all_specs_parsed(&conn)
-                                                            .unwrap_or_default();
-                                                }
-                                                self.log.push_back(LogEntry::info(format!(
-                                                    "Imported Darwin symbol universe from {} ({} symbols)",
-                                                    path.display(),
-                                                    imported
-                                                )));
-                                            }
-                                            Err(e) => self.log.push_back(LogEntry::err(
-                                                format!("Import failed: {}", e),
-                                            )),
-                                        }
-                                    } else {
-                                        self.log.push_back(LogEntry::warn(
-                                            "Cache not ready — cannot import symbols yet",
-                                        ));
-                                    }
-                                }
-                                Err(e) => self.log.push_back(LogEntry::err(format!(
-                                    "Import failed: {}",
-                                    e
-                                ))),
-                            }
-                        }
-                    }
-                    ui.label(
-                        egui::RichText::new(
-                            "Use ExportSymbols.mq5 to define Darwin tradable symbols without MT5 bar sync.",
-                        )
-                        .color(AXIS_TEXT)
-                        .small(),
-                    );
-                });
-
-                ui.add_space(10.0);
-                ui.heading("DARWIN XLSX Import");
-                ui.separator();
-                ui.label(egui::RichText::new("Directory containing MT5 XLSX trade history files (any server — Darwinex, Axion, etc.)").color(AXIS_TEXT).small());
-                ui.horizontal(|ui| {
-                    ui.label("XLSX Dir:");
-                    let r = ui.add(egui::TextEdit::singleline(&mut self.darwin_xlsx_dir).desired_width(250.0).hint_text("/path/to/darwin/xlsx"));
-                    if r.lost_focus() { settings_save_after = true; }
-                    if ui.button("Browse").clicked() {
-                        if let Some(dir) = rfd::FileDialog::new()
-                            .set_title("Select MT5 XLSX Trade History Directory")
-                            .pick_folder()
-                        {
-                            self.darwin_xlsx_dir = dir.display().to_string();
-                            settings_save_after = true;
-                        }
-                    }
-                });
-                if !self.darwin_xlsx_dir.is_empty() {
-                    if ui.button("Import All XLSX Now").clicked() {
-                        let db_path = cache_db_path();
-                        let _ = self.broker_tx.send(BrokerCmd::DarwinImportAll {
-                            dir: PathBuf::from(&self.darwin_xlsx_dir),
-                            db_path,
-                        });
-                        self.log.push_back(LogEntry::info(format!("DARWIN XLSX import started from {}", self.darwin_xlsx_dir)));
-                    }
-                }
-                ui.label("Margin accounts: 100%");
-                } // end darwinex_enabled gate
 
                 ui.add_space(10.0);
                 ui.heading("Notifications");
