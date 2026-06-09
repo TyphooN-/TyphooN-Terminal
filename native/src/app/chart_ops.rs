@@ -100,32 +100,6 @@ fn symbol_matches_no_alloc(raw: &str, target_upper: &str) -> bool {
     t.next().is_none()
 }
 
-#[inline]
-pub(super) fn trade_marker_price_key(price: f64) -> i64 {
-    (price * 100000.0) as i64
-}
-
-pub(super) fn add_trade_marker_volume(
-    marker_map: &mut std::collections::HashMap<(usize, bool, i64), (f64, u32, String)>,
-    bar_idx: usize,
-    is_buy: bool,
-    price_key: i64,
-    volume: f64,
-    ticker: &str,
-) {
-    let entry = marker_map
-        .entry((bar_idx, is_buy, price_key))
-        .or_insert((0.0, 0, String::new()));
-    entry.0 += volume;
-    entry.1 += 1;
-    if !entry.2.contains(ticker) {
-        if !entry.2.is_empty() {
-            entry.2.push_str(", ");
-        }
-        entry.2.push_str(ticker);
-    }
-}
-
 impl TyphooNApp {
     pub(super) fn close_partial_active_symbol(&mut self) {
         let Some((symbol, _)) = self.active_trade_symbol_and_price() else {

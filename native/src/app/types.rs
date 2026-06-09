@@ -469,16 +469,6 @@ pub(crate) enum ResultCard {
         label: String,
         values: Vec<f64>,
     },
-    /// Progress gauge with min/max/value (DARWINVAR corridor)
-    Gauge {
-        title: String,
-        label: String,
-        value: f64,
-        min: f64,
-        max: f64,
-        danger_low: f64,
-        danger_high: f64,
-    },
 }
 
 // ── ADR-094: Toast Notifications ───────────────────────────────────
