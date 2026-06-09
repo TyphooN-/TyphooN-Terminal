@@ -302,15 +302,6 @@ impl TyphooNApp {
                     .map(|p| p.symbol.replace('/', "").to_uppercase())
                     .collect();
                 let kraken_syms = self.kraken_scope_symbols();
-                // Darwinex: strip suffix (.US, .UK, .DE, etc.) from tradeable MT5 symbols.
-                let darwinex_syms: std::collections::HashSet<String> = self
-                    .darwinex_radar_data
-                    .iter()
-                    .filter(|(_, _, _, trade_mode, _, _, _, _, _)| *trade_mode != 0)
-                    .map(|(sym, _, _, _, _, _, _, _, _)| {
-                        sym.split('.').next().unwrap_or(sym.as_str()).to_uppercase()
-                    })
-                    .collect();
 
                 let parse_date = |s: &str| -> Option<NaiveDate> {
                     NaiveDate::parse_from_str(s, "%Y-%m-%d")
@@ -322,9 +313,8 @@ impl TyphooNApp {
                 for f in &self.bg.all_fundamentals {
                     let sym_u = f.symbol.to_uppercase();
                     let in_alpaca = alpaca_syms.contains(&sym_u);
-                    let in_darwinex = darwinex_syms.contains(&sym_u);
                     let in_kraken = kraken_syms.contains(&sym_u);
-                    if !in_alpaca && !in_darwinex && !in_kraken {
+                    if !in_alpaca && !in_kraken {
                         continue;
                     }
 
@@ -342,7 +332,6 @@ impl TyphooNApp {
                                 kind,
                                 detail,
                                 in_alpaca,
-                                in_darwinex,
                                 in_kraken,
                             });
                         }
