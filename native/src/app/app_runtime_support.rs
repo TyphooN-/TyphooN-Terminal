@@ -316,8 +316,6 @@ pub(super) fn broker_msg_kind(msg: &BrokerMsg) -> &'static str {
         BrokerMsg::StreamQuoteTick { .. } => "StreamQuoteTick",
         BrokerMsg::JsonResult(_, _) => "JsonResult",
         BrokerMsg::FundamentalsProgress(_) => "FundamentalsProgress",
-        BrokerMsg::DarwinFtpScanResult(_) => "DarwinFtpScanResult",
-        BrokerMsg::DarwinFtpReturns(_) => "DarwinFtpReturns",
         BrokerMsg::BarsFetched { .. } => "BarsFetched",
         BrokerMsg::AlpacaRetryEnqueue { .. } => "AlpacaRetryEnqueue",
         BrokerMsg::AlpacaNoData { .. } => "AlpacaNoData",

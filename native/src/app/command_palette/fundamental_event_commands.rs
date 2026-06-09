@@ -364,10 +364,10 @@ impl TyphooNApp {
                 rows.sort_by_key(|r| r.days_until);
 
                 self.log.push_back(LogEntry::info(format!(
-                    "Event Calendar: {} upcoming events | Alpaca {} • Darwinex {}",
+                    "Event Calendar: {} upcoming events | Alpaca {} • Kraken {}",
                     rows.len(),
                     alpaca_syms.len(),
-                    darwinex_syms.len()
+                    kraken_syms.len()
                 )));
                 if rows.is_empty() {
                     self.log.push_back(LogEntry::warn("No events found. Run EVSCRAPE/FUNDAMENTALS first to populate earnings/dividend dates."));
