@@ -37,7 +37,6 @@ impl TyphooNApp {
             KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW
                 + KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW
                 + ALPACA_FULL_TILT_QUEUE_WINDOW
-                + TASTYTRADE_FULL_TILT_QUEUE_WINDOW
         } else {
             KRAKEN_SPOT_QUEUE_WINDOW + KRAKEN_FUTURES_QUEUE_WINDOW + 64
         };

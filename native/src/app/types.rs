@@ -266,40 +266,6 @@ pub(crate) fn alpaca_incremental_fetch_limit(
     alpaca_incremental_fetch_limit_at(chrono::Utc::now().timestamp(), timeframe, after_timestamp)
 }
 
-pub(crate) fn tastytrade_sync_backoff_secs(error: &str) -> i64 {
-    let lower = error.to_ascii_lowercase();
-    if tastytrade_quote_streamer_customer_missing(error) {
-        24 * 60 * 60
-    } else if lower.contains("404") || lower.contains("not found") {
-        30 * 60
-    } else if lower.contains("401") || lower.contains("403") || lower.contains("unauthorized") {
-        15 * 60
-    } else if lower.contains("429") {
-        10 * 60
-    } else if lower.contains("502")
-        || lower.contains("503")
-        || lower.contains("504")
-        || lower.contains("gateway")
-    {
-        5 * 60
-    } else {
-        3 * 60
-    }
-}
-
-pub(crate) fn tastytrade_quote_streamer_customer_missing(error: &str) -> bool {
-    let lower = error.to_ascii_lowercase();
-    lower.contains("quote_streamer.customer_not_found_error")
-        || lower.contains("customer_not_found_error")
-        || lower.contains("you must be a customer to access")
-}
-
-pub(crate) fn tastytrade_quote_streamer_customer_missing_message(env: &str, error: &str) -> String {
-    format!(
-        "tastytrade market data unavailable: {env} login authenticated, but tastytrade says this user is not a quote-streamer customer. Create/attach a customer account for this {env} user or switch to a funded production account. Raw error: {error}"
-    )
-}
-
 /// Log severity level.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum LogLevel {

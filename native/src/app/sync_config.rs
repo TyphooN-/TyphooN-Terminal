@@ -9,7 +9,6 @@ pub(super) const KRAKEN_FUTURES_QUEUE_WINDOW: usize = 144;
 pub(super) const ALPACA_BACKGROUND_SCAN_LIMIT: usize = 768;
 pub(super) const KRAKEN_SPOT_BACKGROUND_SCAN_LIMIT: usize = 768;
 pub(super) const KRAKEN_FUTURES_BACKGROUND_SCAN_LIMIT: usize = 384;
-pub(super) const TASTYTRADE_BACKGROUND_SCAN_LIMIT: usize = 192;
 
 /// AC/desktop full-tilt mode keeps request pressure high enough to saturate API
 /// allowances and async worker capacity. It is still bounded: pending sets,
@@ -46,9 +45,6 @@ pub(super) const KRAKEN_EQUITIES_FETCH_PERMITS: usize = 8;
 pub(super) const KRAKEN_TRADES_REST_REFRESH_SECS: u64 = 600;
 pub(super) const KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW: usize = 384;
 pub(super) const KRAKEN_FUTURES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 1024;
-pub(super) const TASTYTRADE_FULL_TILT_QUEUE_WINDOW: usize = 64;
-pub(super) const TASTYTRADE_FULL_TILT_BATCH_SIZE: usize = 32;
-pub(super) const TASTYTRADE_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 1024;
 
 pub(super) const YAHOO_CHART_QUEUE_WINDOW: usize = 12;
 pub(super) const YAHOO_CHART_BATCH_SIZE: usize = 1;
