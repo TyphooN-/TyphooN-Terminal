@@ -126,10 +126,6 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     // Tools
     Command {
-        name: "PORTFOLIO",
-        desc: "DARWIN portfolio dashboard + accounts",
-    },
-    Command {
         name: "OVERLAP",
         desc: "Symbol overlap / correlation",
     },
@@ -200,7 +196,7 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "SCOPE",
-        desc: "Set broker scope filter: SCOPE [ALL|ALPACA|DARWINEX|TASTY|KRAKEN|POSITIONS]",
+        desc: "Set broker scope filter: SCOPE [ALL|ALPACA|KRAKEN|POSITIONS]",
     },
     Command {
         name: "EV",
@@ -364,42 +360,9 @@ pub(crate) const COMMANDS: &[Command] = &[
         name: "CLOSE_TAB",
         desc: "Close current chart tab",
     },
-    // DARWIN-specific
-    Command {
-        name: "DRAWDOWN",
-        desc: "Drawdown dashboard per DARWIN",
-    },
-    Command {
-        name: "REBALANCE",
-        desc: "VaR reduction via decorrelation",
-    },
-    Command {
-        name: "DARWIN_TRADES",
-        desc: "Toggle deal history markers on chart",
-    },
-    Command {
-        name: "POSITION_CHARTS",
-        desc: "Open W1 chart tabs for all open positions (DARWIN + Alpaca)",
-    },
-    Command {
-        name: "DSCORE",
-        desc: "D-Score estimation components",
-    },
-    Command {
-        name: "DARWIN_BROWSER",
-        desc: "Browse DARWIN FTP universe (50K DARWINs)",
-    },
-    Command {
-        name: "DARWINIA_SCAN",
-        desc: "DarwinIA universe scan — top DARWINs by Sharpe (GPU → CPU)",
-    },
     Command {
         name: "OUTLIERS",
         desc: "Multi-dim outlier scanner: P/E + EV + short ratio + SEC filings",
-    },
-    Command {
-        name: "DARWINVAR",
-        desc: "Outlier scanner on DARWIN VaR95 values + Darwinex corridor check (3.25%-6.5%)",
     },
     Command {
         name: "EVOUTLIERS",
@@ -414,52 +377,8 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "ATR/Price ratio IQR outlier detection per sector",
     },
     Command {
-        name: "DELETE_DARWIN",
-        desc: "Delete a DARWIN/MT5 account (DELETE_DARWIN TICKER)",
-    },
-    Command {
-        name: "SWAPHARVEST",
-        desc: "Scan MT5 symbols for positive swap carry trades",
-    },
-    Command {
-        name: "DARWINEXRADAR",
-        desc: "Export Darwinex symbol radar CSVs (stocks/CFD/crypto/futures)",
-    },
-    Command {
-        name: "DWXLOGIN",
-        desc: "Login to darwinexzero.com via Selenium (visible browser for CAPTCHA)",
-    },
-    Command {
-        name: "DWXSYNC",
-        desc: "Scrape live DARWIN stats from darwinexzero.com now",
-    },
-    Command {
-        name: "DWXAUTO",
-        desc: "Toggle automatic hourly DARWIN web scraping at :20 past",
-    },
-    Command {
-        name: "DWXSTATUS",
-        desc: "Show Darwinex web scraping session status",
-    },
-    Command {
-        name: "DWXLOGOUT",
-        desc: "Close Selenium browser and clear session",
-    },
-    Command {
-        name: "DWXSETCREDS",
-        desc: "Store Darwinex Zero email/password in system keyring",
-    },
-    Command {
-        name: "DWXDARWINS",
-        desc: "Set managed DARWIN tickers to scrape (DWXDARWINS TPN AJT XUQF ...)",
-    },
-    Command {
-        name: "DWXEXCLUDE",
-        desc: "Manually exclude DARWINs from correlation (DWXEXCLUDE MFSO) — auto-detected from scrape",
-    },
-    Command {
         name: "SCRAPESTATUS",
-        desc: "Scrape status dashboard — fundamentals, SEC, DarwinIA, crypto",
+        desc: "Scrape status dashboard — fundamentals, SEC, crypto",
     },
     Command {
         name: "WEBSERVER",
