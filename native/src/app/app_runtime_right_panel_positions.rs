@@ -4,31 +4,14 @@ use super::*;
 impl TyphooNApp {
     pub(super) fn render_right_panel_positions_section(&mut self, ui: &mut egui::Ui) {
         // ── Positions Section ─────────────────────────────────
-        let darwin_positions_available = self
-            .bg
-            .portfolio
-            .as_ref()
-            .map(|p| !p.accounts.is_empty())
-            .unwrap_or(false)
-            || !self.bg.open_positions.is_empty();
         let alpaca_positions_available = self.alpaca_enabled;
         let kr_positions_available = self.kraken_enabled;
-        let show_darwin_positions = darwin_positions_available && self.show_darwin_positions;
         let show_alpaca_positions = alpaca_positions_available && self.show_alpaca_positions;
         let show_kr_positions = kr_positions_available && self.show_kr_positions;
-        let position_source_count = [
-            darwin_positions_available,
-            alpaca_positions_available,
-            kr_positions_available,
-        ]
-        .into_iter()
-        .filter(|visible| *visible)
-        .count();
-        let darwin_count = if show_darwin_positions {
-            self.bg.open_positions.len()
-        } else {
-            0
-        };
+        let position_source_count = [alpaca_positions_available, kr_positions_available]
+            .into_iter()
+            .filter(|visible| *visible)
+            .count();
         let alpaca_count = if show_alpaca_positions {
             self.live_positions.len()
         } else {
@@ -39,7 +22,7 @@ impl TyphooNApp {
         } else {
             0
         };
-        let pos_count = darwin_count + alpaca_count + kr_count;
+        let pos_count = alpaca_count + kr_count;
         let (pos_stale_lbl, pos_stale_col) = self.staleness_badge(self.positions_last_update_ts);
         let pos_header = format!("☰ Positions ({})  •  {}", pos_count, pos_stale_lbl);
         let positions_section = egui::CollapsingHeader::new(
@@ -52,16 +35,9 @@ impl TyphooNApp {
         .default_open(self.right_positions_open)
         .show(ui, |ui| {
             // Visibility toggles only matter when more than one eligible
-            // position source exists. Do not show disabled brokers, and do
-            // not show DARWIN unless imported data exists.
+            // position source exists. Do not show disabled brokers.
             if position_source_count > 1 {
                 ui.horizontal(|ui| {
-                    if darwin_positions_available {
-                        ui.checkbox(
-                            &mut self.show_darwin_positions,
-                            egui::RichText::new("DARWIN").small(),
-                        );
-                    }
                     if alpaca_positions_available {
                         ui.checkbox(
                             &mut self.show_alpaca_positions,
@@ -78,146 +54,6 @@ impl TyphooNApp {
                 ui.add_space(4.0);
             }
             let mut has_positions = false;
-            // DARWIN positions — show current chart symbol first, then others dimmed
-            {
-                let positions = &self.bg.open_positions;
-                if !positions.is_empty() && show_darwin_positions {
-                    has_positions = true;
-                    // PERF: rsplit avoids allocating Vec<&str> via split().collect().
-                    let active_sym: String = self
-                        .charts
-                        .get(self.active_tab)
-                        .map(|c| {
-                            let s = c.symbol.as_str();
-                            let mut it = s.rsplit(':');
-                            let last = it.next().unwrap_or("");
-                            let is_tf = matches!(
-                                last,
-                                "1Min"
-                                    | "5Min"
-                                    | "15Min"
-                                    | "30Min"
-                                    | "1Hour"
-                                    | "4Hour"
-                                    | "1Day"
-                                    | "1Week"
-                                    | "1Month"
-                            );
-                            if is_tf {
-                                it.next().unwrap_or(last).to_string()
-                            } else {
-                                last.to_string()
-                            }
-                        })
-                        .unwrap_or_default();
-                    // Current symbol positions first
-                    for pos in positions.iter() {
-                        let is_active = pos.symbol == active_sym;
-                        if !is_active {
-                            continue;
-                        }
-                        let side_c = if pos.side == "buy" { UP } else { DOWN };
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                egui::RichText::new(&pos.symbol).small().strong(),
-                            );
-                            let side_label =
-                                if pos.side == "buy" { "L" } else { "S" };
-                            ui.label(
-                                egui::RichText::new(side_label)
-                                    .color(side_c)
-                                    .small(),
-                                );
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "{:.2}",
-                                    pos.total_volume
-                                ))
-                                .small(),
-                            );
-                            let pl_c = if pos.notional >= 0.0 { UP } else { DOWN };
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "${:.0}",
-                                    pos.notional
-                                ))
-                                .color(pl_c)
-                                .small(),
-                            );
-                        });
-                        // PERF: &str join skips N String::clone() allocations per frame per position.
-                        let darwins: Vec<&str> = pos
-                            .darwin_breakdown
-                            .iter()
-                            .map(|(d, _, _)| d.as_str())
-                            .collect();
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(darwins.join(", "))
-                                    .color(AXIS_TEXT)
-                                    .small(),
-                            )
-                            .wrap(),
-                        );
-                        ui.separator();
-                    }
-                    // Other positions (dimmed)
-                    for pos in positions.iter() {
-                        let is_active = pos.symbol == active_sym;
-                        if is_active {
-                            continue;
-                        }
-                        let dim = egui::Color32::from_rgb(90, 90, 100);
-                        let side_c = if pos.side == "buy" {
-                            egui::Color32::from_rgb(60, 120, 60)
-                        } else {
-                            egui::Color32::from_rgb(120, 60, 60)
-                        };
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                egui::RichText::new(&pos.symbol).small().color(dim),
-                            );
-                            let side_label =
-                                if pos.side == "buy" { "L" } else { "S" };
-                            ui.label(
-                                egui::RichText::new(side_label)
-                                    .color(side_c)
-                                    .small(),
-                            );
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "{:.2}",
-                                    pos.total_volume
-                                ))
-                                .small()
-                                .color(dim),
-                            );
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "${:.0}",
-                                    pos.notional
-                                ))
-                                .color(dim)
-                                .small(),
-                            );
-                        });
-                        let darwins: Vec<&str> = pos
-                            .darwin_breakdown
-                            .iter()
-                            .map(|(d, _, _)| d.as_str())
-                            .collect();
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(darwins.join(", "))
-                                    .color(egui::Color32::from_rgb(60, 60, 70))
-                                    .small(),
-                            )
-                            .wrap(),
-                        );
-                        ui.separator();
-                    }
-                }
-            }
             // Live broker positions (from Alpaca or synced from LAN server via KV)
             let has_live = (self.broker_connected
                 || self.lan_sync_mode == "client")
