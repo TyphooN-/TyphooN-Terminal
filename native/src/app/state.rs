@@ -105,7 +105,6 @@ pub(crate) fn watchlist_cache_fallback_sources(symbol: &str) -> &'static [&'stat
         &[
             "kraken-equities",
             "alpaca",
-            "tastytrade",
             "mt5",
             "mt5:Darwinex",
             "default",
@@ -4439,13 +4438,6 @@ pub struct TyphooNApp {
     pub(crate) alpaca_enabled: bool,
     pub(crate) darwinex_enabled: bool,
 
-    /// Broker connection fields (tastytrade).
-    pub(crate) tt_username: String,
-    pub(crate) tt_password: String,
-    pub(crate) tt_sandbox: bool,
-    pub(crate) tastytrade_full_bar_sync_enabled: bool,
-    pub(crate) tastytrade_enabled: bool,
-
     /// Broker connection fields (Kraken).
     pub(crate) kraken_full_bar_sync_enabled: bool,
     pub(crate) kraken_api_key: String,
@@ -4910,22 +4902,6 @@ pub struct TyphooNApp {
     pub(crate) yahoo_chart_sync_pause_until_ts: i64,
     pub(crate) yahoo_chart_sync_pause_reason: String,
     pub(crate) heavy_sync_in_progress: bool,
-    /// Tastytrade-cached symbol set (uppercased, parsed from detailed_stats keys
-    /// with the `tastytrade:` prefix). Rebuilt alongside cached_mt5_symbols so
-    /// the Alpaca equity rotation can exclude anything tastytrade already has.
-    /// Tastytrade DXLink streams real-time bars for funded accounts, whereas
-    /// Alpaca's free tier is 15-min delayed — we always prefer tastytrade.
-    pub(crate) cached_tastytrade_symbols: std::collections::HashSet<String>,
-    /// Cached tastytrade bar-state map keyed by normalized `(symbol, timeframe)`.
-    pub(super) cached_tastytrade_sync_state:
-        std::collections::HashMap<(String, String), SyncCacheState>,
-    pub(crate) cached_tastytrade_sync_state_rev: Option<u64>,
-    /// Broad tastytrade market-data universe loaded after login.
-    pub(crate) tastytrade_universe_symbols: Vec<String>,
-    pub(crate) tastytrade_universe_requested: bool,
-    pub(crate) tastytrade_universe_retry_after_ts: i64,
-    pub(crate) tastytrade_sync_pause_until_ts: i64,
-    pub(crate) tastytrade_sync_pause_reason: String,
     /// SEC window caches — all keyed off `(bg_rev, broker_scope, ...)` so the heavy
     /// dedup/filter/sort work only runs when state actually changes, not every frame.
     /// Keys are u64 hashes for zero-alloc per-frame comparison.
@@ -5050,7 +5026,6 @@ pub struct TyphooNApp {
     pub(crate) pending_alpaca_fetches: std::collections::HashSet<String>,
     pub(crate) pending_kraken_fetches: std::collections::HashSet<String>,
     pub(crate) pending_kraken_futures_fetches: std::collections::HashSet<String>,
-    pub(crate) pending_tastytrade_fetches: std::collections::HashSet<String>,
     pub(crate) pending_yahoo_chart_fetches: std::collections::HashSet<String>,
     /// Per-key cooldown for broker bar re-queues. The in-flight HashSet only
     /// dedups while a fetch is pending; once it completes we'd previously
@@ -5074,7 +5049,6 @@ pub struct TyphooNApp {
     pub(crate) kraken_equities_alpaca_sync_cursor: usize,
     pub(crate) yahoo_chart_sync_cursor: usize,
     pub(crate) kraken_futures_sync_cursors: [usize; 4],
-    pub(crate) tastytrade_sync_cursor: usize,
     /// Alpaca retry queue — persisted across restarts via cache KV at `alpaca:retry_queue`.
     /// Entries are (symbol, timeframe) pairs that 429'd or partially completed; the
     /// `poll_alpaca_retry_queue()` tick re-dispatches due entries with exponential backoff.
@@ -5115,10 +5089,6 @@ pub struct TyphooNApp {
         std::collections::HashMap<String, AlpacaBackfillCompletePair>,
     pub(crate) kraken_futures_backfill_complete_loaded: bool,
     pub(crate) kraken_futures_backfill_complete_dirty_since: Option<std::time::Instant>,
-    pub(super) tastytrade_backfill_complete_pairs:
-        std::collections::HashMap<String, AlpacaBackfillCompletePair>,
-    pub(crate) tastytrade_backfill_complete_loaded: bool,
-    pub(crate) tastytrade_backfill_complete_dirty_since: Option<std::time::Instant>,
     pub(crate) show_connect: bool,
     pub(crate) show_indicators_panel: bool,
     pub(crate) show_data_window: bool,
@@ -5133,7 +5103,6 @@ pub struct TyphooNApp {
     // Fundamentals symbol source settings
     pub(crate) fund_source_mt5: bool,
     pub(crate) fund_source_alpaca: bool,
-    pub(crate) fund_source_tastytrade: bool,
     pub(crate) fund_source_kraken: bool,
     /// ADR-094: SCOPE popup window with source checkboxes.
     pub(crate) show_scope_window: bool,
@@ -7526,18 +7495,15 @@ pub struct TyphooNApp {
     pub(crate) broker_rx: mpsc::UnboundedReceiver<BrokerMsg>,
     /// Whether broker is connected.
     pub(crate) broker_connected: bool,
-    pub(crate) tt_connected: bool,
     /// Live account info.
     pub(crate) live_account: Option<AccountInfo>,
     /// Live positions.
     pub(crate) live_positions: Vec<PositionInfo>,
-    pub(crate) tt_positions: Vec<PositionInfo>,
     pub(crate) kr_positions: Vec<PositionInfo>,
     pub(crate) kraken_equity_quote_meta: std::collections::BTreeMap<String, KrakenEquityQuoteMeta>,
     /// Position visibility toggles (still synced, just hidden in UI)
     pub(crate) show_darwin_positions: bool,
     pub(crate) show_alpaca_positions: bool,
-    pub(crate) show_tt_positions: bool,
     pub(crate) show_kr_positions: bool,
     pub(crate) show_kraken_trade_history: bool,
     pub(crate) show_kraken_open_orders: bool,
@@ -7621,7 +7587,6 @@ pub struct TyphooNApp {
     /// in `new` on construction.
     pub(crate) news_md_cache: egui_commonmark::CommonMarkCache,
     pub(crate) kraken_futures_universe_last_schedule: std::time::Instant,
-    pub(crate) tastytrade_universe_last_schedule: std::time::Instant,
     pub(crate) lan_client_last_reload: std::time::Instant,
     pub(crate) session_last_autosave: std::time::Instant,
     pub(crate) metrics_last_update: std::time::Instant,
