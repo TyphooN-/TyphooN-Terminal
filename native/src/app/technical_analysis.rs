@@ -3648,7 +3648,7 @@ pub(super) fn draw_chart(
         }
     }
 
-    // ── DARWIN/broker trade markers (buy/sell arrows + position lines) ────────
+    // ── Broker trade markers (buy/sell arrows + position lines) ────────
     // Position entry/SL/TP lines
     for pl in &trade_overlay.position_lines {
         let y = price_to_y(pl.price);
@@ -3692,11 +3692,11 @@ pub(super) fn draw_chart(
     // PERF: markers are sorted by bar_idx (see build_trade_overlay). Binary-search
     // for the first in-range marker so we skip off-screen history in O(log N) instead
     // of scanning the full Vec every frame.
-    // Arrows render per-deal (small triangles — not noisy). Labels are deferred
-    // and collapsed by screen-pixel clustering so dense DARWIN mirror activity
-    // (many accounts, slightly different fill prices on the same bar) doesn't
-    // bury the candles under overlapping text blocks. Previously each deal
-    // rendered its own "HAKR 1.00"/"MFS0 2.00" label and the chart became
+    // Arrows render per-fill (small triangles — not noisy). Labels are deferred
+    // and collapsed by screen-pixel clustering so dense fill activity
+    // (slightly different fill prices on the same bar) doesn't
+    // bury the candles under overlapping text blocks. Previously each fill
+    // rendered its own label and the chart became
     // unreadable at high trade density.
     struct PendingLabel {
         x: f32,
@@ -3860,7 +3860,7 @@ pub(super) fn draw_chart(
         );
     }
 
-    // Total signal-account volume across currently visible markers. Sits in the
+    // Total fill volume across currently visible markers. Sits in the
     // bottom-right corner out of the way of the ATR HUD (top-right) and the
     // position-line labels (top-left).
     let buy_total: f64 = clusters.iter().filter(|c| c.is_buy).map(|c| c.volume).sum();
@@ -3870,7 +3870,7 @@ pub(super) fn draw_chart(
         .map(|c| c.volume)
         .sum();
     if buy_total > 0.0 || sell_total > 0.0 {
-        let hud = format!("DARWINS  BUY {:.2}  SELL {:.2}", buy_total, sell_total);
+        let hud = format!("FILLS  BUY {:.2}  SELL {:.2}", buy_total, sell_total);
         painter.text(
             egui::pos2(chart_rect.right() - 4.0, chart_rect.bottom() - 4.0),
             egui::Align2::RIGHT_BOTTOM,

@@ -2410,7 +2410,7 @@ fn test_format_ts_buf_minute() {
 
 #[test]
 fn test_apply_storage_snapshot_prunes_deleted_keys_and_updates_sizes() {
-    let mut bg = BgDarwinData::default();
+    let mut bg = BgData::default();
     bg.bar_ts_cache.insert("mt5:EURUSD:1Min".into(), (1, 2, 10));
     bg.bar_ts_cache
         .insert("alpaca:AAPL:1Day".into(), (3, 4, 20));

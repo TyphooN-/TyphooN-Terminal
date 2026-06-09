@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn spawn_darwin_background_refresh(
+pub(super) fn spawn_background_refresh(
     app: &mut TyphooNApp,
     shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
     lan_client_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -9,7 +9,7 @@ pub(super) fn spawn_darwin_background_refresh(
     // Spawn the background data-refresh thread (SEC filings, fundamentals,
     // cache/storage stats, insider trades). mpsc channel, capacity unbounded.
     {
-        let (bg_tx, bg_rx) = std::sync::mpsc::channel::<BgDarwinData>();
+        let (bg_tx, bg_rx) = std::sync::mpsc::channel::<BgData>();
         app.bg_rx = bg_rx;
         let shared_cache_bg = shared_cache.clone();
         let lan_client_bg = lan_client_flag.clone();
@@ -23,7 +23,7 @@ pub(super) fn spawn_darwin_background_refresh(
                 std::time::Duration::from_secs(300); // 5 minutes
             const VACUUM_INTERVAL: std::time::Duration = std::time::Duration::from_secs(21600); // 6 hours
             // Persist data across loops so lightweight refreshes keep prior results.
-            let mut data = BgDarwinData::default();
+            let mut data = BgData::default();
             // BG thread opens its OWN read-only SQLite connection via SqliteCache::open_bg_read_connection().
             // This eliminates all Mutex contention with the UI thread's read_conn.
             // WAL mode allows unlimited concurrent readers — each connection reads

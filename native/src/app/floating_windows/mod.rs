@@ -440,7 +440,7 @@ impl TyphooNApp {
         // SEC, macro calendar, earnings, and congressional-trade windows
         timed_window!("sec_calendar", self.render_sec_calendar_windows(ctx));
 
-        // SwapHarvest, Darwinex Radar, scrape status, and earnings windows
+        // Scrape status, fundamentals, EV scanner, and earnings windows
         self.render_scrape_darwinia_windows(ctx);
 
         // Market analytics, calendars, screeners, and portfolio risk windows
@@ -458,7 +458,7 @@ impl TyphooNApp {
         // Object list, command reference, and data-window overlays
         self.render_workspace_reference_windows(ctx);
 
-        // Alerts, market data dashboards, and DarwinIA browser
+        // Alerts and market data dashboards
         self.render_alert_market_data_windows(ctx);
     }
 }

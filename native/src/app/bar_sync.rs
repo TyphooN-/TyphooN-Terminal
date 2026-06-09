@@ -1,4 +1,4 @@
-use super::BgDarwinData;
+use super::BgData;
 use super::sync_workset::normalize_sync_timeframe_key;
 
 /// Per-(broker,TF) bar-sync health snapshot for the Sync Status window + the
@@ -274,7 +274,7 @@ pub(super) fn compute_bar_sync_broker_totals(
 }
 
 pub(super) fn apply_storage_snapshot(
-    bg: &mut BgDarwinData,
+    bg: &mut BgData,
     cache_stats: (i64, i64, i64),
     detailed_rows: Vec<(String, i64, i64, i64)>,
 ) {

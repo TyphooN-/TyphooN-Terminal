@@ -168,7 +168,7 @@ pub(crate) struct EventRow {
 /// Background-computed data — populated by background thread, read by render thread.
 /// This eliminates SQLite queries from the render loop.
 #[derive(Default, Clone)]
-pub(crate) struct BgDarwinData {
+pub(crate) struct BgData {
     pub(crate) cache_stats: Option<(i64, i64, i64)>,
     pub(crate) sec_filings: Vec<sec_filing::SecFiling>,
     pub(crate) sec_alerts: Vec<sec_filing::FilingAlert>,
@@ -7354,9 +7354,9 @@ pub struct TyphooNApp {
     pub(crate) recent_fills: Vec<(String, String, f64, f64, String)>,
 
     /// Latest background-computed data. Updated by draining bg_rx each frame.
-    pub(crate) bg: BgDarwinData,
+    pub(crate) bg: BgData,
     /// Receiver for background data snapshots.
-    pub(crate) bg_rx: std::sync::mpsc::Receiver<BgDarwinData>,
+    pub(crate) bg_rx: std::sync::mpsc::Receiver<BgData>,
 
     pub(crate) gpu_indicators: Option<gpu_compute::GpuCompute>,
     /// Set true when indicator periods change in the UI; cleared after recompute.

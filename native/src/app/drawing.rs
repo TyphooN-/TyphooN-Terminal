@@ -540,16 +540,16 @@ pub(crate) enum Drawing {
     },
 }
 
-/// Trade marker for chart overlay (DARWIN deals, broker fills).
-/// Aggregated: multiple deals at the same bar+price become one marker with combined volume.
+/// Trade marker for chart overlay (broker fills).
+/// Aggregated: multiple fills at the same bar+price become one marker with combined volume.
 #[derive(Clone, Debug)]
 pub(crate) struct TradeMarker {
     pub(crate) bar_idx: usize, // index into bars array
     pub(crate) price: f64,
     pub(crate) volume: f64,    // aggregated total lots
     pub(crate) is_buy: bool,   // true=buy, false=sell
-    pub(crate) count: u32,     // number of individual deals aggregated
-    pub(crate) ticker: String, // DARWIN ticker (e.g., "HAKR", "MFSO")
+    pub(crate) count: u32,     // number of individual fills aggregated
+    pub(crate) ticker: String, // source label (e.g., "Alpaca", "Kraken")
 }
 
 /// Open position line for chart overlay (entry, SL, TP).
@@ -561,7 +561,7 @@ pub(crate) struct PositionLine {
     pub(crate) line_type: u8, // 0=entry, 1=SL, 2=TP
 }
 
-/// Trade overlay data passed to draw_chart for DARWIN/broker position rendering.
+/// Trade overlay data passed to draw_chart for broker position rendering.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TradeOverlay {
     pub(crate) markers: Vec<TradeMarker>,

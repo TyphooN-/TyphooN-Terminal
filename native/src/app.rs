@@ -2766,7 +2766,7 @@ impl TyphooNApp {
             sl_enabled: false,
             tp_enabled: false,
             recent_fills: Vec::new(),
-            bg: BgDarwinData::default(),
+            bg: BgData::default(),
             bg_rx: {
                 // Channel created here; tx passed to background thread below
                 let (_placeholder_tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -2849,7 +2849,7 @@ impl TyphooNApp {
             }
         }
 
-        app_background::spawn_darwin_background_refresh(
+        app_background::spawn_background_refresh(
             &mut app,
             shared_cache.clone(),
             lan_client_flag.clone(),

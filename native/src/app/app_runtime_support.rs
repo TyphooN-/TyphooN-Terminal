@@ -395,8 +395,8 @@ pub(super) fn deferred_chart_load_interval(
 
 impl TyphooNApp {
     #[inline]
-    pub(super) fn drop_bg_snapshot_off_ui(&self, data: BgDarwinData) {
-        // BgDarwinData can own hundreds of thousands of SEC/news/storage rows.
+    pub(super) fn drop_bg_snapshot_off_ui(&self, data: BgData) {
+        // BgData can own hundreds of thousands of SEC/news/storage rows.
         // Dropping it on the egui thread was enough to create 300ms-15s stalls
         // even when we intentionally skipped applying the snapshot. Move the
         // destructor work to a blocking worker; the update hot path only moves
@@ -405,7 +405,7 @@ impl TyphooNApp {
     }
 
     #[inline]
-    pub(super) fn replace_bg_snapshot_off_ui_drop(&mut self, data: BgDarwinData) {
+    pub(super) fn replace_bg_snapshot_off_ui_drop(&mut self, data: BgData) {
         let old = std::mem::replace(&mut self.bg, data);
         self.drop_bg_snapshot_off_ui(old);
         self.bg_rev = self.bg_rev.wrapping_add(1);
