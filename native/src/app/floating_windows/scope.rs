@@ -13,20 +13,17 @@ impl TyphooNApp {
                     ui.add_space(4.0);
                     ui.checkbox(&mut self.fund_source_mt5, "MT5 / Darwinex");
                     ui.checkbox(&mut self.fund_source_alpaca, "Alpaca");
-                    ui.checkbox(&mut self.fund_source_tastytrade, "tastytrade");
                     ui.checkbox(&mut self.fund_source_kraken, "Kraken");
 
                     // Always sync scope enum from current checkbox state
                     self.broker_scope = match (
                         self.fund_source_mt5,
                         self.fund_source_alpaca,
-                        self.fund_source_tastytrade,
                         self.fund_source_kraken,
                     ) {
-                        (false, true, false, false) => EventSource::Alpaca,
-                        (true, false, false, false) => EventSource::Darwinex,
-                        (false, false, true, false) => EventSource::Tasty,
-                        (false, false, false, true) => EventSource::Kraken,
+                        (false, true, false) => EventSource::Alpaca,
+                        (true, false, false) => EventSource::Darwinex,
+                        (false, false, true) => EventSource::Kraken,
                         _ => EventSource::All,
                     };
 
@@ -40,19 +37,13 @@ impl TyphooNApp {
                         EventSource::All => "ALL",
                         EventSource::Alpaca => "ALPACA",
                         EventSource::Darwinex => "DARWINEX",
-                        EventSource::Tasty => "TASTY",
                         EventSource::Kraken => "KRAKEN",
                         EventSource::Positions => "POSITIONS",
                     };
                     let src_note = format!(
-                        "MT5:{} Alpaca:{} Tasty:{} Kraken:{}",
+                        "MT5:{} Alpaca:{} Kraken:{}",
                         if self.fund_source_mt5 { "ON" } else { "off" },
                         if self.fund_source_alpaca { "ON" } else { "off" },
-                        if self.fund_source_tastytrade {
-                            "ON"
-                        } else {
-                            "off"
-                        },
                         if self.fund_source_kraken { "ON" } else { "off" },
                     );
                     ui.label(
@@ -69,42 +60,30 @@ impl TyphooNApp {
                         if ui.button("ALL").clicked() {
                             self.fund_source_mt5 = true;
                             self.fund_source_alpaca = true;
-                            self.fund_source_tastytrade = true;
                             self.fund_source_kraken = true;
                             self.broker_scope = EventSource::All;
                         }
                         if ui.button("Alpaca Only").clicked() {
                             self.fund_source_mt5 = false;
                             self.fund_source_alpaca = true;
-                            self.fund_source_tastytrade = false;
                             self.fund_source_kraken = false;
                             self.broker_scope = EventSource::Alpaca;
                         }
                         if ui.button("Darwinex Only").clicked() {
                             self.fund_source_mt5 = true;
                             self.fund_source_alpaca = false;
-                            self.fund_source_tastytrade = false;
                             self.fund_source_kraken = false;
                             self.broker_scope = EventSource::Darwinex;
-                        }
-                        if ui.button("Tasty Only").clicked() {
-                            self.fund_source_mt5 = false;
-                            self.fund_source_alpaca = false;
-                            self.fund_source_tastytrade = true;
-                            self.fund_source_kraken = false;
-                            self.broker_scope = EventSource::Tasty;
                         }
                         if ui.button("Kraken Only").clicked() {
                             self.fund_source_mt5 = false;
                             self.fund_source_alpaca = false;
-                            self.fund_source_tastytrade = false;
                             self.fund_source_kraken = true;
                             self.broker_scope = EventSource::Kraken;
                         }
                         if ui.button("Positions").clicked() {
                             self.fund_source_mt5 = true;
                             self.fund_source_alpaca = true;
-                            self.fund_source_tastytrade = true;
                             self.fund_source_kraken = true;
                             self.broker_scope = EventSource::Positions;
                         }

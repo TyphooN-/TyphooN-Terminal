@@ -554,7 +554,6 @@ impl TyphooNApp {
                                         db_path,
                                         use_mt5: self.fund_source_mt5,
                                         use_alpaca: self.fund_source_alpaca,
-                                        use_tastytrade: self.fund_source_tastytrade,
                                         use_kraken: self.fund_source_kraken,
                                         kraken_equity_symbols: self
                                             .kraken_equity_universe_symbols
@@ -704,7 +703,6 @@ impl TyphooNApp {
                                     db_path,
                                     use_mt5: true,
                                     use_alpaca: false,
-                                    use_tastytrade: false,
                                     use_kraken: false,
                                     kraken_equity_symbols: self
                                         .kraken_equity_universe_symbols
@@ -728,33 +726,6 @@ impl TyphooNApp {
                                     db_path,
                                     use_mt5: false,
                                     use_alpaca: true,
-                                    use_tastytrade: false,
-                                    use_kraken: false,
-                                    kraken_equity_symbols: self
-                                        .kraken_equity_universe_symbols
-                                        .clone(),
-                                    force: false,
-                                });
-                                self.scrape_fund_running = true;
-                                self.scrape_fund_ok = 0;
-                                self.scrape_fund_fail = 0;
-                                self.scrape_fund_skipped = 0;
-                            }
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new("TastyTrade Only").small(),
-                                    )
-                                    .fill(BTN_GREEN),
-                                )
-                                .clicked()
-                            {
-                                let db_path = cache_db_path();
-                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
-                                    db_path,
-                                    use_mt5: false,
-                                    use_alpaca: false,
-                                    use_tastytrade: true,
                                     use_kraken: false,
                                     kraken_equity_symbols: self
                                         .kraken_equity_universe_symbols
@@ -778,7 +749,6 @@ impl TyphooNApp {
                                     db_path,
                                     use_mt5: false,
                                     use_alpaca: false,
-                                    use_tastytrade: false,
                                     use_kraken: true,
                                     kraken_equity_symbols: self
                                         .kraken_equity_universe_symbols
@@ -802,7 +772,6 @@ impl TyphooNApp {
                                     db_path,
                                     use_mt5: true,
                                     use_alpaca: true,
-                                    use_tastytrade: true,
                                     use_kraken: true,
                                     kraken_equity_symbols: self
                                         .kraken_equity_universe_symbols
@@ -830,20 +799,17 @@ impl TyphooNApp {
                         );
                         ui.checkbox(&mut self.fund_source_mt5, "MT5");
                         ui.checkbox(&mut self.fund_source_alpaca, "Alpaca");
-                        ui.checkbox(&mut self.fund_source_tastytrade, "TastyTrade");
                         ui.checkbox(&mut self.fund_source_kraken, "Kraken");
                     });
                     // Sync broker_scope from checkbox state
                     self.broker_scope = match (
                         self.fund_source_mt5,
                         self.fund_source_alpaca,
-                        self.fund_source_tastytrade,
                         self.fund_source_kraken,
                     ) {
-                        (false, true, false, false) => EventSource::Alpaca,
-                        (true, false, false, false) => EventSource::Darwinex,
-                        (false, false, true, false) => EventSource::Tasty,
-                        (false, false, false, true) => EventSource::Kraken,
+                        (false, true, false) => EventSource::Alpaca,
+                        (true, false, false) => EventSource::Darwinex,
+                        (false, false, true) => EventSource::Kraken,
                         _ => EventSource::All,
                     };
 
@@ -929,7 +895,6 @@ impl TyphooNApp {
                                         db_path,
                                         use_mt5: self.fund_source_mt5,
                                         use_alpaca: self.fund_source_alpaca,
-                                        use_tastytrade: self.fund_source_tastytrade,
                                         use_kraken: self.fund_source_kraken,
                                         kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
                                         force: false,
@@ -1559,7 +1524,6 @@ impl TyphooNApp {
                                 db_path,
                                 use_mt5: self.fund_source_mt5,
                                 use_alpaca: self.fund_source_alpaca,
-                                use_tastytrade: self.fund_source_tastytrade,
                                 use_kraken: self.fund_source_kraken,
                                 kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
                                 force: false,

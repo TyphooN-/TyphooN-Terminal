@@ -1296,7 +1296,6 @@ impl TyphooNApp {
                             EventSource::Darwinex,
                             "Darwinex",
                         );
-                        ui.radio_value(&mut self.event_filter_source, EventSource::Tasty, "Tasty");
                         ui.radio_value(
                             &mut self.event_filter_source,
                             EventSource::Kraken,
@@ -1341,14 +1340,13 @@ impl TyphooNApp {
                         .filter(|r| {
                             let src_ok = match self.event_filter_source {
                                 EventSource::All => {
-                                    r.in_alpaca || r.in_darwinex || r.in_tasty || r.in_kraken
+                                    r.in_alpaca || r.in_darwinex || r.in_kraken
                                 }
                                 EventSource::Alpaca => r.in_alpaca,
                                 EventSource::Darwinex => r.in_darwinex,
-                                EventSource::Tasty => r.in_tasty,
                                 EventSource::Kraken => r.in_kraken,
                                 EventSource::Positions => {
-                                    r.in_alpaca || r.in_darwinex || r.in_tasty || r.in_kraken
+                                    r.in_alpaca || r.in_darwinex || r.in_kraken
                                 }
                             };
                             let kind_ok = match r.kind {
@@ -1430,9 +1428,6 @@ impl TyphooNApp {
                                         }
                                         if r.in_darwinex {
                                             tags.push("D");
-                                        }
-                                        if r.in_tasty {
-                                            tags.push("T");
                                         }
                                         if r.in_kraken {
                                             tags.push("K");

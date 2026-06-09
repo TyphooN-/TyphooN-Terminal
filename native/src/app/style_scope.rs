@@ -82,12 +82,6 @@ impl TyphooNApp {
                     .map(|p| p.symbol.replace('/', "").to_uppercase())
                     .collect(),
             ),
-            EventSource::Tasty => Some(
-                self.tt_positions
-                    .iter()
-                    .map(|p| p.symbol.replace('/', "").to_uppercase())
-                    .collect(),
-            ),
             EventSource::Kraken => Some(self.kraken_scope_symbols()),
             EventSource::Darwinex => {
                 if self.darwinex_radar_data.is_empty() {
@@ -727,12 +721,11 @@ impl TyphooNApp {
 
         for r in rows {
             let src_ok = match source_filter {
-                EventSource::All => r.in_alpaca || r.in_darwinex || r.in_tasty || r.in_kraken,
+                EventSource::All => r.in_alpaca || r.in_darwinex || r.in_kraken,
                 EventSource::Alpaca => r.in_alpaca,
                 EventSource::Darwinex => r.in_darwinex,
-                EventSource::Tasty => r.in_tasty,
                 EventSource::Kraken => r.in_kraken,
-                EventSource::Positions => r.in_alpaca || r.in_darwinex || r.in_tasty || r.in_kraken,
+                EventSource::Positions => r.in_alpaca || r.in_darwinex || r.in_kraken,
             };
             let kind_ok = match r.kind {
                 EventKind::Earnings => show_earnings,
@@ -787,7 +780,6 @@ impl TyphooNApp {
             EventSource::All => "ALL",
             EventSource::Alpaca => "ALPACA",
             EventSource::Darwinex => "DARWINEX",
-            EventSource::Tasty => "TASTY",
             EventSource::Kraken => "KRAKEN",
             EventSource::Positions => "POSITIONS",
         }

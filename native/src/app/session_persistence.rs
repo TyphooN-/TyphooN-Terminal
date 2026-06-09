@@ -355,7 +355,6 @@ impl TyphooNApp {
             "crypto_fiat_quote_chf": self.crypto_fiat_quote_chf,
             "fund_source_mt5": self.fund_source_mt5,
             "fund_source_alpaca": self.fund_source_alpaca,
-            "fund_source_tastytrade": self.fund_source_tastytrade,
             "fund_source_kraken": self.fund_source_kraken,
             "enabled_sync_timeframes": STANDARD_SYNC_TIMEFRAMES.iter()
                 .filter_map(|(_, tf)| self.enabled_sync_timeframes.contains(*tf).then(|| serde_json::json!(tf)))
@@ -689,7 +688,6 @@ impl TyphooNApp {
                 EventSource::All => "all",
                 EventSource::Alpaca => "alpaca",
                 EventSource::Darwinex => "darwinex",
-                EventSource::Tasty => "tasty",
                 EventSource::Kraken => "kraken",
                 EventSource::Positions => "positions",
             },
@@ -2053,7 +2051,6 @@ impl TyphooNApp {
                 self.broker_scope = match v["broker_scope"].as_str() {
                     Some("alpaca") => EventSource::Alpaca,
                     Some("darwinex") => EventSource::Darwinex,
-                    Some("tasty") => EventSource::Tasty,
                     Some("kraken") => EventSource::Kraken,
                     Some("positions") => EventSource::Positions,
                     _ => EventSource::All,
@@ -3360,9 +3357,6 @@ impl TyphooNApp {
                 }
                 if let Some(b) = v["fund_source_alpaca"].as_bool() {
                     self.fund_source_alpaca = b;
-                }
-                if let Some(b) = v["fund_source_tastytrade"].as_bool() {
-                    self.fund_source_tastytrade = b;
                 }
                 if let Some(b) = v["fund_source_kraken"].as_bool() {
                     self.fund_source_kraken = b;

@@ -165,7 +165,6 @@ pub(crate) struct EventRow {
     pub(crate) detail: String, // yield%, previous EPS, etc.
     pub(crate) in_alpaca: bool,
     pub(crate) in_darwinex: bool,
-    pub(crate) in_tasty: bool,
     pub(crate) in_kraken: bool,
 }
 

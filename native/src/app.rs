@@ -26,7 +26,6 @@ use tokio::sync::mpsc;
 use typhoon_engine::broker::alpaca::{
     AccountInfo, AlpacaBroker, Bar as EngineBar, OrderInfo, PositionInfo,
 };
-use typhoon_engine::broker::tastytrade::TastyBalances;
 use typhoon_engine::core::backtest;
 use typhoon_engine::core::cache::{BgConnection, SqliteCache};
 use typhoon_engine::core::darwin;
@@ -118,7 +117,6 @@ use self::kraken_sync::*;
 use self::market_data_sync::normalize_kraken_equity_symbol_list;
 use self::sync_config::*;
 use self::sync_workset::*;
-use self::tastytrade_sync::*;
 use self::technical_analysis::*;
 use self::technical_indicators::*;
 

@@ -374,7 +374,6 @@ impl TyphooNApp {
                             EventSource::All => ("ALL", egui::Color32::from_rgb(140, 140, 160)),
                             EventSource::Alpaca => ("ALPACA", egui::Color32::from_rgb(255, 160, 60)),
                             EventSource::Darwinex => ("DARWINEX", egui::Color32::from_rgb(100, 180, 255)),
-                            EventSource::Tasty => ("TASTY", egui::Color32::from_rgb(200, 130, 255)),
                             EventSource::Kraken => ("KRAKEN", egui::Color32::from_rgb(0, 170, 160)),
                             EventSource::Positions => ("POSITIONS", egui::Color32::from_rgb(80, 220, 120)),
                         };
@@ -397,9 +396,6 @@ impl TyphooNApp {
                             if self.darwinex_enabled {
                                 scope_cycle.push(EventSource::Darwinex);
                             }
-                            if self.tastytrade_enabled {
-                                scope_cycle.push(EventSource::Tasty);
-                            }
                             if self.kraken_enabled {
                                 scope_cycle.push(EventSource::Kraken);
                             }
@@ -414,37 +410,26 @@ impl TyphooNApp {
                                 EventSource::All => {
                                     self.fund_source_mt5 = true;
                                     self.fund_source_alpaca = true;
-                                    self.fund_source_tastytrade = true;
                                     self.fund_source_kraken = true;
                                 }
                                 EventSource::Alpaca => {
                                     self.fund_source_mt5 = false;
                                     self.fund_source_alpaca = true;
-                                    self.fund_source_tastytrade = false;
                                     self.fund_source_kraken = false;
                                 }
                                 EventSource::Darwinex => {
                                     self.fund_source_mt5 = true;
                                     self.fund_source_alpaca = false;
-                                    self.fund_source_tastytrade = false;
-                                    self.fund_source_kraken = false;
-                                }
-                                EventSource::Tasty => {
-                                    self.fund_source_mt5 = false;
-                                    self.fund_source_alpaca = false;
-                                    self.fund_source_tastytrade = true;
                                     self.fund_source_kraken = false;
                                 }
                                 EventSource::Kraken => {
                                     self.fund_source_mt5 = false;
                                     self.fund_source_alpaca = false;
-                                    self.fund_source_tastytrade = false;
                                     self.fund_source_kraken = true;
                                 }
                                 EventSource::Positions => {
                                     self.fund_source_mt5 = true;
                                     self.fund_source_alpaca = true;
-                                    self.fund_source_tastytrade = true;
                                     self.fund_source_kraken = true;
                                 }
                             }

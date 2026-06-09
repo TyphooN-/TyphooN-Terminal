@@ -359,20 +359,17 @@ impl TyphooNApp {
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut self.fund_source_mt5, "MT5 / Darwinex");
                     ui.checkbox(&mut self.fund_source_alpaca, "Alpaca");
-                    ui.checkbox(&mut self.fund_source_tastytrade, "TastyTrade");
                     ui.checkbox(&mut self.fund_source_kraken, "Kraken");
                 });
                 // Sync broker_scope from checkbox state
                 self.broker_scope = match (
                     self.fund_source_mt5,
                     self.fund_source_alpaca,
-                    self.fund_source_tastytrade,
                     self.fund_source_kraken,
                 ) {
-                    (false, true, false, false) => EventSource::Alpaca,
-                    (true, false, false, false) => EventSource::Darwinex,
-                    (false, false, true, false) => EventSource::Tasty,
-                    (false, false, false, true) => EventSource::Kraken,
+                    (false, true, false) => EventSource::Alpaca,
+                    (true, false, false) => EventSource::Darwinex,
+                    (false, false, true) => EventSource::Kraken,
                     _ => EventSource::All,
                 };
 

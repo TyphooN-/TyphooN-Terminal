@@ -12,21 +12,18 @@ impl TyphooNApp {
                 let db_path = cache_db_path();
                 // Broker scope override: narrow sources to just the scoped broker.
                 // SCOPE ALL → use configured source toggles. SCOPE ALPACA → force use_alpaca only, etc.
-                let (use_mt5, use_alpaca, use_tasty, use_kraken) = match self.broker_scope {
+                let (use_mt5, use_alpaca, use_kraken) = match self.broker_scope {
                     EventSource::All => (
                         self.fund_source_mt5,
                         self.fund_source_alpaca,
-                        self.fund_source_tastytrade,
                         self.fund_source_kraken,
                     ),
-                    EventSource::Alpaca => (false, true, false, false),
-                    EventSource::Darwinex => (true, false, false, false),
-                    EventSource::Tasty => (false, false, true, false),
-                    EventSource::Kraken => (false, false, false, true),
+                    EventSource::Alpaca => (false, true, false),
+                    EventSource::Darwinex => (true, false, false),
+                    EventSource::Kraken => (false, false, true),
                     EventSource::Positions => (
                         self.fund_source_mt5,
                         self.fund_source_alpaca,
-                        self.fund_source_tastytrade,
                         self.fund_source_kraken,
                     ),
                 };
@@ -34,7 +31,6 @@ impl TyphooNApp {
                     db_path,
                     use_mt5,
                     use_alpaca,
-                    use_tastytrade: use_tasty,
                     use_kraken,
                     kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
                     force,
@@ -46,7 +42,6 @@ impl TyphooNApp {
                 let sources: Vec<&str> = [
                     ("MT5", use_mt5),
                     ("Alpaca", use_alpaca),
-                    ("TastyTrade", use_tasty),
                     ("Kraken", use_kraken),
                 ]
                 .iter()
@@ -272,7 +267,7 @@ impl TyphooNApp {
             "SECTOR_HEATMAP" => self.show_sector_heatmap = true,
             "DIVSCREEN" => self.show_dividends = true,
             s if s.starts_with("SCOPE") => {
-                // SCOPE [ALL|ALPACA|DARWINEX|TASTY|KRAKEN] — global broker filter for fundamentals.
+                // SCOPE [ALL|ALPACA|DARWINEX|KRAKEN] — global broker filter for fundamentals.
                 let arg = s.trim_start_matches("SCOPE").trim();
                 let (new_scope, label) = match arg {
                     "" => {
@@ -283,12 +278,11 @@ impl TyphooNApp {
                     "ALL" => (EventSource::All, "ALL"),
                     "ALPACA" => (EventSource::Alpaca, "ALPACA"),
                     "DARWINEX" | "DARWIN" => (EventSource::Darwinex, "DARWINEX"),
-                    "TASTY" | "TASTYTRADE" => (EventSource::Tasty, "TASTY"),
                     "KRAKEN" | "KR" => (EventSource::Kraken, "KRAKEN"),
                     "POSITIONS" | "POS" => (EventSource::Positions, "POSITIONS"),
                     other => {
                         self.log.push_back(LogEntry::err(format!(
-                            "Unknown SCOPE '{other}'. Valid: ALL, ALPACA, DARWINEX, TASTY, KRAKEN, POSITIONS"
+                            "Unknown SCOPE '{other}'. Valid: ALL, ALPACA, DARWINEX, KRAKEN, POSITIONS"
                         )));
                         return true;
                     }
@@ -299,37 +293,26 @@ impl TyphooNApp {
                     EventSource::All => {
                         self.fund_source_mt5 = true;
                         self.fund_source_alpaca = true;
-                        self.fund_source_tastytrade = true;
                         self.fund_source_kraken = true;
                     }
                     EventSource::Alpaca => {
                         self.fund_source_mt5 = false;
                         self.fund_source_alpaca = true;
-                        self.fund_source_tastytrade = false;
                         self.fund_source_kraken = false;
                     }
                     EventSource::Darwinex => {
                         self.fund_source_mt5 = true;
                         self.fund_source_alpaca = false;
-                        self.fund_source_tastytrade = false;
-                        self.fund_source_kraken = false;
-                    }
-                    EventSource::Tasty => {
-                        self.fund_source_mt5 = false;
-                        self.fund_source_alpaca = false;
-                        self.fund_source_tastytrade = true;
                         self.fund_source_kraken = false;
                     }
                     EventSource::Kraken => {
                         self.fund_source_mt5 = false;
                         self.fund_source_alpaca = false;
-                        self.fund_source_tastytrade = false;
                         self.fund_source_kraken = true;
                     }
                     EventSource::Positions => {
                         self.fund_source_mt5 = true;
                         self.fund_source_alpaca = true;
-                        self.fund_source_tastytrade = true;
                         self.fund_source_kraken = true;
                     }
                 }
@@ -349,11 +332,6 @@ impl TyphooNApp {
                 // Active symbol sets (bare tickers, uppercased).
                 let alpaca_syms: std::collections::HashSet<String> = self
                     .live_positions
-                    .iter()
-                    .map(|p| p.symbol.replace('/', "").to_uppercase())
-                    .collect();
-                let tasty_syms: std::collections::HashSet<String> = self
-                    .tt_positions
                     .iter()
                     .map(|p| p.symbol.replace('/', "").to_uppercase())
                     .collect();
@@ -378,10 +356,9 @@ impl TyphooNApp {
                 for f in &self.bg.all_fundamentals {
                     let sym_u = f.symbol.to_uppercase();
                     let in_alpaca = alpaca_syms.contains(&sym_u);
-                    let in_tasty = tasty_syms.contains(&sym_u);
                     let in_darwinex = darwinex_syms.contains(&sym_u);
                     let in_kraken = kraken_syms.contains(&sym_u);
-                    if !in_alpaca && !in_tasty && !in_darwinex && !in_kraken {
+                    if !in_alpaca && !in_darwinex && !in_kraken {
                         continue;
                     }
 
@@ -400,7 +377,6 @@ impl TyphooNApp {
                                 detail,
                                 in_alpaca,
                                 in_darwinex,
-                                in_tasty,
                                 in_kraken,
                             });
                         }

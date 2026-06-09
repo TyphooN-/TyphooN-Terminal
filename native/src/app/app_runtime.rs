@@ -877,7 +877,6 @@ impl eframe::App for TyphooNApp {
                                 db_path,
                                 use_mt5: self.fund_source_mt5,
                                 use_alpaca: self.fund_source_alpaca,
-                                use_tastytrade: self.fund_source_tastytrade,
                                 use_kraken: self.fund_source_kraken,
                                 kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
                                 force: false,
@@ -1963,7 +1962,6 @@ impl eframe::App for TyphooNApp {
                                 db_path,
                                 use_mt5: self.fund_source_mt5,
                                 use_alpaca: self.fund_source_alpaca,
-                                use_tastytrade: self.fund_source_tastytrade,
                                 use_kraken: self.fund_source_kraken,
                                 kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
                                 force: false,
@@ -11579,7 +11577,6 @@ impl eframe::App for TyphooNApp {
                                                 db_path,
                                                 use_mt5: self.fund_source_mt5,
                                                 use_alpaca: self.fund_source_alpaca,
-                                                use_tastytrade: self.fund_source_tastytrade,
                                                 use_kraken: self.fund_source_kraken,
                                                 kraken_equity_symbols: self
                                                     .kraken_equity_universe_symbols
@@ -11763,7 +11760,6 @@ impl eframe::App for TyphooNApp {
                                                 db_path,
                                                 use_mt5: self.fund_source_mt5,
                                                 use_alpaca: self.fund_source_alpaca,
-                                                use_tastytrade: self.fund_source_tastytrade,
                                                 use_kraken: self.fund_source_kraken,
                                                 kraken_equity_symbols: self
                                                     .kraken_equity_universe_symbols
