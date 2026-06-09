@@ -2644,7 +2644,6 @@ fn sample_events() -> Vec<EventRow> {
             detail: "P/E 28.5".into(),
             in_alpaca: true,
             in_darwinex: false,
-            in_tasty: true,
             in_kraken: false,
         },
         EventRow {
@@ -2656,7 +2655,6 @@ fn sample_events() -> Vec<EventRow> {
             detail: "0.82% yield".into(),
             in_alpaca: true,
             in_darwinex: true,
-            in_tasty: false,
             in_kraken: false,
         },
         EventRow {
@@ -2668,7 +2666,6 @@ fn sample_events() -> Vec<EventRow> {
             detail: "5.10% yield".into(),
             in_alpaca: false,
             in_darwinex: true,
-            in_tasty: false,
             in_kraken: false,
         },
     ]
@@ -2736,7 +2733,6 @@ fn test_build_events_ics_skips_unparseable_dates() {
         detail: String::new(),
         in_alpaca: true,
         in_darwinex: false,
-        in_tasty: false,
         in_kraken: false,
     }];
     let ics = TyphooNApp::build_events_ics(&bad, EventSource::All, true, true, true);
