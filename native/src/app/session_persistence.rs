@@ -324,7 +324,6 @@ impl TyphooNApp {
             "kraken_scrape_schema": 3,
             "alpaca_enabled": self.alpaca_enabled,
             "alpaca_full_bar_sync_enabled": self.alpaca_full_bar_sync_enabled,
-            "darwinex_enabled": self.darwinex_enabled,
             "kraken_enabled": self.kraken_enabled,
             "kraken_full_bar_sync_enabled": self.kraken_full_bar_sync_enabled,
             "kraken_scrape_xstocks": self.kraken_scrape_xstocks,
@@ -374,9 +373,6 @@ impl TyphooNApp {
         }
         if let Some(enabled) = value["kraken_full_bar_sync_enabled"].as_bool() {
             self.kraken_full_bar_sync_enabled = enabled;
-        }
-        if let Some(enabled) = value["darwinex_enabled"].as_bool() {
-            self.darwinex_enabled = enabled;
         }
         if let Some(enabled) = value["kraken_enabled"].as_bool() {
             self.kraken_enabled = enabled;
@@ -673,7 +669,6 @@ impl TyphooNApp {
             "broker_scope": match self.broker_scope {
                 EventSource::All => "all",
                 EventSource::Alpaca => "alpaca",
-                EventSource::Darwinex => "darwinex",
                 EventSource::Kraken => "kraken",
                 EventSource::Positions => "positions",
             },
@@ -719,7 +714,6 @@ impl TyphooNApp {
             ),
             "lan_client_enabled": self.lan_client_enabled,
             "lan_server_enabled": self.lan_server_enabled,
-            "show_darwin_positions": self.show_darwin_positions,
             "show_alpaca_positions": self.show_alpaca_positions,
             "show_kr_positions": self.show_kr_positions,
             "snap_enabled": self.snap_enabled,
@@ -731,10 +725,7 @@ impl TyphooNApp {
             "lan_server_ip": self.lan_server_ip,
             "lan_sync_host": self.lan_sync_host,
             "lan_sync_port": self.lan_sync_port,
-            "darwin_view": self.darwin_view,
-            "darwin_xlsx_dir": self.darwin_xlsx_dir,
             "mt5_db_paths": self.mt5_db_paths,
-            "darwin_ftp_dir": self.darwin_ftp_dir,
             "codex_model": self.codex_model,
             "codex_reasoning_effort": self.codex_reasoning_effort,
             "hermes_model": self.hermes_model,
@@ -744,7 +735,6 @@ impl TyphooNApp {
             // Credentials: keyring-only (secure OS storage). Session stores non-secret config.
             "alpaca_enabled": self.alpaca_enabled,
             "alpaca_full_bar_sync_enabled": self.alpaca_full_bar_sync_enabled,
-            "darwinex_enabled": self.darwinex_enabled,
             "kraken_enabled": self.kraken_enabled,
             "kraken_full_bar_sync_enabled": self.kraken_full_bar_sync_enabled,
             "broker_paper": self.broker_paper,
@@ -752,8 +742,6 @@ impl TyphooNApp {
             "tp_enabled": self.tp_enabled,
             "windows": {
                 "settings": self.show_settings,
-                "darwin_accounts": self.show_darwin_accounts,
-                "darwin_portfolio": self.show_darwin_portfolio,
                 "risk_calc": self.show_risk_calc,
                 "compound_calc": self.show_compound_calc,
                 "calendar": self.show_calendar,
@@ -782,7 +770,6 @@ impl TyphooNApp {
                 "dividend_calendar": self.show_dividend_calendar,
                 "event_calendar": self.show_event_calendar,
                 "ev_scanner": self.show_ev_scanner,
-                "darwin_browser": self.show_darwin_browser,
                 "stress_test": self.show_stress_test,
                 "volume_profile": self.show_volume_profile,
                 "hv_cone": self.show_hv_cone,
@@ -804,8 +791,6 @@ impl TyphooNApp {
                 "connect": self.show_connect,
                 "data_window": self.show_data_window,
                 "alerts": self.show_alerts,
-                "swap_harvest": self.show_swap_harvest,
-                "darwinex_radar": self.show_darwinex_radar,
                 "scope_window": self.show_scope_window,
                 "scrape_status": self.show_scrape_status,
                 "fear_greed": self.show_fear_greed,
@@ -1357,28 +1342,6 @@ impl TyphooNApp {
             }
             pairs.insert((bare.clone(), tf));
             syms_with_chart.insert(bare);
-        }
-        // DARWIN positions without a chart tab default to 1Hour + 1Day so
-        // intraday + daily reviews always have fresh bars. If a chart tab
-        // exists for the symbol, honour the chart's TF exclusively.
-        if self.show_darwin_positions {
-            for pos in &self.bg.open_positions {
-                let sym = pos.symbol.replace('/', "");
-                if !Self::is_valid_demand_symbol(&sym) {
-                    continue;
-                }
-                if Self::demand_is_crypto(&sym) || Self::demand_is_index_etf(&sym) {
-                    continue;
-                }
-                if !syms_with_chart.contains(&sym) {
-                    if self.sync_timeframe_enabled("1Hour") {
-                        pairs.insert((sym.clone(), "1Hour".to_string()));
-                    }
-                    if self.sync_timeframe_enabled("1Day") {
-                        pairs.insert((sym, "1Day".to_string()));
-                    }
-                }
-            }
         }
         pairs
     }
@@ -2030,7 +1993,6 @@ impl TyphooNApp {
                 // Broker scope + econ filters (added 2026-04-09)
                 self.broker_scope = match v["broker_scope"].as_str() {
                     Some("alpaca") => EventSource::Alpaca,
-                    Some("darwinex") => EventSource::Darwinex,
                     Some("kraken") => EventSource::Kraken,
                     Some("positions") => EventSource::Positions,
                     _ => EventSource::All,
@@ -3387,24 +3349,11 @@ impl TyphooNApp {
                         .collect();
                     self.normalized_right_panel_order();
                 }
-                // Restore DARWIN view
-                if let Some(dv) = v["darwin_view"].as_u64() {
-                    self.darwin_view = dv as usize;
-                }
-                if let Some(dir) = v["darwin_xlsx_dir"].as_str() {
-                    self.darwin_xlsx_dir = dir.to_string();
-                }
                 if let Some(paths) = v["mt5_db_paths"].as_array() {
                     for (i, p) in paths.iter().enumerate().take(4) {
                         if let Some(s) = p.as_str() {
                             self.mt5_db_paths[i] = s.to_string();
                         }
-                    }
-                }
-                if let Some(ftp) = v["darwin_ftp_dir"].as_str() {
-                    self.darwin_ftp_dir = ftp.to_string();
-                    if let Ok(mut dir) = self.shared_ftp_dir.lock() {
-                        *dir = ftp.to_string();
                     }
                 }
                 if let Some(model) = v["codex_model"].as_str() {
@@ -3458,9 +3407,6 @@ impl TyphooNApp {
                 if let Some(enabled) = v["kraken_full_bar_sync_enabled"].as_bool() {
                     self.kraken_full_bar_sync_enabled = enabled;
                 }
-                if let Some(enabled) = v["darwinex_enabled"].as_bool() {
-                    self.darwinex_enabled = enabled;
-                }
                 if let Some(enabled) = v["kraken_enabled"].as_bool() {
                     self.kraken_enabled = enabled;
                 }
@@ -3496,9 +3442,6 @@ impl TyphooNApp {
                 }
                 if let Some(b) = v["lan_server_enabled"].as_bool() {
                     self.lan_server_enabled = b;
-                }
-                if let Some(b) = v["show_darwin_positions"].as_bool() {
-                    self.show_darwin_positions = b;
                 }
                 if let Some(b) = v["show_alpaca_positions"].as_bool() {
                     self.show_alpaca_positions = b;
@@ -3553,12 +3496,6 @@ impl TyphooNApp {
                 if let Some(w) = v.get("windows") {
                     if let Some(b) = w["settings"].as_bool() {
                         self.show_settings = b;
-                    }
-                    if let Some(b) = w["darwin_accounts"].as_bool() {
-                        self.show_darwin_accounts = b;
-                    }
-                    if let Some(b) = w["darwin_portfolio"].as_bool() {
-                        self.show_darwin_portfolio = b;
                     }
                     if let Some(b) = w["risk_calc"].as_bool() {
                         self.show_risk_calc = b;
@@ -3644,9 +3581,6 @@ impl TyphooNApp {
                     if let Some(b) = w["ev_scanner"].as_bool() {
                         self.show_ev_scanner = b;
                     }
-                    if let Some(b) = w["darwin_browser"].as_bool() {
-                        self.show_darwin_browser = b;
-                    }
                     if let Some(b) = w["stress_test"].as_bool() {
                         self.show_stress_test = b;
                     }
@@ -3709,12 +3643,6 @@ impl TyphooNApp {
                     }
                     if let Some(b) = w["alerts"].as_bool() {
                         self.show_alerts = b;
-                    }
-                    if let Some(b) = w["swap_harvest"].as_bool() {
-                        self.show_swap_harvest = b;
-                    }
-                    if let Some(b) = w["darwinex_radar"].as_bool() {
-                        self.show_darwinex_radar = b;
                     }
                     if let Some(b) = w["scope_window"].as_bool() {
                         self.show_scope_window = b;
