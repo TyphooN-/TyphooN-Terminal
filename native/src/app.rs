@@ -70,7 +70,6 @@ mod command_palette;
 mod command_research_windows;
 mod commands;
 mod common;
-mod darwin_universe;
 mod drawing;
 mod export_nav;
 mod fallback_bars;
@@ -504,7 +503,6 @@ impl TyphooNApp {
             cached_active_symbols_set: std::collections::HashSet::with_capacity(64),
             cached_scoped_fundamentals: Vec::new(),
             cached_scoped_fundamentals_key: None,
-            cached_darwin_symbols: std::collections::HashSet::new(),
             cached_mt5_symbols: std::collections::HashSet::new(),
             cached_mt5_symbols_rev: None,
             cached_alpaca_sync_state: std::collections::HashMap::new(),

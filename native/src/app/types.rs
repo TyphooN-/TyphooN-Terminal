@@ -511,8 +511,6 @@ pub(crate) enum PaletteContext {
     Chart,
     /// Right-clicked on a watchlist row
     Watchlist,
-    /// Right-clicked on a DARWIN row
-    Darwin,
 }
 
 // ── ADR-094: Sparkline helper ──────────────────────────────────────

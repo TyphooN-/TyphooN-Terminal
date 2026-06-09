@@ -4678,9 +4678,6 @@ pub struct TyphooNApp {
     /// Dividend Yield Screener, Outlier Scanner.
     pub(crate) cached_scoped_fundamentals: Vec<typhoon_engine::core::fundamentals::Fundamentals>,
     pub(crate) cached_scoped_fundamentals_key: Option<(u64, EventSource)>,
-    /// Darwin/MT5 tradable symbol set (uppercased, sourced from loaded specs /
-    /// imported ExportSymbols CSV). Rebuilt only when `bg_rev` changes.
-    pub(crate) cached_darwin_symbols: std::collections::HashSet<String>,
     /// MT5 bar-covered symbol set (uppercased, parsed from detailed_stats keys).
     /// Rebuilt only when `bg_rev` changes — used to avoid redundant Alpaca fetches
     /// when an operator still chooses to run MT5 sync.

@@ -74,27 +74,11 @@ impl eframe::App for TyphooNApp {
             self.cached_scoped_fundamentals = self.scoped_fundamentals_owned();
             self.cached_scoped_fundamentals_key = Some(scope_key);
         }
-        // PERF: Cache Darwin tradability + MT5/tasty bar-coverage sets on bg_rev.
+        // PERF: Cache MT5 bar-coverage set on bg_rev.
         // Was rebuilding per frame in hot windows and sync loops.
         if self.cached_mt5_symbols_rev != Some(self.bg_rev)
             && (!self.heavy_sync_in_progress || self.cached_mt5_symbols.is_empty())
         {
-            // Start with Darwinex symbols from MT5 specs (if any)
-            let mut darwin: std::collections::HashSet<String> = self
-                .bg
-                .darwinex_specs
-                .iter()
-                .filter(|(_, _, _, trade_mode, _, _, _, _, _)| *trade_mode != 0)
-                .map(|(sym, _, _, _, _, _, _, _, _)| normalize_market_data_symbol(sym))
-                .collect();
-
-            // Merge the full hardcoded Darwinex Zero USA Stocks + ETFs universe.
-            // This allows viewing/analyzing these symbols using Kraken/Alpaca data
-            // even when not syncing MT5.
-            for s in crate::app::darwin_universe::darwinex_usa_equity_symbols() {
-                darwin.insert(normalize_market_data_symbol(s));
-            }
-            self.cached_darwin_symbols = darwin;
             self.cached_mt5_symbols = self
                 .bg
                 .detailed_stats
@@ -576,28 +560,6 @@ impl eframe::App for TyphooNApp {
                     .push_back(LogEntry::info("Kraken auto-connecting..."));
             }
 
-            // ── Restore Darwinex web scraping config from cache (ADR-093) ──
-            if let Some(ref cache) = self.cache {
-                if let Ok(Some(json)) =
-                    cache.get_kv(typhoon_engine::core::darwin_web::cache_keys::CONFIG)
-                {
-                    if let Ok(cfg) = serde_json::from_str::<
-                        typhoon_engine::core::darwin_web::DarwinWebConfig,
-                    >(&json)
-                    {
-                        self.dwx_config = cfg;
-                        if !self.dwx_config.managed_darwins.is_empty() {
-                            self.log.push_back(LogEntry::info(format!(
-                                "DWX config restored: {} DARWINs [{}], auto={}",
-                                self.dwx_config.managed_darwins.len(),
-                                self.dwx_config.managed_darwins.join(", "),
-                                self.dwx_config.auto_scrape
-                            )));
-                        }
-                    }
-                }
-            }
-
             // LAN KV recovery: read client_enabled FIRST so we don't misidentify a client
             // machine as a server. Stale lan:server_enabled keys could have been synced from
             // the server into the client's local KV cache (fixed in lan_sync.rs, but existing
@@ -703,37 +665,6 @@ impl eframe::App for TyphooNApp {
             };
             self.deferred_chart_load_set = self.deferred_chart_loads.iter().copied().collect();
             {
-                // Auto-import DARWIN XLSX if needed (not on LAN client)
-                if !self.darwin_xlsx_dir.is_empty() && !self.lan_client_enabled {
-                    let dir = std::path::PathBuf::from(&self.darwin_xlsx_dir);
-                    if dir.is_dir() {
-                        let has_accounts = self
-                            .cache
-                            .as_ref()
-                            .and_then(|c| {
-                                c.connection().ok().and_then(|conn| {
-                                    let _ = darwin::create_darwin_tables(&conn);
-                                    darwin::list_darwin_accounts(&conn).ok()
-                                })
-                            })
-                            .map(|a| !a.is_empty())
-                            .unwrap_or(false);
-                        if !has_accounts {
-                            let db_path = cache_db_path();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::DarwinImportAll { dir, db_path });
-                            self.log.push_back(LogEntry::info(format!(
-                                "Auto-importing DARWIN XLSX from {}",
-                                self.darwin_xlsx_dir
-                            )));
-                        } else {
-                            self.log.push_back(LogEntry::info(
-                                "DARWIN data already imported (use Import button to reimport)",
-                            ));
-                        }
-                    }
-                }
                 // ── Startup data fetching (disabled for LAN client — server provides all data) ──
                 if !self.lan_client_enabled {
                     // Auto MT5SYNC on startup if data dirs are configured
@@ -914,18 +845,11 @@ impl eframe::App for TyphooNApp {
                 || self.show_fundamentals
                 || self.show_storage
                 || self.show_cache_stats
-                || self.show_darwin_accounts
-                || self.show_darwin_portfolio
                 // Sync Status reads bg.detailed_stats/cache_stats; keep feeding it
                 // (instead of dropping the snapshot during heavy sync) now that it
                 // no longer has a synchronous render-thread refresh fallback.
                 || self.show_sync_status;
             if !self.heavy_sync_in_progress || bg_window_visible {
-                // Auto-populate darwinex_radar_data from BG-loaded specs so Darwinex scope
-                // filtering works without requiring manual DARWINEXRADAR command.
-                if !data.darwinex_specs.is_empty() {
-                    self.darwinex_radar_data = data.darwinex_specs.clone();
-                }
                 self.replace_bg_snapshot_off_ui_drop(data);
             } else {
                 tracing::debug!(
@@ -1003,16 +927,6 @@ impl eframe::App for TyphooNApp {
                                     }
                                 }
                             }
-                        }
-                    }
-                    // DARWIN open positions: read server's computed positions from KV.
-                    // This bypasses the broken recompute-from-45K-deals pipeline —
-                    // the server already computed the correct 3 positions, stored as KV.
-                    if let Ok(Some(json)) = cache.get_kv("darwin:open_positions") {
-                        if let Ok(pos) =
-                            serde_json::from_str::<Vec<darwin::PortfolioOpenPosition>>(&json)
-                        {
-                            self.bg.open_positions = pos;
                         }
                     }
                     // Watchlist quotes from server — only use server data for symbols the client wants
@@ -1111,78 +1025,6 @@ impl eframe::App for TyphooNApp {
                     _ => 99u8,
                 });
                 self.mtf_grid_rx = None; // done
-            }
-        }
-
-        // ── receive Darwinex web scrape results (ADR-093) ─────────────
-        if let Some(ref rx) = self.dwx_rx {
-            if let Ok((result, driver_handle)) = rx.try_recv() {
-                // Store the WebDriver handle if provided (from DWXLOGIN)
-                if let Some(driver_arc) = driver_handle {
-                    self.dwx_driver = Some(driver_arc);
-                }
-                match result {
-                    Ok(update) => {
-                        let n_snap = update.snapshots.len();
-                        let n_corr = update.correlations.len();
-                        let n_alerts = update.correlation_alerts.len();
-                        // Log excluded DARWINs
-                        for snap in &update.snapshots {
-                            if snap.excluded {
-                                self.log.push_back(LogEntry::warn(format!(
-                                    "DARWIN {} EXCLUDED: {}",
-                                    snap.ticker,
-                                    if snap.exclusion_reason.is_empty() {
-                                        "no reason"
-                                    } else {
-                                        &snap.exclusion_reason
-                                    }
-                                )));
-                            }
-                        }
-                        // Log correlation alerts
-                        for alert in &update.correlation_alerts {
-                            self.log.push_back(LogEntry::err(format!(
-                                "CORRELATION BREACH: {} × {} = {:.4} — {}",
-                                alert.darwin_a, alert.darwin_b, alert.correlation, alert.suggestion
-                            )));
-                            // ADR-094: Toast for each correlation breach
-                            self.toasts.push(Toast {
-                                message: format!(
-                                    "{} × {} = {:.4}",
-                                    alert.darwin_a, alert.darwin_b, alert.correlation
-                                ),
-                                color: egui::Color32::from_rgb(255, 80, 80),
-                                created: std::time::Instant::now(),
-                                duration: std::time::Duration::from_secs(60),
-                                dismissable: true,
-                                dismissed: false,
-                            });
-                        }
-                        let n_monthly = update.monthly_returns.len();
-                        let n_alloc = update.allocations.len();
-                        let has_perf = update.portfolio_performance.is_some();
-                        let has_risk = update.portfolio_risk.is_some();
-                        self.dwx_last_update = Some(update);
-                        self.dwx_logged_in = true;
-                        self.log.push_back(LogEntry::info(format!(
-                            "DWX scrape complete: {} DARWINs (all tabs), {} correlations, {} alerts, {} allocations{}{}",
-                            n_snap, n_corr, n_alerts, n_alloc,
-                            if has_perf { ", portfolio perf" } else { "" },
-                            if has_risk { ", portfolio risk" } else { "" },
-                        )));
-                        if n_monthly > 0 {
-                            self.log.push_back(LogEntry::info(format!(
-                                "  Monthly returns: {n_monthly}, equity curves: {n_snap}, VaR histories: {n_snap}, D-Score histories: {n_snap}, investor flows: {n_snap}"
-                            )));
-                        }
-                    }
-                    Err(e) => {
-                        self.log
-                            .push_back(LogEntry::err(format!("DWX scrape failed: {}", e)));
-                    }
-                }
-                self.dwx_rx = None;
             }
         }
 
@@ -7616,15 +7458,6 @@ impl eframe::App for TyphooNApp {
                         self.symbol_suggestions.truncate(20);
                     }
                 }
-                BrokerMsg::DarwinFtpScanResult(results) => {
-                    self.scrape_darwin_running = false;
-                    self.scrape_darwin_last_msg = format!("{} DARWINs scanned", results.len());
-                    self.log.push_back(LogEntry::info(format!(
-                        "DARWIN FTP: {} results loaded",
-                        results.len()
-                    )));
-                    self.ftp_scan_results = results;
-                }
                 BrokerMsg::BarsFetched {
                     source,
                     symbol,
@@ -7853,62 +7686,6 @@ impl eframe::App for TyphooNApp {
                                 marker_count
                             )));
                         }
-                    }
-                }
-                BrokerMsg::DarwinFtpReturns(returns_data) => {
-                    self.log.push_back(LogEntry::info(format!(
-                        "GPU: uploading {} DARWINs to VRAM...",
-                        returns_data.len()
-                    )));
-                    if let Some(ref mut gpu) = self.gpu_darwin {
-                        let max_days =
-                            returns_data.iter().map(|(_, r)| r.len()).max().unwrap_or(0) as u32;
-                        let tickers: Vec<String> =
-                            returns_data.iter().map(|(t, _)| t.clone()).collect();
-                        let series: Vec<Vec<f32>> =
-                            returns_data.into_iter().map(|(_, r)| r).collect();
-                        gpu.upload_returns(&series, max_days);
-                        if let Some(stats) = gpu.compute_all_batches() {
-                            self.log.push_back(LogEntry::info(format!(
-                                "GPU: {} DARWIN stats computed",
-                                stats.len()
-                            )));
-                            self.ftp_scan_results.clear();
-                            for (i, s) in stats.iter().enumerate() {
-                                if i < tickers.len() {
-                                    self.ftp_scan_results.push(darwin_ftp::DarwinFtpSummary {
-                                        ticker: tickers[i].clone(),
-                                        trading_days: 0,
-                                        total_return_pct: s.total_return as f64 * 100.0,
-                                        max_drawdown_pct: s.max_drawdown as f64 * 100.0,
-                                        sharpe: s.sharpe as f64,
-                                        sortino: s.sortino as f64,
-                                        daily_vol: s.variance.sqrt() as f64,
-                                        best_day_pct: s.best_day as f64 * 100.0,
-                                        worst_day_pct: s.worst_day as f64 * 100.0,
-                                        last_quote: 0.0,
-                                        has_dscore: false,
-                                        has_quotes: false,
-                                        has_former_var10: false,
-                                        experience_score: 0.0,
-                                        risk_stability_score: 0.0,
-                                        performance_score: 0.0,
-                                    });
-                                }
-                            }
-                            self.ftp_scan_results.sort_by(|a, b| {
-                                b.sharpe
-                                    .partial_cmp(&a.sharpe)
-                                    .unwrap_or(std::cmp::Ordering::Equal)
-                            });
-                            self.log.push_back(LogEntry::info(format!(
-                                "GPU scan complete: {} DARWINs ranked by Sharpe",
-                                self.ftp_scan_results.len()
-                            )));
-                        }
-                    } else {
-                        self.log
-                            .push_back(LogEntry::warn("GPU not available — cannot compute stats"));
                     }
                 }
             }
@@ -11010,21 +10787,6 @@ impl eframe::App for TyphooNApp {
                     "NEWS",
                     "OPTIONS",
                 ]),
-                PaletteContext::Darwin => Some(&[
-                    "DARWIN",
-                    "PORTFOLIO",
-                    "DRAWDOWN",
-                    "REBALANCE",
-                    "DARWIN_TRADES",
-                    "DARWINVAR",
-                    "DARWINIA_SCAN",
-                    "CORRELATION",
-                    "DWXSYNC",
-                    "DWXSTATUS",
-                    "EXPORT_DARWIN",
-                    "DELETE_DARWIN",
-                    "SWAPHARVEST",
-                ]),
             };
             let palette_commands: Vec<&Command> =
                 if filter_empty && !self.recent_commands.is_empty() {
@@ -11283,12 +11045,6 @@ impl eframe::App for TyphooNApp {
                 // Open positions count
                 snap.positions_open
                     .push(("alpaca".to_string(), self.live_positions.len() as f64));
-
-                // DARWIN portfolio open positions count
-                if !self.bg.open_positions.is_empty() {
-                    snap.positions_open
-                        .push(("darwin".to_string(), self.bg.open_positions.len() as f64));
-                }
 
                 // Price alerts
                 snap.alerts_active = self.alerts.len() as f64 + self.indicator_alerts.len() as f64;
@@ -11564,21 +11320,6 @@ impl eframe::App for TyphooNApp {
                                                 "LAN remote: Kraken Futures backfill {} started",
                                                 sym
                                             )));
-                                        }
-                                    }
-                                    "DARWIN_IMPORT" => {
-                                        if !self.darwin_xlsx_dir.is_empty() {
-                                            let db_path = cache_db_path();
-                                            let _ =
-                                                self.broker_tx.send(BrokerCmd::DarwinImportAll {
-                                                    dir: std::path::PathBuf::from(
-                                                        &self.darwin_xlsx_dir,
-                                                    ),
-                                                    db_path,
-                                                });
-                                            self.log.push_back(LogEntry::info(
-                                                "LAN remote: DARWIN XLSX import started",
-                                            ));
                                         }
                                     }
                                     "EVSCRAPE" | "EVSCRAPE_FORCE" => {

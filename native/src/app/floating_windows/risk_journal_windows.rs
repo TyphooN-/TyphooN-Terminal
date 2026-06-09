@@ -580,9 +580,6 @@ impl TyphooNApp {
                                         if SortState::header(ui, "Short z", 8, &self.outlier_sort) { self.outlier_sort.toggle(8); }
                                         if SortState::header(ui, "SEC z", 9, &self.outlier_sort) { self.outlier_sort.toggle(9); }
                                         ui.end_row();
-                                        // PERF: tradability set is cached on self.cached_darwin_symbols —
-                                        // rebuilt only on bg_rev change, not per frame.
-                                        let darwin_symbols = &self.cached_darwin_symbols;
 
                                         for o in sorted_outliers.iter().take(200) {
                                             let tier_c = match o.tier.as_str() {
@@ -591,14 +588,9 @@ impl TyphooNApp {
                                             let z_color = |z: f64| -> egui::Color32 {
                                                 if z.abs() > 2.0 { ol_high } else if z.abs() > 1.5 { ol_med } else { ol_dim }
                                             };
-                                            // Tradability: green dot = in MT5 (tradable), dim = close-only.
-                                            // o.symbol is guaranteed uppercase (built from Fundamentals).
-                                            let tradable = darwin_symbols.contains(o.symbol.as_str());
-                                            let sym_color = if tradable { egui::Color32::WHITE } else { egui::Color32::from_rgb(80, 80, 90) };
-                                            let trade_icon = if tradable { "\u{25CF} " } else { "\u{25CB} " };
                                             ui.horizontal(|ui| {
                                                 let (_, action) = symbol_label_with_menu(ui, &o.symbol,
-                                                    egui::RichText::new(format!("{}{}", trade_icon, o.symbol)).small().strong().color(sym_color));
+                                                    egui::RichText::new(&o.symbol).small().strong().color(egui::Color32::WHITE));
                                                 if !matches!(action, SymbolAction::None) { pending_action = action; }
                                                 if ui.small_button(egui::RichText::new("+").small()).on_hover_text("Open new chart").clicked() {
                                                     pending_action = SymbolAction::OpenChart(o.symbol.clone());
