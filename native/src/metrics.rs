@@ -60,7 +60,7 @@ impl MetricsRegistry {
         let registry = Registry::new();
 
         let equity = GaugeVec::new(
-            Opts::new("typhoon_equity_total", "Total equity per DARWIN account"),
+            Opts::new("typhoon_equity_total", "Total equity per broker account"),
             &["account"],
         )
         .map_err(|e| format!("equity metric: {e}"))?;

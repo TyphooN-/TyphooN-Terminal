@@ -124,7 +124,7 @@ impl TyphooNApp {
                         )));
                     } else {
                         self.log.push_back(LogEntry::warn(format!(
-                            "Workspace '{}' not found (try TRADING/RESEARCH/DARWIN/COMPACT)",
+                            "Workspace '{}' not found (try TRADING/RESEARCH/COMPACT)",
                             name
                         )));
                     }
@@ -133,7 +133,6 @@ impl TyphooNApp {
                     all.extend([
                         "TRADING (built-in)".into(),
                         "RESEARCH (built-in)".into(),
-                        "DARWIN (built-in)".into(),
                         "COMPACT (built-in)".into(),
                     ]);
                     self.log

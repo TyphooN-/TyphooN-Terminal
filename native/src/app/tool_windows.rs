@@ -120,7 +120,7 @@ impl TyphooNApp {
                 ui.heading("MT5 (view-only data source)");
                 ui.separator();
                 ui.label("MT5 bar data imported via BarCacheWriter EA → SQLite cache.");
-                ui.label("Trade management stays in MT5. DARWIN analytics via XLSX import.");
+                ui.label("Trade management stays in MT5.");
             });
         self.show_connect = show_connect;
         if settings_save_after {

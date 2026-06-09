@@ -216,7 +216,6 @@ impl TyphooNApp {
             "TRADING" => serde_json::json!({
                 "sec": false, "insider": false, "fundamentals": false, "ev": false,
                 "earnings": false, "dividends": false, "darwinex_outliers": false,
-                "darwinex_radar": false, "swap_harvest": false, "darwin_browser": false,
                 "stress_test": false, "volume_profile": true, "hv_cone": false,
                 "sector_heatmap": false, "dividends_screen": false, "event_calendar": false,
                 "lan_sync": false, "alerts": true, "journal": false, "compact_mode": false,
@@ -224,23 +223,13 @@ impl TyphooNApp {
             "RESEARCH" => serde_json::json!({
                 "sec": true, "insider": true, "fundamentals": true, "ev": true,
                 "earnings": true, "dividends": true, "darwinex_outliers": true,
-                "darwinex_radar": false, "swap_harvest": false, "darwin_browser": false,
                 "stress_test": false, "volume_profile": false, "hv_cone": false,
                 "sector_heatmap": true, "dividends_screen": true, "event_calendar": true,
                 "lan_sync": false, "alerts": false, "journal": false, "compact_mode": false,
             }),
-            "DARWIN" => serde_json::json!({
-                "sec": false, "insider": false, "fundamentals": false, "ev": false,
-                "earnings": false, "dividends": false, "darwinex_outliers": true,
-                "darwinex_radar": true, "swap_harvest": true, "darwin_browser": true,
-                "stress_test": true, "volume_profile": false, "hv_cone": false,
-                "sector_heatmap": false, "dividends_screen": false, "event_calendar": false,
-                "lan_sync": false, "alerts": false, "journal": true, "compact_mode": false,
-            }),
             "COMPACT" => serde_json::json!({
                 "sec": false, "insider": false, "fundamentals": false, "ev": false,
                 "earnings": false, "dividends": false, "darwinex_outliers": false,
-                "darwinex_radar": false, "swap_harvest": false, "darwin_browser": false,
                 "stress_test": false, "volume_profile": false, "hv_cone": false,
                 "sector_heatmap": false, "dividends_screen": false, "event_calendar": false,
                 "lan_sync": false, "alerts": false, "journal": false, "compact_mode": true,

@@ -852,7 +852,7 @@ impl TyphooNApp {
                                 // ── Active connection — show stats + stop button ──
                                 ui.add_space(4.0);
                                 if self.lan_sync_mode == "server" {
-                                    ui.label(egui::RichText::new("Serving to LAN clients: MT5 bars, Alpaca positions/orders, DARWIN analytics, crypto backfill, fundamentals, SEC filings, news, FRED data.").color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new("Serving to LAN clients: MT5 bars, Alpaca positions/orders, crypto backfill, fundamentals, SEC filings, news, FRED data.").color(AXIS_TEXT).small());
                                     ui.label(egui::RichText::new("Clients connect using this machine's IP address.").color(AXIS_TEXT).small());
                                     // Connected clients list
                                     if let Some(ref cache) = self.cache {
