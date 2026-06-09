@@ -1,7 +1,7 @@
 use super::*;
 mod alert_market_data_windows;
 mod bookmap;
-mod broker_darwin_windows;
+mod broker_kraken_windows;
 use bookmap::*;
 mod news_filter;
 use news_filter::*;
@@ -198,8 +198,8 @@ impl TyphooNApp {
         self.was_settings_open = self.show_settings;
 
         let _settings_save_after = self.render_settings_window(ctx);
-        // Broker, Kraken, and Darwinex windows
-        self.render_broker_darwin_windows(ctx);
+        // Broker connect + Kraken trade-history / open-orders windows
+        self.render_broker_kraken_windows(ctx);
 
         // AI Chat (Anthropic Claude / OpenAI GPT / …)
         self.render_ai_chat_window(ctx);
