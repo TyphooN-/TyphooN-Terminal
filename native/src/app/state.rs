@@ -437,7 +437,6 @@ impl RiskMode {
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum OrderBroker {
     Alpaca,
-    Tastytrade,
     Kraken,
     Both,
 }
@@ -446,7 +445,6 @@ impl OrderBroker {
     pub(crate) fn label(self) -> &'static str {
         match self {
             OrderBroker::Alpaca => "Alpaca",
-            OrderBroker::Tastytrade => "tastytrade",
             OrderBroker::Kraken => "Kraken",
             OrderBroker::Both => "Both",
         }
@@ -631,7 +629,6 @@ pub(crate) enum BrokerCmd {
         db_path: PathBuf,
         use_mt5: bool,
         use_alpaca: bool,
-        use_tastytrade: bool,
         use_kraken: bool,
         kraken_equity_symbols: Vec<String>,
         force: bool,
@@ -645,7 +642,6 @@ pub(crate) enum BrokerCmd {
     ResearchScrape {
         use_mt5: bool,
         use_alpaca: bool,
-        use_tastytrade: bool,
         finnhub_key: String,
         fmp_key: String,
     },
@@ -662,34 +658,6 @@ pub(crate) enum BrokerCmd {
     /// Fetch SEC filing document content from EDGAR URL.
     FetchFilingContent {
         url: String,
-    },
-    /// Connect to tastytrade broker.
-    TastytradeConnect {
-        username: String,
-        password: String,
-        sandbox: bool,
-    },
-    /// Get tastytrade positions.
-    TastytradePositions,
-    /// Load tastytrade's broad market-data symbol universe.
-    TastytradeGetUniverse,
-    /// Get tastytrade account balances.
-    TastytradeGetBalances,
-    /// Close tastytrade position at market, optionally partial.
-    TastytradeClosePositionQty {
-        symbol: String,
-        qty: Option<i64>,
-    },
-    TastytradeCloseAll,
-    /// Get tastytrade option chain.
-    TastytradeOptionChain {
-        symbol: String,
-    },
-    /// Fetch bars from tastytrade via DXLink WebSocket.
-    TastyTradeFetchBars {
-        symbol: String,
-        timeframe: String,
-        backfill_complete: bool,
     },
     /// Fetch ALL available bars from Alpaca (full history, no limit).
     FetchAllBars {
@@ -745,10 +713,6 @@ pub(crate) enum BrokerCmd {
     /// Scan unusual volume (background, heavy DB reads).
     ScanUnusualVolume {
         keys: Vec<(String, i64)>,
-    },
-    /// Start real-time DXLink quote stream via tastytrade WebSocket.
-    StartDxLinkStream {
-        symbols: Vec<String>,
     },
     /// Export all DARWIN data to JSON.
     ExportDarwinData,
@@ -810,14 +774,6 @@ pub(crate) enum BrokerCmd {
         tp_price: Option<f64>,
         wait_for_qty_at_most: Option<f64>,
     },
-    /// Sync tastytrade exits for the current equity position.
-    TastytradeSyncExits {
-        symbol: String,
-        sl_price: Option<f64>,
-        tp_price: Option<f64>,
-        wait_for_position: bool,
-        wait_for_qty_at_most: Option<f64>,
-    },
     /// Sync Kraken exits for the current open position.
     KrakenSyncExits {
         pair: String,
@@ -858,22 +814,6 @@ pub(crate) enum BrokerCmd {
         room_id: String,
         access_token: String,
         file_path: std::path::PathBuf,
-    },
-    /// Place equity order via tastytrade.
-    TastytradeEquityOrder {
-        symbol: String,
-        qty: i64,
-        side: String,
-        order_type: String,
-        price: Option<f64>,
-    },
-    /// Close an open tastytrade equity position at market (Sell/Buy to Close).
-    TastytradeClosePosition {
-        symbol: String,
-    },
-    /// Cancel any live tastytrade exit orders for a symbol after the position is gone.
-    TastytradeCancelLiveExits {
-        symbol: String,
     },
     /// Place trailing stop order via Alpaca.
     AlpacaTrailingStop {
@@ -2866,7 +2806,6 @@ pub(crate) enum BrokerCmd {
     NewsScrapeAll {
         use_mt5: bool,
         use_alpaca: bool,
-        use_tastytrade: bool,
         use_kraken: bool,
         marketaux_key: String,
         alpha_vantage_key: String,
@@ -2895,10 +2834,6 @@ pub(crate) enum BrokerCmd {
     KrakenGetBalance,
     KrakenGetPositions,
     /// Place an order on Kraken.
-    /// Cancel a tastytrade order by order ID.
-    TastytradeCancelOrder {
-        order_id: String,
-    },
     KrakenPlaceOrder {
         pair: String,
         side: String,
@@ -3098,18 +3033,6 @@ pub(crate) enum BrokerMsg {
         bar_count: usize,
         target_bars: usize,
     },
-    TastytradeBackfillComplete {
-        symbol: String,
-        timeframe: String,
-        bar_count: usize,
-        target_bars: usize,
-    },
-    /// tastytrade DXLink fetch finished (successfully or not) so UI-side
-    /// in-flight dedupe can be released even when no new bars were written.
-    TastytradeFetchSettled {
-        symbol: String,
-        timeframe: String,
-    },
     /// Alpaca reported a concrete historical-data RPM via rate-limit headers.
     /// UI uses this to scale fetch concurrency and queue depth to the real plan.
     AlpacaRateLimitObserved {
@@ -3130,10 +3053,6 @@ pub(crate) enum BrokerMsg {
     CongressData(Vec<(String, String, String, String, String, String)>),
     /// Unusual volume scan results (symbol, today_vol, avg_vol, ratio).
     UnusualVolumeResults(Vec<(String, f64, f64, f64)>),
-    /// tastytrade positions converted to unified format for chart overlay.
-    TastytradePositions(Vec<PositionInfo>),
-    /// tastytrade balances for risk sizing and account display.
-    TastytradeBalances(TastyBalances),
     /// Kraken positions converted to unified format for chart overlay.
     KrakenPositions(Vec<PositionInfo>),
     /// Full asset list from broker (symbol, name, asset_class).
@@ -3158,8 +3077,6 @@ pub(crate) enum BrokerMsg {
     KrakenPairs(Vec<(String, String)>),
     /// Kraken Futures tradeable instrument symbols.
     KrakenFuturesInstruments(Vec<String>),
-    /// tastytrade market-data universe symbols.
-    TastytradeUniverse(Vec<String>),
     // ── Godel parity: research results (ADR-107) ──
     /// Finnhub company profile (symbol + profile).
     CompanyProfile(typhoon_engine::core::research::CompanyProfile),
