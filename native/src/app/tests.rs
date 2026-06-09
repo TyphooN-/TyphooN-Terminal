@@ -2571,7 +2571,7 @@ fn sample_events() -> Vec<EventRow> {
             kind: EventKind::DividendPayment,
             detail: "5.10% yield".into(),
             in_alpaca: false,
-            in_kraken: false,
+            in_kraken: true,
         },
     ]
 }
