@@ -2,7 +2,6 @@ use super::*;
 
 mod ai_commands;
 mod chart_drawing;
-mod darwinex_commands;
 mod fundamental_event_commands;
 mod market_data_commands;
 mod outlier_scan_commands;
@@ -31,9 +30,6 @@ impl TyphooNApp {
             return;
         }
         if self.handle_trade_order_command(&cmd_upper) {
-            return;
-        }
-        if self.handle_darwinex_command(&cmd_upper) {
             return;
         }
         if self.handle_outlier_scan_command(&cmd_upper) {
@@ -108,8 +104,6 @@ impl TyphooNApp {
             "CONNECT" => self.show_connect = true,
             "SETTINGS" => self.show_settings = true,
             "INDICATORS" => self.show_indicators_panel = !self.show_indicators_panel,
-            "DARWIN" => self.show_darwin_accounts = true,
-            "PORTFOLIO" => self.show_darwin_portfolio = true,
             "OVERLAP" => self.show_symbol_overlap = true,
             "BACKTEST" => self.show_backtest = true,
             "SCREENER" => self.show_screener = true,
@@ -365,7 +359,6 @@ impl TyphooNApp {
                     }
                 }
             }
-            // DARWIN-specific
             "RISKRUIN" => self.show_risk_ruin = true,
             "SCRAPESTATUS" => {
                 self.show_scrape_status = true;
@@ -492,16 +485,7 @@ impl TyphooNApp {
                 self.reload_symbol(&sym, tf);
             }
             // Aliases
-            "EQUITY" => self.show_darwin_portfolio = true,
             "CALC" => self.show_risk_calc = true,
-            "TRADESTATS" => {
-                self.darwin_view = 0;
-                self.show_darwin_portfolio = true;
-            } // Portfolio Summary
-            "PERF" => {
-                self.darwin_view = 14;
-                self.show_darwin_portfolio = true;
-            } // Seasonals
             "COMPARE" => {
                 let sym = self.symbol_input.clone();
                 if !sym.is_empty() {
@@ -555,19 +539,9 @@ impl TyphooNApp {
                     }
                 }
             }
-            "SPREAD" => {
-                self.darwin_view = 4;
-                self.show_darwin_portfolio = true;
-            } // Symbol Exposure
-            "HEATMAP" => {
-                self.darwin_view = 14;
-                self.show_darwin_portfolio = true;
-            } // Seasonals
-            "PROFILE" => self.show_darwin_accounts = true,
             "SIGNAL" => self.show_indicators_panel = true,
             "DASHBOARD" => self.show_cache_stats = true,
             "STATUS" => self.show_cache_stats = true,
-            "IMPORT_XLSX" => self.show_darwin_accounts = true,
             "WORKSPACE" => {
                 self.save_session();
                 self.log.push_back(LogEntry::info("Workspace saved"));
