@@ -1,7 +1,7 @@
 //! Pluggable data source hierarchy (ADR-038 Phase 2).
 //!
 //! Formalizes the cache key prefix routing
-//! (kraken: > kraken-futures: > cryptocompare: > alpaca:)
+//! (kraken: > kraken-futures: > alpaca:)
 //! into a trait-based system with per-source health tracking, per-symbol overrides,
 //! and configurable priority ordering.
 
@@ -16,7 +16,7 @@ pub type SourceId = String;
 pub struct DataSourceEntry {
     /// Unique identifier (e.g. "alpaca-paper", "kraken")
     pub id: SourceId,
-    /// Cache key prefix (e.g. "alpaca", "cryptocompare", "kraken")
+    /// Cache key prefix (e.g. "alpaca", "kraken")
     pub cache_prefix: String,
     /// Human-readable label (e.g. "Kraken", "Alpaca (Paper)")
     pub label: String,
@@ -76,15 +76,6 @@ impl Default for DataSourceManager {
                     healthy: true,
                     last_success_ts: 0,
                     asset_classes: vec!["crypto_futures".into(), "futures".into()],
-                },
-                DataSourceEntry {
-                    id: "cryptocompare".into(),
-                    cache_prefix: "cryptocompare".into(),
-                    label: "CryptoCompare".into(),
-                    priority: 4,
-                    healthy: true,
-                    last_success_ts: 0,
-                    asset_classes: vec!["crypto".into()],
                 },
                 DataSourceEntry {
                     id: "alpaca".into(),
@@ -218,11 +209,11 @@ mod tests {
     #[test]
     fn default_sources_ordered() {
         let mgr = DataSourceManager::default();
-        assert_eq!(mgr.sources.len(), 4);
+        assert_eq!(mgr.sources.len(), 3);
         assert_eq!(mgr.sources[0].id, "kraken");
         assert_eq!(mgr.sources[0].priority, 2);
         assert_eq!(mgr.sources[1].id, "kraken-futures");
-        assert_eq!(mgr.sources[3].id, "alpaca");
+        assert_eq!(mgr.sources[2].id, "alpaca");
     }
 
     #[test]
@@ -231,9 +222,8 @@ mod tests {
         let candidates = mgr.resolve_candidates("EURUSD", "1Hour");
         assert_eq!(candidates[0], "kraken:EURUSD:1Hour");
         assert_eq!(candidates[1], "kraken-futures:EURUSD:1Hour");
-        assert_eq!(candidates[2], "cryptocompare:EURUSD:1Hour");
-        assert_eq!(candidates[3], "alpaca:EURUSD:1Hour");
-        assert_eq!(candidates[4], "EURUSD:1Hour"); // bare key
+        assert_eq!(candidates[2], "alpaca:EURUSD:1Hour");
+        assert_eq!(candidates[3], "EURUSD:1Hour"); // bare key
     }
 
     #[test]
@@ -249,10 +239,10 @@ mod tests {
     #[test]
     fn resolve_candidates_with_override() {
         let mut mgr = DataSourceManager::default();
-        mgr.add_override("BTC*", vec!["kraken".into(), "cryptocompare".into()]);
+        mgr.add_override("BTC*", vec!["kraken".into(), "kraken-futures".into()]);
         let candidates = mgr.resolve_candidates("BTCUSD", "1Hour");
         assert_eq!(candidates[0], "kraken:BTCUSD:1Hour");
-        assert_eq!(candidates[1], "cryptocompare:BTCUSD:1Hour");
+        assert_eq!(candidates[1], "kraken-futures:BTCUSD:1Hour");
     }
 
     #[test]
@@ -285,7 +275,7 @@ mod tests {
         let mgr = DataSourceManager::default();
         let json = serde_json::to_string(&mgr).unwrap();
         let back: DataSourceManager = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.sources.len(), 4);
+        assert_eq!(back.sources.len(), 3);
         assert_eq!(back.health_timeout_secs, 900);
     }
 
@@ -299,16 +289,16 @@ mod tests {
     fn override_replaces_existing() {
         let mut mgr = DataSourceManager::default();
         mgr.add_override("BTC*", vec!["kraken".into()]);
-        mgr.add_override("BTC*", vec!["cryptocompare".into()]);
+        mgr.add_override("BTC*", vec!["kraken-futures".into()]);
         assert_eq!(mgr.overrides.len(), 1);
-        assert_eq!(mgr.overrides[0].sources, vec!["cryptocompare"]);
+        assert_eq!(mgr.overrides[0].sources, vec!["kraken-futures"]);
     }
 
     #[test]
     fn status_summary() {
         let mgr = DataSourceManager::default();
         let summary = mgr.status_summary();
-        assert_eq!(summary.len(), 4);
+        assert_eq!(summary.len(), 3);
         assert!(summary[0].2); // kraken healthy
     }
 
@@ -325,9 +315,9 @@ mod tests {
     #[test]
     fn wildcard_override_prefix_match() {
         let mut mgr = DataSourceManager::default();
-        mgr.add_override("SOL*", vec!["cryptocompare".into()]);
+        mgr.add_override("SOL*", vec!["kraken-futures".into()]);
         let c1 = mgr.resolve_candidates("SOLUSD", "1Day");
-        assert_eq!(c1[0], "cryptocompare:SOLUSD:1Day");
+        assert_eq!(c1[0], "kraken-futures:SOLUSD:1Day");
         // Non-matching symbol uses default order
         let c2 = mgr.resolve_candidates("AAPL", "1Day");
         assert_eq!(c2[0], "kraken:AAPL:1Day");
@@ -366,6 +356,6 @@ mod tests {
         mgr.mark_success("nonexistent");
         mgr.mark_failure("nonexistent");
         // No panic, no change
-        assert_eq!(mgr.sources.len(), 4);
+        assert_eq!(mgr.sources.len(), 3);
     }
 }

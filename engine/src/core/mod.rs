@@ -3,7 +3,6 @@ pub mod ai_sessions;
 pub mod backtest;
 pub mod bar_builder;
 pub mod cache;
-pub mod cryptocompare;
 pub mod data_source;
 pub mod econ_calendar;
 pub mod fred;

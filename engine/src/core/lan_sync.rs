@@ -804,7 +804,6 @@ async fn handle_client_tls(
                     "FUNDAMENTALS",
                     "FUNDAMENTALS_ONE",
                     "KRAKEN_BACKFILL",
-                    "CRYPTOCOMPARE",
                     "MT5_SYNC",
                     "FETCH_BARS",
                     "FINNHUB_NEWS",
