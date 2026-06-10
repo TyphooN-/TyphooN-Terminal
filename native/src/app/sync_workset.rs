@@ -292,10 +292,6 @@ where
         return Vec::new();
     }
 
-    // Protect foreground (MTF Grid / focus) work from being starved by background
-    let has_foreground = !focus_symbols.is_empty();
-    let effective_batch = adjust_batch_for_tier_protection(batch_size, has_foreground);
-
     let ordered_timeframes = ordered_sync_timeframes_high_first(timeframes);
     if ordered_timeframes.is_empty() {
         return Vec::new();
@@ -460,6 +456,47 @@ pub(super) fn select_alpaca_sync_candidates(
     )
 }
 
+/// Order candidates by priority tier, then high-timeframe-first, so the
+/// coverage-first path still fills gaps in tier order (MTF grid / focus before
+/// the rest) instead of by raw bucket order. `tier_a..tier_d` are symbol sets
+/// in descending priority; a symbol in none lands in the lowest tier.
+#[cfg(test)]
+fn sort_candidates_by_priority_then_timeframe(
+    candidates: Vec<AlpacaSyncCandidate>,
+    tier_a: &HashSet<String>,
+    tier_b: &HashSet<String>,
+    tier_c: &HashSet<String>,
+    tier_d: &HashSet<String>,
+) -> Vec<AlpacaSyncCandidate> {
+    let tier_rank = |symbol: &str| -> u8 {
+        let key = normalize_market_data_symbol(symbol).replace('/', "");
+        if tier_a.contains(&key) {
+            0
+        } else if tier_b.contains(&key) {
+            1
+        } else if tier_c.contains(&key) {
+            2
+        } else if tier_d.contains(&key) {
+            3
+        } else {
+            4
+        }
+    };
+    let mut ordered = candidates;
+    ordered.sort_by(|a, b| {
+        tier_rank(&a.symbol)
+            .cmp(&tier_rank(&b.symbol))
+            .then(
+                sync_timeframe_high_first_sort_key(&a.timeframe)
+                    .cmp(&sync_timeframe_high_first_sort_key(&b.timeframe)),
+            )
+            .then(b.focus.cmp(&a.focus))
+            .then(b.score.cmp(&a.score))
+            .then(a.symbol.cmp(&b.symbol))
+    });
+    ordered
+}
+
 #[cfg(test)]
 pub(super) fn select_alpaca_sync_workset(
     symbols: &[String],
@@ -478,16 +515,8 @@ pub(super) fn select_alpaca_sync_workset(
         return Vec::new();
     }
 
-    // Protect foreground (MTF Grid / focus) work from being starved by background
-    let has_foreground = !focus_symbols.is_empty();
-    let effective_batch = adjust_batch_for_tier_protection(batch_size, has_foreground);
-
     let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
     let mut staged_pending = pending_fetches.clone();
-
-    // Apply bounded concurrency protection for foreground work
-    let has_foreground = !focus_symbols.is_empty();
-    let effective_batch = adjust_batch_for_tier_protection(batch_size, has_foreground);
 
     // === Tiered Priority + High-Timeframe-First ===
     // 1. MTF Grid / focused symbols get highest priority
