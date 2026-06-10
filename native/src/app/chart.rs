@@ -805,6 +805,7 @@ pub(crate) fn chart_gap_fill_bar_allowed(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn chart_quote_overlay_allowed(quote_ts_ms: i64, last_bar_ts_ms: i64) -> bool {
     quote_ts_ms >= last_bar_ts_ms
 }
