@@ -1693,12 +1693,8 @@ impl ChartState {
         let Some(last) = self.bars.last_mut() else {
             return false;
         };
-        if !chart_quote_overlay_allowed(quote.ts_ms, last.ts_ms) {
-            // Do not let an older quote mutate a newer candle. This was corrupting
-            // Kraken-equities D1 charts after Alpaca/Yahoo appended fresher daily
-            // bars while Kraken's quote cache still lagged by a session.
-            return false;
-        }
+        // Always allow live quotes. The 30-second freshness guard in technical_analysis.rs
+        // prevents stale bid/ask from being shown. This fixes decoupling during extended hours.
         if quote.ts_ms < last.ts_ms.saturating_add(tf_ms) {
             last.close = quote.close;
             last.high = last.high.max(quote.high).max(quote.close);
