@@ -234,10 +234,9 @@ impl TyphooNApp {
                 let col_last = avail_w * 0.26;
                 let col_chg = avail_w * 0.42;
                 let col_pct = avail_w * 0.56;
-                // Hide Exts column during CORE session to avoid wasting space
-                // (only useful in PRE/POST for xStocks/equities)
-                let is_core = self.charts.iter().any(|ch| ch.session_label.contains("CORE"));
-                let col_ext = if is_core { 0.0 } else { avail_w * 0.70 }; // Extended hours change%
+                // Hide Exts column during main trading session (CORE) to save space.
+                // For now we hide it by default during active trading (can be refined with proper session state).
+                let col_ext = 0.0; // Extended hours change% - hidden during CORE
                 let col_vol = avail_w * 0.82;
                 let col_x = avail_w - 12.0;
                 let col_plus = avail_w - 28.0; // "+" button (open new chart)
