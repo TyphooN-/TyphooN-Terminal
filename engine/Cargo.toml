@@ -49,3 +49,4 @@ dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] 
 
 [dev-dependencies]
 tempfile = "3"
+serial_test = "3.2.0"

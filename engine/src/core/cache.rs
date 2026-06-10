@@ -2697,6 +2697,7 @@ mod tests {
         std::env::temp_dir().join(format!("typhoon_cache_test_{}_{}.db", pid, id))
     }
 
+    #[serial_test::serial]
     #[test]
     fn live_bar_writes_use_fast_zstd_level_not_idle_compaction_level() {
         let db_path = temp_db_path();
@@ -3538,6 +3539,7 @@ mod tests {
         assert!(missing.is_none());
     }
 
+    #[serial_test::serial]
     #[test]
     fn kv_writes_obey_configured_zstd_level() {
         let previous_level = bar_zstd_level();
