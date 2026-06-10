@@ -3291,17 +3291,17 @@ mod tests {
         let cache = SqliteCache::open(&db_path).unwrap();
 
         let json = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}]"#;
-        cache.put_bars("mt5:EURUSD:1Min", json).unwrap();
+        cache.put_bars("kraken-futures:EURUSD:1Min", json).unwrap();
         cache.put_bars("alpaca:AAPL:1Min", json).unwrap();
         cache.put_bars("kraken:BTCUSD:1Min", json).unwrap();
-        cache.put_bars("mt5:EURUSD:1Hour", json).unwrap();
+        cache.put_bars("kraken-futures:EURUSD:1Hour", json).unwrap();
 
         let deleted = cache.delete_timeframe("M1").unwrap();
         assert_eq!(deleted, 3);
-        assert!(cache.get_bars("mt5:EURUSD:1Min").unwrap().is_none());
+        assert!(cache.get_bars("kraken-futures:EURUSD:1Min").unwrap().is_none());
         assert!(cache.get_bars("alpaca:AAPL:1Min").unwrap().is_none());
         assert!(cache.get_bars("kraken:BTCUSD:1Min").unwrap().is_none());
-        assert!(cache.get_bars("mt5:EURUSD:1Hour").unwrap().is_some());
+        assert!(cache.get_bars("kraken-futures:EURUSD:1Hour").unwrap().is_some());
     }
 
     #[test]
@@ -3313,7 +3313,7 @@ mod tests {
             conn.execute(
                 "INSERT INTO bar_cache (key, data, timestamp, bar_count, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
-                    "mt5:EURUSD:1Min",
+                    "kraken-futures:EURUSD:1Min",
                     vec![0xABu8; 2_000_000],
                     1i64,
                     1000i64,
@@ -3331,7 +3331,7 @@ mod tests {
         }
 
         let size_before_delete = cache.stats().unwrap().2;
-        assert!(cache.delete_key("mt5:EURUSD:1Min").unwrap());
+        assert!(cache.delete_key("kraken-futures:EURUSD:1Min").unwrap());
         let size_after_delete = cache.stats().unwrap().2;
         assert!(size_after_delete >= size_before_delete);
 
@@ -3349,7 +3349,7 @@ mod tests {
             for i in 0..3 {
                 conn.execute(
                     "INSERT INTO bar_cache (key, data, timestamp, bar_count, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![format!("mt5:PAIR{i}:1Min"), vec![i as u8; 900_000], 1i64, 1000i64, 3i64],
+                    params![format!("kraken-futures:PAIR{i}:1Min"), vec![i as u8; 900_000], 1i64, 1000i64, 3i64],
                 )
                 .unwrap();
             }
@@ -3365,9 +3365,9 @@ mod tests {
         let before = cache.stats().unwrap().2;
         let deleted = cache
             .delete_keys(&[
-                "mt5:PAIR0:1Min".to_string(),
-                "mt5:PAIR1:1Min".to_string(),
-                "mt5:PAIR2:1Min".to_string(),
+                "kraken-futures:PAIR0:1Min".to_string(),
+                "kraken-futures:PAIR1:1Min".to_string(),
+                "kraken-futures:PAIR2:1Min".to_string(),
             ])
             .unwrap();
         assert_eq!(deleted, 3);
@@ -3382,13 +3382,13 @@ mod tests {
 
         let json = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}]"#;
         cache.put_bars("alpaca:AAPL:1Day", json).unwrap();
-        cache.put_bars("mt5:EURUSD:1Day", json).unwrap();
+        cache.put_bars("kraken-futures:EURUSD:1Day", json).unwrap();
         cache.put_kv("alpaca:meta:test", "{\"ok\":true}").unwrap();
 
         let deleted = cache.delete_broker_data("alpaca").unwrap();
         assert_eq!(deleted, 2);
         assert!(cache.get_bars("alpaca:AAPL:1Day").unwrap().is_none());
-        assert!(cache.get_bars("mt5:EURUSD:1Day").unwrap().is_some());
+        assert!(cache.get_bars("kraken-futures:EURUSD:1Day").unwrap().is_some());
         assert!(cache.get_kv("alpaca:meta:test").unwrap().is_none());
     }
 
@@ -3397,13 +3397,13 @@ mod tests {
         let db_path = temp_db_path();
         let cache = SqliteCache::open(&db_path).unwrap();
         let json = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}]"#;
-        cache.put_bars("mt5:EURUSD:1Hour", json).unwrap();
+        cache.put_bars("kraken-futures:EURUSD:1Hour", json).unwrap();
         cache.put_bars("alpaca:AAPL:1Day", json).unwrap();
         cache.put_bars("kraken:BTCUSD:5Min", json).unwrap();
 
         let eur = cache.search_keys("EURUSD", 10).unwrap();
         assert_eq!(eur.len(), 1);
-        assert_eq!(eur[0], "mt5:EURUSD:1Hour");
+        assert_eq!(eur[0], "kraken-futures:EURUSD:1Hour");
 
         // Case-insensitive
         let eur_lower = cache.search_keys("eurusd", 10).unwrap();
