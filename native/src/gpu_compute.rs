@@ -5660,16 +5660,9 @@ fn vs_main(
     var pos = vec2<f32>(0.0, 0.0);
 
     if (instance.is_live_forming > 0.5) {
-        // Live forming bar: render as thin vertical line at mid price (no body, clean live indicator)
-        let mid_y = (instance.body_top + instance.body_bot) * 0.5;
-        let ndc_mid = 1.0 - mid_y / uniforms.viewport_height * 2.0;
-        let thin = 0.8 / uniforms.viewport_width; // ~1px wide
-        switch (vid) {
-            case 0u, 2u: { pos = vec2<f32>(ndc_x - thin, ndc_mid); }
-            case 1u, 3u: { pos = vec2<f32>(ndc_x + thin, ndc_mid); }
-            case 4u, 5u, 6u, 7u: { pos = vec2<f32>(ndc_x, ndc_mid); }
-            default: { pos = vec2<f32>(0.0, 0.0); }
-        }
+        // Live forming bar: draw NOTHING — let the Bid/Ask overlay be the only live indicator
+        out.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return out;
     } else {
         switch (vid) {
             // Body quad (triangle strip: 0-1-2-3)

@@ -445,7 +445,18 @@ impl TyphooNApp {
                                                     } else {
                                                         egui::Color32::from_rgb(220, 220, 220)
                                                     };
-                                                    ui.label(egui::RichText::new(&a.headline).color(color).strong());
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(egui::RichText::new(&a.headline).color(color).strong());
+                                                        if ui.small_button("×").clicked() {
+                                                            if let Some(article) = self.news_full_articles.get(i) {
+                                                                let _ = self.broker_tx.send(BrokerCmd::IgnoreNewsArticle {
+                                                                    symbol: chart_symbol.clone(),
+                                                                    url_hash: article.url_hash.clone(),
+                                                                });
+                                                                self.log.push_back(LogEntry::info(format!("News: ignored article for {}", chart_symbol)));
+                                                            }
+                                                        }
+                                                    });
                                                     if !ts.is_empty() {
                                                         ui.label(egui::RichText::new(ts).color(AXIS_TEXT).small());
                                                     }
