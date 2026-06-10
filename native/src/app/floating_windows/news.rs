@@ -475,6 +475,19 @@ impl TyphooNApp {
                                                     }
                                                 });
                                             });
+                            row.response.context_menu(|ui| {
+                                if ui.button("Remove / Ignore this article").clicked() {
+                                    if let Some(article) = self.news_full_articles.get(i) {
+                                        let _ = self.broker_tx.send(BrokerCmd::IgnoreNewsArticle {
+                                            symbol: chart_symbol.clone(),
+                                            url_hash: article.url_hash.clone(),
+                                        });
+                                        self.log.push_back(LogEntry::info(format!("News: ignored article for {}", chart_symbol)));
+                                    }
+                                    ui.close_menu();
+                                }
+                            });
+
                             if row.response.interact(egui::Sense::click()).clicked() {
                                                 self.news_selected = Some(i);
                                                 // On-click hydrate: if the selected article

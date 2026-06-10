@@ -412,6 +412,11 @@ pub(crate) enum BrokerCmd {
     },
     /// Fetch full tradeable asset list from connected broker.
     GetAllAssets,
+    /// Ignore/remove a specific news article for a symbol (user curation of bad matches).
+    IgnoreNewsArticle {
+        symbol: String,
+        url_hash: String,
+    },
     /// Get order history.
     GetOrderHistory {
         limit: u32,
