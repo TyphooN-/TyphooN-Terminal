@@ -527,56 +527,6 @@ impl TyphooNApp {
                             .strong()
                             .color(opt_green),
                         );
-                        if ui
-                            .small_button(
-                                egui::RichText::new("Export #1 to MQL5").color(opt_cyan),
-                            )
-                            .clicked()
-                        {
-                            if let (Some(best), Some(combo)) =
-                                (self.gpu_opt_results.first(), self.gpu_opt_combos.first())
-                            {
-                                let strategy = typhoon_engine::core::mql5_export::OptimizedStrategy {
-                                    symbol: self.symbol_input.clone(),
-                                    timeframe: self
-                                        .charts
-                                        .get(self.active_tab)
-                                        .map(|c| c.timeframe.label().to_string())
-                                        .unwrap_or_default(),
-                                    sma_fast: combo.sma_fast,
-                                    sma_slow: combo.sma_slow,
-                                    rsi_period: combo.rsi_period,
-                                    rsi_overbought: combo.rsi_overbought as f64,
-                                    rsi_oversold: combo.rsi_oversold as f64,
-                                    atr_period: combo.atr_period,
-                                    atr_sl_mult: combo.atr_sl_mult as f64,
-                                    atr_tp_mult: combo.atr_tp_mult as f64,
-                                    sharpe: best.sharpe as f64,
-                                    profit_factor: best.profit_factor as f64,
-                                    max_drawdown: best.max_drawdown as f64,
-                                    win_rate: best.win_rate as f64,
-                                    trade_count: best.trade_count,
-                                    robustness_score: best.robustness_score as f64,
-                                };
-                                let mut out = dirs_home();
-                                out.push("export");
-                                match typhoon_engine::core::mql5_export::export_strategy(
-                                    &strategy,
-                                    &out.display().to_string(),
-                                ) {
-                                    Ok(files) => {
-                                        for f in &files {
-                                            self.log
-                                                .push_back(LogEntry::info(format!("Exported: {}", f)));
-                                        }
-                                    }
-                                    Err(e) => self.log.push_back(LogEntry::err(format!(
-                                        "MQL5 export failed: {}",
-                                        e
-                                    ))),
-                                }
-                            }
-                        }
                     });
 
                     let bars: Vec<PlotBar> = self
