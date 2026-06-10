@@ -302,7 +302,7 @@ pub(crate) struct ChartState {
     pub(crate) symbol: String,
     /// Currently selected timeframe.
     pub(crate) timeframe: Timeframe,
-    /// Cache source that most recently populated `bars` ("mt5", "alpaca", etc).
+    /// Cache source that most recently populated `bars` ("kraken", "alpaca", etc).
     pub(crate) primary_source: &'static str,
     /// User-forced chart source for debugging provider-specific cache rows.
     /// Empty means automatic source selection.
@@ -498,7 +498,7 @@ pub(crate) struct ChartState {
     /// Supply/demand zones: (bar_idx, zone_high, zone_low, status).
     /// Status: 0=untested, 1=tested (price returned), 2=proven (price bounced)
     pub(crate) supply_zones: Vec<(usize, f64, f64, u8)>,
-    /// Earliest timestamp from primary data source (MT5/Alpaca). Bars before this are backfill.
+    /// Earliest timestamp from primary data source (Kraken/Alpaca). Bars before this are backfill.
     pub(crate) primary_first_ts: i64,
     /// Timestamps of bars sourced from gap-fill (Kraken). Colored magenta.
     pub(crate) gap_fill_timestamps: std::collections::HashSet<i64>,
@@ -609,11 +609,7 @@ pub(crate) struct ChartState {
 /// Extract the bare symbol from a cache key. Accepts canonical 3-part
 /// `source:SYM:TF`, legacy 2-part `SYM:TF`, or bare `SYM`. Used by load
 /// paths that need to put a canonical symbol into `ChartState::symbol`
-/// so `try_load`, `collect_mt5_demand_local`, and the chart header all
-/// agree on its shape. Without this, storing the full key directly
-/// breaks `try_load` (it prepends `mt5:` to the key on TF switch) and
-/// makes `collect_mt5_demand_local` emit garbage pairs like
-/// `("1Hour","1Hour")` into `demand.txt`.
+/// so `try_load` and the chart header agree on its shape.
 pub(crate) fn bare_symbol_from_key(key: &str) -> String {
     let parts: Vec<&str> = key.split(':').collect();
     match parts.as_slice() {
@@ -711,15 +707,11 @@ pub(crate) fn kraken_xstock_fundamental_symbol(
 }
 
 pub(crate) fn cache_source_from_key(key: &str) -> &'static str {
-    if key.starts_with("mt5:") {
-        "mt5"
-    } else if key.starts_with("alpaca:")
+    if key.starts_with("alpaca:")
         || key.starts_with("paper_TyphooN:")
         || key.starts_with("alpaca_paper_TyphooN:")
     {
         "alpaca"
-    } else if key.starts_with("tastytrade:") {
-        "tastytrade"
     } else if key.starts_with("kraken-equities:") {
         "kraken-equities"
     } else if key.starts_with("kraken-futures:") {
@@ -915,7 +907,6 @@ pub(crate) fn chart_equity_source_rank(source: &str) -> Option<u8> {
         "alpaca" => Some(2),
         "yahoo-chart" => Some(3),
         "default" => Some(4),
-        "mt5" => Some(5),
         _ => None,
     }
 }
@@ -987,8 +978,7 @@ pub(crate) fn extract_news_symbols_from_market_data_cache(
     Ok(symbols.into_iter().collect())
 }
 
-pub(crate) const CHART_SOURCE_ORDER: [(&str, &str); 8] = [
-    ("mt5", "MT5"),
+pub(crate) const CHART_SOURCE_ORDER: [(&str, &str); 7] = [
     ("kraken", "Kraken"),
     ("kraken-equities", "Kraken Equities"),
     ("kraken-futures", "Kraken Futures"),
@@ -1046,7 +1036,7 @@ pub(crate) fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &st
     let mut keys = Vec::new();
     for variant in variants {
         let source_variant = match source {
-            "mt5" | "kraken" | "kraken-futures" => variant.replace('/', ""),
+            "kraken" | "kraken-futures" => variant.replace('/', ""),
             "kraken-equities" => variant.replace('/', "").trim_end_matches(".EQ").to_string(),
             _ => variant,
         };
@@ -1877,7 +1867,7 @@ impl ChartState {
         }
 
         // Default fallback: first source in priority order
-        format!("mt5:{}:{}", sym, tf)
+        format!("kraken:{}:{}", sym, tf)
     }
 
     /// Fast cache key without any DB probing. Used by try_load to avoid blocking.
@@ -1893,7 +1883,7 @@ impl ChartState {
         gpu: Option<&mut gpu_compute::GpuCompute>,
     ) -> bool {
         // Data priority mirrors DataSourceManager's default order:
-        // MT5 → Kraken spot/xStocks → Kraken Futures → tastytrade → Alpaca fallback.
+        // Kraken spot/xStocks → Kraken Futures → Alpaca fallback.
         let sym = {
             let parts: Vec<&str> = self.symbol.split(':').collect();
             let is_tf = matches!(
@@ -2061,7 +2051,6 @@ impl ChartState {
             }
         }
         let mut keys_to_try = vec![
-            format!("mt5:{}:{}", sym, tf),
             format!("kraken:{}:{}", sym, tf),
             format!("kraken-equities:{}:{}", sym, tf),
             format!("kraken-futures:{}:{}", sym, tf),
@@ -2071,7 +2060,6 @@ impl ChartState {
         ];
         if sym_norm != sym {
             keys_to_try.extend([
-                format!("mt5:{}:{}", sym_norm, tf),
                 format!("kraken:{}:{}", sym_norm, tf),
                 format!("kraken-equities:{}:{}", sym_norm, tf),
                 format!("kraken-futures:{}:{}", sym_norm, tf),
@@ -2129,7 +2117,6 @@ impl ChartState {
         }
         if result.is_none() && tf == "1Month" {
             let monthly_sources = [
-                "mt5",
                 "kraken",
                 "kraken-equities",
                 "kraken-futures",
@@ -2464,7 +2451,6 @@ impl ChartState {
             let s = sym_parts.last().copied().unwrap_or(&self.symbol);
             // Strip known prefixes
             let known = [
-                "mt5:",
                 "default:",
                 "kraken-futures:",
                 "kraken-equities:",
@@ -2538,7 +2524,6 @@ impl ChartState {
                 self.primary_source = "";
                 if tf == "1Month" {
                     for source in [
-                        "mt5",
                         "kraken",
                         "kraken-equities",
                         "kraken-futures",
@@ -2722,7 +2707,7 @@ impl ChartState {
                 let current_bucket = now_ms / tf_ms * tf_ms;
                 // Try M5 first, then M1
                 // Cascade through all lower timeframes from all sources for best resolution
-                let src = self.symbol.split(':').next().unwrap_or("mt5");
+                let src = self.symbol.split(':').next().unwrap_or("kraken");
                 let ltf_suffixes = [
                     "1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week",
                 ];
@@ -4447,7 +4432,6 @@ impl ChartState {
         // Extract bare symbol (strip ALL prefixes and timeframe)
         let bare_sym = {
             let known_prefixes = [
-                "mt5:",
                 "default:",
                 "kraken-futures:",
                 "kraken-equities:",
@@ -4477,7 +4461,6 @@ impl ChartState {
 
         let prefixes = [
             "merged:",
-            "mt5:",
             "default:",
             "kraken-equities:",
             "kraken:",
@@ -4498,7 +4481,7 @@ impl ChartState {
             let mut htf_bars: Option<Vec<Bar>> = None;
             // Try with bare symbol under each prefix, plus the original base_sym
             for prefix in &prefixes {
-                // e.g. "mt5:EURUSD:1Hour" — BarCacheWriter's 3-part key format.
+                // e.g. "kraken:EURUSD:1Hour" — canonical 3-part key format.
                 let key = format!("{}{}:{}", prefix, bare_sym, tf_suffix);
                 if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
                     if !chart_source_bars_match_timeframe(
@@ -4664,10 +4647,9 @@ impl ChartState {
             ("MN1", "1Month", 43200),
         ];
 
-        // Extract bare symbol (strip prefixes like mt5:Darwinex:)
+        // Extract bare symbol (strip source prefixes like kraken:)
         let bare_sym = {
             let known_prefixes = [
-                "mt5:",
                 "default:",
                 "kraken-futures:",
                 "kraken-equities:",
@@ -4697,7 +4679,6 @@ impl ChartState {
 
         let prefixes = [
             "merged:",
-            "mt5:",
             "default:",
             "kraken-equities:",
             "kraken:",
