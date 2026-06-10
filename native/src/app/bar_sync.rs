@@ -20,9 +20,7 @@ pub(super) struct SyncStatsRow {
 }
 
 /// Aggregate `bar_ts_cache` into per-(broker,TF) rows. Always emits rows for
-/// actively managed live bar sources (Kraken / Alpaca / Tastytrade). MT5 appears
-/// only after it has actually written bars, so unconfigured MT5 sync no longer
-/// consumes Sync Status space.
+/// actively managed live bar sources (Kraken / Alpaca).
 ///
 /// `is_backfill_complete(key)` distinguishes "stale because we haven't checked
 /// lately" from "stale because the provider has no newer bar to give us." A
@@ -56,9 +54,7 @@ pub(super) fn compute_bar_sync_stats(
     ];
     let broker_for_prefix = |p: &str| -> Option<&'static str> {
         match p {
-            "mt5" => Some("MT5"),
             "alpaca" => Some("Alpaca"),
-            "tastytrade" => Some("Tastytrade"),
             "kraken" => Some("Kraken Spot"),
             "kraken-futures" => Some("Kraken Futures"),
             "kraken-equities" => Some("Kraken Equities"),
@@ -180,8 +176,6 @@ pub(super) fn sort_sync_stats_rows(rows: &mut [SyncStatsRow]) {
         "Merged",
         "Alpaca",
         "Yahoo",
-        "Tastytrade",
-        "MT5",
     ];
     rows.sort_by(|a, b| {
         let ab = broker_order
@@ -225,7 +219,7 @@ pub(super) fn sync_stats_row_status_cells(row: &SyncStatsRow) -> SyncStatsRowSta
 
 /// Aggregate per-broker totals from a Vec<SyncStatsRow> for the compact
 /// banner / one-liner display. Returns `(broker, total, healthy, pct)`
-/// tuples in display order (Kraken, Alpaca, Tastytrade, MT5, then any others).
+/// tuples in display order (Kraken, Alpaca, then any others).
 pub(super) fn compute_bar_sync_broker_totals(
     rows: &[SyncStatsRow],
 ) -> Vec<(String, u64, u64, f32)> {
@@ -248,8 +242,6 @@ pub(super) fn compute_bar_sync_broker_totals(
         "Merged",
         "Alpaca",
         "Yahoo",
-        "Tastytrade",
-        "MT5",
     ];
     let mut out = Vec::new();
     for name in order {

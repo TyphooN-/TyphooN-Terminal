@@ -723,11 +723,9 @@ impl McpServer {
 
     fn bar_key_candidates(&self, symbol: &str) -> Vec<String> {
         let mut out = vec![
-            format!("mt5:{symbol}:1Day"),
             format!("alpaca:{symbol}:1Day"),
             format!("kraken:{symbol}:1Day"),
             format!("kraken-futures:{symbol}:1Day"),
-            format!("mt5:{symbol}:D1"),
         ];
         let existing: HashSet<String> = out.iter().cloned().collect();
         let needle = format!(":{}:", symbol.to_uppercase());

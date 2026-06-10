@@ -1547,13 +1547,7 @@ impl TyphooNApp {
     pub(super) fn latest_cached_price_for_symbol(&self, symbol: &str) -> Option<f64> {
         self.latest_cached_price_for_symbol_from_sources(
             symbol,
-            &[
-                "kraken",
-                "kraken-futures",
-                "alpaca",
-                "mt5",
-                "default",
-            ],
+            &["kraken", "kraken-futures", "alpaca", "default"],
         )
     }
 
@@ -1598,7 +1592,7 @@ impl TyphooNApp {
         let timeframes = [
             "quote", "1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day",
         ];
-        let sources = ["kraken-equities", "alpaca", "default", "mt5"];
+        let sources = ["kraken-equities", "alpaca", "default"];
         let mut symbols = Vec::new();
         let mut push_symbol = |candidate: String| {
             let candidate = candidate.trim().replace('/', "").to_ascii_uppercase();

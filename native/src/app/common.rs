@@ -24,19 +24,19 @@ pub fn nav_muted(ui: &mut egui::Ui, text: impl Into<String>) {
 // ─── colours ────────────────────────────────────────────────────────────────
 pub(crate) const BG: egui::Color32 = egui::Color32::from_rgb(0, 0, 0);
 pub(crate) const GRID: egui::Color32 = egui::Color32::from_rgb(33, 33, 33); // #333 (WebKit dotted grid)
-pub(crate) const UP: egui::Color32 = egui::Color32::from_rgb(0, 255, 0); // #00ff00 (MT5 bright green — solid fill)
-pub(crate) const DOWN: egui::Color32 = egui::Color32::from_rgb(255, 0, 0); // #ff0000 (MT5 bright red — solid fill)
-pub(crate) const SMA200_COL: egui::Color32 = egui::Color32::from_rgb(255, 255, 0); // #ffff00 yellow (MT5 match)
+pub(crate) const UP: egui::Color32 = egui::Color32::from_rgb(0, 255, 0); // #00ff00 (bright green — solid fill)
+pub(crate) const DOWN: egui::Color32 = egui::Color32::from_rgb(255, 0, 0); // #ff0000 (bright red — solid fill)
+pub(crate) const SMA200_COL: egui::Color32 = egui::Color32::from_rgb(255, 255, 0); // #ffff00 yellow
 pub(crate) const SMA100_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255); // #64b4ff blue
-pub(crate) const KAMA_COL: egui::Color32 = egui::Color32::from_rgb(220, 220, 230); // soft white (MT5 KAMA)
+pub(crate) const KAMA_COL: egui::Color32 = egui::Color32::from_rgb(220, 220, 230); // soft white (KAMA)
 pub(crate) const EMA_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 60);
 pub(crate) const BB_COL: egui::Color32 = egui::Color32::from_rgb(80, 160, 200);
 pub(crate) const BB_FILL: egui::Color32 = egui::Color32::from_rgba_premultiplied(80, 160, 200, 25);
 pub(crate) const AXIS_TEXT: egui::Color32 = egui::Color32::from_rgb(140, 140, 160); // #8c8ca0
 pub(crate) const ACCENT: egui::Color32 = egui::Color32::from_rgb(76, 175, 80);
-pub(crate) const FISHER_POS: egui::Color32 = egui::Color32::from_rgb(0, 255, 0); // #00ff00 (MT5 bright green)
-pub(crate) const FISHER_NEG: egui::Color32 = egui::Color32::from_rgb(255, 0, 0); // #ff0000 (MT5 bright red)
-pub(crate) const FISHER_SIG: egui::Color32 = egui::Color32::from_rgb(169, 169, 169); // clrDarkGray (MT5 signal)
+pub(crate) const FISHER_POS: egui::Color32 = egui::Color32::from_rgb(0, 255, 0); // #00ff00 (bright green)
+pub(crate) const FISHER_NEG: egui::Color32 = egui::Color32::from_rgb(255, 0, 0); // #ff0000 (bright red)
+pub(crate) const FISHER_SIG: egui::Color32 = egui::Color32::from_rgb(169, 169, 169); // dark gray (signal)
 pub(crate) const RSI_LINE: egui::Color32 = egui::Color32::from_rgb(200, 180, 60); // #c8b43c (mustard yellow)
 pub(crate) const MACD_LINE_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255); // #64b4ff
 pub(crate) const MACD_SIG_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 48); // #ff8230 (orange)
