@@ -90,3 +90,23 @@ To balance full-universe coverage with UI responsiveness, the scheduler now clas
 Within each tier, timeframes are still processed high-to-low (`1Month → 1Week → 1Day → ... → 1Min`).
 
 This ensures that research packets, outlier scans, and MTF Grid charts get fresh data first while the broad universe continues to converge in the background.
+
+
+## Tiered Priority Model (2026-06-10)
+
+To balance full-universe coverage with UI responsiveness, the scheduler classifies symbols into three priority tiers before applying the existing high-timeframe-first and bucket ordering:
+
+### Tiers
+- **Tier 1 – MTF Grid / Foreground**: Open or focused symbols in the MTF Grid + the currently visible single-chart symbol. These receive the highest priority.
+- **Tier 2 – Active**: Watchlist symbols + current positions/holdings.
+- **Tier 3 – Background**: Everything else in the Kraken + Alpaca universe.
+
+### Ordering within tiers
+Timeframes are processed high-to-low:
+`1Month → 1Week → 1Day → 4Hour → 1Hour → 30Min → 15Min → 5Min → 1Min`
+
+### Bounded concurrency
+When Tier 1 or Tier 2 work is available, the effective batch size for pure Tier 3 (background) work is reduced to prevent foreground starvation.
+
+### Rationale
+This model ensures that research packets, outlier detection, and MTF Grid charts get fresh data first, while the broad universe continues to converge in the background without starving the UI.
