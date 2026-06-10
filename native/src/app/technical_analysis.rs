@@ -7329,10 +7329,15 @@ fn next_candle_remaining_ms_at(last_bar_ts_ms: i64, tf: Timeframe, now_ms: i64) 
         return None;
     }
 
-    // TradingView-style: always show time until the *next* bar boundary.
-    // This works during CORE even if the last bar is slightly stale.
-    // We calculate forward from the last known bar.
+    // TradingView-style: show time until the *next* bar boundary, projecting
+    // forward from the last known bar. Tolerate a bar that is slightly stale
+    // (live feeds replace the forming bar a beat after each boundary), but once
+    // more than a full extra interval has elapsed with no replacement the feed
+    // has stalled or the session is closed — there is no live bar to count down.
     let elapsed = now_ms.saturating_sub(last_bar_ts_ms);
+    if elapsed >= interval_ms.saturating_mul(2) {
+        return None;
+    }
     let remaining = interval_ms - (elapsed % interval_ms);
 
     Some(remaining.max(0))
