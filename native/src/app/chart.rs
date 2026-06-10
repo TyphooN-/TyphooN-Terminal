@@ -1064,7 +1064,7 @@ pub(crate) fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &st
         // not exposed through Kraken's public OHLC/AssetPairs API. Keep Kraken keys
         // first, then allow underlying-equity caches so active Kraken-scope charts
         // can still render HRTX/GDC/TNDM-style holdings.
-        for fallback_source in ["kraken-equities", "tastytrade", "alpaca", "default"] {
+        for fallback_source in ["kraken-equities", "alpaca", "default"] {
             for key in chart_source_cache_keys(fallback_source, symbol, timeframe) {
                 if !keys.iter().any(|k: &String| k.eq_ignore_ascii_case(&key)) {
                     keys.push(key);
@@ -2195,7 +2195,7 @@ impl ChartState {
                 // timestamps: Kraken often uses 00:00 UTC, Alpaca/Yahoo US
                 // equities use 04:00/05:00 UTC, and live daily candles can
                 // arrive at close time. Use calendar buckets for higher
-                // timeframes and offset aliases for intraday MT5 UTC+2/US
+                // timeframes and offset aliases for intraday UTC+2/US
                 // market-time variants.
                 let tf_ms = match tf {
                     "4Hour" => 4 * 3_600_000,
@@ -2569,7 +2569,7 @@ impl ChartState {
 
         if is_crypto {
             self.gap_fill_timestamps.clear();
-            // Snap timestamps to TF boundary for dedup (handles MT5 UTC+2 vs CC/Kraken UTC)
+            // Snap timestamps to TF boundary for dedup (handles per-source TZ offsets vs Kraken UTC)
             // Weekly: snap to Monday 00:00 UTC. Monthly: snap to 1st of month 00:00 UTC.
             let tf_ms: i64 = match tf {
                 "1Day" => 86_400_000,
@@ -2665,7 +2665,7 @@ impl ChartState {
                 }
             }
 
-            // Sort merged bars by timestamp (Kraken may interleave with MT5)
+            // Sort merged bars by timestamp (sources may interleave)
             if !self.bars.is_empty() {
                 self.bars.sort_by_key(|b| b.ts_ms);
             }

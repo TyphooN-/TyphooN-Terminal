@@ -416,9 +416,6 @@ impl TyphooNApp {
                         )));
                     }
                     typhoon_web_protocol::WebCmd::Unsubscribe { .. } => {}
-                    typhoon_web_protocol::WebCmd::GetDarwinWeb { ticker: _ } => {
-                        // DARWIN/Darwinex removed — no cached DWX web data to serve.
-                    }
                 }
             }
             if web_cmds_drained >= WEB_CMD_DRAIN_MAX {

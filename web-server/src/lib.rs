@@ -413,14 +413,6 @@ async fn run_websocket_session(
                                     continue;
                                 }
                             }
-                            WebCmd::GetDarwinWeb { ticker } => {
-                                if let Some(ref t) = ticker {
-                                    if !typhoon_web_protocol::is_valid_symbol(t) {
-                                        tracing::warn!("Web client {client_ip} sent invalid GetDarwinWeb ticker");
-                                        continue;
-                                    }
-                                }
-                            }
                             _ => {}
                         }
                         let _ = cmd_tx.send(cmd);
