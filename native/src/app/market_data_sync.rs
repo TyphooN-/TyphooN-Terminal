@@ -215,21 +215,21 @@ impl TyphooNApp {
         let json = match name.to_uppercase().as_str() {
             "TRADING" => serde_json::json!({
                 "sec": false, "insider": false, "fundamentals": false, "ev": false,
-                "earnings": false, "dividends": false, "darwinex_outliers": false,
+                "earnings": false, "dividends": false, "outliers": false,
                 "stress_test": false, "volume_profile": true, "hv_cone": false,
                 "sector_heatmap": false, "dividends_screen": false, "event_calendar": false,
                 "lan_sync": false, "alerts": true, "journal": false, "compact_mode": false,
             }),
             "RESEARCH" => serde_json::json!({
                 "sec": true, "insider": true, "fundamentals": true, "ev": true,
-                "earnings": true, "dividends": true, "darwinex_outliers": true,
+                "earnings": true, "dividends": true, "outliers": true,
                 "stress_test": false, "volume_profile": false, "hv_cone": false,
                 "sector_heatmap": true, "dividends_screen": true, "event_calendar": true,
                 "lan_sync": false, "alerts": false, "journal": false, "compact_mode": false,
             }),
             "COMPACT" => serde_json::json!({
                 "sec": false, "insider": false, "fundamentals": false, "ev": false,
-                "earnings": false, "dividends": false, "darwinex_outliers": false,
+                "earnings": false, "dividends": false, "outliers": false,
                 "stress_test": false, "volume_profile": false, "hv_cone": false,
                 "sector_heatmap": false, "dividends_screen": false, "event_calendar": false,
                 "lan_sync": false, "alerts": false, "journal": false, "compact_mode": true,
@@ -248,7 +248,7 @@ impl TyphooNApp {
             "ev": self.show_ev_scanner,
             "earnings": self.show_earnings_calendar,
             "dividends": self.show_dividend_calendar,
-            "darwinex_outliers": self.show_darwinex_outliers,
+            "outliers": self.show_outliers,
             "stress_test": self.show_stress_test,
             "volume_profile": self.show_volume_profile,
             "hv_cone": self.show_hv_cone,
@@ -278,7 +278,7 @@ impl TyphooNApp {
         set_bool!("ev", show_ev_scanner);
         set_bool!("earnings", show_earnings_calendar);
         set_bool!("dividends", show_dividend_calendar);
-        set_bool!("darwinex_outliers", show_darwinex_outliers);
+        set_bool!("outliers", show_outliers);
         set_bool!("stress_test", show_stress_test);
         set_bool!("volume_profile", show_volume_profile);
         set_bool!("hv_cone", show_hv_cone);

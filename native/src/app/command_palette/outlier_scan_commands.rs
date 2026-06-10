@@ -103,10 +103,10 @@ impl TyphooNApp {
                                 multi.len(), extreme, high, symbols.len(),
                                 var_map.len(), ev_map.len(), atr_map.len(), sec_map.len()
                             )));
-                            self.darwinex_outliers = outliers;
-                            self.darwinex_sector_stats = stats;
-                            self.darwinex_multi_outliers = multi.clone();
-                            self.show_darwinex_outliers = true;
+                            self.outliers = outliers;
+                            self.sector_stats = stats;
+                            self.multi_outliers = multi.clone();
+                            self.show_outliers = true;
                             self.outlier_scroll_pending = true;
 
                             // ADR-094: Table result card for top outliers
@@ -183,10 +183,10 @@ impl TyphooNApp {
                         "EV outliers [{}]: {} total ({} EXTREME, {} HIGH) from {} symbols across {} sectors",
                         scope_label, outliers.len(), extreme, high, data.len(), stats.len()
                     )));
-                    self.darwinex_outliers = outliers;
-                    self.darwinex_sector_stats = stats;
-                    self.darwinex_multi_outliers = Vec::new();
-                    self.show_darwinex_outliers = true;
+                    self.outliers = outliers;
+                    self.sector_stats = stats;
+                    self.multi_outliers = Vec::new();
+                    self.show_outliers = true;
                     self.outlier_scroll_pending = true;
                 }
             }
@@ -279,10 +279,10 @@ impl TyphooNApp {
                         )));
 
                         // Show sector-level outliers (primary view)
-                        self.darwinex_outliers = sector_outliers;
-                        self.darwinex_sector_stats = sector_stats;
-                        self.darwinex_multi_outliers = Vec::new();
-                        self.show_darwinex_outliers = true;
+                        self.outliers = sector_outliers;
+                        self.sector_stats = sector_stats;
+                        self.multi_outliers = Vec::new();
+                        self.show_outliers = true;
                         self.outlier_scroll_pending = true;
                     }
                 }
@@ -373,10 +373,10 @@ impl TyphooNApp {
                             "ATR/Price outlier scan [{}]: {} outliers from {} symbols across {} sectors",
                             scope_label, outliers.len(), atr_data.len(), stats.len()
                         )));
-                        self.darwinex_outliers = outliers;
-                        self.darwinex_sector_stats = stats;
-                        self.darwinex_multi_outliers = Vec::new();
-                        self.show_darwinex_outliers = true;
+                        self.outliers = outliers;
+                        self.sector_stats = stats;
+                        self.multi_outliers = Vec::new();
+                        self.show_outliers = true;
                         self.outlier_scroll_pending = true;
                     }
                 }

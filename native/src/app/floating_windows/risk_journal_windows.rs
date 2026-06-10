@@ -477,20 +477,20 @@ impl TyphooNApp {
         }
 
         // Multi-Dimensional Outlier Scanner
-        if self.show_darwinex_outliers {
+        if self.show_outliers {
             let outlier_scope_label = self.broker_scope_label().to_string();
             // PERF: read from per-frame cache
             let outlier_scoped_fund = self.cached_scoped_fundamentals.clone();
             let mut pending_action = SymbolAction::None;
             // UX7: pre-fetch sparklines for top outlier symbols
             let mut outlier_syms: Vec<String> = self
-                .darwinex_outliers
+                .outliers
                 .iter()
                 .take(200)
                 .map(|o| o.symbol.clone())
                 .collect();
             outlier_syms.extend(
-                self.darwinex_multi_outliers
+                self.multi_outliers
                     .iter()
                     .take(200)
                     .map(|o| o.symbol.clone()),
@@ -506,7 +506,7 @@ impl TyphooNApp {
                 }
             }
             egui::Window::new("Outlier Scanner")
-                        .open(&mut self.show_darwinex_outliers)
+                        .open(&mut self.show_outliers)
                         .resizable(true)
                         .default_size([900.0, 600.0])
                         .show(ctx, |ui| {
@@ -517,7 +517,7 @@ impl TyphooNApp {
                             let ol_dim = egui::Color32::from_rgb(100, 100, 120);
 
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(format!("Outlier Analysis [{}] — {} outliers, {} sectors", outlier_scope_label, self.darwinex_outliers.len(), self.darwinex_sector_stats.len())).strong());
+                                ui.label(egui::RichText::new(format!("Outlier Analysis [{}] — {} outliers, {} sectors", outlier_scope_label, self.outliers.len(), self.sector_stats.len())).strong());
                                 if ui.small_button("Refresh").clicked() {
                                     // Re-run with scope filter (respects SCOPE command)
                                     if let Some(ref cache) = self.cache {
@@ -530,7 +530,7 @@ impl TyphooNApp {
                                             }
                                             if data.len() >= 10 {
                                                 let (o, s) = typhoon_engine::core::var::detect_outliers(&data, 1.5);
-                                                self.darwinex_outliers = o; self.darwinex_sector_stats = s;
+                                                self.outliers = o; self.sector_stats = s;
                                             }
                                         }
                                     }
@@ -540,18 +540,18 @@ impl TyphooNApp {
 
                             egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
                                 // Multi-dimensional anomaly table (VaR + EV + ATR + SEC)
-                                if !self.darwinex_multi_outliers.is_empty() {
-                                    let extreme_count = self.darwinex_multi_outliers.iter().filter(|o| o.dimensions_flagged >= 3).count();
-                                    let high_count = self.darwinex_multi_outliers.iter().filter(|o| o.dimensions_flagged == 2).count();
+                                if !self.multi_outliers.is_empty() {
+                                    let extreme_count = self.multi_outliers.iter().filter(|o| o.dimensions_flagged >= 3).count();
+                                    let high_count = self.multi_outliers.iter().filter(|o| o.dimensions_flagged == 2).count();
                                     ui.label(egui::RichText::new(format!("Multi-Signal Anomaly Scanner — {} EXTREME, {} HIGH, {} total",
-                                        extreme_count, high_count, self.darwinex_multi_outliers.len())).strong());
+                                        extreme_count, high_count, self.multi_outliers.len())).strong());
                                     ui.label(egui::RichText::new("Score = sum of |z-scores| across flagged dimensions. Higher = more anomalous.").color(ol_dim).small());
                                     ui.label(egui::RichText::new("Dims: P/E (risk) + MCap/EV (valuation) + Short Ratio (volatility) + SEC filings+insider trades (activity)").color(ol_dim).small());
                                     ui.add_space(4.0);
                                     // Sort outliers. Column indices:
                                     //   0 Symbol, 1 Sector, 2 Industry, 3 Score, 4 Dims, 5 Tier,
                                     //   6 P/E z, 7 EV z, 8 Short z, 9 SEC z
-                                    let mut sorted_outliers: Vec<&_> = self.darwinex_multi_outliers.iter().collect();
+                                    let mut sorted_outliers: Vec<&_> = self.multi_outliers.iter().collect();
                                     match self.outlier_sort.column {
                                         0 => sorted_outliers.sort_by(|a, b| a.symbol.cmp(&b.symbol)),
                                         1 => sorted_outliers.sort_by(|a, b| a.sector.cmp(&b.sector).then_with(|| a.industry.cmp(&b.industry))),
@@ -619,7 +619,7 @@ impl TyphooNApp {
                                 }
 
                                 // Sector summary (single-dimension)
-                                if !self.darwinex_sector_stats.is_empty() {
+                                if !self.sector_stats.is_empty() {
                                     ui.label(egui::RichText::new("Sector Statistics").small().strong());
                                     egui::Grid::new("sector_stats_grid").striped(true).num_columns(6).min_col_width(60.0).show(ui, |ui| {
                                         ui.label(egui::RichText::new("Sector").color(ol_dim).small());
@@ -629,7 +629,7 @@ impl TyphooNApp {
                                         ui.label(egui::RichText::new("Bounds").color(ol_dim).small());
                                         ui.label(egui::RichText::new("Outliers").color(ol_dim).small());
                                         ui.end_row();
-                                        for s in &self.darwinex_sector_stats {
+                                        for s in &self.sector_stats {
                                             ui.label(egui::RichText::new(&s.sector).small().color(ol_cyan));
                                             ui.label(format!("{}", s.count));
                                             ui.label(typhoon_engine::core::fundamentals::format_large_number(s.median));
@@ -647,13 +647,13 @@ impl TyphooNApp {
                                 }
 
                                 // Outlier table (single-metric) — click headers to sort
-                                if !self.darwinex_outliers.is_empty() {
+                                if !self.outliers.is_empty() {
                                     ui.label(egui::RichText::new("Outliers (click headers to sort)").small().strong());
                                     // Sort outliers per header state. Columns:
                                     //   0 Symbol, 1 Sector, 2 Industry, 3 Value, 4 Median,
                                     //   5 Tier, 6 Z-Score (|z|), 7 Direction
                                     // ("30d" sparkline is display-only between Symbol and Sector — no sort.)
-                                    let mut sorted_single: Vec<&_> = self.darwinex_outliers.iter().collect();
+                                    let mut sorted_single: Vec<&_> = self.outliers.iter().collect();
                                     match self.outlier_single_sort.column {
                                         0 => sorted_single.sort_by(|a, b| a.symbol.cmp(&b.symbol)),
                                         1 => sorted_single.sort_by(|a, b| a.sector.cmp(&b.sector).then_with(|| a.industry.cmp(&b.industry))),

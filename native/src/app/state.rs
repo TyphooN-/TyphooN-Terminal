@@ -4676,10 +4676,10 @@ pub struct TyphooNApp {
     pub(crate) show_order_flow: bool,
     pub(crate) show_bookmap: bool,
     pub(crate) bookmap_windows: Vec<BookmapWindowState>,
-    pub(crate) show_darwinex_outliers: bool,
-    pub(crate) darwinex_outliers: Vec<typhoon_engine::core::var::OutlierResult>,
-    pub(crate) darwinex_sector_stats: Vec<typhoon_engine::core::var::SectorStats>,
-    pub(crate) darwinex_multi_outliers: Vec<typhoon_engine::core::var::MultiOutlierResult>,
+    pub(crate) show_outliers: bool,
+    pub(crate) outliers: Vec<typhoon_engine::core::var::OutlierResult>,
+    pub(crate) sector_stats: Vec<typhoon_engine::core::var::SectorStats>,
+    pub(crate) multi_outliers: Vec<typhoon_engine::core::var::MultiOutlierResult>,
     pub(crate) show_option_chain: bool,
     pub(crate) option_chain_sym: String, // symbol last fetched
     // MQL5/PineScript/…/transpile compiler
