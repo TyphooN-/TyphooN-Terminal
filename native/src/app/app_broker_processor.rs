@@ -371,8 +371,11 @@ pub(super) fn spawn_broker_message_processor(
                                 let change = snap.last - snap.prev_close;
                                 let change_pct = if snap.prev_close > 0.0 { (snap.last / snap.prev_close - 1.0) * 100.0 } else { 0.0 };
                                 // Extended hours change: last trade vs regular session close
-                                let ext_change_pct = if !regular_session_open
-                                    && snap.regular_close > 0.0
+                                // Reset ext_change_pct during regular hours to avoid carrying over
+                                // yesterday's extended hours change as the starting point.
+                                let ext_change_pct = if regular_session_open {
+                                    0.0
+                                } else if snap.regular_close > 0.0
                                     && (snap.last - snap.regular_close).abs() > 1e-10
                                 {
                                     (snap.last / snap.regular_close - 1.0) * 100.0
