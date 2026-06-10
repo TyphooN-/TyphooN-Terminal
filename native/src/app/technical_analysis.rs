@@ -7288,16 +7288,13 @@ fn next_candle_remaining_ms_at(last_bar_ts_ms: i64, tf: Timeframe, now_ms: i64) 
         return None;
     }
 
-    // This is a candle-close countdown, not a generic next calendar boundary
-    // timer. Only show it while the latest cached bar is actually the bar that
-    // is forming now. If the market/session is closed, the latest bar is stale
-    // and must not roll forward through synthetic future buckets.
+    // TradingView-style: always show time until the *next* bar boundary.
+    // This works during CORE even if the last bar is slightly stale.
+    // We calculate forward from the last known bar.
     let elapsed = now_ms.saturating_sub(last_bar_ts_ms);
-    if elapsed >= interval_ms {
-        return None;
-    }
+    let remaining = interval_ms - (elapsed % interval_ms);
 
-    Some(interval_ms - elapsed)
+    Some(remaining.max(0))
 }
 
 fn next_candle_countdown_label(last_bar_ts_ms: i64, tf: Timeframe) -> Option<String> {
