@@ -851,12 +851,34 @@ pub(crate) fn chart_merge_bucket_ts(timeframe: &str, ts: i64) -> i64 {
     }
 }
 
+/// Merge equity/ETF bars from multiple providers into one continuous series.
+///
+/// Sources split into two tiers by [`chart_equity_source_rank`]:
+/// * **Trusted** (rank ≤ 2 — `kraken-equities`, `tastytrade`, `alpaca`): live /
+///   native feeds that define the authoritative, corporate-action-adjusted
+///   price scale. Merged per-bucket by priority (best rank wins; latest tick
+///   wins within a source).
+/// * **Depth** (rank ≥ 3 — `yahoo-chart`, `default`): history-extenders. Yahoo
+///   carries far deeper history but is frequently *unadjusted* across splits and
+///   token re-denominations (WOK was ~10,000× too high before its 2025 action),
+///   which a naïve splice would paste straight onto the trusted scale as a
+///   discontinuity. So each depth source is back-adjusted to the trusted scale
+///   by the price ratio where they overlap, and only fills buckets the trusted
+///   tier lacks (older history + interior gaps). A depth source whose overlap
+///   scale is inconsistent — the tell-tale of an unadjusted action mid-history —
+///   is dropped entirely rather than splicing scale-jumped bars.
+///
+/// With no trusted source present (Yahoo-only symbol) we fall back to per-bucket
+/// priority across the depth sources so the symbol still charts (best effort).
 pub(crate) fn chart_merge_equity_raw_bars(
     timeframe: &str,
     sources: &[(&str, &[(i64, f64, f64, f64, f64, f64)])],
 ) -> Vec<Bar> {
-    let mut by_bucket: std::collections::BTreeMap<i64, (u8, Bar)> =
-        std::collections::BTreeMap::new();
+    use std::collections::BTreeMap;
+    const TRUSTED_MAX_RANK: u8 = 2; // alpaca and better define the price scale
+
+    // Validate + bucket each usable source, tagged by its priority rank.
+    let mut tagged: Vec<(u8, BTreeMap<i64, Bar>)> = Vec::new();
     for (source, raw) in sources {
         let Some(rank) = chart_equity_source_rank(source) else {
             continue;
@@ -864,41 +886,151 @@ pub(crate) fn chart_merge_equity_raw_bars(
         if !chart_source_bars_match_timeframe(source, timeframe, raw) {
             continue;
         }
-        for (ts, o, h, l, c, v) in raw.iter().copied() {
-            if ts <= 0
-                || o <= 0.0
-                || h <= 0.0
-                || l <= 0.0
-                || c <= 0.0
-                || !o.is_finite()
-                || !h.is_finite()
-                || !l.is_finite()
-                || !c.is_finite()
-                || h < l
-            {
+        let bucketed = chart_bucket_valid_source_bars(timeframe, raw);
+        if !bucketed.is_empty() {
+            tagged.push((rank, bucketed));
+        }
+    }
+    // Best priority first; stable so equal ranks keep input order.
+    tagged.sort_by_key(|(rank, _)| *rank);
+
+    // Trusted tier defines the scale: per-bucket, the best rank present wins.
+    let mut merged: BTreeMap<i64, Bar> = BTreeMap::new();
+    for (rank, bucketed) in &tagged {
+        if *rank > TRUSTED_MAX_RANK {
+            continue;
+        }
+        for (bucket, bar) in bucketed {
+            merged.entry(*bucket).or_insert_with(|| bar.clone());
+        }
+    }
+
+    if merged.is_empty() {
+        // No trusted reference — best-effort per-bucket priority over depth.
+        for (_rank, bucketed) in &tagged {
+            for (bucket, bar) in bucketed {
+                merged.entry(*bucket).or_insert_with(|| bar.clone());
+            }
+        }
+        return merged.into_values().collect();
+    }
+
+    // Splice depth sources in (best rank first), back-adjusted to the trusted
+    // scale, filling only buckets not already covered (older history + gaps).
+    for (rank, bucketed) in &tagged {
+        if *rank <= TRUSTED_MAX_RANK {
+            continue;
+        }
+        let Some(factor) = chart_depth_source_scale_factor(&merged, bucketed) else {
+            continue; // unreconcilable scale (unadjusted action) → drop source
+        };
+        let rescale = (factor - 1.0).abs() > 1e-9;
+        for (bucket, bar) in bucketed {
+            if merged.contains_key(bucket) {
                 continue;
             }
-            let bucket = chart_merge_bucket_ts(timeframe, ts);
-            let bar = Bar {
-                ts_ms: ts,
-                open: o,
-                high: h,
-                low: l,
-                close: c,
-                volume: v,
+            let bar = if rescale {
+                Bar {
+                    ts_ms: bar.ts_ms,
+                    open: bar.open * factor,
+                    high: bar.high * factor,
+                    low: bar.low * factor,
+                    close: bar.close * factor,
+                    volume: bar.volume,
+                }
+            } else {
+                bar.clone()
             };
-            let replace = by_bucket
-                .get(&bucket)
-                .map(|(existing_rank, existing_bar)| {
-                    rank < *existing_rank || (rank == *existing_rank && ts >= existing_bar.ts_ms)
-                })
-                .unwrap_or(true);
-            if replace {
-                by_bucket.insert(bucket, (rank, bar));
+            merged.insert(*bucket, bar);
+        }
+    }
+
+    merged.into_values().collect()
+}
+
+/// Validate, bucket, and de-duplicate one raw provider series into
+/// `bucket → Bar` (the latest tick within a bucket wins). Bars that fail basic
+/// sanity (non-positive / non-finite OHLC, high < low, non-positive ts) drop.
+fn chart_bucket_valid_source_bars(
+    timeframe: &str,
+    raw: &[(i64, f64, f64, f64, f64, f64)],
+) -> std::collections::BTreeMap<i64, Bar> {
+    let mut out: std::collections::BTreeMap<i64, Bar> = std::collections::BTreeMap::new();
+    for (ts, o, h, l, c, v) in raw.iter().copied() {
+        if ts <= 0
+            || o <= 0.0
+            || h <= 0.0
+            || l <= 0.0
+            || c <= 0.0
+            || !o.is_finite()
+            || !h.is_finite()
+            || !l.is_finite()
+            || !c.is_finite()
+            || h < l
+        {
+            continue;
+        }
+        let bucket = chart_merge_bucket_ts(timeframe, ts);
+        let bar = Bar {
+            ts_ms: ts,
+            open: o,
+            high: h,
+            low: l,
+            close: c,
+            volume: v,
+        };
+        match out.get(&bucket) {
+            Some(existing) if existing.ts_ms > ts => {}
+            _ => {
+                out.insert(bucket, bar);
             }
         }
     }
-    by_bucket.into_values().map(|(_, bar)| bar).collect()
+    out
+}
+
+/// Back-adjustment factor that brings a depth source onto the trusted scale:
+/// `median(trusted_close / depth_close)` over the buckets they share. Returns
+/// `None` — meaning "drop this source" — when there is no overlap, or when the
+/// overlap is large enough to judge yet the per-bucket ratios span more than
+/// `SCALE_TOL` (p90/p10). A continuously-offset source (a clean, unadjusted but
+/// constant split) has a near-constant ratio and is kept & rescaled; an
+/// internally-inconsistent source (an unadjusted action mid-history, like
+/// Yahoo's WOK) trips the tolerance and is rejected.
+fn chart_depth_source_scale_factor(
+    trusted: &std::collections::BTreeMap<i64, Bar>,
+    depth: &std::collections::BTreeMap<i64, Bar>,
+) -> Option<f64> {
+    const CONSISTENCY_MIN_OVERLAP: usize = 8;
+    const SCALE_TOL: f64 = 3.0;
+
+    let mut factors: Vec<f64> = depth
+        .iter()
+        .filter_map(|(bucket, dbar)| {
+            trusted
+                .get(bucket)
+                .filter(|tbar| tbar.close > 0.0 && dbar.close > 0.0)
+                .map(|tbar| tbar.close / dbar.close)
+        })
+        .collect();
+    if factors.is_empty() {
+        return None;
+    }
+    factors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    if factors.len() >= CONSISTENCY_MIN_OVERLAP {
+        let p10 = factors[factors.len() / 10];
+        let p90 = factors[factors.len() * 9 / 10];
+        if p10 <= 0.0 || p90 / p10 > SCALE_TOL {
+            return None;
+        }
+    }
+    let mid = factors.len() / 2;
+    let median = if factors.len() % 2 == 0 {
+        (factors[mid - 1] + factors[mid]) / 2.0
+    } else {
+        factors[mid]
+    };
+    (median.is_finite() && median > 0.0).then_some(median)
 }
 
 pub(crate) fn chart_equity_source_rank(source: &str) -> Option<u8> {

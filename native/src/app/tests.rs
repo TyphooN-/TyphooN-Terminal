@@ -190,14 +190,76 @@ fn chart_equity_merge_preserves_old_assist_history_and_prefers_kraken_overlap() 
         ],
     );
 
+    // Trusted overlap still prefers kraken > alpaca (day3=alpaca, day4=kraken).
+    // Yahoo's older day1/day2 are preserved but BACK-ADJUSTED to the trusted
+    // scale by the day3 ratio (30.5 / 3.5) so the splice is continuous instead
+    // of dropping two decades from $3.5 to $30.5.
     assert_eq!(
         merged.iter().map(|b| b.ts_ms).collect::<Vec<_>>(),
         vec![day, 2 * day, 3 * day, 4 * day, 5 * day]
     );
-    assert_eq!(merged[0].close, 1.5);
+    let splice_factor = 30.5 / 3.5;
+    assert!((merged[0].close - 1.5 * splice_factor).abs() < 1e-6);
+    assert!((merged[1].close - 2.5 * splice_factor).abs() < 1e-6);
     assert_eq!(merged[2].close, 30.5);
     assert_eq!(merged[3].close, 400.5);
     assert_eq!(merged[4].close, 5.5);
+}
+
+#[test]
+fn chart_equity_merge_drops_unadjusted_depth_history() {
+    // Yahoo carries deep history but is unadjusted across a ~10,000× action: it
+    // agrees with Alpaca recently and is wildly off earlier. That inconsistency
+    // must make the merge DROP Yahoo entirely rather than splice scale-jumped
+    // bars — including Yahoo's older-than-Alpaca history. (Real-world: WOK.)
+    let day = 86_400_000i64;
+    let alpaca: Vec<(i64, f64, f64, f64, f64, f64)> = (10..=25)
+        .map(|d| (d as i64 * day, 1.0, 1.1, 0.9, 1.0, 100.0))
+        .collect();
+    let yahoo: Vec<(i64, f64, f64, f64, f64, f64)> = (1..=25)
+        .map(|d| {
+            // Older half unadjusted (10,000×), recent half agrees with Alpaca.
+            let c = if d <= 17 { 10_000.0 } else { 1.0 };
+            (d as i64 * day, c, c * 1.1, c * 0.9, c, 50.0)
+        })
+        .collect();
+
+    let merged =
+        chart_merge_equity_raw_bars("1Day", &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)]);
+
+    // Only Alpaca's range survives; none of Yahoo's older (day1..9) garbage.
+    assert_eq!(merged.first().map(|b| b.ts_ms), Some(10 * day));
+    assert_eq!(merged.last().map(|b| b.ts_ms), Some(25 * day));
+    assert_eq!(merged.len(), 16);
+    assert!(
+        merged.iter().all(|b| b.close < 5.0),
+        "no 10,000× unadjusted bars may be spliced in"
+    );
+}
+
+#[test]
+fn chart_equity_merge_backadjusts_consistent_deep_history() {
+    // Yahoo is deeper than Alpaca and uniformly 2× (a clean, constant offset —
+    // an unadjusted but consistent split). The merge keeps Alpaca's range as-is
+    // and PREPENDS Yahoo's older history back-adjusted by the overlap ratio so
+    // the splice is continuous.
+    let day = 86_400_000i64;
+    let alpaca: Vec<(i64, f64, f64, f64, f64, f64)> = (10..=25)
+        .map(|d| (d as i64 * day, 5.0, 5.5, 4.5, 5.0, 100.0))
+        .collect();
+    let yahoo: Vec<(i64, f64, f64, f64, f64, f64)> = (1..=25)
+        .map(|d| (d as i64 * day, 10.0, 11.0, 9.0, 10.0, 50.0)) // 2× alpaca
+        .collect();
+
+    let merged =
+        chart_merge_equity_raw_bars("1Day", &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)]);
+
+    assert_eq!(merged.first().map(|b| b.ts_ms), Some(day)); // depth extends back
+    assert_eq!(merged.len(), 25);
+    // Prepended Yahoo bars rescaled by 0.5 → continuous with Alpaca's 5.0.
+    assert!((merged[0].close - 5.0).abs() < 1e-6); // day1, Yahoo back-adjusted
+    assert!((merged[8].close - 5.0).abs() < 1e-6); // day9, still Yahoo
+    assert!((merged[9].close - 5.0).abs() < 1e-6); // day10, Alpaca
 }
 
 #[test]
