@@ -10991,8 +10991,6 @@ impl eframe::App for TyphooNApp {
                                                             timeframes: vec![tf_norm.to_string()],
                                                             db_path: db_path.clone(),
                                                             backfill_complete: false,
-                                                            cryptocompare_backfill_enabled: self
-                                                                .backfill_cryptocompare_enabled,
                                                         });
                                                     self.log.push_back(LogEntry::info(format!(
                                                         "LAN remote: fetching {} {} from Kraken",
@@ -11130,8 +11128,6 @@ impl eframe::App for TyphooNApp {
                                                     timeframes: tfs,
                                                     db_path,
                                                     backfill_complete: false,
-                                                    cryptocompare_backfill_enabled: self
-                                                        .backfill_cryptocompare_enabled,
                                                 });
                                             self.log.push_back(LogEntry::info(format!(
                                                 "LAN remote: Kraken backfill {} started",
@@ -11344,7 +11340,6 @@ impl eframe::App for TyphooNApp {
                                 timeframes: kraken_tfs,
                                 db_path,
                                 backfill_complete: false,
-                                cryptocompare_backfill_enabled: self.backfill_cryptocompare_enabled,
                             });
                         }
                     }

@@ -2707,7 +2707,6 @@ impl TyphooNApp {
             kraken_scrape_fiat_crypto: false,
             kraken_scrape_crypto_crosses: false,
             kraken_scrape_futures: false,
-            backfill_cryptocompare_enabled: true,
             backfill_alpaca_kraken_equities_enabled: false,
             backfill_yahoo_chart_enabled: false,
             kraken_ws_ohlc_enabled: true,

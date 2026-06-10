@@ -407,20 +407,6 @@ pub(super) async fn run_alpaca_fetch_task(
     });
 }
 
-fn merge_json_bars(
-    mut existing: Vec<serde_json::Value>,
-    mut incoming: Vec<serde_json::Value>,
-) -> Vec<serde_json::Value> {
-    existing.append(&mut incoming);
-    existing.sort_by(|a, b| {
-        a["timestamp"]
-            .as_str()
-            .unwrap_or("")
-            .cmp(b["timestamp"].as_str().unwrap_or(""))
-    });
-    existing.dedup_by(|a, b| a["timestamp"] == b["timestamp"]);
-    existing
-}
 
 fn should_request_full_backfill(
     backfill_already_complete: bool,
@@ -431,30 +417,6 @@ fn should_request_full_backfill(
         && target_bars
             .map(|target| cached_count > 0 && (cached_count as i128) * 100 < (target as i128) * 95)
             .unwrap_or(false)
-}
-
-pub(super) fn cryptocompare_backfill_symbol(symbol: &str) -> Option<String> {
-    let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
-    if symbol.is_empty() || symbol.contains(".EQ") {
-        return None;
-    }
-    pub(crate) const FIAT: &[&str] = &["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF"];
-    pub(crate) const USD_QUOTES: &[&str] = &["USDG", "USDT", "USDC", "USD"];
-    for quote in USD_QUOTES {
-        if let Some(base) = symbol.strip_suffix(quote) {
-            if !base.is_empty() && !FIAT.contains(&base) {
-                return Some(format!("{base}USD"));
-            }
-        }
-    }
-    None
-}
-
-fn cryptocompare_backfill_floor_ms() -> i64 {
-    chrono::NaiveDate::from_ymd_opt(2010, 1, 1)
-        .and_then(|d| d.and_hms_opt(0, 0, 0))
-        .map(|ndt| ndt.and_utc().timestamp_millis())
-        .unwrap_or(0)
 }
 
 #[allow(dead_code)]
@@ -527,7 +489,6 @@ pub(super) async fn run_kraken_fetch_task(
     symbol: String,
     timeframe: String,
     backfill_already_complete: bool,
-    cryptocompare_backfill_enabled: bool,
 ) {
     let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(&symbol);
     let timeframe = normalize_sync_timeframe_key(&timeframe)
@@ -584,58 +545,12 @@ pub(super) async fn run_kraken_fetch_task(
         format!("Kraken {} {}: fetching recent window...", symbol, timeframe)
     };
     let _ = broker_msg_tx.send(BrokerMsg::OrderResult(log_msg));
-    let mut cryptocompare_backfill = Vec::new();
-    if after_ts.is_none() && cryptocompare_backfill_enabled {
-        if let Some(cc_symbol) = cryptocompare_backfill_symbol(&symbol) {
-            if let Some(secs) = typhoon_engine::core::cryptocompare::rate_limited_for_secs() {
-                let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
-                    "CryptoCompare backfill skipped for {} {}: rate-limit backoff {}s; using Kraken provider window",
-                    symbol, timeframe, secs
-                )));
-            } else {
-                let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
-                    "CryptoCompare backfill for {} {} before Kraken recent window...",
-                    symbol, timeframe
-                )));
-                match typhoon_engine::core::cryptocompare::fetch_ohlcv(
-                    &client,
-                    &cc_symbol,
-                    &timeframe,
-                    cryptocompare_backfill_floor_ms(),
-                    now_ms,
-                )
-                .await
-                {
-                    Ok(bars) => {
-                        if !bars.is_empty() {
-                            let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
-                                "CryptoCompare backfill for {} {} returned {} bars",
-                                symbol,
-                                timeframe,
-                                bars.len()
-                            )));
-                            cryptocompare_backfill = bars;
-                        }
-                    }
-                    Err(e) => {
-                        let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
-                            "CryptoCompare backfill skipped for {} {}: {}; using Kraken provider window",
-                            symbol, timeframe, e
-                        )));
-                    }
-                }
-            }
-        }
-    }
     match typhoon_engine::core::kraken::fetch_binance_klines(
         &client, &symbol, &timeframe, start_ms, now_ms,
     )
     .await
     {
-        Ok(mut new_bars) => {
-            if !cryptocompare_backfill.is_empty() {
-                new_bars = merge_json_bars(cryptocompare_backfill, new_bars);
-            }
+        Ok(new_bars) => {
             if new_bars.is_empty() && after_ts.is_some() {
                 let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
                     "Kraken {} {} already up to date",

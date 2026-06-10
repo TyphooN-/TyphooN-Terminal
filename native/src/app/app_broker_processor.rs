@@ -3741,7 +3741,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     timeframes,
                     db_path: _,
                     backfill_complete,
-                    cryptocompare_backfill_enabled,
                 } => {
                     let msg_tx = broker_msg_tx_clone.clone();
                     let shared_cache = shared_cache_broker.clone();
@@ -3764,7 +3763,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 symbol,
                                 timeframe,
                                 backfill_complete,
-                                cryptocompare_backfill_enabled,
                             )
                             .await;
                         });

@@ -483,7 +483,6 @@ pub(crate) enum BrokerCmd {
         timeframes: Vec<String>,
         db_path: std::path::PathBuf,
         backfill_complete: bool,
-        cryptocompare_backfill_enabled: bool,
     },
     /// Kraken Futures public chart backfill via the public charts API.
     KrakenFuturesBackfill {
@@ -4238,7 +4237,6 @@ pub struct TyphooNApp {
     /// Backfill provider switches. These are source-specific fallbacks, not
     /// broker universe toggles: they supplement native broker bars without
     /// changing broker/account connectivity.
-    pub(crate) backfill_cryptocompare_enabled: bool,
     pub(crate) backfill_alpaca_kraken_equities_enabled: bool,
     pub(crate) backfill_yahoo_chart_enabled: bool,
     /// Stream Kraken bar updates via WS v2 in addition to the REST scheduler.

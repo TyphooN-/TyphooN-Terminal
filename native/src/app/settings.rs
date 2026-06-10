@@ -465,15 +465,6 @@ impl TyphooNApp {
                     ui.horizontal_wrapped(|ui| {
                         backfill_changed |= ui
                             .checkbox(
-                                &mut self.backfill_cryptocompare_enabled,
-                                "CryptoCompare deep crypto history",
-                            )
-                            .on_hover_text(
-                                "Targeted Kraken Spot crypto USD/stablecoin prepend only. Does not scan CryptoCompare as its own universe and skips FX/xStocks.",
-                            )
-                            .changed();
-                        backfill_changed |= ui
-                            .checkbox(
                                 &mut self.backfill_alpaca_kraken_equities_enabled,
                                 "Alpaca for all Kraken equities",
                             )

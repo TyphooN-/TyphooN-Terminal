@@ -329,7 +329,6 @@ impl TyphooNApp {
             "kraken_scrape_fiat_crypto": self.kraken_scrape_fiat_crypto,
             "kraken_scrape_crypto_crosses": self.kraken_scrape_crypto_crosses,
             "kraken_scrape_futures": self.kraken_scrape_futures,
-            "backfill_cryptocompare_enabled": self.backfill_cryptocompare_enabled,
             "backfill_alpaca_kraken_equities_enabled": self.backfill_alpaca_kraken_equities_enabled,
             "backfill_yahoo_chart_enabled": self.backfill_yahoo_chart_enabled,
             "kraken_ws_ohlc_enabled": self.kraken_ws_ohlc_enabled,
@@ -445,9 +444,6 @@ impl TyphooNApp {
             || self.crypto_fiat_quote_chf;
         if let Some(enabled) = value["kraken_scrape_futures"].as_bool() {
             self.kraken_scrape_futures = enabled;
-        }
-        if let Some(enabled) = value["backfill_cryptocompare_enabled"].as_bool() {
-            self.backfill_cryptocompare_enabled = enabled;
         }
         if let Some(enabled) = value["backfill_alpaca_kraken_equities_enabled"].as_bool() {
             self.backfill_alpaca_kraken_equities_enabled = enabled;
@@ -643,7 +639,6 @@ impl TyphooNApp {
             "kraken_scrape_futures": self.kraken_scrape_futures,
             "alpaca_full_bar_sync_enabled": self.alpaca_full_bar_sync_enabled,
             "kraken_full_bar_sync_enabled": self.kraken_full_bar_sync_enabled,
-            "backfill_cryptocompare_enabled": self.backfill_cryptocompare_enabled,
             "backfill_alpaca_kraken_equities_enabled": self.backfill_alpaca_kraken_equities_enabled,
             "backfill_yahoo_chart_enabled": self.backfill_yahoo_chart_enabled,
             "kraken_ws_ohlc_enabled": self.kraken_ws_ohlc_enabled,
@@ -2570,9 +2565,6 @@ impl TyphooNApp {
                 }
                 if let Some(enabled) = v["kraken_enabled"].as_bool() {
                     self.kraken_enabled = enabled;
-                }
-                if let Some(enabled) = v["backfill_cryptocompare_enabled"].as_bool() {
-                    self.backfill_cryptocompare_enabled = enabled;
                 }
                 if let Some(enabled) = v["backfill_alpaca_kraken_equities_enabled"].as_bool() {
                     self.backfill_alpaca_kraken_equities_enabled = enabled;

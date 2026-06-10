@@ -12,7 +12,6 @@ pub(super) fn is_routine_market_data_status(msg: &str) -> bool {
         || msg.contains(": tastytrade has this symbol — skipping");
 
     (msg.starts_with("Kraken ") || msg.starts_with("Alpaca ")) && routine_progress
-        || msg.starts_with("CryptoCompare backfill ")
         || msg.contains("Yahoo Chart HTTP 429")
         // Once the iapi back-off is armed, late-arriving dispatches that
         // race the gate come back with this prefix. The first arm already

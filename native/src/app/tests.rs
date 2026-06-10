@@ -563,26 +563,6 @@ fn kraken_xstock_detection_does_not_strip_crypto_x_suffixes() {
 }
 
 #[test]
-fn cryptocompare_backfill_is_crypto_usd_only() {
-    assert_eq!(
-        crate::app::broker_fetch::cryptocompare_backfill_symbol("BTCUSD"),
-        Some("BTCUSD".to_string())
-    );
-    assert_eq!(
-        crate::app::broker_fetch::cryptocompare_backfill_symbol("ETHUSDT"),
-        Some("ETHUSD".to_string())
-    );
-    assert_eq!(
-        crate::app::broker_fetch::cryptocompare_backfill_symbol("EURUSD"),
-        None
-    );
-    assert_eq!(
-        crate::app::broker_fetch::cryptocompare_backfill_symbol("HRTX.EQUSD"),
-        None
-    );
-}
-
-#[test]
 fn kraken_equity_balances_use_bare_underlying_symbol() {
     assert_eq!(
         TyphooNApp::kraken_spot_pair_for_balance_asset("WOK.EQ"),

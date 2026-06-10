@@ -1497,7 +1497,6 @@ impl TyphooNApp {
             timeframes: vec![tf.to_string()],
             db_path: cache_db_path(),
             backfill_complete,
-            cryptocompare_backfill_enabled: self.backfill_cryptocompare_enabled,
         });
         true
     }
