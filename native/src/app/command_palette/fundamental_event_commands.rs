@@ -12,23 +12,14 @@ impl TyphooNApp {
                 let db_path = cache_db_path();
                 // Broker scope override: narrow sources to just the scoped broker.
                 // SCOPE ALL → use configured source toggles. SCOPE ALPACA → force use_alpaca only, etc.
-                let (use_mt5, use_alpaca, use_kraken) = match self.broker_scope {
-                    EventSource::All => (
-                        self.fund_source_mt5,
-                        self.fund_source_alpaca,
-                        self.fund_source_kraken,
-                    ),
-                    EventSource::Alpaca => (false, true, false),
-                    EventSource::Kraken => (false, false, true),
-                    EventSource::Positions => (
-                        self.fund_source_mt5,
-                        self.fund_source_alpaca,
-                        self.fund_source_kraken,
-                    ),
+                let (use_alpaca, use_kraken) = match self.broker_scope {
+                    EventSource::All => (self.fund_source_alpaca, self.fund_source_kraken),
+                    EventSource::Alpaca => (true, false),
+                    EventSource::Kraken => (false, true),
+                    EventSource::Positions => (self.fund_source_alpaca, self.fund_source_kraken),
                 };
                 let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
                     db_path,
-                    use_mt5,
                     use_alpaca,
                     use_kraken,
                     kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
@@ -39,7 +30,6 @@ impl TyphooNApp {
                 self.scrape_fund_fail = 0;
                 self.scrape_fund_skipped = 0;
                 let sources: Vec<&str> = [
-                    ("MT5", use_mt5),
                     ("Alpaca", use_alpaca),
                     ("Kraken", use_kraken),
                 ]
@@ -58,28 +48,6 @@ impl TyphooNApp {
                     sources.join(", "),
                     force_label
                 )));
-            }
-            "MT5SYNC" => {
-                let paths: Vec<String> = self
-                    .mt5_db_paths
-                    .iter()
-                    .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
-                    .cloned()
-                    .collect();
-                if paths.is_empty() {
-                    self.log.push_back(LogEntry::warn(
-                        "No valid MT5 database paths configured — set them in Settings",
-                    ));
-                } else {
-                    let _ = self.broker_tx.send(BrokerCmd::Mt5Sync {
-                        sources: paths.clone(),
-                        enabled_timeframes: self.enabled_standard_sync_timeframes(),
-                    });
-                    self.log.push_back(LogEntry::info(format!(
-                        "MT5 sync started ({} sources)...",
-                        paths.len()
-                    )));
-                }
             }
             "ANALYST" => {
                 self.show_analyst = true;
@@ -262,22 +230,18 @@ impl TyphooNApp {
                 // Sync fund_source toggles with scope
                 match new_scope {
                     EventSource::All => {
-                        self.fund_source_mt5 = true;
                         self.fund_source_alpaca = true;
                         self.fund_source_kraken = true;
                     }
                     EventSource::Alpaca => {
-                        self.fund_source_mt5 = false;
                         self.fund_source_alpaca = true;
                         self.fund_source_kraken = false;
                     }
                     EventSource::Kraken => {
-                        self.fund_source_mt5 = false;
                         self.fund_source_alpaca = false;
                         self.fund_source_kraken = true;
                     }
                     EventSource::Positions => {
-                        self.fund_source_mt5 = true;
                         self.fund_source_alpaca = true;
                         self.fund_source_kraken = true;
                     }
