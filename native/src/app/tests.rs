@@ -379,9 +379,12 @@ fn chart_materializes_merged_equity_cache_from_provider_rows() {
         .unwrap()
         .expect("merged cache key should exist");
     assert_eq!(raw.len(), 3);
-    assert_eq!(raw[0].4, 1.5);
-    assert_eq!(raw[1].4, 25.0);
-    assert_eq!(raw[2].4, 3.5);
+    // 2024-01-01 exists only in Yahoo (older than the kraken-equities range), so
+    // it is back-adjusted to the trusted scale by the 01-02 overlap ratio
+    // (kraken 25.0 / yahoo 2.5 = 10×) for a continuous splice: 1.5 * 10 = 15.0.
+    assert_eq!(raw[0].4, 15.0);
+    assert_eq!(raw[1].4, 25.0); // 01-02 overlap: kraken-equities wins
+    assert_eq!(raw[2].4, 3.5); // 01-03: kraken-equities
     let _ = std::fs::remove_file(db_path);
 }
 
