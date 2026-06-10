@@ -112,7 +112,6 @@ impl TyphooNApp {
                                     let db_path = cache_db_path();
                                     let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
                                         db_path,
-                                        use_mt5: self.fund_source_mt5,
                                         use_alpaca: self.fund_source_alpaca,
                                         use_kraken: self.fund_source_kraken,
                                         kraken_equity_symbols: self
@@ -194,29 +193,6 @@ impl TyphooNApp {
                         if can_scrape {
                             if ui
                                 .add(
-                                    egui::Button::new(egui::RichText::new("MT5 Only").small())
-                                        .fill(BTN_GREEN),
-                                )
-                                .clicked()
-                            {
-                                let db_path = cache_db_path();
-                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
-                                    db_path,
-                                    use_mt5: true,
-                                    use_alpaca: false,
-                                    use_kraken: false,
-                                    kraken_equity_symbols: self
-                                        .kraken_equity_universe_symbols
-                                        .clone(),
-                                    force: false,
-                                });
-                                self.scrape_fund_running = true;
-                                self.scrape_fund_ok = 0;
-                                self.scrape_fund_fail = 0;
-                                self.scrape_fund_skipped = 0;
-                            }
-                            if ui
-                                .add(
                                     egui::Button::new(egui::RichText::new("Alpaca Only").small())
                                         .fill(BTN_GREEN),
                                 )
@@ -225,7 +201,6 @@ impl TyphooNApp {
                                 let db_path = cache_db_path();
                                 let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
                                     db_path,
-                                    use_mt5: false,
                                     use_alpaca: true,
                                     use_kraken: false,
                                     kraken_equity_symbols: self
@@ -248,7 +223,6 @@ impl TyphooNApp {
                                 let db_path = cache_db_path();
                                 let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
                                     db_path,
-                                    use_mt5: false,
                                     use_alpaca: false,
                                     use_kraken: true,
                                     kraken_equity_symbols: self
@@ -271,7 +245,6 @@ impl TyphooNApp {
                                 let db_path = cache_db_path();
                                 let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
                                     db_path,
-                                    use_mt5: true,
                                     use_alpaca: true,
                                     use_kraken: true,
                                     kraken_equity_symbols: self
@@ -298,20 +271,16 @@ impl TyphooNApp {
                                 .small()
                                 .color(AXIS_TEXT),
                         );
-                        ui.checkbox(&mut self.fund_source_mt5, "MT5");
                         ui.checkbox(&mut self.fund_source_alpaca, "Alpaca");
                         ui.checkbox(&mut self.fund_source_kraken, "Kraken");
                     });
                     // Sync broker_scope from checkbox state
-                    self.broker_scope = match (
-                        self.fund_source_mt5,
-                        self.fund_source_alpaca,
-                        self.fund_source_kraken,
-                    ) {
-                        (false, true, false) => EventSource::Alpaca,
-                        (false, false, true) => EventSource::Kraken,
-                        _ => EventSource::All,
-                    };
+                    self.broker_scope =
+                        match (self.fund_source_alpaca, self.fund_source_kraken) {
+                            (true, false) => EventSource::Alpaca,
+                            (false, true) => EventSource::Kraken,
+                            _ => EventSource::All,
+                        };
 
                     // Last message
                     if !self.scrape_fund_last_msg.is_empty() {
@@ -393,7 +362,6 @@ impl TyphooNApp {
                                     let db_path = cache_db_path();
                                     let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
                                         db_path,
-                                        use_mt5: self.fund_source_mt5,
                                         use_alpaca: self.fund_source_alpaca,
                                         use_kraken: self.fund_source_kraken,
                                         kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
@@ -1022,14 +990,13 @@ impl TyphooNApp {
                             let db_path = cache_db_path();
                             let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
                                 db_path,
-                                use_mt5: self.fund_source_mt5,
                                 use_alpaca: self.fund_source_alpaca,
                                 use_kraken: self.fund_source_kraken,
                                 kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
                                 force: false,
                             });
                             self.log.push_back(LogEntry::info(
-                                "Fundamentals scrape started for all MT5 symbols...",
+                                "Fundamentals scrape started for all symbols...",
                             ));
                         }
                         ui.label(
