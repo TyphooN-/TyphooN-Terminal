@@ -484,7 +484,7 @@ impl TyphooNApp {
                                         });
                                         self.log.push_back(LogEntry::info(format!("News: ignored article for {}", chart_symbol)));
                                     }
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                             });
 

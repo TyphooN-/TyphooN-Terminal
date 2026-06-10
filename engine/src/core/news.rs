@@ -56,6 +56,33 @@ pub fn gdelt_cooldown_remaining_secs() -> i64 {
 }
 
 /// True while GDELT requests should be skipped after a 429.
+
+/// Returns true if the article is relevant enough for the given ticker.
+/// For short tickers (≤ 4 chars) we are stricter to avoid noise like the WOK cooking spam.
+pub fn article_is_relevant_for_ticker(article: &NewsArticle, ticker: &str) -> bool {
+    let t = ticker.to_uppercase();
+    if t.len() > 4 {
+        return true; // long tickers are usually unique enough
+    }
+
+    let text = format!("{} {}", article.headline, article.summary).to_lowercase();
+    let company_variants = [
+        "work medical", "workmedical", "wok medical", "wokmedical",
+    ];
+
+    // Strong financial / company signals
+    let financial_signals = [
+        "earnings", "revenue", "fda", "nasdaq", "medical device", "biopharma",
+        "clinical", "conference", "partnership", "subsidiary", "acquisition",
+    ];
+
+    let has_company = company_variants.iter().any(|v| text.contains(v));
+    let has_financial = financial_signals.iter().any(|v| text.contains(v));
+
+    // Accept if it mentions the company name or has clear financial context
+    has_company || has_financial
+}
+
 pub fn gdelt_in_cooldown() -> bool {
     gdelt_cooldown_remaining_secs() > 0
 }
@@ -2249,7 +2276,13 @@ pub async fn fetch_all_sources_for_symbol(
         sym,
         all_articles.len()
     ));
-    Ok(all_articles)
+    // Post-ingest relevance gate for short tickers (prevents WOK cooking spam etc.)
+    let filtered: Vec<NewsArticle> = all_articles
+        .into_iter()
+        .filter(|a| article_is_relevant_for_ticker(a, &sym))
+        .collect();
+
+    Ok(filtered)
 }
 
 /// Heuristic — treat alphabetic ticker ≤5 chars as US-listed (EDGAR eligible).
