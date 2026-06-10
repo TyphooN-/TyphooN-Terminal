@@ -34,68 +34,6 @@ impl TyphooNApp {
                     }
                 }
             }
-            cmd if cmd.starts_with("BACKTEST_EXPAND") => {
-                let rest = cmd.trim_start_matches("BACKTEST_EXPAND").trim();
-                if rest.is_empty() {
-                    if self.mt5_backtest_expand_symbols.is_empty() {
-                        self.log.push_back(LogEntry::info(
-                            "backtest_expand: empty. Usage: BACKTEST_EXPAND EURUSD [bars]  (compatibility override; provider-max MT5 sync is already the default)"));
-                    } else {
-                        let mut list: Vec<(String, u32)> = self
-                            .mt5_backtest_expand_symbols
-                            .iter()
-                            .map(|(k, v)| (k.clone(), *v))
-                            .collect();
-                        list.sort_by(|a, b| a.0.cmp(&b.0));
-                        let shown = list
-                            .iter()
-                            .map(|(s, n)| format!("{}={}", s, n))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        self.log
-                            .push_back(LogEntry::info(format!("backtest_expand map: {}", shown)));
-                    }
-                } else {
-                    let parts: Vec<&str> = rest.split_whitespace().collect();
-                    let sym = parts[0].to_uppercase();
-                    // MT5 sync already asks for provider-maximum history by default.
-                    // Keep this command as a compatibility knob for old saved sessions/manual
-                    // experiments, but never let it shrink below the provider-max sentinel.
-                    let default_bars: u32 = MT5_PROVIDER_MAX_BARS;
-                    let cap: u32 = MT5_PROVIDER_MAX_BARS;
-                    let bars: u32 = if parts.len() >= 2 {
-                        parts[1].parse::<u32>().unwrap_or(default_bars).min(cap)
-                    } else {
-                        default_bars
-                    };
-                    self.mt5_backtest_expand_symbols.insert(sym.clone(), bars);
-                    self.log.push_back(LogEntry::info(format!(
-                        "backtest_expand: {} → {} bars (overrides tiered default on gap-fill requests)",
-                        sym, bars)));
-                    self.detect_mt5_gaps();
-                    self.flush_mt5_demand_txt(true);
-                }
-            }
-            cmd if cmd.starts_with("BACKTEST_UNEXPAND") => {
-                let rest = cmd.trim_start_matches("BACKTEST_UNEXPAND").trim();
-                if rest.is_empty() {
-                    self.log
-                        .push_back(LogEntry::warn("Usage: BACKTEST_UNEXPAND EURUSD"));
-                } else {
-                    let sym = rest.to_uppercase();
-                    if self.mt5_backtest_expand_symbols.remove(&sym).is_some() {
-                        self.log.push_back(LogEntry::info(format!(
-                            "backtest_expand: removed {} — provider-max MT5 sync remains the default",
-                            sym
-                        )));
-                    } else {
-                        self.log.push_back(LogEntry::info(format!(
-                            "backtest_expand: {} not in set",
-                            sym
-                        )));
-                    }
-                }
-            }
             cmd if cmd.starts_with("OCO ") => {
                 // OCO SELL AAPL 10 200.00 180.00
                 let parts: Vec<&str> = cmd.split_whitespace().collect();

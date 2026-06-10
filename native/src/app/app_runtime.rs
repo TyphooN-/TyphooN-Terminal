@@ -74,35 +74,6 @@ impl eframe::App for TyphooNApp {
             self.cached_scoped_fundamentals = self.scoped_fundamentals_owned();
             self.cached_scoped_fundamentals_key = Some(scope_key);
         }
-        // PERF: Cache MT5 bar-coverage set on bg_rev.
-        // Was rebuilding per frame in hot windows and sync loops.
-        if self.cached_mt5_symbols_rev != Some(self.bg_rev)
-            && (!self.heavy_sync_in_progress || self.cached_mt5_symbols.is_empty())
-        {
-            self.cached_mt5_symbols = self
-                .bg
-                .detailed_stats
-                .iter()
-                .filter_map(|(k, _, _)| {
-                    // BarCacheWriter's only bar-key shape is `mt5:{SYM}:{TF}`. Metadata
-                    // (`mt5:__SYMBOLS__`, `mt5:__HEARTBEAT__:acct`, …) lives under the
-                    // `mt5:__` prefix — skip it so we don't land bogus synthetic
-                    // symbols like "MT5" or "__HEARTBEAT__" in the tradable set.
-                    let rest = k.strip_prefix("mt5:")?;
-                    if rest.starts_with("__") {
-                        return None;
-                    }
-                    let mut it = rest.split(':');
-                    let sym = it.next()?;
-                    let _tf = it.next()?;
-                    if it.next().is_some() || sym.is_empty() {
-                        return None;
-                    }
-                    Some(normalize_market_data_symbol(sym))
-                })
-                .collect();
-            self.cached_mt5_symbols_rev = Some(self.bg_rev);
-        }
         if self.cached_alpaca_sync_state_rev != Some(self.bg_rev)
             && (!self.heavy_sync_in_progress || self.cached_alpaca_sync_state.is_empty())
         {
@@ -667,25 +638,6 @@ impl eframe::App for TyphooNApp {
             {
                 // ── Startup data fetching (disabled for LAN client — server provides all data) ──
                 if !self.lan_client_enabled {
-                    // Auto MT5SYNC on startup if data dirs are configured
-                    {
-                        let paths: Vec<String> = self
-                            .mt5_db_paths
-                            .iter()
-                            .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
-                            .cloned()
-                            .collect();
-                        if !paths.is_empty() {
-                            let _ = self.broker_tx.send(BrokerCmd::Mt5Sync {
-                                sources: paths.clone(),
-                                enabled_timeframes: self.enabled_standard_sync_timeframes(),
-                            });
-                            self.log.push_back(LogEntry::info(format!(
-                                "Auto MT5SYNC: {} sources",
-                                paths.len()
-                            )));
-                        }
-                    }
                     // Auto SEC scrape on startup. Scope-derived universes may still
                     // be empty while broker/universe startup tasks are loading; do
                     // not send a misleading 0-symbol scrape. The universe-loaded
@@ -729,7 +681,7 @@ impl eframe::App for TyphooNApp {
                     }
                     // Auto EVSCRAPE on startup (fundamentals, skips if updated <24h).
                     // Kraken equities arrive asynchronously, so do not launch a
-                    // misleading MT5-only scrape when Kraken is selected but the
+                    // misleading scrape when Kraken is selected but the
                     // xStocks universe has not landed yet.
                     {
                         let needs_kraken_universe = self.fund_source_kraken
@@ -758,7 +710,6 @@ impl eframe::App for TyphooNApp {
                             let db_path = cache_db_path();
                             let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
                                 db_path,
-                                use_mt5: self.fund_source_mt5,
                                 use_alpaca: self.fund_source_alpaca,
                                 use_kraken: self.fund_source_kraken,
                                 kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
@@ -1586,7 +1537,6 @@ impl eframe::App for TyphooNApp {
                             let db_path = cache_db_path();
                             let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
                                 db_path,
-                                use_mt5: self.fund_source_mt5,
                                 use_alpaca: self.fund_source_alpaca,
                                 use_kraken: self.fund_source_kraken,
                                 kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
@@ -7382,7 +7332,6 @@ impl eframe::App for TyphooNApp {
                         .unwrap_or(false);
                     let source_label = match source.as_str() {
                         "alpaca" => "Alpaca",
-                        "mt5" => "MT5",
                         "kraken" => "Kraken",
                         "kraken-futures" => "Kraken Futures",
                         "yahoo-chart" => "Yahoo Chart",
@@ -11071,8 +11020,7 @@ impl eframe::App for TyphooNApp {
                                         let _ =
                                             self.broker_tx.send(BrokerCmd::FundamentalsScrape {
                                                 db_path,
-                                                use_mt5: self.fund_source_mt5,
-                                                use_alpaca: self.fund_source_alpaca,
+                                                                use_alpaca: self.fund_source_alpaca,
                                                 use_kraken: self.fund_source_kraken,
                                                 kraken_equity_symbols: self
                                                     .kraken_equity_universe_symbols
@@ -11107,27 +11055,6 @@ impl eframe::App for TyphooNApp {
                                                 "LAN remote: SEC scrape skipped: Scope {} has no symbols",
                                                 self.broker_scope_label()
                                             )));
-                                        }
-                                    }
-                                    "MT5_SYNC" => {
-                                        let paths: Vec<String> = self
-                                            .mt5_db_paths
-                                            .iter()
-                                            .filter(|p| {
-                                                !p.is_empty()
-                                                    && std::path::Path::new(p.as_str()).exists()
-                                            })
-                                            .cloned()
-                                            .collect();
-                                        if !paths.is_empty() {
-                                            let _ = self.broker_tx.send(BrokerCmd::Mt5Sync {
-                                                sources: paths,
-                                                enabled_timeframes: self
-                                                    .enabled_standard_sync_timeframes(),
-                                            });
-                                            self.log.push_back(LogEntry::info(
-                                                "LAN remote: MT5 sync started",
-                                            ));
                                         }
                                     }
                                     "FRED_DATA" => {
@@ -11239,8 +11166,7 @@ impl eframe::App for TyphooNApp {
                                         let _ =
                                             self.broker_tx.send(BrokerCmd::FundamentalsScrape {
                                                 db_path,
-                                                use_mt5: self.fund_source_mt5,
-                                                use_alpaca: self.fund_source_alpaca,
+                                                                use_alpaca: self.fund_source_alpaca,
                                                 use_kraken: self.fund_source_kraken,
                                                 kraken_equity_symbols: self
                                                     .kraken_equity_universe_symbols
@@ -11425,48 +11351,11 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
-            // Auto MT5 bar sync every ~60s on weekdays (smart: skips unchanged keys).
-            // Filter for file existence here — a missing path would trigger the
-            // Mt5Sync handler's "locked by BarCacheWriter" fallback message even
-            // though the DB isn't locked, it simply isn't there. Matches the
-            // bid/ask refresh below which already guards with .exists().
-            if now_instant.duration_since(self.mt5_bar_last_sync)
-                >= self.market_data_sync_interval()
-            {
-                self.mt5_bar_last_sync = now_instant;
-                let now_utc = chrono::Utc::now();
-                let eastern = now_utc.with_timezone(
-                    &chrono::FixedOffset::west_opt(5 * 3600)
-                        .unwrap_or(chrono::FixedOffset::east(0)),
-                );
-                use chrono::Datelike;
-                let is_weekday = !matches!(
-                    eastern.weekday(),
-                    chrono::Weekday::Sat | chrono::Weekday::Sun
-                );
-                if is_weekday {
-                    let paths: Vec<String> = self
-                        .mt5_db_paths
-                        .iter()
-                        .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
-                        .cloned()
-                        .collect();
-                    if !paths.is_empty() {
-                        let _ = self.broker_tx.send(BrokerCmd::Mt5Sync {
-                            sources: paths,
-                            enabled_timeframes: self.enabled_standard_sync_timeframes(),
-                        });
-                    }
-                }
-            }
-
             // Alpaca equity rotation — iterate Alpaca's full us_equity tradable
-            // universe (~11000 symbols) minus anything MT5 (Darwinex) already
-            // covers, plus a chart/watchlist floor that holds even before the
-            // asset-list fetch completes. MT5 is authoritative for its own
-            // symbols; Alpaca fills the gap (US stocks + ETFs Darwinex doesn't
-            // list). Runs 7 days/week — stocks don't trade on weekends but the
-            // historical backfill can still progress.
+            // universe (~11000 symbols), plus a chart/watchlist floor that holds
+            // even before the asset-list fetch completes. Runs 7 days/week —
+            // stocks don't trade on weekends but the historical backfill can
+            // still progress.
             if now_instant.duration_since(self.alpaca_rotation_last_sync)
                 >= self.market_data_sync_interval()
             {
@@ -11479,152 +11368,6 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
-            // MT5 live bid/ask refresh every ~30s — fast read of bid_ask table only (no bar sync).
-            // Updates forming bars on all charts with latest MT5 mid prices.
-            // Reads from /dev/shm ramdisk — sub-millisecond, safe on UI thread.
-            if now_instant.duration_since(self.mt5_quote_last_refresh)
-                >= std::time::Duration::from_secs(30)
-            {
-                self.mt5_quote_last_refresh = now_instant;
-                let paths: Vec<String> = self
-                    .mt5_db_paths
-                    .iter()
-                    .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
-                    .cloned()
-                    .collect();
-                if let Some(last_src) = paths.last() {
-                    let src_path = std::path::PathBuf::from(last_src);
-                    if let Ok(src) =
-                        typhoon_engine::core::cache::SqliteCache::open_readonly(&src_path)
-                    {
-                        if let Ok(quotes) = src.read_bid_ask() {
-                            // PERF: precompute `chart_bare` once per chart, rsplit-based.
-                            let chart_bares: Vec<String> = self
-                                .charts
-                                .iter()
-                                .map(|chart| {
-                                    let mut s = chart.symbol.replace('/', "");
-                                    s.make_ascii_uppercase();
-                                    let bare_opt = {
-                                        let mut it = s.rsplit(':');
-                                        let last = it.next().unwrap_or("");
-                                        let is_tf = matches!(
-                                            last,
-                                            "1MIN"
-                                                | "5MIN"
-                                                | "15MIN"
-                                                | "30MIN"
-                                                | "1HOUR"
-                                                | "4HOUR"
-                                                | "1DAY"
-                                                | "1WEEK"
-                                                | "1MONTH"
-                                        );
-                                        if is_tf {
-                                            Some(it.next().unwrap_or(last).to_string())
-                                        } else {
-                                            None
-                                        }
-                                    };
-                                    bare_opt.unwrap_or(s)
-                                })
-                                .collect();
-                            for (sym, bid, ask, _spread) in &quotes {
-                                let mid = (bid + ask) / 2.0;
-                                if mid <= 0.0 {
-                                    continue;
-                                }
-                                let sym_upper = sym.to_uppercase();
-                                for (ci, chart) in self.charts.iter_mut().enumerate() {
-                                    if chart_bares[ci] == sym_upper {
-                                        if let Some(bar) = chart.bars.last_mut() {
-                                            bar.close = mid;
-                                            if mid > bar.high {
-                                                bar.high = mid;
-                                            }
-                                            if mid < bar.low {
-                                                bar.low = mid;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Periodic MT5 bar sync — every ~30 seconds when auto-sync is enabled and
-            // at least one MT5 path is configured. Matches BarCacheWriter's 30s write
-            // cadence (UpdateIntervalSec=30) so the terminal never lags behind the EA.
-            // Idle repaint ≈ 250 ms → 120 frames ≈ 30 s.
-            if self.mt5_auto_sync
-                && now_instant.duration_since(self.mt5_auto_bar_last_sync)
-                    >= std::time::Duration::from_secs(30)
-            {
-                self.mt5_auto_bar_last_sync = now_instant;
-                let paths: Vec<String> = self
-                    .mt5_db_paths
-                    .iter()
-                    .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
-                    .cloned()
-                    .collect();
-                if !paths.is_empty() {
-                    let _ = self.broker_tx.send(BrokerCmd::Mt5Sync {
-                        sources: paths,
-                        enabled_timeframes: self.enabled_standard_sync_timeframes(),
-                    });
-                    // Silent — don't spam the log with auto-sync notifications
-                }
-            }
-
-            // Periodic MT5 self-heal — runs every ~30s regardless of
-            // mt5_auto_sync so gap detection + demand.txt refresh always
-            // happens even when users don't run full cache sync. Keeps
-            // every cached (sym, tf) fresh within 5×TF via pass-2
-            // self-healing. Offset by 30 frames (~7.5s) from the full
-            // sync trigger so the two passes don't collide on the same
-            // frame.
-            if now_instant.duration_since(self.mt5_self_heal_last)
-                >= std::time::Duration::from_secs(30)
-            {
-                self.mt5_self_heal_last = now_instant;
-                let has_mt5 = self
-                    .mt5_db_paths
-                    .iter()
-                    .any(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists());
-                if has_mt5 {
-                    self.detect_mt5_gaps();
-                    self.write_mt5_demand_txt();
-                }
-            }
-
-            // ~1Hz demand.txt refresh for fresh-tab-open latency. detect_mt5_gaps
-            // runs on the 30s cadence above; this flush propagates a newly-
-            // opened chart to the EA's demand list within ~1 second instead of
-            // waiting up to 30s for the next heartbeat. 4 frames ≈ 1 s (idle
-            // repaint ~250 ms). Content-hash dedup makes the no-op path free.
-            //
-            // Must pass `include_gap_requests=true` — a `false` flush writes
-            // demand.txt with the same pair set but a zeroed gap section, which
-            // silently clobbers the gap-fill rows the previous heartbeat
-            // staged. BCW reloads demand.txt only every 2 cycles (~60s), so at
-            // `false` the gap rows were overwritten within 1 s of being
-            // written and the EA never saw them — gap-fill was effectively a
-            // no-op. `mt5_gap_requests` is already cleared + rebuilt by
-            // `detect_mt5_gaps`; re-emitting the existing vector is free.
-            if now_instant.duration_since(self.mt5_demand_last_flush)
-                >= std::time::Duration::from_secs(1)
-            {
-                self.mt5_demand_last_flush = now_instant;
-                let has_mt5 = self
-                    .mt5_db_paths
-                    .iter()
-                    .any(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists());
-                if has_mt5 {
-                    self.flush_mt5_demand_txt(true);
-                }
-            }
         }
 
         // Repaint strategy:
