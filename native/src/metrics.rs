@@ -23,7 +23,7 @@ pub struct MetricsSnapshot {
     pub cache_symbols_total: f64,
     /// (symbol, timeframe, bar_count) triples.
     pub bars: Vec<(String, String, f64)>,
-    /// Unix timestamp of last MT5 sync.
+    /// Unix timestamp of last bar sync.
     pub sync_last_timestamp: f64,
     /// (broker_name, connected_bool_as_f64) pairs.
     pub broker_connected: Vec<(String, f64)>,
@@ -99,7 +99,7 @@ impl MetricsRegistry {
 
         let sync_ts = Gauge::new(
             "typhoon_sync_last_timestamp",
-            "Unix timestamp of last MT5 sync",
+            "Unix timestamp of last bar sync",
         )
         .map_err(|e| format!("sync_ts metric: {e}"))?;
 

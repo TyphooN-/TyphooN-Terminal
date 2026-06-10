@@ -91,7 +91,7 @@ pub(super) fn draw_chart(
     let bars = &chart.bars[start_idx..end_idx];
 
     if bars.is_empty() {
-        // Show the live bar-fetch path instead of pointing users at MT5-only tooling.
+        // Show the live bar-fetch path so users know data is on the way.
         let sym = chart.symbol.as_str();
         let line1 = format!("No data for {}", sym);
         let line2 = "Fetching bars from Kraken when available; chart refreshes after cache update"

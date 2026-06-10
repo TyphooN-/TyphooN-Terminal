@@ -911,7 +911,7 @@ impl eframe::App for TyphooNApp {
         }
 
         // ── deferred chart loading: non-blocking, paced attempts ──
-        // Uses try_load() which returns false if cache Mutex is contended (compaction, MT5 sync).
+        // Uses try_load() which returns false if cache Mutex is contended (compaction, broker sync).
         // Failed loads stay queued. The actual load is still expensive — cache read + GPU
         // indicators + MTF overlays — so pace restored MTF grids instead of burning
         // consecutive UI frames while broad sync/news/SEC/fundamentals are active.
@@ -9057,7 +9057,7 @@ impl eframe::App for TyphooNApp {
 
             if self.mtf_enabled {
                 // Filter to visible, supported MTF charts and group them by symbol. Each
-                // symbol gets its own MT5-style grid; M1/M5 are excluded at the helper.
+                // symbol gets its own multi-timeframe grid; M1/M5 are excluded at the helper.
                 while self.mtf_visible.len() < self.charts.len() {
                     self.mtf_visible.push(true);
                 }
@@ -9299,7 +9299,7 @@ impl eframe::App for TyphooNApp {
                 // Allocate the visual chart area as hover-only, then create separate
                 // interaction targets for the chart body and the price axis. A full-rect
                 // click/drag response steals the pointer before the narrow price scale can
-                // own it, which regressed TradingView/MT5-style scale dragging.
+                // own it, which regressed TradingView-style scale dragging.
                 let (rect, _chart_alloc_resp) = ui.allocate_exact_size(available.size(), egui::Sense::hover());
                 let price_axis_w = 70.0_f32;
                 let price_axis_rect = egui::Rect::from_min_max(

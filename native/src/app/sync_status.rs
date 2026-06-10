@@ -180,9 +180,7 @@ impl TyphooNApp {
                         ui.end_row();
                         for row in &rows {
                             let broker_color = match row.broker.as_str() {
-                                "MT5"           => egui::Color32::from_rgb(26, 188, 156),
                                 "Alpaca"        => egui::Color32::from_rgb(52, 152, 219),
-                                "Tastytrade"    => egui::Color32::from_rgb(170, 100, 220),
                                 "Kraken Spot" | "Kraken Equities" | "Kraken Futures" => egui::Color32::from_rgb(255, 130, 60),
                                 "Merged"        => egui::Color32::from_rgb(0, 220, 220),
                                 "Yahoo"         => egui::Color32::from_rgb(155, 89, 182),

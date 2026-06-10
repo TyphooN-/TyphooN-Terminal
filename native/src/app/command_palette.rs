@@ -495,7 +495,7 @@ impl TyphooNApp {
                         if let Some(ref cache) = self.cache {
                             let tf_label = chart.timeframe.cache_suffix();
                             let keys = [
-                                format!("mt5:{}:{}", sym, tf_label),
+                                format!("kraken:{}:{}", sym, tf_label),
                                 format!("alpaca:{}:{}", sym, tf_label),
                             ];
                             for key in &keys {
@@ -603,7 +603,7 @@ impl TyphooNApp {
             "AUTO_FIB" => self.show_auto_fib = !self.show_auto_fib,
             "SUPPLY_DEMAND" => self.show_supply_demand = !self.show_supply_demand,
             "NNFX" => {
-                // 1:1 MT5 TyphooN NNFX preset (clean reset + enable)
+                // TyphooN NNFX preset (clean reset + enable)
                 // Reset all (skip sma200/kama since they get enabled below)
                 self.show_sma100 = false;
                 self.show_ema21 = false;

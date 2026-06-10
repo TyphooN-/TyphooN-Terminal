@@ -132,7 +132,7 @@ impl TyphooNApp {
                                 }
                             }
                         } else if self.broker_connected {
-                            // Stocks/Forex/CFDs: use Alpaca (AlpacaFetchBars, with MT5 priority + full-history first fetch)
+                            // Stocks/Forex/CFDs: use Alpaca (AlpacaFetchBars, full-history first fetch)
                             for tf in &missing_tfs {
                                 if self.queue_alpaca_fetch(&sym, tf) {
                                     fetched_count += 1;

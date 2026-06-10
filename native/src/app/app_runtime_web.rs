@@ -38,10 +38,22 @@ impl TyphooNApp {
                         }
                     }
                     typhoon_web_protocol::WebCmd::GetBars { symbol, timeframe } => {
-                        // Read bars directly from cache and broadcast
+                        // Read bars directly from cache and broadcast. Try live
+                        // sources in priority order and serve the first hit.
                         if let Some(ref cache) = self.cache {
-                            let key = format!("mt5:{}:{}", symbol, timeframe);
-                            if let Ok(Some(data)) = cache.get_bars_raw(&key) {
+                            let mut data = None;
+                            for source in ["kraken", "kraken-futures", "kraken-equities", "alpaca", "default"] {
+                                for key in crate::app::chart::chart_source_cache_keys(source, &symbol, &timeframe) {
+                                    if let Ok(Some(rows)) = cache.get_bars_raw(&key) {
+                                        data = Some(rows);
+                                        break;
+                                    }
+                                }
+                                if data.is_some() {
+                                    break;
+                                }
+                            }
+                            if let Some(data) = data {
                                 let bars: Vec<typhoon_web_protocol::BarData> = data
                                     .iter()
                                     .map(|b| typhoon_web_protocol::BarData {
