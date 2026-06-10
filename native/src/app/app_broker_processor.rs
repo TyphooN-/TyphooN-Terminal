@@ -526,6 +526,8 @@ pub(super) fn spawn_broker_message_processor(
                     let _ = broker_msg_tx_clone.send(BrokerMsg::WatchlistQuotes(rows));
                 }
                 BrokerCmd::GetMarketClock => {
+                    // TODO: Prefer Alpaca's market clock when available for equities/xStocks
+                    // (Kraken equities are backed by Alpaca). Currently uses primary broker.
                     if let Some(ref b) = broker {
                         match b.get_market_clock().await {
                             Ok(v) => {
@@ -533,18 +535,13 @@ pub(super) fn spawn_broker_message_processor(
                                 let next_open = v["next_open"].as_str().unwrap_or("—");
                                 let next_close = v["next_close"].as_str().unwrap_or("—");
 
-                                // Session-aware label (pre-market / core / after-hours /
-                                // closed) instead of a binary OPEN/CLOSED. Alpaca's clock
-                                // `is_open` only flags the core session, so the old text read
-                                // "US equities CLOSED" all through pre-market; this overlays the
-                                // fixed ET session windows while keeping Alpaca's holiday and
-                                // half-day accuracy via is_open/next_open.
                                 let next_open_utc = chrono::DateTime::parse_from_rfc3339(next_open)
                                     .ok()
                                     .map(|dt| dt.with_timezone(&chrono::Utc));
                                 let next_close_utc = chrono::DateTime::parse_from_rfc3339(next_close)
                                     .ok()
                                     .map(|dt| dt.with_timezone(&chrono::Utc));
+
                                 let msg = crate::app::app_runtime_support::us_equities_session_status_at(
                                     chrono::Utc::now(),
                                     is_open,
