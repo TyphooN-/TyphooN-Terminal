@@ -1,7 +1,7 @@
 # ADR-097: Darwinex Zero USA Equity Universe
 
 ## Status
-Accepted
+Superseded (removed with Darwinex in ADR-111, 2026-06-10)
 
 ## Context
 We want to support viewing and analyzing Darwinex Zero tradable symbols inside TyphooN Terminal without relying on MT5 data sync.

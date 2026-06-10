@@ -1,6 +1,6 @@
 # ADR-111: Broker & Data-Source Scope Reduction — Kraken + Alpaca Only; Darwin/MT5/Tastytrade/CryptoCompare Deprecated to Branches
 
-**Status:** Accepted | **Date:** 2026-06-09
+**Status:** Implemented | **Date:** 2026-06-09 | **Updated:** 2026-06-10
 
 ## Context
 
@@ -51,16 +51,15 @@ We want to keep these integrations **recoverable** (they may return) without
    `journal_mode=DELETE` BCW-coexistence shims). Anything ambiguous between
    MT5-only and shared is **kept and flagged**, not guessed.
 
-## Status of the removal
+## Status of the removal (updated 2026-06-10)
 
-- **Tastytrade — DONE.** Functional removal merged to `master`; dead-code cleanup
-  (inert sync subsystem, fields, session persistence, settings UI, dead consts/
-  fns) completed; `cargo check --workspace` green, warning-free.
-- **Darwin/Darwinex + MT5 — IN PROGRESS** on `chore/rip-out-deprecated-brokers`
-  (staged, build-green per integration, never touching Kraken/Alpaca or the shared
-  cache). MT5 is done last because of the cache untangle.
-- **CryptoCompare — TO DO** (same path: `deprecated/cryptocompare` snapshot, then
-  remove the `cryptocompare:` data-source tier + backfill from the active code).
+- **All removals complete and merged to `master`**:
+  - Tastytrade, Darwinex/DARWIN, MT5/BarCacheWriter, CryptoCompare fully excised.
+  - `chore/rip-out-deprecated-brokers` branch deleted after merge (now redundant).
+  - `deprecated/*` snapshot branches preserved as restore points only.
+  - `cargo check --workspace` clean; no dead code paths remain in active tree.
+- **mql5-compiler** intentionally retained (language tool, not broker integration).
+- **thirtyfour** vendored WebDriver (Darwinex scraper) removed in follow-up cleanup.
 
 ## Consequences
 

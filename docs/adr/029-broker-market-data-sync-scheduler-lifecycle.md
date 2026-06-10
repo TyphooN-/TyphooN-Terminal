@@ -1,5 +1,8 @@
 # ADR-029: Broker market-data sync scheduler lifecycle
 
+> **Note (2026-06-10):** References to tastytrade in this document are historical.
+> After ADR-111 the active brokers are Kraken + Alpaca only.
+
 Status: Accepted
 Date: 2026-05-20
 

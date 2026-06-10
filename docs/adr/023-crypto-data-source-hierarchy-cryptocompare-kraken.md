@@ -1,7 +1,11 @@
 # ADR-023: Crypto Data Source Hierarchy — CryptoCompare + Kraken
 
-**Status:** Implemented
-**Date:** 2026-03-22 | **Updated:** 2026-05-04
+**Status:** Superseded | **Date:** 2026-03-22 | **Updated:** 2026-06-10
+
+> **Superseded by ADR-111 (2026-06-10).** CryptoCompare was fully removed from
+> the active codebase along with the other deprecated brokers. Kraken is now the
+> sole crypto data source for both Spot and historical needs. This document is
+> retained for historical record only.
 
 > 2026-05-01 update: CryptoCompare remains the deep-history extension for
 > crypto before or beyond exchange-listed history. Kraken Spot is now
