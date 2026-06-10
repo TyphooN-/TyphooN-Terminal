@@ -234,9 +234,13 @@ impl TyphooNApp {
                 let col_last = avail_w * 0.26;
                 let col_chg = avail_w * 0.42;
                 let col_pct = avail_w * 0.56;
-                // Hide Exts column during main trading session (CORE) to save space.
-                // For now we hide it by default during active trading (can be refined with proper session state).
-                let col_ext = 0.0; // Extended hours change% - hidden during CORE
+                // Show the Ext% column only when there is extended-hours data to
+                // show. During pre/after/overnight the broker populates
+                // ext_change_pct; during CORE every row resets to 0, so the
+                // column auto-hides and reclaims its space — matching the
+                // original "hide during CORE" intent without session plumbing.
+                let show_ext = sorted_wl.iter().any(|r| r.ext_change_pct.abs() > 0.001);
+                let col_ext = if show_ext { avail_w * 0.70 } else { 0.0 };
                 let col_vol = avail_w * 0.82;
                 let col_x = avail_w - 12.0;
                 let col_plus = avail_w - 28.0; // "+" button (open new chart)
@@ -286,13 +290,15 @@ impl TyphooNApp {
                     hdr_font.clone(),
                     hdr_col,
                 );
-                hp.text(
-                    egui::pos2(hdr_rect.left() + col_ext - 2.0, hy),
-                    egui::Align2::RIGHT_CENTER,
-                    &format!("Ext%{}", sort_arrow(5)),
-                    hdr_font.clone(),
-                    hdr_col,
-                );
+                if show_ext {
+                    hp.text(
+                        egui::pos2(hdr_rect.left() + col_ext - 2.0, hy),
+                        egui::Align2::RIGHT_CENTER,
+                        &format!("Ext%{}", sort_arrow(5)),
+                        hdr_font.clone(),
+                        hdr_col,
+                    );
+                }
                 hp.text(
                     egui::pos2(hdr_rect.left() + col_vol - 2.0, hy),
                     egui::Align2::RIGHT_CENTER,
@@ -310,6 +316,13 @@ impl TyphooNApp {
                             1
                         } else if rx < (col_chg + col_pct) * 0.5 {
                             2
+                        } else if !show_ext {
+                            // No Ext% column: Chg% | Vol split directly.
+                            if rx < (col_pct + col_vol) * 0.5 {
+                                3
+                            } else {
+                                4
+                            }
                         } else if rx < (col_pct + col_ext) * 0.5 {
                             3
                         } else if rx < (col_ext + col_vol) * 0.5 {
@@ -427,24 +440,27 @@ impl TyphooNApp {
                         disp_color,
                     );
 
-                    // Extended hours change % (right-aligned, colored, dimmed if zero)
-                    if wl.ext_change_pct.abs() > 0.001 {
-                        let ext_color = if wl.ext_change_pct >= 0.0 { UP } else { DOWN };
-                        rp.text(
-                            egui::pos2(rx + col_ext - 2.0, ry),
-                            egui::Align2::RIGHT_CENTER,
-                            &format!("{:+.2}%", wl.ext_change_pct),
-                            font.clone(),
-                            ext_color,
-                        );
-                    } else {
-                        rp.text(
-                            egui::pos2(rx + col_ext - 2.0, ry),
-                            egui::Align2::RIGHT_CENTER,
-                            "-",
-                            font.clone(),
-                            egui::Color32::from_rgb(60, 60, 70),
-                        );
+                    // Extended hours change % — only drawn when the Ext% column is
+                    // visible (extended session). Dimmed "-" for rows with no move.
+                    if show_ext {
+                        if wl.ext_change_pct.abs() > 0.001 {
+                            let ext_color = if wl.ext_change_pct >= 0.0 { UP } else { DOWN };
+                            rp.text(
+                                egui::pos2(rx + col_ext - 2.0, ry),
+                                egui::Align2::RIGHT_CENTER,
+                                &format!("{:+.2}%", wl.ext_change_pct),
+                                font.clone(),
+                                ext_color,
+                            );
+                        } else {
+                            rp.text(
+                                egui::pos2(rx + col_ext - 2.0, ry),
+                                egui::Align2::RIGHT_CENTER,
+                                "-",
+                                font.clone(),
+                                egui::Color32::from_rgb(60, 60, 70),
+                            );
+                        }
                     }
 
                     // Volume (right-aligned, dimmed)
