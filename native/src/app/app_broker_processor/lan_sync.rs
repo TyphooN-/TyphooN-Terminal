@@ -110,7 +110,7 @@ pub(super) async fn handle_lan_sync_command(
                             .await
                             .is_err();
                             // Trigger chart reload — bars may have been synced
-                            let _ = msg_tx.send(BrokerMsg::Mt5SyncDone(1));
+                            let _ = msg_tx.send(BrokerMsg::BarsSynced(1));
                             // Connection dropped or periodic resync — clear state and retry
                             {
                                 let mut guard = lan_remote.lock().await;

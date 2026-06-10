@@ -116,7 +116,6 @@ pub(super) fn spawn_broker_message_processor(
                     BrokerCmd::FundamentalsScrapeOne { .. } => Some("FUNDAMENTALS_ONE"),
                     BrokerCmd::KrakenBackfill { .. } => Some("KRAKEN_BACKFILL"),
                     BrokerCmd::KrakenFuturesBackfill { .. } => Some("KRAKEN_FUTURES_BACKFILL"),
-                    BrokerCmd::Mt5Sync { .. } => Some("MT5_SYNC"),
                     BrokerCmd::FinnhubNews { .. } => Some("FINNHUB_NEWS"),
                     BrokerCmd::FetchEconCalendar { .. } => Some("CALENDAR"),
                     BrokerCmd::FetchCongressTrades => Some("CONGRESS_TRADES"),
@@ -2382,7 +2381,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     );
                 }
                 BrokerCmd::NewsScrapeAll {
-                    use_mt5, use_alpaca, use_kraken,
+                    use_alpaca, use_kraken,
                     marketaux_key, alpha_vantage_key, fmp_key,
                     finnhub_key, cryptopanic_key,
                 } => {
@@ -2413,15 +2412,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                             // Gather enabled source-universe tickers from cache/brokers.
                             let mut all_tickers: std::collections::HashSet<String> = std::collections::HashSet::new();
                             all_tickers.extend(extra_tickers);
-                            if use_mt5 {
-                                if let Ok(conn) = cache.connection() {
-                                    if let Ok(mt5_tickers) = fundamentals::extract_stock_tickers_from_cache(&conn) {
-                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
-                                            format!("News scrape: {} MT5 tickers", mt5_tickers.len())));
-                                        all_tickers.extend(mt5_tickers);
-                                    }
-                                }
-                            }
                             if use_kraken {
                                 if let Ok(conn) = cache.connection() {
                                     match extract_news_symbols_from_market_data_cache(
@@ -3281,7 +3271,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                 }
                 BrokerCmd::FundamentalsScrape {
                     db_path: _,
-                    use_mt5,
                     use_alpaca,
                     use_kraken,
                     kraken_equity_symbols,
@@ -3336,17 +3325,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     let mut all_tickers: std::collections::HashSet<String> = std::collections::HashSet::new();
                                     // Add broker tickers gathered before thread spawn
                                     all_tickers.extend(extra_tickers);
-                                    if use_mt5 {
-                                        if let Ok(conn) = cache.connection() {
-                                            let _ = fundamentals::create_fundamentals_tables(&conn);
-                                            if let Ok(mt5_tickers) = fundamentals::extract_stock_tickers_from_cache(&conn) {
-                                                if !mt5_tickers.is_empty() {
-                                                    let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("MT5: {} stock tickers", mt5_tickers.len())));
-                                                }
-                                                all_tickers.extend(mt5_tickers);
-                                            }
-                                        }
-                                    }
                                     let mut tickers: Vec<String> = all_tickers.into_iter().collect();
                                     tickers.sort();
                                     if let Ok(conn) = cache.connection() {
@@ -3379,7 +3357,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                         let mut consecutive_fail = 0usize;
                                         for ticker in &tickers {
                                             // Acquire write lock per-ticker — release between iterations
-                                            // so other threads (BG, Mt5Sync, KV writes) aren't starved.
+                                            // so other threads (BG, LAN sync, KV writes) aren't starved.
                                             let skip = if force { false } else if let Ok(conn) = cache.connection() {
                                                 if let Ok(Some(existing)) = fundamentals::get_fundamentals(&conn, ticker) {
                                                     existing.last_updated >= cutoff
@@ -3557,7 +3535,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         });
                     });
                 }
-                BrokerCmd::ResearchScrape { use_mt5, use_alpaca, finnhub_key, fmp_key } => {
+                BrokerCmd::ResearchScrape { use_alpaca, finnhub_key, fmp_key } => {
                     let mut extra_tickers: Vec<String> = Vec::new();
                     if use_alpaca {
                         if let Some(ref b) = broker {
@@ -3579,13 +3557,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 Ok(cache) => {
                                     let mut all_tickers: std::collections::HashSet<String> = std::collections::HashSet::new();
                                     all_tickers.extend(extra_tickers);
-                                    if use_mt5 {
-                                        if let Ok(conn) = cache.connection() {
-                                            if let Ok(mt5_tickers) = fundamentals::extract_stock_tickers_from_cache(&conn) {
-                                                all_tickers.extend(mt5_tickers);
-                                            }
-                                        }
-                                    }
                                     let mut tickers: Vec<String> = all_tickers.into_iter().collect();
                                     tickers.sort();
                                     if let Ok(conn) = cache.connection() {
@@ -3631,521 +3602,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         importing_flag.clone(),
                         shared_cache_broker.clone(),
                     );
-                }
-                BrokerCmd::Mt5Sync {
-                    sources,
-                    enabled_timeframes,
-                } => {
-                    // In-flight guard. Auto-sync fires every 30 s; on a cold cache
-                    // a full pass can briefly exceed that (batch fsyncs + a large
-                    // source). Without this guard, the second tick spawns a second
-                    // thread that opens its own target connection and contests the
-                    // first sync's write batch — seen as SQLITE_BUSY waits up to
-                    // 10 s each. CAS false→true lets exactly one sync run; the
-                    // overlapping trigger silently drops, the next 30 s tick tries
-                    // again.
-                    static MT5_SYNC_IN_FLIGHT: std::sync::atomic::AtomicBool =
-                        std::sync::atomic::AtomicBool::new(false);
-                    if MT5_SYNC_IN_FLIGHT
-                        .compare_exchange(
-                            false,
-                            true,
-                            std::sync::atomic::Ordering::AcqRel,
-                            std::sync::atomic::Ordering::Acquire,
-                        )
-                        .is_err()
-                    {
-                        tracing::debug!("Mt5Sync: previous pass still running, skipping trigger");
-                        continue;
-                    }
-
-                    // ── O(1) incremental-sync state ──────────────────────────
-                    // Persists target_meta across cycles so the full
-                    // target-side detailed_stats scan only runs on cold
-                    // start. Per-source last_sync_ts lets each source-side
-                    // read become get_cache_meta_since(last_ts − 120s)
-                    // instead of a full-table scan — steady-state work is
-                    // O(delta), not O(total_keys × N_sources).
-                    struct Mt5SyncState {
-                        target_meta: std::collections::HashMap<String, (i64, i64)>,
-                        last_sync_ts_per_source: std::collections::HashMap<String, i64>,
-                        target_warm: bool,
-                    }
-                    static MT5_SYNC_STATE: std::sync::OnceLock<std::sync::Mutex<Mt5SyncState>> =
-                        std::sync::OnceLock::new();
-
-                    // Open a SEPARATE connection for the target — NOT the shared Arc.
-                    // Using the shared Arc caused Rust Mutex contention: Mt5Sync's tight
-                    // put_raw_blob loop starved try_lock callers (UI try_load, bg detailed_stats),
-                    // causing "Cache busy" and empty Storage Manager.
-                    //
-                    // Dedup sources by canonical path so a shared-/dev/shm topology
-                    // (N MT5 prefixes symlink to one tmpfs DB) doesn't read the same
-                    // DB N times per cycle. Falls back to the original path if
-                    // canonicalize fails (path doesn't exist / broken symlink).
-                    let sources: Vec<String> = {
-                        let mut seen: std::collections::HashSet<std::path::PathBuf> =
-                            std::collections::HashSet::new();
-                        let mut out: Vec<String> = Vec::with_capacity(sources.len());
-                        for s in sources {
-                            let canon = std::fs::canonicalize(&s)
-                                .unwrap_or_else(|_| std::path::PathBuf::from(&s));
-                            if seen.insert(canon) {
-                                out.push(s);
-                            }
-                        }
-                        out
-                    };
-                    let msg_tx = broker_msg_tx_clone.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let enabled_timeframes: std::collections::HashSet<String> =
-                            enabled_timeframes
-                                .into_iter()
-                                .filter_map(|tf| normalize_sync_timeframe_key(&tf))
-                                .map(str::to_string)
-                                .collect();
-                        // RAII guard: releases MT5_SYNC_IN_FLIGHT on every exit path
-                        // — early returns on target-open failure, unexpected panics,
-                        // and the normal happy path. Without this, a single target
-                        // open failure (or a thread panic anywhere below) would leak
-                        // the flag and silently disable all future Mt5Sync cycles
-                        // until the terminal restarts.
-                        struct Mt5SyncGuard;
-                        impl Drop for Mt5SyncGuard {
-                            fn drop(&mut self) {
-                                MT5_SYNC_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Release);
-                            }
-                        }
-                        let _mt5_sync_guard = Mt5SyncGuard;
-
-                        // Filter missing sources up front so `last_src_idx` points at an
-                        // actually-existing source and the "N sources" log line reports
-                        // the real count being processed. Upstream callers already filter
-                        // by .exists(), but a stale path slipping through used to make
-                        // last_src_idx reference an entry that the loop would then skip —
-                        // silently starving the bid/ask harvest of its one scheduled read.
-                        // Filter BEFORE opening the target cache so an all-missing source
-                        // list short-circuits before paying for the SQLite open +
-                        // detailed_stats scan (rare but wastes ~50 ms on a warm 10K-key DB).
-                        let sources: Vec<String> = sources.into_iter()
-                            .filter(|p| {
-                                if std::path::Path::new(p).exists() { return true; }
-                                tracing::debug!("Mt5Sync: skipping missing source {}", p);
-                                false
-                            })
-                            .collect();
-                        if sources.is_empty() {
-                            tracing::debug!("Mt5Sync: no source paths exist — skipping");
-                            return;
-                        }
-
-                        let target_path = cache_db_path();
-                        let target_cache = match typhoon_engine::core::cache::SqliteCache::open(&target_path) {
-                            Ok(c) => c,
-                            Err(e) => {
-                                let _ = msg_tx.send(BrokerMsg::Error(format!("MT5 sync: cannot open target cache: {e}")));
-                                return;
-                            }
-                        };
-
-                        // Acquire incremental-sync state. Cold-start rebuilds
-                        // target_meta once via detailed_stats; every subsequent
-                        // pass reuses the persisted map (mutated in-place after
-                        // each successful batch commit). Mutex poisoning is
-                        // recovered silently — a prior panic would have left
-                        // target_meta in a consistent-enough state that re-use
-                        // is safer than a forced rebuild on every pass.
-                        let state_cell = MT5_SYNC_STATE.get_or_init(|| {
-                            std::sync::Mutex::new(Mt5SyncState {
-                                target_meta: std::collections::HashMap::new(),
-                                last_sync_ts_per_source: std::collections::HashMap::new(),
-                                target_warm: false,
-                            })
-                        });
-                        let mut state = match state_cell.lock() {
-                            Ok(g) => g,
-                            Err(p) => p.into_inner(),
-                        };
-                        if !state.target_warm {
-                            state.target_meta = target_cache.detailed_stats()
-                                .unwrap_or_default()
-                                .into_iter()
-                                .map(|(k, count, ts)| (k, (count, ts)))
-                                .collect();
-                            state.target_warm = true;
-                        }
-
-                        let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                            "MT5 sync: {} sources → main cache ({} existing keys)",
-                            sources.len(), state.target_meta.len()
-                        )));
-
-                        let mut total_keys = 0usize;
-                        let mut updated = 0usize;
-                        let mut skipped_unchanged = 0usize;
-                        let mut new_keys = 0usize;
-                        let mut read_errors_total = 0usize;
-                        let mut heartbeats: Vec<(String, String, i64)> = Vec::new();
-
-                        // bid_ask is read from the *last* source (BarCacheWriter writes
-                        // the live quote table there every tick). We fold that read into
-                        // the main iteration instead of reopening the DB afterwards, so
-                        // the sync pass does one open per source total — not two for the
-                        // tail.
-                        let last_src_idx = sources.len().saturating_sub(1);
-                        let mut live_quotes: Vec<(String, f64, f64)> = Vec::new();
-                        // Per-source merged-key accumulator for post-sync cleanup.
-                        // Populated only on successful put_raw_blobs commit so a
-                        // mid-pass commit failure never causes source-side deletes
-                        // of data the target didn't receive. Each tuple is
-                        // (key, src_ts_at_read) — the ts guards the delete
-                        // against BCW races: if BCW rewrote the row between our
-                        // read and our delete, its new ts won't match ours and
-                        // the row stays for the next sync pass.
-                        let mut merged_keys_per_source: Vec<(String, Vec<(String, i64)>)> =
-                            Vec::with_capacity(sources.len());
-                        for (src_idx, src_path) in sources.iter().enumerate() {
-                            let src = std::path::PathBuf::from(src_path);
-                            // Stable per-source key for last_sync_ts_per_source. Canonicalize
-                            // so /dev/shm symlinks and relative paths collapse to the same
-                            // cursor entry; fall back to the raw string if canonicalize fails
-                            // (source removed mid-pass).
-                            let canon_key = std::fs::canonicalize(&src)
-                                .map(|p| p.to_string_lossy().into_owned())
-                                .unwrap_or_else(|_| src_path.clone());
-                            match typhoon_engine::core::cache::SqliteCache::open_readonly(&src) {
-                                Ok(src_cache) => {
-                                    // Collect heartbeat first so UI can show staleness even
-                                    // when the rest of the sync pass is a no-op. Log both
-                                    // Ok(None) (no heartbeat row — BCW not writing) and
-                                    // Err(_) (SQLite read failure) so "no heartbeat yet"
-                                    // stuck in the UI is diagnosable from the log rather
-                                    // than requiring a live SQLite poke at the source DB.
-                                    match src_cache.read_mt5_heartbeat("") {
-                                        Ok(Some((json, ts))) => {
-                                            heartbeats.push((src_path.clone(), json, ts));
-                                        }
-                                        Ok(None) => {
-                                            tracing::info!(
-                                                "Mt5Sync: no heartbeat row in {} (BCW has not written one yet — is the EA attached + running?)",
-                                                src_path
-                                            );
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "Mt5Sync: heartbeat read failed for {}: {}",
-                                                src_path, e
-                                            );
-                                        }
-                                    }
-                                    // O(delta) source read. Cursor is the max src_ts we
-                                    // successfully committed on the previous pass for this
-                                    // canonical source path. A 120s overlap covers host↔Wine
-                                    // clock skew plus BCW writes whose timestamp lands a few
-                                    // seconds below the max we already saw. Overlap cost is
-                                    // bounded by BCW write rate × 120s — at BatchSize=10 and
-                                    // 30s cycle that's ≤ 40 keys per pass, negligible versus
-                                    // the full-scan baseline of all cached keys.
-                                    //
-                                    // Cold source (last_seen_ts == 0) still uses the same
-                                    // path: get_cache_meta_since(-120) returns every row
-                                    // because timestamp > -120 holds for all BCW writes.
-                                    let last_seen_ts = state
-                                        .last_sync_ts_per_source
-                                        .get(&canon_key)
-                                        .copied()
-                                        .unwrap_or(0);
-                                    let cutoff = last_seen_ts.saturating_sub(120);
-                                    // get_cache_meta_since returns (key, ts, count). Re-map
-                                    // to (key, count, ts) so the downstream loop signature
-                                    // matches the original detailed_stats shape.
-                                    let src_stats: Vec<(String, i64, i64)> = src_cache
-                                        .get_cache_meta_since(cutoff)
-                                        .unwrap_or_default()
-                                        .into_iter()
-                                        .map(|(k, ts, count)| (k, count, ts))
-                                        .collect();
-                                    total_keys += src_stats.len();
-                                    // Diagnostic: when the delta query returns 0 rows, it's
-                                    // ambiguous whether the source is actually empty or the
-                                    // cursor has drifted ahead of BCW's writes. Surface the
-                                    // canonical path, last cursor value, and total bar_cache
-                                    // row count so we can tell the two cases apart from the
-                                    // log alone without instrumenting further.
-                                    if src_stats.is_empty() {
-                                        let total_rows = src_cache.stats()
-                                            .map(|(b, _, _)| b).unwrap_or(-1);
-                                        let file_bytes = std::fs::metadata(&src)
-                                            .map(|m| m.len() as i64).unwrap_or(-1);
-                                        tracing::info!(
-                                            "Mt5Sync: {} — 0 delta rows (cursor={}, cutoff={}, total_bar_cache_rows={}, file_bytes={})",
-                                            canon_key, last_seen_ts, cutoff, total_rows, file_bytes
-                                        );
-                                    }
-                                    let mut src_updated = 0usize;
-                                    let mut src_skipped = 0usize;
-                                    let mut src_new = 0usize;
-                                    let mut src_errors = 0usize;
-
-                                    // Track the max src_ts seen during this pass. Advanced
-                                    // into state.last_sync_ts_per_source[canon_key] only
-                                    // after a successful batch commit — if commit fails,
-                                    // the cursor stays where it was so the next pass will
-                                    // re-read the same delta.
-                                    let mut max_src_ts_this_pass = last_seen_ts;
-
-                                    // Collect writes for this source into a batch that's
-                                    // flushed in one transaction at the end — amortises the
-                                    // SQLite commit cost across 900+ keys instead of paying
-                                    // fsync per put_raw_blob.
-                                    let mut pending: Vec<(String, Vec<u8>, i64, i64)> =
-                                        Vec::with_capacity(src_stats.len());
-                                    // Target-meta updates are deferred alongside `pending`
-                                    // and applied as a batch only after put_raw_blobs
-                                    // succeeds. Prevents target_meta from drifting ahead of
-                                    // disk state on a failed commit (which would cause the
-                                    // next pass to skip those keys as "already up to date").
-                                    let mut pending_meta_updates: Vec<(String, i64, i64)> =
-                                        Vec::with_capacity(src_stats.len());
-
-                                    for (key, src_count, src_ts) in &src_stats {
-                                        if *src_ts > max_src_ts_this_pass {
-                                            max_src_ts_this_pass = *src_ts;
-                                        }
-                                        // Metadata keys — BarCacheWriter writes them under
-                                        // the `mt5:__<NAME>__[:…]` convention (SYMBOLS list,
-                                        // SPECS snapshots, SERVER info, HEARTBEAT). All share
-                                        // the `mt5:__` prefix so a single starts_with catches
-                                        // the full set without fragile substring probes. Skip
-                                        // the read+write when target already has the same or
-                                        // newer timestamp — these rarely change.
-                                        let is_metadata = key.starts_with("mt5:__");
-                                        if is_metadata {
-                                            if let Some(&(_, target_ts)) = state.target_meta.get(key) {
-                                                if *src_ts <= target_ts { continue; }
-                                            }
-                                            if let Ok(Some((blob, ts, count))) = src_cache.get_raw_blob(key) {
-                                                pending.push((key.clone(), blob, ts, count));
-                                                pending_meta_updates.push((key.clone(), count, ts));
-                                            }
-                                            continue;
-                                        }
-                                        let Some(tf_suffix) = key.rsplit(':').next() else {
-                                            continue;
-                                        };
-                                        if !enabled_timeframes.contains(tf_suffix) {
-                                            continue;
-                                        }
-
-                                        // Compare with target
-                                        if let Some(&(target_count, target_ts)) = state.target_meta.get(key) {
-                                            // Skip if source has same or fewer bars AND same timestamp
-                                            if *src_count <= target_count && *src_ts <= target_ts {
-                                                src_skipped += 1;
-                                                continue;
-                                            }
-                                            // Note: regression check removed. BarCacheWriter caps at 10K bars per key,
-                                            // but the terminal cache may have 100K+ from previous full exports.
-                                            // Accept source data if it has newer timestamps — recent bars matter more
-                                            // than historical depth for live trading.
-                                        } else {
-                                            src_new += 1;
-                                        }
-
-                                        // Sync: source has more/newer data. Stage blob +
-                                        // meta update in pending batch. state.target_meta
-                                        // is updated after put_raw_blobs succeeds, so a
-                                        // second source in the same pass that carries the
-                                        // same key will re-read it via the pre-commit
-                                        // snapshot — intentional, it guarantees we always
-                                        // keep whichever source has the highest src_ts.
-                                        match src_cache.get_raw_blob(key) {
-                                            Ok(Some((blob, ts, count))) => {
-                                                pending.push((key.clone(), blob, ts, count));
-                                                pending_meta_updates.push((key.clone(), count, ts));
-                                                src_updated += 1;
-                                            }
-                                            Ok(None) => {}
-                                            Err(_) => { src_errors += 1; }
-                                        }
-                                    }
-
-                                    // Atomic-from-memory commit: put_raw_blobs + meta
-                                    // updates + cursor advance all succeed together, or
-                                    // none of them do. On failure the cursor does NOT
-                                    // advance, and target_meta stays in sync with disk.
-                                    let mut merged_this_source: Vec<(String, i64)> =
-                                        Vec::with_capacity(pending.len());
-                                    if !pending.is_empty() {
-                                        match target_cache.put_raw_blobs(&pending) {
-                                            Ok(_) => {
-                                                for (k, count, ts) in pending_meta_updates.drain(..) {
-                                                    state.target_meta.insert(k.clone(), (count, ts));
-                                                    merged_this_source.push((k, ts));
-                                                }
-                                                state.last_sync_ts_per_source
-                                                    .insert(canon_key.clone(), max_src_ts_this_pass);
-                                            }
-                                            Err(e) => {
-                                                src_errors = src_errors.saturating_add(pending.len());
-                                                tracing::warn!("Mt5Sync: batch commit failed: {e}");
-                                            }
-                                        }
-                                    } else {
-                                        // No writes this pass — we successfully scanned the
-                                        // delta and found nothing to copy. Safe to advance
-                                        // the cursor so the next pass reads a tighter delta.
-                                        state.last_sync_ts_per_source
-                                            .insert(canon_key.clone(), max_src_ts_this_pass);
-                                    }
-                                    merged_keys_per_source.push((src_path.clone(), merged_this_source));
-
-                                    // Harvest bid/ask on the last source so the outer-loop
-                                    // post-processing doesn't have to reopen the DB.
-                                    if src_idx == last_src_idx {
-                                        if let Ok(quotes) = src_cache.read_bid_ask() {
-                                            live_quotes = quotes.into_iter()
-                                                .map(|(sym, bid, ask, _spread)| (sym, bid, ask))
-                                                .collect();
-                                        }
-                                    }
-
-                                    let src_name = src.file_name().unwrap_or_default().to_string_lossy();
-                                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                                        "  {} — {} new, {} updated, {} unchanged, {} errors",
-                                        src_name, src_new, src_updated, src_skipped, src_errors
-                                    )));
-
-                                    updated += src_updated;
-                                    skipped_unchanged += src_skipped;
-                                    new_keys += src_new;
-                                    read_errors_total += src_errors;
-                                }
-                                Err(e) => {
-                                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                                        "  Skipping {} — locked by BarCacheWriter (will retry next cycle)",
-                                        src.file_name().unwrap_or_default().to_string_lossy()
-                                    )));
-                                    tracing::debug!("Mt5Sync: cannot open {}: {e}", src.display());
-                                }
-                            }
-                        }
-                        let changed = new_keys + updated;
-                        let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                            "MT5 sync: {} new + {} updated ({} unchanged, {} errors) from {} keys",
-                            new_keys, updated, skipped_unchanged, read_errors_total, total_keys
-                        )));
-
-                        // ── Post-merge source cleanup ──────────────────────────
-                        // After every source's delta has been merged into the
-                        // target, reopen the source in RW mode and DELETE the
-                        // exact keys we just copied over. VACUUM follows so
-                        // tmpfs pages are released back to /dev/shm rather than
-                        // sitting on SQLite's freelist — BCW doesn't configure
-                        // auto_vacuum so the freelist never self-reclaims.
-                        //
-                        // Safety: the target is authoritative. When BCW's next
-                        // rotation hits one of these (sym, TF) pairs, its
-                        // `INSERT OR REPLACE` re-creates the row from fresh
-                        // CopyRates output — bar_track is untouched so BCW's
-                        // in-EA last-bar-time tracking survives. If BCW is
-                        // still mid-write on this pair, busy_timeout=10 s
-                        // from open_source_rw waits it out rather than
-                        // clobbering or skipping. Metadata keys (mt5:__…)
-                        // are filtered out of the DELETE inside SQLite — BCW
-                        // regenerates them every cycle but we keep the row
-                        // so ShouldEnterInitialBurst (which counts bar_cache
-                        // rows on EA attach) doesn't false-positive into burst
-                        // mode on every terminal restart.
-                        let mut cleanup_total_deleted = 0u64;
-                        let mut cleanup_total_freed_bytes: u64 = 0;
-                        for (src_path, merged_keys) in merged_keys_per_source.drain(..) {
-                            if merged_keys.is_empty() { continue; }
-                            let src = std::path::PathBuf::from(&src_path);
-                            let src_name = src.file_name().unwrap_or_default()
-                                .to_string_lossy().into_owned();
-                            match typhoon_engine::core::cache::SqliteCache::open_source_rw(&src) {
-                                Ok(rw) => {
-                                    let size_before = std::fs::metadata(&src)
-                                        .map(|m| m.len()).unwrap_or(0);
-                                    match rw.delete_bar_keys(&merged_keys) {
-                                        Ok(n) if n > 0 => {
-                                            if let Err(e) = rw.vacuum_source() {
-                                                tracing::debug!(
-                                                    "Mt5Sync cleanup: VACUUM {} failed: {e}",
-                                                    src.display()
-                                                );
-                                            }
-                                            let size_after = std::fs::metadata(&src)
-                                                .map(|m| m.len()).unwrap_or(0);
-                                            let freed = size_before.saturating_sub(size_after);
-                                            cleanup_total_deleted += n;
-                                            cleanup_total_freed_bytes += freed;
-                                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                                                "  cleanup {} — {} keys purged, {:.1} MiB freed",
-                                                src_name, n,
-                                                freed as f64 / (1024.0 * 1024.0)
-                                            )));
-                                        }
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            tracing::debug!(
-                                                "Mt5Sync cleanup: delete_bar_keys {} failed: {e}",
-                                                src.display()
-                                            );
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::debug!(
-                                        "Mt5Sync cleanup: cannot open {} RW (busy): {e}",
-                                        src.display()
-                                    );
-                                }
-                            }
-                        }
-                        if cleanup_total_deleted > 0 {
-                            tracing::info!(
-                                "Mt5Sync cleanup: purged {} merged keys from /dev/shm sources, freed {:.1} MiB",
-                                cleanup_total_deleted,
-                                cleanup_total_freed_bytes as f64 / (1024.0 * 1024.0)
-                            );
-                        }
-                        // Mirror the summary to tracing so it shows up in the terminal's
-                        // stdout log — OrderResult only flows to the in-app Log panel,
-                        // which made MT5 sync activity invisible to anyone tailing stdout.
-                        tracing::info!(
-                            "Mt5Sync: {} new + {} updated ({} unchanged, {} errors) from {} keys across {} source(s)",
-                            new_keys, updated, skipped_unchanged, read_errors_total, total_keys, sources.len()
-                        );
-                        // Forward heartbeats to UI so the staleness banner always reflects
-                        // the freshest reading, regardless of whether any keys were copied.
-                        // Log when no heartbeats were collected so "no heartbeat yet" in
-                        // the UI is traceable to a concrete cause (the per-source branches
-                        // above already log their individual None/Err outcomes).
-                        if heartbeats.is_empty() {
-                            tracing::info!(
-                                "Mt5Sync: no heartbeats collected from {} source(s) — UI will show 'no heartbeat yet' until BCW writes one",
-                                sources.len()
-                            );
-                        } else {
-                            let _ = msg_tx.send(BrokerMsg::Mt5Heartbeat(heartbeats));
-                        }
-                        // Signal chart reload if any data changed
-                        if changed > 0 {
-                            let _ = msg_tx.send(BrokerMsg::Mt5SyncDone(changed));
-                        }
-                        // Live bid/ask was harvested inline during the last source's
-                        // pass above (bid_ask table written by BarCacheWriter every
-                        // tick). Sending it here keeps the send ordering identical to
-                        // the prior pattern while avoiding a redundant SQLite open.
-                        if !live_quotes.is_empty() {
-                            let _ = msg_tx.send(BrokerMsg::Mt5LiveQuotes(live_quotes));
-                        }
-                        // In-flight flag release is handled by Mt5SyncGuard's Drop
-                        // on every exit path (normal completion, early return, and
-                        // panic unwind).
-                    });
                 }
                 BrokerCmd::AlpacaFetchBars { symbol, timeframe, db_path: _, backfill_complete } => {
                     if let Some(ref b) = broker {
@@ -4238,7 +3694,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                         let _ = cache.put_bars(&key, &json);
                                         let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
                                             "BARDATA: {} {} — {} bars stored", symbol, timeframe, count)));
-                                        let _ = broker_msg_tx_clone.send(BrokerMsg::Mt5SyncDone(count));
+                                        let _ = broker_msg_tx_clone.send(BrokerMsg::BarsSynced(count));
                                     }
                                 }
                                 match outcome {

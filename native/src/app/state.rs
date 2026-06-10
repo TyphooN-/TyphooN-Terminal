@@ -2922,16 +2922,9 @@ pub(crate) enum BrokerMsg {
     AllAssets(Vec<(String, String, String)>),
     /// Structured fills for chart overlay (symbol, side, qty, price, time).
     RecentFills(Vec<(String, String, f64, f64, String)>),
-    /// MT5 sync completed with N keys updated — trigger chart reloads.
-    Mt5SyncDone(usize),
-    /// Live bid/ask from MT5 BarCacheWriter — update forming bars.
-    Mt5LiveQuotes(Vec<(String, f64, f64)>), // (symbol, bid, ask)
-    /// MT5 BarCacheWriter heartbeat snapshot — one per configured source.
-    /// Payload: (source_path, json_body, row_ts_seconds). `json_body` is the
-    /// raw JSON the EA wrote (see BarCacheWriter v1.447+). `row_ts_seconds`
-    /// is the SQLite timestamp column set by the EA at write time. Terminal
-    /// diffs this against current time to show a staleness banner.
-    Mt5Heartbeat(Vec<(String, String, i64)>),
+    /// Bar sync completed with N keys updated — trigger chart reloads.
+    /// Emitted by LAN sync and bulk Alpaca fetches after new bars land.
+    BarsSynced(usize),
     /// Crypto Top 50 from CoinGecko (name, price, 24h%, market_cap).
     CryptoTop50(Vec<(String, f64, f64, f64)>),
     /// Kraken account balances (asset, balance).

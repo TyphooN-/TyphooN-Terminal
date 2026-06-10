@@ -1370,8 +1370,8 @@ impl eframe::App for TyphooNApp {
                         c.cached_trade_overlay_frame = 0;
                     }
                 }
-                BrokerMsg::Mt5SyncDone(changed) => {
-                    // Reload all visible charts to pick up forming bar updates
+                BrokerMsg::BarsSynced(changed) => {
+                    // Reload all visible charts to pick up newly-synced bars
                     if changed > 0 {
                         if self.mtf_enabled {
                             for i in 0..self.charts.len() {
@@ -1381,95 +1381,6 @@ impl eframe::App for TyphooNApp {
                             self.queue_chart_reload(self.active_tab);
                         }
                     }
-                }
-                BrokerMsg::Mt5LiveQuotes(quotes) => {
-                    // Update forming bar (last bar) on all charts from MT5 live bid/ask.
-                    // O(1) per quote: pre-build symbol→chart-indices map to avoid O(quotes×charts).
-                    // rsplit instead of split+Vec to avoid the intermediate Vec<&str> per chart.
-                    let mut sym_to_charts: std::collections::HashMap<String, Vec<usize>> =
-                        std::collections::HashMap::with_capacity(self.charts.len());
-                    for (ci, chart) in self.charts.iter().enumerate() {
-                        let mut s = chart.symbol.replace('/', "");
-                        s.make_ascii_uppercase();
-                        let bare = {
-                            let mut it = s.rsplit(':');
-                            let last = it.next().unwrap_or("");
-                            let is_tf = matches!(
-                                last,
-                                "1MIN"
-                                    | "5MIN"
-                                    | "15MIN"
-                                    | "30MIN"
-                                    | "1HOUR"
-                                    | "4HOUR"
-                                    | "1DAY"
-                                    | "1WEEK"
-                                    | "1MONTH"
-                            );
-                            if is_tf {
-                                it.next().unwrap_or(last).to_string()
-                            } else {
-                                s.clone()
-                            }
-                        };
-                        sym_to_charts.entry(bare).or_default().push(ci);
-                    }
-                    // Re-use one upper-cased buffer across quotes instead of allocating a
-                    // fresh `sym.to_uppercase()` String per quote. With high-frequency MT5
-                    // feeds this saves an allocation per quote per tick.
-                    let mut sym_upper_buf = String::with_capacity(32);
-                    for (sym, bid, ask) in &quotes {
-                        let mid = (bid + ask) / 2.0;
-                        if mid <= 0.0 {
-                            continue;
-                        }
-                        sym_upper_buf.clear();
-                        sym_upper_buf.push_str(sym);
-                        sym_upper_buf.make_ascii_uppercase();
-                        if let Some(indices) = sym_to_charts.get(sym_upper_buf.as_str()) {
-                            for &ci in indices {
-                                if let Some(bar) = self.charts[ci].bars.last_mut() {
-                                    bar.close = mid;
-                                    if mid > bar.high {
-                                        bar.high = mid;
-                                    }
-                                    if mid < bar.low {
-                                        bar.low = mid;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                BrokerMsg::Mt5Heartbeat(beats) => {
-                    // Merge incoming heartbeats into app state. Each source is keyed
-                    // by its DB path; the freshest row wins. `received_at` is stamped
-                    // locally so the staleness display works even if the EA clock and
-                    // our clock disagree.
-                    let now = chrono::Utc::now().timestamp();
-                    for (path, json, row_ts) in beats {
-                        let entry = self.mt5_heartbeats.iter_mut().find(|h| h.0 == path);
-                        match entry {
-                            Some(e) => {
-                                e.1 = json;
-                                e.2 = row_ts;
-                                e.3 = now;
-                            }
-                            None => {
-                                self.mt5_heartbeats.push((path, json, row_ts, now));
-                            }
-                        }
-                    }
-                    // Writer is alive — run gap detection against current charts
-                    // and always re-emit demand.txt. Previously we only wrote
-                    // when gaps were pending or burst was active, which meant
-                    // a newly-opened chart tab for an already-fresh symbol
-                    // never propagated to the EA's demand list → rotation
-                    // didn't prioritise it. Rewriting every heartbeat is cheap
-                    // (~1KB to /dev/shm) and guarantees the EA sees the
-                    // current (sym, tf) set within one demand-refresh cycle.
-                    self.detect_mt5_gaps();
-                    self.write_mt5_demand_txt();
                 }
                 BrokerMsg::KrakenPositions(mut pos) => {
                     if !self.kraken_enabled {
