@@ -497,7 +497,16 @@ pub(super) fn select_alpaca_sync_workset(
         .first()
         .is_some_and(|candidate| candidate.bucket == AlpacaSyncBucket::Missing)
     {
-        for candidate in coverage {
+        // Still apply tier + TF ordering even in coverage-first mode
+        let mtf_grid: HashSet<String> = focus_symbols.iter().cloned().collect();
+        let ordered_coverage = sort_candidates_by_priority_then_timeframe(
+            coverage,
+            &mtf_grid,
+            focus_symbols,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        for candidate in ordered_coverage {
             if staged_pending.insert(alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)) {
                 selected.push(candidate);
                 if selected.len() >= batch_size {
