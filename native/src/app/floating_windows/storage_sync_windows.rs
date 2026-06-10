@@ -304,7 +304,6 @@ impl TyphooNApp {
                                     let broker_label = |prefix: &str| match prefix {
                                         "alpaca" => "Alpaca",
                                         "tastytrade" => "Tastytrade",
-                                        "mt5" => "MT5",
                                         _ => "Broker",
                                     };
                                     ui.label(
@@ -359,7 +358,7 @@ impl TyphooNApp {
                                             self.storage_purge_broker_confirm = None;
                                         }
                                     } else {
-                                        for prefix in ["alpaca", "tastytrade", "mt5"] {
+                                        for prefix in ["alpaca", "tastytrade"] {
                                             if ui
                                                 .button(
                                                     egui::RichText::new(broker_label(prefix))
@@ -749,10 +748,9 @@ impl TyphooNApp {
         // Sync Status — per-(broker,TF) bar-sync health table, computed
         // from the BG bar_ts_cache on render (cheap: a few thousand keys
         // bucketed into ≤45 rows). Universe is every (symbol, TF) pair
-        // the cache has ever seen for MT5 / Alpaca / Tastytrade /
-        // Kraken; the three trader-facing brokers always
-        // get a row even when their cache slice is empty, so "0%
-        // Tastytrade" is visible before the first bar sync lands.
+        // the cache has ever seen for Alpaca / Kraken; the trader-facing
+        // brokers always get a row even when their cache slice is empty,
+        // so "0% Kraken" is visible before the first bar sync lands.
         self.render_sync_status_window(ctx);
 
         // LAN Sync
@@ -852,7 +850,7 @@ impl TyphooNApp {
                                 // ── Active connection — show stats + stop button ──
                                 ui.add_space(4.0);
                                 if self.lan_sync_mode == "server" {
-                                    ui.label(egui::RichText::new("Serving to LAN clients: MT5 bars, Alpaca positions/orders, crypto backfill, fundamentals, SEC filings, news, FRED data.").color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new("Serving to LAN clients: Kraken + Alpaca bars, positions/orders, crypto backfill, fundamentals, SEC filings, news, FRED data.").color(AXIS_TEXT).small());
                                     ui.label(egui::RichText::new("Clients connect using this machine's IP address.").color(AXIS_TEXT).small());
                                     // Connected clients list
                                     if let Some(ref cache) = self.cache {
@@ -875,7 +873,7 @@ impl TyphooNApp {
                                     }
                                 } else {
                                     ui.label(egui::RichText::new(format!("Syncing from {} — read-only view of server data", self.lan_sync_host)).color(AXIS_TEXT).small());
-                                    ui.label(egui::RichText::new("Receiving: MT5 bars, Alpaca positions/orders, crypto, fundamentals, SEC, news, FRED").color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new("Receiving: Kraken + Alpaca bars, positions/orders, crypto, fundamentals, SEC, news, FRED").color(AXIS_TEXT).small());
                                     // Sync status: local vs remote
                                     if let Some((bar_count, kv_count, file_size)) = self.bg.cache_stats {
                                         ui.label(egui::RichText::new(format!(

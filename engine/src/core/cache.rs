@@ -163,8 +163,9 @@ fn decrypt_backup_payload(encrypted: &[u8], passphrase: &str) -> Result<Vec<u8>,
     Ok(compressed)
 }
 
-/// Decompress bar data if needed. BarCacheWriter stores raw TTBR (magic "TTBR" at byte 0).
-/// Rust put_bars() stores zstd-compressed (magic 0x28B52FFD). This function handles both.
+/// Decompress bar data if needed. Some legacy cache blobs are stored as raw TTBR
+/// (magic "TTBR" at byte 0); `put_bars()` stores zstd-compressed (magic
+/// 0x28B52FFD). This function handles both so old caches still read correctly.
 fn maybe_decompress(data: Vec<u8>) -> Result<Vec<u8>, String> {
     if data.len() >= 4 && &data[0..4] == BAR_BINARY_MAGIC {
         Ok(data) // Already raw TTBR — no decompression needed
@@ -552,7 +553,7 @@ impl SqliteCache {
         // TyphooN-Terminal (Linux native). WAL shared memory works fine here.
         // busy_timeout=5000ms: retry for 5s on SQLITE_BUSY instead of failing
         // immediately. Critical when compact_storage() holds the write lock in
-        // batches and other threads (e.g. Mt5Sync) need to write concurrently.
+        // batches and other threads (e.g. LAN sync, bar fetches) need to write concurrently.
         conn.execute_batch(
             "
             PRAGMA journal_mode=WAL;
@@ -721,22 +722,20 @@ impl SqliteCache {
         })
     }
 
-    /// Open an existing database read-only — for reading source MT5 cache files.
+    /// Open an existing database read-only.
     ///
-    /// Does NOT change journal_mode (avoids conflicting with BarCacheWriter which
-    /// uses DELETE mode on the same file). Read-only mode means SQLite never needs
-    /// a write lock, so BarCacheWriter can continue writing concurrently without
-    /// any "database is locked" errors.
+    /// Does NOT change journal_mode. Read-only mode means SQLite never needs a
+    /// write lock, so another process can keep writing the same file concurrently
+    /// without "database is locked" errors. Used by the CLI to inspect the main
+    /// cache DB without taking a write lock.
     pub fn open_readonly(path: &PathBuf) -> Result<Self, String> {
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(|e| format!("SQLite read-only open failed: {e}"))?;
-        // busy_timeout MUST be set first — BarCacheWriter uses DELETE journal mode
-        // (WAL doesn't work across Wine/Linux boundary) which takes an exclusive lock
-        // during write transactions. Without busy_timeout, all reads fail instantly
-        // with SQLITE_BUSY when BarCacheWriter is mid-transaction.
+        // busy_timeout MUST be set first so reads retry rather than failing
+        // instantly with SQLITE_BUSY if another writer holds an exclusive lock.
         // Use rusqlite's built-in method (doesn't require a DB lock to execute).
         conn.busy_timeout(std::time::Duration::from_secs(10))
             .map_err(|e| format!("SQLite busy_timeout failed: {e}"))?;
@@ -747,8 +746,7 @@ impl SqliteCache {
             PRAGMA temp_store=MEMORY;
         ",
         );
-        // Read-only source: use the same connection for both read and write paths
-        // (open_readonly is only used for reading MT5 source files, no concurrent access)
+        // Read-only: use a second read-only connection for the read path too.
         let read_conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -768,100 +766,6 @@ impl SqliteCache {
             read_conn: Mutex::new(read_conn),
             db_path: path.clone(),
         })
-    }
-
-    /// Open an existing MT5 source DB in read-write mode — exclusively for
-    /// terminal-side cleanup (post-merge row DELETE on /dev/shm files).
-    ///
-    /// Unlike `open()`, this does NOT touch journal_mode, does NOT create or
-    /// migrate tables, and does NOT set auto_vacuum. BarCacheWriter owns the
-    /// schema and the `PRAGMA journal_mode=DELETE` setting; altering either
-    /// from the terminal side would clobber the EA's assumptions. The 10 s
-    /// busy_timeout lets us wait out BCW's exclusive write windows (each
-    /// per-symbol transaction is sub-second).
-    pub fn open_source_rw(path: &PathBuf) -> Result<Self, String> {
-        let conn = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(|e| format!("SQLite RW open failed: {e}"))?;
-        conn.busy_timeout(std::time::Duration::from_secs(10))
-            .map_err(|e| format!("SQLite busy_timeout failed: {e}"))?;
-        let _ = conn.execute_batch(
-            "
-            PRAGMA cache_size=-16000;
-            PRAGMA temp_store=MEMORY;
-        ",
-        );
-        let read_conn = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(|e| format!("SQLite RW-read conn failed: {e}"))?;
-        read_conn
-            .busy_timeout(std::time::Duration::from_secs(5))
-            .map_err(|e| format!("SQLite RW-read busy_timeout failed: {e}"))?;
-        Ok(Self {
-            conn: Mutex::new(conn),
-            read_conn: Mutex::new(read_conn),
-            db_path: path.clone(),
-        })
-    }
-
-    /// Delete a batch of bar_cache rows by `(key, expected_ts)`. Used by
-    /// Mt5Sync's post-merge cleanup — keys that have just been copied to the
-    /// target DB are removed from the source /dev/shm DB so tmpfs doesn't
-    /// accumulate the terminal's already-merged history.
-    ///
-    /// The `expected_ts` guard (`timestamp = ?2`) makes the delete atomic
-    /// relative to the prior read: if BCW rewrote the row between Mt5Sync's
-    /// read and this delete (e.g. mid-pass new-bar export), the source
-    /// timestamp will have advanced past what we recorded, the WHERE clause
-    /// won't match, and the row survives to be picked up on the next sync
-    /// pass. Without this guard the race could drop a newly-written BCW row
-    /// that we hadn't merged yet — the in-memory target_meta would still
-    /// reflect the old ts and target would lag one bar behind source until
-    /// the NEXT re-export.
-    ///
-    /// Metadata rows (`mt5:__…`) are filtered out at the SQL layer so callers
-    /// don't need to pre-partition the key list. Runs inside a single
-    /// transaction — one fsync regardless of batch size.
-    pub fn delete_bar_keys(&self, keys: &[(String, i64)]) -> Result<u64, String> {
-        if keys.is_empty() {
-            return Ok(0);
-        }
-        let mut conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let tx = conn
-            .transaction()
-            .map_err(|e| format!("begin tx failed: {e}"))?;
-        let mut deleted = 0u64;
-        {
-            let mut stmt = tx
-                .prepare_cached(
-                    "DELETE FROM bar_cache WHERE key = ?1 AND timestamp = ?2 \
-                 AND key NOT LIKE 'mt5:\\_\\_%' ESCAPE '\\'",
-                )
-                .map_err(|e| format!("prepare failed: {e}"))?;
-            for (k, ts) in keys {
-                deleted = deleted.saturating_add(stmt.execute(params![k, ts]).unwrap_or(0) as u64);
-            }
-        }
-        tx.commit().map_err(|e| format!("commit failed: {e}"))?;
-        Ok(deleted)
-    }
-
-    /// Run full `VACUUM` on the source DB to rebuild it and release pages
-    /// back to the filesystem. BCW does not configure `auto_vacuum` so
-    /// freelist pages are never reclaimed automatically — a full VACUUM is
-    /// the only way to shrink the /dev/shm file. On tmpfs this is fast
-    /// (~50 ms for a 100 MB DB — no physical disk I/O), so we run it after
-    /// every sync pass that deleted rows. Requires an exclusive lock;
-    /// `busy_timeout=10s` from `open_source_rw` handles BCW write windows.
-    pub fn vacuum_source(&self) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        conn.execute_batch("VACUUM")
-            .map_err(|e| format!("VACUUM failed: {e}"))?;
-        Ok(())
     }
 
     /// Store bar data in packed binary format + zstd compression.
@@ -2199,92 +2103,6 @@ impl SqliteCache {
         Ok(ok)
     }
 
-    /// Read BarCacheWriter's heartbeat row (if present). Returns the JSON
-    /// payload string for the given account tag, and the row's timestamp
-    /// column (seconds since epoch, set by the EA via TimeCurrent()).
-    ///
-    /// Heartbeat key format: `mt5:__HEARTBEAT__:{accountId}`
-    /// JSON payload includes ts, rotation_offset, sym_count, cycle_ms,
-    /// init_burst_active, cycle_count, exported, skipped, track_count,
-    /// demand_count, version. Added in BarCacheWriter v1.447.
-    ///
-    /// If `account_tag` is empty, returns the first heartbeat found (useful
-    /// when the caller does not know which account the source DB is bound to).
-    pub fn read_mt5_heartbeat(&self, account_tag: &str) -> Result<Option<(String, i64)>, String> {
-        let conn = self
-            .read_conn
-            .lock()
-            .map_err(|e| format!("Lock failed: {e}"))?;
-        let key_pattern = if account_tag.is_empty() {
-            "mt5:__HEARTBEAT__:%".to_string()
-        } else {
-            format!("mt5:__HEARTBEAT__:{}", account_tag)
-        };
-        let mut stmt = conn
-            .prepare_cached(
-                "SELECT data, timestamp FROM bar_cache WHERE key LIKE ?1 ORDER BY timestamp DESC LIMIT 1",
-            )
-            .map_err(|e| format!("Prepare heartbeat query failed: {e}"))?;
-        let mut rows = stmt
-            .query(params![key_pattern])
-            .map_err(|e| format!("Query heartbeat failed: {e}"))?;
-        if let Some(row) = rows.next().map_err(|e| format!("Row next failed: {e}"))? {
-            // SQLite uses dynamic typing: BCW's DatabaseBind(stmt, col, string)
-            // stores the JSON with TEXT affinity even though bar_cache.data is
-            // declared BLOB. rusqlite refuses to implicitly coerce TEXT→Vec<u8>,
-            // so `row.get::<_, Vec<u8>>(0)` errors with "Invalid column type
-            // Text at index 0". Read via ValueRef and handle both so we're
-            // robust to however the EA ended up binding the value.
-            use rusqlite::types::ValueRef;
-            let json = match row
-                .get_ref(0)
-                .map_err(|e| format!("Heartbeat col 0 ref failed: {e}"))?
-            {
-                ValueRef::Text(bytes) => std::str::from_utf8(bytes)
-                    .map_err(|e| format!("Heartbeat TEXT not UTF-8: {e}"))?
-                    .to_string(),
-                ValueRef::Blob(bytes) => std::str::from_utf8(bytes)
-                    .map_err(|e| format!("Heartbeat BLOB not UTF-8: {e}"))?
-                    .to_string(),
-                other => {
-                    return Err(format!(
-                        "Heartbeat unexpected column type: {:?}",
-                        other.data_type()
-                    ));
-                }
-            };
-            let ts: i64 = row
-                .get(1)
-                .map_err(|e| format!("Heartbeat ts get failed: {e}"))?;
-            Ok(Some((json, ts)))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Read all bid/ask quotes from the bid_ask table (BarCacheWriter live prices).
-    /// Returns Vec of (symbol, bid, ask, spread).
-    pub fn read_bid_ask(&self) -> Result<Vec<(String, f64, f64, f64)>, String> {
-        let conn = self
-            .read_conn
-            .lock()
-            .map_err(|e| format!("Lock failed: {e}"))?;
-        let mut stmt = conn
-            .prepare_cached("SELECT symbol, bid, ask, spread FROM bid_ask WHERE bid > 0 OR ask > 0")
-            .map_err(|e| format!("Prepare failed (bid_ask table may not exist): {e}"))?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, f64>(1)?,
-                    row.get::<_, f64>(2)?,
-                    row.get::<_, f64>(3)?,
-                ))
-            })
-            .map_err(|e| format!("Query failed: {e}"))?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
-    }
-
     /// Delete all cache entries matching a symbol prefix (e.g., "AAPL:" deletes all TFs for AAPL).
     pub fn delete_symbol(&self, symbol_prefix: &str) -> Result<u64, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
@@ -2301,7 +2119,7 @@ impl SqliteCache {
     }
 
     /// Delete all bar entries matching a timeframe suffix across every broker.
-    /// Example: `1Min` removes `mt5:EURUSD:1Min`, `alpaca:AAPL:1Min`, etc.
+    /// Example: `1Min` removes `kraken:BTCUSD:1Min`, `alpaca:AAPL:1Min`, etc.
     pub fn delete_timeframe(&self, timeframe_suffix: &str) -> Result<u64, String> {
         let Some(tf) = Self::normalize_timeframe_suffix(timeframe_suffix) else {
             return Err(format!("Unknown timeframe: {}", timeframe_suffix));
@@ -2347,7 +2165,6 @@ impl SqliteCache {
     pub fn delete_broker_data(&self, broker_prefix: &str) -> Result<u64, String> {
         let broker = match broker_prefix.to_ascii_lowercase().as_str() {
             "alpaca" => "alpaca",
-            "mt5" => "mt5",
             other => return Err(format!("Unsupported broker purge target: {other}")),
         };
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
@@ -2457,8 +2274,8 @@ impl SqliteCache {
     }
 
     /// Scan bar_cache for entries with bar_count=0 and repair from TTBR header.
-    /// BarCacheWriter stores bar_count correctly, but LAN sync and earlier versions
-    /// may have left stale 0 values. Returns number of entries repaired.
+    /// LAN sync and earlier versions may have left stale 0 values. Returns
+    /// number of entries repaired.
     pub fn repair_bar_counts(&self) -> Result<usize, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         let mut stmt = conn
@@ -2474,8 +2291,8 @@ impl SqliteCache {
             .map_err(|e| format!("Query failed: {e}"))?;
         for row in rows {
             if let Ok((key, data)) = row {
-                // Skip MT5 metadata rows — they all follow `<prefix>:__<NAME>__[…]`
-                // (SYMBOLS, SPECS, SERVER, HEARTBEAT, …) and aren't bar blobs.
+                // Skip metadata rows — they follow `<prefix>:__<NAME>__[…]`
+                // and aren't bar blobs.
                 if key.contains(":__") {
                     continue;
                 }
