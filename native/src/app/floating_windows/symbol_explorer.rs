@@ -40,7 +40,6 @@ impl TyphooNApp {
                 .max_size([680.0, 640.0])
                 .show(ctx, |ui| {
                     let sym_teal = egui::Color32::from_rgb(26, 188, 156);
-                    let sym_gold = egui::Color32::from_rgb(241, 196, 15);
                     let sym_green = egui::Color32::from_rgb(46, 204, 113);
                     let sym_blue = egui::Color32::from_rgb(52, 152, 219);
                     let sym_orange = egui::Color32::from_rgb(255, 130, 60);
@@ -331,7 +330,6 @@ impl TyphooNApp {
                         .show(ui, |ui| {
                             // ── Section 1: Cached Data (by source) ──
                             let source_labels: &[(&str, &str, egui::Color32)] = &[
-                                ("mt5", "MT5 (Darwinex)", sym_gold),
                                 ("alpaca", "Alpaca (cached)", sym_green),
                                 ("kraken", "Kraken", sym_orange),
                                 ("kraken-equities", "Kraken Equities (cached)", sym_orange),

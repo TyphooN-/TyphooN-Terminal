@@ -37,12 +37,9 @@ impl TyphooNApp {
                         let mut found = false;
                         'tf_search: for tf in &tfs {
                             for source in [
-                                "mt5",
-                                "mt5:Darwinex",
                                 "alpaca",
                                 "kraken",
                                 "kraken-equities",
-                                "tastytrade",
                                 "default",
                             ] {
                                 for key in chart_source_cache_keys(source, sym, tf) {

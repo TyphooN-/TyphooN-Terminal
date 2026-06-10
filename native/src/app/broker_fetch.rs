@@ -225,14 +225,8 @@ pub(super) async fn run_alpaca_fetch_task(
             .unwrap_or_else(|| symbol.clone())
     };
 
-    let bare_upper = symbol.replace('/', "").to_uppercase();
-    let mt5_key = format!("mt5:{bare_upper}:{timeframe}");
     let cache_key = format!("alpaca:{symbol}:{timeframe}");
     let cache_handle = shared_cache.read().ok().and_then(|g| g.clone());
-    let mt5_has_bars = cache_handle
-        .as_ref()
-        .and_then(|c| c.get_incremental_start(&mt5_key).ok().flatten())
-        .is_some();
 
     let incremental = cache_handle
         .as_ref()
@@ -249,13 +243,7 @@ pub(super) async fn run_alpaca_fetch_task(
     );
 
     let mut success = false;
-    if mt5_has_bars {
-        let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
-            "Alpaca {} {}: MT5/Darwinex has this symbol — skipping",
-            symbol, timeframe
-        )));
-        success = true;
-    } else {
+    {
         if needs_backfill {
             after_ts = None;
         }

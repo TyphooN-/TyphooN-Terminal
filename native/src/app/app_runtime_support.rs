@@ -7,9 +7,7 @@ pub(super) fn is_routine_market_data_status(msg: &str) -> bool {
         || msg.contains(": cache has ") && msg.contains(" — syncing full server history")
         || msg.contains(" delta since ")
         || msg.contains(" already up to date")
-        || msg.contains(": no bars returned")
-        || msg.contains(": MT5/Darwinex has this symbol — skipping")
-        || msg.contains(": tastytrade has this symbol — skipping");
+        || msg.contains(": no bars returned");
 
     (msg.starts_with("Kraken ") || msg.starts_with("Alpaca ")) && routine_progress
         || msg.contains("Yahoo Chart HTTP 429")
