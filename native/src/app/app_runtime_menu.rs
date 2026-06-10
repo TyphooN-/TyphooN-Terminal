@@ -403,22 +403,18 @@ impl TyphooNApp {
                             // Sync fund_source toggles
                             match self.broker_scope {
                                 EventSource::All => {
-                                    self.fund_source_mt5 = true;
                                     self.fund_source_alpaca = true;
                                     self.fund_source_kraken = true;
                                 }
                                 EventSource::Alpaca => {
-                                    self.fund_source_mt5 = false;
                                     self.fund_source_alpaca = true;
                                     self.fund_source_kraken = false;
                                 }
                                 EventSource::Kraken => {
-                                    self.fund_source_mt5 = false;
                                     self.fund_source_alpaca = false;
                                     self.fund_source_kraken = true;
                                 }
                                 EventSource::Positions => {
-                                    self.fund_source_mt5 = true;
                                     self.fund_source_alpaca = true;
                                     self.fund_source_kraken = true;
                                 }

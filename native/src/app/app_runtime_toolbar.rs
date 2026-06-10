@@ -372,10 +372,9 @@ impl TyphooNApp {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(egui::RichText::new("~").color(AXIS_TEXT).small());
                             ui.separator();
-                            // Determine if we have any data source (broker, MT5, LAN, API keys)
+                            // Determine if we have any data source (broker, LAN, API keys)
                             let has_broker =
                                 self.broker_connected || self.kraken_connected;
-                            let has_mt5 = !self.mt5_db_paths.iter().all(|p| p.is_empty());
                             let has_lan = self.lan_sync_mode == "client" || self.lan_sync_mode == "server";
                             let has_api = !self.finnhub_key.is_empty() || !self.fred_key.is_empty();
                             let has_cache = self.cache.is_some()
@@ -384,7 +383,7 @@ impl TyphooNApp {
                                     .cache_stats
                                     .map(|(bars, _, _)| bars > 0)
                                     .unwrap_or(false);
-                            if has_broker || has_mt5 || has_lan || has_api || has_cache {
+                            if has_broker || has_lan || has_api || has_cache {
                                 let mut sources: Vec<String> = Vec::new();
                                 if self.broker_connected {
                                     let mode = if self.broker_paper { "Paper" } else { "Live" };
@@ -392,9 +391,6 @@ impl TyphooNApp {
                                 }
                                 if self.kraken_connected {
                                     sources.push("Kraken (REST + WS)".into());
-                                }
-                                if !self.mt5_db_paths.iter().all(|p| p.is_empty()) {
-                                    sources.push("MT5".into());
                                 }
                                 if !self.finnhub_key.is_empty() {
                                     sources.push("Finnhub".into());
@@ -406,7 +402,7 @@ impl TyphooNApp {
                                 // LAN server, we don't call any external source directly. Replace
                                 // the locally-derived source list with a single `LAN <ip>` chip,
                                 // optionally annotated with the server's source list so the user
-                                // sees WHAT is being synced in from the LAN (Alpaca+MT5+FRED, etc)
+                                // sees WHAT is being synced in from the LAN (Alpaca+Kraken+FRED, etc)
                                 // without implying the client is calling those APIs itself.
                                 if self.lan_sync_mode == "client" {
                                     let ip = if self.lan_server_ip.is_empty() {
@@ -527,10 +523,7 @@ impl TyphooNApp {
                                     );
                                 }
                             } else {
-                                let mut offline_sources = Vec::new();
-                                if !self.mt5_db_paths.iter().all(|p| p.is_empty()) {
-                                    offline_sources.push("MT5 cache");
-                                }
+                                let offline_sources: Vec<&str> = Vec::new();
                                 let src = if offline_sources.is_empty() {
                                     "no sources".to_string()
                                 } else {

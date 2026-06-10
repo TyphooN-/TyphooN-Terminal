@@ -631,18 +631,6 @@ impl TyphooNApp {
             });
         }
 
-        let pending_mt5: std::collections::HashSet<(String, String)> = self
-            .mt5_gap_requests
-            .iter()
-            .map(|(symbol, tf, _, _)| (symbol.clone(), tf.clone()))
-            .collect();
-        let capped_mt5: std::collections::HashSet<(String, String)> = self
-            .mt5_provider_depth_saturation
-            .iter()
-            .filter(|(_, (_, noops))| *noops >= 2)
-            .map(|(key, _)| key.clone())
-            .collect();
-
         let avail = ui.available_height().max(200.0);
         egui::ScrollArea::vertical()
             .id_salt("storage_scroll")
@@ -739,9 +727,7 @@ impl TyphooNApp {
                         };
 
                         for (key, count, ts) in &page_rows {
-                            let key_color = if key.starts_with("mt5:") {
-                                egui::Color32::from_rgb(26, 188, 156)
-                            } else if key.starts_with("kraken:") {
+                            let key_color = if key.starts_with("kraken:") {
                                 egui::Color32::from_rgb(255, 130, 60)
                             } else if key.starts_with("alpaca:") {
                                 egui::Color32::from_rgb(52, 152, 219)
@@ -800,27 +786,10 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new(age_str).color(AXIS_TEXT).small());
 
                             let tf_suffix = key.rsplit(':').next().unwrap_or("");
-                            let parts: Vec<&str> = key.splitn(3, ':').collect();
-                            let mt5_pair: Option<(String, String)> =
-                                if parts.len() == 3 && parts[0] == "mt5" {
-                                    Some((parts[1].to_string(), parts[2].to_string()))
-                                } else {
-                                    None
-                                };
                             let status_label = if range.is_none() {
                                 ("\u{2026}", AXIS_TEXT)
                             } else if last_ms <= 0 {
                                 ("empty", egui::Color32::from_rgb(150, 150, 150))
-                            } else if mt5_pair
-                                .as_ref()
-                                .is_some_and(|pair| pending_mt5.contains(pair))
-                            {
-                                ("pending", egui::Color32::from_rgb(241, 196, 15))
-                            } else if mt5_pair
-                                .as_ref()
-                                .is_some_and(|pair| capped_mt5.contains(pair))
-                            {
-                                ("capped", egui::Color32::from_rgb(230, 140, 60))
                             } else if let Some(thresh) = frozen_threshold_ms(tf_suffix) {
                                 let lag_ms = now_ms - last_ms;
                                 if lag_ms > thresh {

@@ -180,7 +180,7 @@ impl TyphooNApp {
         // Lazy load
         if let Some(ref cache) = self.cache {
             let candidates = [
-                format!("mt5:{}:1Day", symbol),
+                format!("kraken:{}:1Day", symbol),
                 format!("alpaca:{}:1Day", symbol),
             ];
             for k in &candidates {
@@ -1243,7 +1243,6 @@ impl TyphooNApp {
             .iter()
             .map(|sym| normalize_market_data_symbol(sym).replace('/', ""))
             .filter(|sym| !sym.is_empty())
-            .filter(|sym| !self.cached_mt5_symbols.contains(sym))
             .collect()
     }
 
@@ -1996,7 +1995,6 @@ impl TyphooNApp {
     }
 
     pub(super) fn alpaca_equity_rotation_symbols(&self) -> Vec<String> {
-        let mt5_covered = &self.cached_mt5_symbols;
         let mut equity_set: std::collections::HashSet<String> =
             std::collections::HashSet::with_capacity(self.all_broker_assets.len() + 64);
         let mut equity_syms: Vec<String> = Vec::with_capacity(self.all_broker_assets.len() + 64);
@@ -2006,7 +2004,7 @@ impl TyphooNApp {
                 continue;
             }
             let su = sym.to_uppercase();
-            if Self::demand_is_crypto(&su) || mt5_covered.contains(&su) {
+            if Self::demand_is_crypto(&su) {
                 continue;
             }
             if equity_set.insert(su.clone()) {
@@ -2015,7 +2013,7 @@ impl TyphooNApp {
         }
         for chart in &self.charts {
             let bare = bare_symbol_from_key(&chart.symbol).to_uppercase();
-            if Self::demand_is_crypto(&bare) || mt5_covered.contains(&bare) {
+            if Self::demand_is_crypto(&bare) {
                 continue;
             }
             if equity_set.insert(bare.clone()) {
@@ -2024,7 +2022,7 @@ impl TyphooNApp {
         }
         for wl in &self.user_watchlist {
             let wlu = wl.to_uppercase();
-            if Self::demand_is_crypto(&wlu) || mt5_covered.contains(&wlu) {
+            if Self::demand_is_crypto(&wlu) {
                 continue;
             }
             if equity_set.insert(wlu.clone()) {
