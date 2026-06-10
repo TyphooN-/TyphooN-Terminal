@@ -3901,6 +3901,9 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     )
                     .await;
                 }
+                BrokerCmd::IgnoreNewsArticle { symbol, url_hash } => {
+                    tracing::debug!("Ignoring news article {} for {}", url_hash, symbol);
+                }
             }
         }
     });
