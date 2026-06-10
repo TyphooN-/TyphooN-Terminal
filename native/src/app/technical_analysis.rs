@@ -2076,6 +2076,51 @@ pub(super) fn draw_chart(
         }
     }
 
+    // ── right price-axis label de-confliction ─────────────────────────────
+    // Every boxed price tag on the right axis (last/current, extended-hours,
+    // bid, ask) is painted at the same x. When their prices cluster — common
+    // for low-priced symbols where bid≈ask≈last — the boxes stack into an
+    // unreadable smear. `place_axis_label` tracks the occupied vertical bands
+    // and nudges each new tag to the nearest free slot; the underlying dashed
+    // line still draws at the true price, only the label moves. Tags are placed
+    // in draw order, so earlier (higher-priority) tags keep their preferred y.
+    let axis_top = chart_rect.top();
+    let axis_bot = chart_rect.bottom();
+    let mut occupied_label_bands: Vec<(f32, f32)> = Vec::new();
+    let mut place_axis_label = move |desired_center: f32, half_h: f32| -> f32 {
+        let lo_bound = axis_top + half_h;
+        let hi_bound = (axis_bot - half_h).max(lo_bound);
+        let clamp_center = |c: f32| c.clamp(lo_bound, hi_bound);
+        let collides = |c: f32, bands: &[(f32, f32)]| {
+            bands
+                .iter()
+                .any(|&(lo, hi)| c - half_h < hi + 1.0 && c + half_h + 1.0 > lo)
+        };
+        let mut center = clamp_center(desired_center);
+        if collides(center, &occupied_label_bands) {
+            let span = axis_bot - axis_top;
+            let mut offset = 1.0_f32;
+            loop {
+                let up = clamp_center(desired_center - offset);
+                if !collides(up, &occupied_label_bands) {
+                    center = up;
+                    break;
+                }
+                let down = clamp_center(desired_center + offset);
+                if !collides(down, &occupied_label_bands) {
+                    center = down;
+                    break;
+                }
+                offset += 1.0;
+                if offset > span {
+                    break;
+                }
+            }
+        }
+        occupied_label_bands.push((center - half_h, center + half_h));
+        center
+    };
+
     // ── last price line ──────────────────────────────────────────────────────
     if let Some(last) = bars.last() {
         let y = price_to_y(last.close);
@@ -2099,7 +2144,7 @@ pub(super) fn draw_chart(
                 .last()
                 .and_then(|latest| next_candle_countdown_label(latest.ts_ms, chart.timeframe));
             if let Some(countdown) = countdown {
-                let label_y = y.clamp(chart_rect.top() + 15.0, chart_rect.bottom() - 15.0);
+                let label_y = place_axis_label(y, 14.0);
                 let lbl_rect = egui::Rect::from_min_size(
                     egui::pos2(chart_rect.right() + 2.0, label_y - 14.0),
                     egui::vec2(price_axis_w - 4.0, 28.0),
@@ -2133,8 +2178,9 @@ pub(super) fn draw_chart(
                     egui::Color32::from_rgb(200, 220, 235),
                 );
             } else {
+                let label_y = place_axis_label(y, 8.0);
                 let lbl_rect = egui::Rect::from_min_size(
-                    egui::pos2(chart_rect.right() + 2.0, y - 8.0),
+                    egui::pos2(chart_rect.right() + 2.0, label_y - 8.0),
                     egui::vec2(price_axis_w - 4.0, 16.0),
                 );
                 painter.rect_filled(lbl_rect, 2.0, egui::Color32::from_rgb(12, 18, 28));
@@ -2145,7 +2191,7 @@ pub(super) fn draw_chart(
                     egui::StrokeKind::Inside,
                 );
                 painter.text(
-                    egui::pos2(chart_rect.right() + 4.0, y),
+                    egui::pos2(chart_rect.right() + 4.0, label_y),
                     egui::Align2::LEFT_CENTER,
                     &label,
                     egui::FontId::monospace(10.0),
@@ -2172,13 +2218,14 @@ pub(super) fn draw_chart(
             }
             // Price label
             let label = format_price(chart.ext_close);
+            let label_y = place_axis_label(y, 8.0);
             let lbl_rect = egui::Rect::from_min_size(
-                egui::pos2(chart_rect.right() + 2.0, y - 8.0),
+                egui::pos2(chart_rect.right() + 2.0, label_y - 8.0),
                 egui::vec2(price_axis_w - 4.0, 16.0),
             );
             painter.rect_filled(lbl_rect, 2.0, ext_col);
             painter.text(
-                egui::pos2(chart_rect.right() + 4.0, y),
+                egui::pos2(chart_rect.right() + 4.0, label_y),
                 egui::Align2::LEFT_CENTER,
                 &label,
                 egui::FontId::monospace(10.0),
@@ -2202,14 +2249,6 @@ pub(super) fn draw_chart(
         let bid_text_col = egui::Color32::from_rgb(0, 220, 80);
         let ask_text_col = egui::Color32::from_rgb(255, 90, 90);
         let label_bg = egui::Color32::from_rgb(12, 18, 28);
-        let mut bid_label_y = bid_y.clamp(chart_rect.top() + 8.0, chart_rect.bottom() - 8.0);
-        let mut ask_label_y = ask_y.clamp(chart_rect.top() + 8.0, chart_rect.bottom() - 8.0);
-        if (bid_label_y - ask_label_y).abs() < 17.0 {
-            let mid = ((bid_label_y + ask_label_y) * 0.5)
-                .clamp(chart_rect.top() + 17.0, chart_rect.bottom() - 17.0);
-            ask_label_y = mid - 8.5;
-            bid_label_y = mid + 8.5;
-        }
         if bid_y >= chart_rect.top() && bid_y <= chart_rect.bottom() {
             painter.line_segment(
                 [
@@ -2218,6 +2257,7 @@ pub(super) fn draw_chart(
                 ],
                 egui::Stroke::new(0.75, bid_col),
             );
+            let bid_label_y = place_axis_label(bid_y, 8.0);
             let lbl_rect = egui::Rect::from_min_size(
                 egui::pos2(chart_rect.right() + 2.0, bid_label_y - 8.0),
                 egui::vec2(price_axis_w - 4.0, 16.0),
@@ -2246,6 +2286,7 @@ pub(super) fn draw_chart(
                 ],
                 egui::Stroke::new(0.75, ask_col),
             );
+            let ask_label_y = place_axis_label(ask_y, 8.0);
             let lbl_rect = egui::Rect::from_min_size(
                 egui::pos2(chart_rect.right() + 2.0, ask_label_y - 8.0),
                 egui::vec2(price_axis_w - 4.0, 16.0),
