@@ -204,8 +204,8 @@ impl TyphooNApp {
                         fund_owned.len()
                     )));
                 } else if let Some(ref cache) = self.cache {
-                    // Compute VaR/Ask ratio from bar cache. Tick-scale specs are no longer
-                    // available (Darwinex removed) — default tick_scale to 1.0 per symbol.
+                    // Compute VaR/Ask ratio from bar cache. Tick-scale specs are not
+                    // available — default tick_scale to 1.0 per symbol.
                     let tick_specs: std::collections::HashMap<String, f64> =
                         std::collections::HashMap::new();
                     let mut var_data: Vec<(String, String, String, f64)> = Vec::new();
@@ -223,7 +223,7 @@ impl TyphooNApp {
                             f.industry.clone()
                         };
                         let keys = [
-                            format!("mt5:{}:1Day", f.symbol),
+                            format!("kraken-equities:{}:1Day", f.symbol),
                             format!("alpaca:{}:1Day", f.symbol),
                         ];
                         let mut closes: Vec<f64> = Vec::new();
@@ -315,7 +315,7 @@ impl TyphooNApp {
                             f.industry.clone()
                         };
                         let keys = [
-                            format!("mt5:{}:1Day", f.symbol),
+                            format!("kraken-equities:{}:1Day", f.symbol),
                             format!("alpaca:{}:1Day", f.symbol),
                         ];
                         let mut bars: Vec<(f64, f64, f64, f64)> = Vec::new(); // (o,h,l,c)

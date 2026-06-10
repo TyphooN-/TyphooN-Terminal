@@ -755,8 +755,8 @@ impl TyphooNApp {
     }
 
     /// Emit the user's current open positions for `sym_upper` across all
-    /// connected brokers (Alpaca `live_positions` + Darwinex/MT5-like
-    /// `tt_positions`). Returns an empty string when there is no exposure,
+    /// connected brokers (Alpaca `live_positions` + Kraken `kr_positions`).
+    /// Returns an empty string when there is no exposure,
     /// so the caller can unconditionally append. Derives current price from
     /// `market_value / qty.abs()` rather than querying a separate quote
     /// stream — the broker has already marked the position to market.

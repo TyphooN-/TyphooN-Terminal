@@ -276,7 +276,7 @@ impl TyphooNApp {
             // Price stats from bar cache
             if let Some(ref cache) = self.cache {
                 let keys = [
-                    format!("mt5:{}:1Day", sym_upper),
+                    format!("kraken-equities:{}:1Day", sym_upper),
                     format!("alpaca:{}:1Day", sym_upper),
                 ];
                 let mut closes: Vec<f64> = Vec::new();

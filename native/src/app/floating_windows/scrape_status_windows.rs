@@ -2,7 +2,7 @@ use super::*;
 use crate::app::app_runtime_support::should_start_manual_background_scope_scrape;
 
 impl TyphooNApp {
-    pub(super) fn render_scrape_darwinia_windows(&mut self, ctx: &egui::Context) {
+    pub(super) fn render_scrape_status_windows(&mut self, ctx: &egui::Context) {
         // ── Scrape Status Dashboard ──
         if self.show_scrape_status {
             let scrape_status_sec_scope_label = self.broker_scope_label();

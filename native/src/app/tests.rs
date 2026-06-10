@@ -717,7 +717,7 @@ fn parse_ask_args_preserves_special_chars_in_tickers() {
 }
 
 #[test]
-fn normalize_market_data_symbol_strips_darwin_suffixes_only() {
+fn normalize_market_data_symbol_strips_exchange_suffixes_only() {
     assert_eq!(normalize_market_data_symbol("AAPL.US"), "AAPL");
     assert_eq!(normalize_market_data_symbol("BMW.DE"), "BMW");
     assert_eq!(normalize_market_data_symbol("BRK.B"), "BRK.B");
@@ -1697,9 +1697,9 @@ fn chart_body_camera_vertical_pan_uses_zoomed_visible_price_span() {
 fn test_chart_state_reload_match_requires_source_for_loaded_chart() {
     let mut chart = ChartState::new("BTC/USD", Timeframe::H2);
     chart.bars = make_bars(20);
-    chart.primary_source = "mt5";
+    chart.primary_source = "kraken";
 
-    assert!(chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "mt5"));
+    assert!(chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "kraken"));
     assert!(!chart.should_reload_for_bar_fetch("BTCUSD", "1Hour", "alpaca"));
 
     chart.primary_source = "kraken-equities";
@@ -2391,7 +2391,8 @@ fn test_format_ts_buf_minute() {
 #[test]
 fn test_apply_storage_snapshot_prunes_deleted_keys_and_updates_sizes() {
     let mut bg = BgData::default();
-    bg.bar_ts_cache.insert("mt5:EURUSD:1Min".into(), (1, 2, 10));
+    bg.bar_ts_cache
+        .insert("kraken-futures:EURUSD:1Min".into(), (1, 2, 10));
     bg.bar_ts_cache
         .insert("alpaca:AAPL:1Day".into(), (3, 4, 20));
 
@@ -2407,7 +2408,7 @@ fn test_apply_storage_snapshot_prunes_deleted_keys_and_updates_sizes() {
         vec![("alpaca:AAPL:1Day".into(), 123, 456)]
     );
     assert_eq!(bg.cache_blob_sizes.get("alpaca:AAPL:1Day"), Some(&789));
-    assert!(!bg.bar_ts_cache.contains_key("mt5:EURUSD:1Min"));
+    assert!(!bg.bar_ts_cache.contains_key("kraken-futures:EURUSD:1Min"));
     assert!(bg.bar_ts_cache.contains_key("alpaca:AAPL:1Day"));
 }
 

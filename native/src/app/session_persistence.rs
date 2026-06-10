@@ -1195,7 +1195,7 @@ impl TyphooNApp {
                         for tab in tabs {
                             // Canonicalise legacy sessions: before `bare_symbol_from_key`
                             // was introduced, Screener/watchlist load paths saved full
-                            // cache keys (`mt5:SLV:1Hour`) into chart.symbol. Normalise
+                            // cache keys (`kraken-equities:SLV:1Hour`) into chart.symbol. Normalise
                             // to bare here so try_load doesn't double-prefix.
                             let raw_sym = tab["symbol"].as_str().unwrap_or("CC");
                             let sym = bare_symbol_from_key(raw_sym);

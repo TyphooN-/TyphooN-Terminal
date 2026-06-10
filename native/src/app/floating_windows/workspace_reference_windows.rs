@@ -2,7 +2,7 @@ use super::*;
 
 impl TyphooNApp {
     pub(super) fn render_workspace_reference_windows(&mut self, ctx: &egui::Context) {
-        // Object List (drawing management, like MT5 Object List)
+        // Object List (drawing management)
         if self.show_object_list {
             let mut delete_idx: Option<usize> = None;
             egui::Window::new("Object List")

@@ -107,12 +107,11 @@ impl TyphooNApp {
                                         let parts: Vec<&str> = key.splitn(3, ':').collect();
                                         let (source, sym, tf) = match parts.as_slice() {
                                             [s, sym, tf] => (*s, *sym, *tf),
-                                            [sym, tf] => ("mt5", *sym, *tf),
-                                            [sym] => ("mt5", *sym, ""),
+                                            [sym, tf] => ("local", *sym, *tf),
+                                            [sym] => ("local", *sym, ""),
                                             _ => ("", key.as_str(), ""),
                                         };
                                         let src_col = match source {
-                                            "mt5" => egui::Color32::from_rgb(100, 180, 255),
                                             "alpaca" => egui::Color32::from_rgb(100, 220, 100),
                                             "kraken" => egui::Color32::from_rgb(200, 100, 255),
                                             _ => egui::Color32::from_rgb(160, 160, 160),

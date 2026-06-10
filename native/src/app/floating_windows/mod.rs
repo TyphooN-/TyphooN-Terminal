@@ -72,7 +72,7 @@ mod research_volume_momentum_oscillators;
 mod research_zero_lag_elder_forecast_balance;
 mod risk_journal_windows;
 mod scope;
-mod scrape_darwinia_windows;
+mod scrape_status_windows;
 mod screenshots;
 mod sec_calendar_windows;
 mod storage_sync_windows;
@@ -441,7 +441,7 @@ impl TyphooNApp {
         timed_window!("sec_calendar", self.render_sec_calendar_windows(ctx));
 
         // Scrape status, fundamentals, EV scanner, and earnings windows
-        self.render_scrape_darwinia_windows(ctx);
+        self.render_scrape_status_windows(ctx);
 
         // Market analytics, calendars, screeners, and portfolio risk windows
         self.render_market_analytics_windows(ctx);
