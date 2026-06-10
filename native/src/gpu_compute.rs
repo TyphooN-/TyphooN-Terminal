@@ -191,8 +191,9 @@ impl GpuCompute {
         low: f32,
         close: f32,
         volume: f32,
+        is_live_forming: f32,
     ) -> bool {
-        let Some(write) = forming_bar_gpu_write(self.bar_count, high, low, close) else {
+        let Some(write) = forming_bar_gpu_write(self.bar_count, high, low, close, is_live_forming) else {
             return false;
         };
         let Some(ref close_buf) = self.bar_buffer else {
@@ -5615,8 +5616,9 @@ struct CandleInstance {
     @location(2) body_bot: f32,
     @location(3) wick_top: f32,
     @location(4) wick_bot: f32,
-    @location(5) is_up: f32,      // 1.0 = green, 0.0 = red
+    @location(5) is_up: f32,           // 1.0 = green, 0.0 = red
     @location(6) half_width: f32,
+    @location(7) is_live_forming: f32, // 1.0 = live quote mode (thin mid line, no body)
 }
 
 struct Uniforms {
@@ -5641,7 +5643,11 @@ fn vs_main(
     var out: VertexOutput;
     let green = vec4<f32>(0.0, 1.0, 0.0, 1.0);
     let red = vec4<f32>(1.0, 0.0, 0.0, 1.0);
-    out.color = select(red, green, instance.is_up > 0.5);
+    if (instance.is_live_forming > 0.5) {
+        out.color = vec4<f32>(0.9, 0.9, 0.9, 1.0); // neutral/white for live forming bar
+    } else {
+        out.color = select(red, green, instance.is_up > 0.5);
+    }
 
     // NDC coords: x in [-1, 1], y in [-1, 1]
     let ndc_x = (instance.x_center / uniforms.viewport_width) * 2.0 - 1.0;
@@ -5649,19 +5655,33 @@ fn vs_main(
     let wick_w = 1.0 / uniforms.viewport_width; // 1px wick
 
     var pos = vec2<f32>(0.0, 0.0);
-    switch (vid) {
-        // Body quad (triangle strip: 0-1-2-3)
-        case 0u: { pos = vec2<f32>(ndc_x - hw, 1.0 - instance.body_top / uniforms.viewport_height * 2.0); }
-        case 1u: { pos = vec2<f32>(ndc_x + hw, 1.0 - instance.body_top / uniforms.viewport_height * 2.0); }
-        case 2u: { pos = vec2<f32>(ndc_x - hw, 1.0 - instance.body_bot / uniforms.viewport_height * 2.0); }
-        case 3u: { pos = vec2<f32>(ndc_x + hw, 1.0 - instance.body_bot / uniforms.viewport_height * 2.0); }
-        // Top wick (line: 4-5)
-        case 4u: { pos = vec2<f32>(ndc_x, 1.0 - instance.wick_top / uniforms.viewport_height * 2.0); }
-        case 5u: { pos = vec2<f32>(ndc_x, 1.0 - instance.body_top / uniforms.viewport_height * 2.0); }
-        // Bottom wick (line: 6-7)
-        case 6u: { pos = vec2<f32>(ndc_x, 1.0 - instance.body_bot / uniforms.viewport_height * 2.0); }
-        case 7u: { pos = vec2<f32>(ndc_x, 1.0 - instance.wick_bot / uniforms.viewport_height * 2.0); }
-        default: { pos = vec2<f32>(0.0, 0.0); }
+
+    if (instance.is_live_forming > 0.5) {
+        // Live forming bar: render as thin vertical line at mid price (no body, clean live indicator)
+        let mid_y = (instance.body_top + instance.body_bot) * 0.5;
+        let ndc_mid = 1.0 - mid_y / uniforms.viewport_height * 2.0;
+        let thin = 0.8 / uniforms.viewport_width; // ~1px wide
+        switch (vid) {
+            case 0u, 2u: { pos = vec2<f32>(ndc_x - thin, ndc_mid); }
+            case 1u, 3u: { pos = vec2<f32>(ndc_x + thin, ndc_mid); }
+            case 4u, 5u, 6u, 7u: { pos = vec2<f32>(ndc_x, ndc_mid); }
+            default: { pos = vec2<f32>(0.0, 0.0); }
+        }
+    } else {
+        switch (vid) {
+            // Body quad (triangle strip: 0-1-2-3)
+            case 0u: { pos = vec2<f32>(ndc_x - hw, 1.0 - instance.body_top / uniforms.viewport_height * 2.0); }
+            case 1u: { pos = vec2<f32>(ndc_x + hw, 1.0 - instance.body_top / uniforms.viewport_height * 2.0); }
+            case 2u: { pos = vec2<f32>(ndc_x - hw, 1.0 - instance.body_bot / uniforms.viewport_height * 2.0); }
+            case 3u: { pos = vec2<f32>(ndc_x + hw, 1.0 - instance.body_bot / uniforms.viewport_height * 2.0); }
+            // Top wick (line: 4-5)
+            case 4u: { pos = vec2<f32>(ndc_x, 1.0 - instance.wick_top / uniforms.viewport_height * 2.0); }
+            case 5u: { pos = vec2<f32>(ndc_x, 1.0 - instance.body_top / uniforms.viewport_height * 2.0); }
+            // Bottom wick (line: 6-7)
+            case 6u: { pos = vec2<f32>(ndc_x, 1.0 - instance.body_bot / uniforms.viewport_height * 2.0); }
+            case 7u: { pos = vec2<f32>(ndc_x, 1.0 - instance.wick_bot / uniforms.viewport_height * 2.0); }
+            default: { pos = vec2<f32>(0.0, 0.0); }
+        }
     }
 
     out.position = vec4<f32>(pos, 0.0, 1.0);

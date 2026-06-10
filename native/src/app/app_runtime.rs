@@ -874,6 +874,7 @@ impl eframe::App for TyphooNApp {
                                                 bar.high = bar.high.max(mid);
                                                 bar.low = bar.low.min(mid);
                                             }
+                                            chart.forming_bar_dirty = true;
                                         }
                                     }
                                 }
@@ -7170,6 +7171,7 @@ impl eframe::App for TyphooNApp {
                                     bar.high = bar.high.max(last);
                                     bar.low = bar.low.min(last);
                                 }
+                                chart.forming_bar_dirty = true;
                             }
                         }
                     }

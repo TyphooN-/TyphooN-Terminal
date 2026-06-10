@@ -2844,12 +2844,14 @@ impl ChartState {
                 }
 
                 if let Some(gpu) = gpu {
+                    let is_live = if self.live_bid > 0.0 && self.live_ask > 0.0 { 1.0 } else { 0.0 };
                     gpu.upload_forming_bar(
                         last.open as f32,
                         last.high as f32,
                         last.low as f32,
                         close as f32,
                         last.volume as f32,
+                        is_live,
                     );
                 }
 

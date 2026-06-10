@@ -655,7 +655,7 @@ impl McpServer {
         let Some((key, bars)) = chosen else {
             writeln!(
                 packet,
-                "_No D1 bar data in cache - price/volatility stats unavailable. Run BARDATA to populate._"
+                "_No D1 bar data in cache._"
             )
             .ok();
             writeln!(packet).ok();
