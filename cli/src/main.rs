@@ -490,318 +490,6 @@ fn start_lan_metrics_server(cache: Arc<SqliteCache>, db_path: PathBuf, port: u16
     });
 }
 
-// ── Multi-Account Registry (MT5 CSV Import) ─────────────────────
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct Mt5Position {
-    symbol: String,
-    side: String,
-    lots: f64,
-    price: f64,
-    profit: f64,
-    commission: f64,
-    swap: f64,
-    sl: f64,
-    tp: f64,
-    time: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct Mt5Trade {
-    symbol: String,
-    side: String,
-    lots: f64,
-    price: f64,
-    profit: f64,
-    commission: f64,
-    swap: f64,
-    time: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct ImportedAccount {
-    name: String,
-    #[serde(rename = "type")]
-    acct_type: String,
-    equity: f64,
-    balance: f64,
-    currency: String,
-    positions: Vec<Mt5Position>,
-    history: Vec<Mt5Trade>,
-    import_date: String,
-}
-
-fn account_registry_path() -> PathBuf {
-    let mut p = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    p.push("typhoon-terminal");
-    std::fs::create_dir_all(&p).ok();
-    p.push("account_registry.json");
-    p
-}
-
-fn load_account_registry() -> Vec<ImportedAccount> {
-    let path = account_registry_path();
-    if !path.exists() {
-        return vec![];
-    }
-    match std::fs::read_to_string(&path) {
-        Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-        Err(_) => vec![],
-    }
-}
-
-fn save_account_registry(reg: &[ImportedAccount]) {
-    let path = account_registry_path();
-    if let Ok(s) = serde_json::to_string_pretty(reg) {
-        std::fs::write(&path, s).ok();
-    }
-}
-
-/// Parse MT5 Statement CSV into an ImportedAccount
-fn parse_mt5_csv(text: &str, account_name: &str) -> ImportedAccount {
-    let mut result = ImportedAccount {
-        name: account_name.to_string(),
-        acct_type: "mt5-import".to_string(),
-        equity: 0.0,
-        balance: 0.0,
-        currency: "USD".to_string(),
-        positions: vec![],
-        history: vec![],
-        import_date: chrono::Local::now().format("%Y-%m-%d").to_string(),
-    };
-
-    let lines: Vec<&str> = text
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .collect();
-    let mut section = "header";
-    let mut section_headers: Vec<String> = vec![];
-
-    for i in 0..lines.len() {
-        let line = lines[i];
-        let lower = line.to_lowercase();
-
-        // Parse balance/equity from summary lines
-        if lower.starts_with("balance") || lower.contains("balance:") || lower.contains("balance\t")
-        {
-            if let Some(val) = extract_last_number(line) {
-                result.balance = val;
-            }
-        }
-        if lower.starts_with("equity") || lower.contains("equity:") || lower.contains("equity\t") {
-            if let Some(val) = extract_last_number(line) {
-                result.equity = val;
-            }
-        }
-
-        // Currency detection
-        for cur in &["EUR", "GBP", "CHF", "JPY", "AUD", "CAD"] {
-            if line.contains(cur) && result.currency == "USD" {
-                result.currency = cur.to_string();
-            }
-        }
-
-        // Section detection
-        if lower.starts_with("positions") || lower.starts_with("open positions") {
-            section = "positions";
-            if i + 1 < lines.len() {
-                section_headers = parse_csv_row(lines[i + 1])
-                    .iter()
-                    .map(|h| h.to_lowercase())
-                    .collect();
-            }
-            continue;
-        }
-        if lower.starts_with("deals")
-            || lower.starts_with("closed")
-            || lower.starts_with("trade history")
-        {
-            section = "deals";
-            if i + 1 < lines.len() {
-                section_headers = parse_csv_row(lines[i + 1])
-                    .iter()
-                    .map(|h| h.to_lowercase())
-                    .collect();
-            }
-            continue;
-        }
-
-        // Parse data rows
-        if (section == "positions" || section == "deals") && !section_headers.is_empty() {
-            let vals = parse_csv_row(line);
-            if vals.len() < 3 {
-                continue;
-            }
-            let row = make_row_map(&section_headers, &vals);
-
-            let symbol = row
-                .get("symbol")
-                .or(row.get("instrument"))
-                .cloned()
-                .unwrap_or_default();
-            if symbol.is_empty() || symbol.to_lowercase() == "symbol" {
-                continue;
-            }
-
-            let type_str = row
-                .get("type")
-                .or(row.get("action"))
-                .or(row.get("side"))
-                .cloned()
-                .unwrap_or_default()
-                .to_lowercase();
-            let side = if type_str.contains("buy") {
-                "buy"
-            } else {
-                "sell"
-            }
-            .to_string();
-            let lots = parse_csv_float(row.get("volume").or(row.get("lots")).or(row.get("qty")));
-            let price = parse_csv_float(
-                row.get("price")
-                    .or(row.get("open price"))
-                    .or(row.get("entry")),
-            );
-            let profit = parse_csv_float(row.get("profit").or(row.get("p/l")).or(row.get("pnl")));
-            let commission = parse_csv_float(row.get("commission").or(row.get("comm")));
-            let swap = parse_csv_float(row.get("swap"));
-            let time = row
-                .get("time")
-                .or(row.get("open time"))
-                .or(row.get("date"))
-                .cloned()
-                .unwrap_or_default();
-
-            if section == "positions" {
-                let sl = parse_csv_float(row.get("s/l").or(row.get("sl")).or(row.get("stop loss")));
-                let tp =
-                    parse_csv_float(row.get("t/p").or(row.get("tp")).or(row.get("take profit")));
-                result.positions.push(Mt5Position {
-                    symbol,
-                    side,
-                    lots,
-                    price,
-                    profit,
-                    commission,
-                    swap,
-                    sl,
-                    tp,
-                    time,
-                });
-            } else {
-                result.history.push(Mt5Trade {
-                    symbol,
-                    side,
-                    lots,
-                    price,
-                    profit,
-                    commission,
-                    swap,
-                    time,
-                });
-            }
-        }
-    }
-
-    // Fallback: try simple deal CSV (header row + data rows)
-    if result.positions.is_empty() && result.history.is_empty() {
-        if let Some(headers) = lines.first() {
-            let header_vals: Vec<String> = parse_csv_row(headers)
-                .iter()
-                .map(|h| h.to_lowercase())
-                .collect();
-            if header_vals.iter().any(|h| h == "symbol" || h == "deal") {
-                for line in &lines[1..] {
-                    let vals = parse_csv_row(line);
-                    let row = make_row_map(&header_vals, &vals);
-                    let symbol = row.get("symbol").cloned().unwrap_or_default();
-                    if symbol.is_empty() {
-                        continue;
-                    }
-                    let type_str = row.get("type").cloned().unwrap_or_default().to_lowercase();
-                    let side = if type_str.contains("buy") {
-                        "buy"
-                    } else {
-                        "sell"
-                    }
-                    .to_string();
-                    let lots = parse_csv_float(row.get("volume").or(row.get("lots")));
-                    let price = parse_csv_float(row.get("price"));
-                    let profit = parse_csv_float(row.get("profit"));
-                    let commission = parse_csv_float(row.get("commission"));
-                    let swap = parse_csv_float(row.get("swap"));
-                    let time = row
-                        .get("time")
-                        .or(row.get("open time"))
-                        .cloned()
-                        .unwrap_or_default();
-                    result.history.push(Mt5Trade {
-                        symbol,
-                        side,
-                        lots,
-                        price,
-                        profit,
-                        commission,
-                        swap,
-                        time,
-                    });
-                }
-            }
-        }
-    }
-
-    if result.equity == 0.0 && result.balance > 0.0 {
-        result.equity = result.balance;
-    }
-    result
-}
-
-fn parse_csv_row(line: &str) -> Vec<String> {
-    let mut vals = vec![];
-    let mut in_quote = false;
-    let mut current = String::new();
-    for ch in line.chars() {
-        if ch == '"' {
-            in_quote = !in_quote;
-            continue;
-        }
-        if (ch == ',' || ch == '\t') && !in_quote {
-            vals.push(current.trim().to_string());
-            current.clear();
-            continue;
-        }
-        current.push(ch);
-    }
-    vals.push(current.trim().to_string());
-    vals
-}
-
-fn make_row_map(headers: &[String], vals: &[String]) -> std::collections::HashMap<String, String> {
-    let mut map = std::collections::HashMap::new();
-    for (i, h) in headers.iter().enumerate() {
-        if let Some(v) = vals.get(i) {
-            map.insert(h.clone(), v.clone());
-        }
-    }
-    map
-}
-
-fn parse_csv_float(val: Option<&String>) -> f64 {
-    val.and_then(|s| s.replace(',', "").parse::<f64>().ok())
-        .unwrap_or(0.0)
-}
-
-fn extract_last_number(line: &str) -> Option<f64> {
-    let re_like: Vec<&str> = line
-        .split(|c: char| !c.is_ascii_digit() && c != '.' && c != ',')
-        .filter(|s| !s.is_empty() && s.contains('.'))
-        .collect();
-    re_like
-        .last()
-        .and_then(|s| s.replace(',', "").parse::<f64>().ok())
-}
-
 /// Resolve timeframe shortcodes to Alpaca API format + aggregation factor.
 /// Supports: M1,M5,M15,M30,H1,H2,H3,H4,H6,H8,H12,D1,W1,MN1 + Alpaca native names.
 /// Returns (api_timeframe, aggregation_factor).
@@ -905,13 +593,9 @@ struct Args {
     #[arg(long)]
     account: bool,
 
-    /// Show all accounts (Alpaca + imported MT5) and exit
+    /// Show account info and exit
     #[arg(long)]
     accounts: bool,
-
-    /// Import MT5 CSV as named account (e.g., --import-mt5 DARWIN_EUR:/path/to/statement.csv)
-    #[arg(long)]
-    import_mt5: Option<String>,
 
     /// Symbol to load on startup
     #[arg(long, short = 's')]
@@ -996,8 +680,6 @@ struct App {
     chart_symbol: String,
     chart_bars: Vec<broker::Bar>,
     chart_timeframe: String,
-    // Multi-Account
-    imported_accounts: Vec<ImportedAccount>,
     // Selection state (for interactive list navigation)
     selected_position: usize,
     selected_order: usize,
@@ -1027,7 +709,6 @@ impl App {
         watchlist: Vec<String>,
         cache_dir: Option<PathBuf>,
     ) -> Self {
-        let imported_accounts = load_account_registry();
         Self {
             broker,
             active_tab: 0,
@@ -1045,7 +726,6 @@ impl App {
             orders: vec![],
             watchlist,
             watchlist_quotes: vec![],
-            imported_accounts,
             chart_symbol: symbol,
             chart_bars: vec![],
             chart_timeframe: "1Day".to_string(),
@@ -1296,38 +976,6 @@ impl App {
                     self.chart_timeframe = parts[1].to_string();
                     self.last_refresh = Instant::now() - Duration::from_secs(60);
                     self.log(&format!("Timeframe: {}", self.chart_timeframe), Color::Cyan);
-                }
-            }
-            "import" => {
-                // import ACCOUNT_NAME /path/to/file.csv
-                if parts.len() < 3 {
-                    self.log(
-                        "Usage: import ACCOUNT_NAME /path/to/file.csv",
-                        Color::Yellow,
-                    );
-                } else {
-                    let name = parts[1].to_string();
-                    let path = parts[2..].join(" ");
-                    match std::fs::read_to_string(&path) {
-                        Ok(text) => {
-                            let acct = parse_mt5_csv(&text, &name);
-                            let pos_count = acct.positions.len();
-                            let hist_count = acct.history.len();
-                            let equity = acct.equity;
-                            let currency = acct.currency.clone();
-
-                            // Remove existing with same name
-                            self.imported_accounts.retain(|a| a.name != name);
-                            self.imported_accounts.push(acct);
-                            save_account_registry(&self.imported_accounts);
-
-                            self.log(&format!(
-                                "Imported \"{name}\": {pos_count} positions, {hist_count} trades, equity {currency} {equity:.2}"
-                            ), Color::Green);
-                            self.active_tab = 5; // switch to Accounts tab
-                        }
-                        Err(e) => self.log(&format!("Failed to read {path}: {e}"), Color::Red),
-                    }
                 }
             }
             "accounts" | "acct" => {
@@ -1585,21 +1233,6 @@ impl App {
                     Err(e) => self.log(&format!("History failed: {e}"), Color::Red),
                 }
             }
-            "rmacct" => {
-                if parts.len() < 2 {
-                    self.log("Usage: rmacct ACCOUNT_NAME", Color::Yellow);
-                } else {
-                    let name = parts[1];
-                    let before = self.imported_accounts.len();
-                    self.imported_accounts.retain(|a| a.name != name);
-                    if self.imported_accounts.len() < before {
-                        save_account_registry(&self.imported_accounts);
-                        self.log(&format!("Removed account \"{name}\""), Color::Yellow);
-                    } else {
-                        self.log(&format!("Account \"{name}\" not found"), Color::Red);
-                    }
-                }
-            }
             "search" | "find" => {
                 if parts.len() < 2 {
                     self.log("Usage: search QUERY", Color::Yellow);
@@ -1738,14 +1371,10 @@ impl App {
                 );
                 self.log("  Ops: read-only cache stats, broker/sync snapshots, cache backup import/export, LAN sync server/client + Prometheus metrics, MCP research packet server", Color::Cyan);
                 self.log(
-                    "  Imports: MT5 statement CSV account summaries",
-                    Color::Cyan,
-                );
-                self.log(
                     "--- GUI-only / not reasonable to fully mirror in TUI ---",
                     Color::Yellow,
                 );
-                self.log("  Kraken/tastytrade live broker surfaces, KrakenPro controls, private/public WebSockets, DOM/bookmap/orderbook", Color::Yellow);
+                self.log("  Kraken live broker surfaces, KrakenPro controls, private/public WebSockets, DOM/bookmap/orderbook", Color::Yellow);
                 self.log("  Multi-chart egui workspace, draggable panels, full indicator stack/settings, GPU overlays", Color::Yellow);
                 self.log("  Backtester/optimizer/walk-forward UI, AI assistant windows, full Storage/Sync Status managers", Color::Yellow);
             }
@@ -1877,7 +1506,7 @@ impl App {
                 );
                 self.log("--- Accounts / Ops ---", Color::Cyan);
                 self.log(
-                    "  import NAME /path.csv, accounts, rmacct NAME",
+                    "  accounts                      Show account summary",
                     Color::Cyan,
                 );
                 self.log(
@@ -2470,23 +2099,9 @@ fn draw_accounts(f: &mut Frame, app: &App, area: Rect) {
     let alpaca_equity = app.account.as_ref().map(|a| a.equity).unwrap_or(0.0);
     let alpaca_pl: f64 = app.positions.iter().map(|p| p.unrealized_pl).sum();
     let alpaca_pos_count = app.positions.len();
-    let import_equity: f64 = app.imported_accounts.iter().map(|a| a.equity).sum();
-    let import_pl: f64 = app
-        .imported_accounts
-        .iter()
-        .map(|a| {
-            a.positions.iter().map(|p| p.profit).sum::<f64>()
-                + a.history.iter().map(|h| h.profit).sum::<f64>()
-        })
-        .sum();
-    let import_pos: usize = app
-        .imported_accounts
-        .iter()
-        .map(|a| a.positions.len())
-        .sum();
-    let total_equity = alpaca_equity + import_equity;
-    let total_pl = alpaca_pl + import_pl;
-    let total_pos = alpaca_pos_count + import_pos;
+    let total_equity = alpaca_equity;
+    let total_pl = alpaca_pl;
+    let total_pos = alpaca_pos_count;
 
     let summary_text = vec![
         Line::from(vec![
@@ -2513,20 +2128,10 @@ fn draw_accounts(f: &mut Frame, app: &App, area: Rect) {
             Span::styled("Positions: ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{}", total_pos), Style::default().fg(Color::Cyan)),
         ]),
-        Line::from(vec![
-            Span::styled(
-                format!(
-                    "Accounts: 1 Alpaca + {} imported",
-                    app.imported_accounts.len()
-                ),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                "Use :import NAME /path.csv to add | :rmacct NAME to remove",
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]),
+        Line::from(vec![Span::styled(
+            "Accounts: 1 Alpaca",
+            Style::default().fg(Color::DarkGray),
+        )]),
     ];
     let summary_block = Paragraph::new(summary_text).block(
         Block::default()
@@ -2561,32 +2166,6 @@ fn draw_accounts(f: &mut Frame, app: &App, area: Rect) {
         ]));
     }
 
-    // Imported account rows
-    for acct in &app.imported_accounts {
-        let acct_pl: f64 = acct.positions.iter().map(|p| p.profit).sum::<f64>()
-            + acct.history.iter().map(|h| h.profit).sum::<f64>();
-        let pl_color = if acct_pl >= 0.0 {
-            Color::Green
-        } else {
-            Color::Red
-        };
-        let pos_count = acct.positions.len();
-        rows.push(Row::new(vec![
-            Cell::from(acct.name.clone()).style(
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Cell::from("MT5 Import").style(Style::default().fg(Color::Yellow)),
-            Cell::from(acct.currency.clone()).style(Style::default().fg(Color::DarkGray)),
-            Cell::from(format!("{:.2}", acct.equity)).style(Style::default().fg(Color::White)),
-            Cell::from(format!("{}", pos_count)).style(Style::default().fg(Color::Cyan)),
-            Cell::from(format!("{:+.2}", acct_pl)).style(Style::default().fg(pl_color)),
-            Cell::from(format!("Imported {}", &acct.import_date))
-                .style(Style::default().fg(Color::Yellow)),
-        ]));
-    }
-
     let account_table = Table::new(
         rows,
         [
@@ -2608,7 +2187,7 @@ fn draw_accounts(f: &mut Frame, app: &App, area: Rect) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" Accounts ({}) ", 1 + app.imported_accounts.len())),
+            .title(" Accounts (1) "),
     );
     f.render_widget(account_table, chunks[1]);
 
@@ -2624,21 +2203,6 @@ fn draw_accounts(f: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(Color::Cyan),
                 ),
                 Span::styled("█".repeat(bar_len), Style::default().fg(Color::Green)),
-                Span::styled(
-                    format!(" {:.1}%", pct),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]));
-        }
-        for acct in &app.imported_accounts {
-            let pct = acct.equity / total_equity * 100.0;
-            let bar_len = (pct / 100.0 * 40.0) as usize;
-            weight_lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{:<16}", &acct.name),
-                    Style::default().fg(Color::Yellow),
-                ),
-                Span::styled("█".repeat(bar_len), Style::default().fg(Color::Yellow)),
                 Span::styled(
                     format!(" {:.1}%", pct),
                     Style::default().fg(Color::DarkGray),
@@ -3018,7 +2582,7 @@ fn draw(f: &mut Frame, app: &App) {
             2 => "↑↓/jk:sel  Enter:chart  x:close  p:partial  :closeall  q:quit".to_string(),
             3 => "↑↓:sel  d:cancel  :cancelall  :history  q:quit".to_string(),
             4 => ":watch SYM  :limit/:stop/:bracket  q:quit".to_string(),
-            5 => ":import NAME /path.csv  :rmacct NAME  q:quit".to_string(),
+            5 => "Tab:next  r:refresh  q:quit".to_string(),
             6 => "Tab:next  :history [N]  r:refresh  q:quit".to_string(),
             _ => "Tab:next  ::cmd  q:quit".to_string(),
         }
@@ -3272,43 +2836,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Import MT5 CSV one-shot mode
-    if let Some(ref import_spec) = args.import_mt5 {
-        let parts: Vec<&str> = import_spec.splitn(2, ':').collect();
-        if parts.len() != 2 {
-            eprintln!("Usage: --import-mt5 ACCOUNT_NAME:/path/to/statement.csv");
-            std::process::exit(1);
-        }
-        let name = parts[0];
-        let path = parts[1];
-        match std::fs::read_to_string(path) {
-            Ok(text) => {
-                let acct = parse_mt5_csv(&text, name);
-                let mut registry = load_account_registry();
-                registry.retain(|a| a.name != name);
-                println!(
-                    "Imported \"{}\": {} positions, {} trades, equity {} {:.2}",
-                    name,
-                    acct.positions.len(),
-                    acct.history.len(),
-                    acct.currency,
-                    acct.equity
-                );
-                registry.push(acct);
-                save_account_registry(&registry);
-            }
-            Err(e) => {
-                eprintln!("Failed to read {}: {}", path, e);
-                std::process::exit(1);
-            }
-        }
-        return Ok(());
-    }
-
-    // Show all accounts one-shot mode
+    // Show account one-shot mode
     if args.accounts {
-        let registry = load_account_registry();
-        // Alpaca
         match broker.get_account().await {
             Ok(a) => {
                 let positions = broker.get_positions().await.unwrap_or_default();
@@ -3327,39 +2856,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     positions.len(),
                     pl,
                     "Connected"
-                );
-                for acct in &registry {
-                    let acct_pl: f64 = acct.positions.iter().map(|p| p.profit).sum::<f64>()
-                        + acct.history.iter().map(|h| h.profit).sum::<f64>();
-                    println!(
-                        "{:<18} {:<12} {:<5} {:>14.2} {:>5} {:>14.2} {:<12}",
-                        acct.name,
-                        "MT5 Import",
-                        acct.currency,
-                        acct.equity,
-                        acct.positions.len(),
-                        acct_pl,
-                        format!("Imported {}", acct.import_date)
-                    );
-                }
-                let total_equity = a.equity + registry.iter().map(|a| a.equity).sum::<f64>();
-                let total_pl = pl
-                    + registry
-                        .iter()
-                        .map(|a| {
-                            a.positions.iter().map(|p| p.profit).sum::<f64>()
-                                + a.history.iter().map(|h| h.profit).sum::<f64>()
-                        })
-                        .sum::<f64>();
-                println!("{:-<80}", "");
-                println!(
-                    "{:<18} {:<12} {:<5} {:>14.2} {:>5} {:>14.2}",
-                    "TOTAL",
-                    format!("{} accts", 1 + registry.len()),
-                    "",
-                    total_equity,
-                    positions.len() + registry.iter().map(|a| a.positions.len()).sum::<usize>(),
-                    total_pl
                 );
             }
             Err(e) => {
