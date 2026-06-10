@@ -161,6 +161,7 @@ struct FormingBarGpuWrite {
     ohlc_offset: u64,
     ohlc: [f32; 3],
     mid: f32,
+    is_live_forming: f32,
 }
 
 fn forming_bar_gpu_write(
@@ -168,6 +169,7 @@ fn forming_bar_gpu_write(
     high: f32,
     low: f32,
     close: f32,
+    is_live_forming: f32,
 ) -> Option<FormingBarGpuWrite> {
     if bar_count == 0 {
         return None;
@@ -178,6 +180,7 @@ fn forming_bar_gpu_write(
         ohlc_offset: (last_idx as u64) * 12,
         ohlc: [high, low, close],
         mid: (high + low) * 0.5,
+        is_live_forming,
     })
 }
 
