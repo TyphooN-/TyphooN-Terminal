@@ -94,6 +94,9 @@ impl TyphooNApp {
             // hash to drop, applied after the window closure so we never mutate
             // news_full_articles while it is being iterated for rendering.
             let mut news_remove_hash: Option<String> = None;
+            // "Purge spam": records the active ticker to bulk-remove cached
+            // articles that fail the relevance gate, applied after the closure.
+            let mut news_purge_ticker: Option<String> = None;
             egui::Window::new("News & Research")
                 .open(&mut open)
                 .resizable(true)
@@ -205,6 +208,18 @@ impl TyphooNApp {
                                     )));
                                 }
                             }
+                        }
+                        if ui
+                            .add_enabled(
+                                !self.news_loading && !self.news_full_articles.is_empty(),
+                                egui::Button::new("Purge spam"),
+                            )
+                            .on_hover_text(
+                                "Remove cached articles that fail the relevance gate for the active ticker (GDELT false-positives like cooking / real-estate spam on short tickers). Deleted + ignored so they do not return.",
+                            )
+                            .clicked()
+                        {
+                            news_purge_ticker = Some(chart_symbol.clone());
                         }
                         if self.news_loading {
                             ui.spinner();
@@ -741,6 +756,41 @@ impl TyphooNApp {
                 self.news_full_articles.retain(|a| a.url_hash != hash);
                 self.news_selected = None;
                 self.news_selected_url_hash.clear();
+            }
+            // Bulk "Purge spam": drop every loaded article that fails the
+            // relevance gate for the active ticker (GDELT false-positives), and
+            // ignore each so it can't re-ingest. Hashes are collected first to
+            // keep the borrows disjoint.
+            if let Some(ticker) = news_purge_ticker {
+                let t = ticker.trim().to_uppercase();
+                let purge: Vec<String> = self
+                    .news_full_articles
+                    .iter()
+                    .filter(|a| {
+                        let assoc = a.symbol.eq_ignore_ascii_case(&t)
+                            || a.tickers.iter().any(|tk| tk.eq_ignore_ascii_case(&t));
+                        assoc
+                            && !typhoon_engine::core::news::article_is_relevant_for_ticker(a, &t)
+                    })
+                    .map(|a| a.url_hash.clone())
+                    .collect();
+                for hash in &purge {
+                    let _ = self.broker_tx.send(BrokerCmd::IgnoreNewsArticle {
+                        symbol: t.clone(),
+                        url_hash: hash.clone(),
+                    });
+                }
+                if !purge.is_empty() {
+                    self.news_full_articles
+                        .retain(|a| !purge.contains(&a.url_hash));
+                    self.news_selected = None;
+                    self.news_selected_url_hash.clear();
+                }
+                self.log.push_back(LogEntry::info(format!(
+                    "News: purged {} irrelevant article(s) for {}",
+                    purge.len(),
+                    t
+                )));
             }
             if let Some(symbol) = open_chart_symbol {
                 self.open_news_ticker_chart(&symbol);
