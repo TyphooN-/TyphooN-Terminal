@@ -2831,15 +2831,24 @@ impl ChartState {
         if self.forming_bar_dirty && n > 1 {
             if let Some(last) = self.bars.last() {
                 let close = last.close;
-                if let Some(gpu) = gpu {
-                    gpu.upload_forming_bar(
-                        last.open as f32,
-                        last.high as f32,
-                        last.low as f32,
-                        close as f32,
-                        last.volume as f32,
-                    );
+
+                // When we have live bid/ask data, prefer the clean Bid/Ask/Last overlay
+                // over a mutating forming candle. This eliminates the ghost candle on Daily
+                // and intraday during open session. The overlay already hides itself when stale.
+                let has_live_quotes = self.live_bid > 0.0 && self.live_ask > 0.0;
+                if !has_live_quotes {
+                    if let Some(gpu) = gpu {
+                        gpu.upload_forming_bar(
+                            last.open as f32,
+                            last.high as f32,
+                            last.low as f32,
+                            close as f32,
+                            last.volume as f32,
+                        );
+                    }
                 }
+
+                // Indicator rolling updates still happen (they only need the close value)
                 // For SMA200 / SMA100 we can do a cheap rolling update
                 let prev200 = self.sma200.get(n - 2).copied().flatten();
                 if let (Some(last_sma200), Some(prev)) = (self.sma200.last_mut(), prev200) {
