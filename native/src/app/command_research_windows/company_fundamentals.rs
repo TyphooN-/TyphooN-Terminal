@@ -192,13 +192,12 @@ impl TyphooNApp {
             }
             "RESEARCH_SCRAPE" | "RSCRAPE" => {
                 let _ = self.broker_tx.send(BrokerCmd::ResearchScrape {
-                    use_mt5: true,
                     use_alpaca: true,
                     finnhub_key: self.finnhub_key.clone(),
                     fmp_key: self.fmp_key.clone(),
                 });
                 self.log.push_back(LogEntry::info(
-                    "Research scrape started across MT5/Alpaca universe",
+                    "Research scrape started across Alpaca universe",
                 ));
             }
             "TAS" | "TIME_SALES" => {

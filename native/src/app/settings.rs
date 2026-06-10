@@ -277,18 +277,13 @@ impl TyphooNApp {
                 ui.separator();
                 ui.label(egui::RichText::new("Select which brokers to pull stock tickers from for Yahoo fundamentals scrape.").color(AXIS_TEXT).small());
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.fund_source_mt5, "MT5");
                     ui.checkbox(&mut self.fund_source_alpaca, "Alpaca");
                     ui.checkbox(&mut self.fund_source_kraken, "Kraken");
                 });
                 // Sync broker_scope from checkbox state
-                self.broker_scope = match (
-                    self.fund_source_mt5,
-                    self.fund_source_alpaca,
-                    self.fund_source_kraken,
-                ) {
-                    (false, true, false) => EventSource::Alpaca,
-                    (false, false, true) => EventSource::Kraken,
+                self.broker_scope = match (self.fund_source_alpaca, self.fund_source_kraken) {
+                    (true, false) => EventSource::Alpaca,
+                    (false, true) => EventSource::Kraken,
                     _ => EventSource::All,
                 };
 
@@ -533,72 +528,6 @@ impl TyphooNApp {
                         ui.add(egui::TextEdit::singleline(&mut self.lan_sync_port).desired_width(50.0).font(egui::TextStyle::Monospace));
                     });
                 }
-
-                ui.add_space(10.0);
-                ui.heading("MT5 BarCacheWriter Sources");
-                ui.separator();
-                ui.label(egui::RichText::new("Paths to typhoon_mt5_cache.db files written by BarCacheWriter EA.").color(AXIS_TEXT).small());
-                ui.label(egui::RichText::new("Data is synced into the main cache on startup and on demand.").color(AXIS_TEXT).small());
-                let now_s = chrono::Utc::now().timestamp();
-                for i in 0..4 {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("MT5 #{}:", i + 1));
-                        let r = ui.add(egui::TextEdit::singleline(&mut self.mt5_db_paths[i]).desired_width(400.0).hint_text("/path/to/typhoon_mt5_cache.db"));
-                        if r.lost_focus() { settings_save_after = true; }
-                        // Show status indicator + heartbeat freshness so the user
-                        // can tell "file exists but BarCacheWriter is dead" apart
-                        // from "actively writing". BCW's heartbeat cadence is
-                        // ~30s, so > 90s without a fresh beat means something
-                        // (EA crash, MT5 disconnect, frozen terminal) has stopped
-                        // the writer even though the DB file is still on disk.
-                        if !self.mt5_db_paths[i].is_empty() {
-                            let exists = std::path::Path::new(&self.mt5_db_paths[i]).exists();
-                            let (icon, col) = if exists { ("\u{25CF}", UP) } else { ("\u{25CF}", DOWN) };
-                            ui.label(egui::RichText::new(icon).color(col));
-                            if exists {
-                                let beat = self.mt5_heartbeats.iter()
-                                    .find(|h| h.0 == self.mt5_db_paths[i]);
-                                match beat {
-                                    Some(h) => {
-                                        let age = now_s.saturating_sub(h.3);
-                                        let (txt, col) = if age <= 45 {
-                                            (format!("beat {}s ago", age), UP)
-                                        } else if age <= 90 {
-                                            (format!("beat {}s ago (lagging)", age),
-                                             egui::Color32::from_rgb(220, 200, 80))
-                                        } else {
-                                            (format!("STALE ({}s)", age), DOWN)
-                                        };
-                                        ui.label(egui::RichText::new(txt).color(col).small());
-                                    }
-                                    None => {
-                                        ui.label(egui::RichText::new("no heartbeat yet")
-                                            .color(AXIS_TEXT).small());
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
-                ui.horizontal(|ui| {
-                    if ui.button("Sync MT5 Data Now").clicked() {
-                        let paths: Vec<String> = self.mt5_db_paths.iter()
-                            .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
-                            .cloned().collect();
-                        if paths.is_empty() {
-                            self.log.push_back(LogEntry::warn("No valid MT5 database paths configured"));
-                        } else {
-                            let count = paths.len();
-                            let _ = self.broker_tx.send(BrokerCmd::Mt5Sync {
-                                sources: paths,
-                                enabled_timeframes: self.enabled_standard_sync_timeframes(),
-                            });
-                            self.log.push_back(LogEntry::info(format!("MT5 sync started ({} sources)...", count)));
-                        }
-                    }
-                    ui.checkbox(&mut self.mt5_auto_sync, "Auto-sync every 30s")
-                        .on_hover_text("Matches BarCacheWriter's 30s write cadence. Silent — no log spam.");
-                });
 
                 ui.add_space(10.0);
                 ui.heading("Notifications");
