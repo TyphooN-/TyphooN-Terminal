@@ -52,13 +52,6 @@ pub(super) const YAHOO_CHART_FULL_TILT_QUEUE_WINDOW: usize = 72;
 pub(super) const YAHOO_CHART_FULL_TILT_BATCH_SIZE: usize = 6;
 pub(super) const YAHOO_CHART_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2_048;
 
-/// Largest `MAX_BARS` value that can safely cross the MT5 demand.txt / MQL5
-/// boundary. This is a provider-maximum sentinel, not a local history target:
-/// the terminal asks the EA for everything the broker server can provide, then
-/// the saturation memory suppresses repeat full requests once the count stops
-/// growing for a symbol/timeframe.
-pub(super) const MT5_PROVIDER_MAX_BARS: u32 = i32::MAX as u32;
-
 /// Kraken Spot public OHLC is a provider-window API, not a traversal API. Kraken
 /// documents the endpoint as returning the most recent ~720 candles per interval
 /// (monthly is shorter in practice), so these values are external provider
