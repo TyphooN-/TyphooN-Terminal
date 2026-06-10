@@ -77,3 +77,16 @@ Then run:
 cargo fmt --all
 cargo check -p typhoon-native
 ```
+
+
+## Tiered Priority Model (2026-06-10 update)
+
+To balance full-universe coverage with UI responsiveness, the scheduler now classifies symbols into three tiers:
+
+- **Tier 1 (MTF Grid / Foreground)**: Open or focused symbols in the MTF Grid + the currently visible single-chart symbol.
+- **Tier 2 (Active)**: Watchlist symbols + current positions/holdings.
+- **Tier 3 (Background)**: Everything else in the Kraken + Alpaca universe.
+
+Within each tier, timeframes are still processed high-to-low (`1Month → 1Week → 1Day → ... → 1Min`).
+
+This ensures that research packets, outlier scans, and MTF Grid charts get fresh data first while the broad universe continues to converge in the background.

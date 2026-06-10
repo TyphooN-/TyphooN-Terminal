@@ -109,6 +109,12 @@ The automated scheduler now keeps the per-cycle candidate walk allocation-light:
 - Automated Alpaca writes do not synchronously rescan SQLite storage statistics unless the Storage/Cache windows are visible. Scheduler freshness is updated through `note_cached_sync_success`, keeping chart interaction responsive while bulk sync runs.
 - Sync Health uses the last broker check/write time as a recent-health signal when the provider's latest available market bar is intrinsically old. A successfully checked symbol with no newer Alpaca bars should not make the broker look less healthy immediately after sync.
 
+
+
+## Tiered Symbol Priority (2026-06-10)
+
+In addition to the `Missing` / `Stale` / `Backfill` bucket ordering, symbols are now classified into three priority tiers (MTF Grid → Active → Background) before bucket selection. This ensures that charts the user is actively looking at (especially MTF Grid) receive bar data before background universe work.
+
 ## Consequences
 
 - **Sync throughput scales with the user's tier** without manual

@@ -319,6 +319,12 @@ Default policy:
   window.
 - Never use fallback-filled bars for execution-price assumptions on Kraken.
 
+
+
+## Interaction with Tiered Scheduler (2026-06-10)
+
+Gap-fill work via Alpaca and other providers is now also subject to the three-tier symbol priority (MTF Grid first). High-timeframe gap fills for focused symbols are preferred over low-timeframe background work.
+
 ## Consequences
 
 ### Pros
