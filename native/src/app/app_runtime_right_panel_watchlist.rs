@@ -65,7 +65,7 @@ impl TyphooNApp {
                             for tf in &tfs {
                                 let tf_lower = tf.to_lowercase();
                                 for (k, _, _) in stats {
-                                    // BCW metadata keys (`mt5:__NAME__:…`) never
+                                    // Cache metadata keys (`<prefix>:__NAME__:…`) never
                                     // hold bar blobs — the contains-match below
                                     // could otherwise hit them for a symbol like
                                     // "HEART" or a TF equal to an account tag.

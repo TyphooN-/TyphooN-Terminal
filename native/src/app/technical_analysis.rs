@@ -1927,7 +1927,7 @@ pub(super) fn draw_chart(
                 let y_close = price_to_y(bar.close);
                 // Gap-fill bars (Kraken) get magenta color.
                 // Use explicit timestamp tracking rather than day-of-week:
-                // MT5 uses UTC+2 so Saturday 00:00 MT5 = Friday 22:00 UTC — day-of-week is unreliable.
+                // per-source TZ offsets make day-of-week unreliable for weekend detection.
                 let is_weekend = chart.gap_fill_timestamps.contains(&bar.ts_ms);
                 let color = if flags.vol_heatmap && !vol_avg.is_empty() {
                     // Volume heatmap: blue (low) → green → yellow → red (high)
