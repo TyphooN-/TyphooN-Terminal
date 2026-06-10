@@ -102,13 +102,7 @@ pub(crate) fn watchlist_cache_fallback_sources(symbol: &str) -> &'static [&'stat
         && !symbol.ends_with("USDT")
         && !symbol.ends_with("USDC");
     if equity_like {
-        &[
-            "kraken-equities",
-            "alpaca",
-            "mt5",
-            "mt5:Darwinex",
-            "default",
-        ]
+        &["kraken-equities", "alpaca", "default"]
     } else {
         &["kraken", "kraken-futures", "default"]
     }
@@ -498,12 +492,6 @@ pub(crate) enum BrokerCmd {
         db_path: std::path::PathBuf,
         backfill_complete: bool,
     },
-    /// Sync bar data from MT5 BarCacheWriter databases into main cache.
-    /// Uses shared Arc<SqliteCache> — no second connection opened.
-    Mt5Sync {
-        sources: Vec<String>,
-        enabled_timeframes: Vec<String>,
-    },
     /// Recompress cache at target zstd level (e.g. 22 for max compression).
     CompactStorage {
         db_path: PathBuf,
@@ -512,7 +500,6 @@ pub(crate) enum BrokerCmd {
     /// Scrape fundamentals for stock symbols from selected sources (non-blocking).
     FundamentalsScrape {
         db_path: PathBuf,
-        use_mt5: bool,
         use_alpaca: bool,
         use_kraken: bool,
         kraken_equity_symbols: Vec<String>,
@@ -525,7 +512,6 @@ pub(crate) enum BrokerCmd {
     },
     /// Bulk research scrape — profile/peers/earnings/press/sentiment/transcripts (ADR-107).
     ResearchScrape {
-        use_mt5: bool,
         use_alpaca: bool,
         finnhub_key: String,
         fmp_key: String,
@@ -2671,7 +2657,6 @@ pub(crate) enum BrokerCmd {
     /// Scrape news across all enabled source-universe symbols.
     /// Long-running: hits 3-6 APIs per symbol with rate-limiting sleeps.
     NewsScrapeAll {
-        use_mt5: bool,
         use_alpaca: bool,
         use_kraken: bool,
         marketaux_key: String,
@@ -4034,7 +4019,7 @@ pub struct TyphooNApp {
     pub(crate) auto_compact_next_check_at: std::time::Instant,
     /// Canonical base TFs allowed for automated scrape/sync flows.
     /// Stored as cache suffixes (`1Min` .. `1Month`) so all broker backfill
-    /// paths and MT5 demand generation read the same config.
+    /// paths read the same config.
     pub(crate) enabled_sync_timeframes: std::collections::BTreeSet<String>,
     /// Optional startup hint for Alpaca historical data RPM. `0` means auto:
     /// start at Basic cadence, then upgrade when Alpaca rate-limit headers
@@ -4191,69 +4176,6 @@ pub struct TyphooNApp {
     pub(crate) multi_click_points: Vec<(usize, f64)>,
     /// In-progress brush/freehand points (accumulated while mouse held down).
     pub(crate) brush_points: Vec<(usize, f64)>,
-
-    /// MT5 BarCacheWriter database paths (up to 4 sources).
-    /// Each path points to a `typhoon_mt5_cache.db` in an MT5 Wine prefix or native install.
-    /// Data is synced from these sources into the main cache on startup and on demand.
-    pub(crate) mt5_db_paths: [String; 4],
-
-    /// Latest heartbeat snapshots from each MT5 source (BarCacheWriter v1.447+).
-    /// Tuple: (source_path, json_body, row_ts_seconds, received_at_unix_seconds).
-    /// `json_body` is kept as the raw EA payload so the UI can pick fields
-    /// without a round-trip through a typed struct for every new metric.
-    /// Used to drive the staleness banner and to decide whether auto-request
-    /// demand writes are safe (writer alive).
-    pub(crate) mt5_heartbeats: Vec<(String, String, i64, i64)>,
-
-    /// Pending gap-fill requests emitted alongside demand.txt as v3 entries
-    /// `SYMBOL:TF:LAST_TS_MS:MAX_BARS`. Populated by `detect_mt5_gaps()` when
-    /// it spots a symbol:TF whose cached last-bar time is more than one TF
-    /// period older than "now". Each entry is cleared after a successful
-    /// Mt5Sync pass imports newer bars for that key.
-    pub(crate) mt5_gap_requests: Vec<(String, String, i64, u32)>,
-
-    /// True while pass-2 self-heal keeps flagging stale cache entries.
-    /// Starts true (we don't know cache state at boot) and flips to false
-    /// once the self-heal pass finds zero stale pairs for
-    /// `MT5_REPAIR_CLEAN_THRESHOLD` consecutive runs. While in repair
-    /// mode, demand.txt carries the self-heal queue on top of the watched
-    /// pairs; in steady state demand.txt shrinks back to just the watched
-    /// set and EA rotation alone maintains freshness.
-    pub(crate) mt5_repair_mode: bool,
-    /// Consecutive pass-2 runs that found no staleness. Resets to 0 on
-    /// any stale detection. Drives the `mt5_repair_mode` flip.
-    pub(crate) mt5_repair_clean_passes: u32,
-
-    /// Per-(sym, tf) saturation memory for MT5 provider-depth sync.
-    /// Maps key → `(bar_count_when_last_flagged, consecutive_noop_cycles)`.
-    /// The terminal asks MT5/BCW for provider-maximum history. Some MT5 servers
-    /// naturally retain less than the max-history sentinel; without memory,
-    /// pass-2 would re-request full depth forever. When the count hasn't grown
-    /// across 2 consecutive no-op cycles we treat the broker as saturated at
-    /// its current count and suppress repeat full-depth requests. Any staleness
-    /// still flags independently. Cleared on any growth or if the sentinel
-    /// threshold is ever reached.
-    pub(crate) mt5_provider_depth_saturation:
-        std::collections::HashMap<(String, String), (i64, u8)>,
-
-    /// Legacy per-symbol MT5 expansion map. Key = uppercased symbol; value =
-    /// requested target bar count.
-    ///
-    /// Historical note: this used to lift selected symbols above local
-    /// 10K/20K/50K TF targets. MT5 sync now defaults to the provider-maximum
-    /// sentinel for every enabled symbol/timeframe, so expansion cannot weaken
-    /// the normal max-depth request. The map is retained for saved-session and
-    /// palette-command compatibility only.
-    pub(crate) mt5_backtest_expand_symbols: std::collections::HashMap<String, u32>,
-
-    /// Content hash (DefaultHasher) of the last demand.txt payload we
-    /// rendered. `flush_mt5_demand_txt` recomputes the hash on every call
-    /// and short-circuits if unchanged — so a 1Hz flush loop costs a
-    /// hash comparison, not 5+ filesystem writes. Lets us propagate
-    /// fresh-tab-open events within ~1s without hammering the Common/Files
-    /// candidates when nothing has actually changed. Reset to 0 (a hash no
-    /// real content will match) at boot.
-    pub(crate) mt5_demand_txt_last_hash: u64,
 
     /// ADR-038 Phase 2: Pluggable data source manager.
     pub(crate) data_sources: typhoon_engine::core::data_source::DataSourceManager,
@@ -4671,11 +4593,6 @@ pub struct TyphooNApp {
     /// Dividend Yield Screener, Outlier Scanner.
     pub(crate) cached_scoped_fundamentals: Vec<typhoon_engine::core::fundamentals::Fundamentals>,
     pub(crate) cached_scoped_fundamentals_key: Option<(u64, EventSource)>,
-    /// MT5 bar-covered symbol set (uppercased, parsed from detailed_stats keys).
-    /// Rebuilt only when `bg_rev` changes — used to avoid redundant Alpaca fetches
-    /// when an operator still chooses to run MT5 sync.
-    pub(crate) cached_mt5_symbols: std::collections::HashSet<String>,
-    pub(crate) cached_mt5_symbols_rev: Option<u64>,
     /// Cached Alpaca bar-state map (symbol, timeframe) -> sync metadata.
     /// Rebuilt only when `bg_rev` changes so the sync scheduler doesn't rescan
     /// `bg.detailed_stats` every rotation.
@@ -4836,9 +4753,6 @@ pub struct TyphooNApp {
     pub(crate) lan_server_ip: String,
     pub(crate) show_help: bool,
     pub(crate) help_filter: String,
-    /// Auto-sync MT5 cache every ~5 min when enabled (opt-in, default off).
-    /// Dispatches BrokerCmd::Mt5Sync silently without log spam.
-    pub(crate) mt5_auto_sync: bool,
     /// Count of alerts that have fired since the user last dismissed the badge.
     /// Rendered as a red breach counter on the top bar so the trader can't miss it.
     pub(crate) alert_breach_count: u32,
@@ -4918,7 +4832,6 @@ pub struct TyphooNApp {
     pub(crate) show_data_window: bool,
     pub(crate) show_alerts: bool,
     // Fundamentals symbol source settings
-    pub(crate) fund_source_mt5: bool,
     pub(crate) fund_source_alpaca: bool,
     pub(crate) fund_source_kraken: bool,
     /// ADR-094: SCOPE popup window with source checkboxes.
@@ -7394,12 +7307,7 @@ pub struct TyphooNApp {
     pub(crate) kraken_trades_last_fetch: std::time::Instant,
     pub(crate) watchlist_quotes_last_poll: std::time::Instant,
     pub(crate) weekend_crypto_last_sync: std::time::Instant,
-    pub(crate) mt5_bar_last_sync: std::time::Instant,
     pub(crate) alpaca_rotation_last_sync: std::time::Instant,
-    pub(crate) mt5_quote_last_refresh: std::time::Instant,
-    pub(crate) mt5_auto_bar_last_sync: std::time::Instant,
-    pub(crate) mt5_self_heal_last: std::time::Instant,
-    pub(crate) mt5_demand_last_flush: std::time::Instant,
     pub(crate) perf_last_report: std::time::Instant,
     pub(crate) perf_slow_frame_count: u32,
     pub(crate) perf_max_update_ms: f64,
