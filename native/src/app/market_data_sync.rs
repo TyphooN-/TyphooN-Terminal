@@ -1064,6 +1064,7 @@ impl TyphooNApp {
                 .filter_map(|key| key.strip_prefix("equity:").map(str::to_string))
                 .collect();
             let mut cursor = self.kraken_equities_sync_cursor;
+            // Tier priority (MTF Grid > Active > Background) + high-TF-first is applied inside the workset selector
             let candidates = select_alpaca_sync_workset_rotating_with_stale_multiplier(
                 &native_symbols,
                 &native_timeframes,
