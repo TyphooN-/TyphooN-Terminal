@@ -90,6 +90,10 @@ impl TyphooNApp {
             let mut open = self.show_news;
             let mut open_url: Option<String> = None;
             let mut open_chart_symbol: Option<String> = None;
+            // Optimistic per-article removal: the click handlers below record the
+            // hash to drop, applied after the window closure so we never mutate
+            // news_full_articles while it is being iterated for rendering.
+            let mut news_remove_hash: Option<String> = None;
             egui::Window::new("News & Research")
                 .open(&mut open)
                 .resizable(true)
@@ -453,6 +457,7 @@ impl TyphooNApp {
                                                                     symbol: chart_symbol.clone(),
                                                                     url_hash: article.url_hash.clone(),
                                                                 });
+                                                                news_remove_hash = Some(article.url_hash.clone());
                                                                 self.log.push_back(LogEntry::info(format!("News: ignored article for {}", chart_symbol)));
                                                             }
                                                         }
@@ -493,6 +498,7 @@ impl TyphooNApp {
                                             symbol: chart_symbol.clone(),
                                             url_hash: article.url_hash.clone(),
                                         });
+                                        news_remove_hash = Some(article.url_hash.clone());
                                         self.log.push_back(LogEntry::info(format!("News: ignored article for {}", chart_symbol)));
                                     }
                                     ui.close();
@@ -728,6 +734,14 @@ impl TyphooNApp {
                     }
                 });
             self.show_news = open;
+            // Apply the optimistic removal now that rendering (which borrows
+            // news_full_articles) has finished. Selection is cleared because the
+            // indices shift; the detail pane falls back to "Select an article".
+            if let Some(hash) = news_remove_hash {
+                self.news_full_articles.retain(|a| a.url_hash != hash);
+                self.news_selected = None;
+                self.news_selected_url_hash.clear();
+            }
             if let Some(symbol) = open_chart_symbol {
                 self.open_news_ticker_chart(&symbol);
             }

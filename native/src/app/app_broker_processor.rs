@@ -3902,7 +3902,34 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     .await;
                 }
                 BrokerCmd::IgnoreNewsArticle { symbol, url_hash } => {
-                    tracing::debug!("Ignoring news article {} for {}", url_hash, symbol);
+                    // Persist the removal: delete the row + remember the hash so the
+                    // next GDELT/Finnhub fetch can't resurrect it. The UI removes the
+                    // row optimistically; this makes it stick across reloads.
+                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                        match cache.connection() {
+                            Ok(conn) => {
+                                match typhoon_engine::core::news::delete_news(
+                                    &conn, &url_hash, &symbol,
+                                ) {
+                                    Ok(_) => tracing::info!(
+                                        "News: deleted + ignored {} ({})",
+                                        url_hash,
+                                        symbol
+                                    ),
+                                    Err(e) => tracing::warn!(
+                                        "News: failed to delete {}: {}",
+                                        url_hash,
+                                        e
+                                    ),
+                                }
+                            }
+                            Err(e) => tracing::warn!(
+                                "News: no DB connection to delete {}: {}",
+                                url_hash,
+                                e
+                            ),
+                        }
+                    }
                 }
             }
         }

@@ -186,6 +186,11 @@ pub fn create_news_tables(conn: &Connection) -> Result<(), String> {
             last_scrape_at INTEGER NOT NULL DEFAULT 0,
             article_count INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS research_news_ignored (
+            url_hash TEXT PRIMARY KEY,
+            symbol TEXT NOT NULL DEFAULT '',
+            ignored_at INTEGER NOT NULL DEFAULT 0
+        );
         CREATE VIRTUAL TABLE IF NOT EXISTS research_news_fts USING fts5(
             url_hash UNINDEXED,
             headline,
@@ -262,6 +267,19 @@ pub fn upsert_news(conn: &Connection, article: &NewsArticle) -> Result<(), Strin
         return Err("url_hash empty after hash".into());
     }
 
+    // Honour the user's "Remove / Ignore" action: never resurrect an article the
+    // user explicitly purged (GDELT false positives like the WOK cooking spam).
+    if conn
+        .query_row(
+            "SELECT 1 FROM research_news_ignored WHERE url_hash = ?1",
+            params![a.url_hash],
+            |_| Ok(()),
+        )
+        .is_ok()
+    {
+        return Ok(());
+    }
+
     let tickers_json = serde_json::to_string(&a.tickers).unwrap_or("[]".into());
     let categories_json = serde_json::to_string(&a.categories).unwrap_or("[]".into());
 
@@ -299,6 +317,32 @@ pub fn upsert_news(conn: &Connection, article: &NewsArticle) -> Result<(), Strin
         "INSERT INTO research_news_fts(url_hash, headline, summary, body) VALUES (?1,?2,?3,?4)",
         params![a.url_hash, a.headline, a.summary, a.body],
     );
+    Ok(())
+}
+
+/// Permanently remove a news article and remember its hash so it is never
+/// re-ingested. Backs the per-article "Remove / Ignore" action used to kill
+/// GDELT false-positives (e.g. WOK cooking-recipe spam matched on the substring).
+pub fn delete_news(conn: &Connection, url_hash: &str, symbol: &str) -> Result<(), String> {
+    let _ = create_news_tables(conn);
+    if url_hash.is_empty() {
+        return Err("delete_news: url_hash empty".into());
+    }
+    conn.execute(
+        "DELETE FROM research_news WHERE url_hash = ?1",
+        params![url_hash],
+    )
+    .map_err(|e| format!("delete research_news: {e}"))?;
+    let _ = conn.execute(
+        "DELETE FROM research_news_fts WHERE url_hash = ?1",
+        params![url_hash],
+    );
+    conn.execute(
+        "INSERT OR REPLACE INTO research_news_ignored (url_hash, symbol, ignored_at)
+         VALUES (?1, ?2, ?3)",
+        params![url_hash, symbol.to_uppercase(), now_ts()],
+    )
+    .map_err(|e| format!("insert research_news_ignored: {e}"))?;
     Ok(())
 }
 
