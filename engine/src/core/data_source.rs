@@ -1,7 +1,7 @@
 //! Pluggable data source hierarchy (ADR-038 Phase 2).
 //!
 //! Formalizes the cache key prefix routing
-//! (mt5: > kraken: > kraken-futures: > cryptocompare: > tastytrade: > alpaca:)
+//! (kraken: > kraken-futures: > cryptocompare: > alpaca:)
 //! into a trait-based system with per-source health tracking, per-symbol overrides,
 //! and configurable priority ordering.
 
@@ -14,11 +14,11 @@ pub type SourceId = String;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DataSourceEntry {
-    /// Unique identifier (e.g. "mt5-darwinex", "alpaca-paper", "kraken")
+    /// Unique identifier (e.g. "alpaca-paper", "kraken")
     pub id: SourceId,
-    /// Cache key prefix (e.g. "mt5", "alpaca", "cryptocompare", "kraken")
+    /// Cache key prefix (e.g. "alpaca", "cryptocompare", "kraken")
     pub cache_prefix: String,
-    /// Human-readable label (e.g. "MT5 (Darwinex)", "Alpaca (Paper)")
+    /// Human-readable label (e.g. "Kraken", "Alpaca (Paper)")
     pub label: String,
     /// Priority (lower = higher priority). Used for default ordering.
     pub priority: u32,
@@ -59,15 +59,6 @@ impl Default for DataSourceManager {
     fn default() -> Self {
         Self {
             sources: vec![
-                DataSourceEntry {
-                    id: "mt5-darwinex".into(),
-                    cache_prefix: "mt5".into(),
-                    label: "MT5 (Darwinex)".into(),
-                    priority: 1,
-                    healthy: true,
-                    last_success_ts: 0,
-                    asset_classes: vec!["forex".into(), "cfd".into()],
-                },
                 DataSourceEntry {
                     id: "kraken".into(),
                     cache_prefix: "kraken".into(),
@@ -227,34 +218,32 @@ mod tests {
     #[test]
     fn default_sources_ordered() {
         let mgr = DataSourceManager::default();
-        assert_eq!(mgr.sources.len(), 5);
-        assert_eq!(mgr.sources[0].id, "mt5-darwinex");
-        assert_eq!(mgr.sources[0].priority, 1);
-        assert_eq!(mgr.sources[1].id, "kraken");
-        assert_eq!(mgr.sources[2].id, "kraken-futures");
-        assert_eq!(mgr.sources[4].id, "alpaca");
+        assert_eq!(mgr.sources.len(), 4);
+        assert_eq!(mgr.sources[0].id, "kraken");
+        assert_eq!(mgr.sources[0].priority, 2);
+        assert_eq!(mgr.sources[1].id, "kraken-futures");
+        assert_eq!(mgr.sources[3].id, "alpaca");
     }
 
     #[test]
     fn resolve_candidates_default_order() {
         let mgr = DataSourceManager::default();
         let candidates = mgr.resolve_candidates("EURUSD", "1Hour");
-        assert_eq!(candidates[0], "mt5:EURUSD:1Hour");
-        assert_eq!(candidates[1], "kraken:EURUSD:1Hour");
-        assert_eq!(candidates[2], "kraken-futures:EURUSD:1Hour");
-        assert_eq!(candidates[3], "cryptocompare:EURUSD:1Hour");
-        assert_eq!(candidates[4], "alpaca:EURUSD:1Hour");
-        assert_eq!(candidates[5], "EURUSD:1Hour"); // bare key
+        assert_eq!(candidates[0], "kraken:EURUSD:1Hour");
+        assert_eq!(candidates[1], "kraken-futures:EURUSD:1Hour");
+        assert_eq!(candidates[2], "cryptocompare:EURUSD:1Hour");
+        assert_eq!(candidates[3], "alpaca:EURUSD:1Hour");
+        assert_eq!(candidates[4], "EURUSD:1Hour"); // bare key
     }
 
     #[test]
     fn resolve_candidates_skips_unhealthy() {
         let mut mgr = DataSourceManager::default();
-        mgr.mark_failure("mt5-darwinex");
+        mgr.mark_failure("kraken");
         let candidates = mgr.resolve_candidates("AAPL", "1Day");
         // Healthy first, then unhealthy at end
-        assert_eq!(candidates[0], "kraken:AAPL:1Day");
-        assert!(candidates.iter().any(|c| c == "mt5:AAPL:1Day")); // still present, just last
+        assert_eq!(candidates[0], "kraken-futures:AAPL:1Day");
+        assert!(candidates.iter().any(|c| c == "kraken:AAPL:1Day")); // still present, just last
     }
 
     #[test]
@@ -269,8 +258,8 @@ mod tests {
     #[test]
     fn source_for_key() {
         let mgr = DataSourceManager::default();
-        let source = mgr.source_for_key("mt5:EURUSD:1Hour");
-        assert_eq!(source.map(|s| s.id.as_str()), Some("mt5-darwinex"));
+        let source = mgr.source_for_key("kraken:EURUSD:1Hour");
+        assert_eq!(source.map(|s| s.id.as_str()), Some("kraken"));
         assert!(mgr.source_for_key("unknown:X:1D").is_none());
     }
 
@@ -278,7 +267,7 @@ mod tests {
     fn mark_success_updates_timestamp() {
         let mut mgr = DataSourceManager::default();
         assert_eq!(mgr.sources[0].last_success_ts, 0);
-        mgr.mark_success("mt5-darwinex");
+        mgr.mark_success("kraken");
         assert!(mgr.sources[0].last_success_ts > 0);
         assert!(mgr.sources[0].healthy);
     }
@@ -296,7 +285,7 @@ mod tests {
         let mgr = DataSourceManager::default();
         let json = serde_json::to_string(&mgr).unwrap();
         let back: DataSourceManager = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.sources.len(), 5);
+        assert_eq!(back.sources.len(), 4);
         assert_eq!(back.health_timeout_secs, 900);
     }
 
@@ -319,8 +308,8 @@ mod tests {
     fn status_summary() {
         let mgr = DataSourceManager::default();
         let summary = mgr.status_summary();
-        assert_eq!(summary.len(), 5);
-        assert!(summary[0].2); // mt5 healthy
+        assert_eq!(summary.len(), 4);
+        assert!(summary[0].2); // kraken healthy
     }
 
     #[test]
@@ -329,8 +318,8 @@ mod tests {
         let upper = mgr.resolve_candidates("EURUSD", "1Hour");
         let lower = mgr.resolve_candidates("eurusd", "1Hour");
         // Both should produce uppercase keys
-        assert_eq!(upper[0], "mt5:EURUSD:1Hour");
-        assert_eq!(lower[0], "mt5:EURUSD:1Hour");
+        assert_eq!(upper[0], "kraken:EURUSD:1Hour");
+        assert_eq!(lower[0], "kraken:EURUSD:1Hour");
     }
 
     #[test]
@@ -341,15 +330,15 @@ mod tests {
         assert_eq!(c1[0], "cryptocompare:SOLUSD:1Day");
         // Non-matching symbol uses default order
         let c2 = mgr.resolve_candidates("AAPL", "1Day");
-        assert_eq!(c2[0], "mt5:AAPL:1Day");
+        assert_eq!(c2[0], "kraken:AAPL:1Day");
     }
 
     #[test]
     fn exact_override_match() {
         let mut mgr = DataSourceManager::default();
-        mgr.add_override("XAUUSD", vec!["mt5-darwinex".into(), "alpaca".into()]);
+        mgr.add_override("XAUUSD", vec!["kraken".into(), "alpaca".into()]);
         let c = mgr.resolve_candidates("XAUUSD", "1Hour");
-        assert_eq!(c[0], "mt5:XAUUSD:1Hour");
+        assert_eq!(c[0], "kraken:XAUUSD:1Hour");
         assert_eq!(c[1], "alpaca:XAUUSD:1Hour");
     }
 
@@ -365,9 +354,9 @@ mod tests {
     #[test]
     fn mark_success_restores_health() {
         let mut mgr = DataSourceManager::default();
-        mgr.mark_failure("mt5-darwinex");
+        mgr.mark_failure("kraken");
         assert!(!mgr.sources[0].healthy);
-        mgr.mark_success("mt5-darwinex");
+        mgr.mark_success("kraken");
         assert!(mgr.sources[0].healthy);
     }
 
@@ -377,6 +366,6 @@ mod tests {
         mgr.mark_success("nonexistent");
         mgr.mark_failure("nonexistent");
         // No panic, no change
-        assert_eq!(mgr.sources.len(), 5);
+        assert_eq!(mgr.sources.len(), 4);
     }
 }
