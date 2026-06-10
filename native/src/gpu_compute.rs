@@ -6044,14 +6044,15 @@ mod tests {
     #[test]
     fn forming_bar_gpu_write_targets_last_bar_offsets() {
         assert_eq!(
-            forming_bar_gpu_write(5, 111.0, 99.0, 108.5),
+            forming_bar_gpu_write(5, 111.0, 99.0, 108.5, 1.0),
             Some(FormingBarGpuWrite {
                 scalar_offset: 16,
                 ohlc_offset: 48,
                 ohlc: [111.0, 99.0, 108.5],
                 mid: 105.0,
+                is_live_forming: 1.0,
             })
         );
-        assert_eq!(forming_bar_gpu_write(0, 111.0, 99.0, 108.5), None);
+        assert_eq!(forming_bar_gpu_write(0, 111.0, 99.0, 108.5, 1.0), None);
     }
 }
