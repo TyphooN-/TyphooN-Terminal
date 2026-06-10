@@ -116,11 +116,6 @@ impl TyphooNApp {
                     .color(AXIS_TEXT)
                     .small(),
                 );
-                ui.add_space(10.0);
-                ui.heading("MT5 (view-only data source)");
-                ui.separator();
-                ui.label("MT5 bar data imported via BarCacheWriter EA → SQLite cache.");
-                ui.label("Trade management stays in MT5.");
             });
         self.show_connect = show_connect;
         if settings_save_after {

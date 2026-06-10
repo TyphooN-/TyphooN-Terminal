@@ -360,7 +360,7 @@ impl TyphooNApp {
                 } else {
                     let _ = writeln!(
                         p,
-                        "_No D1 bar data in cache — price/volatility stats unavailable. Run MT5SYNC or BARDATA to populate._"
+                        "_No D1 bar data in cache — price/volatility stats unavailable. Run BARDATA to populate._"
                     );
                     let _ = writeln!(p);
                 }

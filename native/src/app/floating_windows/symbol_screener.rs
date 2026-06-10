@@ -27,12 +27,12 @@ impl TyphooNApp {
                     });
                     ui.separator();
                     let filt = self.screener_filter.to_lowercase();
-                    // Hide BarCacheWriter metadata rows (__SYMBOLS__, __SPECS__,
+                    // Hide cache metadata rows (__SYMBOLS__, __SPECS__,
                     // __SERVER__, __HEARTBEAT__) — their middle parts render as
                     // bogus "symbols" in the Source/Symbol/TF grid.
                     let mut entries: Vec<&(String, i64, i64)> = details
                         .iter()
-                        .filter(|(key, _, _)| !key.starts_with("mt5:__"))
+                        .filter(|(key, _, _)| !key.contains(":__"))
                         .filter(|(key, _, _)| filt.is_empty() || key.to_lowercase().contains(&filt))
                         .collect();
                     entries.sort_by(|a, b| {
@@ -42,8 +42,8 @@ impl TyphooNApp {
                                 [source, sym, tf] => {
                                     ((*source).into(), (*sym).into(), (*tf).into())
                                 }
-                                [sym, tf] => ("mt5".into(), (*sym).into(), (*tf).into()),
-                                [sym] => ("mt5".into(), (*sym).into(), String::new()),
+                                [sym, tf] => ("local".into(), (*sym).into(), (*tf).into()),
+                                [sym] => ("local".into(), (*sym).into(), String::new()),
                                 _ => (String::new(), key.clone(), String::new()),
                             }
                         };

@@ -10917,7 +10917,7 @@ impl eframe::App for TyphooNApp {
 
                 // Detailed stats: bar counts per symbol/TF (skip metadata keys)
                 for (key, count, _size) in &self.bg.detailed_stats {
-                    // BarCacheWriter's metadata rows all follow `<prefix>:__<NAME>__[…]`
+                    // Cache metadata rows all follow `<prefix>:__<NAME>__[…]`
                     // (SYMBOLS, SPECS, SERVER, HEARTBEAT, …). Matching the `:__` segment
                     // covers any new metadata name without a hardcoded allow-list.
                     if key.contains(":__") {

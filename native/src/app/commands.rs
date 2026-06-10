@@ -24,7 +24,7 @@ pub(crate) const COMMANDS: &[Command] = &[
     // Core
     Command {
         name: "CONNECT",
-        desc: "Connect to broker (Alpaca / MT5)",
+        desc: "Connect to broker (Alpaca / Kraken)",
     },
     Command {
         name: "SETTINGS",
@@ -134,10 +134,6 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "Run backtest on current symbol",
     },
     Command {
-        name: "BACKTEST_EXPAND",
-        desc: "Mark symbol for 4× deeper MT5 cache history (BACKTEST_EXPAND EURUSD)",
-    },
-    Command {
         name: "BACKTEST_UNEXPAND",
         desc: "Remove symbol from backtest expand set",
     },
@@ -212,11 +208,7 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "EVSCRAPE",
-        desc: "Scrape fundamentals for all MT5 symbols (EVSCRAPE FORCE to bypass 24h cache)",
-    },
-    Command {
-        name: "MT5SYNC",
-        desc: "Sync bar data from MT5 BarCacheWriter databases",
+        desc: "Scrape fundamentals for all watchlist symbols (EVSCRAPE FORCE to bypass 24h cache)",
     },
     Command {
         name: "ANALYST",
@@ -402,7 +394,7 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "SYNC",
-        desc: "Bar sync status — % healthy per broker/TF across MT5, Alpaca, Tastytrade",
+        desc: "Bar sync status — % healthy per broker/TF across Kraken, Alpaca",
     },
     // Drawing tools
     Command {
@@ -832,10 +824,6 @@ pub(crate) const COMMANDS: &[Command] = &[
     Command {
         name: "BACKUP",
         desc: "Backup settings and cache",
-    },
-    Command {
-        name: "IMPORT_XLSX",
-        desc: "Import MT5 XLSX trade history (any server)",
     },
     Command {
         name: "WORKSPACE",

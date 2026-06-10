@@ -793,22 +793,10 @@ pub async fn scrape_all_portfolio_symbols(
             let conn = open_conn(&db)?;
             let mut sym_set: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-            // From legacy/current full-symbol imports. Do not treat every
-            // `kraken-equities:*` bar-cache key as a SEC target: the Kraken cache
-            // can contain the broad exchange universe, which would turn "Scrape
-            // Now" into a quota-burning crawl. User/broker symbols come from
-            // kv_cache below; bar_cache is retained here only for legacy MT5 DBs.
-            if let Ok(mut stmt) =
-                conn.prepare("SELECT DISTINCT key FROM bar_cache WHERE key LIKE 'mt5:%'")
-            {
-                if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
-                    for row in rows.flatten() {
-                        if let Some(sym) = equity_symbol_from_bar_cache_key(&row) {
-                            sym_set.insert(sym);
-                        }
-                    }
-                }
-            }
+            // Do not treat every `kraken-equities:*` bar-cache key as a SEC
+            // target: the Kraken cache can contain the broad exchange universe,
+            // which would turn "Scrape Now" into a quota-burning crawl. User/
+            // broker symbols come from kv_cache below.
 
             // From compressed broker/user state: watchlist, positions, Kraken
             // positions. These are the symbols the user actually cares about in a
@@ -827,9 +815,9 @@ pub async fn scrape_all_portfolio_symbols(
 
             // If the live/current universe sources are empty, keep the existing SEC
             // database warm by falling back to tickers we already know how to scrape.
-            // Without this, Kraken-only / no-MT5 sessions return "0 tickers" and the
-            // filings database silently freezes even though `sec_scrape_index` has a
-            // valid tracked universe from previous scrapes.
+            // Without this, sessions with no open positions/watchlist return
+            // "0 tickers" and the filings database silently freezes even though
+            // `sec_scrape_index` has a valid tracked universe from previous scrapes.
             if sym_set.is_empty() {
                 if let Ok(mut stmt) = conn.prepare(
                     "SELECT DISTINCT ticker FROM sec_scrape_index
@@ -992,17 +980,6 @@ fn normalize_sec_equity_symbol(sym: &str) -> Option<String> {
     } else {
         None
     }
-}
-
-fn equity_symbol_from_bar_cache_key(key: &str) -> Option<String> {
-    let mut parts = key.splitn(3, ':');
-    let source = parts.next()?;
-    if source != "mt5" {
-        return None;
-    }
-    let raw_symbol = parts.next()?.trim();
-    let _tf = parts.next()?;
-    normalize_sec_equity_symbol(raw_symbol)
 }
 
 fn collect_equity_symbols_from_kv_blob(
@@ -2317,8 +2294,8 @@ mod tests {
 
     #[test]
     fn bar_cache_key_parsing_3_part() {
-        // Canonical BarCacheWriter key shape: `mt5:SYM:TF`.
-        let key = "mt5:MSFT:1Day";
+        // Canonical bar-cache key shape: `<source>:SYM:TF`.
+        let key = "kraken-equities:MSFT:1Day";
         let parts: Vec<&str> = key.split(':').collect();
         assert_eq!(parts.len(), 3);
         assert_eq!(parts[1], "MSFT");
@@ -2328,34 +2305,13 @@ mod tests {
     #[test]
     fn bar_cache_key_filters_timeframe_not_symbol() {
         // Ensure we don't accidentally extract timeframe as symbol.
-        let key = "mt5:SLV:15Min";
+        let key = "kraken-equities:SLV:15Min";
         let parts: Vec<&str> = key.split(':').collect();
         assert_eq!(parts.len(), 3);
         assert_eq!(parts[1], "SLV");
         assert!(is_equity_symbol(&parts[1].to_uppercase()));
         // "15Min" should NOT pass as equity.
         assert!(!is_equity_symbol("15MIN"));
-    }
-
-    #[test]
-    fn equity_symbol_from_bar_cache_key_handles_legacy_mt5_only() {
-        assert_eq!(
-            equity_symbol_from_bar_cache_key("mt5:MSFT:1Day"),
-            Some("MSFT".to_string())
-        );
-        assert_eq!(
-            equity_symbol_from_bar_cache_key("kraken-equities:TNDM:1Day"),
-            None
-        );
-        assert_eq!(
-            equity_symbol_from_bar_cache_key("yahoo-chart:ARAY:15Min"),
-            None
-        );
-        assert_eq!(
-            equity_symbol_from_bar_cache_key("kraken:BTC/USD:1Day"),
-            None
-        );
-        assert_eq!(equity_symbol_from_bar_cache_key("mt5:__META__:1Day"), None);
     }
 
     #[test]

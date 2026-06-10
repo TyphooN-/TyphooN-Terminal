@@ -114,7 +114,7 @@ impl TyphooNApp {
                             1 => {
                                 let a = parts.next()?;
                                 let b = parts.next()?;
-                                Some(("mt5", a, b))
+                                Some(("local", a, b))
                             }
                             _ => None,
                         }
@@ -128,7 +128,7 @@ impl TyphooNApp {
                     let mut cached_syms_set: std::collections::HashSet<String> =
                         std::collections::HashSet::new();
                     for (key, bars, _ts) in details {
-                        // Skip BarCacheWriter metadata rows (`mt5:__NAME__:…`).
+                        // Skip cache metadata rows (`<prefix>:__NAME__:…`).
                         // parse_cache_key would otherwise surface "__HEARTBEAT__"
                         // et al as bogus symbols in the Symbol Explorer tree.
                         if key.contains(":__") {

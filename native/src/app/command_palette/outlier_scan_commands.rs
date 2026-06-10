@@ -250,7 +250,7 @@ impl TyphooNApp {
 
                     if var_data.len() < 5 {
                         self.log.push_back(LogEntry::warn(format!(
-                            "Need 5+ symbols with D1 bar data for VaR (have {}, {} missing bars). Run MT5SYNC first.",
+                            "Need 5+ symbols with D1 bar data for VaR (have {}, {} missing bars). Run BARDATA first.",
                             var_data.len(), no_bars
                         )));
                     } else {
@@ -364,7 +364,7 @@ impl TyphooNApp {
 
                     if atr_data.len() < 5 {
                         self.log.push_back(LogEntry::warn(format!(
-                            "Need 5+ symbols with D1 bar data (have {}, {} missing). Run MT5SYNC first.",
+                            "Need 5+ symbols with D1 bar data (have {}, {} missing). Run BARDATA first.",
                             atr_data.len(), no_bars
                         )));
                     } else {
