@@ -60,3 +60,17 @@ These duplicates come from upstream crates and cannot be resolved without upstre
 - **Pro:** Reduced compile time from fewer duplicate builds
 - **Pro:** Security: no known CVEs in outdated pinned versions
 - **Con:** Remaining transitive duplicates are documented above; direct TyphooN dependencies should move forward, not backward, even when an older transitive line remains.
+
+## Follow-up alignment (2026-06-10)
+
+Security-first refresh:
+
+- Bumped direct pins in `[workspace.dependencies]` and member manifests to latest stable patch/minor releases discoverable via `cargo search` (tokio 1.52, eframe/egui/egui_* 0.34.3, ratatui 0.30.1, zeroize 1.8, base64 0.22.1, etc.).
+- `rusqlite` deliberately left at 0.39 (0.40 pulls libsqlite3-sys requiring unstable `cfg_select` on the current rustc 2026-01-25 toolchain; concrete compatibility blocker).
+- `aes-gcm` left at 0.10 (0.11 is still rc).
+- `winit` left at 0.30.x (0.31 is beta).
+- `cargo check --workspace` clean after updates.
+- `cargo update --workspace` applied; no new version splits introduced in direct deps.
+- Remaining duplicates unchanged from prior ADR (transitive only).
+
+This keeps the policy: latest possible without breaking the build or introducing known-unstable crates.
