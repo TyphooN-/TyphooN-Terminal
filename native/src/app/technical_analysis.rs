@@ -160,8 +160,8 @@ pub(super) fn draw_chart(
     );
 
     // Price axis margins
-    let price_axis_w = 70.0_f32;
-    let time_axis_h = 22.0_f32;
+    let price_axis_w = 86.0_f32;
+    let time_axis_h = 24.0_f32;
     let chart_rect = egui::Rect::from_min_max(
         main_rect.min,
         egui::pos2(
@@ -210,6 +210,18 @@ pub(super) fn draw_chart(
     if let Some(mid) = fresh_live_mid {
         price_min = price_min.min(mid).min(chart.live_bid).min(chart.live_ask);
         price_max = price_max.max(mid).max(chart.live_bid).max(chart.live_ask);
+    }
+    if chart.ext_active && chart.ext_close > 0.0 {
+        price_min = price_min
+            .min(chart.ext_open)
+            .min(chart.ext_high)
+            .min(chart.ext_low)
+            .min(chart.ext_close);
+        price_max = price_max
+            .max(chart.ext_open)
+            .max(chart.ext_high)
+            .max(chart.ext_low)
+            .max(chart.ext_close);
     }
 
     // Also account for indicator values in visible range
@@ -2104,9 +2116,15 @@ pub(super) fn draw_chart(
         center
     };
 
-    // ── last price line ──────────────────────────────────────────────────────
+    // ── last/core close line ─────────────────────────────────────────────────
     if let Some(last) = bars.last() {
-        let current_price = fresh_live_mid.unwrap_or(last.close);
+        let current_price = if chart.ext_active && chart.ext_close > 0.0 {
+            // During extended hours keep the regular-session close explicitly
+            // visible. The magenta EXT tag below owns the extended-hours last.
+            last.close
+        } else {
+            fresh_live_mid.unwrap_or(last.close)
+        };
         let y = price_to_y(current_price);
         if y >= chart_rect.top() && y <= chart_rect.bottom() {
             let color = if current_price >= last.open { UP } else { DOWN };
@@ -2122,7 +2140,11 @@ pub(super) fn draw_chart(
                 x += dash_len * 2.0;
             }
             // Price label + TradingView-style countdown to the next candle close.
-            let label = format_price(current_price);
+            let label = if chart.ext_active && chart.ext_close > 0.0 {
+                format_axis_price_label("C", current_price)
+            } else {
+                format_price(current_price)
+            };
             let countdown = chart
                 .bars
                 .last()
@@ -2200,8 +2222,9 @@ pub(super) fn draw_chart(
                 );
                 x += dash_len * 2.0;
             }
-            // Price label
-            let label = format_price(chart.ext_close);
+            // Price label. Prefix it so extended-hours last cannot be confused
+            // with the regular daily close tag.
+            let label = format_axis_price_label("EXT", chart.ext_close);
             let label_y = place_axis_label(y, 8.0);
             let lbl_rect = egui::Rect::from_min_size(
                 egui::pos2(chart_rect.right() + 2.0, label_y - 8.0),
@@ -7222,6 +7245,34 @@ mod tests {
     }
 
     #[test]
+    fn time_axis_labels_include_dates_and_years_across_timeframes() {
+        let ts = chrono::DateTime::parse_from_rfc3339("2026-06-11T14:35:00Z")
+            .unwrap()
+            .timestamp_millis();
+
+        assert_eq!(
+            super::format_ts(ts, super::Timeframe::M5),
+            "11 Jun'26 14:35"
+        );
+        assert_eq!(
+            super::format_ts(ts, super::Timeframe::H1),
+            "11 Jun'26 14:35"
+        );
+        assert_eq!(super::format_ts(ts, super::Timeframe::D1), "11 Jun'26");
+        assert_eq!(super::format_ts(ts, super::Timeframe::W1), "11 Jun'26");
+        assert_eq!(super::format_ts(ts, super::Timeframe::MN1), "Jun 2026");
+    }
+
+    #[test]
+    fn extended_hours_axis_labels_are_explicit() {
+        assert_eq!(
+            super::format_axis_price_label("EXT", 0.0924),
+            "EXT 0.092400"
+        );
+        assert_eq!(super::format_axis_price_label("C", 194.32), "C 194.3200");
+    }
+
+    #[test]
     fn nnfx_view_uses_mql_mtf_names_when_projected_overlays_exist() {
         assert_eq!(
             super::nnfx_trend_legend_labels(true, true),
@@ -7256,6 +7307,10 @@ pub(super) fn format_price(p: f64) -> String {
     }
 }
 
+fn format_axis_price_label(prefix: &str, price: f64) -> String {
+    format!("{} {}", prefix, format_price(price))
+}
+
 /// Buffer-reusing variant of format_price — writes into caller's String to avoid heap alloc per call.
 pub(super) fn format_price_buf(p: f64, buf: &mut String) {
     use std::fmt::Write;
@@ -7275,7 +7330,7 @@ pub(super) fn format_price_buf(p: f64, buf: &mut String) {
 }
 
 pub(super) fn format_ts(ts_ms: i64, tf: Timeframe) -> String {
-    let mut buf = String::with_capacity(12);
+    let mut buf = String::with_capacity(18);
     format_ts_buf(ts_ms, tf, &mut buf);
     buf
 }
@@ -7331,7 +7386,7 @@ fn format_candle_countdown(remaining_ms: i64) -> String {
 
 /// Buffer-reusing variant of format_ts — writes into caller's String to avoid heap alloc per call.
 pub(super) fn format_ts_buf(ts_ms: i64, tf: Timeframe, buf: &mut String) {
-    use chrono::{TimeZone, Timelike};
+    use chrono::TimeZone;
     buf.clear();
     let dt = chrono::Utc
         .timestamp_millis_opt(ts_ms)
@@ -7340,20 +7395,13 @@ pub(super) fn format_ts_buf(ts_ms: i64, tf: Timeframe, buf: &mut String) {
     use std::fmt::Write;
     match tf {
         Timeframe::MN1 => {
-            write!(buf, "{}", dt.format("%b'%y")).ok();
+            write!(buf, "{}", dt.format("%b %Y")).ok();
         }
         Timeframe::W1 | Timeframe::D1 => {
-            write!(buf, "{}", dt.format("%d %b")).ok();
-        }
-        Timeframe::H4 | Timeframe::H1 => {
-            if dt.hour() == 0 {
-                write!(buf, "{}", dt.format("%d %b")).ok();
-            } else {
-                write!(buf, "{}", dt.format("%H:%M")).ok();
-            }
+            write!(buf, "{}", dt.format("%d %b'%y")).ok();
         }
         _ => {
-            write!(buf, "{}", dt.format("%H:%M")).ok();
+            write!(buf, "{}", dt.format("%d %b'%y %H:%M")).ok();
         }
     };
 }
