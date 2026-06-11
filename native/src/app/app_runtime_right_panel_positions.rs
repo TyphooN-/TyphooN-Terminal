@@ -65,11 +65,13 @@ impl TyphooNApp {
                 for pos in &self.live_positions {
                     let side_c = if pos.side == "long" { UP } else { DOWN };
                     let side_label = if pos.side == "long" { "Long" } else { "Short" };
-                    let current_price = if pos.qty.abs() > f64::EPSILON {
-                        Some(pos.market_value.abs() / pos.qty.abs())
-                    } else {
-                        None
-                    };
+                    let current_price = self.live_quote_mid_for_symbol(&pos.symbol).or_else(|| {
+                        if pos.qty.abs() > f64::EPSILON {
+                            Some(pos.market_value.abs() / pos.qty.abs())
+                        } else {
+                            None
+                        }
+                    });
                     ui.horizontal_wrapped(|ui| {
                         let (_, act) = symbol_label_with_menu(
                             ui,
@@ -159,13 +161,15 @@ impl TyphooNApp {
                     } else {
                         self.kraken_position_avg_price(&pos.symbol)
                     };
-                    let current_price = if pos.asset_id.starts_with("equity_balance:")
-                        || pos.asset_class.eq_ignore_ascii_case("stock")
-                    {
-                        self.latest_cached_equity_price_for_symbol(&pos.symbol)
-                    } else {
-                        self.latest_cached_price_for_symbol(&pos.symbol)
-                    };
+                    let current_price = self.live_quote_mid_for_symbol(&pos.symbol).or_else(|| {
+                        if pos.asset_id.starts_with("equity_balance:")
+                            || pos.asset_class.eq_ignore_ascii_case("stock")
+                        {
+                            self.latest_cached_equity_price_for_symbol(&pos.symbol)
+                        } else {
+                            self.latest_cached_price_for_symbol(&pos.symbol)
+                        }
+                    });
                     let quote_meta = self.kraken_equity_quote_meta_for_symbol(&pos.symbol);
                     let now_ms = chrono::Utc::now().timestamp_millis();
                     let (quote_label, quote_color) = if let Some(meta) = quote_meta {

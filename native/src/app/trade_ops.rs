@@ -1616,6 +1616,25 @@ impl TyphooNApp {
         })
     }
 
+    /// Freshest real-time live quote mid for `symbol` from any open chart whose
+    /// bid/ask is fresh (<30s). Lets the positions panel show the same live "cur"
+    /// the chart's spread shows instead of the lagging last-closed-bar cached
+    /// price; returns None when no matching chart has a fresh live quote so
+    /// callers fall back to the cached price.
+    pub(super) fn live_quote_mid_for_symbol(&self, symbol: &str) -> Option<f64> {
+        let want = bare_symbol_from_key(symbol).to_ascii_uppercase();
+        self.charts.iter().find_map(|c| {
+            if bare_symbol_from_key(&c.symbol).to_ascii_uppercase() != want {
+                return None;
+            }
+            let fresh = c
+                .live_quote_at
+                .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
+            (fresh && c.live_bid > 0.0 && c.live_ask > 0.0)
+                .then(|| (c.live_bid + c.live_ask) * 0.5)
+        })
+    }
+
     pub(super) fn latest_cached_equity_price_for_symbol(&self, symbol: &str) -> Option<f64> {
         // Prefer the watchlist's equity quote when available. For Kraken Securities
         // this is the professional price path during pre/post-market because the
