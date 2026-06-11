@@ -1217,14 +1217,11 @@ pub(crate) fn chart_merged_equity_cache_key(symbol: &str, timeframe: &str) -> St
     format!("merged:{symbol}:{timeframe}")
 }
 
-pub(crate) fn chart_persist_merged_equity_bars_to_cache(
-    cache: &SqliteCache,
-    symbol: &str,
-    timeframe: &str,
-    bars: &[Bar],
-) -> Result<(), String> {
+/// Serialize merged bars into the cache JSON payload, or `None` when there is
+/// nothing worth persisting (no bars, or none with a valid timestamp).
+fn chart_merged_bars_to_cache_json(bars: &[Bar]) -> Option<String> {
     if bars.is_empty() {
-        return Ok(());
+        return None;
     }
     let json: Vec<serde_json::Value> = bars
         .iter()
@@ -1241,12 +1238,39 @@ pub(crate) fn chart_persist_merged_equity_bars_to_cache(
         })
         .collect();
     if json.is_empty() {
-        return Ok(());
+        return None;
     }
+    serde_json::to_string(&json).ok()
+}
+
+pub(crate) fn chart_persist_merged_equity_bars_to_cache(
+    cache: &SqliteCache,
+    symbol: &str,
+    timeframe: &str,
+    bars: &[Bar],
+) -> Result<(), String> {
+    let Some(json) = chart_merged_bars_to_cache_json(bars) else {
+        return Ok(());
+    };
     let key = chart_merged_equity_cache_key(symbol, timeframe);
-    let json =
-        serde_json::to_string(&json).map_err(|e| format!("serialize merged bars failed: {e}"))?;
     cache.put_bars(&key, &json)
+}
+
+/// Best-effort merged-cache warm for hot render-thread loads: skips the write
+/// entirely when the writer connection is busy (bulk sync) so the render thread
+/// never stalls behind it. The merged blob is re-materialised off-thread (the
+/// background sync) when it ends up missing.
+fn chart_persist_merged_equity_bars_best_effort(
+    cache: &SqliteCache,
+    symbol: &str,
+    timeframe: &str,
+    bars: &[Bar],
+) {
+    let Some(json) = chart_merged_bars_to_cache_json(bars) else {
+        return;
+    };
+    let key = chart_merged_equity_cache_key(symbol, timeframe);
+    let _ = cache.put_bars_if_uncontended(&key, &json);
 }
 
 pub(crate) fn chart_materialize_merged_equity_cache(
@@ -1265,7 +1289,7 @@ pub(crate) fn chart_load_merged_equity_bars_from_cache(
     timeframe: &str,
 ) -> Vec<Bar> {
     let merged = chart_build_merged_equity_bars_from_cache(cache, symbol, timeframe);
-    let _ = chart_persist_merged_equity_bars_to_cache(cache, symbol, timeframe, &merged);
+    chart_persist_merged_equity_bars_best_effort(cache, symbol, timeframe, &merged);
     merged
 }
 

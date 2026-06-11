@@ -793,6 +793,41 @@ impl SqliteCache {
         Ok(())
     }
 
+    /// Best-effort variant of [`put_bars`] for hot render-thread callers (e.g.
+    /// merged-equity cache warming). Does all the CPU prep (pack + compress) up
+    /// front, then writes *only* if the writer connection is immediately
+    /// available; returns `Ok(false)` (skipped) when it is busy — typically held
+    /// by bulk bar-sync — so the render thread never stalls behind a long write
+    /// transaction. The blob is a best-effort cache, so callers must already
+    /// tolerate it being absent (it gets re-materialised off-thread).
+    /// Mirrors the prep in [`put_bars`]; keep the two in sync.
+    pub fn put_bars_if_uncontended(&self, key: &str, json_data: &str) -> Result<bool, String> {
+        let binary = pack_bars_for_key(key, json_data)?;
+        let bar_count = u32::from_le_bytes(
+            binary[4..8]
+                .try_into()
+                .map_err(|_| "bar_count header slice failed")?,
+        ) as i64;
+        let (second_last_ts, last_ts) = get_last_two_bar_timestamps(&binary, bar_count as usize);
+        let zstd_level = bar_zstd_level();
+        let compressed = zstd::encode_all(binary.as_slice(), zstd_level)
+            .map_err(|e| format!("zstd compress failed: {e}"))?;
+        let timestamp = chrono::Utc::now().timestamp();
+
+        let conn = match self.conn.try_lock() {
+            Ok(conn) => conn,
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+            Err(std::sync::TryLockError::Poisoned(e)) => {
+                return Err(format!("Lock poisoned: {e}"))
+            }
+        };
+        conn.execute(
+            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, last_ts, second_last_ts, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![key, compressed, timestamp, bar_count, last_ts, second_last_ts, zstd_level],
+        ).map_err(|e| format!("SQLite insert failed: {e}"))?;
+        Ok(true)
+    }
+
     /// Load bar data — handles both binary (new) and JSON (legacy) formats.
     pub fn get_bars(&self, key: &str) -> Result<Option<(String, i64)>, String> {
         let conn = self
