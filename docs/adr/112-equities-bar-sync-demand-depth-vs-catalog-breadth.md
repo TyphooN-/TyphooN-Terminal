@@ -119,5 +119,12 @@ These are the specific footguns that caused the 2026-06 regressions. Do not:
 
 - **Done:** demand-scope WS live + iapi depth-repair; demand-scope the native
   Sync Status rows (`kraken_ohlc_ws.rs`, `market_data_sync.rs`).
-- **Planned:** Kraken WS OHLC snapshot sweep (rule 3); Alpaca queue/batch
-  right-sizing (rule 4); Yahoo `adjclose` (ADR-113).
+- **Done:** Kraken WS OHLC snapshot sweep (rule 3). The app now schedules one
+  bounded xStocks catalog batch at a time, high-timeframe-first, requests
+  `snapshot=true`, drains through the existing bounded writer, unsubscribes, and
+  advances a persistent in-session sweep cursor.
+- **Done:** Alpaca/Yahoo catalog breadth lanes are right-sized for full-tilt
+  high-TF-first convergence via bounded queue/batch/scan windows
+  (`sync_config.rs`, `market_data_sync.rs`).
+- **Done:** Yahoo `adjclose` ingestion (ADR-113) uses split/dividend-adjusted
+  close as the independent corroborator scale.

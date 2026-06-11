@@ -48,6 +48,10 @@ const KRAKEN_WS_SUBSCRIBE_DRAIN_IDLE: Duration = Duration::from_millis(50);
 /// the connection as broken. Sized so even the 13k/250 = 52 batches at
 /// 1 frame/sec stay well under it.
 const KRAKEN_WS_SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Snapshot sweep connections are intentionally short-lived: subscribe one
+/// bounded catalog batch, drain the initial history burst, unsubscribe, close.
+/// This idle window decides when the snapshot burst is done.
+const KRAKEN_WS_SNAPSHOT_SWEEP_DRAIN_IDLE: Duration = Duration::from_millis(750);
 
 /// Kraken WS v2 caps subscribe frames at a few hundred symbols. We chunk at
 /// 250 to stay comfortably under that ceiling without paying the per-frame
@@ -425,6 +429,99 @@ pub async fn run_ohlc_streamer_with_snapshot(
         let wait = compute_reconnect_backoff(consecutive_failures);
         if !wait.is_zero() {
             tokio::time::sleep(wait).await;
+        }
+    }
+}
+
+/// Subscribe one bounded OHLC batch with `snapshot=true`, drain its startup
+/// history, unsubscribe, and return. This is the catalog-breadth lane for
+/// Kraken xStocks/equities: it harvests recent Kraken-native history without
+/// holding a permanent full-catalog live subscription.
+pub async fn run_ohlc_snapshot_sweep_once(
+    interval_min: u32,
+    pairs: Vec<String>,
+    bar_tx: mpsc::Sender<KrakenWsOhlcBar>,
+    event_tx: mpsc::UnboundedSender<KrakenOhlcStreamerEvent>,
+) -> Result<(), String> {
+    if pairs.is_empty() {
+        return Ok(());
+    }
+    let (ws_stream, _) = connect_async(KRAKEN_WS_V2_URL)
+        .await
+        .map_err(|e| format!("snapshot sweep ws connect failed: {e}"))?;
+    let (mut sink, mut stream) = ws_stream.split();
+    let _ = event_tx.send(KrakenOhlcStreamerEvent::Connected { interval_min });
+
+    let frames = build_subscribe_frames_with_snapshot(interval_min, &pairs, true);
+    let batches = frames.len();
+    for frame in &frames {
+        sink.send(Message::Text(frame.clone().into()))
+            .await
+            .map_err(|e| format!("snapshot sweep subscribe send failed: {e}"))?;
+        drain_ohlc_ws_until_idle(
+            &mut sink,
+            &mut stream,
+            &bar_tx,
+            true,
+            KRAKEN_WS_SNAPSHOT_SWEEP_DRAIN_IDLE,
+        )
+        .await?;
+        tokio::time::sleep(KRAKEN_WS_SUBSCRIBE_FRAME_DELAY).await;
+    }
+    let _ = event_tx.send(KrakenOhlcStreamerEvent::Subscribed {
+        interval_min,
+        batches,
+    });
+
+    if let Some(frame) = build_unsubscribe_frame(interval_min, &pairs) {
+        sink.send(Message::Text(frame.into()))
+            .await
+            .map_err(|e| format!("snapshot sweep unsubscribe send failed: {e}"))?;
+        drain_ohlc_ws_until_idle(
+            &mut sink,
+            &mut stream,
+            &bar_tx,
+            true,
+            KRAKEN_WS_SNAPSHOT_SWEEP_DRAIN_IDLE,
+        )
+        .await?;
+    }
+    let _ = sink.send(Message::Close(None)).await;
+    Ok(())
+}
+
+async fn drain_ohlc_ws_until_idle<S>(
+    sink: &mut futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, Message>,
+    stream: &mut futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<S>>,
+    bar_tx: &mpsc::Sender<KrakenWsOhlcBar>,
+    accept_snapshots: bool,
+    idle: Duration,
+) -> Result<(), String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    loop {
+        match tokio::time::timeout(idle, stream.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                if is_heartbeat_or_status(&text) || is_subscribe_ack(&text) {
+                    continue;
+                }
+                for bar in parse_ohlc_message_with_snapshot_policy(&text, accept_snapshots) {
+                    if bar_tx.send(bar).await.is_err() {
+                        return Ok(());
+                    }
+                }
+            }
+            Ok(Some(Ok(Message::Ping(payload)))) => {
+                let _ = sink.send(Message::Pong(payload)).await;
+            }
+            Ok(Some(Ok(Message::Pong(_))))
+            | Ok(Some(Ok(Message::Binary(_))))
+            | Ok(Some(Ok(Message::Frame(_)))) => {}
+            Ok(Some(Ok(Message::Close(_)))) => return Ok(()),
+            Ok(Some(Err(e))) => return Err(format!("snapshot sweep ws read error: {e}")),
+            Ok(None) => return Ok(()),
+            Err(_) => return Ok(()),
         }
     }
 }

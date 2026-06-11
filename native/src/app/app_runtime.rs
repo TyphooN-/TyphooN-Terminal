@@ -209,6 +209,7 @@ impl eframe::App for TyphooNApp {
             self.kraken_universe_last_schedule = now_instant;
             let _ = self.schedule_kraken_universe_sectors();
             let _ = self.schedule_kraken_equities_universe();
+            let _ = self.maybe_schedule_kraken_ws_ohlc_snapshot_sweep();
         }
 
         // WS OHLC spawn is pair-discovery/settings driven. At startup the
@@ -1189,10 +1190,36 @@ impl eframe::App for TyphooNApp {
                     } else {
                         format!("Kraken WS OHLC {tf}: {kind} — {detail}")
                     };
-                    if matches!(kind.as_str(), "disconnected" | "subscribe_failed") {
+                    if matches!(
+                        kind.as_str(),
+                        "disconnected"
+                            | "subscribe_failed"
+                            | "snapshot_disconnected"
+                            | "snapshot_subscribe_failed"
+                    ) {
                         self.log.push_back(LogEntry::warn(msg));
                     } else {
                         self.log.push_back(LogEntry::info(msg));
+                    }
+                }
+                BrokerMsg::KrakenWsOhlcSnapshotSweepSettled {
+                    interval_min,
+                    pair_count,
+                    error,
+                } => {
+                    self.kraken_ws_ohlc_snapshot_sweep_in_flight = false;
+                    let tf = typhoon_engine::broker::kraken::kraken_ws_interval_to_tf_label(
+                        interval_min,
+                    )
+                    .unwrap_or("?");
+                    if let Some(error) = error {
+                        self.log.push_back(LogEntry::warn(format!(
+                            "Kraken WS OHLC snapshot sweep {tf} failed after {pair_count} pairs — {error}"
+                        )));
+                    } else {
+                        self.log.push_back(LogEntry::info(format!(
+                            "Kraken WS OHLC snapshot sweep {tf}: completed {pair_count} pairs"
+                        )));
                     }
                 }
                 BrokerMsg::Error(e) => {
@@ -7355,10 +7382,8 @@ impl eframe::App for TyphooNApp {
                             timeframe
                         );
                     }
-                    let source_has_terminal_settlement = matches!(
-                        source.as_str(),
-                        "alpaca" | "kraken" | "kraken-futures"
-                    );
+                    let source_has_terminal_settlement =
+                        matches!(source.as_str(), "alpaca" | "kraken" | "kraken-futures");
                     if !source_has_terminal_settlement {
                         self.settle_market_data_fetch(&source, &symbol, &timeframe);
                     }
@@ -10988,14 +11013,14 @@ impl eframe::App for TyphooNApp {
                                                 .any(|b| su.starts_with(b) && su.ends_with("USD"));
                                             if is_crypto {
                                                 if self.kraken_spot_symbol_scrape_enabled(symbol) {
-                                                    let _ =
-                                                        self.broker_tx
-                                                            .send(BrokerCmd::KrakenBackfill {
+                                                    let _ = self.broker_tx.send(
+                                                        BrokerCmd::KrakenBackfill {
                                                             symbol: symbol.to_string(),
                                                             timeframes: vec![tf_norm.to_string()],
                                                             db_path: db_path.clone(),
                                                             backfill_complete: false,
-                                                        });
+                                                        },
+                                                    );
                                                     self.log.push_back(LogEntry::info(format!(
                                                         "LAN remote: fetching {} {} from Kraken",
                                                         symbol, tf_norm
@@ -11022,7 +11047,7 @@ impl eframe::App for TyphooNApp {
                                         let _ =
                                             self.broker_tx.send(BrokerCmd::FundamentalsScrape {
                                                 db_path,
-                                                                use_alpaca: self.fund_source_alpaca,
+                                                use_alpaca: self.fund_source_alpaca,
                                                 use_kraken: self.fund_source_kraken,
                                                 kraken_equity_symbols: self
                                                     .kraken_equity_universe_symbols
@@ -11166,7 +11191,7 @@ impl eframe::App for TyphooNApp {
                                         let _ =
                                             self.broker_tx.send(BrokerCmd::FundamentalsScrape {
                                                 db_path,
-                                                                use_alpaca: self.fund_source_alpaca,
+                                                use_alpaca: self.fund_source_alpaca,
                                                 use_kraken: self.fund_source_kraken,
                                                 kraken_equity_symbols: self
                                                     .kraken_equity_universe_symbols
@@ -11366,7 +11391,6 @@ impl eframe::App for TyphooNApp {
                     self.schedule_alpaca_pairs(&equity_syms);
                 }
             }
-
         }
 
         // Repaint strategy:

@@ -120,5 +120,10 @@ equity-history re-sync.
 
 - **Done:** recent-window outlier guard + helper + test
   (`chart_merge_equity_raw_bars`, `chart_recent_overlap_scale`).
-- **Planned:** Yahoo `adjclose` ingestion (§4); live-tick anchor; one-time purge
-  of the already-cached bad WOK 06-09/10 bars.
+- **Done:** Yahoo `adjclose` ingestion (§4) rebases each Yahoo bar onto the
+  split/dividend-adjusted scale before it participates in corroboration.
+- **Open future work:** live-tick anchor for the recent-window guard.
+- **Operator action, not code:** one-time purge of already-cached bad WOK
+  2026-06-09/10 `merged:WOK:*` rows is intentionally not auto-run against the
+  live cache; rebuild/restart self-heals on next merge, and manual SQL deletion
+  remains available if immediate cleanup is explicitly approved.

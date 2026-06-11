@@ -3110,6 +3110,84 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         )));
                     }
                 }
+                BrokerCmd::KrakenOhlcSnapshotSweep {
+                    interval_min,
+                    pairs,
+                } => {
+                    let msg_tx = broker_msg_tx_clone.clone();
+                    let pair_count = pairs.len();
+                    if pair_count == 0 {
+                        let _ = msg_tx.send(BrokerMsg::KrakenWsOhlcSnapshotSweepSettled {
+                            interval_min,
+                            pair_count: 0,
+                            error: None,
+                        });
+                    } else {
+                        let (commit_tx, mut commit_rx) = tokio::sync::mpsc::unbounded_channel();
+                        let (status_tx, mut status_rx) = tokio::sync::mpsc::unbounded_channel();
+                        let (settled_tx, mut settled_rx) = tokio::sync::mpsc::unbounded_channel();
+
+                        let commit_msg_tx = msg_tx.clone();
+                        tokio::spawn(async move {
+                            while let Some(fresh) = commit_rx.recv().await {
+                                let _ = commit_msg_tx.send(BrokerMsg::KrakenWsBarsCommitted { fresh });
+                            }
+                        });
+                        let status_msg_tx = msg_tx.clone();
+                        tokio::spawn(async move {
+                            while let Some(event) = status_rx.recv().await {
+                                let (interval_min, kind, detail) = match event {
+                                    typhoon_engine::broker::kraken::KrakenOhlcStreamerEvent::Connected { interval_min } => {
+                                        (interval_min, "snapshot_connected".to_string(), String::new())
+                                    }
+                                    typhoon_engine::broker::kraken::KrakenOhlcStreamerEvent::Subscribed { interval_min, batches } => {
+                                        (interval_min, "snapshot_subscribed".to_string(), format!("{batches} batches"))
+                                    }
+                                    typhoon_engine::broker::kraken::KrakenOhlcStreamerEvent::Disconnected { interval_min, reason } => {
+                                        (interval_min, "snapshot_disconnected".to_string(), reason)
+                                    }
+                                    typhoon_engine::broker::kraken::KrakenOhlcStreamerEvent::SubscribeFailed { interval_min, reason } => {
+                                        (interval_min, "snapshot_subscribe_failed".to_string(), reason)
+                                    }
+                                };
+                                let _ = status_msg_tx.send(BrokerMsg::KrakenWsOhlcStatus {
+                                    interval_min,
+                                    kind,
+                                    detail,
+                                });
+                            }
+                        });
+                        let settled_msg_tx = msg_tx.clone();
+                        tokio::spawn(async move {
+                            if let Some(result) = settled_rx.recv().await {
+                                match result {
+                                    Ok((interval_min, pair_count)) => {
+                                        let _ = settled_msg_tx.send(BrokerMsg::KrakenWsOhlcSnapshotSweepSettled {
+                                            interval_min,
+                                            pair_count,
+                                            error: None,
+                                        });
+                                    }
+                                    Err(error) => {
+                                        let _ = settled_msg_tx.send(BrokerMsg::KrakenWsOhlcSnapshotSweepSettled {
+                                            interval_min,
+                                            pair_count,
+                                            error: Some(error),
+                                        });
+                                    }
+                                }
+                            }
+                        });
+                        kraken_ohlc_ws::spawn_kraken_ohlc_snapshot_sweep(
+                            shared_cache_broker.clone(),
+                            interval_min,
+                            pairs,
+                            commit_tx,
+                            status_tx,
+                            settled_tx,
+                        );
+                    }
+                }
                 BrokerCmd::KrakenStartOrderbookWs { symbol, depth } => {
                     let msg_tx = broker_msg_tx_clone.clone();
                     let Some(ws_symbol) = typhoon_engine::core::kraken::resolve_kraken_ws_pair(

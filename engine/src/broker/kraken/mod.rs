@@ -28,7 +28,8 @@ pub use self::ohlc_ws::{
     build_subscribe_frames, build_subscribe_frames_with_snapshot, build_unsubscribe_frame,
     compute_reconnect_backoff, is_heartbeat_or_status, is_subscribe_ack, kraken_ws_bar_to_json,
     kraken_ws_interval_to_tf_label, kraken_ws_symbol_to_cache_key, parse_ohlc_message,
-    run_ohlc_streamer, run_ohlc_streamer_with_snapshot, ws_bar_is_closed,
+    run_ohlc_snapshot_sweep_once, run_ohlc_streamer, run_ohlc_streamer_with_snapshot,
+    ws_bar_is_closed,
 };
 pub use self::order_types::{KrakenConditionalClose, KrakenOrderRequest};
 pub use self::private_ws::{
@@ -255,7 +256,8 @@ fn merge_equity_markets(
                 }
                 // Prefer a known overnight-support value (iapi catalog) over an
                 // unknown one (WS-derived rows carry None).
-                existing.overnight_trading = existing.overnight_trading.or(market.overnight_trading);
+                existing.overnight_trading =
+                    existing.overnight_trading.or(market.overnight_trading);
             })
             .or_insert(market);
     }
@@ -1943,7 +1945,11 @@ mod tests {
         // iapi's known overnight value survives the merge with the WS row's None.
         assert_eq!(aapl.overnight_trading, Some(false));
         assert_eq!(
-            merged.iter().find(|m| m.symbol == "A").unwrap().overnight_trading,
+            merged
+                .iter()
+                .find(|m| m.symbol == "A")
+                .unwrap()
+                .overnight_trading,
             Some(true)
         );
     }

@@ -2729,6 +2729,11 @@ pub(crate) enum BrokerCmd {
     KrakenStartOhlcStreamers {
         pairs: Vec<String>,
     },
+    /// Run one bounded Kraken WS OHLC snapshot sweep batch and then unsubscribe.
+    KrakenOhlcSnapshotSweep {
+        interval_min: u32,
+        pairs: Vec<String>,
+    },
     KrakenStartOrderbookWs {
         symbol: String,
         depth: usize,
@@ -2779,6 +2784,11 @@ pub(crate) enum BrokerMsg {
         interval_min: u32,
         kind: String,
         detail: String,
+    },
+    KrakenWsOhlcSnapshotSweepSettled {
+        interval_min: u32,
+        pair_count: usize,
+        error: Option<String>,
     },
     KrakenEquityQuote(typhoon_engine::broker::kraken::KrakenEquityTicker),
     KrakenEquityBars {
@@ -4261,6 +4271,10 @@ pub struct TyphooNApp {
     /// Lets Spot start from AssetPairs and xStocks join later from the
     /// instrument universe without duplicate subscriptions.
     pub(crate) kraken_ws_ohlc_streamed_pairs: std::collections::HashSet<String>,
+    /// Rotating cursor for the one-batch-at-a-time Kraken xStocks OHLC snapshot sweep.
+    pub(crate) kraken_ws_ohlc_snapshot_sweep_cursor: usize,
+    pub(crate) kraken_ws_ohlc_snapshot_sweep_last_schedule: std::time::Instant,
+    pub(crate) kraken_ws_ohlc_snapshot_sweep_in_flight: bool,
     pub(crate) crypto_fiat_quote_usd: bool,
     pub(crate) crypto_fiat_quote_usdt: bool,
     pub(crate) crypto_fiat_quote_usdc: bool,

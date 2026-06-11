@@ -20,8 +20,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use typhoon_engine::broker::kraken::{
     KRAKEN_WS_OHLC_INTERVALS_MIN, KrakenOhlcStreamerEvent, KrakenWsOhlcBar, kraken_ws_bar_to_json,
-    kraken_ws_interval_to_tf_label, kraken_ws_symbol_to_cache_key, run_ohlc_streamer_with_snapshot,
-    ws_bar_is_closed,
+    kraken_ws_interval_to_tf_label, kraken_ws_symbol_to_cache_key, run_ohlc_snapshot_sweep_once,
+    run_ohlc_streamer_with_snapshot, ws_bar_is_closed,
 };
 use typhoon_engine::core::cache::SqliteCache;
 
@@ -79,6 +79,43 @@ impl TyphooNApp {
         )));
         true
     }
+
+    pub(super) fn maybe_schedule_kraken_ws_ohlc_snapshot_sweep(&mut self) -> bool {
+        if !self.kraken_enabled
+            || !self.kraken_ws_ohlc_enabled
+            || !self.kraken_scrape_xstocks
+            || self.kraken_ws_ohlc_snapshot_sweep_in_flight
+        {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        if now.duration_since(self.kraken_ws_ohlc_snapshot_sweep_last_schedule)
+            < KRAKEN_WS_SNAPSHOT_SWEEP_CADENCE
+        {
+            return false;
+        }
+        let catalog = self.kraken_equity_catalog_symbols();
+        let Some(batch) = next_kraken_ws_snapshot_sweep_batch(
+            &catalog,
+            &mut self.kraken_ws_ohlc_snapshot_sweep_cursor,
+            KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE,
+        ) else {
+            return false;
+        };
+        let pair_count = batch.pairs.len();
+        self.kraken_ws_ohlc_snapshot_sweep_in_flight = true;
+        self.kraken_ws_ohlc_snapshot_sweep_last_schedule = now;
+        let interval_min = batch.interval_min;
+        let _ = self.broker_tx.send(BrokerCmd::KrakenOhlcSnapshotSweep {
+            interval_min,
+            pairs: batch.pairs,
+        });
+        let tf = kraken_ws_interval_to_tf_label(interval_min).unwrap_or("?");
+        self.log.push_back(LogEntry::info(format!(
+            "Kraken WS OHLC snapshot sweep: queued {pair_count} xStocks for {tf}"
+        )));
+        true
+    }
 }
 
 /// Transform the `(pair_name, display_symbol)` tuples that Kraken's
@@ -110,7 +147,7 @@ pub(super) fn build_kraken_ws_subscribe_symbols_for_app(
         // across 8 intervals overwhelmed a single WS v2 connection — constant
         // "connection reset without closing handshake" churn plus snapshot write
         // storms that stalled egui for seconds. Catalog breadth is carried by the
-        // batched Alpaca/Yahoo history lanes and the merge, not by live WS.
+        // paced snapshot sweep below and by batched Alpaca/Yahoo history lanes.
         let _ = xstock_catalog_symbols;
         for symbol in xstock_demand_symbols {
             if let Some(formatted) = format_xstock_ws_symbol(symbol) {
@@ -119,6 +156,53 @@ pub(super) fn build_kraken_ws_subscribe_symbols_for_app(
         }
     }
     out.into_iter().collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KrakenWsSnapshotSweepBatch {
+    interval_min: u32,
+    pairs: Vec<String>,
+}
+
+const KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST: [u32; 8] = [
+    10080, // 1Week
+    1440,  // 1Day
+    240,   // 4Hour
+    60,    // 1Hour
+    30,    // 30Min
+    15,    // 15Min
+    5,     // 5Min
+    1,     // 1Min
+];
+
+fn next_kraken_ws_snapshot_sweep_batch(
+    catalog_symbols: &[String],
+    cursor: &mut usize,
+    batch_size: usize,
+) -> Option<KrakenWsSnapshotSweepBatch> {
+    let batch_size = batch_size.max(1);
+    let pairs: Vec<String> = catalog_symbols
+        .iter()
+        .filter_map(|symbol| format_xstock_ws_symbol(symbol))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if pairs.is_empty() {
+        *cursor = 0;
+        return None;
+    }
+    let batches_per_interval = pairs.len().div_ceil(batch_size).max(1);
+    let total_steps = batches_per_interval * KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST.len();
+    let step = *cursor % total_steps;
+    let interval_idx = step / batches_per_interval;
+    let batch_idx = step % batches_per_interval;
+    let start = batch_idx * batch_size;
+    let end = (start + batch_size).min(pairs.len());
+    *cursor = (step + 1) % total_steps;
+    Some(KrakenWsSnapshotSweepBatch {
+        interval_min: KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST[interval_idx],
+        pairs: pairs[start..end].to_vec(),
+    })
 }
 
 fn format_xstock_ws_symbol(symbol: &str) -> Option<String> {
@@ -364,6 +448,49 @@ mod tests {
         assert_eq!(wave(60), WS_LARGE_UNIVERSE_INTERVAL_STAGGER * 3);
     }
 
+    #[test]
+    fn snapshot_sweep_batches_catalog_high_timeframe_first() {
+        let catalog = vec!["aapl".to_string(), "MSFT.EQ".to_string(), "WOK".to_string()];
+        let mut cursor = 0usize;
+
+        let first =
+            next_kraken_ws_snapshot_sweep_batch(&catalog, &mut cursor, 2).expect("first batch");
+
+        assert_eq!(first.interval_min, 10080);
+        assert_eq!(
+            first.pairs,
+            vec!["AAPLx/USD".to_string(), "MSFTx/USD".to_string()]
+        );
+        assert_eq!(cursor, 1);
+
+        let second =
+            next_kraken_ws_snapshot_sweep_batch(&catalog, &mut cursor, 2).expect("second batch");
+        assert_eq!(second.interval_min, 10080);
+        assert_eq!(second.pairs, vec!["WOKx/USD".to_string()]);
+        assert_eq!(cursor, 2);
+
+        let third =
+            next_kraken_ws_snapshot_sweep_batch(&catalog, &mut cursor, 2).expect("third batch");
+        assert_eq!(third.interval_min, 1440);
+        assert_eq!(
+            third.pairs,
+            vec!["AAPLx/USD".to_string(), "MSFTx/USD".to_string()]
+        );
+    }
+
+    #[test]
+    fn snapshot_sweep_cursor_wraps_after_all_interval_batches() {
+        let catalog = vec!["AAPL".to_string()];
+        let mut cursor = KRAKEN_WS_OHLC_INTERVALS_MIN.len();
+
+        let batch =
+            next_kraken_ws_snapshot_sweep_batch(&catalog, &mut cursor, 1).expect("wrapped batch");
+
+        assert_eq!(batch.interval_min, 10080);
+        assert_eq!(batch.pairs, vec!["AAPLx/USD".to_string()]);
+        assert_eq!(cursor, 1);
+    }
+
     fn mk_bar(interval_min: u32, interval_begin_ms: i64) -> KrakenWsOhlcBar {
         KrakenWsOhlcBar {
             symbol: "BTC/USD".into(),
@@ -542,6 +669,8 @@ const WS_BAR_MAX_BUFFERED_BUCKETS: usize = 16_384;
 /// can be parsed, backpressured, and persisted before the next wave starts.
 const WS_LARGE_UNIVERSE_INTERVAL_STAGGER: Duration = Duration::from_secs(120);
 const WS_LARGE_UNIVERSE_PAIR_THRESHOLD: usize = 5_000;
+const KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE: usize = 250;
+const KRAKEN_WS_SNAPSHOT_SWEEP_CADENCE: Duration = Duration::from_secs(10);
 
 /// Maximum grouped `(symbol, timeframe)` merges to process in one blocking task.
 /// Keeps startup snapshot persistence in bounded slices so tokio can schedule
@@ -621,6 +750,31 @@ pub(super) fn spawn_kraken_ohlc_pipeline(
     drop(bar_tx);
     tokio::spawn(async move {
         run_ws_bar_writer(shared_cache, bar_rx, commit_tx, None).await;
+    });
+}
+
+pub(super) fn spawn_kraken_ohlc_snapshot_sweep(
+    shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
+    interval_min: u32,
+    pairs: Vec<String>,
+    commit_tx: mpsc::UnboundedSender<Vec<WsFreshEntry>>,
+    status_tx: mpsc::UnboundedSender<KrakenOhlcStreamerEvent>,
+    settled_tx: mpsc::UnboundedSender<Result<(u32, usize), String>>,
+) {
+    if pairs.is_empty() {
+        let _ = settled_tx.send(Ok((interval_min, 0)));
+        return;
+    }
+    let pair_count = pairs.len();
+    let (bar_tx, bar_rx) = mpsc::channel::<KrakenWsOhlcBar>(WS_BAR_CHANNEL_CAPACITY);
+    tokio::spawn(async move {
+        run_ws_bar_writer(shared_cache, bar_rx, commit_tx, None).await;
+    });
+    tokio::spawn(async move {
+        let result = run_ohlc_snapshot_sweep_once(interval_min, pairs, bar_tx, status_tx)
+            .await
+            .map(|()| (interval_min, pair_count));
+        let _ = settled_tx.send(result);
     });
 }
 
