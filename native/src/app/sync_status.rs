@@ -89,12 +89,13 @@ impl TyphooNApp {
             &self.bg.bar_ts_cache,
             &checked_or_complete_lookup,
         );
+        self.add_kraken_equities_tradable_catalog_row(&mut rows);
         self.add_expected_kraken_sync_rows(&mut rows);
         self.add_kraken_equities_merged_rows(&mut rows, &checked_or_complete_lookup);
         sort_sync_stats_rows(&mut rows);
         let (total, healthy) = rows
             .iter()
-            .filter(|row| row.broker != "Merged")
+            .filter(|row| row.broker != "Merged" && !sync_stats_row_is_informational(row))
             .fold((0u64, 0u64), |(t, h), row| (t + row.total, h + row.healthy));
         self.cached_bar_sync_overall_pct = if total == 0 {
             100.0
@@ -138,6 +139,16 @@ impl TyphooNApp {
                 ui.label(egui::RichText::new("Bar sync % per broker / timeframe").color(AXIS_TEXT).small());
                 ui.label(egui::RichText::new("healthy = fresh or provider-settled · unhealthy = stale or empty").color(AXIS_TEXT).small());
                 self.render_sync_timeframe_controls(ui, &mut sync_save_after);
+                let tradable_count = self.kraken_equity_catalog_symbol_count();
+                if tradable_count > 0 {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Kraken Equities (Tradable): {tradable_count} catalog symbols. This is the denominator for Merged plus Alpaca/Yahoo assist target lists; native Kraken Equities history rows stay demand-scoped."
+                        ))
+                        .color(AXIS_TEXT)
+                        .small(),
+                    );
+                }
                 ui.separator();
 
                 // Per-broker summary chips
@@ -181,13 +192,16 @@ impl TyphooNApp {
                         for row in &rows {
                             let broker_color = match row.broker.as_str() {
                                 "Alpaca"        => egui::Color32::from_rgb(52, 152, 219),
-                                "Kraken Spot" | "Kraken Equities" | "Kraken Futures" => egui::Color32::from_rgb(255, 130, 60),
+                                "Kraken Spot" | "Kraken Equities" | "Kraken Equities (Tradable)" | "Kraken Futures" => egui::Color32::from_rgb(255, 130, 60),
                                 "Merged"        => egui::Color32::from_rgb(0, 220, 220),
                                 "Yahoo"         => egui::Color32::from_rgb(155, 89, 182),
                                 _ => AXIS_TEXT,
                             };
                             let cells = sync_stats_row_status_cells(row);
-                            ui.label(egui::RichText::new(&row.broker).color(broker_color).small().monospace().strong());
+                            let broker_response = ui.label(egui::RichText::new(&row.broker).color(broker_color).small().monospace().strong());
+                            if let Some(note) = row.note.as_deref() {
+                                broker_response.on_hover_text(note);
+                            }
                             ui.label(egui::RichText::new(&row.tf).color(AXIS_TEXT).small().monospace());
                             ui.label(egui::RichText::new(cells.symbols).small());
                             let healthy_response = ui.label(egui::RichText::new(cells.healthy).color(egui::Color32::from_rgb(26, 188, 156)).small());
@@ -204,7 +218,9 @@ impl TyphooNApp {
                                     row.stale, row.empty
                                 ));
                             }
-                            let pct_color = if row.total == 0 {
+                            let pct_color = if sync_stats_row_is_informational(row) {
+                                AXIS_TEXT
+                            } else if row.total == 0 {
                                 egui::Color32::from_rgb(150, 150, 150)
                             } else if row.pct_healthy >= 90.0 {
                                 egui::Color32::from_rgb(26, 188, 156)
@@ -213,8 +229,9 @@ impl TyphooNApp {
                             } else {
                                 egui::Color32::from_rgb(231, 76, 60)
                             };
-                            let pct_text = match (row.total, row.note.as_deref()) {
-                                (0, Some(note)) => note.to_string(),
+                            let pct_text = match (sync_stats_row_is_informational(row), row.total, row.note.as_deref()) {
+                                (true, _, _) => "catalog".to_string(),
+                                (false, 0, Some(note)) => note.to_string(),
                                 _ => format!("{:.1}%", row.pct_healthy),
                             };
                             ui.label(
@@ -250,6 +267,27 @@ impl TyphooNApp {
         if sync_save_after {
             self.save_session();
         }
+    }
+
+    fn add_kraken_equities_tradable_catalog_row(&self, rows: &mut Vec<SyncStatsRow>) {
+        let total = self.kraken_equity_catalog_symbol_count() as u64;
+        if total == 0 {
+            return;
+        }
+        rows.push(SyncStatsRow {
+            broker: "Kraken Equities (Tradable)".to_string(),
+            tf: "Catalog".to_string(),
+            total,
+            healthy: total,
+            stale: 0,
+            empty: 0,
+            settled: 0,
+            note: Some(
+                "Full Kraken Securities/xStocks tradable catalog. This reference universe forms the Merged, Alpaca assist, and Yahoo assist sync target lists; native Kraken Equities history rows remain demand-scoped."
+                    .to_string(),
+            ),
+            pct_healthy: 100.0,
+        });
     }
 
     fn add_kraken_equities_merged_rows(

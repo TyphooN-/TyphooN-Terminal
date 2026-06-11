@@ -172,11 +172,22 @@ pub(super) fn compute_bar_sync_stats(
 
 pub(super) fn sort_sync_stats_rows(rows: &mut [SyncStatsRow]) {
     let tf_order = [
-        "1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week", "1Month",
+        "Catalog",
+        "Reference",
+        "1Min",
+        "5Min",
+        "15Min",
+        "30Min",
+        "1Hour",
+        "4Hour",
+        "1Day",
+        "1Week",
+        "1Month",
     ];
     let broker_order = [
         "Kraken Spot",
         "Kraken Equities",
+        "Kraken Equities (Tradable)",
         "Kraken Futures",
         "Merged",
         "Alpaca",
@@ -213,6 +224,15 @@ pub(super) struct SyncStatsRowStatusCells {
 }
 
 pub(super) fn sync_stats_row_status_cells(row: &SyncStatsRow) -> SyncStatsRowStatusCells {
+    if sync_stats_row_is_informational(row) {
+        return SyncStatsRowStatusCells {
+            symbols: row.total.to_string(),
+            healthy: "—".to_string(),
+            stale_or_empty: "—".to_string(),
+            settled: "—".to_string(),
+            note: row.note.clone().unwrap_or_default(),
+        };
+    }
     SyncStatsRowStatusCells {
         symbols: row.total.to_string(),
         healthy: row.healthy.to_string(),
@@ -232,7 +252,7 @@ pub(super) fn compute_bar_sync_broker_totals(
 
     let mut totals: BTreeMap<String, (u64, u64)> = BTreeMap::new();
     for row in rows {
-        if row.total == 0 {
+        if row.total == 0 || sync_stats_row_is_informational(row) {
             continue;
         }
         let entry = totals.entry(row.broker.clone()).or_default();
@@ -243,6 +263,7 @@ pub(super) fn compute_bar_sync_broker_totals(
     let order = [
         "Kraken Spot",
         "Kraken Equities",
+        "Kraken Equities (Tradable)",
         "Kraken Futures",
         "Merged",
         "Alpaca",
@@ -268,6 +289,10 @@ pub(super) fn compute_bar_sync_broker_totals(
         out.push((broker, total, healthy, pct));
     }
     out
+}
+
+pub(super) fn sync_stats_row_is_informational(row: &SyncStatsRow) -> bool {
+    row.broker == "Kraken Equities (Tradable)"
 }
 
 pub(super) fn apply_storage_snapshot(
@@ -467,6 +492,17 @@ mod tests {
                 note: None,
                 pct_healthy: 50.0,
             },
+            SyncStatsRow {
+                broker: "Kraken Equities (Tradable)".into(),
+                tf: "Catalog".into(),
+                total: 12_721,
+                healthy: 12_721,
+                stale: 0,
+                empty: 0,
+                settled: 0,
+                note: Some("reference catalog, not bar-sync workload".into()),
+                pct_healthy: 100.0,
+            },
         ]);
 
         let names: Vec<&str> = totals
@@ -474,6 +510,22 @@ mod tests {
             .map(|(broker, _, _, _)| broker.as_str())
             .collect();
         assert_eq!(names, vec!["Kraken Spot", "Merged", "Yahoo"]);
+
+        let catalog_row = SyncStatsRow {
+            broker: "Kraken Equities (Tradable)".into(),
+            tf: "Catalog".into(),
+            total: 12_721,
+            healthy: 12_721,
+            stale: 0,
+            empty: 0,
+            settled: 0,
+            note: Some("reference catalog, not bar-sync workload".into()),
+            pct_healthy: 100.0,
+        };
+        let cells = sync_stats_row_status_cells(&catalog_row);
+        assert_eq!(cells.symbols, "12721");
+        assert_eq!(cells.healthy, "—");
+        assert_eq!(cells.stale_or_empty, "—");
     }
 
     #[test]
