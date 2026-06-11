@@ -63,7 +63,7 @@ Auto-compact uses the same compaction path for leftovers, but only runs when the
 
 ### Auto MT5 Sync
 
-Bar data from MT5 (via BarCacheWriter EA) is automatically synced about once per minute when the cache is loaded and the terminal is not a LAN client. The sync is smart enough to skip unchanged keys.
+Bar data from MT5 (via BarCacheWriter EA) is imported into the local cache. Cache writes skip unchanged keys where possible.
 
 ### Kraken Public Bar Sync
 

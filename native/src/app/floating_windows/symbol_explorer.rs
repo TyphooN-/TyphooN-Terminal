@@ -39,7 +39,6 @@ impl TyphooNApp {
                 .default_size([680.0, 650.0])
                 .max_size([680.0, 640.0])
                 .show(ctx, |ui| {
-                    let sym_teal = egui::Color32::from_rgb(26, 188, 156);
                     let sym_green = egui::Color32::from_rgb(46, 204, 113);
                     let sym_blue = egui::Color32::from_rgb(52, 152, 219);
                     let sym_orange = egui::Color32::from_rgb(255, 130, 60);
@@ -237,11 +236,7 @@ impl TyphooNApp {
                             !cached_syms_set.contains(&s.replace('/', "").to_uppercase())
                         })
                         .count();
-                    let cache_label = if self.lan_sync_mode == "client" {
-                        "cached (local)"
-                    } else {
-                        "cached"
-                    };
+                    let cache_label = "cached";
                     ui.label(
                         egui::RichText::new(format!(
                             "{} {} symbols | {} broker universe ({} not cached)",
@@ -249,22 +244,10 @@ impl TyphooNApp {
                         ))
                         .color(sym_dim),
                     );
-                    if self.lan_sync_mode == "client" {
-                        ui.label(
-                            egui::RichText::new(
-                                "LAN Client — use \u{1F4E5} to sync symbol from server",
-                            )
-                            .color(sym_teal)
-                            .small(),
-                        );
-                    }
                     ui.add_space(4.0);
 
                     let mut load_sym: Option<String> = None;
                     let mut add_wl: Option<String> = None;
-                    let mut sync_sym: Option<String> = None;
-                    let is_lan_client = self.lan_sync_mode == "client";
-
                     // Macro for symbol row rendering
                     macro_rules! sym_row {
                         ($ui:expr, $sym:expr, $info:expr, $indent:expr, $load:expr, $wl:expr) => {
@@ -291,20 +274,6 @@ impl TyphooNApp {
                                     .clicked()
                                 {
                                     $wl = Some($sym.to_string());
-                                }
-                                if is_lan_client {
-                                    if ui
-                                        .add(
-                                            egui::Button::new(
-                                                egui::RichText::new("\u{1F4E5}").small(),
-                                            )
-                                            .min_size(egui::vec2(22.0, 18.0)),
-                                        )
-                                        .on_hover_text("Sync all TFs from server")
-                                        .clicked()
-                                    {
-                                        sync_sym = Some($sym.to_string());
-                                    }
                                 }
                                 if ui
                                     .add(
@@ -634,19 +603,6 @@ impl TyphooNApp {
                                 sym_upper
                             )));
                         }
-                    }
-
-                    // Handle sync from server (LAN client)
-                    if let Some(sym) = sync_sym {
-                        let all_tfs = self.enabled_standard_sync_timeframes();
-                        for tf in &all_tfs {
-                            self.queue_alpaca_fetch(&sym, tf);
-                        }
-                        let _ = self.broker_tx.send(BrokerCmd::LanResyncBars);
-                        self.log.push_back(LogEntry::info(format!(
-                            "Syncing ALL TFs for {} from server...",
-                            sym
-                        )));
                     }
                 });
             self.show_symbols = show_symbols;

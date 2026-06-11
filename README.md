@@ -38,7 +38,6 @@ A native desktop trading terminal + TUI CLI with full risk management and multi-
 | **Stock Screener** | Filter by price, volume, sector, change%, tradable/shortable flags |
 | **Command Palette** | ~ (tilde) Quake-console: BACKTEST, RISK_CALC, SCREENER, EXPORT_CSV |
 | **Watchlist** | Multi-symbol quote monitor with live prices and daily change |
-| **LAN Sync** | TLS/PBKDF2 LAN sync plus headless server/client deployment |
 | **Storage Manager** | View, delete, compact (zstd-22), and schedule idle auto-compaction by symbol/source |
 | **Multi-Window** | Open additional terminal windows (NEW_WINDOW/POPOUT) for multi-monitor setups |
 | **Chart Templates** | Save/load indicator configs and order mode |
@@ -85,8 +84,7 @@ A native desktop trading terminal + TUI CLI with full risk management and multi-
 | **Options P&L Calc** | Multi-leg payoff diagram with canvas rendering (~ →OPTCALC) |
 | **Sector Rotation** | S&P 500 sector ETF heatmap with daily/weekly % (~ →SECTORS) |
 | **Options Strategy** | Live chain viewer, presets (spreads, condors), aggregate Greeks (~ →OPTSTRAT) |
-| **Headless LAN** | `--lan-server` / `--lan-client` reuse the GUI cache/passphrase and expose Prometheus metrics for VPS/NAS deployment |
-| **CLI/TUI** | Interactive SSH-ready TUI plus positions/account/import/LAN commands; strategy backtests run in the native GUI |
+| **CLI/TUI** | Interactive SSH-ready TUI plus positions/account/cache/research commands; strategy backtests run in the native GUI |
 | **Community Chat** | Matrix protocol chat via ~ (tilde) → CHAT, no server needed |
 | **Broker Abstraction** | BrokerTrait — extensible to any broker via single Rust file |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS-native keyring credential storage |
@@ -204,7 +202,6 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [ROADMAP.md](docs/ROADMAP.md) | Current status and future plans |
 | [DESIGN_PHILOSOPHY.md](docs/DESIGN_PHILOSOPHY.md) | Core design principles |
 | [API_KEYS.md](docs/API_KEYS.md) | Data source API key setup |
-| [deployment/lan-server.md](docs/deployment/lan-server.md) | Docker, Kubernetes, Terraform, Ansible, Prometheus, Grafana, and Kafka LAN server deployment |
 | [docs/adr/](docs/adr/) | Architecture Decision Records |
 
 ### ADR Index
@@ -371,14 +368,10 @@ cd cli && ./typhoon.sh              # Interactive TUI
 ./typhoon.sh -s BTC/USD             # Start with specific symbol
 ./typhoon.sh --export-cache backup.typhoon-backup --cache-backup-passphrase "$PASS"
 ./typhoon.sh --import-cache backup.typhoon-backup --cache-backup-passphrase "$PASS"
-./typhoon.sh --lan-server --cache-dir /mnt/nas/typhoon-cache
-./typhoon.sh --lan-client 192.168.1.20
 cargo run -q -p typhoon-cli -- --mcp-server  # MCP stdio server for research packets
 ```
 
 The CLI shares encrypted credentials with the GUI — no need to re-enter API keys. 6.5MB standalone binary, works over SSH on any VPS.
-
-CLI LAN server/client mode uses the same encrypted LAN sync protocol, saved LAN passphrase, and `typhoon_cache.db` cache as the GUI. Headless mode also exposes Prometheus metrics with `--metrics-port`. For Docker, Kubernetes, Terraform, Ansible, Grafana, Prometheus, and Kafka examples with a user-provided local or NAS cache path, see [LAN server deployment](docs/deployment/lan-server.md).
 
 MCP clients can run `typhoon-cli --mcp-server` (or `cargo run -q -p typhoon-cli -- --mcp-server` from the workspace) to expose read-only TyphooN tools. The main tool is `research_packet`, which builds the same AI-facing markdown packet from the shared SQLite cache for requested symbols.
 

@@ -221,7 +221,8 @@ pub(super) fn us_equities_session_status_at(
 ) -> String {
     use chrono::{Datelike, Timelike};
 
-    let now_et = now_utc.naive_utc() + chrono::Duration::seconds(us_eastern_offset_seconds(now_utc));
+    let now_et =
+        now_utc.naive_utc() + chrono::Duration::seconds(us_eastern_offset_seconds(now_utc));
     let weekday = now_et.weekday();
     let minute_of_day = now_et.hour() as i64 * 60 + now_et.minute() as i64;
     const PRE: i64 = 4 * 60;
@@ -597,12 +598,22 @@ mod tests {
 
         // 08:35 ET Monday — pre-market, core opens in 55m.
         assert_eq!(
-            us_equities_session_status_at(at("2026-06-08T12:35:00Z"), false, open_today, close_today),
+            us_equities_session_status_at(
+                at("2026-06-08T12:35:00Z"),
+                false,
+                open_today,
+                close_today
+            ),
             "US equities PRE-MARKET · Core in 55m"
         );
         // 11:00 ET Monday — core open, closes at 16:00 (5h).
         assert_eq!(
-            us_equities_session_status_at(at("2026-06-08T15:00:00Z"), true, open_tomorrow, close_today),
+            us_equities_session_status_at(
+                at("2026-06-08T15:00:00Z"),
+                true,
+                open_tomorrow,
+                close_today
+            ),
             "US equities OPEN · closes in 5h 0m"
         );
         // 17:00 ET Monday — after-hours, closes (8 PM) in 3h.
@@ -632,7 +643,10 @@ mod tests {
             Some(at("2026-06-08T13:30:00Z")),
             None,
         );
-        assert!(saturday.starts_with("US equities CLOSED · opens in 1d"), "got {saturday}");
+        assert!(
+            saturday.starts_with("US equities CLOSED · opens in 1d"),
+            "got {saturday}"
+        );
 
         // Holiday at noon ET (is_open=false, next_open is a *later* day) must read
         // CLOSED, not PRE-MARKET or AFTER-HOURS — the trading-day gate comes from
@@ -643,7 +657,10 @@ mod tests {
             Some(at("2026-06-09T13:30:00Z")),
             None,
         );
-        assert!(holiday_noon.starts_with("US equities CLOSED"), "got {holiday_noon}");
+        assert!(
+            holiday_noon.starts_with("US equities CLOSED"),
+            "got {holiday_noon}"
+        );
     }
 
     #[test]

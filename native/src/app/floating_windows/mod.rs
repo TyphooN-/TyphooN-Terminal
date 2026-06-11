@@ -137,10 +137,6 @@ impl TyphooNApp {
                 (keyring::keys::FINNHUB_KEY, self.finnhub_key.as_str()),
                 (keyring::keys::FRED_KEY, self.fred_key.as_str()),
                 (
-                    keyring::keys::LAN_SYNC_PASS,
-                    self.lan_sync_passphrase.as_str(),
-                ),
-                (
                     keyring::keys::DISCORD_WEBHOOK,
                     self.discord_webhook.as_str(),
                 ),

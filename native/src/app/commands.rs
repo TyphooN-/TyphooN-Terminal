@@ -369,10 +369,6 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "Scrape status dashboard — fundamentals, SEC, crypto",
     },
     Command {
-        name: "WEBSERVER",
-        desc: "Start HTTPS web server for phone access over LAN",
-    },
-    Command {
         name: "ALERTS",
         desc: "Indicator alert builder (RSI, MACD, Fisher, Price conditions)",
     },

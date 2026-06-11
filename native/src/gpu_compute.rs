@@ -196,7 +196,8 @@ impl GpuCompute {
         volume: f32,
         is_live_forming: f32,
     ) -> bool {
-        let Some(write) = forming_bar_gpu_write(self.bar_count, high, low, close, is_live_forming) else {
+        let Some(write) = forming_bar_gpu_write(self.bar_count, high, low, close, is_live_forming)
+        else {
             return false;
         };
         let Some(ref close_buf) = self.bar_buffer else {

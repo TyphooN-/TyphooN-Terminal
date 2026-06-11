@@ -81,7 +81,6 @@ pub mod keys {
     pub const ALPACA_SECRET: &str = "alpaca_secret";
     pub const FINNHUB_KEY: &str = "finnhub_api_key";
     pub const FRED_KEY: &str = "fred_api_key";
-    pub const LAN_SYNC_PASS: &str = "lan_sync_passphrase";
     pub const DISCORD_WEBHOOK: &str = "discord_webhook";
     pub const PUSHOVER_TOKEN: &str = "pushover_token";
     pub const PUSHOVER_USER: &str = "pushover_user";
@@ -117,7 +116,6 @@ mod tests {
         assert!(!keys::ALPACA_SECRET.is_empty());
         assert!(!keys::FINNHUB_KEY.is_empty());
         assert!(!keys::FRED_KEY.is_empty());
-        assert!(!keys::LAN_SYNC_PASS.is_empty());
     }
 
     #[test]

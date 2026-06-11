@@ -707,9 +707,7 @@ impl TyphooNApp {
                     ui.add(egui::TextEdit::singleline(&mut self.ci_years).desired_width(60.0));
                     ui.end_row();
                     ui.label("Compounds/Year:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.ci_compounds).desired_width(60.0),
-                    );
+                    ui.add(egui::TextEdit::singleline(&mut self.ci_compounds).desired_width(60.0));
                     ui.end_row();
                     ui.label("Monthly Add ($):");
                     ui.add(
@@ -761,14 +759,14 @@ impl TyphooNApp {
                             .color(ACCENT),
                     );
                     ui.separator();
-                    let bal_pts: PlotPoints = PlotPoints::new(
-                        self.ci_result.iter().map(|(y, b, _)| [*y, *b]).collect(),
-                    );
-                    let cont_pts: PlotPoints = PlotPoints::new(
-                        self.ci_result.iter().map(|(y, _, c)| [*y, *c]).collect(),
-                    );
+                    let bal_pts: PlotPoints =
+                        PlotPoints::new(self.ci_result.iter().map(|(y, b, _)| [*y, *b]).collect());
+                    let cont_pts: PlotPoints =
+                        PlotPoints::new(self.ci_result.iter().map(|(y, _, c)| [*y, *c]).collect());
                     let bal_line = Line::new("Balance", bal_pts).color(UP).width(2.0);
-                    let cont_line = Line::new("Contributions", cont_pts).color(ACCENT).width(1.0);
+                    let cont_line = Line::new("Contributions", cont_pts)
+                        .color(ACCENT)
+                        .width(1.0);
                     Plot::new("ci_plot")
                         .height(200.0)
                         .allow_drag(false)

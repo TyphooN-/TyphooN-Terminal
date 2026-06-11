@@ -49,7 +49,7 @@ impl TyphooNApp {
         if self.total_pending_market_data_fetches() > pending_cap {
             return;
         }
-        if self.lan_sync_mode == "client" || !self.cache_loaded {
+        if !self.cache_loaded {
             return;
         }
         let _ = self.schedule_light_market_data_targets();
@@ -710,8 +710,6 @@ impl TyphooNApp {
                     .map(|(k, v)| (k.clone(), serde_json::json!(v)))
                     .collect()
             ),
-            "lan_client_enabled": self.lan_client_enabled,
-            "lan_server_enabled": self.lan_server_enabled,
             "show_alpaca_positions": self.show_alpaca_positions,
             "show_kr_positions": self.show_kr_positions,
             "snap_enabled": self.snap_enabled,
@@ -720,9 +718,6 @@ impl TyphooNApp {
             "draw_width": self.draw_width,
             "draw_color": [self.draw_color.r(), self.draw_color.g(), self.draw_color.b()],
             "draw_line_style": match self.draw_line_style { LineStyle::Solid => "solid", LineStyle::Dashed => "dashed", LineStyle::Dotted => "dotted" },
-            "lan_server_ip": self.lan_server_ip,
-            "lan_sync_host": self.lan_sync_host,
-            "lan_sync_port": self.lan_sync_port,
             "codex_model": self.codex_model,
             "codex_reasoning_effort": self.codex_reasoning_effort,
             "hermes_model": self.hermes_model,
@@ -775,7 +770,6 @@ impl TyphooNApp {
                 "alert_builder": self.show_alert_builder,
                 "storage": self.show_storage,
                 "sync_status": self.show_sync_status,
-                "lan_sync": self.show_lan_sync,
                 "unusual_volume": self.show_unusual_volume,
                 "sector_rotation": self.show_sector_rotation,
                 "fred": self.show_fred,
@@ -1084,10 +1078,6 @@ impl TyphooNApp {
             ),
             (keyring::keys::FINNHUB_KEY.into(), self.finnhub_key.clone()),
             (keyring::keys::FRED_KEY.into(), self.fred_key.clone()),
-            (
-                keyring::keys::LAN_SYNC_PASS.into(),
-                self.lan_sync_passphrase.clone(),
-            ),
             (
                 keyring::keys::DISCORD_WEBHOOK.into(),
                 self.discord_webhook.clone(),
@@ -2613,13 +2603,6 @@ impl TyphooNApp {
                         .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                         .collect();
                 }
-                // Restore LAN client config
-                if let Some(b) = v["lan_client_enabled"].as_bool() {
-                    self.lan_client_enabled = b;
-                }
-                if let Some(b) = v["lan_server_enabled"].as_bool() {
-                    self.lan_server_enabled = b;
-                }
                 if let Some(b) = v["show_alpaca_positions"].as_bool() {
                     self.show_alpaca_positions = b;
                 }
@@ -2652,15 +2635,6 @@ impl TyphooNApp {
                         "dotted" => LineStyle::Dotted,
                         _ => LineStyle::Solid,
                     };
-                }
-                if let Some(s) = v["lan_server_ip"].as_str() {
-                    self.lan_server_ip = s.to_string();
-                }
-                if let Some(s) = v["lan_sync_host"].as_str() {
-                    self.lan_sync_host = s.to_string();
-                }
-                if let Some(s) = v["lan_sync_port"].as_str() {
-                    self.lan_sync_port = s.to_string();
                 }
                 // Restore SL/TP state
                 if let Some(sl) = v["sl_enabled"].as_bool() {
@@ -2781,9 +2755,6 @@ impl TyphooNApp {
                     }
                     if let Some(b) = w["sync_status"].as_bool() {
                         self.show_sync_status = b;
-                    }
-                    if let Some(b) = w["lan_sync"].as_bool() {
-                        self.show_lan_sync = b;
                     }
                     if let Some(b) = w["unusual_volume"].as_bool() {
                         self.show_unusual_volume = b;

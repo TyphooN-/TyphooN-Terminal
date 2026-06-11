@@ -504,22 +504,6 @@ impl TyphooNApp {
                 ui.label("SEC EDGAR: Filing scraper + Form 4 insider trades");
                 ui.add_space(6.0);
                 ui.separator();
-                // LAN Client mode toggle
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.lan_client_enabled, "LAN Client Mode");
-                    if self.lan_client_enabled {
-                        ui.label(egui::RichText::new("(all local syncing disabled — data from server)").color(AXIS_TEXT).small());
-                    }
-                });
-                if self.lan_client_enabled {
-                    ui.horizontal(|ui| {
-                        ui.label("Server IP:");
-                        ui.add(egui::TextEdit::singleline(&mut self.lan_server_ip).desired_width(140.0).hint_text("192.168.1.100").font(egui::TextStyle::Monospace));
-                        ui.label("Port:");
-                        ui.add(egui::TextEdit::singleline(&mut self.lan_sync_port).desired_width(50.0).font(egui::TextStyle::Monospace));
-                    });
-                }
-
                 ui.add_space(10.0);
                 ui.heading("Notifications");
                 ui.separator();

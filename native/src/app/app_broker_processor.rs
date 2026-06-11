@@ -1,7 +1,6 @@
 use super::*;
 
 mod external_feeds;
-mod lan_sync;
 mod news;
 mod research_compute;
 mod storage;
@@ -79,15 +78,13 @@ pub(super) fn spawn_broker_message_processor(
     broker_cmd_rx: tokio::sync::mpsc::UnboundedReceiver<BrokerCmd>,
     broker_msg_tx: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
     importing_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    lan_client_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     rt_handle: tokio::runtime::Handle,
     shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
 ) {
     // Spawn broker message processor
     let broker_msg_tx_clone = broker_msg_tx.clone();
     let importing_flag_broker = importing_flag.clone();
-    let lan_client_broker = lan_client_flag.clone();
-    let shared_cache_broker = shared_cache.clone(); // shared DB connection for LAN sync
+    let shared_cache_broker = shared_cache.clone();
     rt_handle.spawn(async move {
         let mut cmd_rx = broker_cmd_rx;
         let mut broker: Option<AlpacaBroker> = None;
@@ -98,12 +95,6 @@ pub(super) fn spawn_broker_message_processor(
         // shared across all iapi endpoints). The handler below just
         // delegates to it instead of maintaining its own gate state.
         let importing_flag = importing_flag_broker;
-        let lan_client = lan_client_broker;
-        // Shared sender for forwarding requests to LAN sync WebSocket
-        let lan_remote_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>> =
-            Arc::new(tokio::sync::Mutex::new(None));
-        let lan_remote_tx_ref = lan_remote_tx.clone();
-        let mut lan_reconnect_handle: Option<tokio::task::AbortHandle> = None;
         let mut alpaca_fetch_permits = Arc::new(tokio::sync::Semaphore::new(4));
         let yahoo_chart_fetch_permits = Arc::new(tokio::sync::Semaphore::new(4));
         let kraken_fetch_permits =
@@ -128,79 +119,6 @@ pub(super) fn spawn_broker_message_processor(
         let mut yahoo_session: Option<fundamentals::YahooSession> = None;
         let mut yahoo_session_created: std::time::Instant = std::time::Instant::now();
         while let Some(cmd) = cmd_rx.recv().await {
-            // LAN client: forward external data-fetching commands to server
-            if lan_client.load(std::sync::atomic::Ordering::Relaxed) {
-                let remote_cmd = match &cmd {
-                    BrokerCmd::SecScrape { .. } => Some("SEC_SCRAPE"),
-                    BrokerCmd::FundamentalsScrape { force, .. } => Some(if *force { "FUNDAMENTALS_FORCE" } else { "FUNDAMENTALS" }),
-                    BrokerCmd::FundamentalsScrapeOne { .. } => Some("FUNDAMENTALS_ONE"),
-                    BrokerCmd::KrakenBackfill { .. } => Some("KRAKEN_BACKFILL"),
-                    BrokerCmd::KrakenFuturesBackfill { .. } => Some("KRAKEN_FUTURES_BACKFILL"),
-                    BrokerCmd::FinnhubNews { .. } => Some("FINNHUB_NEWS"),
-                    BrokerCmd::FetchEconCalendar { .. } => Some("CALENDAR"),
-                    BrokerCmd::FetchCongressTrades => Some("CONGRESS_TRADES"),
-                    BrokerCmd::FredFetch { .. } => Some("FRED_DATA"),
-                    // FetchFilingContent NOT forwarded — SEC EDGAR is public, fetch directly
-                    // BrokerCmd::FetchFilingContent { .. } => Some("SEC_FILING"),
-                    _ => None,
-                };
-                // Special handling: AlpacaFetchBars includes symbol+TF in args
-                // Use try_lock to avoid blocking the broker command loop
-                if let BrokerCmd::AlpacaFetchBars { ref symbol, ref timeframe, .. } = cmd {
-                    if let Ok(guard) = lan_remote_tx_ref.try_lock() {
-                        if let Some(ref tx) = *guard {
-                            let _ = tx.send(format!("FETCH_BARS:{},{}", symbol, timeframe));
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
-                                format!("LAN client: fetching {} {} via server — will sync shortly", symbol, timeframe)
-                            ));
-                        } else {
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
-                                format!("LAN client: {} {} — waiting for server connection", symbol, timeframe)
-                            ));
-                        }
-                    }
-                    // else: lock contended, silently skip (will retry on next request)
-                    continue;
-                }
-                // Special handling: IngestResearchArticles carries a multiline text payload.
-                // We both run it locally (immediate visibility for the pasting user) AND
-                // forward a JSON-wrapped copy to the server so the central DB gets the
-                // articles too — the LAN sync on research_web_articles + research_news
-                // will then propagate to other clients. We do NOT `continue` here so the
-                // outer match still executes the local ingest below.
-                if let BrokerCmd::IngestResearchArticles { ref text, ref agent_override } = cmd {
-                    if let Ok(guard) = lan_remote_tx_ref.try_lock() {
-                        if let Some(ref tx) = *guard {
-                            let payload = serde_json::json!({
-                                "text": text,
-                                "agent": agent_override,
-                            }).to_string();
-                            let _ = tx.send(format!("INGEST_RESEARCH:{}", payload));
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
-                                "LAN client: research ingest forwarded to server (will sync back).".into()
-                            ));
-                        }
-                    }
-                    // fall through — run local ingest too so the pasting user
-                    // sees articles in the News panel immediately, even before
-                    // the server's copy syncs back.
-                }
-                if let Some(cmd_name) = remote_cmd {
-                    if let Ok(guard) = lan_remote_tx_ref.try_lock() {
-                        if let Some(ref tx) = *guard {
-                            let _ = tx.send(cmd_name.to_string());
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
-                                format!("LAN client: '{}' forwarded to server", cmd_name)
-                            ));
-                        } else {
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
-                                format!("LAN client: '{}' — not connected to server", cmd_name)
-                            ));
-                        }
-                    }
-                    continue;
-                }
-            }
             match cmd {
                 BrokerCmd::Connect {
                     api_key,
@@ -351,10 +269,6 @@ pub(super) fn spawn_broker_message_processor(
                     }
                 }
                 BrokerCmd::GetWatchlistQuotes { symbols } => {
-                    // LAN client: skip — watchlist data comes from server via KV sync (broker:watchlist)
-                    if lan_client.load(std::sync::atomic::Ordering::Relaxed) {
-                        continue;
-                    }
                     let mut rows: Vec<WatchlistRow> = symbols
                         .iter()
                         .map(|sym| empty_watchlist_row(sym))
@@ -4021,22 +3935,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                     }
                 }
-                cmd @ (
-                    BrokerCmd::LanSyncStart { .. }
-                    | BrokerCmd::LanSyncConnect { .. }
-                    | BrokerCmd::LanSyncStop
-                    | BrokerCmd::LanResyncBars
-                ) => {
-                    lan_sync::handle_lan_sync_command(
-                        cmd,
-                        broker_msg_tx_clone.clone(),
-                        shared_cache_broker.clone(),
-                        lan_remote_tx_ref.clone(),
-                        lan_client.clone(),
-                        &mut lan_reconnect_handle,
-                    )
-                    .await;
-                }
+
                 BrokerCmd::IgnoreNewsArticle { symbol, url_hash } => {
                     // Persist the removal: delete the row + remember the hash so the
                     // next GDELT/Finnhub fetch can't resurrect it. The UI removes the

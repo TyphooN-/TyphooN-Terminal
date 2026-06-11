@@ -66,14 +66,21 @@ pub fn article_is_relevant_for_ticker(article: &NewsArticle, ticker: &str) -> bo
     }
 
     let text = format!("{} {}", article.headline, article.summary).to_lowercase();
-    let company_variants = [
-        "work medical", "workmedical", "wok medical", "wokmedical",
-    ];
+    let company_variants = ["work medical", "workmedical", "wok medical", "wokmedical"];
 
     // Strong financial / company signals
     let financial_signals = [
-        "earnings", "revenue", "fda", "nasdaq", "medical device", "biopharma",
-        "clinical", "conference", "partnership", "subsidiary", "acquisition",
+        "earnings",
+        "revenue",
+        "fda",
+        "nasdaq",
+        "medical device",
+        "biopharma",
+        "clinical",
+        "conference",
+        "partnership",
+        "subsidiary",
+        "acquisition",
     ];
 
     let has_company = company_variants.iter().any(|v| text.contains(v));

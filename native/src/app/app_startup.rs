@@ -55,7 +55,7 @@ pub(super) fn spawn_async_cache_open(
     let shared = shared_cache.clone();
     rt_handle.spawn_blocking(move || {
         let parent = cache_dir();
-        // Create cache directory if it doesn't exist (fresh install / LAN client).
+        // Create cache directory if it doesn't exist (fresh install).
         // For a custom-configured NAS dir this also creates the leaf dir if
         // the user pointed at something like `/mnt/nas/typhoon/cache` that
         // exists only as a parent mount.

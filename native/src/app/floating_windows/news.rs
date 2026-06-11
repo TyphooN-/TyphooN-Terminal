@@ -786,8 +786,7 @@ impl TyphooNApp {
                     .filter(|a| {
                         let assoc = a.symbol.eq_ignore_ascii_case(&t)
                             || a.tickers.iter().any(|tk| tk.eq_ignore_ascii_case(&t));
-                        assoc
-                            && !typhoon_engine::core::news::article_is_relevant_for_ticker(a, &t)
+                        assoc && !typhoon_engine::core::news::article_is_relevant_for_ticker(a, &t)
                     })
                     .map(|a| a.url_hash.clone())
                     .collect();

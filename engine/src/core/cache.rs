@@ -817,9 +817,7 @@ impl SqliteCache {
         let conn = match self.conn.try_lock() {
             Ok(conn) => conn,
             Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
-            Err(std::sync::TryLockError::Poisoned(e)) => {
-                return Err(format!("Lock poisoned: {e}"))
-            }
+            Err(std::sync::TryLockError::Poisoned(e)) => return Err(format!("Lock poisoned: {e}")),
         };
         conn.execute(
             "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, last_ts, second_last_ts, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -3334,10 +3332,20 @@ mod tests {
 
         let deleted = cache.delete_timeframe("M1").unwrap();
         assert_eq!(deleted, 3);
-        assert!(cache.get_bars("kraken-futures:EURUSD:1Min").unwrap().is_none());
+        assert!(
+            cache
+                .get_bars("kraken-futures:EURUSD:1Min")
+                .unwrap()
+                .is_none()
+        );
         assert!(cache.get_bars("alpaca:AAPL:1Min").unwrap().is_none());
         assert!(cache.get_bars("kraken:BTCUSD:1Min").unwrap().is_none());
-        assert!(cache.get_bars("kraken-futures:EURUSD:1Hour").unwrap().is_some());
+        assert!(
+            cache
+                .get_bars("kraken-futures:EURUSD:1Hour")
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
@@ -3424,7 +3432,12 @@ mod tests {
         let deleted = cache.delete_broker_data("alpaca").unwrap();
         assert_eq!(deleted, 2);
         assert!(cache.get_bars("alpaca:AAPL:1Day").unwrap().is_none());
-        assert!(cache.get_bars("kraken-futures:EURUSD:1Day").unwrap().is_some());
+        assert!(
+            cache
+                .get_bars("kraken-futures:EURUSD:1Day")
+                .unwrap()
+                .is_some()
+        );
         assert!(cache.get_kv("alpaca:meta:test").unwrap().is_none());
     }
 

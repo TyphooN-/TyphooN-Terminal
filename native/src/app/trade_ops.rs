@@ -201,8 +201,7 @@ impl TyphooNApp {
             .collect();
         entries.sort_by(|a, b| {
             a.symbol.cmp(&b.symbol).then(
-                sync_timeframe_sort_key(&a.timeframe)
-                    .cmp(&sync_timeframe_sort_key(&b.timeframe)),
+                sync_timeframe_sort_key(&a.timeframe).cmp(&sync_timeframe_sort_key(&b.timeframe)),
             )
         });
         let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
@@ -338,8 +337,7 @@ impl TyphooNApp {
             .collect();
         entries.sort_by(|a, b| {
             a.broker.cmp(&b.broker).then(a.symbol.cmp(&b.symbol)).then(
-                sync_timeframe_sort_key(&a.timeframe)
-                    .cmp(&sync_timeframe_sort_key(&b.timeframe)),
+                sync_timeframe_sort_key(&a.timeframe).cmp(&sync_timeframe_sort_key(&b.timeframe)),
             )
         });
         let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
@@ -447,8 +445,7 @@ impl TyphooNApp {
             .collect();
         entries.sort_by(|a, b| {
             a.symbol.cmp(&b.symbol).then(
-                sync_timeframe_sort_key(&a.timeframe)
-                    .cmp(&sync_timeframe_sort_key(&b.timeframe)),
+                sync_timeframe_sort_key(&a.timeframe).cmp(&sync_timeframe_sort_key(&b.timeframe)),
             )
         });
         let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
@@ -544,8 +541,7 @@ impl TyphooNApp {
         let mut entries: Vec<AlpacaBackfillCompletePair> = pairs.values().cloned().collect();
         entries.sort_by(|a, b| {
             a.symbol.cmp(&b.symbol).then(
-                sync_timeframe_sort_key(&a.timeframe)
-                    .cmp(&sync_timeframe_sort_key(&b.timeframe)),
+                sync_timeframe_sort_key(&a.timeframe).cmp(&sync_timeframe_sort_key(&b.timeframe)),
             )
         });
         let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
@@ -1397,8 +1393,8 @@ impl TyphooNApp {
     }
 
     pub(super) fn selected_live_broker_targets(&self) -> (bool, bool) {
-        let send_alpaca = self.alpaca_order_available()
-            && matches!(self.order_broker, OrderBroker::Alpaca);
+        let send_alpaca =
+            self.alpaca_order_available() && matches!(self.order_broker, OrderBroker::Alpaca);
         let send_kraken =
             self.kraken_order_available() && matches!(self.order_broker, OrderBroker::Kraken);
         (send_alpaca, send_kraken)
@@ -1630,8 +1626,7 @@ impl TyphooNApp {
             let fresh = c
                 .live_quote_at
                 .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
-            (fresh && c.live_bid > 0.0 && c.live_ask > 0.0)
-                .then(|| (c.live_bid + c.live_ask) * 0.5)
+            (fresh && c.live_bid > 0.0 && c.live_ask > 0.0).then(|| (c.live_bid + c.live_ask) * 0.5)
         })
     }
 

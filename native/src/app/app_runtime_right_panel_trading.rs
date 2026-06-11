@@ -9,23 +9,7 @@ impl TyphooNApp {
                 .default_open(self.right_trading_open)
                 .show(ui, |ui| {
                     // ── Trading Buttons Grid (exact WebKit CSS: #button-grid) ──
-                    // LAN client: read-only — disable all trading buttons
-                    if self.lan_sync_mode == "client" {
-                        ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new("Read-Only View (LAN Client)")
-                                .color(AXIS_TEXT)
-                                .small()
-                                .strong(),
-                        );
-                        ui.label(
-                            egui::RichText::new("Trade execution disabled — use server")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        ui.add_space(4.0);
-                    }
-                    let trading_enabled = self.lan_sync_mode != "client";
+                    let trading_enabled = true;
                     self.resolve_order_broker();
                     ui.set_enabled(trading_enabled);
                     ui.add_space(8.0);

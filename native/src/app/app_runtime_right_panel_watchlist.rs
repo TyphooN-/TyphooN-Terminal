@@ -36,12 +36,7 @@ impl TyphooNApp {
                     for sym in &missing {
                         let mut found = false;
                         'tf_search: for tf in &tfs {
-                            for source in [
-                                "alpaca",
-                                "kraken",
-                                "kraken-equities",
-                                "default",
-                            ] {
+                            for source in ["alpaca", "kraken", "kraken-equities", "default"] {
                                 for key in chart_source_cache_keys(source, sym, tf) {
                                     if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
                                         if let Some(row) =
@@ -318,11 +313,7 @@ impl TyphooNApp {
                             2
                         } else if !show_ext {
                             // No Ext% column: Chg% | Vol split directly.
-                            if rx < (col_pct + col_vol) * 0.5 {
-                                3
-                            } else {
-                                4
-                            }
+                            if rx < (col_pct + col_vol) * 0.5 { 3 } else { 4 }
                         } else if rx < (col_pct + col_ext) * 0.5 {
                             3
                         } else if rx < (col_ext + col_vol) * 0.5 {

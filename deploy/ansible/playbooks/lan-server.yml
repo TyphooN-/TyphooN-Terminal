@@ -1,6 +1,0 @@
----
-- name: Deploy TyphooN LAN server
-  hosts: typhoon_lan_servers
-  become: true
-  roles:
-    - role: typhoon_lan_server

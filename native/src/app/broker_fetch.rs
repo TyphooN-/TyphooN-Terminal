@@ -395,7 +395,6 @@ pub(super) async fn run_alpaca_fetch_task(
     });
 }
 
-
 fn should_request_full_backfill(
     backfill_already_complete: bool,
     target_bars: Option<u32>,

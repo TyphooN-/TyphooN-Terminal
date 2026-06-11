@@ -143,7 +143,6 @@
 - [x] WASM client (eframe/glow), built via trunk (ADR-052)
 - [x] HTTPS + WebSocket relay (axum, axum-server)
 - [x] Read-only chart, watchlist, positions/orders display
-- [x] PBKDF2 passphrase auth shared with native LAN sync
 
 ### Phase 16: Fundamentals & Research
 - [x] Fundamentals engine across 21 sources (Alpaca, Finnhub, FMP, Alpha Vantage, FRED, SEC EDGAR, Yahoo, etc.) — ADR-034
@@ -154,7 +153,7 @@
 
 ### Phase 17: AI Sessions
 - [x] Persistent AI sessions: Claude Code, Gemini CLI, Codex CLI, generic AI Chat (ADR-082)
-- [x] Cross-client AI response cache, dedup across LAN clients (ADR-083)
+- [x] Local AI response cache, dedup identical hosted-AI prompts (ADR-083)
 - [x] Slash commands: RESUMECLAUDE / RESUMEGEMINI / RESUMECODEX / RESUMEAI
 - [x] Ask Codex reasoning effort control
 
@@ -178,21 +177,3 @@
 - [x] Documented Kraken Spot public/private rate-limit pacing, cache-depth-aware window sizing
 - [x] No-data symbol skip set
 - [x] Dependency audit + RustSec advisory closure (ADR-088)
-
-### Phase 21: Headless LAN & Observability
-- [x] CLI `--lan-server` / `--lan-client` headless mode reusing GUI keyring/KV passphrase (ADR-090)
-- [x] `--lan-passphrase` / `TYPHOON_LAN_PASSPHRASE` bootstrap for fresh caches (ADR-090)
-- [x] Docker, Docker Compose, Kubernetes (envsubst + hostPath PV), Terraform module, Ansible role (ADR-090)
-- [x] CLI `--metrics-port` Prometheus text endpoint with cache size, row counts, per-series bar counts, liveness, uptime (ADR-093)
-- [x] Compose `observability` profile + Ansible/Kubernetes/Terraform Prometheus + Grafana with provisioned LAN dashboard (ADR-093)
-- [x] Compose `kafka` profile + Ansible/Kubernetes/Terraform single-node Apache Kafka KRaft broker (ADR-093)
-
-## Deferred / Data-Gated
-
-### Bookmap / L2
-- Current status: Bookmap supports multiple per-symbol windows, `/bookmap SYMBOL` routing, orderbook DOM, Alpaca crypto orderbook snapshots, symbol-filtered live L2 rendering, and Kraken spot depth streaming only for symbols that map to known Kraken spot pairs.
-- Deferred: retained streaming L2 history with a dedicated wgpu compute texture remains data-entitlement and scope gated (ADR-027).
-
-### Pattern Recognition
-- Current status: harmonic pattern auto-detection is implemented and chart drawing tools include manual pattern annotations.
-- Deferred: automatic classic chart-pattern detection (double top/bottom, H&S, wedge, triangle) is not part of the current active roadmap.

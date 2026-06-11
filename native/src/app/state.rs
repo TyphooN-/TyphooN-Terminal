@@ -83,18 +83,6 @@ pub(crate) fn empty_watchlist_row(symbol: &str) -> WatchlistRow {
     }
 }
 
-pub(crate) fn watchlist_quote_poll_ready(
-    elapsed: std::time::Duration,
-    has_symbols: bool,
-    lan_client_enabled: bool,
-    cache_loaded: bool,
-) -> bool {
-    elapsed >= std::time::Duration::from_secs(15)
-        && has_symbols
-        && !lan_client_enabled
-        && cache_loaded
-}
-
 pub(crate) fn watchlist_cache_fallback_sources(symbol: &str) -> &'static [&'static str] {
     let symbol = symbol.trim().replace('/', "").to_ascii_uppercase();
     let equity_like = !symbol.contains('/')
@@ -556,23 +544,7 @@ pub(crate) enum BrokerCmd {
         trade_symbols: Vec<String>,
         quote_symbols: Vec<String>,
     },
-    /// Start LAN sync server on port with passphrase.
-    LanSyncStart {
-        port: u16,
-        passphrase: String,
-        db_path: std::path::PathBuf,
-    },
-    /// Connect LAN sync client to server.
-    LanSyncConnect {
-        host: String,
-        port: u16,
-        passphrase: String,
-        db_path: std::path::PathBuf,
-    },
-    /// Stop LAN sync server or client.
-    LanSyncStop,
-    /// Request resync of bar data from LAN server.
-    LanResyncBars,
+
     /// Scan unusual volume (background, heavy DB reads).
     ScanUnusualVolume {
         keys: Vec<(String, i64)>,
@@ -4774,17 +4746,6 @@ pub struct TyphooNApp {
     /// Bar-sync % per broker/TF window. Counted from `bg.detailed_stats`,
     /// with freshness derived from `bg.bar_ts_cache` when available.
     pub(crate) show_sync_status: bool,
-    pub(crate) show_lan_sync: bool,
-    pub(crate) lan_sync_mode: String, // "idle", "server", "client"
-    pub(crate) lan_sync_host: String, // client: server IP to connect to
-    pub(crate) lan_sync_port: String, // port (default 9847)
-    pub(crate) lan_sync_passphrase: String, // shared secret for auth
-    /// Persistent: this instance is a LAN client (auto-connect on startup, no outbound syncing)
-    pub(crate) lan_client_enabled: bool,
-    /// Persistent: this instance is a LAN server (auto-start on startup)
-    pub(crate) lan_server_enabled: bool,
-    /// Persistent: saved LAN server IP for auto-connect
-    pub(crate) lan_server_ip: String,
     pub(crate) show_help: bool,
     pub(crate) help_filter: String,
     /// Count of alerts that have fired since the user last dismissed the badge.
@@ -4888,15 +4849,10 @@ pub struct TyphooNApp {
     pub(crate) scrape_sec_last_msg: String,
     /// Startup auto SEC scrape was deferred because Scope had no symbols yet.
     pub(crate) auto_sec_scrape_deferred: bool,
-    // Web server (phone access over LAN)
-    pub(crate) web_server_running: bool,
     /// Hash-based dedup for broker KV writes — skip put_kv if content unchanged
     pub(crate) kv_write_hashes: std::collections::HashMap<&'static str, u64>,
     /// Throttle: last write time per KV key (max once per 30s even if content changes)
     pub(crate) kv_write_times: std::collections::HashMap<&'static str, std::time::Instant>,
-    pub(crate) web_cmd_rx:
-        Option<tokio::sync::mpsc::UnboundedReceiver<typhoon_web_protocol::WebCmd>>,
-    pub(crate) web_msg_tx: Option<tokio::sync::broadcast::Sender<typhoon_web_protocol::WebMsg>>,
     // Fundamentals windows
     pub(crate) show_ev_scanner: bool,
     pub(crate) show_earnings_calendar: bool,
@@ -7326,12 +7282,8 @@ pub struct TyphooNApp {
     /// in `new` on construction.
     pub(crate) news_md_cache: egui_commonmark::CommonMarkCache,
     pub(crate) kraken_futures_universe_last_schedule: std::time::Instant,
-    pub(crate) lan_client_last_reload: std::time::Instant,
     pub(crate) session_last_autosave: std::time::Instant,
     pub(crate) metrics_last_update: std::time::Instant,
-    pub(crate) lan_remote_last_poll: std::time::Instant,
-    pub(crate) kraken_positions_last_poll: std::time::Instant,
-    pub(crate) kraken_position_quotes_last_poll: std::time::Instant,
     /// Last REST `TradesHistory` fetch. The `ownTrades` WebSocket already
     /// streams new trades live (see KrakenLiveTrade handler), so the REST
     /// pull is only needed at connect / reconnect / cold cache. A periodic
@@ -7339,7 +7291,6 @@ pub struct TyphooNApp {
     /// REST counter slot and re-rendering the same history; this gate caps
     /// the cadence to KRAKEN_TRADES_REST_REFRESH_SECS.
     pub(crate) kraken_trades_last_fetch: std::time::Instant,
-    pub(crate) watchlist_quotes_last_poll: std::time::Instant,
     pub(crate) weekend_crypto_last_sync: std::time::Instant,
     pub(crate) alpaca_rotation_last_sync: std::time::Instant,
     pub(crate) perf_last_report: std::time::Instant,

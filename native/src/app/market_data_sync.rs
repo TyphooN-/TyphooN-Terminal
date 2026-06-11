@@ -215,21 +215,21 @@ impl TyphooNApp {
                 "earnings": false, "dividends": false, "outliers": false,
                 "stress_test": false, "volume_profile": true, "hv_cone": false,
                 "sector_heatmap": false, "dividends_screen": false, "event_calendar": false,
-                "lan_sync": false, "alerts": true, "journal": false, "compact_mode": false,
+            "alerts": true, "journal": false, "compact_mode": false,
             }),
             "RESEARCH" => serde_json::json!({
                 "sec": true, "insider": true, "fundamentals": true, "ev": true,
                 "earnings": true, "dividends": true, "outliers": true,
                 "stress_test": false, "volume_profile": false, "hv_cone": false,
                 "sector_heatmap": true, "dividends_screen": true, "event_calendar": true,
-                "lan_sync": false, "alerts": false, "journal": false, "compact_mode": false,
+            "alerts": false, "journal": false, "compact_mode": false,
             }),
             "COMPACT" => serde_json::json!({
                 "sec": false, "insider": false, "fundamentals": false, "ev": false,
                 "earnings": false, "dividends": false, "outliers": false,
                 "stress_test": false, "volume_profile": false, "hv_cone": false,
                 "sector_heatmap": false, "dividends_screen": false, "event_calendar": false,
-                "lan_sync": false, "alerts": false, "journal": false, "compact_mode": true,
+            "alerts": false, "journal": false, "compact_mode": true,
             }),
             _ => return None,
         };
@@ -252,7 +252,6 @@ impl TyphooNApp {
             "sector_heatmap": self.show_sector_heatmap,
             "dividends_screen": self.show_dividends,
             "event_calendar": self.show_event_calendar,
-            "lan_sync": self.show_lan_sync,
             "alerts": self.show_alert_builder,
             "journal": self.show_journal,
             "compact_mode": self.compact_mode,
@@ -282,7 +281,6 @@ impl TyphooNApp {
         set_bool!("sector_heatmap", show_sector_heatmap);
         set_bool!("dividends_screen", show_dividends);
         set_bool!("event_calendar", show_event_calendar);
-        set_bool!("lan_sync", show_lan_sync);
         set_bool!("alerts", show_alert_builder);
         set_bool!("journal", show_journal);
         set_bool!("compact_mode", compact_mode);

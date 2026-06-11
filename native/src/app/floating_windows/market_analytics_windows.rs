@@ -1203,6 +1203,5 @@ impl TyphooNApp {
                         });
             self.apply_symbol_action(sa_pending_action);
         }
-
     }
 }

@@ -83,7 +83,6 @@ impl TyphooNApp {
         self.show_cache_stats = false;
         self.show_storage = false;
         self.show_sync_status = false;
-        self.show_lan_sync = false;
         self.show_help = false;
         self.show_connect = false;
         self.show_indicators_panel = false;

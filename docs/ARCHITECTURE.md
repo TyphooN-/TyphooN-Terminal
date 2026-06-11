@@ -139,27 +139,17 @@ TyphooN-Terminal/
 │   │   │   ├── kraken.rs        # Kraken Spot public OHLCV
 │   │   │   ├── kraken_futures.rs # Kraken Futures public candles
 │   │   │   ├── ai_sessions.rs # ADR-082 chat persistence
-│   │   │   ├── ai_response_cache.rs # ADR-083 cross-client cache
-│   │   │   └── lan_sync.rs    # TLS + PBKDF2 LAN sync (ADR-045)
+│   │   │   └── ai_response_cache.rs # ADR-083 local AI response cache
 │   │   └── broker/
 │   │       ├── alpaca.rs       # REST + WebSocket (ADR-087 autotune)
 │   │       ├── tastytrade.rs   # REST + DXLink (ADR-018)
 │   │       ├── kraken_broker.rs # Kraken Spot REST trading (ADR-051)
 │   │       └── dxlink.rs       # DXLink WebSocket
 │   └── Cargo.toml
-├── cli/                    # TUI plus headless LAN server/client
-│   ├── src/main.rs         # --lan-server / --lan-client, shared cache dir
+├── cli/                    # TUI/headless cache, broker, and research ops
+│   ├── src/main.rs         # cache stats/import/export, broker snapshots, research packets
 │   └── Cargo.toml
-├── deploy/                 # Docker, Kubernetes, Terraform, Ansible, Grafana/Prometheus/Kafka assets
-│   ├── ansible/            # LAN host role with optional observability + Kafka (ADR-093)
-│   ├── grafana/            # Provisioned datasource + LAN server dashboard
-│   ├── kubernetes/         # lan-server + observability-kafka manifests
-│   ├── prometheus/         # Prometheus scrape config for /metrics
-│   └── terraform/          # Kubernetes module incl. observability + Kafka resources
 ├── mql5-compiler/          # MQL5 compiler plus full 10-language transpiler matrix
-├── web/                    # WASM LAN client (ADR-052)
-├── web-protocol/           # Shared web ↔ server message types
-├── web-server/             # axum HTTPS + WebSocket relay
 └── docs/
     ├── adr/                # 200+ Architecture Decision Records
     ├── API_KEYS.md
@@ -181,10 +171,6 @@ TyphooN-Terminal/
 | Binary size (release) | ~25MB |
 
 ## Additional Features
-
-### LAN Sync
-
-TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates (no pinning — PBKDF2 passphrase handles auth). 60-second periodic re-sync. Server and client auto-start on startup. Full data sync: bars + DARWIN tables + filtered KV cache + 34 pre-computed analytics fields + the whitelisted research snapshot tables. LAN clients are read-only viewers — zero local deal computation, all analytics from server KV. Broker positions/orders/account synced via KV for read-only display. 15 remote commands wired (SEC_SCRAPE, DARWIN_IMPORT, FETCH_BARS, INGEST_RESEARCH, etc.). Connected client IPs shown in server UI. Trading buttons disabled on LAN client. CLI/headless mode exposes Prometheus metrics for cache size, cache rows, per-series bar counts, liveness, and uptime. Implemented in `engine/src/core/lan_sync.rs` with CLI deployment in `cli/src/main.rs`.
 
 ### Storage Manager
 
@@ -221,12 +207,8 @@ Right-aligned numeric columns (Last, Chg, Chg%, Vol) with painter-based renderin
 
 ### AI Sessions
 
-Four AI surfaces with persistent, resumable sessions (ADR-082): Claude Code (`claude --resume <uuid>`), Gemini CLI, Codex CLI, and a generic AI Chat (Claude / OpenAI / Gemini / Grok / Mistral / Perplexity / Local). Sessions auto-save to the SqliteCache `kv_cache` (zstd-compressed, level 3 on hot mutable KV writes) on every reply. Cross-client AI response cache (ADR-083) deduplicates identical hosted-AI prompts across LAN clients so the same prompt issued from server + phone hits the cache once. Slash commands (`RESUMECLAUDE`, `RESUMEGEMINI`, `RESUMECODEX`, `RESUMEAI`) re-enter prior sessions; the AI Sessions browser window shows history with subject lines and last-touched timestamps. If a built-in AI reply includes an ADR-080 `===TYPHOON_INGEST===` Return Path block, ADR-212 queues the existing research-ingest broker path automatically.
+Four AI surfaces with persistent, resumable sessions (ADR-082): Claude Code (`claude --resume <uuid>`), Gemini CLI, Codex CLI, and a generic AI Chat (Claude / OpenAI / Gemini / Grok / Mistral / Perplexity / Local). Sessions auto-save to the SqliteCache `kv_cache` (zstd-compressed, level 3 on hot mutable KV writes) on every reply. Local AI response cache (ADR-083) deduplicates identical hosted-AI prompts so repeated prompts avoid duplicate hosted-model calls. Slash commands (`RESUMECLAUDE`, `RESUMEGEMINI`, `RESUMECODEX`, `RESUMEAI`) re-enter prior sessions; the AI Sessions browser window shows history with subject lines and last-touched timestamps. If a built-in AI reply includes an ADR-080 `===TYPHOON_INGEST===` Return Path block, ADR-212 queues the existing research-ingest broker path automatically.
 
 ### Research Packet (TA-Lib + Godel Parity)
 
 The research packet is an AI-agent-readable markdown bundle emitted on demand via `RESEARCH_PACKET`. It carries every cached signal: ~375 TA-Lib primitives (indicators + candlestick patterns), Godel-Terminal-documented features (options chain, expirations calendar, earnings whispers, institutional ownership, insider transactions, etc.), and the user's open positions per symbol. Each surface flows through the same pipeline (snapshot struct → SQLite table → LAN-sync whitelist → BrokerCmd/Msg → packet emitter → egui popup) — see ADR-079. Chart-drawing parity for these signals is deferred (ADR-079); the agent reads the markdown directly.
-
-### Web LAN Client (WASM)
-
-A standalone WASM client built with `eframe`/`glow` (ADR-052) connects to the native `web-server` over HTTPS + WebSocket (PBKDF2 passphrase). Read-only chart, watchlist, positions/orders display — trading and analytics computation stay on the server. Built separately via `trunk`. See `web/`, `web-protocol/`, `web-server/` workspace members.

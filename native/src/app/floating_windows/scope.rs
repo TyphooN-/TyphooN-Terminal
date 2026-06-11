@@ -15,12 +15,11 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.fund_source_kraken, "Kraken");
 
                     // Always sync scope enum from current checkbox state
-                    self.broker_scope =
-                        match (self.fund_source_alpaca, self.fund_source_kraken) {
-                            (true, false) => EventSource::Alpaca,
-                            (false, true) => EventSource::Kraken,
-                            _ => EventSource::All,
-                        };
+                    self.broker_scope = match (self.fund_source_alpaca, self.fund_source_kraken) {
+                        (true, false) => EventSource::Alpaca,
+                        (false, true) => EventSource::Kraken,
+                        _ => EventSource::All,
+                    };
 
                     ui.separator();
                     let total = if self.broker_scope == EventSource::All {

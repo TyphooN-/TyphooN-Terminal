@@ -653,11 +653,7 @@ impl McpServer {
         }
 
         let Some((key, bars)) = chosen else {
-            writeln!(
-                packet,
-                "_No D1 bar data in cache._"
-            )
-            .ok();
+            writeln!(packet, "_No D1 bar data in cache._").ok();
             writeln!(packet).ok();
             return;
         };

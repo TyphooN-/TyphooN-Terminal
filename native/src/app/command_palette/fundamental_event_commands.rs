@@ -29,14 +29,11 @@ impl TyphooNApp {
                 self.scrape_fund_ok = 0;
                 self.scrape_fund_fail = 0;
                 self.scrape_fund_skipped = 0;
-                let sources: Vec<&str> = [
-                    ("Alpaca", use_alpaca),
-                    ("Kraken", use_kraken),
-                ]
-                .iter()
-                .filter(|(_, on)| *on)
-                .map(|(n, _)| *n)
-                .collect();
+                let sources: Vec<&str> = [("Alpaca", use_alpaca), ("Kraken", use_kraken)]
+                    .iter()
+                    .filter(|(_, on)| *on)
+                    .map(|(n, _)| *n)
+                    .collect();
                 let force_label = if force {
                     " (FORCE — ignoring cache)"
                 } else {

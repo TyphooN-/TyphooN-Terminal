@@ -4,9 +4,8 @@ use super::*;
 impl TyphooNApp {
     pub(super) fn render_right_panel_orders_section(&mut self, ui: &mut egui::Ui) {
         // ── Orders Section ────────────────────────────────────
-        let alpaca_live = self.show_alpaca_positions
-            && (self.broker_connected || self.lan_sync_mode == "client")
-            && !self.live_orders.is_empty();
+        let alpaca_live =
+            self.show_alpaca_positions && self.broker_connected && !self.live_orders.is_empty();
         if alpaca_live {
             let ord_count = self.live_orders.len();
             let (ord_stale_lbl, ord_stale_col) = self.staleness_badge(self.orders_last_update_ts);
@@ -40,7 +39,7 @@ impl TyphooNApp {
                                 .color(AXIS_TEXT)
                                 .small(),
                         );
-                        if self.broker_connected && self.lan_sync_mode != "client" {
+                        if self.broker_connected {
                             if ui
                                 .small_button(egui::RichText::new("X").color(DOWN))
                                 .on_hover_text("Cancel order")

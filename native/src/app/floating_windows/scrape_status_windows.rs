@@ -275,12 +275,11 @@ impl TyphooNApp {
                         ui.checkbox(&mut self.fund_source_kraken, "Kraken");
                     });
                     // Sync broker_scope from checkbox state
-                    self.broker_scope =
-                        match (self.fund_source_alpaca, self.fund_source_kraken) {
-                            (true, false) => EventSource::Alpaca,
-                            (false, true) => EventSource::Kraken,
-                            _ => EventSource::All,
-                        };
+                    self.broker_scope = match (self.fund_source_alpaca, self.fund_source_kraken) {
+                        (true, false) => EventSource::Alpaca,
+                        (false, true) => EventSource::Kraken,
+                        _ => EventSource::All,
+                    };
 
                     // Last message
                     if !self.scrape_fund_last_msg.is_empty() {

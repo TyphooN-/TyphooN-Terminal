@@ -3,7 +3,6 @@ use super::*;
 pub(super) fn spawn_background_refresh(
     app: &mut TyphooNApp,
     shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
-    lan_client_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     importing_flag_bg: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     // Spawn the background data-refresh thread (SEC filings, fundamentals,
@@ -12,7 +11,6 @@ pub(super) fn spawn_background_refresh(
         let (bg_tx, bg_rx) = std::sync::mpsc::channel::<BgData>();
         app.bg_rx = bg_rx;
         let shared_cache_bg = shared_cache.clone();
-        let lan_client_bg = lan_client_flag.clone();
         let _ = std::thread::Builder::new()
             .name("typhoon-bg-refresh".to_string())
             .spawn(move || {
@@ -210,8 +208,6 @@ pub(super) fn spawn_background_refresh(
                         tracing::info!("BG: incremental_vacuum(500) completed");
                     }
 
-                    let is_lan_client =
-                        lan_client_bg.load(std::sync::atomic::Ordering::Relaxed);
                     // Full refresh: insider-trade grouping — once per startup only.
                     let need_full_refresh = !full_refresh_done;
                     if !need_full_refresh {
@@ -223,7 +219,7 @@ pub(super) fn spawn_background_refresh(
                         // order of magnitude below their cap while still
                         // making real progress on the backlog.
                         // Spawns a short-lived thread with its own tokio runtime (same pattern as scrape thread).
-                        if !is_lan_client && bg_cycle_count % 10 == 5 {
+                        if bg_cycle_count % 10 == 5 {
                             if let Ok(unfetched) = sec_filing::get_unfetched_filings(conn, 15) {
                                 if !unfetched.is_empty() {
                                     if let Some(ref wr_cache) = cache_arc {

@@ -1040,8 +1040,14 @@ mod tests {
         let second = lim.record_rate_limited("Too Many Requests").await;
         let third = lim.record_rate_limited("Too Many Requests").await;
         assert!((89..=90).contains(&first), "got {first}");
-        assert_eq!(second, first, "concurrent arm must not escalate: {first}/{second}");
-        assert_eq!(third, first, "concurrent arm must not escalate: {first}/{third}");
+        assert_eq!(
+            second, first,
+            "concurrent arm must not escalate: {first}/{second}"
+        );
+        assert_eq!(
+            third, first,
+            "concurrent arm must not escalate: {first}/{third}"
+        );
     }
 
     #[tokio::test]
@@ -1055,7 +1061,10 @@ mod tests {
         assert_eq!(first, 1, "got {first}");
         tokio::time::sleep(StdDuration::from_millis(1_100)).await;
         let second = lim.record_rate_limited("Too Many Requests").await;
-        assert_eq!(second, 2, "a fresh overshoot after the window escalates once");
+        assert_eq!(
+            second, 2,
+            "a fresh overshoot after the window escalates once"
+        );
     }
 
     #[tokio::test]
@@ -1069,7 +1078,10 @@ mod tests {
             lim.record_rate_limited("Too Many Requests").await;
         }
         let remaining = lim.remaining_backoff_secs().unwrap();
-        assert!(remaining <= 91, "burst must coalesce to one base window, got {remaining}");
+        assert!(
+            remaining <= 91,
+            "burst must coalesce to one base window, got {remaining}"
+        );
     }
 
     #[tokio::test]

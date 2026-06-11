@@ -231,7 +231,6 @@ impl TyphooNApp {
             "SYNC" | "SYNC_STATUS" | "SYNC_PCT" | "BARSYNC" | "BAR_SYNC" => {
                 self.show_sync_status = true
             }
-            "LAN_SYNC" => self.show_lan_sync = true,
             "UNUSUAL_VOLUME" => {
                 self.show_unusual_volume = true;
                 // Send scan to background thread (avoids blocking UI with DB reads)
@@ -394,54 +393,7 @@ impl TyphooNApp {
                     std::time::Instant::now(),
                 ));
             }
-            "WEBSERVER" => {
-                if !self.web_server_running {
-                    if self.lan_sync_passphrase.is_empty() {
-                        self.log.push_back(LogEntry::err(
-                            "Set LAN sync passphrase in Settings before starting web server",
-                        ));
-                    } else {
-                        // Generate ephemeral self-signed TLS cert (same as LAN sync)
-                        match typhoon_engine::core::lan_sync::generate_self_signed_cert() {
-                            Ok((cert_pem, key_pem, _fingerprint)) => {
-                                let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<
-                                    typhoon_web_protocol::WebCmd,
-                                >();
-                                let (msg_tx, _) = tokio::sync::broadcast::channel::<
-                                    typhoon_web_protocol::WebMsg,
-                                >(512);
-                                let state = typhoon_web_server::WebServerState {
-                                    cmd_tx,
-                                    msg_tx: msg_tx.clone(),
-                                    passphrase: self.lan_sync_passphrase.clone(),
-                                };
-                                let wasm_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                                    .join("../target/web-dist");
-                                typhoon_web_server::start_web_server(
-                                    &self.rt_handle,
-                                    state,
-                                    9848,
-                                    wasm_dir,
-                                    cert_pem,
-                                    key_pem,
-                                );
-                                self.web_cmd_rx = Some(cmd_rx);
-                                self.web_msg_tx = Some(msg_tx);
-                                self.web_server_running = true;
-                                self.log.push_back(LogEntry::info("Web server started on https://0.0.0.0:9848 (passphrase required)"));
-                            }
-                            Err(e) => {
-                                self.log.push_back(LogEntry::err(format!(
-                                    "Web server TLS cert failed: {e}"
-                                )));
-                            }
-                        }
-                    }
-                } else {
-                    self.log
-                        .push_back(LogEntry::info("Web server already running on port 9848"));
-                }
-            }
+
             "REPLAY" => {
                 self.replay_active = !self.replay_active;
                 if self.replay_active {

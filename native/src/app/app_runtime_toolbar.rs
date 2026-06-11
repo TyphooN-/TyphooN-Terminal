@@ -373,10 +373,8 @@ impl TyphooNApp {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(egui::RichText::new("~").color(AXIS_TEXT).small());
                             ui.separator();
-                            // Determine if we have any data source (broker, LAN, API keys)
-                            let has_broker =
-                                self.broker_connected || self.kraken_connected;
-                            let has_lan = self.lan_sync_mode == "client" || self.lan_sync_mode == "server";
+                            // Determine if we have any data source (broker, API keys, cache)
+                            let has_broker = self.broker_connected || self.kraken_connected;
                             let has_api = !self.finnhub_key.is_empty() || !self.fred_key.is_empty();
                             let has_cache = self.cache.is_some()
                                 && self
@@ -384,7 +382,7 @@ impl TyphooNApp {
                                     .cache_stats
                                     .map(|(bars, _, _)| bars > 0)
                                     .unwrap_or(false);
-                            if has_broker || has_lan || has_api || has_cache {
+                            if has_broker || has_api || has_cache {
                                 let mut sources: Vec<String> = Vec::new();
                                 if self.broker_connected {
                                     let mode = if self.broker_paper { "Paper" } else { "Live" };
@@ -398,37 +396,6 @@ impl TyphooNApp {
                                 }
                                 if !self.fred_key.is_empty() {
                                     sources.push("FRED".into());
-                                }
-                                // LAN client is the provider — everything is served through the
-                                // LAN server, we don't call any external source directly. Replace
-                                // the locally-derived source list with a single `LAN <ip>` chip,
-                                // optionally annotated with the server's source list so the user
-                                // sees WHAT is being synced in from the LAN (Alpaca+Kraken+FRED, etc)
-                                // without implying the client is calling those APIs itself.
-                                if self.lan_sync_mode == "client" {
-                                    let ip = if self.lan_server_ip.is_empty() {
-                                        self.lan_sync_host.clone()
-                                    } else {
-                                        self.lan_server_ip.clone()
-                                    };
-                                    let server_src = self
-                                        .cache
-                                        .as_ref()
-                                        .and_then(|c| c.get_kv("lan:server:sources").ok().flatten())
-                                        .filter(|s| !s.is_empty());
-                                    sources.clear();
-                                    sources.push(match server_src {
-                                        Some(s) => format!("LAN {}: {}", ip, s),
-                                        None => format!("LAN {}", ip),
-                                    });
-                                } else if self.lan_sync_mode == "server" {
-                                    // Publish our locally-derived source list so connected LAN
-                                    // clients can render it inside their `LAN <ip>: …` chip.
-                                    let server_sources = sources.join(" + ");
-                                    if let Some(ref cache) = self.cache {
-                                        let _ = cache.put_kv("lan:server:sources", &server_sources);
-                                    }
-                                    sources.push("LAN Server".into());
                                 }
                                 let src_text = sources.join(" + ");
                                 // Any data source connected = Connected. OFFLINE only when nothing connected.

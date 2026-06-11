@@ -4768,8 +4768,8 @@ reports the number of articles in the bag; body emits the **top
 15** articles (newest first) with title, source, published date,
 `agent_used`, truncated summary (≤260 chars), and URL. The cache
 holds up to 50 articles per symbol — FIFO with URL-based dedup,
-timestamp-wins semantics — and LAN-syncs like every other research
-table so a LAN client's ingestion populates the bag on all peers.
+timestamp-wins semantics — and persists like every other research
+table so later packet builds can reuse the ingested context.
 Source: ADR-080 INGEST_RESEARCH window + Return Path parser; ADR-096
 auto-ingests Return Path blocks from built-in AI replies.
 
@@ -5055,7 +5055,7 @@ blocks — LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT — each
 measuring ~2 k/v rows and adding ~240-320 bytes when populated, for a typical
 +1.40 KB per symbol;
 all twenty-five reuse the existing `research_historical_price` HP cache and the
-standard research-table LAN sync path with zero new API dependencies;
+standard research-table cache path with zero new API dependencies;
 MIDPRICE computes TA-Lib's 14-bar highest-high/lowest-low midpoint
 `midprice = (HHV(H, 14) + LLV(L, 14)) / 2` with ABOVE_BAND / UPPER_HALF /
 NEAR_MID / LOWER_HALF / BELOW_BAND labels from close position within the
@@ -5196,7 +5196,7 @@ ADR-079 adds five optional per-symbol
 blocks — WMA / RAINBOW / MESA_SINE / FRAMA / IBS — each measuring ~2 k/v rows
 and adding ~260-340 bytes when populated, for a typical +1.46 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the
-standard research-table LAN sync path with zero new API dependencies;
+standard research-table cache path with zero new API dependencies;
 WMA computes the plain N=20 linearly-weighted moving average
 `Σ(price[i]·(i+1))/Σ(i+1)` (oldest→newest weights 1..N) versus the
 plain SMA, with BULL / WEAK_BULL / NEUTRAL / WEAK_BEAR / BEAR labels
@@ -5231,7 +5231,7 @@ ADR-079 added five optional per-symbol
 blocks — DEMARKER / GATOR / BW_MFI / VWMA / STDDEV — each measuring ~2 k/v rows
 and adding ~260-340 bytes when populated, for a typical +1.49 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the
-standard research-table LAN sync path with zero new API dependencies;
+standard research-table cache path with zero new API dependencies;
 DEMARKER computes Tom DeMark's N=14 exhaustion oscillator as
 `ΣDeMax / (ΣDeMax + ΣDeMin)` where DeMax/DeMin track bar-over-bar
 high/low pressure on a bounded [0, 1] scale — distinct from every
@@ -5265,7 +5265,7 @@ ADR-079 added five optional per-symbol
 blocks — FRACTALS / IFT_RSI / MAMA / COG / DIDI — each measuring ~2 k/v rows and
 adding ~240-340 bytes when populated, for a typical +1.47 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the
-standard research-table LAN sync path with zero new API dependencies;
+standard research-table cache path with zero new API dependencies;
 FRACTALS computes Bill Williams's 5-bar peak/trough structural pivots
 (strict local maxima on highs and minima on lows with 2 left and 2 right
 comparators) and reports the most-recent up/down fractal values plus
@@ -5298,7 +5298,7 @@ ALLIGATOR (ADR-079) on the multi-MA axis; ADR-079 added five optional per-symbol
 blocks — KDJ / QQE / PMO / CFO / TMF — each measuring ~2 k/v rows and
 adding ~260-320 bytes when populated, for a typical +1.44 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the
-standard research-table LAN sync path with zero new API dependencies;
+standard research-table cache path with zero new API dependencies;
 KDJ computes the Chinese-market Stochastic variant with RSV over a
 9-bar HHV/LLV base, EMA₁/₃ smoothing for K and D (`K = EMA₁/₃(RSV)`,
 `D = EMA₁/₃(K)`), and `J = 3·K − 2·D` — the J line's 3× leverage
@@ -5336,7 +5336,7 @@ and CHAIKOSC (ADR-079); ADR-079 added five optional per-symbol
 blocks — GMMA / MAENV / ADL / VHF / VROC — each measuring ~2 k/v rows and
 adding ~240-320 bytes when populated, for a typical +1.39 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the
-standard research-table LAN sync path with zero new API dependencies;
+standard research-table cache path with zero new API dependencies;
 GMMA computes Daryl Guppy's Multiple Moving Average as a fan of twelve
 EMAs split into a short-term trader group (periods 3,5,8,10,12,15) and a
 long-term investor group (periods 30,35,40,45,50,60), reporting group
@@ -5373,7 +5373,7 @@ price-based ROC; ADR-079 adds five optional per-symbol blocks —
 SMMA / ALLIGATOR / CRSI / SEB / IMI — each measuring ~2 k/v rows
 and adding ~230-300 bytes when populated, for a typical +1.35 KB per
 symbol; all five reuse the existing `research_historical_price` HP cache
-and the standard research-table LAN sync path with zero new API
+and the standard research-table cache path with zero new API
 dependencies; SMMA computes Wilder's Smoothed Moving Average as the
 recursive `SMMA_t = (SMMA_{t−1}·(N−1) + price_t) / N` — equivalent to EMA
 with `α = 1/N` (vs classical EMA's `α = 2/(N+1)`), the slow-decay Wilder
@@ -5423,7 +5423,7 @@ research table; ADR-079 added five optional per-symbol
 blocks — AC / CHVOL / BBWIDTH / ELDERIMP / RMI — each measuring ~2 k/v
 rows and adding ~220-300 bytes when populated, for a typical +1.25 KB per
 symbol; all five reuse the existing `research_historical_price` HP
-cache and the standard research-table LAN sync path with zero new API
+cache and the standard research-table cache path with zero new API
 dependencies; AC computes Bill Williams's Accelerator Oscillator as
 `AO − SMA₅(AO)` where `AO = SMA₅(medprice) − SMA₃₄(medprice)` — the
 first derivative of AO (ADR-079), completing the Williams Chaos Theory
@@ -5458,7 +5458,7 @@ ADR-079 previously added five optional per-symbol
 blocks — TRIMA / T3 / VIDYA / SMI / PVT — each measuring ~2 k/v rows
 and adding ~200-280 bytes when populated, for a typical +1.24 KB per
 symbol; all five reuse the existing `research_historical_price` HP
-cache and the standard research-table LAN sync path with zero new API
+cache and the standard research-table cache path with zero new API
 dependencies; TRIMA computes Legoux's 1997 Triangular Moving Average
 as `SMA_inner(SMA_inner(close))` with `inner = floor(N/2)+1`, the
 first centre-symmetric MA in the repo — distinct from every existing
@@ -5493,7 +5493,7 @@ detection; ADR-079 previously added five optional per-symbol
 blocks — ALMA / ZLEMA / ELDERRAY / TSF / RVI — each measuring ~2 k/v
 rows and adding ~200-280 bytes when populated, for a typical +1.24 KB
 per symbol; all five reuse the existing `research_historical_price` HP
-cache and the standard research-table LAN sync path with zero new API
+cache and the standard research-table cache path with zero new API
 dependencies; ALMA computes Legoux & Kouzoubov's 2009 Arnaud Legoux
 Moving Average with a Gaussian-kernel weighting `exp(−0.5·((i−m)/s)²)`
 at offset=0.85 and sigma=6 across length N=20, peak-biased toward the
@@ -5528,7 +5528,7 @@ ADR-079 added five optional per-symbol blocks — DEMA / TEMA / LINREG /
 PIVOTS / HEIKIN — each measuring ~2 k/v rows and adding ~200-250 bytes
 when populated, for a typical +1.10 KB per symbol; all five reuse the
 existing `research_historical_price` HP cache and the standard
-research-table LAN sync path with zero new API dependencies; DEMA computes Mulloy's 1994 Double EMA = 2·EMA(20) −
+research-table cache path with zero new API dependencies; DEMA computes Mulloy's 1994 Double EMA = 2·EMA(20) −
 EMA(EMA(20)) with STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR
 labels driven by ±2% deviation thresholds — first algebraic-lag-
 reduction MA in the repo, complementing MCGD's feedback-adaptive and
@@ -5625,7 +5625,7 @@ per-symbol blocks — EFI / EMV / NVI / PVI / COPPOCK — each measuring
 ~2 k/v rows and adding ~190-240 bytes when populated, for a typical
 +1.06 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the
-standard research-table LAN sync path with zero new API dependencies;
+standard research-table cache path with zero new API dependencies;
 EFI computes Elder's 1993 Force Index as EMA13(volume × Δclose) with
 STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR labels — the simplest
 volume-weighted momentum oscillator, Elder's zero-line cross signals
@@ -5648,7 +5648,7 @@ treated as decision points rather than trailing states; prior five
 blocks — MASS / CHAIKOSC / KLINGER / STOCHRSI / AWESOME — each measuring
 ~2 k/v rows and adding ~200-300 bytes when populated, for a typical
 +1.3 KB per symbol; all five reuse the existing `research_historical_price`
-HP cache and the standard research-table LAN sync path with zero new API
+HP cache and the standard research-table cache path with zero new API
 dependencies; MASS computes Dorsey's 1992 Mass Index as Σ₂₅(EMA₉(H-L) /
 EMA₉(EMA₉(H-L))) with REVERSAL_BULGE (>27) / WATCH (>25) / NEUTRAL labels
 — first direction-agnostic reversal detector using range expansion
@@ -5674,7 +5674,7 @@ remain unchanged; ADR-079 adds five optional per-symbol
 blocks — PPO / DPO / KST / ULTOSC / WILLR — each measuring ~2 k/v rows
 and adding ~200-280 bytes when populated, for a typical +1.2 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the
-standard research-table LAN sync path with zero new API dependencies;
+standard research-table cache path with zero new API dependencies;
 PPO computes Appel's Percentage Price Oscillator (MACD's normalised twin)
 at 12/26/9 with STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR labels
 — the %-normalised cross-symbol-comparable complement to MACD whose
@@ -5735,7 +5735,7 @@ ADR-079 adds five optional per-symbol
 blocks — ADX / CCI / CMF / MFI / PSAR — each measuring ~2 k/v rows and
 adding ~210-270 bytes when populated, for a typical +1.15 KB per symbol;
 all five reuse the existing `research_historical_price` HP cache and the
-standard research-table LAN sync path with zero new API dependencies;
+standard research-table cache path with zero new API dependencies;
 ADX computes Wilder's 1978 directional-movement system at period=14
 (+DM/−DM winner-takes-bar, Wilder-smoothed, normalised by ATR, ADX =
 Wilder-smoothed DX) with STRONG_TREND (≥40) / TREND (≥25) / WEAK_TREND
@@ -5857,7 +5857,7 @@ blocks — GARCH11 / SADF / CORDIM / SKSPEC / AUTOMI — each
 measuring ~2 k/v rows and adding ~200-500 bytes when populated, for
 a typical +1 KB per symbol and +2 KB worst case; all five reuse the
 existing `research_historical_price` HP cache and the standard
-research-table LAN sync path with zero new API dependencies;
+research-table cache path with zero new API dependencies;
 GARCH11 fits Bollerslev 1986 σ²_t = ω + α·r²_{t-1} + β·σ²_{t-1}
 via coordinate-descent grid MLE over (α, β) with ω implied by the
 unconditional-variance constraint — first parametric volatility

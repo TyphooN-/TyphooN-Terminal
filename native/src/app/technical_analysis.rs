@@ -38,11 +38,7 @@ fn previous_daily_close_from_bars(bars: &[Bar]) -> Option<f64> {
 
 fn close_reference_color(current_close: f64, fallback_open: f64, bars: &[Bar]) -> egui::Color32 {
     let reference = previous_daily_close_from_bars(bars).unwrap_or(fallback_open);
-    if current_close >= reference {
-        UP
-    } else {
-        DOWN
-    }
+    if current_close >= reference { UP } else { DOWN }
 }
 
 /// Draw a single chart viewport into `rect` using `painter`.

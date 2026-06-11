@@ -65,7 +65,6 @@ mod app_runtime_right_panel_watchlist;
 mod app_runtime_support;
 mod app_runtime_tabs;
 mod app_runtime_toolbar;
-mod app_runtime_web;
 mod app_startup;
 mod auto_compact;
 mod bar_sync;
@@ -147,13 +146,11 @@ impl TyphooNApp {
 
         // Flag: true while a heavy bulk import is running — background thread skips DB queries
         let importing_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let lan_client_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         app_broker_processor::spawn_broker_message_processor(
             _broker_cmd_rx,
             broker_msg_tx.clone(),
             importing_flag.clone(),
-            lan_client_flag.clone(),
             rt_handle.clone(),
             shared_cache.clone(),
         );
@@ -596,14 +593,6 @@ impl TyphooNApp {
             storage_cache_move_result: None,
             storage_cache_move_rx: None,
             show_sync_status: false,
-            show_lan_sync: false,
-            lan_sync_mode: "idle".into(),
-            lan_sync_host: String::new(),
-            lan_sync_port: "9847".into(),
-            lan_sync_passphrase: String::new(),
-            lan_client_enabled: false,
-            lan_server_enabled: false,
-            lan_server_ip: String::new(),
             show_help: false,
             help_filter: String::new(),
             alert_breach_count: 0,
@@ -660,11 +649,8 @@ impl TyphooNApp {
             scrape_sec_started_at: None,
             scrape_sec_last_msg: String::new(),
             auto_sec_scrape_deferred: false,
-            web_server_running: false,
             kv_write_hashes: std::collections::HashMap::new(),
             kv_write_times: std::collections::HashMap::new(),
-            web_cmd_rx: None,
-            web_msg_tx: None,
             show_ev_scanner: false,
             show_earnings_calendar: false,
             show_dividend_calendar: false,
@@ -2789,20 +2775,12 @@ impl TyphooNApp {
             news_md_cache: egui_commonmark::CommonMarkCache::default(),
             kraken_futures_universe_last_schedule: std::time::Instant::now()
                 - std::time::Duration::from_secs(60),
-            lan_client_last_reload: std::time::Instant::now() - std::time::Duration::from_secs(5),
             session_last_autosave: std::time::Instant::now(),
             metrics_last_update: std::time::Instant::now() - std::time::Duration::from_secs(5),
-            lan_remote_last_poll: std::time::Instant::now() - std::time::Duration::from_secs(5),
-            kraken_positions_last_poll: std::time::Instant::now()
-                - std::time::Duration::from_secs(60),
-            kraken_position_quotes_last_poll: std::time::Instant::now()
-                - std::time::Duration::from_secs(15),
             // Initialise far enough in the past that the first
             // KrakenBalances tick after startup will be allowed to fetch.
             kraken_trades_last_fetch: std::time::Instant::now()
                 - std::time::Duration::from_secs(60 * 60),
-            watchlist_quotes_last_poll: std::time::Instant::now()
-                - std::time::Duration::from_secs(15),
             weekend_crypto_last_sync: std::time::Instant::now()
                 - std::time::Duration::from_secs(60),
             alpaca_rotation_last_sync: std::time::Instant::now()
@@ -2846,12 +2824,7 @@ impl TyphooNApp {
             }
         }
 
-        app_background::spawn_background_refresh(
-            &mut app,
-            shared_cache.clone(),
-            lan_client_flag.clone(),
-            importing_flag_bg,
-        );
+        app_background::spawn_background_refresh(&mut app, shared_cache.clone(), importing_flag_bg);
 
         // Initialize GPU compute from eframe's wgpu device (available when renderer = Wgpu)
         if let Some(ref render_state) = cc.wgpu_render_state {

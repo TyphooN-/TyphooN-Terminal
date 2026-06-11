@@ -596,34 +596,6 @@ fn yahoo_extended_quote_time_filter_rejects_stale_ext_ticks() {
 }
 
 #[test]
-fn watchlist_poll_is_not_blocked_by_background_backfill() {
-    assert!(watchlist_quote_poll_ready(
-        std::time::Duration::from_secs(15),
-        true,
-        false,
-        true,
-    ));
-    assert!(!watchlist_quote_poll_ready(
-        std::time::Duration::from_secs(14),
-        true,
-        false,
-        true,
-    ));
-    assert!(!watchlist_quote_poll_ready(
-        std::time::Duration::from_secs(15),
-        false,
-        false,
-        true,
-    ));
-    assert!(!watchlist_quote_poll_ready(
-        std::time::Duration::from_secs(15),
-        true,
-        true,
-        true,
-    ));
-}
-
-#[test]
 fn watchlist_cache_fallback_prioritizes_kraken_equities_for_stocks() {
     assert_eq!(
         watchlist_cache_fallback_sources("WOK")[0],

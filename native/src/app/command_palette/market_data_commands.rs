@@ -139,7 +139,6 @@ impl TyphooNApp {
                                 }
                             }
                         }
-
                     }
 
                     // Update progress tracking and open window

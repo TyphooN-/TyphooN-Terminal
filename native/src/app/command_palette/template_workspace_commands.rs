@@ -46,8 +46,7 @@ impl TyphooNApp {
             }
             other => {
                 // Commands with arguments
-                if other.starts_with("SAVE_TEMPLATE ") || other.starts_with("TEMPLATE_SAVE ")
-                {
+                if other.starts_with("SAVE_TEMPLATE ") || other.starts_with("TEMPLATE_SAVE ") {
                     let name = other.splitn(2, ' ').nth(1).unwrap_or("").trim().to_string();
                     if name.is_empty() {
                         self.log

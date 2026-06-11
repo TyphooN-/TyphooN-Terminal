@@ -563,6 +563,5 @@ impl TyphooNApp {
                     }
                 });
         }
-
     }
 }

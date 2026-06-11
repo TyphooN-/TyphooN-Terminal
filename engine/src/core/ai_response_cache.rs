@@ -1,23 +1,20 @@
 //! Cross-client AI response cache.
 //!
-//! Deduplicates AI-provider calls across LAN-synced clients by hashing the
-//! normalised prompt tuple (provider, model, system, history, message) and
-//! checking the cache before spending tokens on another call.
+//! Deduplicates AI-provider calls by hashing the normalised prompt tuple
+//! (provider, model, system, history, message) and checking the cache before
+//! spending tokens on another call.
 //!
 //! Storage: a regular `ai_response_cache` table (NOT the `kv_cache` KV store),
-//! so the existing `lan_sync` delta protocol replicates it across peers. One
-//! client pays for a response — every other client on the LAN gets it for
-//! free on the next sync window.
+//! so one expensive hosted-model answer can satisfy identical prompts from
+//! the native app and CLI.
 //!
 //! Invalidation: primary invalidation is automatic — the research packet
 //! changes every day (new prices, new fundamentals), which changes the hash,
 //! which forces a cache miss. The `created_at` column plus a soft TTL lets
 //! callers prune very old entries; there is no hard expiry in SQL itself.
 //!
-//! Privacy: the cache stores normalised prompts in cleartext (for debugging
-//! and inspection), so every LAN peer sees what questions were asked. This is
-//! by design — a trading terminal running on a single user's LAN, where the
-//! explicit goal is to share responses across the user's own devices.
+//! Privacy: the cache stores normalised prompts in cleartext for debugging
+//! and inspection.
 //!
 //! See for the full design.
 

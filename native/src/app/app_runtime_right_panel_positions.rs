@@ -54,10 +54,8 @@ impl TyphooNApp {
                 ui.add_space(4.0);
             }
             let mut has_positions = false;
-            // Live broker positions (from Alpaca or synced from LAN server via KV)
-            let has_live = (self.broker_connected
-                || self.lan_sync_mode == "client")
-                && show_alpaca_positions;
+            // Live broker positions from Alpaca.
+            let has_live = self.broker_connected && show_alpaca_positions;
             if has_live && !self.live_positions.is_empty() {
                 has_positions = true;
                 let mut close_sym: Option<String> = None;
@@ -114,7 +112,7 @@ impl TyphooNApp {
                             .color(AXIS_TEXT)
                             .small(),
                         );
-                        if self.broker_connected && self.lan_sync_mode != "client" {
+                        if self.broker_connected {
                             if ui
                                 .small_button(egui::RichText::new("x").color(DOWN))
                                 .on_hover_text("Close position")

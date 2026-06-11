@@ -12,10 +12,6 @@ path = "src/main.rs"
 # Engine (shared core library)
 typhoon-engine = { workspace = true }
 
-# Web client server (HTTPS + WebSocket relay for phone access)
-typhoon-web-server = { workspace = true }
-typhoon-web-protocol = { workspace = true }
-
 # MQL5/PineScript compiler (indicator compilation + execution)
 mql5-compiler = { workspace = true }
 
@@ -32,7 +28,7 @@ egui_commonmark = { version = "0.23", default-features = false, features = ["loa
 wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "vulkan", "wgsl"] }  # Aligned with eframe 0.34; Linux-native only, no web/DX/Metal backends
 
 # Async runtime (shared with engine)
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "fs"] }
 
 # Concurrent future combinators (join_all for the news-body hydrator)
 futures-util = "0.3"

@@ -92,7 +92,6 @@ impl eframe::App for TyphooNApp {
         }
 
         if self.cache_loaded
-            && self.lan_sync_mode != "client"
             && self.kraken_enabled
             && self.kraken_any_spot_scrape_enabled()
             && self.kraken_pairs.is_empty()
@@ -103,7 +102,6 @@ impl eframe::App for TyphooNApp {
         }
         let now_ts = chrono::Utc::now().timestamp();
         if self.cache_loaded
-            && self.lan_sync_mode != "client"
             && self.kraken_enabled
             && self.kraken_scrape_xstocks
             && self.kraken_equity_universe_symbols.is_empty()
@@ -115,7 +113,6 @@ impl eframe::App for TyphooNApp {
             self.kraken_equity_universe_retry_after_ts = now_ts + 120;
         }
         if self.cache_loaded
-            && self.lan_sync_mode != "client"
             && self.kraken_enabled
             && self.kraken_scrape_futures
             && self.kraken_futures_symbols.is_empty()
@@ -126,13 +123,10 @@ impl eframe::App for TyphooNApp {
         }
 
         // Periodic crypto bar refresh (every ~60 seconds at 4fps = every 240 frames)
-        // Periodic crypto bar refresh (~60s) — works on both server and LAN client
+        // Periodic crypto bar refresh (~60s).
         // Uses Kraken (free, no auth) as primary source, Alpaca as fallback
-        // Periodic crypto bar refresh — SERVER/STANDALONE ONLY
-        // LAN clients get ALL data from server via sync — no direct API calls
         if now_instant.duration_since(self.periodic_crypto_last_refresh)
             >= std::time::Duration::from_secs(60)
-            && self.lan_sync_mode != "client"
             && self.cache_loaded
         {
             self.periodic_crypto_last_refresh = now_instant;
@@ -200,7 +194,6 @@ impl eframe::App for TyphooNApp {
         if now_instant.duration_since(self.kraken_universe_last_schedule)
             >= self.market_data_sync_interval()
             && self.cache_loaded
-            && self.lan_sync_mode != "client"
             && self.kraken_enabled
             && self.kraken_full_bar_sync_enabled
             && (self.kraken_any_spot_scrape_enabled()
@@ -234,7 +227,6 @@ impl eframe::App for TyphooNApp {
         // freshest public best bid/ask feed we have and validates CRC32 before
         // publishing top-of-book ticks back into ChartState.
         if self.kraken_enabled
-            && self.lan_sync_mode != "client"
             && now_instant.duration_since(self.kraken_chart_l2_last_start_attempt)
                 >= std::time::Duration::from_secs(5)
             && let Some(chart) = self.charts.get(self.active_tab)
@@ -305,7 +297,6 @@ impl eframe::App for TyphooNApp {
         if now_instant.duration_since(self.kraken_futures_universe_last_schedule)
             >= self.market_data_sync_interval()
             && self.cache_loaded
-            && self.lan_sync_mode != "client"
             && self.kraken_enabled
         {
             self.kraken_futures_universe_last_schedule = now_instant;
@@ -417,7 +408,6 @@ impl eframe::App for TyphooNApp {
                     (keyring::keys::ALPACA_SECRET, "alpaca_secret"),
                     (keyring::keys::FINNHUB_KEY, "finnhub_key"),
                     (keyring::keys::FRED_KEY, "fred_key"),
-                    (keyring::keys::LAN_SYNC_PASS, "lan_sync_pass"),
                     (keyring::keys::DISCORD_WEBHOOK, "discord_webhook"),
                     (keyring::keys::PUSHOVER_TOKEN, "pushover_token"),
                     (keyring::keys::PUSHOVER_USER, "pushover_user"),
@@ -475,9 +465,6 @@ impl eframe::App for TyphooNApp {
                         k if k == keyring::keys::ALPACA_SECRET => self.broker_secret = val.clone(),
                         k if k == keyring::keys::FINNHUB_KEY => self.finnhub_key = val.clone(),
                         k if k == keyring::keys::FRED_KEY => self.fred_key = val.clone(),
-                        k if k == keyring::keys::LAN_SYNC_PASS => {
-                            self.lan_sync_passphrase = val.clone()
-                        }
                         k if k == keyring::keys::DISCORD_WEBHOOK => {
                             self.discord_webhook = val.clone()
                         }
@@ -531,12 +518,10 @@ impl eframe::App for TyphooNApp {
                     )));
                 }
             }
-            // Auto-connect Alpaca if credentials are available and not a LAN client
-            // (LAN clients get data from the server, no need for direct broker connection)
+            // Auto-connect Alpaca if credentials are available.
             if self.alpaca_enabled
                 && !self.broker_api_key.is_empty()
                 && !self.broker_secret.is_empty()
-                && !self.lan_client_enabled
             {
                 let capacity = self.alpaca_sync_capacity();
                 let _ = self.broker_tx.send(BrokerCmd::Connect {
@@ -568,87 +553,6 @@ impl eframe::App for TyphooNApp {
                     .push_back(LogEntry::info("Kraken auto-connecting..."));
             }
 
-            // LAN KV recovery: read client_enabled FIRST so we don't misidentify a client
-            // machine as a server. Stale lan:server_enabled keys could have been synced from
-            // the server into the client's local KV cache (fixed in lan_sync.rs, but existing
-            // client DBs may already have the poisoned key — sanitize it here).
-            if let Some(ref cache) = self.cache {
-                // Step 1: read client config (IP, port, client_enabled)
-                if self.lan_server_ip.is_empty() {
-                    if let Ok(Some(ip)) = cache.get_kv("lan:server_ip") {
-                        if !ip.is_empty() {
-                            self.lan_server_ip = ip;
-                            self.lan_sync_host = self.lan_server_ip.clone();
-                            self.log.push_back(LogEntry::info(format!(
-                                "LAN server IP recovered from cache: {}",
-                                self.lan_server_ip
-                            )));
-                        }
-                    }
-                }
-                if let Ok(Some(port)) = cache.get_kv("lan:sync_port") {
-                    if !port.is_empty() {
-                        self.lan_sync_port = port;
-                    }
-                }
-                if !self.lan_client_enabled {
-                    if let Ok(Some(enabled)) = cache.get_kv("lan:client_enabled") {
-                        if enabled == "true" {
-                            self.lan_client_enabled = true;
-                        }
-                    }
-                }
-
-                // Step 2: recover server_enabled — but ONLY if this machine is not a client.
-                // If lan:client_enabled is set, this is a client machine; lan:server_enabled
-                // may have been synced from the server's KV and must be ignored + purged.
-                if !self.lan_server_enabled && !self.lan_client_enabled {
-                    if let Ok(Some(enabled)) = cache.get_kv("lan:server_enabled") {
-                        if enabled == "true" {
-                            self.lan_server_enabled = true;
-                            self.log.push_back(LogEntry::info(
-                                "LAN server_enabled recovered from cache",
-                            ));
-                        }
-                    }
-                } else if self.lan_client_enabled {
-                    // Sanitize: remove any stale server_enabled that was synced from server
-                    let _ = cache.put_kv("lan:server_enabled", "false");
-                }
-            }
-
-            if self.lan_server_enabled && !self.lan_sync_passphrase.is_empty() {
-                let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
-                self.lan_sync_mode = "server".into();
-                let db_path = cache_db_path();
-                let _ = self.broker_tx.send(BrokerCmd::LanSyncStart {
-                    port,
-                    passphrase: self.lan_sync_passphrase.clone(),
-                    db_path,
-                });
-                self.log.push_back(LogEntry::info(format!(
-                    "LAN server auto-starting on wss://0.0.0.0:{}...",
-                    port
-                )));
-            }
-            // Don't auto-connect as client if we're already a server
-            if self.lan_client_enabled && !self.lan_server_ip.is_empty() && !self.lan_server_enabled
-            {
-                let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
-                self.lan_sync_mode = "client".into();
-                self.lan_sync_host = self.lan_server_ip.clone();
-                let db_path = cache_db_path();
-                let _ = self.broker_tx.send(BrokerCmd::LanSyncConnect {
-                    host: self.lan_server_ip.clone(),
-                    port,
-                    passphrase: self.lan_sync_passphrase.clone(),
-                    db_path,
-                });
-                self.log.push_back(LogEntry::info(format!(
-                    "LAN client auto-connecting to {}:{}...",
-                    self.lan_server_ip, port
-                )));
-            }
             // Defer chart loading to subsequent frames — don't block the first frame
             // Charts will load progressively (one per frame) via the deferred_chart_loads mechanism
             self.deferred_chart_loads = if self.mtf_enabled {
@@ -673,95 +577,86 @@ impl eframe::App for TyphooNApp {
             };
             self.deferred_chart_load_set = self.deferred_chart_loads.iter().copied().collect();
             {
-                // ── Startup data fetching (disabled for LAN client — server provides all data) ──
-                if !self.lan_client_enabled {
-                    // Auto SEC scrape on startup. Scope-derived universes may still
-                    // be empty while broker/universe startup tasks are loading; do
-                    // not send a misleading 0-symbol scrape. The universe-loaded
-                    // BrokerMsg handler retries this once symbols arrive.
-                    {
-                        let symbols = self.sec_scrape_scope_symbols();
-                        let symbol_count = symbols.len();
-                        if should_auto_start_background_scope_scrape(
-                            self.broker_scope,
-                            symbol_count,
-                        ) {
-                            let db_path = cache_db_path();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::SecScrape { db_path, symbols });
-                            self.scrape_sec_running = true;
-                            self.scrape_sec_last_msg = format!(
-                                "scraping Scope {} ({} symbols)...",
-                                self.broker_scope_label(),
-                                symbol_count
-                            );
-                            self.log.push_back(LogEntry::info(format!(
-                                "SEC EDGAR scrape started for Scope {} ({} symbols)...",
-                                self.broker_scope_label(),
-                                symbol_count
-                            )));
-                        } else if symbol_count == 0 {
-                            self.auto_sec_scrape_deferred = true;
-                            self.log.push_back(LogEntry::info(format!(
-                                "SEC EDGAR auto-scrape deferred: Scope {} has no symbols yet",
-                                self.broker_scope_label()
-                            )));
-                        } else {
-                            self.auto_sec_scrape_deferred = false;
-                            self.log.push_back(LogEntry::info(format!(
+                // ── Startup data fetching ─────────────────────────────────────
+                // Auto SEC scrape on startup. Scope-derived universes may still
+                // be empty while broker/universe startup tasks are loading; do
+                // not send a misleading 0-symbol scrape. The universe-loaded
+                // BrokerMsg handler retries this once symbols arrive.
+                {
+                    let symbols = self.sec_scrape_scope_symbols();
+                    let symbol_count = symbols.len();
+                    if should_auto_start_background_scope_scrape(self.broker_scope, symbol_count) {
+                        let db_path = cache_db_path();
+                        let _ = self
+                            .broker_tx
+                            .send(BrokerCmd::SecScrape { db_path, symbols });
+                        self.scrape_sec_running = true;
+                        self.scrape_sec_last_msg = format!(
+                            "scraping Scope {} ({} symbols)...",
+                            self.broker_scope_label(),
+                            symbol_count
+                        );
+                        self.log.push_back(LogEntry::info(format!(
+                            "SEC EDGAR scrape started for Scope {} ({} symbols)...",
+                            self.broker_scope_label(),
+                            symbol_count
+                        )));
+                    } else if symbol_count == 0 {
+                        self.auto_sec_scrape_deferred = true;
+                        self.log.push_back(LogEntry::info(format!(
+                            "SEC EDGAR auto-scrape deferred: Scope {} has no symbols yet",
+                            self.broker_scope_label()
+                        )));
+                    } else {
+                        self.auto_sec_scrape_deferred = false;
+                        self.log.push_back(LogEntry::info(format!(
                                 "SEC EDGAR auto-scrape skipped for broad Scope {} ({} symbols); use manual SEC scrape for full-universe backfill",
                                 self.broker_scope_label(),
                                 symbol_count
                             )));
-                        }
                     }
-                    // Auto EVSCRAPE on startup (fundamentals, skips if updated <24h).
-                    // Kraken equities arrive asynchronously, so do not launch a
-                    // misleading scrape when Kraken is selected but the
-                    // xStocks universe has not landed yet.
-                    {
-                        let needs_kraken_universe = self.fund_source_kraken
-                            && self.kraken_enabled
-                            && self.kraken_scrape_xstocks
-                            && self.kraken_equity_universe_symbols.is_empty();
-                        if needs_kraken_universe {
-                            self.auto_fundamentals_deferred = true;
-                            self.log.push_back(LogEntry::info(
+                }
+                // Auto EVSCRAPE on startup (fundamentals, skips if updated <24h).
+                // Kraken equities arrive asynchronously, so do not launch a
+                // misleading scrape when Kraken is selected but the
+                // xStocks universe has not landed yet.
+                {
+                    let needs_kraken_universe = self.fund_source_kraken
+                        && self.kraken_enabled
+                        && self.kraken_scrape_xstocks
+                        && self.kraken_equity_universe_symbols.is_empty();
+                    if needs_kraken_universe {
+                        self.auto_fundamentals_deferred = true;
+                        self.log.push_back(LogEntry::info(
                                 "Fundamentals auto-scrape deferred: waiting for Kraken equities universe",
                             ));
-                        } else if self.fund_source_kraken
-                            && self.kraken_enabled
-                            && self.kraken_scrape_xstocks
-                            && !should_auto_start_kraken_fundamentals_scrape(
-                                self.kraken_equity_universe_symbols.len(),
-                            )
-                        {
-                            self.auto_fundamentals_deferred = false;
-                            self.auto_fundamentals_started = false;
-                            self.log.push_back(LogEntry::info(format!(
+                    } else if self.fund_source_kraken
+                        && self.kraken_enabled
+                        && self.kraken_scrape_xstocks
+                        && !should_auto_start_kraken_fundamentals_scrape(
+                            self.kraken_equity_universe_symbols.len(),
+                        )
+                    {
+                        self.auto_fundamentals_deferred = false;
+                        self.auto_fundamentals_started = false;
+                        self.log.push_back(LogEntry::info(format!(
                                 "Fundamentals auto-scrape skipped for broad Kraken xStocks universe ({} symbols); use manual Fundamentals scrape for full-universe backfill",
                                 self.kraken_equity_universe_symbols.len()
                             )));
-                        } else {
-                            let db_path = cache_db_path();
-                            let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
-                                db_path,
-                                use_alpaca: self.fund_source_alpaca,
-                                use_kraken: self.fund_source_kraken,
-                                kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
-                                force: false,
-                            });
-                            self.auto_fundamentals_started = true;
-                            self.log.push_back(LogEntry::info(
-                                "Fundamentals scrape started for selected source universes...",
-                            ));
-                        }
+                    } else {
+                        let db_path = cache_db_path();
+                        let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
+                            db_path,
+                            use_alpaca: self.fund_source_alpaca,
+                            use_kraken: self.fund_source_kraken,
+                            kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
+                            force: false,
+                        });
+                        self.auto_fundamentals_started = true;
+                        self.log.push_back(LogEntry::info(
+                            "Fundamentals scrape started for selected source universes...",
+                        ));
                     }
-                } else {
-                    self.log.push_back(LogEntry::info(
-                        "LAN client mode: all data fetching disabled (server provides everything)",
-                    ));
                 }
             }
         }
@@ -846,97 +741,6 @@ impl eframe::App for TyphooNApp {
                     data.detailed_stats.len()
                 );
                 self.drop_bg_snapshot_off_ui(data);
-            }
-        }
-
-        // ── LAN client: load server's broker positions/account from KV cache ──
-        // The server stores broker:account/positions/orders to KV on every update.
-        // LAN sync's 15s incremental KV sync delivers them to the client's cache.
-        // Reload every ~5s (200 frames at 250ms idle repaint) for near-live updates.
-        // LAN client: reload positions/orders from server KV.
-        // Check every ~5s (200 frames). Cheap local SQLite read — only deserializes
-        // when KV actually changed (server writes only on position/order updates).
-        if self.lan_sync_mode == "client" {
-            if now_instant.duration_since(self.lan_client_last_reload)
-                >= std::time::Duration::from_secs(5)
-                || (self.live_positions.is_empty() && self.frame_count > 10)
-            {
-                self.lan_client_last_reload = now_instant;
-                if let Some(ref cache) = self.cache {
-                    if self.alpaca_enabled {
-                        if let Ok(Some(json)) = cache.get_kv("broker:positions") {
-                            if let Ok(pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
-                                self.live_positions = pos;
-                            }
-                        }
-                        if let Ok(Some(json)) = cache.get_kv("broker:account") {
-                            if let Ok(acct) = serde_json::from_str::<AccountInfo>(&json) {
-                                self.live_account = Some(acct);
-                            }
-                        }
-                        if let Ok(Some(json)) = cache.get_kv("broker:orders") {
-                            if let Ok(orders) = serde_json::from_str::<Vec<OrderInfo>>(&json) {
-                                self.live_orders = orders;
-                            }
-                        }
-                    }
-                    if self.kraken_enabled {
-                        if let Ok(Some(json)) = cache.get_kv("broker:kr_positions") {
-                            if let Ok(mut pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
-                                pos.retain(|p| {
-                                    p.asset_class != "crypto_spot"
-                                        && !p.asset_id.starts_with("spot:")
-                                });
-                                self.kr_positions = pos;
-                            }
-                        }
-                    }
-                    // Live quotes from server (update forming bars on LAN client)
-                    for chart in &mut self.charts {
-                        let bare = chart.symbol.split(':').last().unwrap_or("").to_string();
-                        if !bare.is_empty() {
-                            if let Ok(Some(qv)) = cache.get_kv(&format!("quote:{}", bare)) {
-                                let parts: Vec<&str> = qv.split(',').collect();
-                                if parts.len() == 2 {
-                                    if let (Ok(bid), Ok(ask)) =
-                                        (parts[0].parse::<f64>(), parts[1].parse::<f64>())
-                                    {
-                                        let mid = (bid + ask) / 2.0;
-                                        if mid > 0.0 {
-                                            chart.apply_live_quote_update(bid, ask, false);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Watchlist quotes from server — only use server data for symbols the client wants
-                    if let Ok(Some(json)) = cache.get_kv("broker:watchlist") {
-                        if let Ok(rows) = serde_json::from_str::<Vec<WatchlistRow>>(&json) {
-                            if self.user_watchlist.is_empty() {
-                                self.watchlist_rows = rows;
-                            } else {
-                                // Filter server rows to only the client's local watchlist.
-                                // O(1) per row via HashSet for exact matches, fallback to contains for partials.
-                                let wl_set: std::collections::HashSet<String> = self
-                                    .user_watchlist
-                                    .iter()
-                                    .map(|s| s.to_uppercase())
-                                    .collect();
-                                self.watchlist_rows = rows
-                                    .into_iter()
-                                    .filter(|r| {
-                                        let sym = r.symbol.to_uppercase();
-                                        wl_set.contains(&sym)
-                                            || wl_set.iter().any(|w| {
-                                                sym.contains(w.as_str()) || w.contains(&sym)
-                                            })
-                                    })
-                                    .collect();
-                            }
-                        }
-                    }
-                }
             }
         }
 
@@ -1489,7 +1293,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                     self.watchlist_last_update_ts = chrono::Utc::now().timestamp();
-                    // Store to KV for LAN clients — dedup to avoid timestamp churn
+                    // Store to KV for downstream read-only status surfaces — dedup to avoid timestamp churn
                     // Offload the expensive serialization + KV write to a blocking task
                     // so large watchlists don't stall the UI thread for seconds.
                     let rows_for_kv = rows.clone();
@@ -7271,8 +7075,6 @@ impl eframe::App for TyphooNApp {
         }
 
         let post_broker_setup_started = std::time::Instant::now();
-        self.drain_web_client_commands(ctx);
-
         self.sync_cross_timeframe_drawings();
 
         let pointer_over_floating = self.handle_runtime_input(ctx);
@@ -10637,356 +10439,9 @@ impl eframe::App for TyphooNApp {
             }
         }
 
-        // Poll for remote commands from LAN clients (server only, every ~5 seconds).
-        // Uses drain_queue for atomic read+delete (O(1) per entry instead of O(n) full
-        // array read + rewrite). See cache.rs:append_to_queue for the producer side.
-        if now_instant.duration_since(self.lan_remote_last_poll)
-            >= std::time::Duration::from_secs(5)
-            && self.lan_sync_mode == "server"
-        {
-            self.lan_remote_last_poll = now_instant;
-            if let Some(ref cache) = self.cache {
-                if let Ok(entries) = cache.drain_queue("lan:remote_queue") {
-                    if !entries.is_empty() {
-                        let queue: Vec<serde_json::Value> = entries
-                            .iter()
-                            .filter_map(|s| serde_json::from_str(s).ok())
-                            .collect();
-                        if !queue.is_empty() {
-                            for v in &queue {
-                                let cmd = v["cmd"].as_str().unwrap_or("");
-                                let args = v["args"].as_str().unwrap_or("");
-                                match cmd {
-                                    "FETCH_BARS" => {
-                                        if let Some((symbol, tf)) = args.split_once(',') {
-                                            let Some(tf_norm) = normalize_sync_timeframe_key(tf)
-                                            else {
-                                                continue;
-                                            };
-                                            if !self.sync_timeframe_enabled(tf_norm) {
-                                                self.log.push_back(LogEntry::info(format!(
-                                                    "LAN remote: skipped {} {} (timeframe disabled)",
-                                                    symbol, tf_norm
-                                                )));
-                                                continue;
-                                            }
-                                            let db_path = cache_db_path();
-                                            // Detect crypto and use Kraken (free, works weekends) + Alpaca
-                                            let su = symbol.to_uppercase();
-                                            let crypto_bases = [
-                                                "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "LTC",
-                                                "LINK", "AVAX", "DOT", "XMR", "ZEC", "DASH",
-                                            ];
-                                            let is_crypto = crypto_bases
-                                                .iter()
-                                                .any(|b| su.starts_with(b) && su.ends_with("USD"));
-                                            if is_crypto {
-                                                if self.kraken_spot_symbol_scrape_enabled(symbol) {
-                                                    let _ = self.broker_tx.send(
-                                                        BrokerCmd::KrakenBackfill {
-                                                            symbol: symbol.to_string(),
-                                                            timeframes: vec![tf_norm.to_string()],
-                                                            db_path: db_path.clone(),
-                                                            backfill_complete: false,
-                                                        },
-                                                    );
-                                                    self.log.push_back(LogEntry::info(format!(
-                                                        "LAN remote: fetching {} {} from Kraken",
-                                                        symbol, tf_norm
-                                                    )));
-                                                } else {
-                                                    self.log.push_back(LogEntry::info(format!(
-                                                        "LAN remote: skipped Kraken {} {} (disabled universe)",
-                                                        symbol, tf_norm
-                                                    )));
-                                                }
-                                            }
-                                            self.queue_alpaca_fetch(symbol, tf_norm);
-                                            if !is_crypto {
-                                                self.log.push_back(LogEntry::info(format!(
-                                                    "LAN remote: fetching {} {} from Alpaca",
-                                                    symbol, tf_norm
-                                                )));
-                                            }
-                                        }
-                                    }
-                                    "FUNDAMENTALS" | "FUNDAMENTALS_FORCE" => {
-                                        let force = cmd == "FUNDAMENTALS_FORCE";
-                                        let db_path = cache_db_path();
-                                        let _ =
-                                            self.broker_tx.send(BrokerCmd::FundamentalsScrape {
-                                                db_path,
-                                                use_alpaca: self.fund_source_alpaca,
-                                                use_kraken: self.fund_source_kraken,
-                                                kraken_equity_symbols: self
-                                                    .kraken_equity_universe_symbols
-                                                    .clone(),
-                                                force,
-                                            });
-                                        let label = if force {
-                                            "fundamentals scrape started (FORCE)"
-                                        } else {
-                                            "fundamentals scrape started"
-                                        };
-                                        self.log.push_back(LogEntry::info(format!(
-                                            "LAN remote: {}",
-                                            label
-                                        )));
-                                    }
-                                    "SEC_SCRAPE" => {
-                                        let symbols = self.sec_scrape_scope_symbols();
-                                        let symbol_count = symbols.len();
-                                        if symbol_count > 0 {
-                                            let db_path = cache_db_path();
-                                            let _ = self
-                                                .broker_tx
-                                                .send(BrokerCmd::SecScrape { db_path, symbols });
-                                            self.log.push_back(LogEntry::info(format!(
-                                                "LAN remote: SEC scrape started for Scope {} ({} symbols)",
-                                                self.broker_scope_label(),
-                                                symbol_count
-                                            )));
-                                        } else {
-                                            self.log.push_back(LogEntry::warn(format!(
-                                                "LAN remote: SEC scrape skipped: Scope {} has no symbols",
-                                                self.broker_scope_label()
-                                            )));
-                                        }
-                                    }
-                                    "FRED_DATA" => {
-                                        if !self.fred_key.is_empty() {
-                                            let _ = self.broker_tx.send(BrokerCmd::FredFetch {
-                                                api_key: self.fred_key.clone(),
-                                            });
-                                            self.log.push_back(LogEntry::info(
-                                                "LAN remote: FRED fetch started",
-                                            ));
-                                        }
-                                    }
-                                    "FINNHUB_NEWS" => {
-                                        if !self.finnhub_key.is_empty() {
-                                            let sym = if args.is_empty() {
-                                                "general".to_string()
-                                            } else {
-                                                args.to_string()
-                                            };
-                                            let _ = self.broker_tx.send(BrokerCmd::FinnhubNews {
-                                                symbol: sym,
-                                                api_key: self.finnhub_key.clone(),
-                                            });
-                                            self.log.push_back(LogEntry::info(
-                                                "LAN remote: Finnhub news fetch started",
-                                            ));
-                                        }
-                                    }
-                                    "CALENDAR" => {
-                                        if !self.finnhub_key.is_empty() {
-                                            let _ =
-                                                self.broker_tx.send(BrokerCmd::FetchEconCalendar {
-                                                    finnhub_key: self.finnhub_key.clone(),
-                                                });
-                                            self.log.push_back(LogEntry::info(
-                                                "LAN remote: econ calendar fetch started",
-                                            ));
-                                        }
-                                    }
-                                    "CONGRESS_TRADES" => {
-                                        let _ = self.broker_tx.send(BrokerCmd::FetchCongressTrades);
-                                        self.log.push_back(LogEntry::info(
-                                            "LAN remote: congress trades fetch started",
-                                        ));
-                                    }
-                                    "FUNDAMENTALS_ONE" => {
-                                        if !args.is_empty() {
-                                            let db_path = cache_db_path();
-                                            let _ = self.broker_tx.send(
-                                                BrokerCmd::FundamentalsScrapeOne {
-                                                    ticker: args.to_string(),
-                                                    db_path,
-                                                },
-                                            );
-                                            self.log.push_back(LogEntry::info(format!(
-                                                "LAN remote: fundamentals scrape for {}",
-                                                args
-                                            )));
-                                        }
-                                    }
-                                    "KRAKEN_BACKFILL" => {
-                                        let db_path = cache_db_path();
-                                        let sym = if args.is_empty() { "BTCUSD" } else { args };
-                                        let tfs = self.filtered_sync_timeframes([
-                                            "1Day", "1Hour", "4Hour", "15Min", "30Min", "5Min",
-                                        ]);
-                                        if !tfs.is_empty()
-                                            && self.kraken_spot_symbol_scrape_enabled(sym)
-                                        {
-                                            let _ =
-                                                self.broker_tx.send(BrokerCmd::KrakenBackfill {
-                                                    symbol: sym.to_string(),
-                                                    timeframes: tfs,
-                                                    db_path,
-                                                    backfill_complete: false,
-                                                });
-                                            self.log.push_back(LogEntry::info(format!(
-                                                "LAN remote: Kraken backfill {} started",
-                                                sym
-                                            )));
-                                        }
-                                    }
-                                    "KRAKEN_FUTURES_BACKFILL" => {
-                                        let db_path = cache_db_path();
-                                        let sym = if args.is_empty() { "PF_XBTUSD" } else { args };
-                                        let tfs = self.filtered_sync_timeframes([
-                                            "1Day", "1Hour", "4Hour", "15Min", "30Min", "5Min",
-                                        ]);
-                                        if !tfs.is_empty() && self.kraken_scrape_futures {
-                                            let _ = self.broker_tx.send(
-                                                BrokerCmd::KrakenFuturesBackfill {
-                                                    symbol: sym.to_string(),
-                                                    timeframes: tfs,
-                                                    db_path,
-                                                    backfill_complete: false,
-                                                },
-                                            );
-                                            self.log.push_back(LogEntry::info(format!(
-                                                "LAN remote: Kraken Futures backfill {} started",
-                                                sym
-                                            )));
-                                        }
-                                    }
-                                    "EVSCRAPE" | "EVSCRAPE_FORCE" => {
-                                        let force = cmd == "EVSCRAPE_FORCE";
-                                        let db_path = cache_db_path();
-                                        let _ =
-                                            self.broker_tx.send(BrokerCmd::FundamentalsScrape {
-                                                db_path,
-                                                use_alpaca: self.fund_source_alpaca,
-                                                use_kraken: self.fund_source_kraken,
-                                                kraken_equity_symbols: self
-                                                    .kraken_equity_universe_symbols
-                                                    .clone(),
-                                                force,
-                                            });
-                                        let label = if force {
-                                            "EVScrape started (FORCE)"
-                                        } else {
-                                            "EVScrape started"
-                                        };
-                                        self.log.push_back(LogEntry::info(format!(
-                                            "LAN remote: {}",
-                                            label
-                                        )));
-                                    }
-                                    "INGEST_RESEARCH" => {
-                                        // Args is a JSON object: {"text": "...", "agent": "..."}.
-                                        // Unwrap and re-dispatch as a local ingest so the server's
-                                        // DB gets the articles — clients will pull via normal
-                                        // research_web_articles / research_news table sync.
-                                        let parsed: serde_json::Value = serde_json::from_str(args)
-                                            .unwrap_or(serde_json::Value::Null);
-                                        let text = parsed
-                                            .get("text")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("")
-                                            .to_string();
-                                        let agent_override = parsed
-                                            .get("agent")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("")
-                                            .to_string();
-                                        if !text.trim().is_empty() {
-                                            let _ = self.broker_tx.send(
-                                                BrokerCmd::IngestResearchArticles {
-                                                    text,
-                                                    agent_override,
-                                                },
-                                            );
-                                            self.log.push_back(LogEntry::info(
-                                                "LAN remote: research ingest accepted from client",
-                                            ));
-                                        }
-                                    }
-                                    _ => {
-                                        self.log.push_back(LogEntry::info(format!(
-                                            "LAN remote: unhandled '{}' (args: {})",
-                                            cmd, args
-                                        )));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Poll Kraken positions every ~60 seconds so terminal-managed exit changes
-        // and broker fills eventually converge back into the unified position view.
-        if now_instant.duration_since(self.kraken_positions_last_poll)
-            >= std::time::Duration::from_secs(60)
-            && self.kraken_enabled
-            && self.kraken_connected
-            && !self.lan_client_enabled
-            && self.cache_loaded
-        {
-            self.kraken_positions_last_poll = now_instant;
-            let _ = self.broker_tx.send(BrokerCmd::KrakenGetPositions);
-            let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
-        }
-
-        // Open Kraken equity positions are safety-critical foreground quotes, not
-        // broad history sync. The 60s balance/position REST poll already queues
-        // one ticker refresh, but P/L should not sit stale for a full minute when
-        // iapi is healthy. Until a verified Kraken Securities quote stream exists,
-        // refresh held xStock symbols on the same 15s cadence as watchlist quotes.
-        if now_instant.duration_since(self.kraken_position_quotes_last_poll)
-            >= std::time::Duration::from_secs(15)
-            && self.kraken_enabled
-            && self.kraken_connected
-            && !self.kr_positions.is_empty()
-            && !self.lan_client_enabled
-            && self.cache_loaded
-        {
-            self.kraken_position_quotes_last_poll = now_instant;
-            let mut symbols = std::collections::BTreeSet::new();
-            for pos in &self.kr_positions {
-                if pos.qty == 0.0 {
-                    continue;
-                }
-                let symbol = pos
-                    .symbol
-                    .replace('/', "")
-                    .trim_end_matches(".EQ")
-                    .to_ascii_uppercase();
-                if !symbol.is_empty() {
-                    symbols.insert(symbol);
-                }
-            }
-            for symbol in symbols {
-                self.dispatch_kraken_equity_ticker(&symbol);
-            }
-        }
-
-        // Poll watchlist quotes every ~15 seconds at 60fps (900 frames). Disabled for LAN client.
-        // Uses the best available stack: broker snapshots when connected, Yahoo quote enrichment,
-        // and cached bars as a weekend/off-hours fallback.
-        if watchlist_quote_poll_ready(
-            now_instant.duration_since(self.watchlist_quotes_last_poll),
-            !self.user_watchlist.is_empty(),
-            self.lan_client_enabled,
-            self.cache_loaded,
-        ) {
-            self.watchlist_quotes_last_poll = now_instant;
-            let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes {
-                symbols: self.user_watchlist.clone(),
-            });
-        }
-
-        // ── Data sync (disabled when LAN client — server provides all data) ──
-        let is_lan_client = self.lan_client_enabled || self.lan_sync_mode == "client";
-
-        // No API calls or data operations before cache is loaded
-        if !is_lan_client && self.cache_loaded {
+        // ── Data sync ───────────────────────────────────────────────────────
+        // No API calls or data operations before cache is loaded.
+        if self.cache_loaded {
             // Weekend crypto sync via Kraken. Runs every ~60s, one symbol per cycle.
             // Symbols come from a hardcoded floor plus any crypto in chart tabs
             // or the user watchlist so user-added coins (incl. XMR/ZEC/DASH
