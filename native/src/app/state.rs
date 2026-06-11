@@ -4096,6 +4096,10 @@ pub struct TyphooNApp {
     pub(crate) session_dirty_since: Option<std::time::Instant>,
     /// Last time we scanned session state for incremental persistence.
     pub(crate) session_last_scan_at: std::time::Instant,
+    /// Consecutive incremental-save scans that found no change. Drives an
+    /// adaptive scan backoff (500ms→2s) so an idle terminal stops rebuilding and
+    /// diffing the session JSON twice a second; reset to 0 on any detected change.
+    pub(crate) session_idle_scans: u32,
     /// Monotonic write sequence for session persistence. Bumped on the UI thread
     /// each time a snapshot is issued to disk; paired with `session_write_gate`
     /// so a late background autosave can never clobber a newer synchronous save.

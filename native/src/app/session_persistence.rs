@@ -995,7 +995,13 @@ impl TyphooNApp {
             return;
         }
         let now = std::time::Instant::now();
-        let scan_interval = std::time::Duration::from_millis(500);
+        // Adaptive scan cadence: 500ms while the session is actively changing,
+        // backing off toward 2s after sustained no-change so an idle terminal
+        // isn't rebuilding+diffing the session JSON twice a second for nothing.
+        // Any detected change resets to the fast cadence; the save debounce and
+        // forced/exit saves are unaffected.
+        let scan_interval =
+            std::time::Duration::from_millis(500 + u64::from(self.session_idle_scans.min(6)) * 250);
         let save_debounce = std::time::Duration::from_millis(1200);
         let since_last_scan = now.saturating_duration_since(self.session_last_scan_at);
         if since_last_scan < scan_interval {
@@ -1004,9 +1010,11 @@ impl TyphooNApp {
         self.session_last_scan_at = now;
         let json = self.build_session_json();
         if json == self.session_last_saved_json {
+            self.session_idle_scans = self.session_idle_scans.saturating_add(1);
             self.session_dirty_since = None;
             return;
         }
+        self.session_idle_scans = 0;
         let dirty_since = self.session_dirty_since.get_or_insert(now);
         let dirty_for = now.saturating_duration_since(*dirty_since);
         if dirty_for < save_debounce {
