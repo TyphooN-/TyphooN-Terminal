@@ -623,7 +623,7 @@ impl TyphooNApp {
                                         .collect();
                                     chart.view_offset =
                                         chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
-                                    chart.symbol = bare_symbol_from_key(&key);
+                                    chart.switch_symbol(bare_symbol_from_key(&key));
                                     chart.compute_indicators();
                                     self.log.push_back(LogEntry::info(format!(
                                         "Loaded {} bars from {}",

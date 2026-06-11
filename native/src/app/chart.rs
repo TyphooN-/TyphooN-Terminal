@@ -1513,6 +1513,21 @@ fn chart_build_merged_equity_bars_from_cache(
 }
 
 impl ChartState {
+    /// Point this chart at a new symbol and clear per-symbol live-quote state.
+    /// `live_bid`/`live_ask`/`live_quote_at`/`live_quote_delayed` belong to the
+    /// *previous* symbol: carrying them over folds a stale mid into the new
+    /// symbol's forming bar (see `has_live_quotes`) and can make the real-time
+    /// quote guards suppress the new symbol's newest delayed quotes for up to the
+    /// freshness window. Use for in-place symbol switches (watchlist / screener /
+    /// explorer / peers); `reload_symbol_auto` already builds a fresh ChartState.
+    pub(crate) fn switch_symbol(&mut self, symbol: impl Into<String>) {
+        self.symbol = symbol.into();
+        self.live_bid = 0.0;
+        self.live_ask = 0.0;
+        self.live_quote_at = None;
+        self.live_quote_delayed = false;
+    }
+
     pub(crate) fn new(symbol: impl Into<String>, tf: Timeframe) -> Self {
         Self {
             symbol: symbol.into(),

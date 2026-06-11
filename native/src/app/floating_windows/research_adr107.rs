@@ -670,7 +670,7 @@ impl TyphooNApp {
             if let Some(sym) = jump_to {
                 self.symbol_input = sym.clone();
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                    chart.symbol = sym.clone();
+                    chart.switch_symbol(sym.clone());
                     if let Some(ref cache_arc) = self.cache {
                         let mut gpu = self.gpu_indicators.take();
                         if !chart.try_load(Arc::as_ref(cache_arc), &mut self.log, gpu.as_mut()) {
