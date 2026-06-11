@@ -207,8 +207,8 @@ impl eframe::App for TyphooNApp {
                 || (self.kraken_scrape_xstocks && !self.kraken_equity_universe_symbols.is_empty()))
         {
             self.kraken_universe_last_schedule = now_instant;
-            let _ = self.schedule_kraken_universe_sectors();
             let _ = self.schedule_kraken_equities_universe();
+            let _ = self.schedule_kraken_universe_sectors();
             let _ = self.maybe_schedule_kraken_ws_ohlc_snapshot_sweep();
         }
 
@@ -1536,6 +1536,7 @@ impl eframe::App for TyphooNApp {
                         self.kraken_equity_universe_symbols.len(),
                         self.kraken_equity_tokenized_symbols.len()
                     )));
+                    market_data_refill_requested = true;
                     self.maybe_start_kraken_ws_ohlc();
 
                     if self.auto_sec_scrape_deferred && !self.scrape_sec_running {
@@ -1699,6 +1700,7 @@ impl eframe::App for TyphooNApp {
                             timeframe
                         );
                     }
+                    market_data_refill_requested = true;
                 }
                 BrokerMsg::KrakenEquityHistoryError {
                     symbol,
@@ -1761,6 +1763,7 @@ impl eframe::App for TyphooNApp {
                     } else {
                         self.log.push_back(LogEntry::err(error));
                     }
+                    market_data_refill_requested = true;
                 }
                 BrokerMsg::Quote(symbol, bid, ask, last) => {
                     self.log.push_back(LogEntry::info(format!(

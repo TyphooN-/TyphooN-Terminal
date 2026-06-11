@@ -25,7 +25,6 @@ pub(super) fn current_process_rss_mb() -> u64 {
     0
 }
 
-
 pub(super) fn background_retry_dispatch_allowed(pending_fetches: usize) -> bool {
     pending_fetches < BACKGROUND_RETRY_PENDING_FETCH_CAP
 }
@@ -1695,6 +1694,11 @@ impl TyphooNApp {
     }
 
     pub(super) fn settle_market_data_fetch(&mut self, source: &str, symbol: &str, timeframe: &str) {
+        if source.eq_ignore_ascii_case("kraken-equities") {
+            self.pending_kraken_fetches
+                .remove(&format!("equity:{}", alpaca_fetch_key(symbol, timeframe)));
+            return;
+        }
         self.pending_fetches_for_source_mut(source)
             .remove(&alpaca_fetch_key(symbol, timeframe));
     }

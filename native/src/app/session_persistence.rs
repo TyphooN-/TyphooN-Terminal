@@ -35,10 +35,16 @@ impl TyphooNApp {
     pub(super) fn refill_market_data_sync_slots(&mut self) {
         let pending_cap = if self.full_tilt_sync_enabled() {
             KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW
+                + KRAKEN_EQUITIES_FULL_TILT_QUEUE_WINDOW
                 + KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW
                 + ALPACA_FULL_TILT_QUEUE_WINDOW
+                + YAHOO_CHART_FULL_TILT_QUEUE_WINDOW
         } else {
-            KRAKEN_SPOT_QUEUE_WINDOW + KRAKEN_FUTURES_QUEUE_WINDOW + 64
+            KRAKEN_SPOT_QUEUE_WINDOW
+                + KRAKEN_FUTURES_QUEUE_WINDOW
+                + 96 // Kraken Equities native/demand repair lane
+                + 64 // Alpaca assist/broad lane
+                + YAHOO_CHART_QUEUE_WINDOW
         };
         if self.total_pending_market_data_fetches() > pending_cap {
             return;
@@ -47,6 +53,12 @@ impl TyphooNApp {
             return;
         }
         let _ = self.schedule_light_market_data_targets();
+        if self.kraken_full_bar_sync_enabled
+            && self.kraken_scrape_xstocks
+            && !self.kraken_equity_universe_symbols.is_empty()
+        {
+            let _ = self.schedule_kraken_equities_universe();
+        }
         if self.kraken_full_bar_sync_enabled && !self.kraken_pairs.is_empty() {
             let _ = self.schedule_kraken_universe_sectors();
         }
