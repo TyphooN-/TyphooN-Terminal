@@ -1950,9 +1950,17 @@ impl eframe::App for TyphooNApp {
                                 // No ext data — clear ext candle (regular hours)
                                 chart.ext_active = false;
                             }
-                            // Update forming bar
+                            // Update forming bar — but never let a delayed
+                            // watchlist quote (Alpaca/Yahoo `row.last`) clobber a
+                            // fresh real-time WS bar. Real-time wins for 30s; the
+                            // watchlist fills the forming bar only when WS is absent
+                            // or has gone quiet (mirrors the iapi quote guard).
+                            let realtime_fresh = !chart.live_quote_delayed
+                                && chart.live_quote_at.is_some_and(|t| {
+                                    t.elapsed() < std::time::Duration::from_secs(30)
+                                });
                             if let Some(bar) = chart.bars.last_mut() {
-                                if !chart.ext_active {
+                                if !chart.ext_active && !realtime_fresh {
                                     bar.close = row.last;
                                     if row.last > bar.high {
                                         bar.high = row.last;
