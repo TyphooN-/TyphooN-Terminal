@@ -367,10 +367,29 @@ async fn fetch_iapi_equity_markets(client: &Client) -> Result<Vec<KrakenEquityMa
                     .get("instrument_status")
                     .and_then(|v| v.as_str())
                     .map(str::to_string),
+                // Tri-state, NOT a bool: only an explicit "disabled" opts a
+                // symbol out of overnight. Unknown/blank tokens map to `None`
+                // (unknown) so the universe handler defaults them to
+                // overnight-enabled — the old `== "enabled"` check classified
+                // every non-"enabled" value (blanks, unfamiliar tokens) as a hard
+                // opt-out, hiding the overnight session for xStocks Kraken
+                // actually trades overnight (e.g. WOK showed CLOSED vs Kraken's
+                // own "OPEN (OVERNIGHT)"). Logs unrecognized values so the real
+                // catalog vocabulary is visible.
                 overnight_trading: item
                     .get("overnight_trading_support")
                     .and_then(|v| v.as_str())
-                    .map(|s| s.eq_ignore_ascii_case("enabled")),
+                    .and_then(|s| match s.trim().to_ascii_lowercase().as_str() {
+                        "enabled" => Some(true),
+                        "disabled" => Some(false),
+                        "" => None,
+                        other => {
+                            tracing::debug!(
+                                "kraken catalog: unrecognized overnight_trading_support {other:?}; treating as unknown (overnight-enabled)"
+                            );
+                            None
+                        }
+                    }),
             });
         }
         let total_results = result
