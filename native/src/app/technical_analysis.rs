@@ -28,6 +28,23 @@ fn nnfx_trend_legend_labels(
     (ma_label, kama_label)
 }
 
+fn previous_daily_close_from_bars(bars: &[Bar]) -> Option<f64> {
+    let latest_day = bars.last()?.ts_ms / 86_400_000;
+    bars.iter()
+        .rev()
+        .find(|bar| bar.ts_ms / 86_400_000 < latest_day)
+        .map(|bar| bar.close)
+}
+
+fn close_reference_color(current_close: f64, fallback_open: f64, bars: &[Bar]) -> egui::Color32 {
+    let reference = previous_daily_close_from_bars(bars).unwrap_or(fallback_open);
+    if current_close >= reference {
+        UP
+    } else {
+        DOWN
+    }
+}
+
 /// Draw a single chart viewport into `rect` using `painter`.
 pub(super) fn draw_chart(
     painter: &egui::Painter,
@@ -2127,7 +2144,17 @@ pub(super) fn draw_chart(
         };
         let y = price_to_y(current_price);
         if y >= chart_rect.top() && y <= chart_rect.bottom() {
-            let color = if current_price >= last.open { UP } else { DOWN };
+            let color = if chart.ext_active && chart.ext_close > 0.0 {
+                // The `C` tag is the regular/daily close reference. Color it
+                // against the previous daily close, not the current intraday
+                // candle open; otherwise a down day can look green just because
+                // the close finished above that bar's open while EXT is active.
+                close_reference_color(current_price, last.open, &chart.bars)
+            } else if current_price >= last.open {
+                UP
+            } else {
+                DOWN
+            };
             // Dashed line
             let dash_len = 6.0_f32;
             let mut x = chart_rect.left();
@@ -7334,6 +7361,52 @@ mod tests {
             "EXT 0.092400"
         );
         assert_eq!(super::format_axis_price_label("C", 194.32), "C 194.3200");
+    }
+
+    #[test]
+    fn close_reference_color_uses_previous_daily_close() {
+        let day = 86_400_000_i64;
+        let bars = vec![
+            super::Bar {
+                ts_ms: day,
+                open: 0.11,
+                high: 0.12,
+                low: 0.10,
+                close: 0.10065,
+                volume: 1.0,
+            },
+            super::Bar {
+                ts_ms: day * 2,
+                open: 0.09,
+                high: 0.11,
+                low: 0.08,
+                close: 0.09265,
+                volume: 1.0,
+            },
+        ];
+
+        assert_eq!(super::previous_daily_close_from_bars(&bars), Some(0.10065));
+        assert_eq!(
+            super::close_reference_color(0.09265, 0.09, &bars),
+            super::DOWN
+        );
+        assert_eq!(super::close_reference_color(0.102, 0.09, &bars), super::UP);
+    }
+
+    #[test]
+    fn close_reference_color_falls_back_to_bar_open_without_prior_day() {
+        let bars = vec![super::Bar {
+            ts_ms: 86_400_000,
+            open: 10.0,
+            high: 11.0,
+            low: 9.0,
+            close: 10.5,
+            volume: 1.0,
+        }];
+
+        assert_eq!(super::previous_daily_close_from_bars(&bars), None);
+        assert_eq!(super::close_reference_color(9.5, 10.0, &bars), super::DOWN);
+        assert_eq!(super::close_reference_color(10.5, 10.0, &bars), super::UP);
     }
 
     #[test]
