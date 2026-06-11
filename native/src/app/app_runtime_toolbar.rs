@@ -261,6 +261,7 @@ impl TyphooNApp {
                                     let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
                                         symbol: orderbook_symbol.clone(),
                                         depth: 100,
+                                        publish_dom: true,
                                     });
                                 }
                             }

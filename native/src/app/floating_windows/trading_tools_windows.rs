@@ -41,6 +41,7 @@ impl TyphooNApp {
                             let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
                                 symbol: sym.clone(),
                                 depth: 100,
+                                publish_dom: true,
                             });
                         }
                         if !stream_supported && !sym.is_empty() {
@@ -258,6 +259,7 @@ impl TyphooNApp {
                                     let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
                                         symbol: sym.clone(),
                                         depth: 100,
+                                        publish_dom: true,
                                     });
                                 }
                                 if !stream_supported && !sym.is_empty() {

@@ -2737,6 +2737,7 @@ pub(crate) enum BrokerCmd {
     KrakenStartOrderbookWs {
         symbol: String,
         depth: usize,
+        publish_dom: bool,
     },
     KrakenClosePosition {
         pair: String,
@@ -2772,6 +2773,11 @@ pub(crate) enum BrokerMsg {
         message: String,
     },
     KrakenOrderbookUpdate(String),
+    KrakenBookQuoteTick {
+        symbol: String,
+        bid: f64,
+        ask: f64,
+    },
     /// Bars just committed to cache by the Kraken WS OHLC pipeline.
     /// Each entry is `(typhoon_symbol, tf_label, last_bar_ts_ms)` so the
     /// REST scheduler can mark the (symbol, tf) WS-fresh and skip refetch.
@@ -4572,6 +4578,8 @@ pub struct TyphooNApp {
     pub(crate) show_orderbook_window: bool,
     pub(crate) orderbook_result: String, // last fetched L2 orderbook JSON
     pub(crate) kraken_orderbook_ws_symbol: String,
+    pub(crate) kraken_chart_l2_ws_symbol: String,
+    pub(crate) kraken_chart_l2_last_start_attempt: std::time::Instant,
     pub(crate) market_clock_status: String,
     pub(crate) show_symbol_overlap: bool,
     pub(crate) show_correlation: bool,

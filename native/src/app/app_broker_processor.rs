@@ -55,6 +55,26 @@ fn kraken_ws_v2_book_state_json(
     .to_string()
 }
 
+fn top_of_kraken_ws_v2_book(
+    state: &typhoon_engine::broker::kraken::KrakenWsBookState,
+) -> Option<(f64, f64)> {
+    let bid = state.bids.first()?.price;
+    let ask = state.asks.first()?.price;
+    (bid > 0.0 && ask > 0.0 && bid.is_finite() && ask.is_finite()).then_some((bid, ask))
+}
+
+fn resolve_kraken_chart_book_ws_symbol(symbol: &str) -> Option<String> {
+    let bare = symbol
+        .trim()
+        .trim_end_matches(".EQ")
+        .trim_end_matches(".eq")
+        .to_ascii_uppercase();
+    if bare.is_empty() || bare.contains('/') {
+        return None;
+    }
+    Some(format!("{bare}x/USD"))
+}
+
 pub(super) fn spawn_broker_message_processor(
     broker_cmd_rx: tokio::sync::mpsc::UnboundedReceiver<BrokerCmd>,
     broker_msg_tx: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
@@ -3188,16 +3208,21 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         );
                     }
                 }
-                BrokerCmd::KrakenStartOrderbookWs { symbol, depth } => {
+                BrokerCmd::KrakenStartOrderbookWs {
+                    symbol,
+                    depth,
+                    publish_dom,
+                } => {
                     let msg_tx = broker_msg_tx_clone.clone();
-                    let Some(ws_symbol) = typhoon_engine::core::kraken::resolve_kraken_ws_pair(
+                    let ws_symbol = typhoon_engine::core::kraken::resolve_kraken_ws_pair(
                         &kraken_public_client,
                         &symbol,
                     )
                     .await
-                    else {
+                    .or_else(|| resolve_kraken_chart_book_ws_symbol(&symbol));
+                    let Some(ws_symbol) = ws_symbol else {
                         let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                            "Kraken WS v2 book skipped: {symbol} is not a Kraken spot pair"
+                            "Kraken WS v2 book skipped: {symbol} is not a WS-mappable Kraken pair"
                         )));
                         continue;
                     };
@@ -3235,27 +3260,48 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                         let Some(delta) = maybe_delta else { break; };
                                         match state.apply_delta_with_checksum(&delta) {
                                             Ok(checksum) => {
-                                                let text = kraken_ws_v2_book_state_json(
-                                                    &display_symbol,
-                                                    &state,
-                                                    checksum,
-                                                    "ok",
-                                                );
-                                                let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
+                                                if let Some((bid, ask)) = top_of_kraken_ws_v2_book(&state) {
+                                                    let _ = update_msg_tx.send(BrokerMsg::KrakenBookQuoteTick {
+                                                        symbol: display_symbol.clone(),
+                                                        bid,
+                                                        ask,
+                                                    });
+                                                }
+                                                if publish_dom {
+                                                    let text = kraken_ws_v2_book_state_json(
+                                                        &display_symbol,
+                                                        &state,
+                                                        checksum,
+                                                        "ok",
+                                                    );
+                                                    let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
+                                                }
                                             }
                                             Err(err) => {
-                                                let text = kraken_ws_v2_book_state_json(
-                                                    &display_symbol,
-                                                    &state,
-                                                    Some(err.actual),
-                                                    "checksum_mismatch",
-                                                );
-                                                let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
+                                                if publish_dom {
+                                                    let text = kraken_ws_v2_book_state_json(
+                                                        &display_symbol,
+                                                        &state,
+                                                        Some(err.actual),
+                                                        "checksum_mismatch",
+                                                    );
+                                                    let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
+                                                }
                                                 resubscribe_count = resubscribe_count.saturating_add(1);
-                                                let _ = update_msg_tx.send(BrokerMsg::Error(format!(
-                                                    "Kraken WS v2 book checksum mismatch for {}: expected {}, actual {}; resubscribing snapshot attempt {}",
-                                                    err.symbol, err.expected, err.actual, resubscribe_count
-                                                )));
+                                                if publish_dom {
+                                                    let _ = update_msg_tx.send(BrokerMsg::Error(format!(
+                                                        "Kraken WS v2 book checksum mismatch for {}: expected {}, actual {}; resubscribing snapshot attempt {}",
+                                                        err.symbol, err.expected, err.actual, resubscribe_count
+                                                    )));
+                                                } else {
+                                                    tracing::warn!(
+                                                        "Kraken WS v2 book checksum mismatch for {}: expected {}, actual {}; resubscribing snapshot attempt {}",
+                                                        err.symbol,
+                                                        err.expected,
+                                                        err.actual,
+                                                        resubscribe_count
+                                                    );
+                                                }
                                                 retry_after_mismatch = true;
                                                 break;
                                             }
@@ -3277,7 +3323,11 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                                 format!("Kraken WS v2 book disconnected: {state_symbol} depth {depth}: {reason}")
                                             }
                                         };
-                                        let _ = update_msg_tx.send(BrokerMsg::OrderResult(text));
+                                        if publish_dom {
+                                            let _ = update_msg_tx.send(BrokerMsg::OrderResult(text));
+                                        } else {
+                                            tracing::debug!("{text}");
+                                        }
                                     }
                                 }
                             }
@@ -3286,14 +3336,22 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 break;
                             }
                             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                            let _ = update_msg_tx.send(BrokerMsg::OrderResult(format!(
-                                "Kraken WS v2 book resubscribing: {state_symbol} depth {depth}"
-                            )));
+                            if publish_dom {
+                                let _ = update_msg_tx.send(BrokerMsg::OrderResult(format!(
+                                    "Kraken WS v2 book resubscribing: {state_symbol} depth {depth}"
+                                )));
+                            }
                         }
                     });
-                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                        "Kraken WS v2 book starting: {ws_symbol} depth {depth}"
-                    )));
+                    if publish_dom {
+                        let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                            "Kraken WS v2 book starting: {ws_symbol} depth {depth}"
+                        )));
+                    } else {
+                        tracing::debug!(
+                            "Kraken WS v2 chart book quote starting: {ws_symbol} depth {depth}"
+                        );
+                    }
                 }
                 BrokerCmd::KrakenCloseAll => {
                     if let Some(ref kb) = kraken_broker {

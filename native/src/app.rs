@@ -473,6 +473,9 @@ impl TyphooNApp {
             show_orderbook_window: false,
             orderbook_result: String::new(),
             kraken_orderbook_ws_symbol: String::new(),
+            kraken_chart_l2_ws_symbol: String::new(),
+            kraken_chart_l2_last_start_attempt: std::time::Instant::now()
+                - std::time::Duration::from_secs(60),
             market_clock_status: String::new(),
             show_symbol_overlap: false,
             show_correlation: false,

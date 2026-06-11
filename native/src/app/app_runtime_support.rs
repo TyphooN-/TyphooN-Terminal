@@ -298,6 +298,7 @@ pub(super) fn broker_msg_kind(msg: &BrokerMsg) -> &'static str {
         BrokerMsg::KrakenOpenOrders(_) => "KrakenOpenOrders",
         BrokerMsg::KrakenWsStatus { .. } => "KrakenWsStatus",
         BrokerMsg::KrakenOrderbookUpdate(_) => "KrakenOrderbookUpdate",
+        BrokerMsg::KrakenBookQuoteTick { .. } => "KrakenBookQuoteTick",
         BrokerMsg::KrakenWsBarsCommitted { .. } => "KrakenWsBarsCommitted",
         BrokerMsg::KrakenWsOhlcStatus { .. } => "KrakenWsOhlcStatus",
         BrokerMsg::KrakenEquityQuote(_) => "KrakenEquityQuote",

@@ -228,6 +228,42 @@ impl eframe::App for TyphooNApp {
             self.maybe_start_kraken_ws_ohlc();
         }
 
+        // Chart bid/ask should prefer Kraken's WS v2 L2 top-of-book when the
+        // active chart is a Kraken spot or xStock symbol. OHLC updates are bar
+        // cadence; ticker/iapi can lag or be delayed. The book stream is the
+        // freshest public best bid/ask feed we have and validates CRC32 before
+        // publishing top-of-book ticks back into ChartState.
+        if self.kraken_enabled
+            && self.lan_sync_mode != "client"
+            && now_instant.duration_since(self.kraken_chart_l2_last_start_attempt)
+                >= std::time::Duration::from_secs(5)
+            && let Some(chart) = self.charts.get(self.active_tab)
+        {
+            let source = cache_source_from_key(&chart.symbol);
+            let bare = bare_symbol_from_key(&chart.symbol)
+                .trim_end_matches(".EQ")
+                .to_ascii_uppercase();
+            let kraken_chart = matches!(source, "kraken" | "kraken-equities")
+                || chart.symbol.to_ascii_uppercase().contains("KRAKEN")
+                || chart.symbol.to_ascii_uppercase().contains(".EQ")
+                || self
+                    .kraken_equity_universe_symbols
+                    .iter()
+                    .any(|symbol| symbol.trim_end_matches(".EQ").eq_ignore_ascii_case(&bare));
+            if kraken_chart
+                && !bare.is_empty()
+                && !self.kraken_chart_l2_ws_symbol.eq_ignore_ascii_case(&bare)
+            {
+                self.kraken_chart_l2_last_start_attempt = now_instant;
+                self.kraken_chart_l2_ws_symbol = bare.clone();
+                let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
+                    symbol: bare,
+                    depth: 10,
+                    publish_dom: false,
+                });
+            }
+        }
+
         // News body hydrator: fetch the full article text for rows that
         // still only have the provider summary. Throttled by
         // HYDRATE_INTERVAL_SECS and gated on `in_flight` so we never have
@@ -1156,6 +1192,27 @@ impl eframe::App for TyphooNApp {
                     if was_empty {
                         self.log
                             .push_back(LogEntry::info("Kraken orderbook WS: live depth streaming"));
+                    }
+                }
+                BrokerMsg::KrakenBookQuoteTick { symbol, bid, ask } => {
+                    let last = (bid + ask) * 0.5;
+                    if last > 0.0 && last.is_finite() {
+                        let wanted = bare_symbol_from_key(&symbol)
+                            .replace('/', "")
+                            .trim_end_matches(".EQ")
+                            .to_ascii_uppercase();
+                        for chart in &mut self.charts {
+                            let chart_symbol = bare_symbol_from_key(&chart.symbol)
+                                .replace('/', "")
+                                .trim_end_matches(".EQ")
+                                .to_ascii_uppercase();
+                            if chart_symbol == wanted
+                                || chart_symbol.contains(&wanted)
+                                || wanted.contains(&chart_symbol)
+                            {
+                                chart.apply_live_quote_update(bid, ask, false);
+                            }
+                        }
                     }
                 }
                 BrokerMsg::KrakenWsBarsCommitted { fresh } => {
