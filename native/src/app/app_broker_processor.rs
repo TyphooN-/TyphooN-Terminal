@@ -549,8 +549,8 @@ pub(super) fn spawn_broker_message_processor(
                     let _ = broker_msg_tx_clone.send(BrokerMsg::WatchlistQuotes(rows));
                 }
                 BrokerCmd::GetMarketClock => {
-                    // TODO: Prefer Alpaca's market clock when available for equities/xStocks
-                    // (Kraken equities are backed by Alpaca). Currently uses primary broker.
+                    // US-equity/xStock session status is sourced from Alpaca's market clock.
+                    // Kraken crypto pairs are shown separately as 24/7 in the toolbar.
                     if let Some(ref b) = broker {
                         match b.get_market_clock().await {
                             Ok(v) => {
