@@ -1,6 +1,11 @@
 # ADR-099: Kraken WS Full-Universe Streaming Under egui Responsiveness Budget
 
-**Status:** Accepted
+**Status:** Revised by ADR-112 — full-universe *permanent* WS subscription is
+withdrawn. Live WS streaming is now demand-scoped; Kraken-native catalog history
+comes from a paced, rotating WS OHLC *snapshot sweep*, not a 12k permanent
+subscription (which caused connection-reset churn and multi-second egui stalls,
+and backfilled no history when subscribed `snapshot=false`). The egui
+responsiveness analysis below remains valid; the streaming *scope* does not.
 **Date:** 2026-05-24
 **Related:** ADR-089 (zstd compression policy), ADR-032 (performance architecture), ADR-094 (Kraken async bar sync), ADR-098 (per-frame O(1) discipline), `native/src/app/kraken_ohlc_ws.rs`, `native/src/app/app_runtime.rs`, `engine/src/broker/kraken/ohlc_ws.rs`, `engine/src/core/cache.rs::merge_bars_fast`
 
