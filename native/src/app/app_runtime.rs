@@ -1007,6 +1007,7 @@ impl eframe::App for TyphooNApp {
                             continue;
                         }
                         self.kraken_connected = true;
+                        self.resolve_order_broker(); // Live > Paper: prefer live Kraken once connected
                         // REST is authoritative: load balances/positions/history/orders before
                         // relying on private WS deltas.
                         let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
@@ -1020,6 +1021,7 @@ impl eframe::App for TyphooNApp {
                             continue;
                         }
                         self.broker_connected = true;
+                        self.resolve_order_broker(); // Live > Paper bias once Alpaca paper/live state is known
                         if self.alpaca_full_bar_sync_enabled {
                             self.log.push_back(LogEntry::info(
                                 "Alpaca connected — broad Alpaca universe bar sync enabled.",

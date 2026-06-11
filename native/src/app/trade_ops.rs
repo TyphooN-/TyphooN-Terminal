@@ -1341,17 +1341,28 @@ impl TyphooNApp {
     }
 
     pub(super) fn resolve_order_broker(&mut self) {
-        if self.order_broker_available(self.order_broker) {
+        // Live > Paper. Bias the order-routing default toward a live-funds broker:
+        // Alpaca can run in paper mode (`broker_paper`); Kraken spot is always
+        // live funds. So never rest on paper-mode Alpaca when live Kraken is
+        // available, and when the selection is unavailable, fall back to the live
+        // broker first. (This is a default/normalization bias, not a hard lock —
+        // an explicit combo selection still applies until the next resolve.)
+        let kraken_live = self.kraken_order_available(); // Kraken spot has no paper mode
+
+        if !self.order_broker_available(self.order_broker) {
+            self.order_broker = if kraken_live {
+                OrderBroker::Kraken
+            } else if self.alpaca_order_available() {
+                OrderBroker::Alpaca
+            } else {
+                self.order_broker
+            };
             return;
         }
 
-        self.order_broker = if self.kraken_order_available() {
-            OrderBroker::Kraken
-        } else if self.alpaca_order_available() {
-            OrderBroker::Alpaca
-        } else {
-            self.order_broker
-        };
+        if matches!(self.order_broker, OrderBroker::Alpaca) && self.broker_paper && kraken_live {
+            self.order_broker = OrderBroker::Kraken;
+        }
     }
 
     pub(super) fn selected_live_broker_targets(&self) -> (bool, bool) {
