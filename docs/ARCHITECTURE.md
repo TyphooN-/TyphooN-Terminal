@@ -36,7 +36,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  - KrakenBroker (Spot REST orders + private WS) │
 │  - SqliteCache (TTBR binary, zstd compression)  │
 │  - DarwinDB (80+ analytics, 100% wired)         │
-│  - RiskEngine (VaR, TRIM, martingale)           │
+│  - RiskEngine (VaR, TRIM, order sizing)         │
 │  - BacktestEngine (bar-by-bar, optimization)    │
 │  - BarBuilder (WebSocket → OHLCV)               │
 │  - LanSync (TLS, PBKDF2, 15 remote commands)    │

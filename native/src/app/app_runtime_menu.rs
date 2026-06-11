@@ -191,13 +191,6 @@ impl TyphooNApp {
                                 self.apply_current_tp_to_positions();
                                 ui.close();
                             }
-                            ui.separator();
-                            if ui.button("Open MG (Martingale Hedge)").clicked() {
-                                self.log.push_back(LogEntry::info(
-                                    "Trading: Open MG — connect to broker first",
-                                ));
-                                ui.close();
-                            }
                             if ui.button("Buy Lines").clicked() {
                                 match self.set_visible_range_trade_lines(true) {
                                     Ok((sl, tp)) => {

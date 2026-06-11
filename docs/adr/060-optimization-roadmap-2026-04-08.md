@@ -16,7 +16,7 @@ Comprehensive audit of the TyphooN-Terminal codebase identified 10 actionable op
 - [x] **Responsive window sizes** — Deferred: egui remembers user resize after first open. Fixed sizes are reasonable defaults.
 - [x] **Right-click context menus** — Watchlist: Chart/Remove context menu.
 - [x] **Sub-pane height constant** — Extracted to `SUB_PANE_H` const.
-- [x] **Missing tooltips** — Added to Destroy Lines, Open MG, Close Partial.
+- [x] **Missing tooltips** — Added to Destroy Lines, deprecated hedge setup, Close Partial. The hedge setup was later removed from active builds by ADR-114.
 
 ### Performance (Medium Impact)
 - [x] **Indicator Vec reuse** — MACD computation reuses existing Vec allocations (clear+reserve+push instead of new Vec).

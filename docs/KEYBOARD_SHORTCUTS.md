@@ -44,7 +44,7 @@
 |------|-----------|
 | File | Connect to Broker, Settings, Quit (Alt+F4) |
 | View | MTF Grid, Chart Type, Indicators, Sub-Panes |
-| Trading | Open Trade, Close All, SL/TP Lines, Martingale |
+| Trading | Open Trade, Close All, SL/TP Lines |
 | Tools | DARWIN Accounts, Portfolio, Backtest, Screener, Risk Calc |
 | Research | News, Calendar, SEC, Fundamentals |
 | Analysis | Correlation, Seasonals, Monte Carlo, Volume Profile |

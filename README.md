@@ -1,6 +1,6 @@
 # TyphooN-Terminal
 
-A native desktop trading terminal + TUI CLI with full risk management, multi-timeframe charting, and hedged martingale support — built in pure Rust with native GPU rendering (egui + wgpu) for Alpaca and Kraken market data.
+A native desktop trading terminal + TUI CLI with full risk management and multi-timeframe charting — built in pure Rust with native GPU rendering (egui + wgpu) for Alpaca and Kraken market data.
 
 **License:** [BUSL 1.1](LICENSE) ([Commercial](COMMERCIAL.md))
 
@@ -29,7 +29,6 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 |---|---|
 | **Charting** | Candlestick charts with 10K+ bar support, auto-load on timeframe change, multi-timeframe indicator overlays, separate indicator panes |
 | **Risk Management** | 4 order modes: Standard (% risk), Fixed lots, Dynamic (min-balance scaling), VaR (percent/notional) |
-| **Hedged Martingale** | Forward-looking TRIM, dynamic PROTECT, Open MG one-click setup, equity TP, unwind — full port of TyphooN EA v1.420 |
 | **Order Placement** | Draggable SL/TP lines, 6 order types (market/bracket/limit/stop/stop-limit/trailing), auto lot calculation |
 | **Order Management** | Open positions panel with live P/L, trade history, cancel pending orders, smart partial close |
 | **Price Alerts** | Set alerts at any price, browser notifications, persistent across sessions |
@@ -162,10 +161,9 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | **margin.rs** | Forward-looking TRIM, PROTECT urgency, spread tolerance, usable margin with buffer |
 | **risk.rs** | All 4 order modes (Standard/Fixed/Dynamic/VaR), RiskLots calculation, lot normalization |
 | **var.rs** | VaR calculation with inline StdDev, inverse cumulative normal, configurable confidence |
-| **position.rs** | Hedge/bias tracking, break-even detection, SL/TP P/L, risk/reward ratio |
-| **martingale.rs** | State machine (OFF/LONG/SHORT/UNWIND), TRIM/PROTECT decisions, Open MG sizing, equity TP |
+| **position.rs** | Broker position tracking, break-even detection, SL/TP P/L, risk/reward ratio |
 
-28 unit tests covering margin math, lot sizing, and VaR calculations.
+Unit tests cover margin math, lot sizing, VaR, and broker position calculations.
 
 ---
 
@@ -177,8 +175,6 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | `s` | Sell Lines (SL = high, TP = low) |
 | `d` | Destroy Lines |
 | `t` | Open Trade |
-| `m` | Martingale mode toggle |
-| `o` | Open MG |
 | `c` | Close All |
 | `p` | Close Partial |
 | `l` | Draw trend line (click 2 points) |
@@ -326,6 +322,9 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [109](docs/adr/109-kraken-websocket-v2-market-depth-completion.md) | Kraken WebSocket v2 Market Depth Completion |
 | [110](docs/adr/110-market-session-status-xstocks-24-5-and-us-equities.md) | Market Session Status Display (xStocks 24/5 + US Equities) |
 | [111](docs/adr/111-broker-scope-reduction-kraken-alpaca-only.md) | Broker Scope Reduction — Kraken + Alpaca Only (Darwin/MT5/Tastytrade deprecated to branches) |
+| [112](docs/adr/112-equities-bar-sync-demand-depth-vs-catalog-breadth.md) | Equities Bar Sync — Demand Depth vs Catalog Breadth |
+| [113](docs/adr/113-cross-source-equity-bar-merge-data-integrity.md) | Cross-Source Equity Bar Merge & Data Integrity |
+| [114](docs/adr/114-deprecate-martingale-live-trading.md) | Deprecate Martingale Live-Trading Support |
 
 ---
 

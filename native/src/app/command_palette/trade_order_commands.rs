@@ -100,16 +100,6 @@ impl TyphooNApp {
                     }
                 }
             }
-            "OPEN_MG" => {
-                if self.broker_connected {
-                    self.log.push_back(LogEntry::info(
-                        "Martingale: use chart SL/TP lines and the broker-backed Open MG flow",
-                    ));
-                } else {
-                    self.log
-                        .push_back(LogEntry::warn("Connect to broker first"));
-                }
-            }
             "BUY_LINES" | "SELL_LINES" => {
                 let is_buy = cmd_upper == "BUY_LINES";
                 match self.set_visible_range_trade_lines(is_buy) {

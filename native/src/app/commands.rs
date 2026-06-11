@@ -120,10 +120,6 @@ pub(crate) const COMMANDS: &[Command] = &[
         name: "SET_TP",
         desc: "Click chart to set take profit",
     },
-    Command {
-        name: "OPEN_MG",
-        desc: "Open martingale position",
-    },
     // Tools
     Command {
         name: "OVERLAP",
