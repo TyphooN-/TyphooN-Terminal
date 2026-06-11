@@ -1125,13 +1125,17 @@ impl TyphooNApp {
         let seq = self.session_save_seq;
         let pref_json =
             serde_json::to_string(&self.build_sync_preferences_value()).unwrap_or_default();
-        Self::persist_session_to_disk(
-            &self.session_write_gate,
-            seq,
-            &json,
-            &pref_json,
-            self.cache.as_ref(),
-        );
+        // Route the session.json write + SQLite put_kv off the UI thread (mirrors
+        // the per-frame autosave). The monotonic `seq` + write gate guarantee this
+        // explicit save still wins over any in-flight autosave, while keeping the
+        // blocking put_kv — held for seconds by bulk bar-sync writers — off the
+        // render thread (it was a 4 s+ frame stall during heavy sync).
+        let gate = self.session_write_gate.clone();
+        let cache = self.cache.clone();
+        let json_for_disk = json.clone();
+        self.rt_handle.spawn_blocking(move || {
+            Self::persist_session_to_disk(&gate, seq, &json_for_disk, &pref_json, cache.as_ref());
+        });
         self.session_last_saved_json = json;
         self.session_dirty_since = None;
         self.session_last_scan_at = std::time::Instant::now();
