@@ -105,12 +105,14 @@ pub(super) fn build_kraken_ws_subscribe_symbols_for_app(
         }
     }
     if include_xstocks {
-        let xstock_symbols = if xstock_catalog_symbols.is_empty() {
-            xstock_demand_symbols
-        } else {
-            xstock_catalog_symbols
-        };
-        for symbol in xstock_symbols {
+        // Stream only the demand set (held / open chart / watchlist xStocks),
+        // never the full ~12k reference catalog. Subscribing the whole catalog
+        // across 8 intervals overwhelmed a single WS v2 connection — constant
+        // "connection reset without closing handshake" churn plus snapshot write
+        // storms that stalled egui for seconds. Catalog breadth is carried by the
+        // batched Alpaca/Yahoo history lanes and the merge, not by live WS.
+        let _ = xstock_catalog_symbols;
+        for symbol in xstock_demand_symbols {
             if let Some(formatted) = format_xstock_ws_symbol(symbol) {
                 out.insert(formatted);
             }
@@ -264,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn build_kraken_ws_subscribe_symbols_streams_full_xstock_catalog_first() {
+    fn build_kraken_ws_subscribe_symbols_streams_demand_xstocks_not_full_catalog() {
         let pairs = vec![("XXBTZUSD".to_string(), "XBT/USD".to_string())];
         let catalog_xstocks = vec!["AAPL".to_string(), "MSFT".to_string(), "WOK.EQ".to_string()];
         let demand_xstocks = vec!["wok".to_string()];
@@ -276,10 +278,13 @@ mod tests {
             true,
         );
 
-        assert!(symbols.contains(&"AAPLx/USD".to_string()));
-        assert!(symbols.contains(&"MSFTx/USD".to_string()));
+        // Only the demand xStock (WOK) and spot pairs stream live. The broad
+        // catalog (AAPL/MSFT) is intentionally excluded: streaming ~12k symbols
+        // across 8 intervals is what caused the WS reset churn and UI stalls.
         assert!(symbols.contains(&"WOKx/USD".to_string()));
         assert!(symbols.contains(&"XBT/USD".to_string()));
+        assert!(!symbols.contains(&"AAPLx/USD".to_string()));
+        assert!(!symbols.contains(&"MSFTx/USD".to_string()));
     }
 
     #[test]

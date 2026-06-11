@@ -70,12 +70,14 @@ pub(super) fn kraken_equity_native_symbols_for_timeframe(
     demand_symbols: &[String],
     timeframe: &str,
 ) -> Vec<String> {
+    // Native Kraken-Equities (iapi/WS) is the demand-scoped DEPTH lane, so the
+    // Sync Status "Kraken Equities" row counts only held/charted/watchlisted
+    // symbols and can reach ~100% as they fill. The ~12k catalog's breadth lives
+    // in the Merged row (Alpaca/Yahoo history + merge), not the native provider
+    // row — counting 12k here would peg it near 0% forever.
+    let _ = catalog_symbols;
     if kraken_equity_full_universe_timeframe(timeframe) {
-        if catalog_symbols.is_empty() {
-            normalize_kraken_equity_symbol_list(demand_symbols.iter())
-        } else {
-            normalize_kraken_equity_symbol_list(catalog_symbols.iter())
-        }
+        normalize_kraken_equity_symbol_list(demand_symbols.iter())
     } else {
         Vec::new()
     }
@@ -85,20 +87,16 @@ pub(super) fn kraken_equity_native_history_symbols(
     catalog_symbols: &[String],
     demand_symbols: &[String],
 ) -> Vec<String> {
-    // Sweep the full xStocks catalog through native iapi history, matching the
-    // catalog scope the Sync Status rows (`kraken_equity_native_symbols_for_timeframe`)
-    // already advertise. This was demand-only while iapi was Cloudflare-bound to
-    // <1 req/s — a catalog × timeframe sweep was multi-day and tripped 1015
-    // backoffs, so the broad universe was delegated to Alpaca/Yahoo assist. The
-    // iapi limiter now sustains ~40 req/s (AIMD-governed, halves on any 429),
-    // which clears the ~100k (symbol, tf) backlog in well under an hour, so
-    // native history owns the catalog again and only falls back to demand
-    // symbols before the catalog has loaded.
-    if catalog_symbols.is_empty() {
-        normalize_kraken_equity_symbol_list(demand_symbols.iter())
-    } else {
-        normalize_kraken_equity_symbol_list(catalog_symbols.iter())
-    }
+    // iapi history is the rate-limited DEPTH lane: ~6 req/s Cloudflare ceiling,
+    // one (symbol, tf) per call, 1015-banned on overshoot. It owns ONLY the
+    // demand set — symbols you hold, chart, or watchlist — which reaches full
+    // depth across every timeframe in ~a minute. The ~12k reference catalog's
+    // breadth is carried by the batched Alpaca/Yahoo history lanes plus the
+    // merge, never by iapi: a catalog × timeframe sweep at 6 req/s is multi-hour
+    // and trips escalating 1015 bans, which is exactly why overnight
+    // Kraken-Equities coverage flatlined near zero.
+    let _ = catalog_symbols;
+    normalize_kraken_equity_symbol_list(demand_symbols.iter())
 }
 
 pub(super) fn kraken_equity_symbols_for_timeframe(
@@ -2039,22 +2037,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kraken_equity_native_symbols_for_timeframe_uses_catalog_when_available() {
+    fn kraken_equity_native_symbols_for_timeframe_is_demand_scoped() {
         let catalog = vec!["TNDM.EQ".to_string(), "wok".to_string(), "TNDM".to_string()];
         let demand = vec!["POM.EQ".to_string(), "array".to_string()];
 
-        assert_eq!(
-            kraken_equity_native_symbols_for_timeframe(&catalog, &demand, "15Min"),
-            vec!["TNDM".to_string(), "WOK".to_string()]
-        );
-        assert_eq!(
-            kraken_equity_native_symbols_for_timeframe(&catalog, &demand, "1Day"),
-            vec!["TNDM".to_string(), "WOK".to_string()]
-        );
-        assert_eq!(
-            kraken_equity_native_symbols_for_timeframe(&catalog, &demand, "1Week"),
-            vec!["TNDM".to_string(), "WOK".to_string()]
-        );
+        // Native rows count only the demand set, regardless of catalog size, so
+        // the "Kraken Equities" status row can converge to ~100%.
+        for tf in ["15Min", "1Day", "1Week"] {
+            assert_eq!(
+                kraken_equity_native_symbols_for_timeframe(&catalog, &demand, tf),
+                vec!["ARRAY".to_string(), "POM".to_string()],
+                "{tf} native row should be demand-scoped"
+            );
+        }
         assert!(kraken_equity_native_symbols_for_timeframe(&catalog, &demand, "1Month").is_empty());
         assert_eq!(
             kraken_equity_native_symbols_for_timeframe(&[], &demand, "1Day"),
@@ -2103,15 +2098,15 @@ mod tests {
     }
 
     #[test]
-    fn kraken_equity_native_history_sweeps_full_catalog_when_loaded() {
+    fn kraken_equity_native_history_is_demand_scoped_not_full_catalog() {
         let catalog = symbols(&["AAPL", "MSFT", "NVDA", "TSLA"]);
         let demand = symbols(&["WOK.EQ", "AAPLx/USD"]);
 
         let selected = kraken_equity_native_history_symbols(&catalog, &demand);
 
-        // iapi now sustains ~40 req/s, so native history owns the whole catalog
-        // (normalized + sorted) rather than just the demand subset.
-        assert_eq!(selected, symbols(&["AAPL", "MSFT", "NVDA", "TSLA"]));
+        // iapi (~6 req/s, 1015-banned on overshoot) owns only the demand depth
+        // lane; the catalog's breadth is carried by Alpaca/Yahoo + the merge.
+        assert_eq!(selected, symbols(&["AAPLXUSD", "WOK"]));
     }
 
     #[test]
@@ -2127,19 +2122,19 @@ mod tests {
     }
 
     #[test]
-    fn kraken_equity_status_and_assist_helpers_still_use_catalog_for_broad_coverage() {
+    fn kraken_equity_native_is_demand_scoped_while_assist_lanes_stay_catalog_broad() {
         let catalog = symbols(&["MSFT", "AAPL"]);
         let demand = symbols(&["WOK.EQ"]);
 
         assert_eq!(
             kraken_equity_native_symbols_for_timeframe(&catalog, &demand, "1Day"),
-            symbols(&["AAPL", "MSFT"]),
-            "status/control-plane native rows should expose catalog WS coverage"
+            symbols(&["WOK"]),
+            "native iapi/WS rows are demand-scoped depth, not catalog breadth"
         );
         assert_eq!(
             kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Month"),
             symbols(&["AAPL", "MSFT"]),
-            "assist/merged broad lanes should still rotate over the catalog"
+            "assist/merged broad lanes (Alpaca/Yahoo) still rotate over the catalog"
         );
     }
 
