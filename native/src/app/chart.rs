@@ -335,6 +335,11 @@ pub(crate) struct ChartState {
     /// The spread lines are hidden once this goes stale so a frozen quote isn't
     /// drawn next to a live (differently-priced) last/candle.
     pub(crate) live_quote_at: Option<std::time::Instant>,
+    /// `true` when the most recent `live_bid`/`live_ask` came from a *delayed*
+    /// source (the Kraken iapi equity ticker, ~15 min). Lets a real-time WS quote
+    /// take precedence so the chart spread/last don't flip to the delayed snapshot
+    /// while live ticks are flowing.
+    pub(crate) live_quote_delayed: bool,
     // Extended hours candle (pre/post market)
     pub(crate) ext_open: f64,
     pub(crate) ext_high: f64,
@@ -1534,6 +1539,7 @@ impl ChartState {
             live_bid: 0.0,
             live_ask: 0.0,
             live_quote_at: None,
+            live_quote_delayed: false,
             ext_open: 0.0,
             ext_high: 0.0,
             ext_low: 0.0,

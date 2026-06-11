@@ -4650,6 +4650,11 @@ pub struct TyphooNApp {
     pub(crate) auto_full_tilt_active: bool,
     /// Full tradable Kraken Securities/equities symbol universe from the internal public catalog.
     pub(crate) kraken_equity_universe_symbols: Vec<String>,
+    /// WS-tokenized xStock subset of the universe (the `{SYM}x/USD` pairs that
+    /// actually exist on Kraken's public WS v2 OHLC channel, ~150 of the ~12k).
+    /// Scopes the WS OHLC snapshot sweep; the full catalog still syncs via the
+    /// Alpaca/Yahoo breadth lanes + demand-scoped iapi.
+    pub(crate) kraken_equity_tokenized_symbols: Vec<String>,
     /// Equity symbols whose iapi `overnight_trading_support` is disabled — they
     /// trade pre/core/after only (CLOSED 8 PM–4 AM ET), not the full 24/5 cycle.
     /// Absence ⇒ overnight-enabled (the common case); drives the session label.

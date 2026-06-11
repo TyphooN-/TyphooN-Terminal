@@ -512,6 +512,7 @@ impl TyphooNApp {
             cached_bar_sync_overall_pct: 0.0,
             auto_full_tilt_active: false,
             kraken_equity_universe_symbols: Vec::new(),
+            kraken_equity_tokenized_symbols: Vec::new(),
             kraken_equity_no_overnight: std::collections::HashSet::new(),
             kraken_equity_universe_requested: false,
             kraken_equity_universe_retry_after_ts: 0,

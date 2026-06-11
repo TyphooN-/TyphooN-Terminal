@@ -75,6 +75,14 @@ pub struct KrakenEquityMarket {
     /// when it trades pre/core/after only, `None` when unknown (e.g. WS-derived
     /// rows that don't carry the field). Drives the per-symbol session label.
     pub overnight_trading: Option<bool>,
+    /// `true` when this symbol is a Kraken WS-tokenized xStock (`{SYM}x/USD`),
+    /// i.e. subscribable on the public WS v2 OHLC channel. The bulk of the iapi
+    /// Securities catalog is `false`: those symbols have no WS pair and are
+    /// reachable natively only via the paced single-symbol iapi history endpoint.
+    /// Scopes the WS OHLC snapshot sweep to pairs that actually exist on WS
+    /// instead of the full ~12k catalog (which would be ~99% phantom subscribes).
+    #[serde(default)]
+    pub tokenized: bool,
 }
 
 pub(super) fn parse_json_number(value: &serde_json::Value) -> Option<f64> {

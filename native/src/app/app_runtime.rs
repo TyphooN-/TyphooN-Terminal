@@ -870,6 +870,7 @@ impl eframe::App for TyphooNApp {
                                             chart.live_bid = bid;
                                             chart.live_ask = ask;
                                             chart.live_quote_at = Some(std::time::Instant::now());
+                                            chart.live_quote_delayed = false;
                                             if let Some(bar) = chart.bars.last_mut() {
                                                 bar.close = mid;
                                                 bar.high = bar.high.max(mid);
@@ -1504,6 +1505,24 @@ impl eframe::App for TyphooNApp {
                         .map(|market| market.symbol.trim_end_matches(".EQ").to_ascii_uppercase())
                         .filter(|symbol| !symbol.is_empty())
                         .collect();
+                    // WS-tokenized subset (real `{SYM}x/USD` WS pairs) — scopes the
+                    // WS OHLC snapshot sweep. The full catalog below still drives
+                    // the Alpaca/Yahoo breadth lanes and the Merged Sync Status row.
+                    let mut tokenized: Vec<String> = markets
+                        .iter()
+                        .filter(|market| {
+                            market.tokenized
+                                && market.tradable
+                                && market.status.as_deref().unwrap_or("active") != "disabled"
+                                && market.instrument_status.as_deref().unwrap_or("enabled")
+                                    != "disabled"
+                        })
+                        .map(|market| market.symbol.trim_end_matches(".EQ").to_ascii_uppercase())
+                        .filter(|symbol| !symbol.is_empty())
+                        .collect();
+                    tokenized.sort();
+                    tokenized.dedup();
+                    self.kraken_equity_tokenized_symbols = tokenized;
                     let mut symbols: Vec<String> = markets
                         .into_iter()
                         .filter(|market| {
@@ -1522,8 +1541,9 @@ impl eframe::App for TyphooNApp {
                     self.kraken_equity_universe_retry_after_ts = 0;
                     self.bg_rev = self.bg_rev.wrapping_add(1);
                     self.log.push_back(LogEntry::info(format!(
-                        "Kraken equities universe loaded: {} tradable symbols",
-                        self.kraken_equity_universe_symbols.len()
+                        "Kraken equities universe loaded: {} tradable symbols ({} WS-tokenized)",
+                        self.kraken_equity_universe_symbols.len(),
+                        self.kraken_equity_tokenized_symbols.len()
                     )));
                     self.maybe_start_kraken_ws_ohlc();
 
@@ -1612,17 +1632,30 @@ impl eframe::App for TyphooNApp {
                                 .trim_end_matches(".EQ")
                                 .to_string();
                             if chart_bare == symbol {
-                                chart.live_bid = ticker.bid;
-                                chart.live_ask = ticker.ask;
-                                chart.live_quote_at = Some(std::time::Instant::now());
-                                if let Some(bar) = chart.bars.last_mut() {
-                                    bar.close = last;
-                                    bar.high = bar.high.max(last);
-                                    bar.low = if bar.low > 0.0 {
-                                        bar.low.min(last)
-                                    } else {
-                                        last
-                                    };
+                                // A delayed iapi equity quote (~15 min) must not
+                                // clobber a fresh real-time WS quote. Adopt it only
+                                // when no recent real-time quote exists (cold start
+                                // or the WS feed went quiet); real-time quotes
+                                // (delayed=false) always win. Keeps the chart spread
+                                // and last matching the live tape during CORE.
+                                let realtime_fresh = !chart.live_quote_delayed
+                                    && chart.live_quote_at.is_some_and(|t| {
+                                        t.elapsed() < std::time::Duration::from_secs(30)
+                                    });
+                                if !(ticker.delayed && realtime_fresh) {
+                                    chart.live_bid = ticker.bid;
+                                    chart.live_ask = ticker.ask;
+                                    chart.live_quote_at = Some(std::time::Instant::now());
+                                    chart.live_quote_delayed = ticker.delayed;
+                                    if let Some(bar) = chart.bars.last_mut() {
+                                        bar.close = last;
+                                        bar.high = bar.high.max(last);
+                                        bar.low = if bar.low > 0.0 {
+                                            bar.low.min(last)
+                                        } else {
+                                            last
+                                        };
+                                    }
                                 }
                             }
                         }
@@ -7195,6 +7228,7 @@ impl eframe::App for TyphooNApp {
                                 chart.live_bid = bid;
                                 chart.live_ask = ask;
                                 chart.live_quote_at = Some(std::time::Instant::now());
+                                chart.live_quote_delayed = false;
                                 if let Some(bar) = chart.bars.last_mut() {
                                     bar.close = last;
                                     bar.high = bar.high.max(last);

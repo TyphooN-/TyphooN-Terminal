@@ -94,7 +94,12 @@ impl TyphooNApp {
         {
             return false;
         }
-        let catalog = self.kraken_equity_catalog_symbols();
+        // Scope the sweep to WS-tokenized xStocks (the `{SYM}x/USD` pairs that
+        // actually exist on Kraken's WS v2), not the full ~12k iapi catalog — the
+        // catalog is ~99% non-WS Securities, so subscribing it was ~99% phantom
+        // and starved the real tokens. Full catalog breadth still comes from the
+        // Alpaca/Yahoo lanes + demand-scoped iapi (see ADR-112).
+        let catalog = self.kraken_equity_ws_sweep_symbols();
         let Some(batch) = next_kraken_ws_snapshot_sweep_batch(
             &catalog,
             &mut self.kraken_ws_ohlc_snapshot_sweep_cursor,

@@ -882,6 +882,18 @@ impl TyphooNApp {
         normalize_kraken_equity_symbol_list(self.kraken_equity_universe_symbols.iter())
     }
 
+    /// The WS-subscribable subset (tokenized `{SYM}x/USD` xStocks). Used to scope
+    /// the WS OHLC snapshot sweep to pairs Kraken actually serves on WS v2, rather
+    /// than the full ~12k iapi catalog (which is ~99% non-WS Securities). Returns
+    /// empty if the WS tokenized snapshot was unavailable at universe load — in
+    /// which case there is nothing to sweep on WS and breadth rides Alpaca/Yahoo.
+    pub(super) fn kraken_equity_ws_sweep_symbols(&self) -> Vec<String> {
+        if !self.kraken_enabled || !self.kraken_scrape_xstocks {
+            return Vec::new();
+        }
+        normalize_kraken_equity_symbol_list(self.kraken_equity_tokenized_symbols.iter())
+    }
+
     pub(super) fn kraken_equity_demand_symbols(&self) -> Vec<String> {
         if !self.kraken_enabled || !self.kraken_scrape_xstocks {
             return Vec::new();

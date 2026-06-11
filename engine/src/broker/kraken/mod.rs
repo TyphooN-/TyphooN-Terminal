@@ -212,6 +212,9 @@ fn parse_tokenized_equity_markets(
                 // WS instrument pairs don't carry overnight support; the iapi
                 // catalog does, and the merge keeps that value.
                 overnight_trading: None,
+                // Came from the WS instrument tokenized-asset snapshot → it has a
+                // real `{SYM}x/USD` WS pair, so the snapshot sweep can subscribe it.
+                tokenized: true,
             });
     }
 
@@ -258,6 +261,9 @@ fn merge_equity_markets(
                 // unknown one (WS-derived rows carry None).
                 existing.overnight_trading =
                     existing.overnight_trading.or(market.overnight_trading);
+                // A symbol is WS-subscribable if *either* source says so (the WS
+                // tokenized snapshot is the one that sets it).
+                existing.tokenized |= market.tokenized;
             })
             .or_insert(market);
     }
@@ -392,6 +398,9 @@ async fn fetch_iapi_equity_markets(client: &Client) -> Result<Vec<KrakenEquityMa
                             None
                         }
                     }),
+                // iapi catalog rows are not WS pairs; the merge flips this to
+                // `true` for any symbol that also appears in the WS tokenized snapshot.
+                tokenized: false,
             });
         }
         let total_results = result
@@ -1907,6 +1916,7 @@ mod tests {
                 status: Some("active".into()),
                 instrument_status: Some("enabled".into()),
                 overnight_trading: Some(true),
+                tokenized: false,
             },
             KrakenEquityMarket {
                 symbol: "AAPL".into(),
@@ -1915,6 +1925,7 @@ mod tests {
                 status: Some("active".into()),
                 instrument_status: Some("enabled".into()),
                 overnight_trading: Some(false),
+                tokenized: false,
             },
         ];
         let ws = vec![
@@ -1925,6 +1936,7 @@ mod tests {
                 status: Some("online".into()),
                 instrument_status: Some("enabled".into()),
                 overnight_trading: None,
+                tokenized: true,
             },
             KrakenEquityMarket {
                 symbol: "WOK".into(),
@@ -1933,6 +1945,7 @@ mod tests {
                 status: Some("online".into()),
                 instrument_status: Some("enabled".into()),
                 overnight_trading: None,
+                tokenized: true,
             },
         ];
 
@@ -1951,6 +1964,17 @@ mod tests {
                 .unwrap()
                 .overnight_trading,
             Some(true)
+        );
+        // The WS-tokenized flag merges in: true for symbols present in the WS
+        // tokenized snapshot, false for iapi-only Securities.
+        assert!(aapl.tokenized, "AAPL is on WS → tokenized");
+        assert!(
+            merged.iter().find(|m| m.symbol == "WOK").unwrap().tokenized,
+            "WOK is WS-only → tokenized"
+        );
+        assert!(
+            !merged.iter().find(|m| m.symbol == "A").unwrap().tokenized,
+            "A is iapi-only → not tokenized"
         );
     }
 
