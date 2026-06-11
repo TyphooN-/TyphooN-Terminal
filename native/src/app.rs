@@ -49,6 +49,7 @@ mod app_runtime_connections;
 mod app_runtime_drawing_sync;
 mod app_runtime_errors;
 mod app_runtime_input;
+mod app_runtime_kraken_market;
 mod app_runtime_kraken_private;
 mod app_runtime_kraken_ws;
 mod app_runtime_live_quotes;
