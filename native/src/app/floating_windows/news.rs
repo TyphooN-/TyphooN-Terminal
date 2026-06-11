@@ -101,7 +101,7 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([920.0, news_default_h])
-                .min_size([680.0, 260.0])
+                .min_size([300.0, 260.0])
                 // Do not cap width or height here. The reader is often used as a
                 // wide article/workbench pane, and any `max_width` silently turns
                 // into an invisible horizontal resize ceiling. Let the window's
@@ -464,8 +464,25 @@ impl TyphooNApp {
                                                     } else {
                                                         egui::Color32::from_rgb(220, 220, 220)
                                                     };
-                                                    ui.horizontal(|ui| {
-                                                        ui.label(egui::RichText::new(&a.headline).color(color).strong());
+                                                    ui.horizontal_top(|ui| {
+                                                        // Reserve the dismiss button's width up front so the
+                                                        // headline wraps within the remaining column width
+                                                        // instead of overflowing and pushing "×" outside the
+                                                        // clipped list column (which made it unclickable).
+                                                        let btn_w = 24.0;
+                                                        let text_w = (ui.available_width() - btn_w).max(40.0);
+                                                        ui.allocate_ui_with_layout(
+                                                            egui::vec2(text_w, 0.0),
+                                                            egui::Layout::top_down(egui::Align::Min),
+                                                            |ui| {
+                                                                ui.add(
+                                                                    egui::Label::new(
+                                                                        egui::RichText::new(&a.headline).color(color).strong(),
+                                                                    )
+                                                                    .wrap_mode(egui::TextWrapMode::Wrap),
+                                                                );
+                                                            },
+                                                        );
                                                         if ui.small_button("×").clicked() {
                                                             if let Some(article) = self.news_full_articles.get(i) {
                                                                 let _ = self.broker_tx.send(BrokerCmd::IgnoreNewsArticle {
