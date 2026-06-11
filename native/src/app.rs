@@ -45,6 +45,7 @@ mod app_broker_processor;
 mod app_runtime;
 mod app_runtime_bottom;
 mod app_runtime_drawing_sync;
+mod app_runtime_errors;
 mod app_runtime_input;
 mod app_runtime_kraken_ws;
 mod app_runtime_live_quotes;

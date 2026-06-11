@@ -5,6 +5,7 @@
 **Related:** ADR-032 (background data + render decoupling),
 `native/src/app/technical_analysis.rs`,
 `native/src/app/app_runtime.rs`,
+`native/src/app/app_runtime_errors.rs`,
 `native/src/app/chart_ops.rs`,
 `native/src/app/market_data_sync.rs`,
 `native/src/app/session_persistence.rs`,
