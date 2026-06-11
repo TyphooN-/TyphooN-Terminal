@@ -1528,6 +1528,55 @@ impl ChartState {
         self.live_quote_delayed = false;
     }
 
+    pub(crate) fn fresh_live_quote_mid(&self) -> Option<f64> {
+        let fresh = self
+            .live_quote_at
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
+        if fresh && self.live_bid > 0.0 && self.live_ask > 0.0 {
+            let mid = (self.live_bid + self.live_ask) * 0.5;
+            if mid > 0.0 && mid.is_finite() {
+                return Some(mid);
+            }
+        }
+        None
+    }
+
+    pub(crate) fn apply_forming_price_update(&mut self, price: f64) -> bool {
+        if price <= 0.0 || !price.is_finite() {
+            return false;
+        }
+        let Some(bar) = self.bars.last_mut() else {
+            return false;
+        };
+        bar.close = price;
+        bar.high = bar.high.max(price);
+        bar.low = if bar.low > 0.0 {
+            bar.low.min(price)
+        } else {
+            price
+        };
+        self.forming_bar_dirty = true;
+        self.last_visible_bar_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
+        true
+    }
+
+    pub(crate) fn apply_live_quote_update(&mut self, bid: f64, ask: f64, delayed: bool) -> bool {
+        let mid = (bid + ask) * 0.5;
+        if bid <= 0.0 || ask <= 0.0 || mid <= 0.0 || !bid.is_finite() || !ask.is_finite() {
+            return false;
+        }
+        self.live_bid = bid;
+        self.live_ask = ask;
+        self.live_quote_at = Some(std::time::Instant::now());
+        self.live_quote_delayed = delayed;
+        self.apply_forming_price_update(mid)
+    }
+
+    pub(crate) fn fold_fresh_live_quote_into_forming_bar(&mut self) -> bool {
+        self.fresh_live_quote_mid()
+            .is_some_and(|mid| self.apply_forming_price_update(mid))
+    }
+
     pub(crate) fn new(symbol: impl Into<String>, tf: Timeframe) -> Self {
         Self {
             symbol: symbol.into(),
@@ -3100,6 +3149,15 @@ impl ChartState {
 
     pub(crate) fn compute_indicators_gpu(&mut self, gpu: Option<&mut gpu_compute::GpuCompute>) {
         let n = self.bars.len();
+        let forming_bar_dirty_at_entry = self.forming_bar_dirty;
+        // Cache reloads replace `bars` with the last persisted candle, which can lag the
+        // live quote already shown in the watchlist/position panels. Fold the fresh live
+        // mid back into the last bar before either the incremental or full GPU path so a
+        // reload cannot make the active forming candle jump backward until the next tick.
+        let live_quote_folded = self.fold_fresh_live_quote_into_forming_bar();
+        if live_quote_folded && !forming_bar_dirty_at_entry {
+            self.forming_bar_dirty = false;
+        }
 
         // Forming-bar fast path: only update the last value of indicators
         // instead of full recompute + GPU upload. This is the key integration
@@ -3107,7 +3165,7 @@ impl ChartState {
         // O(1) path for SMA/EMA (with hoisted close); stateful indicators
         // (KAMA, RSI, MACD, ATR, ...) intentionally fall through to the next
         // structural change (new closed bar) for full GPU dispatch.
-        if self.forming_bar_dirty && n > 1 {
+        if forming_bar_dirty_at_entry && n > 1 {
             if let Some(last) = self.bars.last_mut() {
                 let mut close = last.close;
 
@@ -3123,7 +3181,11 @@ impl ChartState {
                 }
 
                 if let Some(gpu) = gpu {
-                    let is_live = if self.live_bid > 0.0 && self.live_ask > 0.0 { 1.0 } else { 0.0 };
+                    let is_live = if self.live_bid > 0.0 && self.live_ask > 0.0 {
+                        1.0
+                    } else {
+                        0.0
+                    };
                     gpu.upload_forming_bar(
                         last.open as f32,
                         last.high as f32,

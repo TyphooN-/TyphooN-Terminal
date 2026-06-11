@@ -2976,6 +2976,83 @@ fn forming_bar_helpers_test() {
 }
 
 #[test]
+fn live_quote_update_marks_forming_bar_dirty() {
+    let mut chart = ChartState::new("TEST", Timeframe::M1);
+    chart.bars.push(Bar {
+        ts_ms: 1000,
+        open: 100.0,
+        high: 101.0,
+        low: 99.0,
+        close: 100.0,
+        volume: 1.0,
+    });
+    chart.mark_structural_change();
+
+    assert!(chart.apply_live_quote_update(110.0, 112.0, false));
+
+    let last = chart.bars.last().unwrap();
+    assert_eq!(last.close, 111.0);
+    assert_eq!(last.high, 111.0);
+    assert_eq!(last.low, 99.0);
+    assert!(chart.forming_bar_dirty);
+    assert_eq!(chart.fresh_live_quote_mid(), Some(111.0));
+}
+
+#[test]
+fn full_recompute_folds_fresh_live_quote_after_cache_reload_without_fast_path() {
+    let mut chart = ChartState::new("TEST", Timeframe::M1);
+    for i in 0..300 {
+        chart.bars.push(Bar {
+            ts_ms: 1000 + i as i64 * 60_000,
+            open: 100.0,
+            high: 101.0,
+            low: 99.0,
+            close: 100.0,
+            volume: 1.0,
+        });
+    }
+    chart.compute_indicators();
+    chart.forming_bar_dirty = false;
+
+    // Simulate a queued cache reload that replaced the active forming candle with
+    // an older persisted close while the chart still owns a fresh live quote.
+    chart.bars.last_mut().unwrap().close = 100.0;
+    chart.bars.last_mut().unwrap().high = 101.0;
+    chart.live_bid = 119.0;
+    chart.live_ask = 121.0;
+    chart.live_quote_at = Some(std::time::Instant::now());
+    chart.live_quote_delayed = false;
+
+    chart.compute_indicators();
+
+    let last = chart.bars.last().unwrap();
+    assert_eq!(last.close, 120.0);
+    assert_eq!(last.high, 120.0);
+    assert!(!chart.forming_bar_dirty);
+}
+
+#[test]
+fn stale_live_quote_is_not_folded_into_reloaded_bar() {
+    let mut chart = ChartState::new("TEST", Timeframe::M1);
+    chart.bars.push(Bar {
+        ts_ms: 1000,
+        open: 100.0,
+        high: 101.0,
+        low: 99.0,
+        close: 100.0,
+        volume: 1.0,
+    });
+    chart.live_bid = 119.0;
+    chart.live_ask = 121.0;
+    chart.live_quote_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(31));
+
+    chart.compute_indicators();
+
+    assert_eq!(chart.bars.last().unwrap().close, 100.0);
+    assert!(!chart.forming_bar_dirty);
+}
+
+#[test]
 fn news_dedup_placeholder_test() {
     // Placeholder test for article deduplication logic.
     // Real implementation will use article_exists_by_url_hash.

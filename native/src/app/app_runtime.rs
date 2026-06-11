@@ -867,16 +867,7 @@ impl eframe::App for TyphooNApp {
                                     {
                                         let mid = (bid + ask) / 2.0;
                                         if mid > 0.0 {
-                                            chart.live_bid = bid;
-                                            chart.live_ask = ask;
-                                            chart.live_quote_at = Some(std::time::Instant::now());
-                                            chart.live_quote_delayed = false;
-                                            if let Some(bar) = chart.bars.last_mut() {
-                                                bar.close = mid;
-                                                bar.high = bar.high.max(mid);
-                                                bar.low = bar.low.min(mid);
-                                            }
-                                            chart.forming_bar_dirty = true;
+                                            chart.apply_live_quote_update(bid, ask, false);
                                         }
                                     }
                                 }
@@ -1643,19 +1634,11 @@ impl eframe::App for TyphooNApp {
                                         t.elapsed() < std::time::Duration::from_secs(30)
                                     });
                                 if !(ticker.delayed && realtime_fresh) {
-                                    chart.live_bid = ticker.bid;
-                                    chart.live_ask = ticker.ask;
-                                    chart.live_quote_at = Some(std::time::Instant::now());
-                                    chart.live_quote_delayed = ticker.delayed;
-                                    if let Some(bar) = chart.bars.last_mut() {
-                                        bar.close = last;
-                                        bar.high = bar.high.max(last);
-                                        bar.low = if bar.low > 0.0 {
-                                            bar.low.min(last)
-                                        } else {
-                                            last
-                                        };
-                                    }
+                                    chart.apply_live_quote_update(
+                                        ticker.bid,
+                                        ticker.ask,
+                                        ticker.delayed,
+                                    );
                                 }
                             }
                         }
@@ -1818,15 +1801,7 @@ impl eframe::App for TyphooNApp {
                                 || chart_bare.contains(&sym_norm)
                                 || sym_norm.contains(&chart_bare)
                             {
-                                if let Some(bar) = chart.bars.last_mut() {
-                                    bar.close = last;
-                                    if last > bar.high {
-                                        bar.high = last;
-                                    }
-                                    if last < bar.low {
-                                        bar.low = last;
-                                    }
-                                }
+                                chart.apply_forming_price_update(last);
                             }
                         }
                     }
@@ -1959,16 +1934,8 @@ impl eframe::App for TyphooNApp {
                                 && chart.live_quote_at.is_some_and(|t| {
                                     t.elapsed() < std::time::Duration::from_secs(30)
                                 });
-                            if let Some(bar) = chart.bars.last_mut() {
-                                if !chart.ext_active && !realtime_fresh {
-                                    bar.close = row.last;
-                                    if row.last > bar.high {
-                                        bar.high = row.last;
-                                    }
-                                    if row.last < bar.low {
-                                        bar.low = row.last;
-                                    }
-                                }
+                            if !chart.ext_active && !realtime_fresh {
+                                chart.apply_forming_price_update(row.last);
                             }
                         }
                     }
@@ -7233,16 +7200,7 @@ impl eframe::App for TyphooNApp {
                         // was burning hundreds of SSD writes/sec during market hours.
                         for chart in &mut self.charts {
                             if chart.symbol.contains(&symbol) {
-                                chart.live_bid = bid;
-                                chart.live_ask = ask;
-                                chart.live_quote_at = Some(std::time::Instant::now());
-                                chart.live_quote_delayed = false;
-                                if let Some(bar) = chart.bars.last_mut() {
-                                    bar.close = last;
-                                    bar.high = bar.high.max(last);
-                                    bar.low = bar.low.min(last);
-                                }
-                                chart.forming_bar_dirty = true;
+                                chart.apply_live_quote_update(bid, ask, false);
                             }
                         }
                     }
