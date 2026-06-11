@@ -191,6 +191,19 @@ async fn _fetch_yahoo_chart_bars_internal(
     let lows = quote["low"].as_array().cloned().unwrap_or_default();
     let closes = quote["close"].as_array().cloned().unwrap_or_default();
     let volumes = quote["volume"].as_array().cloned().unwrap_or_default();
+    // Split+dividend-adjusted close (daily+ only; Yahoo omits adjclose for
+    // intraday granularities). Where present we rebase the whole bar onto the
+    // adjusted scale by the per-bar adjclose/close ratio — Yahoo only adjusts
+    // close, not O/H/L — so yahoo-chart becomes a clean, scale-consistent
+    // corroborator that matches TradingView's adjusted view and no longer needs
+    // the deep-history back-adjust hack for split/redenomination actions (e.g.
+    // WOK's ~10,000× unadjusted era). See ADR-113.
+    let adj_closes = root["chart"]["result"][0]["indicators"]["adjclose"]
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|obj| obj["adjclose"].as_array())
+        .cloned()
+        .unwrap_or_default();
 
     let mut bars = Vec::with_capacity(ts.len());
     for i in 0..ts.len() {
@@ -210,6 +223,14 @@ async fn _fetch_yahoo_chart_bars_internal(
             continue;
         };
         let volume = volumes.get(i).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        // Rebase onto the split/dividend-adjusted scale where Yahoo provides it.
+        let (open, high, low, close) = match adj_closes.get(i).and_then(|v| v.as_f64()) {
+            Some(adj) if adj > 0.0 && close > 0.0 => {
+                let factor = adj / close;
+                (open * factor, high * factor, low * factor, adj)
+            }
+            _ => (open, high, low, close),
+        };
         let bar = FallbackBar {
             ts_ms: sec.saturating_mul(1000),
             open,
