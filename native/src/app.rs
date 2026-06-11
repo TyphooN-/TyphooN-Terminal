@@ -46,6 +46,7 @@ mod app_runtime;
 mod app_runtime_bottom;
 mod app_runtime_drawing_sync;
 mod app_runtime_input;
+mod app_runtime_kraken_ws;
 mod app_runtime_live_quotes;
 mod app_runtime_menu;
 mod app_runtime_right_panel;

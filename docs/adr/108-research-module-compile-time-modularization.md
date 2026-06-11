@@ -39,6 +39,8 @@ Initial structure:
   - v6 macro/snapshot storage helpers for world indices, market movers, sector performance, and WACC snapshots
 - `engine/src/core/research/storage_valuation_snapshots.rs`
   - v7 storage helpers for currency rates, beta, DDM, relative valuation, and FIGI snapshots
+- `engine/src/core/research/storage_valuation_models.rs`
+  - v8 storage helpers for HRA, DCF, SVM, options-chain, and implied-volatility snapshots
 - `engine/src/core/research/valuation.rs`
   - valuation and market-stat snapshot computations (`compute_wacc_snapshot`, beta/DDM/relative valuation/HRA/DCF/SVM) plus closely related option-expiry parsing helpers
 - `engine/src/core/research/market_stats.rs`
@@ -66,6 +68,7 @@ Next structural targets, in order:
    - keep `storage_market_data.rs` focused on v2-v5 market/fundamentals cache helpers.
    - keep `storage_macro_snapshots.rs` focused on v6 macro/snapshot cache helpers.
    - keep `storage_valuation_snapshots.rs` focused on v7 valuation/reference cache helpers.
+   - keep `storage_valuation_models.rs` focused on v8 model-output/options cache helpers.
 2. Then split remaining research compute families into semantic modules:
    - risk/correlation surfaces
    - high-volume return distribution/statistical surfaces
@@ -88,7 +91,7 @@ After extracting `providers.rs`, `storage_core.rs`, `storage_market_data.rs`, `v
 
 | File | Lines | Notes |
 | --- | ---: | --- |
-| `engine/src/core/research/mod.rs` | ~37,835 | Still the primary compile/rust-analyzer hotspot. |
+| `engine/src/core/research/mod.rs` | ~37,654 | Still the primary compile/rust-analyzer hotspot. |
 | `engine/src/core/research/types.rs` | ~9,342 | Already extracted; leave alone unless type ownership needs cleanup. |
 | `engine/src/core/research/return_risk_stats.rs` | ~8,071 | Extracted return-distribution/risk-statistical compute slice. |
 | `engine/src/core/darwin.rs` | ~7,055 | Secondary candidate, but smaller and already has proven child-module patterns. |
@@ -99,6 +102,7 @@ After extracting `providers.rs`, `storage_core.rs`, `storage_market_data.rs`, `v
 | `engine/src/core/research/storage_core.rs` | ~501 | Extracted first-generation storage slice; keep as low-level cache helper boundary. |
 | `engine/src/core/research/providers.rs` | ~390 | Extracted first provider slice. |
 | `engine/src/core/research/fundamental_stats.rs` | ~305 | Extracted leverage/accrual compute slice. |
+| `engine/src/core/research/storage_valuation_models.rs` | ~185 | Extracted v8 valuation/model/options storage slice. |
 | `engine/src/core/research/storage_valuation_snapshots.rs` | ~180 | Extracted v7 valuation/reference storage slice. |
 | `engine/src/core/research/storage_macro_snapshots.rs` | ~139 | Extracted v6 macro/snapshot storage slice. |
 
@@ -119,7 +123,7 @@ Positive:
 - Market-stat compute edits no longer require editing the root research file.
 - Fundamental leverage/accrual compute edits no longer require editing the root research file.
 - Valuation compute edits no longer require editing the root research file.
-- V2-v7 market/fundamentals/macro/valuation-reference cache edits no longer require editing the root research file.
+- V2-v8 market/fundamentals/macro/valuation/model-output cache edits no longer require editing the root research file.
 - First-generation storage/cache edits no longer require editing the root research file.
 - DTO/constant edits no longer require editing the root 80k+ line research file.
 - TECH compute edits are isolated into a small module.

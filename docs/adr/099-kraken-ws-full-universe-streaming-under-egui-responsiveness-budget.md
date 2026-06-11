@@ -7,7 +7,7 @@ subscription (which caused connection-reset churn and multi-second egui stalls,
 and backfilled no history when subscribed `snapshot=false`). The egui
 responsiveness analysis below remains valid; the streaming *scope* does not.
 **Date:** 2026-05-24
-**Related:** ADR-089 (zstd compression policy), ADR-032 (performance architecture), ADR-094 (Kraken async bar sync), ADR-098 (per-frame O(1) discipline), `native/src/app/kraken_ohlc_ws.rs`, `native/src/app/app_runtime.rs`, `engine/src/broker/kraken/ohlc_ws.rs`, `engine/src/core/cache.rs::merge_bars_fast`
+**Related:** ADR-089 (zstd compression policy), ADR-032 (performance architecture), ADR-094 (Kraken async bar sync), ADR-098 (per-frame O(1) discipline), `native/src/app/kraken_ohlc_ws.rs`, `native/src/app/app_runtime.rs`, `native/src/app/app_runtime_kraken_ws.rs`, `engine/src/broker/kraken/ohlc_ws.rs`, `engine/src/core/cache.rs::merge_bars_fast`
 
 ## Context
 
@@ -162,7 +162,7 @@ open-orders refresh) drifts back onto the egui frame.
 - Hot-path merge: `engine/src/core/cache.rs::merge_bars_fast`,
   `put_bars_with_level`.
 - Spawn lifecycle: `maybe_start_kraken_ws_ohlc` +
-  `kraken_ws_ohlc_last_spawn_retry` in `app_runtime.rs`.
+  `kraken_ws_ohlc_last_spawn_retry` in `app_runtime.rs`; runtime status/freshness message handling lives in `app_runtime_kraken_ws.rs`.
 - User-interaction reset: top of `eframe::App::update` in
   `app_runtime.rs` (~line 40).
 - Auto-compact promotion: `engine/src/core/cache.rs::compact_storage`

@@ -1198,60 +1198,25 @@ impl eframe::App for TyphooNApp {
                     self.handle_kraken_book_quote_tick(symbol, bid, ask);
                 }
                 BrokerMsg::KrakenWsBarsCommitted { fresh } => {
-                    // Mark each (symbol, tf) WS-fresh so the REST scheduler skips
-                    // refetch while the WS feed is keeping the cache current.
-                    // O(n) over the flush batch; per-key insert is O(1).
-                    let now_ms = chrono::Utc::now().timestamp_millis();
-                    for (symbol, tf, last_bar_ts_ms) in fresh {
-                        self.kraken_ws_fresh_until
-                            .insert((symbol, tf), now_ms.max(last_bar_ts_ms));
-                    }
+                    self.handle_kraken_ws_bars_committed(fresh);
                 }
                 BrokerMsg::KrakenWsOhlcStatus {
                     interval_min,
                     kind,
                     detail,
                 } => {
-                    let tf = typhoon_engine::broker::kraken::kraken_ws_interval_to_tf_label(
-                        interval_min,
-                    )
-                    .unwrap_or("?");
-                    let msg = if detail.is_empty() {
-                        format!("Kraken WS OHLC {tf}: {kind}")
-                    } else {
-                        format!("Kraken WS OHLC {tf}: {kind} — {detail}")
-                    };
-                    if matches!(
-                        kind.as_str(),
-                        "disconnected"
-                            | "subscribe_failed"
-                            | "snapshot_disconnected"
-                            | "snapshot_subscribe_failed"
-                    ) {
-                        self.log.push_back(LogEntry::warn(msg));
-                    } else {
-                        self.log.push_back(LogEntry::info(msg));
-                    }
+                    self.handle_kraken_ws_ohlc_status(interval_min, kind, detail);
                 }
                 BrokerMsg::KrakenWsOhlcSnapshotSweepSettled {
                     interval_min,
                     pair_count,
                     error,
                 } => {
-                    self.kraken_ws_ohlc_snapshot_sweep_in_flight = false;
-                    let tf = typhoon_engine::broker::kraken::kraken_ws_interval_to_tf_label(
+                    self.handle_kraken_ws_ohlc_snapshot_sweep_settled(
                         interval_min,
-                    )
-                    .unwrap_or("?");
-                    if let Some(error) = error {
-                        self.log.push_back(LogEntry::warn(format!(
-                            "Kraken WS OHLC snapshot sweep {tf} failed after {pair_count} pairs — {error}"
-                        )));
-                    } else {
-                        self.log.push_back(LogEntry::info(format!(
-                            "Kraken WS OHLC snapshot sweep {tf}: completed {pair_count} pairs"
-                        )));
-                    }
+                        pair_count,
+                        error,
+                    );
                 }
                 BrokerMsg::Error(e) => {
                     let now = chrono::Utc::now().timestamp();
