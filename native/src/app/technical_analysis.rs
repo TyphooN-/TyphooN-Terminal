@@ -2071,35 +2071,6 @@ pub(super) fn draw_chart(
         }
     }
 
-    // Make extended-hours mode unambiguous in the chart body, not only on the
-    // crowded right axis: magenta is the live extended-hours last, `C` is the
-    // regular-session daily close/reference.
-    if chart.ext_active && chart.ext_close > 0.0 {
-        if let Some(last) = bars.last() {
-            let legend = format_ext_hours_legend(last.close, chart.ext_close);
-            let legend_pos = egui::pos2(chart_rect.left() + 8.0, chart_rect.top() + 8.0);
-            let legend_rect = egui::Rect::from_min_size(legend_pos, egui::vec2(310.0, 20.0));
-            painter.rect_filled(
-                legend_rect,
-                3.0,
-                egui::Color32::from_rgba_premultiplied(12, 8, 18, 220),
-            );
-            painter.rect_stroke(
-                legend_rect,
-                3.0,
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 50, 200)),
-                egui::StrokeKind::Inside,
-            );
-            painter.text(
-                legend_pos + egui::vec2(6.0, 10.0),
-                egui::Align2::LEFT_CENTER,
-                legend,
-                egui::FontId::monospace(10.0),
-                egui::Color32::from_rgb(235, 205, 245),
-            );
-        }
-    }
-
     // ── right price-axis label de-confliction ─────────────────────────────
     // Every boxed price tag on the right axis (last/current, extended-hours,
     // bid, ask) is painted at the same x. When their prices cluster — common
@@ -2711,22 +2682,79 @@ pub(super) fn draw_chart(
     }
 
     // ── symbol / tf label (WebKit: .mtf-cell-label — #8cf, 11px bold, text-shadow)
+    // Box the symbol first, then attach the extended-hours context to that same
+    // header row. The old standalone EXT badge sat underneath this symbol text;
+    // drawing one joined header makes ownership obvious and prevents overlap.
     let sym_label = format!("{} [{}]", chart.symbol, chart.timeframe.label());
-    // Shadow for readability over candles
-    painter.text(
-        egui::pos2(chart_rect.left() + 9.0, chart_rect.top() + 7.0),
-        egui::Align2::LEFT_TOP,
-        &sym_label,
-        egui::FontId::monospace(11.0),
-        egui::Color32::from_rgb(0, 0, 0),
+    let header_pos = egui::pos2(chart_rect.left() + 8.0, chart_rect.top() + 6.0);
+    let header_pad_x = 6.0_f32;
+    let header_pad_y = 3.0_f32;
+    let sym_font = egui::FontId::monospace(11.0);
+    let sym_galley = painter.layout_no_wrap(sym_label, sym_font, egui::Color32::WHITE);
+    let sym_rect = egui::Rect::from_min_size(
+        header_pos,
+        egui::vec2(
+            sym_galley.rect.width() + header_pad_x * 2.0,
+            sym_galley.rect.height() + header_pad_y * 2.0,
+        ),
     );
-    painter.text(
-        egui::pos2(chart_rect.left() + 8.0, chart_rect.top() + 6.0),
-        egui::Align2::LEFT_TOP,
-        &sym_label,
-        egui::FontId::monospace(11.0),
+    painter.rect_filled(
+        sym_rect,
+        3.0,
+        egui::Color32::from_rgba_premultiplied(8, 12, 18, 232),
+    );
+    painter.rect_stroke(
+        sym_rect,
+        3.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 150, 210)),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(
+        egui::pos2(
+            sym_rect.left() + header_pad_x,
+            sym_rect.center().y - sym_galley.rect.height() * 0.5,
+        ),
+        sym_galley,
         egui::Color32::WHITE,
     );
+
+    if chart.ext_active && chart.ext_close > 0.0 {
+        if let Some(last) = bars.last() {
+            let ext_text = format_ext_hours_symbol_badge(last.close, chart.ext_close);
+            let ext_col = egui::Color32::from_rgb(200, 50, 200);
+            let ext_galley = painter.layout_no_wrap(
+                ext_text,
+                egui::FontId::monospace(10.0),
+                egui::Color32::from_rgb(245, 220, 250),
+            );
+            let ext_rect = egui::Rect::from_min_size(
+                egui::pos2(sym_rect.right() + 2.0, sym_rect.top()),
+                egui::vec2(
+                    ext_galley.rect.width() + header_pad_x * 2.0,
+                    sym_rect.height(),
+                ),
+            );
+            painter.rect_filled(
+                ext_rect,
+                3.0,
+                egui::Color32::from_rgba_premultiplied(30, 8, 34, 235),
+            );
+            painter.rect_stroke(
+                ext_rect,
+                3.0,
+                egui::Stroke::new(1.0, ext_col),
+                egui::StrokeKind::Inside,
+            );
+            painter.galley(
+                egui::pos2(
+                    ext_rect.left() + header_pad_x,
+                    ext_rect.center().y - ext_galley.rect.height() * 0.5,
+                ),
+                ext_galley,
+                egui::Color32::from_rgb(245, 220, 250),
+            );
+        }
+    }
 
     // ── indicator legend ─────────────────────────────────────────────────────
     let ly = chart_rect.top() + 34.0;
@@ -7309,14 +7337,18 @@ mod tests {
     }
 
     #[test]
-    fn extended_hours_legend_explains_ext_vs_regular_close() {
+    fn extended_hours_symbol_badge_lists_close_ext_and_move() {
         assert_eq!(
-            super::format_ext_hours_legend(100.0, 101.25),
-            "EXT last vs C close  +1.2500 (+1.25%)"
+            super::format_ext_hours_symbol_badge(100.0, 101.25),
+            "Daily C 100.0000  EXT last 101.2500  Δ/C +1.2500 (+1.25%)"
         );
         assert_eq!(
-            super::format_ext_hours_legend(100.0, 99.5),
-            "EXT last vs C close  -0.5000 (-0.50%)"
+            super::format_ext_hours_symbol_badge(100.0, 99.5),
+            "Daily C 100.0000  EXT last 99.5000  Δ/C -0.500000 (-0.50%)"
+        );
+        assert_eq!(
+            super::format_ext_hours_symbol_badge(0.0925, 0.0924),
+            "Daily C 0.092500  EXT last 0.092400  Δ/C -0.000100 (-0.11%)"
         );
     }
 
@@ -7359,14 +7391,28 @@ fn format_axis_price_label(prefix: &str, price: f64) -> String {
     format!("{} {}", prefix, format_price(price))
 }
 
-fn format_ext_hours_legend(close: f64, ext_last: f64) -> String {
+fn format_ext_hours_symbol_badge(close: f64, ext_last: f64) -> String {
     let delta = ext_last - close;
     let pct = if close.abs() > f64::EPSILON {
         delta / close * 100.0
     } else {
         0.0
     };
-    format!("EXT last vs C close  {:+.4} ({:+.2}%)", delta, pct)
+    format!(
+        "Daily C {}  EXT last {}  Δ/C {} ({:+.2}%)",
+        format_price(close),
+        format_price(ext_last),
+        format_signed_price(delta),
+        pct
+    )
+}
+
+fn format_signed_price(p: f64) -> String {
+    if p < 0.0 {
+        format!("-{}", format_price(p.abs()))
+    } else {
+        format!("+{}", format_price(p))
+    }
 }
 
 /// Buffer-reusing variant of format_price — writes into caller's String to avoid heap alloc per call.
