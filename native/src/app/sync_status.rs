@@ -213,7 +213,10 @@ impl TyphooNApp {
                             } else {
                                 egui::Color32::from_rgb(231, 76, 60)
                             };
-                            let pct_text = format!("{:.1}%", row.pct_healthy);
+                            let pct_text = match (row.total, row.note.as_deref()) {
+                                (0, Some(note)) => note.to_string(),
+                                _ => format!("{:.1}%", row.pct_healthy),
+                            };
                             ui.label(
                                 egui::RichText::new(pct_text)
                                     .color(pct_color)
