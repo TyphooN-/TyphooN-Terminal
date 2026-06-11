@@ -263,6 +263,43 @@ fn chart_equity_merge_backadjusts_consistent_deep_history() {
 }
 
 #[test]
+fn chart_equity_merge_corrects_trusted_outlier_print_against_recent_corroborator() {
+    // WOK 2026-06: Alpaca (trusted) momentarily doubled to ~2× on the last two
+    // days while Yahoo and TradingView stayed flat. The depth tier only fills
+    // gaps, so without a guard the bad trusted print is charted unchallenged and
+    // pins the autoscale. The merge must replace the 2× bars with the
+    // corroborated value — while still ignoring Yahoo's deep unadjusted region.
+    let day = 86_400_000i64;
+    let alpaca: Vec<(i64, f64, f64, f64, f64, f64)> = (1..=50)
+        .map(|d| {
+            let c = if d >= 49 { 0.20 } else { 0.10 }; // last two days: bad 2× print
+            (d as i64 * day, c, c, c, c, 100.0)
+        })
+        .collect();
+    let yahoo: Vec<(i64, f64, f64, f64, f64, f64)> = (1..=50)
+        .map(|d| {
+            let c = if d <= 10 { 1_000.0 } else { 0.10 }; // deep region unadjusted
+            (d as i64 * day, c, c, c, c, 50.0)
+        })
+        .collect();
+
+    let merged =
+        chart_merge_equity_raw_bars("1Day", &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)]);
+
+    let by_ts: std::collections::HashMap<i64, f64> =
+        merged.iter().map(|b| (b.ts_ms, b.close)).collect();
+    // The two doubled prints are pulled back to the ~0.10 consensus.
+    assert!((by_ts[&(49 * day)] - 0.10).abs() < 1e-6, "day49 corrected");
+    assert!((by_ts[&(50 * day)] - 0.10).abs() < 1e-6, "day50 corrected");
+    // A normal earlier day is untouched, and no 1000× unadjusted bar leaks in.
+    assert!((by_ts[&(40 * day)] - 0.10).abs() < 1e-6, "day40 untouched");
+    assert!(
+        merged.iter().all(|b| b.close < 1.0),
+        "no unadjusted deep region may be spliced or scaled in"
+    );
+}
+
+#[test]
 fn chart_persists_merged_equity_bars_under_merged_cache_key() {
     let db_path = std::env::temp_dir().join(format!(
         "typhoon-merged-cache-test-{}-{}.db",

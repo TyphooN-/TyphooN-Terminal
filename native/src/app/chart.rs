@@ -915,6 +915,53 @@ pub(crate) fn chart_merge_equity_raw_bars(
         return merged.into_values().collect();
     }
 
+    // Trusted-tier outlier correction. A trusted feed can momentarily emit a
+    // bad print — a thin microcap whose provider mis-applies a corporate action
+    // (WOK doubled to ~2× on Alpaca for two days in 2026-06 while Yahoo,
+    // TradingView and the live tape all stayed flat). The depth tier only fills
+    // *gaps*, so a bad trusted bar would otherwise be charted unchallenged and
+    // poison the autoscale + every MA/ATR. Where a depth corroborator overlaps on
+    // a locally-consistent recent scale, replace any trusted bar that diverges
+    // from the rescaled corroborator by more than OUTLIER_RATIO. Deliberately
+    // recent-window only: deep history can legitimately sit on a different scale
+    // per split era (an unadjusted depth source), so we never "correct" there.
+    const OUTLIER_RATIO: f64 = 1.5;
+    for (rank, bucketed) in &tagged {
+        if *rank <= TRUSTED_MAX_RANK {
+            continue;
+        }
+        let Some((scale, window_start)) = chart_recent_overlap_scale(&merged, bucketed) else {
+            continue;
+        };
+        for (bucket, dbar) in bucketed {
+            if *bucket < window_start {
+                continue; // only adjudicate the recent, locally-consistent window
+            }
+            let Some(tbar) = merged.get(bucket) else {
+                continue;
+            };
+            let expected = dbar.close * scale;
+            if expected <= 0.0 || tbar.close <= 0.0 {
+                continue;
+            }
+            let divergence = (tbar.close / expected).max(expected / tbar.close);
+            if divergence > OUTLIER_RATIO {
+                merged.insert(
+                    *bucket,
+                    Bar {
+                        ts_ms: tbar.ts_ms,
+                        open: dbar.open * scale,
+                        high: dbar.high * scale,
+                        low: dbar.low * scale,
+                        close: dbar.close * scale,
+                        volume: tbar.volume,
+                    },
+                );
+            }
+        }
+        break; // only the best valid corroborator adjudicates
+    }
+
     // Splice depth sources in (best rank first), back-adjusted to the trusted
     // scale, filling only buckets not already covered (older history + gaps).
     for (rank, bucketed) in &tagged {
@@ -1031,6 +1078,64 @@ fn chart_depth_source_scale_factor(
         factors[mid]
     };
     (median.is_finite() && median > 0.0).then_some(median)
+}
+
+/// Robust `median(trusted_close / depth_close)` over only the most recent
+/// overlapping buckets, used to sanity-check trusted bars against an independent
+/// corroborator. Unlike [`chart_depth_source_scale_factor`] this ignores deep
+/// history — where an unadjusted depth source legitimately sits on a different
+/// scale per split era — and accepts the scale only when that recent window is
+/// internally tight (p75/p25 within `LOCAL_TOL`). That lets it anchor an outlier
+/// check on a clean recent scale without being thrown off by old unadjusted
+/// bars, so a transient bad print in the trusted feed can be caught and the
+/// genuine deep-history splice (handled separately) is left alone.
+///
+/// Note Kraken xStock bars are sourced from Alpaca on the backend, so the
+/// trusted tier (kraken-equities + alpaca) is not self-corroborating — a backend
+/// mis-adjustment hits both identically. Yahoo is the independent reference.
+fn chart_recent_overlap_scale(
+    trusted: &std::collections::BTreeMap<i64, Bar>,
+    depth: &std::collections::BTreeMap<i64, Bar>,
+) -> Option<(f64, i64)> {
+    const RECENT_OVERLAP_WINDOW: usize = 40;
+    const MIN_OVERLAP: usize = 10;
+    const LOCAL_TOL: f64 = 1.25;
+
+    // Most recent shared buckets (newest first), capped to the recent window.
+    // Carry the bucket so the caller can restrict correction to this window —
+    // deep history may legitimately sit on a different scale and must not be
+    // "corrected" against the recent ratio.
+    let recent: Vec<(i64, f64)> = trusted
+        .iter()
+        .rev()
+        .filter_map(|(bucket, tbar)| {
+            depth
+                .get(bucket)
+                .filter(|dbar| tbar.close > 0.0 && dbar.close > 0.0)
+                .map(|dbar| (*bucket, tbar.close / dbar.close))
+        })
+        .take(RECENT_OVERLAP_WINDOW)
+        .collect();
+    if recent.len() < MIN_OVERLAP {
+        return None;
+    }
+    let window_start = recent.iter().map(|(bucket, _)| *bucket).min()?;
+    let mut ratios: Vec<f64> = recent.iter().map(|(_, ratio)| *ratio).collect();
+    ratios.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // Reject a noisy recent window: the tight middle band must be consistent so
+    // we never anchor the outlier check on a mixed-scale (mid-split) overlap.
+    let p25 = ratios[ratios.len() / 4];
+    let p75 = ratios[ratios.len() * 3 / 4];
+    if p25 <= 0.0 || p75 / p25 > LOCAL_TOL {
+        return None;
+    }
+    let mid = ratios.len() / 2;
+    let median = if ratios.len() % 2 == 0 {
+        (ratios[mid - 1] + ratios[mid]) / 2.0
+    } else {
+        ratios[mid]
+    };
+    (median.is_finite() && median > 0.0).then_some((median, window_start))
 }
 
 pub(crate) fn chart_equity_source_rank(source: &str) -> Option<u8> {
