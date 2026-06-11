@@ -202,6 +202,16 @@ pub(super) fn draw_chart(
     let mut price_min = bars.iter().map(|b| b.low).fold(f64::MAX, f64::min);
     let mut price_max = bars.iter().map(|b| b.high).fold(f64::MIN, f64::max);
 
+    // The right-axis current line should follow the freshest live quote, not
+    // whichever timeframe's cached/forming bar last happened to repaint. In
+    // MTF Grid that prevents H1/H4/D1/W1 panes from showing a stale current
+    // tag while the bid/ask tags already reflect Kraken WS v2 L2 top-of-book.
+    let fresh_live_mid = chart.fresh_live_quote_mid();
+    if let Some(mid) = fresh_live_mid {
+        price_min = price_min.min(mid).min(chart.live_bid).min(chart.live_ask);
+        price_max = price_max.max(mid).max(chart.live_bid).max(chart.live_ask);
+    }
+
     // Also account for indicator values in visible range
     for i in start_idx..end_idx {
         if flags.sma200 {
@@ -2096,9 +2106,10 @@ pub(super) fn draw_chart(
 
     // ── last price line ──────────────────────────────────────────────────────
     if let Some(last) = bars.last() {
-        let y = price_to_y(last.close);
+        let current_price = fresh_live_mid.unwrap_or(last.close);
+        let y = price_to_y(current_price);
         if y >= chart_rect.top() && y <= chart_rect.bottom() {
-            let color = if last.close >= last.open { UP } else { DOWN };
+            let color = if current_price >= last.open { UP } else { DOWN };
             // Dashed line
             let dash_len = 6.0_f32;
             let mut x = chart_rect.left();
@@ -2111,7 +2122,7 @@ pub(super) fn draw_chart(
                 x += dash_len * 2.0;
             }
             // Price label + TradingView-style countdown to the next candle close.
-            let label = format_price(last.close);
+            let label = format_price(current_price);
             let countdown = chart
                 .bars
                 .last()
