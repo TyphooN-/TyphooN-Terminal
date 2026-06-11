@@ -516,10 +516,15 @@ impl IapiLimiter {
                 // lesser of `aimd_max_rate` and the empirically discovered
                 // ssthresh — if Cloudflare 1015'd us at some rate before,
                 // we cap the ramp just below there instead of climbing
-                // back into the known ban zone.
+                // back into the known ban zone. The discovered ceiling is the
+                // *last rate that tripped a limit*, so converging exactly at it
+                // re-trips on the next clean ramp (the observed 5.4→5.1→4.9
+                // ceiling decay with 600–1200 s 1015 backoffs each cycle). Hold a
+                // `aimd_ceiling_headroom` margin below it so we settle just under
+                // the wall instead of repeatedly probing into it.
                 let effective_max = bucket
                     .discovered_ceiling
-                    .map(|c| c.min(self.config.aimd_max_rate))
+                    .map(|c| (c * self.config.aimd_ceiling_headroom).min(self.config.aimd_max_rate))
                     .unwrap_or(self.config.aimd_max_rate);
                 if self.config.aimd_enabled
                     && !bucket.converged
