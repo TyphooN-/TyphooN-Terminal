@@ -1,0 +1,98 @@
+use super::*;
+use std::collections::HashMap;
+use typhoon_engine::broker::kraken::{KrakenOrder, KrakenTrade};
+
+impl TyphooNApp {
+    pub(super) fn handle_kraken_trades(&mut self, mut trades: Vec<KrakenTrade>) {
+        if !self.kraken_enabled {
+            return;
+        }
+        trades.sort_by(|a, b| {
+            b.time
+                .partial_cmp(&a.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        if trades.len() > KRAKEN_TRADE_HISTORY_CAP {
+            trades.truncate(KRAKEN_TRADE_HISTORY_CAP);
+        }
+        let prev_trades = self.kraken_trades.len();
+        let prev_basis = self.kraken_cost_basis.len();
+        self.kraken_trades = VecDeque::from(trades);
+        self.rebuild_kraken_trade_indexes();
+        self.refresh_kraken_position_costs();
+        for c in &mut self.charts {
+            c.cached_trade_overlay_frame = 0;
+        }
+        self.kraken_trades_last_fetch = std::time::Instant::now();
+        let new_trades = self.kraken_trades.len();
+        let new_basis = self.kraken_cost_basis.len();
+        // The safety-net REST fetch normally returns the same counts as the last
+        // pull. Only surface the user log line when something actually changed;
+        // routine confirmations go to trace at debug level.
+        if new_trades != prev_trades || new_basis != prev_basis {
+            self.log.push_back(LogEntry::info(format!(
+                "Kraken: loaded {} trades; cost basis for {} held assets",
+                new_trades, new_basis
+            )));
+        } else {
+            tracing::debug!(
+                "Kraken trades resync: {} trades / {} held assets (unchanged)",
+                new_trades,
+                new_basis
+            );
+        }
+    }
+
+    pub(super) fn handle_kraken_live_trade(&mut self, trade: KrakenTrade) {
+        if !self.kraken_enabled {
+            return;
+        }
+        let t0 = std::time::Instant::now();
+        let inserted = self.insert_kraken_live_trade(trade);
+        if inserted {
+            self.refresh_kraken_position_costs();
+            for c in &mut self.charts {
+                c.cached_trade_overlay_frame = 0;
+            }
+            let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
+            let _ = self.broker_tx.send(BrokerCmd::KrakenGetPositions);
+            let _ = self.broker_tx.send(BrokerCmd::KrakenFetchOpenOrders);
+        }
+        let dt = t0.elapsed();
+        if dt > std::time::Duration::from_millis(2) {
+            tracing::warn!("KrakenLiveTrade path took {:?} (inserted={})", dt, inserted);
+        }
+    }
+
+    pub(super) fn handle_kraken_open_orders(&mut self, orders: Vec<KrakenOrder>) {
+        if !self.kraken_enabled {
+            return;
+        }
+
+        let mut by_txid: HashMap<String, KrakenOrder> = self
+            .kraken_open_orders
+            .iter()
+            .cloned()
+            .map(|order| (order.txid.clone(), order))
+            .collect();
+
+        for order in orders {
+            let terminal = matches!(
+                order.status.as_str(),
+                "closed" | "canceled" | "cancelled" | "expired"
+            );
+            if terminal {
+                by_txid.remove(&order.txid);
+            } else {
+                by_txid.insert(order.txid.clone(), order);
+            }
+        }
+
+        self.kraken_open_orders = by_txid.into_values().collect();
+        self.kraken_open_orders.sort_by(|a, b| {
+            b.opentm
+                .partial_cmp(&a.opentm)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+}
