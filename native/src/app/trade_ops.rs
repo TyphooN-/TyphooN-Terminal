@@ -107,16 +107,40 @@ impl TyphooNApp {
         self.alpaca_retry_dirty_since = None;
     }
 
-    pub(super) fn alpaca_retry_save(&self) {
-        if let Some(ref cache) = self.cache {
-            let entries: Vec<&AlpacaRetry> = self
-                .alpaca_retry_queue
-                .iter()
-                .filter(|entry| !obsolete_nonspot_low_timeframe("alpaca", &entry.timeframe))
-                .collect();
-            let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
-            let _ = cache.put_kv("alpaca:retry_queue", &json);
+    /// Persist a small mark/queue KV blob. When `defer` is true (the periodic
+    /// render-thread flush path), hand the blocking `put_kv` to a worker so the
+    /// render thread never blocks on the cache write mutex held by bulk bar-sync
+    /// writers — the dominant source of the multi-second autosave frame stalls
+    /// observed when `heavy_sync` clears while writers are still draining. Forced
+    /// /exit and explicit-clear saves pass `defer=false` so the write lands inline
+    /// before the process can exit. Per-key snapshots are best-effort (the dirty
+    /// flag is cleared optimistically by callers), mirroring the off-thread
+    /// session autosave; a dropped write is re-derived on the next mark.
+    fn persist_mark_kv(&self, key: &str, json: String, defer: bool) {
+        let Some(cache) = self.cache.clone() else {
+            return;
+        };
+        if defer {
+            let key = key.to_string();
+            self.rt_handle.spawn_blocking(move || {
+                let _ = cache.put_kv(&key, &json);
+            });
+        } else {
+            let _ = cache.put_kv(key, &json);
         }
+    }
+
+    pub(super) fn alpaca_retry_save(&self, defer: bool) {
+        if self.cache.is_none() {
+            return;
+        }
+        let entries: Vec<&AlpacaRetry> = self
+            .alpaca_retry_queue
+            .iter()
+            .filter(|entry| !obsolete_nonspot_low_timeframe("alpaca", &entry.timeframe))
+            .collect();
+        let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
+        self.persist_mark_kv("alpaca:retry_queue", json, defer);
     }
 
     #[inline]
@@ -143,7 +167,7 @@ impl TyphooNApp {
                 return;
             }
         }
-        self.alpaca_retry_save();
+        self.alpaca_retry_save(!force);
         self.alpaca_retry_dirty_since = None;
     }
 
@@ -165,23 +189,24 @@ impl TyphooNApp {
         self.alpaca_no_data_dirty_since = None;
     }
 
-    pub(super) fn alpaca_no_data_save(&self) {
-        if let Some(ref cache) = self.cache {
-            let mut entries: Vec<AlpacaNoDataPair> = self
-                .alpaca_no_data_pairs
-                .values()
-                .filter(|entry| !obsolete_nonspot_low_timeframe("alpaca", &entry.timeframe))
-                .cloned()
-                .collect();
-            entries.sort_by(|a, b| {
-                a.symbol.cmp(&b.symbol).then(
-                    sync_timeframe_sort_key(&a.timeframe)
-                        .cmp(&sync_timeframe_sort_key(&b.timeframe)),
-                )
-            });
-            let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
-            let _ = cache.put_kv("alpaca:no_data_pairs", &json);
+    pub(super) fn alpaca_no_data_save(&self, defer: bool) {
+        if self.cache.is_none() {
+            return;
         }
+        let mut entries: Vec<AlpacaNoDataPair> = self
+            .alpaca_no_data_pairs
+            .values()
+            .filter(|entry| !obsolete_nonspot_low_timeframe("alpaca", &entry.timeframe))
+            .cloned()
+            .collect();
+        entries.sort_by(|a, b| {
+            a.symbol.cmp(&b.symbol).then(
+                sync_timeframe_sort_key(&a.timeframe)
+                    .cmp(&sync_timeframe_sort_key(&b.timeframe)),
+            )
+        });
+        let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
+        self.persist_mark_kv("alpaca:no_data_pairs", json, defer);
     }
 
     #[inline]
@@ -204,7 +229,7 @@ impl TyphooNApp {
                 return;
             }
         }
-        self.alpaca_no_data_save();
+        self.alpaca_no_data_save(!force);
         self.alpaca_no_data_dirty_since = None;
     }
 
@@ -262,7 +287,7 @@ impl TyphooNApp {
             return;
         }
         self.alpaca_no_data_pairs.clear();
-        self.alpaca_no_data_save();
+        self.alpaca_no_data_save(false);
         self.alpaca_no_data_dirty_since = None;
     }
 
@@ -297,27 +322,28 @@ impl TyphooNApp {
         }
     }
 
-    pub(super) fn unresolvable_save(&self) {
-        if let Some(ref cache) = self.cache {
-            let now_s = chrono::Utc::now().timestamp();
-            let mut entries: Vec<UnresolvablePair> = self
-                .unresolvable_pairs
-                .values()
-                .filter(|entry| {
-                    !obsolete_nonspot_low_timeframe(&entry.broker, &entry.timeframe)
-                        && !stale_kraken_equity_no_data_mark(entry, now_s)
-                })
-                .cloned()
-                .collect();
-            entries.sort_by(|a, b| {
-                a.broker.cmp(&b.broker).then(a.symbol.cmp(&b.symbol)).then(
-                    sync_timeframe_sort_key(&a.timeframe)
-                        .cmp(&sync_timeframe_sort_key(&b.timeframe)),
-                )
-            });
-            let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
-            let _ = cache.put_kv("broker:unresolvable_pairs", &json);
+    pub(super) fn unresolvable_save(&self, defer: bool) {
+        if self.cache.is_none() {
+            return;
         }
+        let now_s = chrono::Utc::now().timestamp();
+        let mut entries: Vec<UnresolvablePair> = self
+            .unresolvable_pairs
+            .values()
+            .filter(|entry| {
+                !obsolete_nonspot_low_timeframe(&entry.broker, &entry.timeframe)
+                    && !stale_kraken_equity_no_data_mark(entry, now_s)
+            })
+            .cloned()
+            .collect();
+        entries.sort_by(|a, b| {
+            a.broker.cmp(&b.broker).then(a.symbol.cmp(&b.symbol)).then(
+                sync_timeframe_sort_key(&a.timeframe)
+                    .cmp(&sync_timeframe_sort_key(&b.timeframe)),
+            )
+        });
+        let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
+        self.persist_mark_kv("broker:unresolvable_pairs", json, defer);
     }
 
     #[inline]
@@ -340,7 +366,7 @@ impl TyphooNApp {
                 return;
             }
         }
-        self.unresolvable_save();
+        self.unresolvable_save(!force);
         self.unresolvable_dirty_since = None;
     }
 
@@ -388,7 +414,7 @@ impl TyphooNApp {
         }
         self.unresolvable_pairs.clear();
         self.unresolvable_fetch_keys_by_broker.clear();
-        self.unresolvable_save();
+        self.unresolvable_save(false);
         self.unresolvable_dirty_since = None;
     }
 
@@ -409,23 +435,24 @@ impl TyphooNApp {
         self.alpaca_backfill_complete_dirty_since = None;
     }
 
-    pub(super) fn alpaca_backfill_complete_save(&self) {
-        if let Some(ref cache) = self.cache {
-            let mut entries: Vec<AlpacaBackfillCompletePair> = self
-                .alpaca_backfill_complete_pairs
-                .values()
-                .filter(|entry| !obsolete_nonspot_low_timeframe("alpaca", &entry.timeframe))
-                .cloned()
-                .collect();
-            entries.sort_by(|a, b| {
-                a.symbol.cmp(&b.symbol).then(
-                    sync_timeframe_sort_key(&a.timeframe)
-                        .cmp(&sync_timeframe_sort_key(&b.timeframe)),
-                )
-            });
-            let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
-            let _ = cache.put_kv("alpaca:backfill_complete_pairs", &json);
+    pub(super) fn alpaca_backfill_complete_save(&self, defer: bool) {
+        if self.cache.is_none() {
+            return;
         }
+        let mut entries: Vec<AlpacaBackfillCompletePair> = self
+            .alpaca_backfill_complete_pairs
+            .values()
+            .filter(|entry| !obsolete_nonspot_low_timeframe("alpaca", &entry.timeframe))
+            .cloned()
+            .collect();
+        entries.sort_by(|a, b| {
+            a.symbol.cmp(&b.symbol).then(
+                sync_timeframe_sort_key(&a.timeframe)
+                    .cmp(&sync_timeframe_sort_key(&b.timeframe)),
+            )
+        });
+        let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
+        self.persist_mark_kv("alpaca:backfill_complete_pairs", json, defer);
     }
 
     pub(super) fn alpaca_backfill_complete_mark(
@@ -481,7 +508,7 @@ impl TyphooNApp {
                 return;
             }
         }
-        self.alpaca_backfill_complete_save();
+        self.alpaca_backfill_complete_save(!force);
         self.alpaca_backfill_complete_dirty_since = None;
     }
 
@@ -509,18 +536,20 @@ impl TyphooNApp {
         &self,
         kv_key: &str,
         pairs: &std::collections::HashMap<String, AlpacaBackfillCompletePair>,
+        defer: bool,
     ) {
-        if let Some(ref cache) = self.cache {
-            let mut entries: Vec<AlpacaBackfillCompletePair> = pairs.values().cloned().collect();
-            entries.sort_by(|a, b| {
-                a.symbol.cmp(&b.symbol).then(
-                    sync_timeframe_sort_key(&a.timeframe)
-                        .cmp(&sync_timeframe_sort_key(&b.timeframe)),
-                )
-            });
-            let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
-            let _ = cache.put_kv(kv_key, &json);
+        if self.cache.is_none() {
+            return;
         }
+        let mut entries: Vec<AlpacaBackfillCompletePair> = pairs.values().cloned().collect();
+        entries.sort_by(|a, b| {
+            a.symbol.cmp(&b.symbol).then(
+                sync_timeframe_sort_key(&a.timeframe)
+                    .cmp(&sync_timeframe_sort_key(&b.timeframe)),
+            )
+        });
+        let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
+        self.persist_mark_kv(kv_key, json, defer);
     }
 
     pub(super) fn kraken_backfill_complete_load(&mut self) {
@@ -622,6 +651,7 @@ impl TyphooNApp {
                 self.save_backfill_complete_pairs_to_kv(
                     "kraken:backfill_complete_pairs",
                     &self.kraken_backfill_complete_pairs,
+                    !force,
                 );
                 self.kraken_backfill_complete_dirty_since = None;
             }
@@ -631,6 +661,7 @@ impl TyphooNApp {
                 self.save_backfill_complete_pairs_to_kv(
                     "kraken-futures:backfill_complete_pairs",
                     &self.kraken_futures_backfill_complete_pairs,
+                    !force,
                 );
                 self.kraken_futures_backfill_complete_dirty_since = None;
             }
