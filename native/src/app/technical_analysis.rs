@@ -2007,70 +2007,43 @@ pub(super) fn draw_chart(
     }
 
     // ── Extended Hours Candle (magenta, TradingView-style) ─────────────
-    // When pre/post market data is available, draw a real ext hours candle.
-    // Otherwise, draw a ghost placeholder. It belongs in the next chart slot
-    // after the last visible real candle, not pinned to the far-right edge of
-    // the chart's empty future space.
-    if let Some(last) = bars.last() {
+    // Only render when real pre/post-market data is present (`ext_active`).
+    // During CORE/regular hours there is no extended-hours candle, so we draw
+    // nothing here. The previous grey "ghost" placeholder was a fabricated
+    // `last.close ± 0.3·range` candle: it carried no information, showed during
+    // CORE while the live bar was already forming, and also cluttered 24/7
+    // crypto charts — so it has been removed.
+    if chart.ext_active && chart.ext_high > 0.0 {
         if let Some(next_x) =
             adjacent_projection_candle_x(data_left, bars.len(), bar_w, half_body, chart_rect)
         {
-            if chart.ext_active && chart.ext_high > 0.0 {
-                // Real extended hours candle (magenta)
-                let ext_col = egui::Color32::from_rgb(200, 50, 200); // Magenta
-                let y_open = price_to_y(chart.ext_open);
-                let y_high = price_to_y(chart.ext_high);
-                let y_low = price_to_y(chart.ext_low);
-                let y_close = price_to_y(chart.ext_close);
-                // Wick
-                painter.line_segment(
-                    [egui::pos2(next_x, y_high), egui::pos2(next_x, y_low)],
-                    egui::Stroke::new(1.0, ext_col),
-                );
-                // Body
-                let body_top = y_open.min(y_close);
-                let body_h = (y_open - y_close).abs().max(1.0);
-                let body_rect = egui::Rect::from_min_size(
-                    egui::pos2(next_x - half_body, body_top),
-                    egui::vec2(candle_w, body_h),
-                );
-                if body_h > 2.0 {
-                    painter.rect_filled(body_rect, 0.0, ext_col);
-                } else {
-                    painter.line_segment(
-                        [
-                            egui::pos2(next_x - half_body, body_top),
-                            egui::pos2(next_x + half_body, body_top),
-                        ],
-                        egui::Stroke::new(1.0, ext_col),
-                    );
-                }
+            // Real extended hours candle (magenta)
+            let ext_col = egui::Color32::from_rgb(200, 50, 200); // Magenta
+            let y_open = price_to_y(chart.ext_open);
+            let y_high = price_to_y(chart.ext_high);
+            let y_low = price_to_y(chart.ext_low);
+            let y_close = price_to_y(chart.ext_close);
+            // Wick
+            painter.line_segment(
+                [egui::pos2(next_x, y_high), egui::pos2(next_x, y_low)],
+                egui::Stroke::new(1.0, ext_col),
+            );
+            // Body
+            let body_top = y_open.min(y_close);
+            let body_h = (y_open - y_close).abs().max(1.0);
+            let body_rect = egui::Rect::from_min_size(
+                egui::pos2(next_x - half_body, body_top),
+                egui::vec2(candle_w, body_h),
+            );
+            if body_h > 2.0 {
+                painter.rect_filled(body_rect, 0.0, ext_col);
             } else {
-                // Ghost candle (no ext data — regular hours)
-                let ghost_col = egui::Color32::from_rgba_premultiplied(100, 100, 120, 80);
-                let ghost_close = last.close;
-                let ghost_open = last.close;
-                let ghost_high = last.close + (last.high - last.low) * 0.3;
-                let ghost_low = last.close - (last.high - last.low) * 0.3;
-                let y_open = price_to_y(ghost_open);
-                let y_high = price_to_y(ghost_high);
-                let y_low = price_to_y(ghost_low);
-                let y_close = price_to_y(ghost_close);
                 painter.line_segment(
-                    [egui::pos2(next_x, y_high), egui::pos2(next_x, y_low)],
-                    egui::Stroke::new(1.0, ghost_col),
-                );
-                let body_top = y_open.min(y_close);
-                let body_h = (y_open - y_close).abs().max(2.0);
-                let body_rect = egui::Rect::from_min_size(
-                    egui::pos2(next_x - half_body, body_top),
-                    egui::vec2(candle_w, body_h),
-                );
-                painter.rect_stroke(
-                    body_rect,
-                    0.0,
-                    egui::Stroke::new(1.0, ghost_col),
-                    egui::StrokeKind::Outside,
+                    [
+                        egui::pos2(next_x - half_body, body_top),
+                        egui::pos2(next_x + half_body, body_top),
+                    ],
+                    egui::Stroke::new(1.0, ext_col),
                 );
             }
         }
