@@ -2071,6 +2071,35 @@ pub(super) fn draw_chart(
         }
     }
 
+    // Make extended-hours mode unambiguous in the chart body, not only on the
+    // crowded right axis: magenta is the live extended-hours last, `C` is the
+    // regular-session daily close/reference.
+    if chart.ext_active && chart.ext_close > 0.0 {
+        if let Some(last) = bars.last() {
+            let legend = format_ext_hours_legend(last.close, chart.ext_close);
+            let legend_pos = egui::pos2(chart_rect.left() + 8.0, chart_rect.top() + 8.0);
+            let legend_rect = egui::Rect::from_min_size(legend_pos, egui::vec2(310.0, 20.0));
+            painter.rect_filled(
+                legend_rect,
+                3.0,
+                egui::Color32::from_rgba_premultiplied(12, 8, 18, 220),
+            );
+            painter.rect_stroke(
+                legend_rect,
+                3.0,
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 50, 200)),
+                egui::StrokeKind::Inside,
+            );
+            painter.text(
+                legend_pos + egui::vec2(6.0, 10.0),
+                egui::Align2::LEFT_CENTER,
+                legend,
+                egui::FontId::monospace(10.0),
+                egui::Color32::from_rgb(235, 205, 245),
+            );
+        }
+    }
+
     // ── right price-axis label de-confliction ─────────────────────────────
     // Every boxed price tag on the right axis (last/current, extended-hours,
     // bid, ask) is painted at the same x. When their prices cluster — common
@@ -2145,10 +2174,17 @@ pub(super) fn draw_chart(
             } else {
                 format_price(current_price)
             };
-            let countdown = chart
-                .bars
-                .last()
-                .and_then(|latest| next_candle_countdown_label(latest.ts_ms, chart.timeframe));
+            let countdown = if chart.ext_active && chart.ext_close > 0.0 {
+                // Countdown belongs to a forming regular-session bar. During
+                // ext-hours this tag is the static regular close reference, so
+                // showing a rolling timer under it is misleading.
+                None
+            } else {
+                chart
+                    .bars
+                    .last()
+                    .and_then(|latest| next_candle_countdown_label(latest.ts_ms, chart.timeframe))
+            };
             if let Some(countdown) = countdown {
                 let label_y = place_axis_label(y, 14.0);
                 let lbl_rect = egui::Rect::from_min_size(
@@ -7273,6 +7309,18 @@ mod tests {
     }
 
     #[test]
+    fn extended_hours_legend_explains_ext_vs_regular_close() {
+        assert_eq!(
+            super::format_ext_hours_legend(100.0, 101.25),
+            "EXT last vs C close  +1.2500 (+1.25%)"
+        );
+        assert_eq!(
+            super::format_ext_hours_legend(100.0, 99.5),
+            "EXT last vs C close  -0.5000 (-0.50%)"
+        );
+    }
+
+    #[test]
     fn nnfx_view_uses_mql_mtf_names_when_projected_overlays_exist() {
         assert_eq!(
             super::nnfx_trend_legend_labels(true, true),
@@ -7309,6 +7357,16 @@ pub(super) fn format_price(p: f64) -> String {
 
 fn format_axis_price_label(prefix: &str, price: f64) -> String {
     format!("{} {}", prefix, format_price(price))
+}
+
+fn format_ext_hours_legend(close: f64, ext_last: f64) -> String {
+    let delta = ext_last - close;
+    let pct = if close.abs() > f64::EPSILON {
+        delta / close * 100.0
+    } else {
+        0.0
+    };
+    format!("EXT last vs C close  {:+.4} ({:+.2}%)", delta, pct)
 }
 
 /// Buffer-reusing variant of format_price — writes into caller's String to avoid heap alloc per call.
