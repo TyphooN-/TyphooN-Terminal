@@ -1,6 +1,24 @@
 use super::*;
 
 impl TyphooNApp {
+    pub(super) fn handle_kraken_ws_status(&mut self, status: String, message: String) {
+        let should_reconcile = status == "online" && message.contains("reconnected");
+        let text = format!("Kraken WS {status}: {message}");
+        if matches!(status.as_str(), "error" | "closed") {
+            self.log.push_back(LogEntry::warn(text));
+        } else {
+            self.log.push_back(LogEntry::info(text));
+        }
+        if should_reconcile && self.kraken_enabled {
+            // A reconnect means a delta gap may exist. Pull REST snapshots so
+            // balances, cost basis, P/L, and open orders converge immediately.
+            let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
+            let _ = self.broker_tx.send(BrokerCmd::KrakenGetPositions);
+            let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
+            let _ = self.broker_tx.send(BrokerCmd::KrakenFetchOpenOrders);
+        }
+    }
+
     pub(super) fn handle_kraken_ws_bars_committed(&mut self, fresh: Vec<(String, String, i64)>) {
         // Mark each (symbol, tf) WS-fresh so the REST scheduler skips refetch while
         // the WS feed is keeping the cache current. O(n) over the flush batch;

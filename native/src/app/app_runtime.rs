@@ -1043,21 +1043,7 @@ impl eframe::App for TyphooNApp {
                     self.handle_kraken_open_orders(orders);
                 }
                 BrokerMsg::KrakenWsStatus { status, message } => {
-                    let should_reconcile = status == "online" && message.contains("reconnected");
-                    let text = format!("Kraken WS {status}: {message}");
-                    if matches!(status.as_str(), "error" | "closed") {
-                        self.log.push_back(LogEntry::warn(text));
-                    } else {
-                        self.log.push_back(LogEntry::info(text));
-                    }
-                    if should_reconcile && self.kraken_enabled {
-                        // A reconnect means a delta gap may exist. Pull REST snapshots so
-                        // balances, cost basis, P/L, and open orders converge immediately.
-                        let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
-                        let _ = self.broker_tx.send(BrokerCmd::KrakenGetPositions);
-                        let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
-                        let _ = self.broker_tx.send(BrokerCmd::KrakenFetchOpenOrders);
-                    }
+                    self.handle_kraken_ws_status(status, message);
                 }
                 BrokerMsg::KrakenOrderbookUpdate(text) => {
                     let was_empty = self.orderbook_result.is_empty();
