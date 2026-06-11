@@ -3874,26 +3874,6 @@ pub(super) fn draw_chart(
         );
     }
 
-    // Total fill volume across currently visible markers. Sits in the
-    // bottom-right corner out of the way of the ATR HUD (top-right) and the
-    // position-line labels (top-left).
-    let buy_total: f64 = clusters.iter().filter(|c| c.is_buy).map(|c| c.volume).sum();
-    let sell_total: f64 = clusters
-        .iter()
-        .filter(|c| !c.is_buy)
-        .map(|c| c.volume)
-        .sum();
-    if buy_total > 0.0 || sell_total > 0.0 {
-        let hud = format!("FILLS  BUY {:.2}  SELL {:.2}", buy_total, sell_total);
-        painter.text(
-            egui::pos2(chart_rect.right() - 4.0, chart_rect.bottom() - 4.0),
-            egui::Align2::RIGHT_BOTTOM,
-            &hud,
-            egui::FontId::monospace(9.0),
-            egui::Color32::from_gray(210),
-        );
-    }
-
     // ── alert price lines ─────────────────────────────────────────────────────
     if !alerts.is_empty() {
         let alert_col = egui::Color32::from_rgb(255, 165, 0); // orange
