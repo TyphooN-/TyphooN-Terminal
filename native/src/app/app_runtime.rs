@@ -3959,7 +3959,7 @@ impl eframe::App for TyphooNApp {
                     return;
                 }
                 let cols = self.mtf_cols.max(1);
-                let header_h = 18.0_f32;
+                let header_h = 0.0_f32; // no per-group symbol header — each cell self-labels "SYM [TF]"
                 let row_gap = 4.0_f32;
                 let group_layout: Vec<(usize, usize)> = mtf_groups
                     .iter()
@@ -3998,17 +3998,6 @@ impl eframe::App for TyphooNApp {
                 let mut group_top = available.top();
                 for (group_idx, group) in mtf_groups.iter().enumerate() {
                     let (cols, rows) = group_layout[group_idx];
-                    let group_header_rect = egui::Rect::from_min_size(
-                        egui::pos2(available.left(), group_top),
-                        egui::vec2(available.width(), header_h),
-                    );
-                    ui.painter().text(
-                        group_header_rect.left_center() + egui::vec2(6.0, 0.0),
-                        egui::Align2::LEFT_CENTER,
-                        &group.symbol,
-                        egui::FontId::proportional(12.0),
-                        ACCENT,
-                    );
                     group_top += header_h;
                     let cell_w = available.width() / cols as f32;
                     let cell_h = chart_row_h;
@@ -4161,7 +4150,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                     let painter = ui.painter_at(cell_rect);
-                    draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &self.draw_mode, true);
+                    draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &self.draw_mode);
                     // Restore the cached overlay we moved out above.
                     self.charts[vi].cached_trade_overlay = trade_ov;
 
@@ -4331,7 +4320,7 @@ impl eframe::App for TyphooNApp {
                     }
                     let trade_ov = std::mem::take(&mut chart.cached_trade_overlay);
                     let painter = ui.painter_at(rect);
-                    draw_chart(&painter, chart, rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &self.draw_mode, false);
+                    draw_chart(&painter, chart, rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &self.draw_mode);
                     chart.cached_trade_overlay = trade_ov;
 
                     // Replay overlay: show bar count and speed

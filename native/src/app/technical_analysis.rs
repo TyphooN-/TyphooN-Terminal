@@ -89,10 +89,6 @@ pub(super) fn draw_chart(
     trade_overlay: &TradeOverlay,
     alerts: &[(f64, String)],
     draw_mode: &DrawMode,
-    // In the MTF grid each group already shows its symbol once in the green
-    // header above the cells, so the per-cell badge drops the symbol and shows
-    // only the timeframe — otherwise "WOK" appears twice (header + "WOK [H1]").
-    in_mtf_grid: bool,
 ) {
     // Do not early-return for a stable chart. egui is immediate-mode: if this
     // function skips painting for a frame, the chart area can be left blank or
@@ -2739,11 +2735,9 @@ pub(super) fn draw_chart(
     // Box the symbol first, then attach the extended-hours context to that same
     // header row. The old standalone EXT badge sat underneath this symbol text;
     // drawing one joined header makes ownership obvious and prevents overlap.
-    let sym_label = if in_mtf_grid {
-        format!("[{}]", chart.timeframe.label())
-    } else {
-        format!("{} [{}]", chart.symbol, chart.timeframe.label())
-    };
+    // Every cell self-labels with the full "SYM [TF]" badge — same as the
+    // single-chart view — so the MTF grid needs no separate symbol header.
+    let sym_label = format!("{} [{}]", chart.symbol, chart.timeframe.label());
     let header_pos = egui::pos2(chart_rect.left() + 8.0, chart_rect.top() + 6.0);
     let header_pad_x = 6.0_f32;
     let header_pad_y = 3.0_f32;
