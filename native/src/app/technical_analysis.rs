@@ -2813,7 +2813,11 @@ pub(super) fn draw_chart(
 
     if chart.ext_active && chart.ext_close > 0.0 {
         if let Some(last) = bars.last() {
-            let ext_text = format_ext_hours_symbol_badge(last.close, chart.ext_close);
+            let ext_text = format_ext_hours_symbol_badge(
+                last.close,
+                chart.ext_close,
+                previous_daily_close_from_bars(&chart.bars),
+            );
             let ext_col = egui::Color32::from_rgb(200, 50, 200);
             let ext_galley = painter.layout_no_wrap(
                 ext_text,
@@ -7499,15 +7503,19 @@ mod tests {
     #[test]
     fn extended_hours_symbol_badge_lists_close_ext_and_move() {
         assert_eq!(
-            super::format_ext_hours_symbol_badge(100.0, 101.25),
-            "Daily C 100.0000  EXT last 101.2500  Δ/C +1.2500 (+1.25%)"
+            super::format_ext_hours_symbol_badge(100.0, 101.25, Some(98.0)),
+            "Daily C 100.0000  Day +3.32%  EXT last 101.2500  Δ/C +1.2500 (+1.25%)"
         );
         assert_eq!(
-            super::format_ext_hours_symbol_badge(100.0, 99.5),
-            "Daily C 100.0000  EXT last 99.5000  Δ/C -0.500000 (-0.50%)"
+            super::format_ext_hours_symbol_badge(100.0, 99.5, Some(100.0)),
+            "Daily C 100.0000  Day -0.50%  EXT last 99.5000  Δ/C -0.500000 (-0.50%)"
         );
         assert_eq!(
-            super::format_ext_hours_symbol_badge(0.0925, 0.0924),
+            super::format_ext_hours_symbol_badge(0.0925, 0.0924, Some(0.0900)),
+            "Daily C 0.092500  Day +2.67%  EXT last 0.092400  Δ/C -0.000100 (-0.11%)"
+        );
+        assert_eq!(
+            super::format_ext_hours_symbol_badge(0.0925, 0.0924, None),
             "Daily C 0.092500  EXT last 0.092400  Δ/C -0.000100 (-0.11%)"
         );
     }
@@ -7551,20 +7559,34 @@ fn format_axis_price_label(prefix: &str, price: f64) -> String {
     format!("{} {}", prefix, format_price(price))
 }
 
-fn format_ext_hours_symbol_badge(close: f64, ext_last: f64) -> String {
+fn format_ext_hours_symbol_badge(close: f64, ext_last: f64, prev_close: Option<f64>) -> String {
     let delta = ext_last - close;
     let pct = if close.abs() > f64::EPSILON {
         delta / close * 100.0
     } else {
         0.0
     };
-    format!(
-        "Daily C {}  EXT last {}  Δ/C {} ({:+.2}%)",
-        format_price(close),
-        format_price(ext_last),
-        format_signed_price(delta),
-        pct
-    )
+    let day_pct = prev_close.and_then(|prev| {
+        (prev.abs() > f64::EPSILON).then_some((ext_last / prev - 1.0) * 100.0)
+    });
+    if let Some(day_pct) = day_pct {
+        format!(
+            "Daily C {}  Day {:+.2}%  EXT last {}  Δ/C {} ({:+.2}%)",
+            format_price(close),
+            day_pct,
+            format_price(ext_last),
+            format_signed_price(delta),
+            pct
+        )
+    } else {
+        format!(
+            "Daily C {}  EXT last {}  Δ/C {} ({:+.2}%)",
+            format_price(close),
+            format_price(ext_last),
+            format_signed_price(delta),
+            pct
+        )
+    }
 }
 
 fn format_signed_price(p: f64) -> String {
