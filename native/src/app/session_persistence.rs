@@ -767,6 +767,7 @@ impl TyphooNApp {
                 "hv_cone": self.show_hv_cone,
                 "sector_heatmap": self.show_sector_heatmap,
                 "dividends_screen": self.show_dividends,
+                "company_info": self.show_company_info_window,
                 "alert_builder": self.show_alert_builder,
                 "storage": self.show_storage,
                 "sync_status": self.show_sync_status,
@@ -2746,6 +2747,9 @@ impl TyphooNApp {
                     }
                     if let Some(b) = w["dividends_screen"].as_bool() {
                         self.show_dividends = b;
+                    }
+                    if let Some(b) = w["company_info"].as_bool() {
+                        self.show_company_info_window = b;
                     }
                     if let Some(b) = w["alert_builder"].as_bool() {
                         self.show_alert_builder = b;

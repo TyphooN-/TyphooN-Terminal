@@ -87,6 +87,7 @@ impl TyphooNApp {
         self.show_connect = false;
         self.show_indicators_panel = false;
         self.show_data_window = false;
+        self.show_company_info_window = false;
         self.show_alerts = false;
         self.show_scrape_status = false;
         self.show_ev_scanner = false;

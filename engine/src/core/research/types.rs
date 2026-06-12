@@ -16,6 +16,7 @@ pub struct CompanyProfile {
     pub logo: String,
     pub phone: String,
     pub ipo_date: String,
+    pub description: String,     // long "About" text
     pub market_cap: f64,         // in USD millions (Finnhub native unit)
     pub shares_outstanding: f64, // in millions
 }
@@ -30,6 +31,17 @@ pub struct EarningRow {
     pub surprise_pct: Option<f64>,
     pub quarter: Option<i32>,
     pub year: Option<i32>,
+}
+
+/// Corporate action event (split, dividend, spin-off, etc.).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CorporateAction {
+    pub symbol: String,
+    pub date: String,        // YYYY-MM-DD
+    pub action_type: String, // "split", "dividend", "spin", etc.
+    pub value: f64,          // split ratio or dividend amount
+    pub currency: Option<String>,
+    pub note: Option<String>,
 }
 
 /// IPO calendar row.

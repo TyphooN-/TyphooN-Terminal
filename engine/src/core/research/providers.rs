@@ -36,9 +36,21 @@ pub async fn fetch_finnhub_profile(
         logo: v["logo"].as_str().unwrap_or("").to_string(),
         phone: v["phone"].as_str().unwrap_or("").to_string(),
         ipo_date: v["ipo"].as_str().unwrap_or("").to_string(),
+        description: v["description"].as_str().unwrap_or("").to_string(),
         market_cap: v["marketCapitalization"].as_f64().unwrap_or(0.0),
         shares_outstanding: v["shareOutstanding"].as_f64().unwrap_or(0.0),
     })
+}
+
+/// Finnhub profile + earnings snapshot for callers that want a compact company refresh.
+pub async fn fetch_finnhub_company_snapshot(
+    client: &reqwest::Client,
+    symbol: &str,
+    token: &str,
+) -> Result<(CompanyProfile, Vec<EarningRow>), String> {
+    let profile = fetch_finnhub_profile(client, symbol, token).await?;
+    let earnings = fetch_finnhub_earnings(client, symbol, token).await?;
+    Ok((profile, earnings))
 }
 
 /// Finnhub /stock/peers — related tickers (up to ~10).

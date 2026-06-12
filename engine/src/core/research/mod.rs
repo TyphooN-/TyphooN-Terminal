@@ -23,9 +23,9 @@ mod technical;
 pub use technical::compute_technical_indicators;
 mod providers;
 pub use providers::{
-    fetch_finnhub_earnings, fetch_finnhub_ipo_calendar, fetch_finnhub_peers, fetch_finnhub_press,
-    fetch_finnhub_profile, fetch_finnhub_social, fetch_fmp_transcript, fetch_fmp_transcript_list,
-    fetch_yahoo_quotes,
+    fetch_finnhub_company_snapshot, fetch_finnhub_earnings, fetch_finnhub_ipo_calendar,
+    fetch_finnhub_peers, fetch_finnhub_press, fetch_finnhub_profile, fetch_finnhub_social,
+    fetch_fmp_transcript, fetch_fmp_transcript_list, fetch_yahoo_quotes,
 };
 mod fetchers;
 pub use fetchers::*;
@@ -82,6 +82,51 @@ mod storage_web_articles;
 pub use storage_web_articles::*;
 mod scrape;
 pub use scrape::scrape_and_cache_symbol;
+
+/// Returns a compact, GUI-friendly company summary string.
+/// Suitable for Symbol Explorer, right panels, tooltips, or floating windows.
+pub fn get_company_summary(profile: &CompanyProfile) -> String {
+    let mut parts = Vec::new();
+
+    if !profile.name.is_empty() {
+        parts.push(profile.name.clone());
+    }
+    if !profile.exchange.is_empty() {
+        parts.push(format!("[{}]", profile.exchange));
+    }
+
+    let mut meta = Vec::new();
+    if !profile.sector.is_empty() {
+        meta.push(profile.sector.clone());
+    }
+    if !profile.industry.is_empty() && profile.industry != profile.sector {
+        meta.push(profile.industry.clone());
+    }
+    if !meta.is_empty() {
+        parts.push(format!("({})", meta.join(" · ")));
+    }
+
+    if !profile.ipo_date.is_empty() {
+        parts.push(format!("IPO: {}", profile.ipo_date));
+    }
+    if !profile.website.is_empty() {
+        parts.push(profile.website.clone());
+    }
+
+    let mut out = parts.join("  ");
+    if !profile.description.is_empty() {
+        let desc: String = profile.description.chars().take(320).collect();
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(&desc);
+        if profile.description.chars().count() > 320 {
+            out.push('…');
+        }
+    }
+
+    out
+}
 
 // ── SQLite cache schema / first-generation cache helpers ────────────────
 

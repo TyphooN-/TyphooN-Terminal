@@ -4566,6 +4566,9 @@ pub struct TyphooNApp {
     pub(crate) show_hv_cone: bool,
     pub(crate) show_sector_heatmap: bool,
     pub(crate) show_dividends: bool,
+    pub(crate) show_company_info_window: bool,
+    pub(crate) company_info_symbol: String,
+    pub(crate) company_info_text: String,
     /// Global broker scope filter applied to all fundamental-based commands
     /// (OUTLIERS, EVOUTLIERS, DIVSCREEN, SECTOR_HEATMAP, HV_CONE, EV viewer, etc.).
     /// All = no filter. Use `SCOPE [ALL|ALPACA|KRAKEN]` command to change.

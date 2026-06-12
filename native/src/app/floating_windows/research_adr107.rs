@@ -152,6 +152,11 @@ impl TyphooNApp {
                                             .color(AXIS_TEXT),
                                     );
                                 }
+                                if !p.description.is_empty() {
+                                    ui.add_space(6.0);
+                                    ui.label(egui::RichText::new("About").strong());
+                                    ui.label(egui::RichText::new(p.description).color(AXIS_TEXT));
+                                }
                             } else {
                                 ui.label(
                                     egui::RichText::new(

@@ -17,6 +17,7 @@ pub fn create_research_tables(conn: &Connection) -> Result<(), String> {
             logo TEXT NOT NULL DEFAULT '',
             phone TEXT NOT NULL DEFAULT '',
             ipo_date TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
             market_cap REAL NOT NULL DEFAULT 0,
             shares_outstanding REAL NOT NULL DEFAULT 0,
             updated_at INTEGER NOT NULL DEFAULT 0
@@ -59,16 +60,59 @@ pub fn create_research_tables(conn: &Connection) -> Result<(), String> {
             snapshot_at INTEGER PRIMARY KEY,
             rows_json TEXT NOT NULL DEFAULT '[]'
         );
+        CREATE TABLE IF NOT EXISTS research_corporate_actions (
+            symbol TEXT NOT NULL,
+            date TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            value REAL NOT NULL DEFAULT 0,
+            currency TEXT,
+            note TEXT,
+            updated_at INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (symbol, date, action_type)
+        );
         CREATE INDEX IF NOT EXISTS idx_research_profile_updated ON research_profile(updated_at);
         CREATE INDEX IF NOT EXISTS idx_research_peers_updated ON research_peers(updated_at);
-        CREATE INDEX IF NOT EXISTS idx_research_earnings_updated ON research_earnings(updated_at);",
+        CREATE INDEX IF NOT EXISTS idx_research_earnings_updated ON research_earnings(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_research_corporate_actions_symbol ON research_corporate_actions(symbol);",
     )
     .map_err(|e| format!("create research tables: {e}"))?;
+    ensure_column(
+        conn,
+        "research_profile",
+        "description",
+        "ALTER TABLE research_profile ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+    )?;
     Ok(())
 }
 
 pub(super) fn now_ts() -> i64 {
     chrono::Utc::now().timestamp()
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    alter_sql: &str,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|e| format!("prepare table_info {table}: {e}"))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| format!("query table_info {table}: {e}"))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| format!("row table_info {table}: {e}"))?
+    {
+        let name: String = row.get(1).unwrap_or_default();
+        if name == column {
+            return Ok(());
+        }
+    }
+    conn.execute_batch(alter_sql)
+        .map_err(|e| format!("alter {table} add {column}: {e}"))?;
+    Ok(())
 }
 
 // ── profile ────────────────────────────────────────────────────────────────
@@ -77,18 +121,18 @@ pub fn upsert_profile(conn: &Connection, p: &CompanyProfile) -> Result<(), Strin
     let _ = create_research_tables(conn);
     conn.execute(
         "INSERT INTO research_profile
-         (symbol, name, exchange, country, currency, industry, sector, website, logo, phone, ipo_date, market_cap, shares_outstanding, updated_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+         (symbol, name, exchange, country, currency, industry, sector, website, logo, phone, ipo_date, description, market_cap, shares_outstanding, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
          ON CONFLICT(symbol) DO UPDATE SET
             name=excluded.name, exchange=excluded.exchange, country=excluded.country,
             currency=excluded.currency, industry=excluded.industry, sector=excluded.sector,
             website=excluded.website, logo=excluded.logo, phone=excluded.phone,
-            ipo_date=excluded.ipo_date, market_cap=excluded.market_cap,
+            ipo_date=excluded.ipo_date, description=excluded.description, market_cap=excluded.market_cap,
             shares_outstanding=excluded.shares_outstanding, updated_at=excluded.updated_at",
         params![
             p.symbol.to_uppercase(), p.name, p.exchange, p.country, p.currency,
             p.industry, p.sector, p.website, p.logo, p.phone, p.ipo_date,
-            p.market_cap, p.shares_outstanding, now_ts(),
+            p.description, p.market_cap, p.shares_outstanding, now_ts(),
         ],
     ).map_err(|e| format!("upsert profile: {e}"))?;
     Ok(())
@@ -98,7 +142,7 @@ pub fn get_profile(conn: &Connection, symbol: &str) -> Result<Option<CompanyProf
     let _ = create_research_tables(conn);
     let sym = symbol.to_uppercase();
     let mut stmt = conn.prepare(
-        "SELECT symbol, name, exchange, country, currency, industry, sector, website, logo, phone, ipo_date, market_cap, shares_outstanding
+        "SELECT symbol, name, exchange, country, currency, industry, sector, website, logo, phone, ipo_date, description, market_cap, shares_outstanding
          FROM research_profile WHERE symbol = ?1"
     ).map_err(|e| format!("prepare get_profile: {e}"))?;
     let mut rows = stmt
@@ -117,12 +161,69 @@ pub fn get_profile(conn: &Connection, symbol: &str) -> Result<Option<CompanyProf
             logo: row.get(8).unwrap_or_default(),
             phone: row.get(9).unwrap_or_default(),
             ipo_date: row.get(10).unwrap_or_default(),
-            market_cap: row.get(11).unwrap_or(0.0),
-            shares_outstanding: row.get(12).unwrap_or(0.0),
+            description: row.get(11).unwrap_or_default(),
+            market_cap: row.get(12).unwrap_or(0.0),
+            shares_outstanding: row.get(13).unwrap_or(0.0),
         }))
     } else {
         Ok(None)
     }
+}
+
+// ── corporate actions ──────────────────────────────────────────────────────
+
+pub fn upsert_corporate_action(conn: &Connection, ca: &CorporateAction) -> Result<(), String> {
+    let _ = create_research_tables(conn);
+    conn.execute(
+        "INSERT INTO research_corporate_actions
+         (symbol, date, action_type, value, currency, note, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7)
+         ON CONFLICT(symbol, date, action_type) DO UPDATE SET
+            value=excluded.value, currency=excluded.currency, note=excluded.note, updated_at=excluded.updated_at",
+        params![
+            ca.symbol.to_uppercase(),
+            ca.date,
+            ca.action_type,
+            ca.value,
+            ca.currency,
+            ca.note,
+            now_ts(),
+        ],
+    )
+    .map_err(|e| format!("upsert corporate action: {e}"))?;
+    Ok(())
+}
+
+pub fn get_corporate_actions(
+    conn: &Connection,
+    symbol: &str,
+) -> Result<Vec<CorporateAction>, String> {
+    let _ = create_research_tables(conn);
+    let mut stmt = conn
+        .prepare(
+            "SELECT symbol, date, action_type, value, currency, note
+             FROM research_corporate_actions
+             WHERE symbol = ?1
+             ORDER BY date DESC",
+        )
+        .map_err(|e| format!("prepare get_corporate_actions: {e}"))?;
+    let rows = stmt
+        .query_map(params![symbol.to_uppercase()], |row| {
+            Ok(CorporateAction {
+                symbol: row.get(0)?,
+                date: row.get(1)?,
+                action_type: row.get(2)?,
+                value: row.get(3)?,
+                currency: row.get(4)?,
+                note: row.get(5)?,
+            })
+        })
+        .map_err(|e| format!("query get_corporate_actions: {e}"))?;
+    let mut actions = Vec::new();
+    for row in rows {
+        actions.push(row.map_err(|e| format!("row corporate action: {e}"))?);
+    }
+    Ok(actions)
 }
 
 // ── peers ──────────────────────────────────────────────────────────────────

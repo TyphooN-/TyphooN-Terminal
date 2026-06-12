@@ -2,6 +2,7 @@ use super::*;
 mod alert_market_data_windows;
 mod bookmap;
 mod broker_kraken_windows;
+mod company_info;
 use bookmap::*;
 mod news_filter;
 use news_filter::*;
@@ -236,6 +237,7 @@ impl TyphooNApp {
         // Risk Calculator — wired to engine risk.rs
         // ── SCOPE popup window with source checkboxes ──
         self.render_scope_window(ctx);
+        self.render_company_info_window(ctx);
 
         self.render_risk_calc_window(ctx);
         self.render_compound_calc_window(ctx);

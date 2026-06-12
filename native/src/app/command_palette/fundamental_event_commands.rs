@@ -203,6 +203,49 @@ impl TyphooNApp {
             "HV_CONE" => self.show_hv_cone = true,
             "SECTOR_HEATMAP" => self.show_sector_heatmap = true,
             "DIVSCREEN" => self.show_dividends = true,
+            "COMPANY" | "DES" | "PROFILE" => {
+                let sym = self
+                    .active_trade_symbol()
+                    .unwrap_or_default()
+                    .to_uppercase();
+                if sym.is_empty() {
+                    self.company_info_symbol.clear();
+                    self.company_info_text = "No active chart symbol.".to_string();
+                    self.show_company_info_window = true;
+                    return true;
+                }
+
+                self.company_info_symbol = sym.clone();
+                let cached_profile = self
+                    .cache
+                    .as_ref()
+                    .and_then(|cache| cache.connection().ok())
+                    .and_then(|conn| {
+                        typhoon_engine::core::research::get_profile(&conn, &sym)
+                            .ok()
+                            .flatten()
+                    });
+
+                if let Some(profile) = cached_profile {
+                    self.company_info_text =
+                        typhoon_engine::core::research::get_company_summary(&profile);
+                } else {
+                    self.company_info_text = if self.finnhub_key.is_empty() {
+                        format!(
+                            "No cached profile for {sym}. Add a Finnhub key and run PROFILE again or use EVSCRAPE."
+                        )
+                    } else {
+                        let _ = self.broker_tx.send(BrokerCmd::FetchCompanyProfile {
+                            symbol: sym.clone(),
+                            finnhub_key: self.finnhub_key.clone(),
+                        });
+                        format!(
+                            "No cached profile for {sym}. Fetch requested; reopen PROFILE after it completes."
+                        )
+                    };
+                }
+                self.show_company_info_window = true;
+            }
             s if s.starts_with("SCOPE") => {
                 // SCOPE [ALL|ALPACA|KRAKEN] — global broker filter for fundamentals.
                 let arg = s.trim_start_matches("SCOPE").trim();

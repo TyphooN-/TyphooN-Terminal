@@ -251,6 +251,7 @@ impl TyphooNApp {
             "hv_cone": self.show_hv_cone,
             "sector_heatmap": self.show_sector_heatmap,
             "dividends_screen": self.show_dividends,
+            "company_info": self.show_company_info_window,
             "event_calendar": self.show_event_calendar,
             "alerts": self.show_alert_builder,
             "journal": self.show_journal,
@@ -280,6 +281,7 @@ impl TyphooNApp {
         set_bool!("hv_cone", show_hv_cone);
         set_bool!("sector_heatmap", show_sector_heatmap);
         set_bool!("dividends_screen", show_dividends);
+        set_bool!("company_info", show_company_info_window);
         set_bool!("event_calendar", show_event_calendar);
         set_bool!("alerts", show_alert_builder);
         set_bool!("journal", show_journal);
