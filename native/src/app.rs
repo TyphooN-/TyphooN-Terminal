@@ -56,6 +56,7 @@ mod app_runtime_kraken_private;
 mod app_runtime_kraken_ws;
 mod app_runtime_live_quotes;
 mod app_runtime_macro_alt_data;
+mod app_runtime_market_data_fetch_results;
 mod app_runtime_menu;
 mod app_runtime_news_results;
 mod app_runtime_order_results;
