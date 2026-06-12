@@ -2,7 +2,25 @@ use super::*;
 use crate::app::app_runtime_support::{
     should_auto_start_background_scope_scrape, should_auto_start_kraken_fundamentals_scrape,
 };
-use typhoon_engine::broker::kraken::KrakenEquityMarket;
+use typhoon_engine::broker::kraken::{KrakenBroker, KrakenEquityMarket};
+
+fn kraken_positions_with_balance_equities(
+    mut positions: Vec<PositionInfo>,
+    balances: &[(String, f64)],
+) -> Vec<PositionInfo> {
+    // Kraken xStocks arrive as cash-account balances (`WOK.EQ`), not REST
+    // OpenPositions rows. If periodic Balance polls only refresh
+    // `kraken_balances`, the right-panel position row stays timestamp-stale
+    // and can keep old quantities after live fills. Treat every fresh balance
+    // snapshot as the authoritative xStock position source while preserving
+    // any non-balance positions already reported by OpenPositions.
+    positions.retain(|pos| !pos.asset_id.starts_with("equity_balance:"));
+    positions.extend(KrakenBroker::equity_position_summaries_from_balances(
+        balances,
+    ));
+    positions.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+    positions
+}
 
 impl TyphooNApp {
     pub(super) fn handle_kraken_equity_universe(
@@ -160,7 +178,27 @@ impl TyphooNApp {
         if !self.kraken_enabled {
             return;
         }
+        let had_balance_equity_positions = self
+            .kr_positions
+            .iter()
+            .any(|pos| pos.asset_id.starts_with("equity_balance:"));
         self.kraken_balances = balances;
+        let next_positions = kraken_positions_with_balance_equities(
+            std::mem::take(&mut self.kr_positions),
+            &self.kraken_balances,
+        );
+        let has_balance_equity_positions = next_positions
+            .iter()
+            .any(|pos| pos.asset_id.starts_with("equity_balance:"));
+        if had_balance_equity_positions || has_balance_equity_positions {
+            self.positions_last_update_ts = chrono::Utc::now().timestamp();
+            self.kr_positions = next_positions;
+            if let Ok(json) = serde_json::to_string(&self.kr_positions) {
+                self.put_kv_dedup("broker:kr_positions", &json);
+            }
+        } else {
+            self.kr_positions = next_positions;
+        }
         self.refresh_kraken_position_costs();
         for c in &mut self.charts {
             c.cached_trade_overlay_frame = 0;
@@ -315,5 +353,54 @@ impl TyphooNApp {
                 ));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn position(symbol: &str, asset_id: &str, qty: f64) -> PositionInfo {
+        PositionInfo {
+            symbol: symbol.to_string(),
+            qty,
+            side: "long".to_string(),
+            avg_entry_price: 0.0,
+            market_value: 0.0,
+            unrealized_pl: 0.0,
+            asset_class: "stock".to_string(),
+            asset_id: asset_id.to_string(),
+        }
+    }
+
+    #[test]
+    fn kraken_balance_snapshot_replaces_stale_xstock_positions() {
+        let existing = vec![
+            position("WOK", "equity_balance:WOK.EQ", 8174.0),
+            position("BTCUSD", "margin:btc", 0.25),
+        ];
+        let balances = vec![("WOK.EQ".to_string(), 8123.0), ("ZUSD".to_string(), 705.0)];
+
+        let merged = kraken_positions_with_balance_equities(existing, &balances);
+
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().any(|pos| pos.symbol == "BTCUSD"));
+        let wok = merged.iter().find(|pos| pos.symbol == "WOK").unwrap();
+        assert_eq!(wok.qty, 8123.0);
+        assert_eq!(wok.asset_id, "equity_balance:WOK.EQ");
+    }
+
+    #[test]
+    fn kraken_balance_snapshot_removes_closed_xstock_positions() {
+        let existing = vec![
+            position("WOK", "equity_balance:WOK.EQ", 8174.0),
+            position("BTCUSD", "margin:btc", 0.25),
+        ];
+        let balances = vec![("ZUSD".to_string(), 705.0)];
+
+        let merged = kraken_positions_with_balance_equities(existing, &balances);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].symbol, "BTCUSD");
     }
 }

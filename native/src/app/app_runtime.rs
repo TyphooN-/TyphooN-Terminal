@@ -1291,12 +1291,41 @@ impl eframe::App for TyphooNApp {
                             self.forex_pairs_data = fx_rows;
                         }
                     }
+                    let watchlist_updates_position = self.kr_positions.iter().any(|pos| {
+                        let pos_symbol = pos
+                            .symbol
+                            .replace('/', "")
+                            .trim_end_matches(".EQ")
+                            .to_ascii_uppercase();
+                        let asset_symbol = pos
+                            .asset_id
+                            .rsplit(':')
+                            .next()
+                            .unwrap_or(pos.asset_id.as_str())
+                            .replace('/', "")
+                            .trim_end_matches(".EQ")
+                            .to_ascii_uppercase();
+                        rows.iter().any(|row| {
+                            if row.last <= 0.0 {
+                                return false;
+                            }
+                            let row_symbol = row
+                                .symbol
+                                .replace('/', "")
+                                .trim_end_matches(".EQ")
+                                .to_ascii_uppercase();
+                            row_symbol == pos_symbol || row_symbol == asset_symbol
+                        })
+                    });
                     self.watchlist_rows = rows;
                     // Watchlist quotes are the freshest equity valuation input during
                     // extended hours. Reprice Kraken Securities balances from them so
                     // the Positions/Cur column does not lag behind the watchlist by
                     // Kraken iapi's delayed=true feed window.
                     self.refresh_kraken_position_costs();
+                    if watchlist_updates_position {
+                        self.positions_last_update_ts = chrono::Utc::now().timestamp();
+                    }
                 }
                 BrokerMsg::CryptoTop50(data) => {
                     self.log.push_back(LogEntry::info(format!(

@@ -41,6 +41,15 @@ fn close_reference_color(current_close: f64, fallback_open: f64, bars: &[Bar]) -
     if current_close >= reference { UP } else { DOWN }
 }
 
+fn clamp_f32_bounds(value: f32, a: f32, b: f32) -> f32 {
+    if !value.is_finite() || !a.is_finite() || !b.is_finite() {
+        return value;
+    }
+    let lo = a.min(b);
+    let hi = a.max(b);
+    value.clamp(lo, hi)
+}
+
 /// Draw a single chart viewport into `rect` using `painter`.
 pub(super) fn draw_chart(
     painter: &egui::Painter,
@@ -1144,12 +1153,12 @@ pub(super) fn draw_chart(
         for &(label, htf_open, atr_val, line_start_idx) in &chart.atr_proj_levels {
             let upper_price = htf_open + atr_val;
             let lower_price = htf_open - atr_val;
-            let x_start = if line_start_idx >= start_idx {
+            let x_start_raw = if line_start_idx >= start_idx {
                 data_left + ((line_start_idx - start_idx) as f32) * bar_w
             } else {
                 chart_rect.left()
-            }
-            .clamp(chart_rect.left(), chart_rect.right());
+            };
+            let x_start = clamp_f32_bounds(x_start_raw, chart_rect.left(), chart_rect.right());
             let x_end = chart_rect.right();
             for (price, suffix) in [(upper_price, "Hi"), (lower_price, "Lo")] {
                 let y = price_to_y(price);
@@ -2120,7 +2129,7 @@ pub(super) fn draw_chart(
     let mut place_axis_label = move |desired_center: f32, half_h: f32| -> f32 {
         let lo_bound = axis_top + half_h;
         let hi_bound = (axis_bot - half_h).max(lo_bound);
-        let clamp_center = |c: f32| c.clamp(lo_bound, hi_bound);
+        let clamp_center = |c: f32| clamp_f32_bounds(c, lo_bound, hi_bound);
         let collides = |c: f32, bands: &[(f32, f32)]| {
             bands
                 .iter()
@@ -3799,7 +3808,10 @@ pub(super) fn draw_chart(
                     let mapped_price = base_close * (1.0 + cmp_pct);
                     let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
                     let y = price_to_y(mapped_price);
-                    let pt = egui::pos2(x, y.clamp(chart_rect.top(), chart_rect.bottom()));
+                    let pt = egui::pos2(
+                        x,
+                        clamp_f32_bounds(y, chart_rect.top(), chart_rect.bottom()),
+                    );
                     if let Some(pp) = prev_pt {
                         painter.line_segment([pp, pt], egui::Stroke::new(1.5, cmp_col));
                     }
@@ -7308,6 +7320,12 @@ mod tests {
     }
 
     #[test]
+    fn clamp_f32_bounds_accepts_inverted_tiny_pane_bounds() {
+        assert_eq!(super::clamp_f32_bounds(9.0, 8.0, 7.46875), 8.0);
+        assert_eq!(super::clamp_f32_bounds(7.0, 8.0, 7.46875), 7.46875);
+    }
+
+    #[test]
     fn projection_candle_sits_in_next_slot_not_far_right_empty_space() {
         let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1000.0, 400.0));
         let x = super::adjacent_projection_candle_x(0.0, 1, 10.0, 3.5, rect)
@@ -7698,7 +7716,9 @@ fn draw_intraday_time_axis(
         let date = dt.date_naive();
         let first_label = last_label_date.is_none();
         let new_day = last_label_date != Some(date);
-        let new_year = last_label_date.map(|d| d.year() != date.year()).unwrap_or(true);
+        let new_year = last_label_date
+            .map(|d| d.year() != date.year())
+            .unwrap_or(true);
 
         label_buf.clear();
         if first_label || new_year {

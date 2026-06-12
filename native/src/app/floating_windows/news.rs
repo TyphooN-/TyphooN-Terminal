@@ -102,12 +102,12 @@ impl TyphooNApp {
                 .resizable(true)
                 .default_size([920.0, news_default_h])
                 .min_size([300.0, 260.0])
-                // Do not cap width or height here. The reader is often used as a
-                // wide article/workbench pane, and any `max_width` silently turns
-                // into an invisible horizontal resize ceiling. Let the window's
-                // resize state own both axes; child scroll areas below still bound
-                // their content so shrinking remains stable.
-                .constrain(false)
+                // Keep the reader inside the viewport. Without a vertical cap,
+                // long article bodies can make the floating window auto-size past
+                // the screen bottom before the child scroll areas get a chance to
+                // take over.
+                .max_height((content_h - 24.0).max(260.0))
+                .constrain(true)
                 .show(ctx, |ui| {
                     // ── Top bar: Search-driven filter + fetch controls ────────────
                     // The Search field is now the single point of control for
@@ -395,7 +395,10 @@ impl TyphooNApp {
                         // the window back open; when the user expands, the scroll
                         // areas advertise that larger height so egui preserves the
                         // new resize state instead of snapping back to content size.
-                        let pane_h = (ui.max_rect().bottom() - ui.cursor().top()).max(96.0);
+                        let pane_h = ui
+                            .available_height()
+                            .min((content_h * 0.82).max(96.0))
+                            .max(96.0);
                         ui.allocate_ui_with_layout(
                             egui::vec2(ui.available_width(), pane_h),
                             egui::Layout::left_to_right(egui::Align::Min),

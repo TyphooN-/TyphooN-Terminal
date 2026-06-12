@@ -88,6 +88,12 @@ impl TyphooNApp {
         });
         if quote_updates_position {
             self.refresh_kraken_position_costs();
+            // The position row's quantity/cost basis only changes on balance/trade
+            // events, but its displayed current price and P/L are quote-driven.
+            // If a held xStock quote updates the chart/watchlist, mark Positions
+            // fresh too; otherwise the header says "3m" while the row is already
+            // priced from this same tick.
+            self.positions_last_update_ts = chrono::Utc::now().timestamp();
         }
         tracing::debug!(
             "Kraken equities: {} bid {} ask {} last {}{}",
