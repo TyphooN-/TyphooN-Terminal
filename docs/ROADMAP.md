@@ -90,7 +90,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] Multi-window support (NEW_WINDOW/POPOUT for multi-monitor)
 - [x] Collapsible right panel sections
 - [x] Sortable columns (SEC filings, insider trades tables)
-- [x] CryptoCompare deep history (BTC from 2010, replaces Kraken as primary backfill)
+- [x] ~~CryptoCompare deep history~~ *(removed 2026-06 — Kraken + Yahoo only)*
 - [x] Weekend crypto adaptive polling (60s M1, 2.5min M15, 5min H1+) with magenta candles
 - [x] Chart right margin (5 bars, MT5 chart shift style)
 - [x] Unusual Volume Scanner

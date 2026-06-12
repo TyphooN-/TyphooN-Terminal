@@ -2,6 +2,8 @@
 
 _Last updated: 2026-06-08_
 
+> **Historical (2026-06):** the MT5 `BarCacheWriter` external writer referenced below was removed with the broker rip-out (ADR-111). The SQLite write-contention insight still applies — the contending writers are now the Rust bulk bar-sync tasks, not the MT5 EA.
+
 Investigation + fixes for the reported symptoms: UI lag / stalls, `ask/bid/last`
 decoupling, and "improve data sync." This doc records what shipped, the root
 cause, and the pros/cons of pushing further.
