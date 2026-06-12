@@ -303,6 +303,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [115](docs/adr/115-deprecate-cli-tui.md) | Deprecate CLI/TUI — Archive to `deprecated/cli-tui` |
 | [116](docs/adr/116-finviz-stock-page-feature-parity-target.md) | Finviz Stock-Page Feature Parity Target |
 | [117](docs/adr/117-stocktwits-social-sentiment-ingest.md) | StockTwits Social-Sentiment Ingest into Research Packet |
+| [118](docs/adr/118-test-module-decomposition-convention.md) | Test Module Decomposition Convention (`include!`-tree + dir-module tests) |
 
 ---
 

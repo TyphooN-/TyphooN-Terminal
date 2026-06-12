@@ -99,36 +99,43 @@ Next structural targets, in order:
 
 ## Current Extraction Ranking
 
-After extracting `providers.rs`, `storage_core.rs`, `storage_market_data.rs`, `valuation.rs`, `market_stats.rs`, `fundamental_stats.rs`, and `return_risk_stats.rs`, the root research file is still the dominant target:
+**Update (2026-06): the original goal is achieved.** The root `research/mod.rs`
+went ~90k → ~36.8k → **1,668 lines** and is **no longer the compile/rust-analyzer
+hotspot**. The final two cuts were:
+
+- **Candlestick-pattern storage** (v80/v83–v88 `create/upsert/get_cdl_*`) →
+  `storage_candlestick_extended_snapshots.rs` (~1.5k lines).
+- **The ~21,793-line inline `#[cfg(test)] mod tests`** (93% of the file, 1,030
+  tests) was extracted to `tests.rs`, then split into a per-round `research/tests/`
+  tree via `include!` — see **ADR-118** for the convention and the
+  shared-fixture rationale.
+
+`mod.rs` now holds module declarations + residual storage helpers (v56 expirations,
+v89–v93 rank/short-interest/insider, and the trailing TA-indicator snapshot
+upsert/get). The dominant research files are now the **compute-model files**, not
+the root:
 
 | File | Lines | Notes |
 | --- | ---: | --- |
-| `engine/src/core/research/mod.rs` | ~36,846 | Still the primary compile/rust-analyzer hotspot. |
-| `engine/src/core/research/types.rs` | ~9,342 | Already extracted; leave alone unless type ownership needs cleanup. |
-| `engine/src/core/research/return_risk_stats.rs` | ~8,071 | Extracted return-distribution/risk-statistical compute slice. |
-| `engine/src/core/darwin.rs` | ~7,055 | Secondary candidate, but smaller and already has proven child-module patterns. |
-| `engine/src/broker/alpaca.rs` | ~4,467 | Broker split candidate, but lower impact than research. |
-| `engine/src/core/research/valuation.rs` | ~1,132 | Extracted valuation/market-stat compute slice. |
-| `engine/src/core/research/market_stats.rs` | ~689 | Extracted IV/seasonality/correlation/total-return/vol-skew compute slice. |
-| `engine/src/core/research/storage_market_data.rs` | ~661 | Extracted v2-v5 market/fundamentals storage slice. |
-| `engine/src/core/research/storage_core.rs` | ~501 | Extracted first-generation storage slice; keep as low-level cache helper boundary. |
-| `engine/src/core/research/providers.rs` | ~390 | Extracted first provider slice. |
-| `engine/src/core/research/fundamental_stats.rs` | ~305 | Extracted leverage/accrual compute slice. |
-| `engine/src/core/research/storage_fundamental_risk_snapshots.rs` | ~218 | Extracted v10 fundamental-risk/cash-flow/short-interest storage slice. |
-| `engine/src/core/research/storage_market_stat_snapshots.rs` | ~207 | Extracted v9 market-stat/technical storage slice. |
-| `engine/src/core/research/storage_financial_quality_snapshots.rs` | ~201 | Extracted v11 financial-quality/earnings/dispersion storage slice. |
-| `engine/src/core/research/storage_insider_dividend_momentum_snapshots.rs` | ~194 | Extracted v12 insider/dividend/earnings/rotation/upside-momentum storage slice. |
-| `engine/src/core/research/storage_valuation_models.rs` | ~185 | Extracted v8 valuation/model/options storage slice. |
-| `engine/src/core/research/storage_valuation_snapshots.rs` | ~180 | Extracted v7 valuation/reference storage slice. |
-| `engine/src/core/research/storage_macro_snapshots.rs` | ~139 | Extracted v6 macro/snapshot storage slice. |
+| `research/types.rs` | ~9,354 | Public DTOs/constants. Leave put — downstream depends on the re-export surface; splitting churns every `use`. |
+| `research/return_risk_stats.rs` | ~8,071 | Return-distribution/risk-stat compute. Sub-splittable by stat family. |
+| `research/candlestick_pattern_models.rs` | ~5,353 | CDL* compute models. |
+| `research/price_transform_indicator_models.rs` | ~4,466 | Price-transform indicator compute. |
+| `research/technical_indicator_models.rs` | ~3,806 | TA indicator compute. |
+| `research/moving_average_oscillator_models.rs` | ~3,630 | MA/oscillator compute. |
+| `research/mod.rs` | ~1,668 | Orchestration + residual storage. No longer the hotspot. |
 
-Next best research slice is not another provider fetcher; it is a semantic compute/storage family from the remaining root file. Good candidates:
+### Next targets (in order)
 
-1. `research/storage.rs` for schema/create/upsert/get helper families once the public API surface is inventoried.
-2. `research/indicator_snapshots.rs` for the large TA-style `compute_*_snapshot` families around 22k-31k, coordinated with existing `technical.rs` so indicator naming/parity stays clean.
-3. `research/storage_quant_snapshots.rs` for round 22+ schema/upsert/get helpers once the current compute extraction has settled.
+1. **Sub-split the large `*_models.rs` compute files** by indicator/stat family
+   where cohesive (`return_risk_stats` by stat family; candlestick/price-transform
+   by pattern group), always preserving the `pub use` re-export surface.
+2. **Extract residual `mod.rs` storage** (v56/v89–v93 + trailing TA snapshot
+   upsert/get) into `storage_*` modules if `mod.rs` regrows.
+3. **Leave `types.rs`** for now — it is the public DTO surface; splitting it churns
+   every downstream `use` for little compile gain.
 
-Do not start with a full `typhoon-research` crate split yet. The module is still entangled with `crate::core::{fundamentals, sec_filing, cache}` and LAN/broker infrastructure; crate extraction should come after at least two more semantic submodule cuts and API re-export stabilization.
+Do not start a full `typhoon-research` crate split yet. The module is still entangled with `crate::core::{fundamentals, sec_filing, cache}`; crate extraction comes after the compute-model files are sub-split and the re-export surface is stable.
 
 ## Consequences
 

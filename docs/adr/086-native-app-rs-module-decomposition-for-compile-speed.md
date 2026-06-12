@@ -77,10 +77,14 @@ The two-step split was deliberate:
 - **1c667fb0 (2026-04-23 09:03)** — second peel: tool windows and
   strategy windows.
 
-The original ~158k-line `app.rs` has since been reduced to roughly 33k
-lines. The current largest seam is `native/src/app/floating_windows.rs`
-(~63k lines), followed by `command_palette.rs` (~18k lines). Peeled-off
-submodules rebuild in isolation when they are the only thing changed.
+The original ~158k-line `app.rs` has since been decomposed far further: as of
+2026-06, `native/src/app.rs` is **~3,093 lines**, and the two seams this ADR
+flagged have themselves been split into directories — `app/floating_windows/` is
+now **81 files (~61k lines total)** and `command_palette.rs` is **~684 lines**.
+The renderer/window decomposition this ADR set in motion is essentially complete;
+the remaining native monoliths are production *logic* files, not renderers (see
+the updated seam bullet under Consequences). Peeled-off submodules rebuild in
+isolation when they are the only thing changed.
 
 ## Consequences
 
@@ -105,10 +109,22 @@ submodules rebuild in isolation when they are the only thing changed.
   `app/sync_config.rs`, selector logic in `app/alpaca_sync.rs` or a broker-
   specific sync module, and queue/refill orchestration in
   `app/market_data_sync.rs`; do not add new sync islands to `app.rs`.
-- **The remaining largest seams are mechanical but high-touch:**
-  `floating_windows.rs` should be split by window family, `command_palette.rs`
-  by command namespace, and any new broker fetch worker should land in
-  `app/broker_fetch.rs` instead of being added back to `app.rs`.
+- **The renderer seams this ADR named are done; the remaining monoliths are
+  production logic.** `floating_windows/` (81 files) and `command_palette.rs`
+  (~684 lines) are split. New broker fetch workers still land in
+  `app/broker_fetch.rs`, not `app.rs`. The next targets need *semantic* splits
+  (extract cohesive `impl TyphooNApp` method groups or free-fn families into
+  sibling files — a second `impl TyphooNApp` block in a new file is fine), not
+  renderer moves: `technical_analysis.rs` (~7.8k), `state.rs` (~7.3k),
+  `gpu_compute.rs` (~6.1k), `app_broker_processor/research_compute*` (~5.6–6.1k),
+  `chart.rs` (~5.7k), `app_runtime.rs` (~5.3k). For `state.rs`, keep the central
+  state struct in one place (per the consequence above) and split its *methods*,
+  not the struct.
+- **Test modules live in their own files (ADR-118).** The `app/tests.rs` monolith
+  (3.5k lines) was split into an `app/tests/` `include!` tree, and inline
+  `#[cfg(test)] mod tests {}` blocks (`sync_workset`, `app_runtime_support`,
+  `kraken_ohlc_ws`) moved to sibling `<name>/tests.rs` dir-modules. New tests go
+  in a `tests` submodule file, never inline in a production file.
 - **The default launcher path must stay incremental-friendly.** `./launch.sh`
   runs the thin-LTO `release` profile for normal use; full-LTO
   `release-max` remains available as `./launch.sh max` only for explicit final
