@@ -1,6 +1,6 @@
 # TyphooN-Terminal
 
-A native desktop trading terminal + TUI CLI with full risk management and multi-timeframe charting — built in pure Rust with native GPU rendering (egui + wgpu) for Alpaca and Kraken market data.
+A native desktop trading terminal with full risk management and multi-timeframe charting — built in pure Rust with native GPU rendering (egui + wgpu) for Alpaca and Kraken market data.
 
 **License:** [BUSL 1.1](LICENSE) ([Commercial](COMMERCIAL.md))
 
@@ -9,7 +9,6 @@ A native desktop trading terminal + TUI CLI with full risk management and multi-
 | Metric | Value |
 |---|---|
 | **GUI Binary** | ~25MB native (egui + wgpu) |
-| **CLI Binary** | 6.5MB standalone TUI (SSH/VPS ready) |
 | **Memory Usage** | ~50-100MB (vs thinkorswim ~2GB+) |
 | **Startup Time** | < 2 seconds |
 | **Lines of Code** | 170K+ native GUI + 135K+ engine/research (pure Rust) |
@@ -84,7 +83,6 @@ A native desktop trading terminal + TUI CLI with full risk management and multi-
 | **Options P&L Calc** | Multi-leg payoff diagram with canvas rendering (~ →OPTCALC) |
 | **Sector Rotation** | S&P 500 sector ETF heatmap with daily/weekly % (~ →SECTORS) |
 | **Options Strategy** | Live chain viewer, presets (spreads, condors), aggregate Greeks (~ →OPTSTRAT) |
-| **CLI/TUI** | Interactive SSH-ready TUI plus positions/account/cache/research commands; strategy backtests run in the native GUI |
 | **Community Chat** | Matrix protocol chat via ~ (tilde) → CHAT, no server needed |
 | **Broker Abstraction** | BrokerTrait — extensible to any broker via single Rust file |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS-native keyring credential storage |
@@ -338,43 +336,15 @@ cd native && cargo run          # development
 cd native && cargo build --release  # production
 ```
 
-### CLI / TUI (no GUI required)
+### Deprecated CLI / TUI
 
-```bash
-cd cli && ./typhoon.sh              # Interactive TUI
-./typhoon.sh --positions            # Print positions and exit
-./typhoon.sh --account              # Print account and exit
-./typhoon.sh --accounts             # All accounts (Alpaca)
-./typhoon.sh -s BTC/USD             # Start with specific symbol
-./typhoon.sh --export-cache backup.typhoon-backup --cache-backup-passphrase "$PASS"
-./typhoon.sh --import-cache backup.typhoon-backup --cache-backup-passphrase "$PASS"
-cargo run -q -p typhoon-cli -- --mcp-server  # MCP stdio server for research packets
-```
-
-The CLI shares encrypted credentials with the GUI — no need to re-enter API keys. 6.5MB standalone binary, works over SSH on any VPS.
-
-MCP clients can run `typhoon-cli --mcp-server` (or `cargo run -q -p typhoon-cli -- --mcp-server` from the workspace) to expose read-only TyphooN tools. The main tool is `research_packet`, which builds the same AI-facing markdown packet from the shared SQLite cache for requested symbols.
-
-| CLI Feature | Command |
-|---|---|
-| Market buy/sell | `:buy SMCI 100` / `:sell SLV 50` |
-| Limit order | `:limit buy AAPL 10 150.00` |
-| Stop order | `:stop sell SMCI 100 25.00` |
-| Bracket order | `:bracket buy CC 500 15.00 25.00` |
-| Close position | `:close CC` or `x` on selected |
-| Partial close | `p` on selected (50%) |
-| Close all | `:closeall` |
-| Cancel all orders | `:cancelall` |
-| Order history | `:history 20` |
-| Chart symbol | `:chart BTC/USD H4` |
-| Cache backup | `--export-cache PATH` / `--import-cache PATH` |
-| MCP research packets | `--mcp-server` |
+The standalone `typhoon-cli` / Ratatui interface has been removed from the active `master` workspace so GUI iteration and compile-time work stay focused on the native terminal. The last active CLI/TUI implementation is preserved on `deprecated/cli-tui` for later revival.
 
 ---
 
 ## Brokers
 
-TyphooN-Terminal trades **Alpaca + Kraken**. The historical **MT5/Darwinex** (DARWIN portfolio + BarCacheWriter EA bridge), **tastytrade**, and **CryptoCompare** (deep crypto history) integrations have been deprecated and removed from the active codebase — see [ADR-111](docs/adr/111-broker-scope-reduction-kraken-alpaca-only.md). Their full code is preserved on the `deprecated/darwin`, `deprecated/mt5`, `deprecated/tastytrade`, and `deprecated/cryptocompare` branches for possible future restoration; they are not built or maintained in the interim. (The MQL5/PineScript→WASM compiler is a separate language tool and is retained.)
+TyphooN-Terminal trades **Alpaca + Kraken**. The historical **MT5/Darwinex** (DARWIN portfolio + BarCacheWriter EA bridge), **tastytrade**, and **CryptoCompare** (deep crypto history) integrations have been deprecated and removed from the active codebase — see [ADR-111](docs/adr/111-broker-scope-reduction-kraken-alpaca-only.md). The standalone **CLI/TUI** has also been removed from active `master` and archived on `deprecated/cli-tui` — see [ADR-115](docs/adr/115-deprecate-cli-tui.md). Their full code is preserved on the relevant `deprecated/*` branches for possible future restoration; they are not built or maintained in the interim. (The MQL5/PineScript→WASM compiler is a separate language tool and is retained.)
 
 **Alpaca Markets** — stocks, ETFs, options, and crypto via REST + WebSocket streaming. IEX (free) or SIP (paid) market data.
 

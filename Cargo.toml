@@ -4,7 +4,6 @@ members = [
     "engine",
     "native",
     "mql5-compiler",
-    "cli",
 ]
 
 [workspace.dependencies]

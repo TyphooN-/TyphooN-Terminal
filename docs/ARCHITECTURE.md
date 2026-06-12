@@ -140,12 +140,9 @@ TyphooN-Terminal/
 │   │       ├── alpaca.rs       # REST + WebSocket (ADR-087 autotune)
 │   │       └── kraken/         # Kraken Spot REST trading + WS (ADR-051)
 │   └── Cargo.toml
-├── cli/                    # TUI/headless cache, broker, and research ops
-│   ├── src/main.rs         # cache stats/import/export, broker snapshots, research packets
-│   └── Cargo.toml
 ├── mql5-compiler/          # MQL5 compiler plus full 10-language transpiler matrix
 └── docs/
-    ├── adr/                # Architecture Decision Records (114)
+    ├── adr/                # Architecture Decision Records (115)
     ├── API_KEYS.md
     ├── INDICATORS.md
     ├── PERFORMANCE.md

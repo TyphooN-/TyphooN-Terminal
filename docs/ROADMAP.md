@@ -8,6 +8,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - **LAN sync + WASM/web phone client:** removed; native-desktop only.
 - **Live martingale trading:** deprecated — see [ADR-114](adr/114-deprecate-martingale-live-trading.md).
 - **MQL5 export pipeline:** removed (the `mql5-compiler` transpiler is retained).
+- **CLI/TUI:** removed from active `master`; preserved on `deprecated/cli-tui` for later revisit while GUI remains the main focus — see [ADR-115](adr/115-deprecate-cli-tui.md).
 
 ## Completed
 
@@ -80,7 +81,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] MTF SMA (H1/H4/D1/W1 200SMA + W1/MN1 100SMA — Tomato + Magenta)
 - [x] ATR Projection MTF (M15/H1/H4/D1/W1/MN1 horizontal levels)
 - [x] Previous Candle Levels (H1/H4/D1/W1/MN1)
-- [x] CLI/TUI (search, movers, fills)
+- [x] ~~CLI/TUI (search, movers, fills)~~ *(removed 2026-06 — archived on `deprecated/cli-tui`)*
 - [x] Monthly Returns Heatmap (Darwinex-style grid per DARWIN)
 - [x] Drawdown Analytics (combined + per-DARWIN dashboard, best/worst days)
 - [x] Divergence Index (signal vs quote return divergence)

@@ -35,7 +35,7 @@ egui's immediate mode paradigm means the entire UI is a function of state — no
 
 ### 7. Engine as Library
 
-The `typhoon-engine` crate exports all broker, cache, risk, analytics, and backtest functionality as a Rust library. The native GUI and CLI/TUI consume the same engine with zero duplication.
+The `typhoon-engine` crate exports all broker, cache, risk, analytics, and backtest functionality as a Rust library. The active product surface is the native GUI. The former CLI/TUI consumer is archived on `deprecated/cli-tui` and no longer builds on `master`.
 
 ### 8. Risk Corridor Discipline
 
