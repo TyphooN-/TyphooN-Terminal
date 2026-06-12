@@ -2740,7 +2740,12 @@ pub(super) fn draw_chart(
                     .map(|s| tooltip.len().max(s.len()))
                     .unwrap_or(tooltip.len());
                 let data_h = if ind_text.is_some() { 34.0 } else { 20.0 };
-                let data_y = (sym_rect.bottom() + 4.0)
+                // Anchor below both the symbol header row AND the indicator legend
+                // row (which starts at ~top+34) so the hover readout never overlaps
+                // either overlay and remains readable in all MTF/single views.
+                let legend_row = chart_rect.top() + 38.0;
+                let data_y = (sym_rect.bottom() + 22.0)
+                    .max(legend_row)
                     .min((chart_rect.bottom() - data_h - 2.0).max(chart_rect.top() + 2.0));
                 // Semi-transparent background behind data text. It intentionally
                 // sits under the symbol/timeframe header with matching blue trim,
