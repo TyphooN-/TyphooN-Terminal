@@ -936,22 +936,8 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                BrokerMsg::KrakenPositions(mut pos) => {
-                    if !self.kraken_enabled {
-                        continue;
-                    }
-                    self.positions_last_update_ts = chrono::Utc::now().timestamp();
-                    pos.retain(|p| {
-                        p.asset_class != "crypto_spot" && !p.asset_id.starts_with("spot:")
-                    });
-                    if let Ok(json) = serde_json::to_string(&pos) {
-                        self.put_kv_dedup("broker:kr_positions", &json);
-                    }
-                    self.kr_positions = pos;
-                    self.refresh_kraken_position_costs();
-                    for c in &mut self.charts {
-                        c.cached_trade_overlay_frame = 0;
-                    }
+                BrokerMsg::KrakenPositions(pos) => {
+                    self.handle_kraken_positions(pos);
                 }
                 BrokerMsg::Orders(orders) => {
                     self.handle_alpaca_orders(orders);

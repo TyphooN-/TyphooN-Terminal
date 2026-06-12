@@ -64,6 +64,22 @@ impl TyphooNApp {
         }
     }
 
+    pub(super) fn handle_kraken_positions(&mut self, mut pos: Vec<PositionInfo>) {
+        if !self.kraken_enabled {
+            return;
+        }
+        self.positions_last_update_ts = chrono::Utc::now().timestamp();
+        pos.retain(|p| p.asset_class != "crypto_spot" && !p.asset_id.starts_with("spot:"));
+        if let Ok(json) = serde_json::to_string(&pos) {
+            self.put_kv_dedup("broker:kr_positions", &json);
+        }
+        self.kr_positions = pos;
+        self.refresh_kraken_position_costs();
+        for c in &mut self.charts {
+            c.cached_trade_overlay_frame = 0;
+        }
+    }
+
     pub(super) fn handle_kraken_open_orders(&mut self, orders: Vec<KrakenOrder>) {
         if !self.kraken_enabled {
             return;
