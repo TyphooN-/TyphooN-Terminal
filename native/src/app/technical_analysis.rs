@@ -2207,38 +2207,56 @@ pub(super) fn draw_chart(
                     .and_then(|latest| next_candle_countdown_label(latest.ts_ms, chart.timeframe))
             };
             if let Some(countdown) = countdown {
-                let label_y = place_axis_label(y, 14.0);
-                let lbl_rect = egui::Rect::from_min_size(
-                    egui::pos2(chart_rect.right() + 2.0, label_y - 14.0),
-                    egui::vec2(price_axis_w - 4.0, 28.0),
+                // TradingView-style current-price tag: ticker / price / countdown
+                // stacked, each in its OWN bordered box. The timer used to be a
+                // borderless cell that blended into the chart and was hard to read
+                // against the price; now all three rows are delineated and the
+                // ticker is shown for context.
+                let ticker = bare_symbol_from_key(&chart.symbol);
+                let row_h = 14.0_f32;
+                let badge_h = row_h * 3.0;
+                let label_y = place_axis_label(y, badge_h * 0.5);
+                let badge_left = chart_rect.right() + 2.0;
+                let badge_w = price_axis_w - 4.0;
+                let ticker_rect = egui::Rect::from_min_size(
+                    egui::pos2(badge_left, label_y - badge_h * 0.5),
+                    egui::vec2(badge_w, row_h),
                 );
-                let price_rect =
-                    egui::Rect::from_min_size(lbl_rect.min, egui::vec2(lbl_rect.width(), 15.0));
-                let timer_rect = egui::Rect::from_min_max(
-                    egui::pos2(lbl_rect.left(), lbl_rect.top() + 15.0),
-                    lbl_rect.max,
+                let price_rect = egui::Rect::from_min_size(
+                    egui::pos2(badge_left, ticker_rect.bottom()),
+                    egui::vec2(badge_w, row_h),
                 );
-                painter.rect_filled(price_rect, 2.0, egui::Color32::from_rgb(12, 18, 28));
-                painter.rect_stroke(
-                    price_rect,
-                    2.0,
-                    egui::Stroke::new(1.0, color),
-                    egui::StrokeKind::Inside,
+                let timer_rect = egui::Rect::from_min_size(
+                    egui::pos2(badge_left, price_rect.bottom()),
+                    egui::vec2(badge_w, row_h),
                 );
-                painter.rect_filled(timer_rect, 2.0, egui::Color32::from_rgb(12, 18, 28));
+                let bg = egui::Color32::from_rgb(12, 18, 28);
+                let border = egui::Stroke::new(1.0, color);
+                for r in [ticker_rect, price_rect, timer_rect] {
+                    painter.rect_filled(r, 2.0, bg);
+                    painter.rect_stroke(r, 2.0, border, egui::StrokeKind::Inside);
+                }
+                let text_x = badge_left + 3.0;
                 painter.text(
-                    egui::pos2(chart_rect.right() + 4.0, price_rect.center().y),
+                    egui::pos2(text_x, ticker_rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    &ticker,
+                    egui::FontId::monospace(9.0),
+                    egui::Color32::from_rgb(190, 205, 225),
+                );
+                painter.text(
+                    egui::pos2(text_x, price_rect.center().y),
                     egui::Align2::LEFT_CENTER,
                     &label,
                     egui::FontId::monospace(10.0),
                     color,
                 );
                 painter.text(
-                    egui::pos2(chart_rect.right() + 4.0, timer_rect.center().y),
+                    egui::pos2(text_x, timer_rect.center().y),
                     egui::Align2::LEFT_CENTER,
                     &countdown,
                     egui::FontId::monospace(9.0),
-                    egui::Color32::from_rgb(200, 220, 235),
+                    egui::Color32::from_rgb(215, 230, 245),
                 );
             } else {
                 let label_y = place_axis_label(y, 8.0);
