@@ -4484,6 +4484,10 @@ pub struct TyphooNApp {
     pub(crate) watchlist_rows: Vec<WatchlistRow>,
     /// Unix timestamp of last successful watchlist quote refresh — drives staleness badge.
     pub(crate) watchlist_last_update_ts: i64,
+    /// Last time an automatic watchlist quote refresh was dispatched. `None` until
+    /// the first dispatch, so the watchlist populates on startup rather than only
+    /// when the user manually adds a symbol. See the periodic refresh in `update`.
+    pub(crate) watchlist_auto_refresh_at: Option<std::time::Instant>,
     /// Unix timestamp of last successful positions refresh.
     pub(crate) positions_last_update_ts: i64,
     /// Unix timestamp of last successful orders refresh.

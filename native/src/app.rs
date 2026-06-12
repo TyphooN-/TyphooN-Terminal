@@ -422,6 +422,7 @@ impl TyphooNApp {
             active_tab: 0,
             watchlist_rows,
             watchlist_last_update_ts: 0,
+            watchlist_auto_refresh_at: None,
             positions_last_update_ts: 0,
             orders_last_update_ts: 0,
             user_watchlist: Vec::new(),

@@ -182,6 +182,24 @@ impl eframe::App for TyphooNApp {
             }
         }
 
+        // Watchlist quotes used to be fetched only when the user manually added a
+        // symbol, so a session-restored watchlist sat empty ("No cached data …
+        // never") until poked. Refresh once on startup (auto_refresh_at == None)
+        // and every 90s after. The GetWatchlistQuotes handler enriches from Yahoo
+        // even with no broker connected, so this also works offline / on weekends.
+        if self.cache_loaded && !self.user_watchlist.is_empty() {
+            let due = self
+                .watchlist_auto_refresh_at
+                .map(|t| now_instant.duration_since(t) >= std::time::Duration::from_secs(90))
+                .unwrap_or(true);
+            if due {
+                self.watchlist_auto_refresh_at = Some(now_instant);
+                let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes {
+                    symbols: self.user_watchlist.clone(),
+                });
+            }
+        }
+
         // Refresh the cached Sync Status coverage % so auto-full-tilt sees
         // current data even when the Sync Status window isn't open. The
         // compute call self-throttles by mode; broad heavy-sync snapshots are
@@ -8475,7 +8493,7 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                     let painter = ui.painter_at(cell_rect);
-                    draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &self.draw_mode);
+                    draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &self.draw_mode, true);
                     // Restore the cached overlay we moved out above.
                     self.charts[vi].cached_trade_overlay = trade_ov;
 
@@ -8645,7 +8663,7 @@ impl eframe::App for TyphooNApp {
                     }
                     let trade_ov = std::mem::take(&mut chart.cached_trade_overlay);
                     let painter = ui.painter_at(rect);
-                    draw_chart(&painter, chart, rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &self.draw_mode);
+                    draw_chart(&painter, chart, rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &self.draw_mode, false);
                     chart.cached_trade_overlay = trade_ov;
 
                     // Replay overlay: show bar count and speed

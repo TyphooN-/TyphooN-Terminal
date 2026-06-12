@@ -426,6 +426,68 @@ fn chart_materializes_merged_equity_cache_from_provider_rows() {
 }
 
 #[test]
+fn chart_equity_merge_4hour_corrects_wick_spike_via_synthesized_yahoo_corroborator() {
+    // Yahoo has no native 4-hour interval, so the H4 merge had no independent
+    // corroborator and a bad Alpaca print sailed through (the WOK H4 artifact).
+    // The merge now aggregates cached Yahoo 1h bars into a 4h corroborator, and
+    // the outlier check compares the high (not just the close) — so a lone wick
+    // spike on the trusted 4h feed is pulled back to the corroborated value.
+    use chrono::{TimeZone, Utc};
+    let db_path = std::env::temp_dir().join(format!(
+        "typhoon-merged-4h-corroborate-test-{}-{}.db",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let cache = SqliteCache::open(&db_path).unwrap();
+
+    let base = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+    let four_h = chrono::Duration::hours(4);
+    let one_h = chrono::Duration::hours(1);
+    let n: i64 = 60;
+
+    // Alpaca (trusted) 4h bars: flat ~0.10, except the final bar carries a bad
+    // wick to 0.30 (high only — open/close stay 0.10).
+    let alpaca: Vec<serde_json::Value> = (0..n)
+        .map(|i| {
+            let high = if i == n - 1 { 0.30 } else { 0.11 };
+            serde_json::json!({
+                "timestamp": (base + four_h * i as i32).to_rfc3339(),
+                "open": 0.10, "high": high, "low": 0.09, "close": 0.10, "volume": 100.0
+            })
+        })
+        .collect();
+    cache
+        .put_bars("alpaca:WOK:4Hour", &serde_json::to_string(&alpaca).unwrap())
+        .unwrap();
+
+    // Yahoo 1h bars over the same span: clean ~0.10, no spike.
+    let yahoo_hourly: Vec<serde_json::Value> = (0..n * 4)
+        .map(|j| {
+            serde_json::json!({
+                "timestamp": (base + one_h * j as i32).to_rfc3339(),
+                "open": 0.10, "high": 0.11, "low": 0.09, "close": 0.10, "volume": 25.0
+            })
+        })
+        .collect();
+    cache
+        .put_bars(
+            "yahoo-chart:WOK:1Hour",
+            &serde_json::to_string(&yahoo_hourly).unwrap(),
+        )
+        .unwrap();
+
+    let merged = chart_load_merged_equity_bars_from_cache(&cache, "WOK", "4Hour");
+    let last = merged.last().expect("merged 4h bars should exist");
+    assert!(
+        last.high < 0.20,
+        "the 0.30 wick on the final 4h bar must be corrected against the synthesized \
+         Yahoo corroborator; got high={}",
+        last.high
+    );
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn chart_mtf_overlays_load_from_merged_cache_rows() {
     let db_path = std::env::temp_dir().join(format!(
         "typhoon-merged-mtf-overlay-test-{}-{}.db",

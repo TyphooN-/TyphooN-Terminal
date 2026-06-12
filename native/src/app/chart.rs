@@ -938,6 +938,16 @@ pub(crate) fn chart_merge_equity_raw_bars(
         let Some((scale, window_start)) = chart_recent_overlap_scale(&merged, bucketed) else {
             continue;
         };
+        // Compare close, high, AND low against the rescaled corroborator. A bad
+        // trusted print can be a full-candle doubling (close diverges) or a lone
+        // wick spike (only the high diverges) — the WOK H4 artifact was the
+        // latter, invisible to a close-only check.
+        let diverges = |trusted_v: f64, depth_v: f64| -> bool {
+            let expected = depth_v * scale;
+            expected > 0.0
+                && trusted_v > 0.0
+                && (trusted_v / expected).max(expected / trusted_v) > OUTLIER_RATIO
+        };
         for (bucket, dbar) in bucketed {
             if *bucket < window_start {
                 continue; // only adjudicate the recent, locally-consistent window
@@ -945,12 +955,10 @@ pub(crate) fn chart_merge_equity_raw_bars(
             let Some(tbar) = merged.get(bucket) else {
                 continue;
             };
-            let expected = dbar.close * scale;
-            if expected <= 0.0 || tbar.close <= 0.0 {
-                continue;
-            }
-            let divergence = (tbar.close / expected).max(expected / tbar.close);
-            if divergence > OUTLIER_RATIO {
+            if diverges(tbar.close, dbar.close)
+                || diverges(tbar.high, dbar.high)
+                || diverges(tbar.low, dbar.low)
+            {
                 merged.insert(
                     *bucket,
                     Bar {
@@ -1505,11 +1513,85 @@ fn chart_build_merged_equity_bars_from_cache(
             break;
         }
     }
+
+    // Yahoo exposes no native 4-hour interval (see `yahoo_chart_supports_timeframe`),
+    // so a "4Hour" merge would otherwise have no independent corroborator and the
+    // trusted-tier outlier correction is skipped entirely — exactly why a bad
+    // Alpaca 4Hour print (WOK, 2026-06) reached the H4 chart while H1, corroborated
+    // by Yahoo's 1h series, stayed clean. Synthesize a 4-hour Yahoo series by
+    // aggregating cached 1-hour Yahoo bars to restore that corroborator.
+    if timeframe == "4Hour" && !loaded.iter().any(|(src, _)| *src == "yahoo-chart") {
+        if let Some(hourly) = chart_source_cache_keys("yahoo-chart", symbol, "1Hour")
+            .iter()
+            .find_map(|key| cache.get_bars_raw(key).ok().flatten())
+            .filter(|raw| !raw.is_empty())
+        {
+            let agg = chart_aggregate_raw_to_4hour(&hourly);
+            if agg.len() >= 2 {
+                loaded.push(("yahoo-chart", agg));
+            }
+        }
+    }
+
     let views: Vec<(&str, &[(i64, f64, f64, f64, f64, f64)])> = loaded
         .iter()
         .map(|(source, raw)| (*source, raw.as_slice()))
         .collect();
     chart_merge_equity_raw_bars(timeframe, &views)
+}
+
+/// Aggregate a finer raw OHLCV series into 4-hour buckets aligned exactly to
+/// [`chart_merge_bucket_ts`]'s "4Hour" boundaries, so the result overlaps native
+/// 4-hour bars bucket-for-bucket inside the merge. Open = first bar in a bucket,
+/// close = last, high/low = extremes, volume = sum. Used to synthesize a 4-hour
+/// Yahoo corroborator from cached 1-hour Yahoo bars.
+fn chart_aggregate_raw_to_4hour(
+    raw: &[(i64, f64, f64, f64, f64, f64)],
+) -> Vec<(i64, f64, f64, f64, f64, f64)> {
+    let mut sorted: Vec<(i64, f64, f64, f64, f64, f64)> = raw
+        .iter()
+        .copied()
+        .filter(|(ts, o, h, l, c, _v)| {
+            *ts > 0
+                && *o > 0.0
+                && *h > 0.0
+                && *l > 0.0
+                && *c > 0.0
+                && o.is_finite()
+                && h.is_finite()
+                && l.is_finite()
+                && c.is_finite()
+                && *h >= *l
+        })
+        .collect();
+    sorted.sort_by_key(|(ts, ..)| *ts);
+
+    let mut out: std::collections::BTreeMap<i64, Bar> = std::collections::BTreeMap::new();
+    for (ts, o, h, l, c, v) in sorted {
+        let bucket = chart_merge_bucket_ts("4Hour", ts);
+        out.entry(bucket)
+            .and_modify(|b| {
+                if h > b.high {
+                    b.high = h;
+                }
+                if l < b.low {
+                    b.low = l;
+                }
+                b.close = c;
+                b.volume += v;
+            })
+            .or_insert(Bar {
+                ts_ms: bucket,
+                open: o,
+                high: h,
+                low: l,
+                close: c,
+                volume: v,
+            });
+    }
+    out.into_values()
+        .map(|b| (b.ts_ms, b.open, b.high, b.low, b.close, b.volume))
+        .collect()
 }
 
 impl ChartState {

@@ -80,6 +80,10 @@ pub(super) fn draw_chart(
     trade_overlay: &TradeOverlay,
     alerts: &[(f64, String)],
     draw_mode: &DrawMode,
+    // In the MTF grid each group already shows its symbol once in the green
+    // header above the cells, so the per-cell badge drops the symbol and shows
+    // only the timeframe — otherwise "WOK" appears twice (header + "WOK [H1]").
+    in_mtf_grid: bool,
 ) {
     // Do not early-return for a stable chart. egui is immediate-mode: if this
     // function skips painting for a frame, the chart area can be left blank or
@@ -439,24 +443,42 @@ pub(super) fn draw_chart(
     }
 
     // ── grid lines (time) ────────────────────────────────────────────────────
-    let time_step = ((80.0 / bar_w) as usize).max(1);
-    for (rel_idx, bar) in bars.iter().enumerate().step_by(time_step) {
-        let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
-        painter.line_segment(
-            [
-                egui::pos2(x, chart_rect.top()),
-                egui::pos2(x, chart_rect.bottom()),
-            ],
+    // Intraday axes get hierarchical, boundary-aligned labels (a date on each
+    // day rollover, HH:MM otherwise), so lower timeframes stop smearing the full
+    // "%d %b'%y %H:%M" string onto every tick — the unreadable case in the H1/H4
+    // screenshots. Daily-and-up keep the terse date-only labels that already read
+    // cleanly per the higher-timeframe screenshot.
+    if chart.timeframe.minutes() < 1440 {
+        draw_intraday_time_axis(
+            painter,
+            bars,
+            data_left,
+            bar_w,
+            chart_rect,
+            chart.timeframe.minutes(),
             grid_stroke,
+            &mut label_buf,
         );
-        format_ts_buf(bar.ts_ms, chart.timeframe, &mut label_buf);
-        painter.text(
-            egui::pos2(x, chart_rect.bottom() + 2.0),
-            egui::Align2::CENTER_TOP,
-            &label_buf,
-            egui::FontId::monospace(9.0),
-            AXIS_TEXT,
-        );
+    } else {
+        let time_step = ((80.0 / bar_w) as usize).max(1);
+        for (rel_idx, bar) in bars.iter().enumerate().step_by(time_step) {
+            let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
+            painter.line_segment(
+                [
+                    egui::pos2(x, chart_rect.top()),
+                    egui::pos2(x, chart_rect.bottom()),
+                ],
+                grid_stroke,
+            );
+            format_ts_buf(bar.ts_ms, chart.timeframe, &mut label_buf);
+            painter.text(
+                egui::pos2(x, chart_rect.bottom() + 2.0),
+                egui::Align2::CENTER_TOP,
+                &label_buf,
+                egui::FontId::monospace(9.0),
+                AXIS_TEXT,
+            );
+        }
     }
 
     // ── MA ribbon fill (KAMA vs SMA200) — only when single-TF lines are visible ──
@@ -2708,7 +2730,11 @@ pub(super) fn draw_chart(
     // Box the symbol first, then attach the extended-hours context to that same
     // header row. The old standalone EXT badge sat underneath this symbol text;
     // drawing one joined header makes ownership obvious and prevents overlap.
-    let sym_label = format!("{} [{}]", chart.symbol, chart.timeframe.label());
+    let sym_label = if in_mtf_grid {
+        format!("[{}]", chart.timeframe.label())
+    } else {
+        format!("{} [{}]", chart.symbol, chart.timeframe.label())
+    };
     let header_pos = egui::pos2(chart_rect.left() + 8.0, chart_rect.top() + 6.0);
     let header_pad_x = 6.0_f32;
     let header_pad_y = 3.0_f32;
@@ -7351,6 +7377,18 @@ mod tests {
     }
 
     #[test]
+    fn intraday_axis_stride_climbs_the_ladder_as_bars_shrink() {
+        // Wide bars (zoomed in) → fine stride; thin bars (zoomed out) → coarse.
+        // H1 (60m bars): 22px bars want ~3h between labels; 1.3px bars want days.
+        assert_eq!(super::intraday_axis_stride_minutes(60, 22.0, 64.0), 180);
+        assert_eq!(super::intraday_axis_stride_minutes(60, 1.3, 64.0), 4320);
+        // Stride never drops below the timeframe itself (H4 = 240m floor).
+        assert_eq!(super::intraday_axis_stride_minutes(240, 100.0, 64.0), 240);
+        // H4 over a month (≈4.5px bars) → multi-day date ticks, no intraday smear.
+        assert_eq!(super::intraday_axis_stride_minutes(240, 4.5, 64.0), 4320);
+    }
+
+    #[test]
     fn extended_hours_axis_labels_are_explicit() {
         assert_eq!(
             super::format_axis_price_label("EXT", 0.0924),
@@ -7577,6 +7615,118 @@ pub(super) fn format_ts_buf(ts_ms: i64, tf: Timeframe, buf: &mut String) {
             write!(buf, "{}", dt.format("%d %b'%y %H:%M")).ok();
         }
     };
+}
+
+/// Smallest "nice" axis-label stride (in minutes) whose on-screen spacing is at
+/// least `min_gap_px`, drawn from a human ladder of clock/calendar boundaries
+/// (…15m, 30m, 1h, 2h, 3h, 4h, 6h, 12h, 1d, 2d, 3d, 1w…). Aligning labels to
+/// these boundaries — instead of "every N bars" — is what makes intraday times
+/// land on round values (14:00, 18:00) rather than whatever bar the step hit.
+fn intraday_axis_stride_minutes(tf_minutes: u32, bar_w: f32, min_gap_px: f32) -> i64 {
+    const LADDER: &[i64] = &[
+        1, 2, 5, 15, 30, // sub-hour
+        60, 120, 180, 240, 360, 720, // 1h … 12h
+        1440, 2880, 4320, 10080, 20160, 43200, // 1d … ~1mo
+    ];
+    let tf = (tf_minutes.max(1)) as i64;
+    for &stride in LADDER {
+        if stride < tf {
+            continue;
+        }
+        // bars per stride × pixels per bar = on-screen gap between labels
+        let gap_px = (stride as f32 / tf as f32) * bar_w;
+        if gap_px >= min_gap_px {
+            return stride;
+        }
+    }
+    *LADDER.last().unwrap()
+}
+
+/// Hierarchical, boundary-aligned time axis for intraday timeframes.
+///
+/// The old scheme labelled every Nth bar with the full `%d %b'%y %H:%M` string;
+/// on lower timeframes each ~76px label sat ~80px from its neighbour and the
+/// repeated date made them collide into an unreadable smear. Here labels are
+/// placed only where a chosen clock boundary is crossed (so they fall on round
+/// times), never closer than `MIN_GAP_PX`, and each shows only what changed:
+/// the date ("08 May") when the day rolls over, otherwise the time ("14:00").
+fn draw_intraday_time_axis(
+    painter: &egui::Painter,
+    bars: &[Bar],
+    data_left: f32,
+    bar_w: f32,
+    chart_rect: egui::Rect,
+    tf_minutes: u32,
+    grid_stroke: egui::Stroke,
+    label_buf: &mut String,
+) {
+    use chrono::{Datelike, TimeZone, Timelike};
+    use std::fmt::Write;
+    const MIN_GAP_PX: f32 = 64.0;
+
+    if bars.is_empty() {
+        return;
+    }
+    let stride_ms = intraday_axis_stride_minutes(tf_minutes, bar_w, MIN_GAP_PX) * 60_000;
+    if stride_ms <= 0 {
+        return;
+    }
+    let font = egui::FontId::monospace(9.0);
+    let mut last_label_x = f32::NEG_INFINITY;
+    let mut last_label_date: Option<chrono::NaiveDate> = None;
+    let mut prev_bucket: Option<i64> = None;
+
+    for (rel_idx, bar) in bars.iter().enumerate() {
+        // A label is a candidate only on the bar that first crosses each stride
+        // boundary (and always the first visible bar, for left-edge context).
+        let bucket = bar.ts_ms.div_euclid(stride_ms);
+        let is_boundary = prev_bucket != Some(bucket);
+        prev_bucket = Some(bucket);
+        if !is_boundary {
+            continue;
+        }
+        let x = data_left + (rel_idx as f32 + 0.5) * bar_w;
+        // Time gaps (weekend/overnight) can place two boundaries on adjacent
+        // bars; the pixel-gap guard keeps them from overprinting.
+        if x - last_label_x < MIN_GAP_PX {
+            continue;
+        }
+        let dt = chrono::Utc
+            .timestamp_millis_opt(bar.ts_ms)
+            .single()
+            .unwrap_or_default();
+        let date = dt.date_naive();
+        let first_label = last_label_date.is_none();
+        let new_day = last_label_date != Some(date);
+        let new_year = last_label_date.map(|d| d.year() != date.year()).unwrap_or(true);
+
+        label_buf.clear();
+        if first_label || new_year {
+            // First tick / year rollover: anchor with the year for context.
+            let _ = write!(label_buf, "{}", dt.format("%d %b'%y"));
+        } else if new_day {
+            let _ = write!(label_buf, "{}", dt.format("%d %b"));
+        } else {
+            let _ = write!(label_buf, "{:02}:{:02}", dt.hour(), dt.minute());
+        }
+
+        painter.line_segment(
+            [
+                egui::pos2(x, chart_rect.top()),
+                egui::pos2(x, chart_rect.bottom()),
+            ],
+            grid_stroke,
+        );
+        painter.text(
+            egui::pos2(x, chart_rect.bottom() + 2.0),
+            egui::Align2::CENTER_TOP,
+            label_buf.as_str(),
+            font.clone(),
+            AXIS_TEXT,
+        );
+        last_label_x = x;
+        last_label_date = Some(date);
+    }
 }
 
 // ─── command palette ─────────────────────────────────────────────────────────

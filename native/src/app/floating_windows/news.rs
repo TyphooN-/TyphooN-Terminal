@@ -755,8 +755,21 @@ impl TyphooNApp {
                                             if ui.button("Open Source").clicked() {
                                                 open_url = Some(a.url.clone());
                                             }
-                                            ui.label(egui::RichText::new(&a.url).color(AXIS_TEXT).small());
                                         });
+                                        // The raw URL is a single long unbreakable token. Inside the
+                                        // horizontal row above it refused to wrap, so its full pixel
+                                        // width became the article pane's — and therefore the whole
+                                        // window's — minimum width, a resize floor that changed with
+                                        // every article (the bug the user reported). Render it on its
+                                        // own line and TRUNCATE to the available width so the reader
+                                        // shrinks freely on both axes; the full URL is on hover.
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(&a.url).color(AXIS_TEXT).small(),
+                                            )
+                                            .wrap_mode(egui::TextWrapMode::Truncate),
+                                        )
+                                        .on_hover_text(a.url.as_str());
                                     }
                                 } else {
                                     ui.label(egui::RichText::new("Select an article from the list.").color(AXIS_TEXT));
