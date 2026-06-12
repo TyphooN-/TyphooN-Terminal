@@ -3246,16 +3246,15 @@ impl eframe::App for TyphooNApp {
                     ctx.input(|i| i.pointer.interact_pos())
                 } else { None };
 
-                // Lazy-load bars for visible MTF grid charts
-                if let Some(ref cache) = self.cache {
-                    'load_one: for group in &mtf_groups {
-                        for &vi in &group.indices {
-                            let chart = &mut self.charts[vi];
-                            if chart.bars.is_empty() {
-                                let loaded = { let mut gpu = self.gpu_indicators.take(); let r = chart.try_load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; r };
-                                let _ = loaded;
-                                break 'load_one;
-                            }
+                // Lazy-load bars for visible MTF grid charts through the paced
+                // deferred loader. Doing a synchronous `try_load()` directly from
+                // this render loop produced multi-second UI stalls while restored
+                // MTF grids pulled M1/M5/M15 merged rows and recomputed overlays.
+                // `queue_chart_reload` is O(1)-deduped by `deferred_chart_load_set`.
+                for group in &mtf_groups {
+                    for &vi in &group.indices {
+                        if self.charts[vi].bars.is_empty() {
+                            self.queue_chart_reload(vi);
                         }
                     }
                 }

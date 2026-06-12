@@ -2580,6 +2580,23 @@ pub(super) fn draw_chart(
         }
     }
 
+    // ── symbol / tf header geometry ─────────────────────────────────────────
+    // Compute this before the crosshair data window so the hover readout can
+    // anchor underneath the same decorated header instead of being hidden by it.
+    let sym_label = format!("{} [{}]", chart.symbol, chart.timeframe.label());
+    let header_pos = egui::pos2(chart_rect.left() + 8.0, chart_rect.top() + 6.0);
+    let header_pad_x = 6.0_f32;
+    let header_pad_y = 3.0_f32;
+    let sym_font = egui::FontId::monospace(11.0);
+    let sym_galley = painter.layout_no_wrap(sym_label, sym_font, egui::Color32::WHITE);
+    let sym_rect = egui::Rect::from_min_size(
+        header_pos,
+        egui::vec2(
+            sym_galley.rect.width() + header_pad_x * 2.0,
+            sym_galley.rect.height() + header_pad_y * 2.0,
+        ),
+    );
+
     // ── crosshair ────────────────────────────────────────────────────────────
     if let Some(pos) = crosshair {
         if chart_rect.contains(pos) {
@@ -2630,24 +2647,6 @@ pub(super) fn draw_chart(
                     format_price(b.close),
                     b.volume
                 );
-                // Semi-transparent background behind data text (WebKit: background #000000ee)
-                let data_bg = egui::Rect::from_min_size(
-                    egui::pos2(chart_rect.left() + 2.0, chart_rect.top() + 2.0),
-                    egui::vec2(tooltip.len() as f32 * 6.5 + 8.0, 30.0),
-                );
-                painter.rect_filled(
-                    data_bg,
-                    2.0,
-                    egui::Color32::from_rgba_premultiplied(0, 0, 0, 238),
-                );
-                painter.text(
-                    egui::pos2(chart_rect.left() + 6.0, chart_rect.top() + 4.0),
-                    egui::Align2::LEFT_TOP,
-                    &tooltip,
-                    egui::FontId::monospace(10.0),
-                    egui::Color32::from_rgb(220, 220, 255),
-                );
-
                 // Indicator values on second line
                 let mut ind_parts: Vec<String> = Vec::new();
                 if flags.sma200 {
@@ -2735,10 +2734,42 @@ pub(super) fn draw_chart(
                 if let Some(Some(v)) = chart.atr.get(abs_idx) {
                     ind_parts.push(format!("ATR:{}", format_price(*v)));
                 }
-                if !ind_parts.is_empty() {
-                    let ind_text = ind_parts.join("  ");
+                let ind_text = (!ind_parts.is_empty()).then(|| ind_parts.join("  "));
+                let data_chars = ind_text
+                    .as_ref()
+                    .map(|s| tooltip.len().max(s.len()))
+                    .unwrap_or(tooltip.len());
+                let data_h = if ind_text.is_some() { 34.0 } else { 20.0 };
+                let data_y = (sym_rect.bottom() + 4.0)
+                    .min((chart_rect.bottom() - data_h - 2.0).max(chart_rect.top() + 2.0));
+                // Semi-transparent background behind data text. It intentionally
+                // sits under the symbol/timeframe header with matching blue trim,
+                // instead of competing for the same top-left pixels.
+                let data_bg = egui::Rect::from_min_size(
+                    egui::pos2(header_pos.x, data_y),
+                    egui::vec2(data_chars as f32 * 6.5 + 12.0, data_h),
+                );
+                painter.rect_filled(
+                    data_bg,
+                    3.0,
+                    egui::Color32::from_rgba_premultiplied(0, 0, 0, 238),
+                );
+                painter.rect_stroke(
+                    data_bg,
+                    3.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 120, 180)),
+                    egui::StrokeKind::Inside,
+                );
+                painter.text(
+                    egui::pos2(data_bg.left() + 6.0, data_bg.top() + 4.0),
+                    egui::Align2::LEFT_TOP,
+                    &tooltip,
+                    egui::FontId::monospace(10.0),
+                    egui::Color32::from_rgb(220, 220, 255),
+                );
+                if let Some(ind_text) = ind_text {
                     painter.text(
-                        egui::pos2(chart_rect.left() + 6.0, chart_rect.top() + 18.0),
+                        egui::pos2(data_bg.left() + 6.0, data_bg.top() + 18.0),
                         egui::Align2::LEFT_TOP,
                         &ind_text,
                         egui::FontId::monospace(10.0),
@@ -2755,19 +2786,6 @@ pub(super) fn draw_chart(
     // drawing one joined header makes ownership obvious and prevents overlap.
     // Every cell self-labels with the full "SYM [TF]" badge — same as the
     // single-chart view — so the MTF grid needs no separate symbol header.
-    let sym_label = format!("{} [{}]", chart.symbol, chart.timeframe.label());
-    let header_pos = egui::pos2(chart_rect.left() + 8.0, chart_rect.top() + 6.0);
-    let header_pad_x = 6.0_f32;
-    let header_pad_y = 3.0_f32;
-    let sym_font = egui::FontId::monospace(11.0);
-    let sym_galley = painter.layout_no_wrap(sym_label, sym_font, egui::Color32::WHITE);
-    let sym_rect = egui::Rect::from_min_size(
-        header_pos,
-        egui::vec2(
-            sym_galley.rect.width() + header_pad_x * 2.0,
-            sym_galley.rect.height() + header_pad_y * 2.0,
-        ),
-    );
     painter.rect_filled(
         sym_rect,
         3.0,
