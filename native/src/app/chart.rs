@@ -910,9 +910,17 @@ pub(crate) fn chart_merge_equity_raw_bars(
         }
     }
 
+    let trusted_merge_is_stale = chart_trusted_equity_merge_is_stale(timeframe, &merged, &tagged);
+    if trusted_merge_is_stale {
+        merged.clear();
+    }
+
     if merged.is_empty() {
         // No trusted reference — best-effort per-bucket priority over depth.
-        for (_rank, bucketed) in &tagged {
+        for (rank, bucketed) in &tagged {
+            if trusted_merge_is_stale && *rank <= TRUSTED_MAX_RANK {
+                continue;
+            }
             for (bucket, bar) in bucketed {
                 merged.entry(*bucket).or_insert_with(|| bar.clone());
             }
@@ -1006,6 +1014,37 @@ pub(crate) fn chart_merge_equity_raw_bars(
     }
 
     merged.into_values().collect()
+}
+
+fn chart_trusted_equity_merge_is_stale(
+    timeframe: &str,
+    trusted: &std::collections::BTreeMap<i64, Bar>,
+    tagged: &[(u8, std::collections::BTreeMap<i64, Bar>)],
+) -> bool {
+    let Some(trusted_last) = trusted.keys().next_back().copied() else {
+        return false;
+    };
+    let Some(depth_last) = tagged
+        .iter()
+        .filter(|(rank, _)| *rank > 2)
+        .filter_map(|(_, bucketed)| bucketed.keys().next_back().copied())
+        .max()
+    else {
+        return false;
+    };
+    depth_last.saturating_sub(trusted_last) > chart_stale_trusted_equity_gap_ms(timeframe)
+}
+
+fn chart_stale_trusted_equity_gap_ms(timeframe: &str) -> i64 {
+    let hour = 3_600_000i64;
+    let day = 24 * hour;
+    match timeframe {
+        "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" => 10 * day,
+        "1Day" => 45 * day,
+        "1Week" => 120 * day,
+        "1Month" => 370 * day,
+        _ => 45 * day,
+    }
 }
 
 /// Validate, bucket, and de-duplicate one raw provider series into

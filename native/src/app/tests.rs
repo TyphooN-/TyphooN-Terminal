@@ -426,6 +426,58 @@ fn chart_materializes_merged_equity_cache_from_provider_rows() {
 }
 
 #[test]
+fn chart_equity_merge_does_not_pin_to_stale_trusted_intraday_rows() {
+    let db_path = std::env::temp_dir().join(format!(
+        "typhoon-merged-stale-trusted-test-{}-{}.db",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let hour = 3_600_000i64;
+    let stale_base = 1_609_459_200_000i64; // 2021-01-01T00:00:00Z
+    let fresh_base = 1_767_225_600_000i64; // 2026-01-01T00:00:00Z
+
+    let stale_trusted: Vec<serde_json::Value> = (0..32i64)
+        .map(|i| {
+            serde_json::json!({
+                "timestamp": chrono::DateTime::from_timestamp_millis(stale_base + i * hour).unwrap().to_rfc3339(),
+                "open": 0.60, "high": 0.70, "low": 0.50, "close": 0.65, "volume": 100.0
+            })
+        })
+        .collect();
+    cache
+        .put_bars(
+            "alpaca:BYND:1Hour",
+            &serde_json::to_string(&stale_trusted).unwrap(),
+        )
+        .unwrap();
+
+    let fresh_depth: Vec<serde_json::Value> = (0..32i64)
+        .map(|i| {
+            serde_json::json!({
+                "timestamp": chrono::DateTime::from_timestamp_millis(fresh_base + i * hour).unwrap().to_rfc3339(),
+                "open": 0.70, "high": 0.80, "low": 0.60, "close": 0.75, "volume": 1000.0
+            })
+        })
+        .collect();
+    cache
+        .put_bars(
+            "yahoo-chart:BYND:1Hour",
+            &serde_json::to_string(&fresh_depth).unwrap(),
+        )
+        .unwrap();
+
+    let merged = chart_load_merged_equity_bars_from_cache(&cache, "BYND", "1Hour");
+    assert_eq!(merged.len(), 32);
+    assert!(
+        merged.first().unwrap().ts_ms >= fresh_base,
+        "fresh Yahoo/current bars must win when the trusted intraday feed is years stale"
+    );
+    assert_eq!(merged.last().unwrap().close, 0.75);
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn chart_equity_merge_4hour_corrects_wick_spike_via_synthesized_yahoo_corroborator() {
     // Yahoo has no native 4-hour interval, so the H4 merge had no independent
     // corroborator and a bad Alpaca print sailed through (the WOK H4 artifact).
