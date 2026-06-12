@@ -75,3 +75,51 @@ pub use storage_return_distribution_snapshots::*;
 
 mod storage_autocorr_drawup_volatility_snapshots;
 pub use storage_autocorr_drawup_volatility_snapshots::*;
+
+/// Returns a compact, GUI-friendly company summary string.
+/// Suitable for Symbol Explorer, right panels, tooltips, or floating windows.
+pub fn get_company_summary(profile: &CompanyProfile) -> String {
+    let mut parts = Vec::new();
+
+    if !profile.name.is_empty() {
+        parts.push(profile.name.clone());
+    }
+    if !profile.exchange.is_empty() {
+        parts.push(format!("[{}]", profile.exchange));
+    }
+
+    let mut meta = Vec::new();
+    if !profile.sector.is_empty() {
+        meta.push(profile.sector.clone());
+    }
+    if !profile.industry.is_empty() && profile.industry != profile.sector {
+        meta.push(profile.industry.clone());
+    }
+    if !meta.is_empty() {
+        parts.push(format!("({})", meta.join(" · ")));
+    }
+
+    if !profile.ipo_date.is_empty() {
+        parts.push(format!("IPO: {}", profile.ipo_date));
+    }
+
+    if !profile.website.is_empty() {
+        parts.push(profile.website.clone());
+    }
+
+    let mut out = parts.join("  ");
+
+    if !profile.description.is_empty() {
+        let desc = if profile.description.len() > 320 {
+            format!("{}…", &profile.description[..320])
+        } else {
+            profile.description.clone()
+        };
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(&desc);
+    }
+
+    out
+}
