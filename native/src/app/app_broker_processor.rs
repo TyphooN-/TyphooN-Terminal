@@ -115,9 +115,6 @@ pub(super) fn spawn_broker_message_processor(
             .timeout(std::time::Duration::from_secs(20))
             .build()
             .unwrap_or_default();
-        // Cached Yahoo session for watchlist extended hours (avoid re-auth every cycle)
-        let mut yahoo_session: Option<fundamentals::YahooSession> = None;
-        let mut yahoo_session_created: std::time::Instant = std::time::Instant::now();
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 BrokerCmd::Connect {
@@ -269,6 +266,17 @@ pub(super) fn spawn_broker_message_processor(
                     }
                 }
                 BrokerCmd::GetWatchlistQuotes { symbols } => {
+                    // Run OFF the serial broker loop. This fetch makes up to one
+                    // broker snapshot per watchlist symbol (3s timeout each) plus a
+                    // Yahoo round-trip; on the shared loop its periodic refresh
+                    // starved trading-critical commands (GetPositions/GetOrders),
+                    // leaving positions "constantly stale". Spawning keeps it
+                    // concurrent — the same off-loop principle the equities sync
+                    // already follows (see kraken_equity_fetch_permits above).
+                    let broker = broker.clone();
+                    let broker_msg_tx_clone = broker_msg_tx_clone.clone();
+                    let shared_cache_broker = shared_cache_broker.clone();
+                    tokio::spawn(async move {
                     let mut rows: Vec<WatchlistRow> = symbols
                         .iter()
                         .map(|sym| empty_watchlist_row(sym))
@@ -340,11 +348,10 @@ pub(super) fn spawn_broker_message_processor(
                             .map(|r| r.symbol.clone())
                             .collect();
                         if !equity_syms.is_empty() {
-                            // Reuse cached Yahoo session (recreate every 30 min to refresh cookies)
-                            if yahoo_session.is_none() || yahoo_session_created.elapsed().as_secs() > 1800 {
-                                yahoo_session = fundamentals::YahooSession::new().await.ok();
-                                yahoo_session_created = std::time::Instant::now();
-                            }
+                            // Fresh Yahoo session per refresh. This now runs in a
+                            // spawned task off the broker loop, so the auth round-trip
+                            // is not on any critical path.
+                            let yahoo_session = fundamentals::YahooSession::new().await.ok();
                             if let Some(ref session) = yahoo_session {
                                 let sym_list = equity_syms.join(",");
                                 let crumb_param = if session.crumb().is_empty() { String::new() } else { format!("&crumb={}", session.crumb()) };
@@ -461,6 +468,7 @@ pub(super) fn spawn_broker_message_processor(
                         }
                     }
                     let _ = broker_msg_tx_clone.send(BrokerMsg::WatchlistQuotes(rows));
+                    });
                 }
                 BrokerCmd::GetMarketClock => {
                     // US-equity/xStock session status is sourced from Alpaca's market clock.
