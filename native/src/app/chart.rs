@@ -1606,17 +1606,32 @@ fn chart_build_merged_equity_bars_from_cache(
     symbol: &str,
     timeframe: &str,
 ) -> Vec<Bar> {
+    if timeframe == "4Hour" {
+        let hourly = chart_build_merged_equity_bars_from_cache(cache, symbol, "1Hour");
+        if hourly.len() >= 2 {
+            let hourly_raw = chart_bars_to_raw(hourly);
+            let four_hour = chart_aggregate_raw_to_4hour(&hourly_raw);
+            if four_hour.len() >= 2 {
+                return chart_raw_to_bars(four_hour);
+            }
+        }
+    }
+
+    if timeframe == "1Week" {
+        let daily = chart_build_merged_equity_bars_from_cache(cache, symbol, "1Day");
+        if daily.len() >= 2 {
+            let daily_raw = chart_bars_to_raw(daily);
+            let weekly = chart_aggregate_raw_to_weekly(&daily_raw);
+            if weekly.len() >= 2 {
+                return weekly;
+            }
+        }
+    }
+
     if timeframe == "1Month" {
         let daily = chart_build_merged_equity_bars_from_cache(cache, symbol, "1Day");
         if daily.len() >= 2 {
-            let daily_raw = daily
-                .into_iter()
-                .map(|bar| {
-                    (
-                        bar.ts_ms, bar.open, bar.high, bar.low, bar.close, bar.volume,
-                    )
-                })
-                .collect();
+            let daily_raw = chart_bars_to_raw(daily);
             let monthly = ChartState::aggregate_daily_raw_to_monthly(daily_raw);
             if monthly.len() >= 2 {
                 return monthly;
@@ -1671,6 +1686,29 @@ fn chart_build_merged_equity_bars_from_cache(
     chart_merge_equity_raw_bars(timeframe, &views)
 }
 
+fn chart_bars_to_raw(bars: Vec<Bar>) -> Vec<(i64, f64, f64, f64, f64, f64)> {
+    bars.into_iter()
+        .map(|bar| {
+            (
+                bar.ts_ms, bar.open, bar.high, bar.low, bar.close, bar.volume,
+            )
+        })
+        .collect()
+}
+
+fn chart_raw_to_bars(raw: Vec<(i64, f64, f64, f64, f64, f64)>) -> Vec<Bar> {
+    raw.into_iter()
+        .map(|(ts_ms, open, high, low, close, volume)| Bar {
+            ts_ms,
+            open,
+            high,
+            low,
+            close,
+            volume,
+        })
+        .collect()
+}
+
 /// Aggregate a finer raw OHLCV series into 4-hour buckets aligned exactly to
 /// [`chart_merge_bucket_ts`]'s "4Hour" boundaries, so the result overlaps native
 /// 4-hour bars bucket-for-bucket inside the merge. Open = first bar in a bucket,
@@ -1723,6 +1761,47 @@ fn chart_aggregate_raw_to_4hour(
     out.into_values()
         .map(|b| (b.ts_ms, b.open, b.high, b.low, b.close, b.volume))
         .collect()
+}
+
+fn chart_aggregate_raw_to_weekly(raw: &[(i64, f64, f64, f64, f64, f64)]) -> Vec<Bar> {
+    let mut sorted: Vec<(i64, f64, f64, f64, f64, f64)> = raw
+        .iter()
+        .copied()
+        .filter(|(ts, o, h, l, c, _v)| {
+            *ts > 0
+                && *o > 0.0
+                && *h > 0.0
+                && *l > 0.0
+                && *c > 0.0
+                && o.is_finite()
+                && h.is_finite()
+                && l.is_finite()
+                && c.is_finite()
+                && *h >= *l
+        })
+        .collect();
+    sorted.sort_by_key(|(ts, ..)| *ts);
+
+    let mut out: std::collections::BTreeMap<i64, Bar> = std::collections::BTreeMap::new();
+    for (ts, o, h, l, c, v) in sorted {
+        let bucket = chart_merge_bucket_ts("1Week", ts);
+        out.entry(bucket)
+            .and_modify(|b| {
+                b.high = b.high.max(h).max(c);
+                b.low = b.low.min(l).min(c);
+                b.close = c;
+                b.volume += v;
+            })
+            .or_insert(Bar {
+                ts_ms: bucket,
+                open: o,
+                high: h,
+                low: l,
+                close: c,
+                volume: v,
+            });
+    }
+    out.into_values().collect()
 }
 
 impl ChartState {

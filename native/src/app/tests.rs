@@ -613,6 +613,81 @@ fn chart_equity_merge_4hour_corrects_wick_spike_via_synthesized_yahoo_corroborat
 }
 
 #[test]
+fn chart_loads_merged_weekly_from_corrected_daily_bars() {
+    // Native weekly provider blobs can preserve stale/mis-adjusted OHLC across
+    // corporate-action weeks. The user-facing Merged W1 chart should be the
+    // weekly aggregation of the already-adjudicated daily Merged bars, matching
+    // TradingView-style HTF construction instead of trusting a separate bad W1
+    // provider row.
+    use chrono::{TimeZone, Utc};
+    let db_path = std::env::temp_dir().join(format!(
+        "typhoon-merged-weekly-from-daily-test-{}-{}.db",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let cache = SqliteCache::open(&db_path).unwrap();
+
+    let day = chrono::Duration::days(1);
+    let week = chrono::Duration::weeks(1);
+    let base = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
+
+    let alpaca_daily: Vec<serde_json::Value> = (0..10i64)
+        .map(|i| {
+            let c = if i == 6 || i == 7 { 0.20 } else { 0.10 };
+            serde_json::json!({
+                "timestamp": (base + day * i as i32).to_rfc3339(),
+                "open": c, "high": c, "low": c, "close": c, "volume": 100.0
+            })
+        })
+        .collect();
+    cache
+        .put_bars(
+            "alpaca:WOK:1Day",
+            &serde_json::to_string(&alpaca_daily).unwrap(),
+        )
+        .unwrap();
+
+    let yahoo_daily: Vec<serde_json::Value> = (0..10i64)
+        .map(|i| {
+            serde_json::json!({
+                "timestamp": (base + day * i as i32).to_rfc3339(),
+                "open": 0.10, "high": 0.11, "low": 0.09, "close": 0.10, "volume": 50.0
+            })
+        })
+        .collect();
+    cache
+        .put_bars(
+            "yahoo-chart:WOK:1Day",
+            &serde_json::to_string(&yahoo_daily).unwrap(),
+        )
+        .unwrap();
+
+    let bad_weekly: Vec<serde_json::Value> = (0..2i64)
+        .map(|i| {
+            serde_json::json!({
+                "timestamp": (base + week * i as i32).to_rfc3339(),
+                "open": 0.20, "high": 0.40, "low": 0.18, "close": 0.20, "volume": 500.0
+            })
+        })
+        .collect();
+    cache
+        .put_bars(
+            "alpaca:WOK:1Week",
+            &serde_json::to_string(&bad_weekly).unwrap(),
+        )
+        .unwrap();
+
+    let weekly = chart_load_merged_equity_bars_from_cache(&cache, "WOK", "1Week");
+    assert_eq!(weekly.len(), 2);
+    assert!(
+        weekly.iter().all(|bar| bar.close < 0.12 && bar.high < 0.12),
+        "weekly Merged bars must come from corrected daily bars, not stale native W1 rows: {:?}",
+        weekly.iter().map(|b| b.close).collect::<Vec<_>>()
+    );
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn chart_mtf_overlays_load_from_merged_cache_rows() {
     let db_path = std::env::temp_dir().join(format!(
         "typhoon-merged-mtf-overlay-test-{}-{}.db",
