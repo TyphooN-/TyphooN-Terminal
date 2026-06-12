@@ -301,6 +301,8 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [113](docs/adr/113-cross-source-equity-bar-merge-data-integrity.md) | Cross-Source Equity Bar Merge & Data Integrity |
 | [114](docs/adr/114-deprecate-martingale-live-trading.md) | Deprecate Martingale Live-Trading Support |
 | [115](docs/adr/115-deprecate-cli-tui.md) | Deprecate CLI/TUI — Archive to `deprecated/cli-tui` |
+| [116](docs/adr/116-finviz-stock-page-feature-parity-target.md) | Finviz Stock-Page Feature Parity Target |
+| [117](docs/adr/117-stocktwits-social-sentiment-ingest.md) | StockTwits Social-Sentiment Ingest into Research Packet |
 
 ---
 
