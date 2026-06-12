@@ -73,6 +73,7 @@ mod app_runtime_right_panel_recent_fills;
 mod app_runtime_right_panel_risk;
 mod app_runtime_right_panel_trading;
 mod app_runtime_right_panel_watchlist;
+mod app_runtime_stream_ticks;
 mod app_runtime_support;
 mod app_runtime_tabs;
 mod app_runtime_toolbar;
