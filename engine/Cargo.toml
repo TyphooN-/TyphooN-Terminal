@@ -34,7 +34,6 @@ hmac = { workspace = true }
 pbkdf2 = { workspace = true }
 rand = "0.10"
 base64 = { workspace = true }
-calamine = "0.35"
 # DOM-aware article body extractor: picks the publisher's main content node
 # (article/main/.caas-body/.article-body/etc.) and drops nav/header/footer/aside
 # chrome before returning text. See news::extract_article_text.
