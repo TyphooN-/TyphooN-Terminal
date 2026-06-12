@@ -1,6 +1,47 @@
 use super::*;
 
 impl TyphooNApp {
+    pub(super) fn handle_broker_quote(&mut self, symbol: String, bid: f64, ask: f64, last: f64) {
+        self.log.push_back(LogEntry::info(format!(
+            "{}: bid {} ask {} last {}",
+            symbol,
+            format_price(bid),
+            format_price(ask),
+            format_price(last)
+        )));
+        if last <= 0.0 || !last.is_finite() {
+            return;
+        }
+
+        let sym_norm = symbol.replace('/', "").to_ascii_uppercase();
+        for chart in &mut self.charts {
+            let chart_sym = chart.symbol.replace('/', "").to_ascii_uppercase();
+            let mut parts = chart_sym.rsplit(':');
+            let last_part = parts.next().unwrap_or(chart_sym.as_str());
+            let chart_bare = if matches!(
+                last_part,
+                "1MIN"
+                    | "5MIN"
+                    | "15MIN"
+                    | "30MIN"
+                    | "1HOUR"
+                    | "4HOUR"
+                    | "1DAY"
+                    | "1WEEK"
+                    | "1MONTH"
+            ) {
+                parts.next().unwrap_or(chart_sym.as_str())
+            } else {
+                chart_sym.as_str()
+            };
+            if chart_bare == sym_norm.as_str()
+                || chart_bare.contains(sym_norm.as_str())
+                || sym_norm.contains(chart_bare)
+            {
+                chart.apply_forming_price_update(last);
+            }
+        }
+    }
     pub(super) fn handle_kraken_book_quote_tick(&mut self, symbol: String, bid: f64, ask: f64) {
         let last = (bid + ask) * 0.5;
         if last <= 0.0 || !last.is_finite() {

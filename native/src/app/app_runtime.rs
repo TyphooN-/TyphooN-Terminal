@@ -1063,48 +1063,7 @@ impl eframe::App for TyphooNApp {
                         self.handle_kraken_equity_history_error(symbol, timeframe, error);
                 }
                 BrokerMsg::Quote(symbol, bid, ask, last) => {
-                    self.log.push_back(LogEntry::info(format!(
-                        "{}: bid {} ask {} last {}",
-                        symbol,
-                        format_price(bid),
-                        format_price(ask),
-                        format_price(last)
-                    )));
-                    // Update forming bar (last bar) on any chart matching this symbol
-                    if last > 0.0 {
-                        let sym_norm = symbol.replace('/', "").to_uppercase();
-                        for chart in &mut self.charts {
-                            let chart_sym = chart.symbol.replace('/', "").to_uppercase();
-                            let chart_bare = {
-                                let parts: Vec<&str> = chart_sym.split(':').collect();
-                                let is_tf = matches!(
-                                    parts.last().map(|s| s.as_ref()),
-                                    Some(
-                                        "1MIN"
-                                            | "5MIN"
-                                            | "15MIN"
-                                            | "30MIN"
-                                            | "1HOUR"
-                                            | "4HOUR"
-                                            | "1DAY"
-                                            | "1WEEK"
-                                            | "1MONTH"
-                                    )
-                                );
-                                if is_tf && parts.len() > 1 {
-                                    parts[parts.len() - 2].to_string()
-                                } else {
-                                    chart_sym.clone()
-                                }
-                            };
-                            if chart_bare == sym_norm
-                                || chart_bare.contains(&sym_norm)
-                                || sym_norm.contains(&chart_bare)
-                            {
-                                chart.apply_forming_price_update(last);
-                            }
-                        }
-                    }
+                    self.handle_broker_quote(symbol, bid, ask, last);
                 }
                 BrokerMsg::WatchlistQuotes(rows) => {
                     self.handle_watchlist_quotes(rows);
