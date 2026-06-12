@@ -945,27 +945,10 @@ impl eframe::App for TyphooNApp {
                 BrokerMsg::OrderResult(msg) => {
                     self.handle_order_result(msg);
                 }
-                BrokerMsg::SecScrapeResult(ref msg) => {
-                    self.scrape_sec_running = false;
-                    self.scrape_sec_last_msg = msg.clone();
-                    self.log.push_back(LogEntry::info(msg.clone()));
-                }
-                BrokerMsg::FilingContent(text) => {
-                    self.sec_filing_content = text;
-                    self.sec_filing_loading = false;
-                    // Invalidate cached summary so it re-computes for the new content.
-                    self.sec_filing_summary = None;
-                    self.sec_filing_summary_for.clear();
-                    self.log
-                        .push_back(LogEntry::info("SEC filing document loaded"));
-                }
-                BrokerMsg::FinnhubNewsResult(articles) => {
-                    self.news_loading = false;
-                    self.log.push_back(LogEntry::info(format!(
-                        "Finnhub: {} articles loaded",
-                        articles.len()
-                    )));
-                    self.news_articles = articles;
+                msg @ (BrokerMsg::SecScrapeResult(_)
+                | BrokerMsg::FilingContent(_)
+                | BrokerMsg::FinnhubNewsResult(_)) => {
+                    self.handle_news_sec_result_msg(msg);
                 }
                 BrokerMsg::KrakenEquityUniverse(markets) => {
                     market_data_refill_requested |= self.handle_kraken_equity_universe(markets);
@@ -1463,117 +1446,9 @@ impl eframe::App for TyphooNApp {
                 | BrokerMsg::KupiecPofSnapshotMsg(_, _)) => {
                     self.handle_extended_indicator_snapshot_msg(msg);
                 }
-                BrokerMsg::IngestResearchResult {
-                    per_symbol_added,
-                    errors,
-                } => {
-                    self.ingest_research_busy = false;
-                    if per_symbol_added.is_empty() && errors.is_empty() {
-                        self.ingest_research_status = "No articles parsed.".into();
-                    } else {
-                        let summary: Vec<String> = per_symbol_added
-                            .iter()
-                            .map(|(s, added, total)| format!("{}: +{} (now {})", s, added, total))
-                            .collect();
-                        let total_added: usize = per_symbol_added.iter().map(|(_, a, _)| *a).sum();
-                        self.ingest_research_status = if errors.is_empty() {
-                            format!(
-                                "Ingested {} new articles across {} symbol(s): {}",
-                                total_added,
-                                per_symbol_added.len(),
-                                summary.join(" · ")
-                            )
-                        } else {
-                            format!(
-                                "Ingested {} new articles · {} error(s): {}",
-                                total_added,
-                                errors.len(),
-                                errors.join("; ")
-                            )
-                        };
-                        self.log
-                            .push_back(LogEntry::info(self.ingest_research_status.clone()));
-                        // Auto-refresh the News panel so the pasting user sees the
-                        // new articles without having to click "Load Cached". Prefer
-                        // the symbol the user is currently filtering; otherwise fall
-                        // back to the first ingested symbol.
-                        if total_added > 0 {
-                            let refresh_sym = if !self.news_symbol_filter.trim().is_empty() {
-                                self.news_symbol_filter.trim().to_uppercase()
-                            } else {
-                                per_symbol_added
-                                    .first()
-                                    .map(|(s, _, _)| s.to_uppercase())
-                                    .unwrap_or_default()
-                            };
-                            if !refresh_sym.is_empty() {
-                                self.news_loading = true;
-                                let _ = self.broker_tx.send(BrokerCmd::LoadCachedNews {
-                                    symbol: refresh_sym,
-                                    limit: 200,
-                                });
-                            }
-                        }
-                    }
-                }
-                BrokerMsg::NewsArticlesLoaded { symbol, articles } => {
-                    self.news_loading = false;
-                    let count = articles.len();
-                    self.news_full_articles = articles;
-                    // Update content hash for news cache guard
-                    let mut h = self.news_full_articles.len() as u64;
-                    if let Some(first) = self.news_full_articles.first() {
-                        for b in first.headline.as_bytes() {
-                            h = h.wrapping_mul(31).wrapping_add(*b as u64);
-                        }
-                    }
-                    self.news_input_hash = h;
-                    self.news_articles = self
-                        .news_full_articles
-                        .iter()
-                        .map(|a| {
-                            let dt =
-                                chrono::DateTime::<chrono::Utc>::from_timestamp(a.published_at, 0)
-                                    .map(|d| d.format("%Y-%m-%d").to_string())
-                                    .unwrap_or_else(|| "—".to_string());
-                            let source = if a.provider.is_empty() {
-                                a.source.clone()
-                            } else {
-                                a.provider.clone()
-                            };
-                            (a.headline.clone(), source, dt)
-                        })
-                        .collect();
-                    // Restore selection by stable URL hash after reload/session restore.
-                    if !self.news_selected_url_hash.is_empty() {
-                        self.news_selected = self
-                            .news_full_articles
-                            .iter()
-                            .position(|a| a.url_hash == self.news_selected_url_hash);
-                    }
-                    // Clear selection if the selected index is now out of range.
-                    if let Some(idx) = self.news_selected {
-                        if idx >= self.news_full_articles.len() {
-                            self.news_selected = None;
-                        }
-                    }
-                    if self.news_selected.is_none() && !self.news_full_articles.is_empty() {
-                        self.news_selected = Some(0);
-                    }
-                    if let Some(idx) = self.news_selected {
-                        if let Some(article) = self.news_full_articles.get(idx) {
-                            self.news_selected_url_hash = article.url_hash.clone();
-                        }
-                    }
-                    let label = if symbol.is_empty() {
-                        "all".to_string()
-                    } else {
-                        symbol
-                    };
-                    self.log.push_back(LogEntry::info(format!(
-                        "News {}: {} articles loaded",
-                        label, count
-                    )));
+                msg @ (BrokerMsg::IngestResearchResult { .. }
+                | BrokerMsg::NewsArticlesLoaded { .. }) => {
+                    self.handle_news_ingest_msg(msg);
                 }
                 BrokerMsg::UnusualVolumeResults(results) => {
                     self.log.push_back(LogEntry::info(format!(

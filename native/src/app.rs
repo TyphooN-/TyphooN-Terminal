@@ -57,6 +57,7 @@ mod app_runtime_kraken_ws;
 mod app_runtime_live_quotes;
 mod app_runtime_macro_alt_data;
 mod app_runtime_menu;
+mod app_runtime_news_results;
 mod app_runtime_order_results;
 mod app_runtime_research_core;
 mod app_runtime_research_macro_valuation;
