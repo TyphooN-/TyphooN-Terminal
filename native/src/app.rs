@@ -66,6 +66,7 @@ mod app_runtime_right_panel_watchlist;
 mod app_runtime_support;
 mod app_runtime_tabs;
 mod app_runtime_toolbar;
+mod app_runtime_watchlist_quotes;
 mod app_startup;
 mod auto_compact;
 mod bar_sync;
