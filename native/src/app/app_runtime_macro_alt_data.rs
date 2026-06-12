@@ -3,6 +3,13 @@ use super::*;
 impl TyphooNApp {
     pub(super) fn handle_macro_alt_data_msg(&mut self, msg: BrokerMsg) {
         match msg {
+            BrokerMsg::CryptoTop50(data) => {
+                self.log.push_back(LogEntry::info(format!(
+                    "CoinGecko: {} coins loaded",
+                    data.len()
+                )));
+                self.crypto_top50 = data;
+            }
             BrokerMsg::FredData(series, yields) => {
                 self.fred_data = series;
                 self.fred_yield_curve = yields;

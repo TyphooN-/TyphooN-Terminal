@@ -1109,13 +1109,6 @@ impl eframe::App for TyphooNApp {
                 BrokerMsg::WatchlistQuotes(rows) => {
                     self.handle_watchlist_quotes(rows);
                 }
-                BrokerMsg::CryptoTop50(data) => {
-                    self.log.push_back(LogEntry::info(format!(
-                        "CoinGecko: {} coins loaded",
-                        data.len()
-                    )));
-                    self.crypto_top50 = data;
-                }
                 BrokerMsg::KrakenBalances(balances) => {
                     self.handle_kraken_balances(balances);
                 }
@@ -1125,7 +1118,8 @@ impl eframe::App for TyphooNApp {
                 BrokerMsg::KrakenFuturesInstruments(symbols) => {
                     self.handle_kraken_futures_instruments(symbols);
                 }
-                msg @ (BrokerMsg::FredData(_, _)
+                msg @ (BrokerMsg::CryptoTop50(_)
+                | BrokerMsg::FredData(_, _)
                 | BrokerMsg::EconCalendarData(_)
                 | BrokerMsg::CongressData(_)) => {
                     self.handle_macro_alt_data_msg(msg);
