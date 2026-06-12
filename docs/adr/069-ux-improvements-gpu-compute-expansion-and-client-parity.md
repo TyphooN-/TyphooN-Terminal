@@ -179,10 +179,7 @@ possible from grammar/iterator mismatches across entire codebase.
 - All WebCmd variants validated in web-server before relay
 - `deny_unknown_fields` on all serde types
 - Integer overflow checked in cache.rs with `checked_mul`/`checked_add`
-- Integer overflow checked in gpu_compute.rs Darwin batch calculations (ADR-070 audit)
-- Constant-time passphrase comparison in web-server auth (ADR-070, `subtle` crate)
-- Mutex locks dropped before I/O in lan_sync.rs (ADR-070 audit fix)
-- Write lock released before file I/O + compression in cache.rs export_backup (ADR-070 audit)
+- Write lock released before file I/O + compression in cache.rs export_backup
 - Decompression failures logged instead of silently defaulted in cache.rs repair_bar_counts
 - Client-side SYNCABLE_TABLES whitelist check on LAN sync table names (defense in depth)
 
@@ -236,7 +233,6 @@ zone compositor.
 
 - ADR-001 — Native GPU architecture (foundation)
 - ADR-030 — GPU compute architecture (40 existing shaders)
-- ADR-035 — GPU DARWIN analytics
 - ADR-038 — GPU strategy optimizer
 - ADR-053 — Web server TLS + WebSocket relay
 - ADR-066 — Phone WASM trade tab

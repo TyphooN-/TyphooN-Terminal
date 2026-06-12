@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-25
 **Status:** Accepted
-**Related:** `engine/src/broker/alpaca.rs`, `native/src/app.rs`, ADR-009 (multi-broker), ADR-058 (LAN sync bandwidth), ADR-059 (SSD write reduction)
+**Related:** `engine/src/broker/alpaca.rs`, `native/src/app.rs`, ADR-009 (multi-broker), ADR-059 (SSD write reduction)
 
 ## Context
 
@@ -91,7 +91,7 @@ broad Missing/Stale/Backfill scheduler.
 `close_position` and `close_all_positions` now read
 `response.status()` and parse `json["message"]`; any non-2xx with a
 `"message"` body returns `Err` instead of pretending the close
-succeeded. This pairs with ADR-085's cancel-exits-then-close flow:
+succeeded. This pairs with the cancel-exits-then-close flow:
 the flow can now distinguish a hard reject (asset not closeable)
 from a soft `insufficient qty` race (which the retry handles).
 

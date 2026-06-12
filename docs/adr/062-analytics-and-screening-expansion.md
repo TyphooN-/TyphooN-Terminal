@@ -67,4 +67,4 @@ All implementable analytics features complete. 470 tests passing. GPU path fully
 - GPU path verified at 31/31 indicators active — no dead code
 - 467 total tests passing
 
-See also: ADR-056 (Screener Framework), ADR-035 (GPU DARWIN Analytics)
+See also: ADR-056 (Screener Framework)

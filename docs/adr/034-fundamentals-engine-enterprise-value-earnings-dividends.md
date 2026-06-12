@@ -100,4 +100,4 @@ Scrape Status Dashboard now has individual buttons: "MT5 Only", "Alpaca Only", "
 ### Symbol Sources
 `FundamentalsScrape` carries three boolean flags: `use_mt5`, `use_alpaca`, `use_tastytrade`. MT5 symbols extracted from `bar_cache` keys (`mt5:SYMBOL:TF`, 3-part). Alpaca symbols from `broker.get_all_assets()`. TastyTrade symbols from `tt.get_positions()`.
 
-See also: ADR-054 (SwapHarvester), ADR-055 (DarwinexRadar), ADR-056 (Screener)
+See also: ADR-056 (Screener)

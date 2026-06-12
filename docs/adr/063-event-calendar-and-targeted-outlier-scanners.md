@@ -114,5 +114,4 @@ Date color: red (≤3 days), amber (≤7 days), muted otherwise — draws the ey
 ## Related
 
 - ADR-057 — Yahoo extended-hours pipeline (original magenta candle)
-- ADR-055 — Darwinex Radar (source of Darwinex tradeable universe)
 - ADR-062 — Analytics expansion (multi-dim outlier scanner, dividend screener)

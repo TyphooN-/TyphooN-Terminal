@@ -101,4 +101,4 @@ MT5 → BarCacheWriter → typhoon_mt5_cache.db (specs table)
 - BarCacheWriter EA needs update and redeployment to all MT5 instances
 - Spec snapshot adds ~100ms to daily BarCacheWriter cycle
 
-See also: ADR-054 (SwapHarvester — scans specs for positive swap), ADR-055 (DarwinexRadar — changelog from spec snapshots)
+

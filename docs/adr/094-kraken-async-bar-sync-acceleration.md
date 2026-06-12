@@ -81,8 +81,6 @@ Kraken public bar sync now follows a fully async, queue-friendly model:
 
 ## References
 
-- ADR-021: Data source hierarchy
-- ADR-023: Crypto data source
 - ADR-051: Kraken as full broker
 - ADR-087: Alpaca sync autotuning
 - ADR-095: Kraken rate-limit pacing and cooldown

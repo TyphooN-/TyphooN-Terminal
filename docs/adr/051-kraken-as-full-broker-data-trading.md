@@ -131,7 +131,7 @@ to reduce latency and REST pressure between authoritative snapshots.
 
 Native quick-trade and chart-position controls can route crypto orders to
 Kraken. Close-all, partial-close, cancel-order, and exit synchronization use
-the same MT5 EA semantics as Alpaca and tastytrade (ADR-085).
+the same net-position EA semantics as Alpaca.
 
 The LAN web/mobile protocol now accepts `kraken` for order, cancel, and close
 commands. Web order types are normalized to Kraken names:

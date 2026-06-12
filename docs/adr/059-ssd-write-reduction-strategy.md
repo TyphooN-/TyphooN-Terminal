@@ -27,4 +27,4 @@ SQLite KV cache writes were burning SSD at hundreds of writes/second during mark
 - Trade-off: live bid/ask no longer persisted across restarts (acceptable — refreshes immediately from streaming)
 - WAL file grows slightly larger between checkpoints (~8MB vs ~4MB)
 
-See also: ADR-003 (SQLite Cache), ADR-058 (LAN Sync Bandwidth)
+See also: ADR-003 (SQLite Cache)

@@ -2,7 +2,7 @@
 
 **Status:** Updated / Implemented
 **Date:** 2026-04-28 (original decision), 2026-04-29 (auto-compact wired), 2026-05-03 (Storage Manager schedule controls), 2026-05-20 (bar-cache writes moved to zstd-22), 2026-05-24 (WS hot-path carve-out at zstd-3, see ADR-099), 2026-06-03 (user-selectable base write level)
-**Related:** ADR-003 (SQLite + zstd cache), ADR-032 (performance architecture), ADR-058 (LAN sync bandwidth), ADR-099 (Kraken WS full-universe responsiveness), `engine/src/core/cache.rs`, `native/src/app/auto_compact.rs`, `native/src/app.rs::BrokerCmd::CompactStorage`
+**Related:** ADR-003 (SQLite + zstd cache), ADR-032 (performance architecture), ADR-099 (Kraken WS full-universe responsiveness), `engine/src/core/cache.rs`, `native/src/app/auto_compact.rs`, `native/src/app.rs::BrokerCmd::CompactStorage`
 
 ## Context
 

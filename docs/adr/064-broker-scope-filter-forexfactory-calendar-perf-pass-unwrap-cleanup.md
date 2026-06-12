@@ -132,4 +132,4 @@ Critical production unwraps fixed:
 
 - ADR-061 — No-unwrap policy
 - ADR-063 — Event Calendar + targeted outlier scanners
-- ADR-058 / 080 / 081 — Prior performance work (referenced to avoid re-doing)
+- ADR-080 — Prior performance work (referenced to avoid re-doing)

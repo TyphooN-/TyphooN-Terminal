@@ -147,7 +147,7 @@ Reuse existing render shaders for analytics overlays:
 
 ## Tests
 
-**Total workspace test count: 881** (up from 854 in ADR-070).
+**Total workspace test count: 881**.
 
 - 216 mql5-compiler (unchanged)
 - 535 engine (+24: DataSourceManager 17, OCO/format_order_price 3, Kraken 2, FRED 2)
@@ -239,4 +239,3 @@ Pivot Points (single arithmetic from prev day — GPU overhead > benefit).
 
 - ADR-030 — GPU compute architecture (original 33 shaders)
 - ADR-069 — UX improvements, GPU expansion, client parity
-- ADR-070 — Darwinex Zero web scraping + correlation alerts

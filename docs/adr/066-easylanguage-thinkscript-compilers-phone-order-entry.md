@@ -1,5 +1,7 @@
 # ADR-066: EasyLanguage + thinkScript Compilers, Phone Order Entry
 
+> **⚠️ Partially superseded (2026-06).** The phone / WASM-web order-entry portion was removed with the web client; the EasyLanguage / thinkScript compiler work remains in the `mql5-compiler` transpiler.
+
 **Status:** Implemented
 **Date:** 2026-04-09
 

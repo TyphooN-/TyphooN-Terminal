@@ -1,5 +1,14 @@
 # TyphooN Terminal — Roadmap
 
+## Deprecated & Removed (2026-06)
+
+The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the history below that cover these subsystems are kept for the record but no longer ship:
+
+- **Brokers/data:** MT5/Darwinex (DARWIN portfolio + BarCacheWriter bridge), tastytrade, CryptoCompare, and the Stooq fallback — see [ADR-111](adr/111-broker-scope-reduction-kraken-alpaca-only.md), [ADR-106](adr/106-remove-stooq-daily-fallback.md). Code preserved on `deprecated/*` branches.
+- **LAN sync + WASM/web phone client:** removed; native-desktop only.
+- **Live martingale trading:** deprecated — see [ADR-114](adr/114-deprecate-martingale-live-trading.md).
+- **MQL5 export pipeline:** removed (the `mql5-compiler` transpiler is retained).
+
 ## Completed
 
 ### Phase 1: Foundation
@@ -130,17 +139,17 @@
 - [x] Full Spot REST AddOrder parameters: stop/take-profit/trailing variants, price2, displayvol iceberg, settle-position, margin/reduce-only, flags, TIF, client IDs, STP, validate-only, conditional close
 - [x] Batch orders, order amend/edit, batch cancel, cancel-all, dead-man cancel
 - [x] LAN web/mobile order, cancel, and close routing for Kraken
-- [x] Position summaries unified into PositionInfo shape (ADR-085)
+- [x] Position summaries unified into PositionInfo shape
 - [x] Display-pair normalization (XBTUSD → BTCUSD)
 
 ### Phase 14: LAN Sync v2
-- [x] TLS-encrypted (wss://) WebSocket sync, ephemeral self-signed certs (ADR-045)
+- [x] TLS-encrypted (wss://) WebSocket sync, ephemeral self-signed certs
 - [x] PBKDF2 passphrase auth, constant-time HMAC-SHA256
-- [x] 15 remote commands (SEC_SCRAPE, DARWIN_IMPORT, FETCH_BARS, INGEST_RESEARCH, etc.) — ADR-046
-- [x] Bandwidth-tuned sync, full data + KV cache (ADR-058)
+- [x] 15 remote commands (SEC_SCRAPE, FETCH_BARS, INGEST_RESEARCH, etc.)
+- [x] Bandwidth-tuned sync, full data + KV cache
 
 ### Phase 15: Web LAN Client
-- [x] WASM client (eframe/glow), built via trunk (ADR-052)
+- [x] WASM client (eframe/glow), built via trunk
 - [x] HTTPS + WebSocket relay (axum, axum-server)
 - [x] Read-only chart, watchlist, positions/orders display
 
@@ -165,7 +174,7 @@
 - Deferred: chart-overlay candlestick pattern marks remain intentionally research-packet-first per ADR-079.
 
 ### Phase 19: MT5 EA Trading-Flow Alignment
-- [x] One net position per symbol across Alpaca / tastytrade / Kraken (ADR-085)
+- [x] One net position per symbol across Alpaca / Kraken
 - [x] Partial close + close-all on every broker
 - [x] Cancel-pending-exit-orders-before-close (no more `insufficient qty` rejects)
 - [x] Display-symbol normalization to EA's symbol table

@@ -206,6 +206,8 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 
 ### ADR Index
 
+> Removed-feature ADRs (Darwin/MT5/Tastytrade/CryptoCompare, LAN sync, WASM web client) were deleted in the 2026-06 Kraken + Alpaca scope reduction. ADR numbers are permanent identifiers and are **not reused**, so gaps in the sequence below are expected.
+
 | ADR | Topic |
 |---|---|
 | [001](docs/adr/001-native-gpu-architecture.md) | Native GPU Architecture |
@@ -225,15 +227,8 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [015](docs/adr/015-price-alerts.md) | Price Alerts |
 | [016](docs/adr/016-drawing-tools.md) | Drawing Tools |
 | [017](docs/adr/017-multi-timeframe-grid.md) | Multi-Timeframe Grid |
-| [018](docs/adr/018-tastytrade-broker-integration.md) | Tastytrade Broker Integration |
 | [019](docs/adr/019-ehlers-dsp-indicators.md) | Ehlers DSP Indicators |
 | [020](docs/adr/020-free-api-expansion-data-sources-research.md) | Free API Expansion — Data Sources Research |
-| [021](docs/adr/021-data-source-hierarchy-mt5-master-broker-fallback.md) | Data Source Hierarchy — MT5 Master, Broker Fallback |
-| [022](docs/adr/022-data-source-indicator-and-pluggable-broker-hierarchy.md) | Data Source Indicator & Pluggable Broker Hierarchy |
-| [023](docs/adr/023-crypto-data-source-hierarchy-cryptocompare-kraken.md) | Crypto Data Source Hierarchy — CryptoCompare + Kraken |
-| [024](docs/adr/024-darwin-import-pipeline-and-analytics-engine.md) | DARWIN Import Pipeline & Analytics Engine |
-| [025](docs/adr/025-backup-lan-sync-system.md) | Backup + LAN Sync System |
-| [026](docs/adr/026-darwin-analytics-expansion.md) | DARWIN Analytics Expansion |
 | [027](docs/adr/027-bookmap-style-depth-heatmap.md) | Bookmap-Style Depth Heatmap |
 | [028](docs/adr/028-scott-carney-harmonic-pattern-detection.md) | Scott Carney Harmonic Pattern Detection |
 | [029](docs/adr/029-broker-market-data-sync-scheduler-lifecycle.md) | Broker market-data sync scheduler lifecycle |
@@ -242,30 +237,21 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [032](docs/adr/032-performance-architecture-background-data-render-decoupling.md) | Performance Architecture — Background Data + Render Decoupling |
 | [033](docs/adr/033-background-data-channels-zero-db-queries-on-ui-thread.md) | Background Data Channels (Zero DB Queries on UI Thread) |
 | [034](docs/adr/034-fundamentals-engine-enterprise-value-earnings-dividends.md) | Fundamentals Engine (Enterprise Value, Earnings, Dividends) |
-| [035](docs/adr/035-gpu-accelerated-darwin-analytics.md) | GPU-Accelerated DARWIN Analytics |
 | [036](docs/adr/036-data-pipelines-and-rendering-architecture.md) | Data Pipelines & Rendering Architecture |
 | [037](docs/adr/037-symbol-specs-tracking-and-radar-export.md) | Symbol Specs Tracking & Radar Export |
 | [038](docs/adr/038-gpu-strategy-optimizer-and-mql5-export-pipeline.md) | GPU Strategy Optimizer & MQL5 Export Pipeline |
 | [039](docs/adr/039-security-by-design-credential-and-data-protection.md) | Security by Design — Credential & Data Protection |
 | [040](docs/adr/040-mql5-compiler-pipeline-source-to-gpu-cpu-execution.md) | MQL5 Compiler Pipeline — Source to GPU/CPU Execution |
 | [041](docs/adr/041-gpu-cpu-indicator-audit-parity-verification.md) | GPU/CPU Indicator Audit — Parity Verification |
-| [042](docs/adr/042-darwin-trade-overlay-chart-arrows-position-lines.md) | DARWIN Trade Overlay — Chart Arrows + Position Lines |
 | [043](docs/adr/043-bettervolume-full-mql5-port-emini-watch-algorithm.md) | BetterVolume — Full MQL5 Port (Emini-Watch Algorithm) |
 | [044](docs/adr/044-performance-and-security-audit.md) | Performance & Security Audit |
-| [045](docs/adr/045-lan-sync-tls-encryption.md) | LAN Sync TLS Encryption |
-| [046](docs/adr/046-lan-sync-remote-request-forwarding.md) | LAN Sync Remote Request Forwarding |
 | [047](docs/adr/047-feature-audit-and-gap-closure-record.md) | Feature Audit and Gap-Closure Record |
 | [048](docs/adr/048-drawing-tools-and-ux-parity-with-tradingview.md) | Drawing Tools & UX Parity with TradingView |
-| [049](docs/adr/049-lan-lite-client-mode-on-demand-bar-sync.md) | LAN-Lite Client Mode (On-Demand Bar Sync) |
 | [050](docs/adr/050-broker-bar-data-provider-maximum-history.md) | Broker Bar Data — Provider-Maximum History |
 | [051](docs/adr/051-kraken-as-full-broker-data-trading.md) | Kraken as Full Broker (Data + Trading) |
-| [052](docs/adr/052-wasm-web-client-for-phone-access.md) | WASM Web Client for Phone Access |
 | [053](docs/adr/053-notification-system-discord-pushover-ntfy-sh.md) | Notification System — Discord, Pushover, ntfy.sh |
-| [054](docs/adr/054-swapharvester-financing-cost-screening-for-carry-strategies.md) | SwapHarvester — Financing Cost Screening for Carry Strategies |
-| [055](docs/adr/055-darwinexradar-symbol-spec-change-tracking-and-export.md) | DarwinexRadar — Symbol Spec Change Tracking & Export |
 | [056](docs/adr/056-screener-framework-ev-fundamentals-and-signal-scanning.md) | Screener Framework — EV, Fundamentals, and Signal Scanning |
 | [057](docs/adr/057-yahoo-finance-extended-hours-watchlist.md) | Yahoo Finance Extended Hours Watchlist |
-| [058](docs/adr/058-lan-sync-bandwidth-optimization.md) | LAN Sync Bandwidth Optimization |
 | [059](docs/adr/059-ssd-write-reduction-strategy.md) | SSD Write Reduction Strategy |
 | [060](docs/adr/060-optimization-roadmap-2026-04-08.md) | Optimization Roadmap (2026-04-08) |
 | [061](docs/adr/061-no-unwrap-policy-production-error-handling.md) | No Unwrap Policy — Production Error Handling |
@@ -277,7 +263,6 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [067](docs/adr/067-multi-frontend-expansion-cross-language-transpiler.md) | Multi-Frontend Expansion + Cross-Language Transpiler |
 | [068](docs/adr/068-transpiler-phase-2-full-cross-language-matrix.md) | Transpiler Phase 2: Full Cross-Language Matrix |
 | [069](docs/adr/069-ux-improvements-gpu-compute-expansion-and-client-parity.md) | UX Improvements, GPU Compute Expansion, and Client Parity |
-| [070](docs/adr/070-darwinex-zero-live-web-scraping-via-selenium.md) | Darwinex Zero Live Web Scraping via Selenium |
 | [071](docs/adr/071-gpu-parity-for-all-indicators-analytics-ux-overhaul.md) | GPU Parity for All Indicators + Analytics UX Overhaul |
 | [072](docs/adr/072-o-1-hot-path-optimizations-scope-regression-fix.md) | O(1) Hot-Path Optimizations + Scope Regression Fix |
 | [073](docs/adr/073-sec-filing-database-expansion.md) | SEC Filing Database Expansion |
@@ -288,23 +273,18 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [078](docs/adr/078-multi-source-news-ingest-pipeline.md) | Multi-source News Ingest Pipeline |
 | [079](docs/adr/079-godel-ta-lib-parity-program.md) | Godel / TA-Lib Parity Program |
 | [080](docs/adr/080-web-research-ingestion-from-ai-agents-research-packet-viewer.md) | Web Research Ingestion from AI Agents + RESEARCH_PACKET Viewer |
-| [081](docs/adr/081-mt5-barcachewriter-typhoon-terminal-health-check-protocol.md) | MT5 BarCacheWriter ⇆ TyphooN-Terminal health-check protocol |
 | [082](docs/adr/082-ai-chat-session-persistence-resume-slash-commands.md) | AI chat session persistence + resume slash commands |
 | [083](docs/adr/083-cross-client-ai-response-cache.md) | Cross-Client AI Response Cache |
 | [084](docs/adr/084-options-expiration-calendar-tier-1-market-tier-2-per-symbol.md) | Options Expiration Calendar — Tier 1 Market + Tier 2 Per-Symbol |
-| [085](docs/adr/085-mt5-ea-trading-flow-alignment-across-brokers.md) | MT5 EA Trading-Flow Alignment Across Brokers |
 | [086](docs/adr/086-native-app-rs-module-decomposition-for-compile-speed.md) | native/app.rs Module Decomposition for Compile Speed |
 | [087](docs/adr/087-alpaca-sync-autotuning-by-data-tier.md) | Alpaca Sync Autotuning by Data Tier |
 | [088](docs/adr/088-dependency-audit-and-rustsec-advisory-closure.md) | Dependency Audit and RustSec Advisory Closure |
 | [089](docs/adr/089-zstd-compression-level-policy-and-auto-compaction.md) | ZSTD Compression Level Policy and Auto-Compaction |
-| [090](docs/adr/090-headless-lan-server-deployment.md) | Headless LAN Server Deployment |
 | [091](docs/adr/091-password-encrypted-cache-at-rest.md) | Password-Encrypted Cache at Rest |
 | [092](docs/adr/092-xynth-feature-parity-target.md) | Xynth Feature Parity Target |
-| [093](docs/adr/093-lan-observability-and-kafka-deployment.md) | LAN Observability and Kafka Deployment |
 | [094](docs/adr/094-kraken-async-bar-sync-acceleration.md) | Kraken Async Bar Sync Acceleration |
 | [095](docs/adr/095-kraken-rate-limit-pacing-and-cooldown.md) | Kraken Rate-Limit Pacing and Cooldown |
 | [096](docs/adr/096-ai-return-path-auto-ingest.md) | AI Return Path Auto-Ingest |
-| [097](docs/adr/097-darwinex-zero-usa-equity-universe.md) | Darwinex Zero USA Equity Universe |
 | [098](docs/adr/098-per-frame-o-1-discipline-in-chart-and-sync-paths.md) | Per-Frame O(1) Discipline in Chart and Sync Paths |
 | [099](docs/adr/099-kraken-ws-full-universe-streaming-under-egui-responsiveness-budget.md) | Kraken WS Full-Universe Streaming Under egui Responsiveness Budget |
 | [100](docs/adr/100-news-article-rendering-dom-aware-extractor-hero-images-commonmark-viewer.md) | News Article Rendering: DOM-aware extractor, hero images, CommonMark viewer; NO HTML/JS renderer |

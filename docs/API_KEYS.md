@@ -12,15 +12,6 @@ Optional API keys and broker credentials that unlock additional features.
 - **Data:** IEX (free) or SIP (paid) market data feeds
 - **Rate limit:** 200 requests/minute (free plan)
 
-## tastytrade (Optional Broker)
-
-**Used for:** tastytrade account display, positions, orders, option chains, quote snapshots, market metrics, and DXLink historical bars.
-
-- **Sign up:** https://tastytrade.com/
-- **Cost:** Free account; trading fees apply on filled orders
-- **Credentials:** tastytrade username + password, stored in the OS-native keyring
-- **Note:** tastytrade does not use API keys in TyphooN; the terminal creates a session token from the saved login.
-
 ## FRED (Federal Reserve Economic Data)
 
 **Used for:** Historical market statistics, interest rates, GDP, CPI, unemployment, yield curves
@@ -29,15 +20,6 @@ Optional API keys and broker credentials that unlock additional features.
 - **Cost:** Free
 - **Rate limit:** 120 requests/minute
 - **Key format:** 32-character alphanumeric string
-
-## CryptoCompare (Deep Crypto History)
-
-**Used for:** Historical crypto bar data — BTC from 2010, ETH from 2015, most alts from 2017+. Primary crypto backfill source (replaces Kraken for deep history).
-
-- **Sign up:** Not required
-- **Cost:** Free, no API key needed
-- **Rate limit:** Generous (no key = lower tier, but sufficient for backfill)
-- **Note:** 2000 bars per request with proper backward pagination. No geo-restrictions.
 
 ## Kraken (Primary Market Data + Trading)
 

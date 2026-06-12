@@ -123,7 +123,7 @@ No per-frame throttling by window state — expensive operations eliminated inst
 
 **LAN Sync:**
 - TLS encrypted (wss://), PBKDF2-HMAC-SHA256 auth. No TOFU cert pinning (ephemeral certs).
-- 60-second periodic re-sync (bars, KV, DARWIN, research tables), updated by ADR-058 to reduce LAN bandwidth.
+- 60-second periodic re-sync (bars, KV, research tables).
 - Server auto-start on startup (`lan_server_enabled` persisted). Client auto-connect (`lan_client_enabled`).
 - Connected client IPs tracked and displayed in server UI (stored in KV `lan:server:clients`).
 - Broker positions/account/orders stored to KV cache → LAN clients read-only view.
@@ -141,7 +141,7 @@ No per-frame throttling by window state — expensive operations eliminated inst
 - Batch 5, sleep 200ms, incremental_vacuum every 30min, 100K bar cap.
 
 **Other:**
-- Alpaca auto-connect on startup. tastytrade button disabled (ADR-018).
+- Alpaca auto-connect on startup.
 - Crypto backfill: CryptoCompare + Kraken for sub-hourly TFs (complementary, both stored).
 - Status bar: LIVE when any data source connected (removed market hours logic).
 - MTF indicators (SMA/KAMA) computed in `try_load()` (was missing — invisible on chart).
@@ -170,7 +170,6 @@ No per-frame throttling by window state — expensive operations eliminated inst
 - Yahoo Finance ticker validated (alphanumeric + dots/hyphens, max 20 chars) before URL construction — prevents URL injection.
 - SEC CIK validated (numeric only) before EDGAR URL construction.
 - Hardcoded `/home/typhoon/` path in darwin radar export replaced with `$HOME`-based resolution.
-- See ADR-052 for WASM web server security model (TLS, passphrase auth, rate limiting, connection limits).
 
 **Performance Optimizations (2026-04-07/08):**
 - Correlation matrix: single-pass mean/variance pre-compute, single-pass covariance per pair (was 5 passes). Self-correlation short-circuits to 1.0.

@@ -1,5 +1,7 @@
 # ADR-038: GPU Strategy Optimizer & MQL5 Export Pipeline
 
+> **⚠️ Partially superseded (2026-06).** The MQL5 *export* pipeline was removed (the `mql5-compiler` transpiler and GPU strategy optimizer remain). See [ADR-111](111-broker-scope-reduction-kraken-alpaca-only.md).
+
 **Status:** Implemented
 **Date:** 2026-03-26
 
