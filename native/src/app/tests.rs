@@ -329,6 +329,50 @@ fn chart_equity_merge_corrects_days_old_intraday_spike() {
 }
 
 #[test]
+fn chart_equity_merge_prefers_adjusted_alpaca_over_raw_kraken_across_split() {
+    // kraken-equities (rank 0) returns RAW xStock bars; Alpaca (rank 2) returns
+    // split-adjusted bars. Across a reverse split the raw source out-ranks Alpaca
+    // and would paint unadjusted pre-split history (the WOK December discontinuity).
+    // The era-wide reconciliation must adopt the adjusted Alpaca bars there.
+    let day = 86_400_000i64;
+    let n = 150i64;
+    // Days 1..=90 PRE-split: kraken RAW ~10.0 (100x), Alpaca adjusted ~0.10.
+    // Days 91..=150 POST-split: both ~0.10 (agree).
+    let kraken: Vec<(i64, f64, f64, f64, f64, f64)> = (1..=n)
+        .map(|d| {
+            let c = if d <= 90 { 10.0 } else { 0.10 };
+            (d * day, c, c, c, c, 100.0)
+        })
+        .collect();
+    let alpaca: Vec<(i64, f64, f64, f64, f64, f64)> = (1..=n)
+        .map(|d| (d * day, 0.10, 0.10, 0.10, 0.10, 80.0))
+        .collect();
+
+    let merged = chart_merge_equity_raw_bars(
+        "1Day",
+        &[("kraken-equities", &kraken), ("alpaca", &alpaca)],
+    );
+    let by_ts: std::collections::HashMap<i64, f64> =
+        merged.iter().map(|b| (b.ts_ms, b.close)).collect();
+    // Pre-split era is now on the adjusted (0.10) scale, continuous with post-split.
+    assert!(
+        (by_ts[&(10 * day)] - 0.10).abs() < 1e-6,
+        "raw pre-split bars must be replaced by adjusted Alpaca; got {}",
+        by_ts[&(10 * day)]
+    );
+    assert!(
+        (by_ts[&(50 * day)] - 0.10).abs() < 1e-6,
+        "mid pre-split era corrected; got {}",
+        by_ts[&(50 * day)]
+    );
+    assert!(
+        (by_ts[&(130 * day)] - 0.10).abs() < 1e-6,
+        "post-split bars unchanged; got {}",
+        by_ts[&(130 * day)]
+    );
+}
+
+#[test]
 fn chart_persists_merged_equity_bars_under_merged_cache_key() {
     let db_path = std::env::temp_dir().join(format!(
         "typhoon-merged-cache-test-{}-{}.db",

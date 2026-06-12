@@ -928,6 +928,16 @@ pub(crate) fn chart_merge_equity_raw_bars(
         return merged.into_values().collect();
     }
 
+    // Trusted-tier split-adjustment reconciliation. The best-rank trusted source
+    // (kraken-equities iapi) returns RAW xStock bars, while Alpaca returns
+    // split-adjusted bars (`adjustment=all`). Across a reverse split (WOK 1-for-100,
+    // 2025-12) the raw source sits on a different scale and — out-ranking Alpaca
+    // per bucket — paints unadjusted pre-split history (the December discontinuity
+    // TradingView never shows). Where the raw source diverges from the adjusted
+    // reference across a whole consistent ERA (not a single bad print), adopt the
+    // adjusted bars so the series stays continuous.
+    chart_reconcile_trusted_split_adjustment(&mut merged, &tagged);
+
     // Trusted-tier outlier correction. A trusted feed can momentarily emit a
     // bad print — a thin microcap whose provider mis-applies a corporate action
     // (WOK doubled to ~2× on Alpaca for two days in 2026-06 while Yahoo,
@@ -1014,6 +1024,80 @@ pub(crate) fn chart_merge_equity_raw_bars(
     }
 
     merged.into_values().collect()
+}
+
+/// Reconcile a raw best-rank trusted source against a split-adjusted lower-rank
+/// trusted source (Alpaca, `adjustment=all`) — see the call site. Only an
+/// ERA-WIDE, internally-consistent divergence (a corporate-action scale step, not
+/// a single bad print) is overridden, so a lone bad Alpaca bar can't hijack a good
+/// raw bar. Buckets in the recent window are left to the Yahoo outlier guard.
+fn chart_reconcile_trusted_split_adjustment(
+    merged: &mut std::collections::BTreeMap<i64, Bar>,
+    tagged: &[(u8, std::collections::BTreeMap<i64, Bar>)],
+) {
+    const TRUSTED_MAX_RANK: u8 = 2;
+    const DIVERGE_RATIO: f64 = 1.5; // a scale step, not noise
+    const MIN_ERA: usize = 5; // need a run of divergent buckets, not one bad bar
+    const ERA_TOL: f64 = 1.25; // the divergent ratios must share one scale factor
+
+    // The best-rank trusted source is the one that populated `merged`.
+    let Some(best_rank) = tagged
+        .iter()
+        .map(|(rank, _)| *rank)
+        .filter(|rank| *rank <= TRUSTED_MAX_RANK)
+        .min()
+    else {
+        return;
+    };
+
+    for (rank, adj) in tagged {
+        if *rank <= best_rank || *rank > TRUSTED_MAX_RANK {
+            continue; // only a lower-rank trusted source is a candidate reference
+        }
+        // Recent consensus ratio between merged (raw best) and the adjusted
+        // reference. They must agree recently (post-split) for the comparison to
+        // mean anything; a window straddling the split is rejected by the
+        // tightness check inside chart_recent_overlap_scale.
+        let Some((consensus, window_start)) = chart_recent_overlap_scale(merged, adj) else {
+            continue;
+        };
+        // Older buckets where merged diverges from the adjusted reference beyond
+        // DIVERGE_RATIO of that recent consensus.
+        let mut divergent: Vec<(i64, f64)> = Vec::new();
+        for (bucket, abar) in adj {
+            if *bucket >= window_start {
+                continue; // recent window is handled by the outlier guard
+            }
+            let Some(mbar) = merged.get(bucket) else {
+                continue;
+            };
+            if abar.close <= 0.0 || mbar.close <= 0.0 {
+                continue;
+            }
+            let ratio = mbar.close / abar.close;
+            if (ratio / consensus).max(consensus / ratio) > DIVERGE_RATIO {
+                divergent.push((*bucket, ratio));
+            }
+        }
+        if divergent.len() < MIN_ERA {
+            continue; // not era-wide → could be a single bad print; leave it alone
+        }
+        // The divergent ratios must be one consistent scale (a split factor), not
+        // scattered single-bar errors.
+        let mut ratios: Vec<f64> = divergent.iter().map(|(_, r)| *r).collect();
+        ratios.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let p25 = ratios[ratios.len() / 4];
+        let p75 = ratios[ratios.len() * 3 / 4];
+        if p25 <= 0.0 || p75 / p25 > ERA_TOL {
+            continue;
+        }
+        // A consistent mis-adjusted era → the adjusted reference is authoritative.
+        for (bucket, _) in &divergent {
+            if let Some(abar) = adj.get(bucket) {
+                merged.insert(*bucket, abar.clone());
+            }
+        }
+    }
 }
 
 fn chart_trusted_equity_merge_is_stale(
