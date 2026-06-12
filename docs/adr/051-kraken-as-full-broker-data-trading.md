@@ -2,6 +2,8 @@
 
 **Status:** Accepted | **Date:** 2026-05-01
 
+> **Note (2026-06):** Kraken and Alpaca are the only supported brokers — see [ADR-111](111-broker-scope-reduction-kraken-alpaca-only.md). The Kraken trading/data surface documented here is current; references below to **tastytrade** and to **CryptoCompare** crypto backfill are historical (those integrations were removed, code on `deprecated/*`).
+
 ## Context
 
 Kraken is the terminal's crypto exchange integration. TyphooN uses it in two
@@ -21,7 +23,7 @@ includes `AddOrder`, `AmendOrder`, `CancelOrder`, `CancelAll`,
 
 ## Decision
 
-Kraken remains a first-class broker beside Alpaca and tastytrade. The engine
+Kraken remains a first-class broker beside Alpaca. The engine
 centralizes Kraken nonce generation, request signing, form encoding, response
 error handling, pair normalization, and order construction in
 `KrakenBroker`.

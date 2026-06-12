@@ -300,6 +300,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [112](docs/adr/112-equities-bar-sync-demand-depth-vs-catalog-breadth.md) | Equities Bar Sync — Demand Depth vs Catalog Breadth |
 | [113](docs/adr/113-cross-source-equity-bar-merge-data-integrity.md) | Cross-Source Equity Bar Merge & Data Integrity |
 | [114](docs/adr/114-deprecate-martingale-live-trading.md) | Deprecate Martingale Live-Trading Support |
+| [115](docs/adr/115-deprecate-cli-tui.md) | Deprecate CLI/TUI — Archive to `deprecated/cli-tui` |
 
 ---
 

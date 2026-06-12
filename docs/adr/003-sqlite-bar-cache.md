@@ -3,6 +3,8 @@
 **Status:** Implemented
 **Date:** 2026-03-24
 
+> **Note (2026-06):** the SQLite bar cache remains current, but the external **MT5 BarCacheWriter** producer referenced below was removed in the **Kraken + Alpaca** scope reduction — see [ADR-111](111-broker-scope-reduction-kraken-alpaca-only.md). Rust writers (`put_bars` / `merge_bars`) are now the sole producers; `maybe_decompress()` still tolerates legacy raw-TTBR blobs from older caches.
+
 ## Context
 
 Fetching historical bars from broker APIs on every startup is slow and rate-limited. The terminal needs a local cache that survives restarts, supports fast range queries by symbol and timeframe, and minimizes memory copies on the hot path.

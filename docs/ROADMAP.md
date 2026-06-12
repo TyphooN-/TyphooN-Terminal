@@ -76,7 +76,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] Bid/ask spread display
 
 ### Phase 8: Data & Analytics
-- [x] Crypto backfill (CryptoCompare — BTC from 2010, 2000 bars/request; Kraken retained for async recent/gap-fill)
+- [x] ~~Crypto backfill (CryptoCompare — BTC from 2010, 2000 bars/request)~~ *(removed 2026-06 — Kraken async recent/gap-fill retained)*
 - [x] DARWIN signal vs quote comparison
 - [x] MTF SMA (H1/H4/D1/W1 200SMA + W1/MN1 100SMA — Tomato + Magenta)
 - [x] ATR Projection MTF (M15/H1/H4/D1/W1/MN1 horizontal levels)
@@ -139,7 +139,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] HMAC-SHA512 signed REST trading (ADR-051)
 - [x] Full Spot REST AddOrder parameters: stop/take-profit/trailing variants, price2, displayvol iceberg, settle-position, margin/reduce-only, flags, TIF, client IDs, STP, validate-only, conditional close
 - [x] Batch orders, order amend/edit, batch cancel, cancel-all, dead-man cancel
-- [x] LAN web/mobile order, cancel, and close routing for Kraken
+- [x] ~~LAN web/mobile order, cancel, and close routing for Kraken~~ *(removed 2026-06 — LAN/web client deprecated)*
 - [x] Position summaries unified into PositionInfo shape
 - [x] Display-pair normalization (XBTUSD → BTCUSD)
 

@@ -1,6 +1,6 @@
 # TyphooN Terminal — Indicator Reference (46+ Indicators)
 
-All indicators computed in pure Rust on `&[f64]` slices. No Web Workers, no WASM bridge. 40+ run on the GPU via wgpu compute shaders with CPU fallback. See ADR-079 for the chartable parity bundle (CMO / QStick / Disparity / BOP / StdDev) and ADR-079 for the broader TA-Lib + Godel parity surface.
+All indicators computed in pure Rust on `&[f64]` slices. No Web Workers, no WASM bridge. 40+ run on the GPU via wgpu compute shaders with CPU fallback. See ADR-079 for the chartable parity bundle (CMO / QStick / Disparity / BOP / StdDev) and the broader TA-Lib + Godel parity surface.
 
 ## NNFX System (Baseline + Confirmation + Volume + Exit)
 

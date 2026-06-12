@@ -23,8 +23,9 @@ without lying on the chart:
 
 The second mode is the dangerous one, and it exposed an architectural gap:
 
-- The merge has a **trusted tier** (rank ≤ 2: `kraken-equities`, `tastytrade`,
-  `alpaca`) that *defines the price scale*, and a **depth tier** (`yahoo-chart`,
+- The merge has a **trusted tier** (rank ≤ 2: `kraken-equities` and `alpaca`; the
+  rank table keeps a vestigial `tastytrade` slot only so legacy cached rows from
+  the removed broker still merge) that *defines the price scale*, and a **depth tier** (`yahoo-chart`,
   `default`) that only *fills gaps* the trusted tier lacks. So a bad trusted bar
   is never challenged — the depth tier can't overwrite a bucket the trusted tier
   already owns.

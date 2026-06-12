@@ -3,6 +3,8 @@
 **Status:** Implemented
 **Date:** 2026-03-26 | **Updated:** 2026-04-05
 
+> **Note (2026-06):** the **MT5 BarCacheWriter** and **Darwinex XLSX/FTP** data sources described below were removed in the **Kraken + Alpaca** scope reduction — see [ADR-111](111-broker-scope-reduction-kraken-alpaca-only.md). Current bar pipelines are Kraken (Spot REST/WS, Securities iapi, Futures) + Alpaca with a Yahoo corroborator — see [ADR-112](112-equities-bar-sync-demand-depth-vs-catalog-breadth.md) and [ADR-113](113-cross-source-equity-bar-merge-data-integrity.md). The threading model, render-decoupling, and contention-avoidance architecture documented here still apply.
+
 ## Overview
 
 TyphooN Terminal has multiple data sources, processing pipelines, and rendering paths. This ADR documents how data flows from source to screen, which thread handles what, and how contention is avoided.
