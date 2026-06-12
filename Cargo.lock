@@ -5795,6 +5795,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rfd",
+ "rustls",
  "serde",
  "serde_json",
  "tokio",

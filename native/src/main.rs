@@ -75,6 +75,8 @@ fn ac_power_available() -> bool {
 }
 
 fn main() -> eframe::Result {
+    install_rustls_crypto_provider();
+
     // Initialize logging — suppress noisy wgpu/egl/vulkan adapter probing
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -204,4 +206,8 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| Ok(Box::new(app::TyphooNApp::new(cc, rt_handle)))),
     )
+}
+
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 }

@@ -40,6 +40,10 @@ regex = "1"
 
 # HTTP client (for Kraken API in broker task — matches engine)
 reqwest = { workspace = true, features = ["json", "rustls"] }
+# Select one process-wide rustls crypto provider explicitly. reqwest pulls
+# aws-lc-rs while egui_extras/ehttp/ureq pulls ring, so rustls cannot infer a
+# unique provider at runtime unless the binary installs one before TLS use.
+rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
 
 # Date/time formatting (for chart time axis labels)
 chrono = { workspace = true }
