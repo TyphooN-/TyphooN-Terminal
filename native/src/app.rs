@@ -55,6 +55,7 @@ mod app_runtime_kraken_ws;
 mod app_runtime_live_quotes;
 mod app_runtime_menu;
 mod app_runtime_research_core;
+mod app_runtime_research_quant_snapshots;
 mod app_runtime_research_rank_snapshots;
 mod app_runtime_research_snapshots;
 mod app_runtime_right_panel;
