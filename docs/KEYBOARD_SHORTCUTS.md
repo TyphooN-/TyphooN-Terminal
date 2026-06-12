@@ -45,7 +45,7 @@
 | File | Connect to Broker, Settings, Quit (Alt+F4) |
 | View | MTF Grid, Chart Type, Indicators, Sub-Panes |
 | Trading | Open Trade, Close All, SL/TP Lines |
-| Tools | DARWIN Accounts, Portfolio, Backtest, Screener, Risk Calc |
+| Tools | Backtest, Screener, Risk Calc |
 | Research | News, Calendar, SEC, Fundamentals |
 | Analysis | Correlation, Seasonals, Monte Carlo, Volume Profile |
 | Help | Keyboard Shortcuts |
@@ -61,15 +61,13 @@ Open with `~` and type to fuzzy-search. Selected examples below — the full set
 | `RELOAD` | Reload bars from cache |
 | `MTF` | Toggle multi-timeframe grid |
 | `INDICATORS` | Indicator settings panel |
-| `DARWIN` | DARWIN accounts overview |
-| `PORTFOLIO` | DARWIN portfolio dashboard |
 | `BACKTEST` | Run backtest on loaded bars |
 | `OPTIMIZER` | SMA Cross grid optimization |
 | `RISK_CALC` | Position sizing calculator |
 | `VAR` | VaR multiplier estimator |
 | `MARGIN` | Margin monitor |
 | `SCREENER` | Symbol screener |
-| `CORRELATION` | DARWIN correlation matrix |
+| `CORRELATION` | Correlation matrix |
 | `SEASONALS` | Monthly return patterns |
 | `MONTECARLO` | Monte Carlo VaR simulation |
 | `STRESS_TEST` | Portfolio stress test |

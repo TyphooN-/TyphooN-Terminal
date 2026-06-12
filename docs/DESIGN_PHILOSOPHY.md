@@ -6,13 +6,13 @@
 
 Every byte from SQLite cache to GPU pixels traverses zero serialization layers. No JSON, no IPC, no JavaScript objects, no garbage collection. Rust types from storage to render.
 
-### 2. DARWIN-First Analytics
+### 2. Independent Risk Analytics
 
-The terminal is built around Darwinex DARWIN accounts. The analytics engine (darwin.rs, 80+ functions) provides independent risk verification — VaR, correlation, exposure, streaks, hourly P&L — without relying on Darwinex's own dashboards.
+The terminal computes its own risk verification — VaR, CVaR, correlation, exposure, streaks, hourly P&L, drawdown — from cached bars and live broker positions, without relying on any broker's own dashboards. See `risk.rs`, `var.rs`, `margin.rs`, and the research surfaces in `research.rs`.
 
-### 3. MT5 as View-Only Data Source
+### 3. Trusted Data + Independent Corroboration
 
-MT5 provides bar data via the BarCacheWriter EA → SQLite cache pipeline. Trade management stays in MT5. The terminal consumes MT5 data but does not manage MT5 instances. DARWIN analytics come from XLSX trade history imports.
+Market data comes from **Kraken + Alpaca** (trusted, corporate-action-adjusted) with Yahoo Chart as the independent corroborator. Equity bars from multiple providers are merged into one continuous, scale-validated series, and a bad trusted print is corrected against the corroborator rather than charted (ADR-111/112/113).
 
 ### 4. NNFX System Parity
 
@@ -37,13 +37,13 @@ egui's immediate mode paradigm means the entire UI is a function of state — no
 
 The `typhoon-engine` crate exports all broker, cache, risk, analytics, and backtest functionality as a Rust library. The native GUI and CLI/TUI consume the same engine with zero duplication.
 
-### 8. Darwinex VaR Corridor Compliance
+### 8. Risk Corridor Discipline
 
-All risk panels are designed around Darwinex's rules:
-- VaR corridor: 3.25% – 6.5%
-- Correlation limit: 0.95 / 45d
-- 100% margin accounts
+Risk panels enforce a configurable risk framework rather than ad-hoc sizing:
+- VaR corridor with configurable upper/lower bounds
+- Portfolio correlation limit
 - Forward-looking TRIM for position sizing
+- Margin and exposure monitoring
 
 ### 9. Session Continuity
 
@@ -55,4 +55,3 @@ Indicator toggles, symbol, MTF state, and window positions persist to `~/.config
 - No WebView (no XSS, no CSP issues)
 - SQLite parameterized queries only (no SQL injection)
 - API credentials stored via OS-native keyring (libsecret/Keychain/CredentialManager)
-- XLSX parsing via calamine (pure Rust, no shell execution)

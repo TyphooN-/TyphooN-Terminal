@@ -43,7 +43,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] Session persistence (save/restore on quit/startup)
 - [x] CSV export with file dialog
 
-### Phase 5: DARWIN Analytics
+### Phase 5: DARWIN Analytics *(removed 2026-06 — see Deprecated & Removed)*
 - [x] XLSX import via rfd file dialog
 - [x] Account overview: balance, P&L, win rate, profit factor, drawdown
 - [x] Per-DARWIN VaR (95/99), Sharpe, Sortino, daily vol
@@ -97,14 +97,14 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] Multi-signal Anomaly Scanner (VaR + EV + ATR + SEC with tradability indicators)
 - [x] MTF Grid tab visibility checkboxes
 - [x] Storage Manager pagination
-- [x] Data hierarchy: MT5 > Kraken Spot > Kraken Securities/xStocks > Kraken Futures > CryptoCompare > tastytrade > Alpaca
+- [x] Cross-source data hierarchy (current: Kraken + Alpaca trusted tier with Yahoo corroborator — ADR-111/113)
 
-### Phase 9: tastytrade Integration
+### Phase 9: tastytrade Integration *(removed 2026-06 — see Deprecated & Removed)*
 - [x] tastytrade REST API client (session-based login, balances, positions, orders)
 - [x] Market data via DXLink WebSocket (historical bars: SETUP→AUTH→FEED protocol)
 - [x] Option chains + Greeks (nested expiration/strike, IV rank/percentile via market metrics)
 - [x] Quote snapshots + market metrics (bid/ask, IV rank, IV percentile, beta)
-- [x] 7-source bar priority: MT5 → Kraken Spot → Kraken Securities/xStocks → Kraken Futures → CryptoCompare → tastytrade → Alpaca
+- [x] Cross-source bar merge with scale validation (current: Kraken + Alpaca + Yahoo — ADR-113)
 
 ### Phase 10: Advanced Features
 - [x] More drawing tools (pitchfork, Elliott, Gann — all implemented, 89 total)
@@ -112,7 +112,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] Trade journal (log trades with notes, ~ → JOURNAL)
 - [x] Supply/demand zones (auto-detected from impulse candles, GPU + CPU paths)
 - [x] Harmonic patterns (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives)
-- [x] Position visibility toggles per broker (DARWIN/Alpaca/tastytrade)
+- [x] Position visibility toggles per broker (Alpaca/Kraken)
 - [x] POSITION_CHARTS command (open W1 tabs for all open positions)
 - [x] Backfill candle coloring (magenta for non-primary data sources)
 - [x] Session save on window close (on_exit)
@@ -142,13 +142,13 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] Position summaries unified into PositionInfo shape
 - [x] Display-pair normalization (XBTUSD → BTCUSD)
 
-### Phase 14: LAN Sync v2
+### Phase 14: LAN Sync v2 *(removed 2026-06 — see Deprecated & Removed)*
 - [x] TLS-encrypted (wss://) WebSocket sync, ephemeral self-signed certs
 - [x] PBKDF2 passphrase auth, constant-time HMAC-SHA256
 - [x] 15 remote commands (SEC_SCRAPE, FETCH_BARS, INGEST_RESEARCH, etc.)
 - [x] Bandwidth-tuned sync, full data + KV cache
 
-### Phase 15: Web LAN Client
+### Phase 15: Web LAN Client *(removed 2026-06 — see Deprecated & Removed)*
 - [x] WASM client (eframe/glow), built via trunk
 - [x] HTTPS + WebSocket relay (axum, axum-server)
 - [x] Read-only chart, watchlist, positions/orders display

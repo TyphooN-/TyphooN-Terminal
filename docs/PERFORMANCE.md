@@ -51,19 +51,11 @@ WebSocket trade streams build 1-minute OHLCV bars in-process. Completed bars use
    bitset membership, and per-frame `trade_overlay` borrows use
    `std::mem::take` + restore instead of `Clone`. See ADR-098.
 
-### GPU DarwinIA Scan
-
-Large DarwinIA datasets (>128MB) are processed via chunked batching in the GPU compute pipeline. The `compute_all_batches()` method splits return series into chunks that fit within wgpu buffer size limits, processes each chunk on the GPU, and merges the results. This enables scanning 50K+ DARWINs without exceeding VRAM constraints.
-
 ### Storage Compact (zstd-22)
 
 Rust bar-cache writes store packed TTBR blobs at a configurable base zstd level (default 3; range 1-22) selected in Storage Manager. Lower levels keep broad sync/import writes CPU-cheap; higher levels shrink new blobs immediately. The Storage Manager (`STORAGE` command) compact path remains the archival promotion path for bar_cache entries whose `zstd_level` metadata is below 22, including configured-base writes, legacy/raw/imported rows, and Kraken WS hot writes. Decompression speed is effectively unchanged by source compression level — only on-disk storage and encode time change. Progress is reported per 200 entries.
 
 Auto-compact uses the same compaction path for leftovers, but only runs when the configured cadence/window, AC-power, idle, and min-row gates pass. Defaults are daily 04:00-05:00 local and at least 100 uncompacted rows; the Storage Manager exposes those knobs plus last-run, next-window, skip-reason, and running-state readouts.
-
-### Auto MT5 Sync
-
-Bar data from MT5 (via BarCacheWriter EA) is imported into the local cache. Cache writes skip unchanged keys where possible.
 
 ### Kraken Public Bar Sync
 
@@ -77,7 +69,7 @@ Direct Kraken requests spawn per-timeframe tasks where applicable, while the bro
 
 ### Broker Full-History Sync
 
-Alpaca, tastytrade, and Kraken Futures no longer use arbitrary local target depths such as 10k, 50k, 7.5k, or 3.5k bars. If the provider supports full historical traversal, first sync and incomplete-cache backfill continue until provider exhaustion and then persist a backfill-complete marker with the actual stored count. tastytrade uses DXLink Candle snapshot status: `SNAPSHOT_SNIP` pages forward from the last candle; only `SNAPSHOT_END` marks full-history complete. Kraken Spot remains recent-window-only by API design; deep crypto history belongs to CryptoCompare in the source hierarchy.
+Alpaca and Kraken Futures no longer use arbitrary local target depths such as 10k, 50k, 7.5k, or 3.5k bars. If the provider supports full historical traversal, first sync and incomplete-cache backfill continue until provider exhaustion and then persist a backfill-complete marker with the actual stored count. Kraken Spot remains recent-window-only by API design; deeper equity history is supplied by the Yahoo corroborator where available (ADR-113).
 
 ### Cache Format
 
