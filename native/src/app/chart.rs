@@ -3566,7 +3566,7 @@ impl ChartState {
                     self.atr = compute_atr(&self.bars, atr_p as usize);
                 }
 
-                // MACD — sequential GPU with dynamic periods (ADR-081 follow-up)
+                // MACD — sequential GPU with dynamic periods
                 if let Some(data) =
                     gpu.compute_macd_gpu_dynamic(self.macd_fast, self.macd_slow, self.macd_signal_p)
                 {

@@ -628,7 +628,7 @@ impl TyphooNApp {
                         }
                     });
 
-                    // ── Cross-language transpile row (ADR-090) ────────
+                    // ── Cross-language transpile row ────────
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Transpile to:").small());
                         const TRANSPILE_TARGETS: &[(

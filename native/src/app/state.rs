@@ -349,7 +349,7 @@ pub(crate) struct TradeAccountSnapshot {
 
 /// Messages sent from UI → async broker task.
 #[allow(dead_code)] // All variants are handled in broker task. Some lack dedicated UI buttons but are
-// accessible via console commands or research windows. See ADR-081 for tracking.
+// accessible via console commands or research windows.
 pub(crate) enum BrokerCmd {
     Connect {
         api_key: String,
