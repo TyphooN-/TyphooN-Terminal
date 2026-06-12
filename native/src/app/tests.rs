@@ -300,6 +300,35 @@ fn chart_equity_merge_corrects_trusted_outlier_print_against_recent_corroborator
 }
 
 #[test]
+fn chart_equity_merge_corrects_days_old_intraday_spike() {
+    // An intraday bad trusted print days old must still be corrected against the
+    // Yahoo corroborator. The old fixed 40-bucket window was only ~10 hours on
+    // M15/H1, so a spike ~10 days back was never reached — the WOK M15 artifact.
+    let hour = 3_600_000i64;
+    let n = 300i64; // ~12.5 days of hourly bars
+    let alpaca: Vec<(i64, f64, f64, f64, f64, f64)> = (0..n)
+        .map(|i| {
+            // Bad 2x print at index 50 (~10 days before the latest bar).
+            let v = if i == 50 { 0.20 } else { 0.10 };
+            (i * hour, v, v, v, v, 100.0)
+        })
+        .collect();
+    let yahoo: Vec<(i64, f64, f64, f64, f64, f64)> = (0..n)
+        .map(|i| (i * hour, 0.10, 0.10, 0.10, 0.10, 50.0))
+        .collect();
+
+    let merged =
+        chart_merge_equity_raw_bars("1Hour", &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)]);
+    let by_ts: std::collections::HashMap<i64, f64> =
+        merged.iter().map(|b| (b.ts_ms, b.close)).collect();
+    assert!(
+        (by_ts[&(50 * hour)] - 0.10).abs() < 1e-6,
+        "days-old intraday spike must be corrected against the corroborator; got {}",
+        by_ts[&(50 * hour)]
+    );
+}
+
+#[test]
 fn chart_persists_merged_equity_bars_under_merged_cache_key() {
     let db_path = std::env::temp_dir().join(format!(
         "typhoon-merged-cache-test-{}-{}.db",

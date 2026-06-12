@@ -1149,25 +1149,33 @@ fn chart_recent_overlap_scale(
     trusted: &std::collections::BTreeMap<i64, Bar>,
     depth: &std::collections::BTreeMap<i64, Bar>,
 ) -> Option<(f64, i64)> {
-    const RECENT_OVERLAP_WINDOW: usize = 40;
+    const MIN_COUNT: usize = 40;
     const MIN_OVERLAP: usize = 10;
     const LOCAL_TOL: f64 = 1.25;
+    // The adjudication window is defined by TIME, not a fixed bucket count. A flat
+    // 40 buckets is ~40 days on D1 but only ~10 hours on M15, so an intraday bad
+    // print even a day old was never reached (the WOK M15 artifact). Take the most
+    // recent buckets covering at least MIN_COUNT *and* at least RECENT_WINDOW_MS.
+    // The p25/p75 tightness check below still rejects any window that straddles a
+    // split-era scale change, so widening the reach stays safe.
+    const RECENT_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-    // Most recent shared buckets (newest first), capped to the recent window.
-    // Carry the bucket so the caller can restrict correction to this window —
-    // deep history may legitimately sit on a different scale and must not be
-    // "corrected" against the recent ratio.
-    let recent: Vec<(i64, f64)> = trusted
-        .iter()
-        .rev()
-        .filter_map(|(bucket, tbar)| {
-            depth
-                .get(bucket)
-                .filter(|dbar| tbar.close > 0.0 && dbar.close > 0.0)
-                .map(|dbar| (*bucket, tbar.close / dbar.close))
-        })
-        .take(RECENT_OVERLAP_WINDOW)
-        .collect();
+    // Newest-first shared buckets, taken until BOTH the count and time floors pass.
+    let mut recent: Vec<(i64, f64)> = Vec::new();
+    let mut time_floor: Option<i64> = None;
+    for (bucket, ratio) in trusted.iter().rev().filter_map(|(bucket, tbar)| {
+        depth
+            .get(bucket)
+            .filter(|dbar| tbar.close > 0.0 && dbar.close > 0.0)
+            .map(|dbar| (*bucket, tbar.close / dbar.close))
+    }) {
+        match time_floor {
+            Some(floor) if recent.len() >= MIN_COUNT && bucket < floor => break,
+            None => time_floor = Some(bucket - RECENT_WINDOW_MS),
+            _ => {}
+        }
+        recent.push((bucket, ratio));
+    }
     if recent.len() < MIN_OVERLAP {
         return None;
     }
