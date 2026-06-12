@@ -130,10 +130,6 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "Run backtest on current symbol",
     },
     Command {
-        name: "BACKTEST_UNEXPAND",
-        desc: "Remove symbol from backtest expand set",
-    },
-    Command {
         name: "SCREENER",
         desc: "Symbol screener",
     },
@@ -232,7 +228,7 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "OPTIONS",
-        desc: "Options chain for current symbol (Alpaca + tastytrade)",
+        desc: "Options chain for current symbol (Alpaca)",
     },
     Command {
         name: "WATCHLISTS",
@@ -245,10 +241,6 @@ pub(crate) const COMMANDS: &[Command] = &[
     Command {
         name: "STREAM",
         desc: "Start real-time WebSocket stream for current symbol",
-    },
-    Command {
-        name: "DXLINK_STREAM",
-        desc: "Start DXLink real-time quote stream (tastytrade)",
     },
     // Analysis
     Command {
@@ -766,34 +758,14 @@ pub(crate) const COMMANDS: &[Command] = &[
         name: "MN1",
         desc: "Switch to monthly timeframe",
     },
-    // Analytics (from old app)
-    Command {
-        name: "EQUITY",
-        desc: "Account equity curve",
-    },
-    Command {
-        name: "TRADESTATS",
-        desc: "Trade statistics (win rate, expectancy)",
-    },
+    // Analytics
     Command {
         name: "COMPARE",
         desc: "Normalized multi-symbol overlay",
     },
     Command {
-        name: "SPREAD",
-        desc: "Price ratio / spread chart",
-    },
-    Command {
         name: "PIVOTS",
         desc: "Classic pivot points on chart",
-    },
-    Command {
-        name: "HEATMAP",
-        desc: "Daily P&L heatmap",
-    },
-    Command {
-        name: "PROFILE",
-        desc: "Trading profile (best symbols, times)",
     },
     Command {
         name: "SIGNAL",
@@ -868,10 +840,6 @@ pub(crate) const COMMANDS: &[Command] = &[
     Command {
         name: "SUPPLY_DEMAND",
         desc: "Toggle supply/demand zone detection",
-    },
-    Command {
-        name: "LAN_SYNC",
-        desc: "LAN sync — start server or connect to server by IP",
     },
     Command {
         name: "NEW_WINDOW",
