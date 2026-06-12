@@ -437,6 +437,7 @@ impl TyphooNApp {
             watchlist_last_update_ts: 0,
             watchlist_auto_refresh_at: None,
             positions_last_update_ts: 0,
+            positions_auto_refresh_at: None,
             orders_last_update_ts: 0,
             user_watchlist: Vec::new(),
             watchlist_fallback_prices: std::collections::HashMap::new(),

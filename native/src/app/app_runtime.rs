@@ -185,18 +185,44 @@ impl eframe::App for TyphooNApp {
         // Watchlist quotes used to be fetched only when the user manually added a
         // symbol, so a session-restored watchlist sat empty ("No cached data …
         // never") until poked. Refresh once on startup (auto_refresh_at == None)
-        // and every 90s after. The GetWatchlistQuotes handler enriches from Yahoo
+        // and every 30s after. The GetWatchlistQuotes handler enriches from Yahoo
         // even with no broker connected, so this also works offline / on weekends.
         if self.cache_loaded && !self.user_watchlist.is_empty() {
             let due = self
                 .watchlist_auto_refresh_at
-                .map(|t| now_instant.duration_since(t) >= std::time::Duration::from_secs(90))
+                .map(|t| now_instant.duration_since(t) >= std::time::Duration::from_secs(30))
                 .unwrap_or(true);
             if due {
                 self.watchlist_auto_refresh_at = Some(now_instant);
                 let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes {
                     symbols: self.user_watchlist.clone(),
                 });
+            }
+        }
+
+        // Positions/orders are trading-critical UI, not five-minute background
+        // metadata. Reconcile them periodically without tying the cadence to the
+        // broad cache refresh loop; the dispatch timestamp prevents per-frame spam
+        // if a broker response is slow.
+        let positions_due = self
+            .positions_auto_refresh_at
+            .map(|t| now_instant.duration_since(t) >= std::time::Duration::from_secs(30))
+            .unwrap_or(true);
+        if positions_due {
+            let mut requested = false;
+            if self.alpaca_enabled && self.broker_connected {
+                let _ = self.broker_tx.send(BrokerCmd::GetPositions);
+                let _ = self.broker_tx.send(BrokerCmd::GetOrders);
+                requested = true;
+            }
+            if self.kraken_enabled && self.kraken_connected {
+                let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
+                let _ = self.broker_tx.send(BrokerCmd::KrakenGetPositions);
+                let _ = self.broker_tx.send(BrokerCmd::KrakenFetchOpenOrders);
+                requested = true;
+            }
+            if requested {
+                self.positions_auto_refresh_at = Some(now_instant);
             }
         }
 
