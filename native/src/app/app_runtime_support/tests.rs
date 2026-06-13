@@ -24,6 +24,47 @@ fn routine_market_data_status_keeps_actionable_alpaca_messages_visible() {
 }
 
 #[test]
+fn json_result_card_formats_array_json_without_log_dump() {
+    let raw = r#"[
+        {"symbol":"AAPL","change":1.25,"nested":{"ignored":true}},
+        {"symbol":"MSFT","change":-0.5,"nested":{"ignored":true}}
+    ]"#;
+    let Some((
+        ResultCard::Table {
+            title,
+            headers,
+            rows,
+            ..
+        },
+        summary,
+    )) = json_result_card_from_text("Top Movers", raw)
+    else {
+        panic!("expected table result card");
+    };
+    assert_eq!(title, "Top Movers");
+    assert!(headers.contains(&"change".to_string()));
+    assert!(headers.contains(&"symbol".to_string()));
+    assert_eq!(rows.len(), 2);
+    assert!(summary.contains("raw JSON"));
+}
+
+#[test]
+fn json_result_card_formats_object_json_as_summary() {
+    let raw = r#"{"equity":12345.67,"status":"ok","positions":[{"symbol":"AAPL"}]}"#;
+    let Some((ResultCard::Summary { title, metrics }, summary)) =
+        json_result_card_from_text("Portfolio History", raw)
+    else {
+        panic!("expected summary result card");
+    };
+    assert_eq!(title, "Portfolio History");
+    assert!(metrics
+        .iter()
+        .any(|(k, v, _)| k == "equity" && v == "12345.67"));
+    assert!(metrics.iter().any(|(k, v, _)| k == "status" && v == "ok"));
+    assert!(summary.contains("field"));
+}
+
+#[test]
 fn alpaca_retry_queue_log_is_milestoned() {
     assert!(!should_emit_alpaca_retry_queue_log(0));
     assert!(!should_emit_alpaca_retry_queue_log(1));

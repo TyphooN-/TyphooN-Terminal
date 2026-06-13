@@ -351,7 +351,7 @@ The standalone `typhoon-cli` / Ratatui interface has been removed from the activ
 
 TyphooN-Terminal trades **Alpaca + Kraken**. The historical **MT5/Darwinex** (DARWIN portfolio + BarCacheWriter EA bridge), **tastytrade**, and **CryptoCompare** (deep crypto history) integrations have been deprecated and removed from the active codebase — see [ADR-111](docs/adr/111-broker-scope-reduction-kraken-alpaca-only.md). The standalone **CLI/TUI** has also been removed from active `master` and archived on `deprecated/cli-tui` — see [ADR-115](docs/adr/115-deprecate-cli-tui.md). Their full code is preserved on the relevant `deprecated/*` branches for possible future restoration; they are not built or maintained in the interim. (The MQL5/PineScript→WASM compiler is a separate language tool and is retained.)
 
-**Alpaca Markets** — stocks, ETFs, options, and crypto via REST + WebSocket streaming. IEX (free) or SIP (paid) market data.
+**Alpaca Markets** — stocks, ETFs, options, and crypto via REST market/account/trading APIs. IEX (free) or SIP (paid) market data.
 
 **Kraken** — public Spot/xStocks and Futures market data without keys, plus authenticated Spot REST trading for crypto/xStocks accounts.
 

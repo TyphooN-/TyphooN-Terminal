@@ -1567,6 +1567,10 @@ impl eframe::App for TyphooNApp {
                             room_id: self.matrix_room.clone(),
                             access_token: self.matrix_access_token.clone(),
                         });
+                    } else if let Some((card, summary)) = json_result_card_from_text(&label, &text) {
+                        self.result_card = Some((card, std::time::Instant::now()));
+                        self.log.push_back(LogEntry::info(summary));
+                        continue;
                     }
                     self.log
                         .push_back(LogEntry::info(format!("{}:\n{}", label, text)));

@@ -33,6 +33,125 @@ pub(super) fn is_routine_news_progress(msg: &str) -> bool {
             && (msg.contains(" articles") || msg.contains(" cached") || msg.contains("failed:")))
 }
 
+pub(super) fn json_result_card_from_text(label: &str, text: &str) -> Option<(ResultCard, String)> {
+    let trimmed = text.trim_start();
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return None;
+    }
+
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    match value {
+        serde_json::Value::Array(items) => json_array_result_card(label, &items, text.len()),
+        serde_json::Value::Object(map) => json_object_result_card(label, &map, text.len()),
+        _ => None,
+    }
+}
+
+fn json_array_result_card(
+    label: &str,
+    items: &[serde_json::Value],
+    byte_len: usize,
+) -> Option<(ResultCard, String)> {
+    let first_obj = items.iter().find_map(|v| v.as_object())?;
+    let headers: Vec<String> = first_obj
+        .iter()
+        .filter(|(_, v)| json_value_is_compact_scalar(v))
+        .take(5)
+        .map(|(k, _)| k.clone())
+        .collect();
+    if headers.is_empty() {
+        return None;
+    }
+
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .filter_map(|v| v.as_object())
+        .take(12)
+        .map(|obj| {
+            headers
+                .iter()
+                .map(|k| obj.get(k).map(format_json_scalar).unwrap_or_default())
+                .collect()
+        })
+        .collect();
+    if rows.is_empty() {
+        return None;
+    }
+
+    let summary = format!(
+        "{label}: {} row{} shown as a result card (raw JSON {} bytes hidden)",
+        items.len(),
+        if items.len() == 1 { "" } else { "s" },
+        byte_len
+    );
+    Some((
+        ResultCard::Table {
+            title: label.to_string(),
+            headers,
+            rows,
+            sort_col: 0,
+            sort_asc: true,
+        },
+        summary,
+    ))
+}
+
+fn json_object_result_card(
+    label: &str,
+    map: &serde_json::Map<String, serde_json::Value>,
+    byte_len: usize,
+) -> Option<(ResultCard, String)> {
+    let metrics: Vec<(String, String, egui::Color32)> = map
+        .iter()
+        .filter(|(_, v)| json_value_is_compact_scalar(v))
+        .take(10)
+        .map(|(k, v)| (k.clone(), format_json_scalar(v), egui::Color32::LIGHT_GRAY))
+        .collect();
+    if metrics.is_empty() {
+        return None;
+    }
+
+    let summary = format!(
+        "{label}: {} field{} shown as a result card (raw JSON {} bytes hidden)",
+        metrics.len(),
+        if metrics.len() == 1 { "" } else { "s" },
+        byte_len
+    );
+    Some((
+        ResultCard::Summary {
+            title: label.to_string(),
+            metrics,
+        },
+        summary,
+    ))
+}
+
+fn json_value_is_compact_scalar(value: &serde_json::Value) -> bool {
+    matches!(
+        value,
+        serde_json::Value::Null
+            | serde_json::Value::Bool(_)
+            | serde_json::Value::Number(_)
+            | serde_json::Value::String(_)
+    )
+}
+
+fn format_json_scalar(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "—".to_string(),
+        serde_json::Value::Bool(v) => v.to_string(),
+        serde_json::Value::Number(v) => v.to_string(),
+        serde_json::Value::String(v) => {
+            let mut s: String = v.chars().take(64).collect();
+            if v.chars().count() > 64 {
+                s.push('…');
+            }
+            s
+        }
+        _ => String::new(),
+    }
+}
+
 const HEAVY_SYNC_PENDING_FETCH_THRESHOLD: usize = 32;
 const HEAVY_SYNC_DEFERRED_CHART_THRESHOLD: usize = 4;
 pub(super) fn should_auto_start_background_scope_scrape(
