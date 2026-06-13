@@ -304,6 +304,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [116](docs/adr/116-finviz-stock-page-feature-parity-target.md) | Finviz Stock-Page Feature Parity Target |
 | [117](docs/adr/117-stocktwits-social-sentiment-ingest.md) | StockTwits Social-Sentiment Ingest into Research Packet |
 | [118](docs/adr/118-test-module-decomposition-convention.md) | Test Module Decomposition Convention (`include!`-tree + dir-module tests) |
+| [119](docs/adr/119-live-forming-bar-overlay-source-policy.md) | Live Forming-Bar Overlay Source Policy |
 
 ---
 

@@ -3920,35 +3920,6 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     external_feeds::handle_external_feed_command(cmd, broker_msg_tx_clone.clone())
                         .await;
                 }
-                BrokerCmd::StartStream { trade_symbols, quote_symbols } => {
-                    if let Some(ref b) = broker {
-                        let msg_tx = broker_msg_tx_clone.clone();
-                        let total = trade_symbols.len() + quote_symbols.len();
-                        match b.start_stream(trade_symbols, quote_symbols).await {
-                            Ok(mut rx) => {
-                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!("Stream started for {} symbols", total)));
-                                tokio::spawn(async move {
-                                    while let Some(msg) = rx.recv().await {
-                                        match msg {
-                                            typhoon_engine::broker::alpaca::StreamMessage::Trade(t) => {
-                                                let _ = msg_tx.send(BrokerMsg::StreamTick {
-                                                    symbol: t.symbol, price: t.price, size: t.size, timestamp: t.timestamp,
-                                                });
-                                            }
-                                            typhoon_engine::broker::alpaca::StreamMessage::Quote(q) => {
-                                                let _ = msg_tx.send(BrokerMsg::StreamQuoteTick {
-                                                    symbol: q.symbol, bid: q.bid, ask: q.ask,
-                                                });
-                                            }
-                                        }
-                                    }
-                                });
-                            }
-                            Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Stream failed: {}", e))); }
-                        }
-                    }
-                }
-
                 BrokerCmd::IgnoreNewsArticle { symbol, url_hash } => {
                     // Persist the removal: delete the row + remember the hash so the
                     // next GDELT/Finnhub fetch can't resurrect it. The UI removes the

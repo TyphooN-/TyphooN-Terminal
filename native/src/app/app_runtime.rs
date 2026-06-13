@@ -1499,11 +1499,8 @@ impl eframe::App for TyphooNApp {
                 | BrokerMsg::NewsArticlesLoaded { .. }) => {
                     self.handle_news_ingest_msg(msg);
                 }
-                msg @ (BrokerMsg::UnusualVolumeResults(_)
-                | BrokerMsg::MarketClock(_)
-                | BrokerMsg::StreamTick { .. }
-                | BrokerMsg::StreamQuoteTick { .. }) => {
-                    self.handle_stream_tick_msg(msg);
+                msg @ (BrokerMsg::UnusualVolumeResults(_) | BrokerMsg::MarketClock(_)) => {
+                    self.handle_misc_broker_msg(msg);
                 }
                 BrokerMsg::JsonResult(label, text) => {
                     if label == "Kraken WS" {

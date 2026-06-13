@@ -174,7 +174,8 @@ open-orders refresh) drifts back onto the egui frame.
 - Narrowing the WS subscription to focus symbols. WS exists to cover the
   whole catalog; narrowing just regresses to the REST gap WS was added
   to close.
-- Persisting open-bar updates. Only closed bars hit the cache. Live
-  intra-bar values stay in `bar_builder` for the chart that needs them.
+- Persisting open-bar updates. Only closed bars hit the cache; live
+  intra-bar state stays inside the Kraken WS aggregation path until the
+  close can be coalesced and committed.
 - Replacing REST. WS is forward streaming; REST still handles cold-start
   deep history. ADR-094 covers REST; this ADR is strictly the WS side.

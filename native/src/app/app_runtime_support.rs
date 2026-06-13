@@ -335,8 +335,6 @@ pub(super) fn broker_msg_kind(msg: &BrokerMsg) -> &'static str {
         BrokerMsg::FinnhubNewsResult(_) => "FinnhubNewsResult",
         BrokerMsg::Quote(_, _, _, _) => "Quote",
         BrokerMsg::MarketClock(_) => "MarketClock",
-        BrokerMsg::StreamTick { .. } => "StreamTick",
-        BrokerMsg::StreamQuoteTick { .. } => "StreamQuoteTick",
         BrokerMsg::JsonResult(_, _) => "JsonResult",
         BrokerMsg::FundamentalsProgress(_) => "FundamentalsProgress",
         BrokerMsg::BarsFetched { .. } => "BarsFetched",

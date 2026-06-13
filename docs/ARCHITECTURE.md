@@ -31,12 +31,11 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  └─────────────────────────────────────────────┘│
 ├─────────────────────────────────────────────────┤
 │  Engine Library (typhoon-engine crate)          │
-│  - AlpacaBroker (REST + WebSocket)              │
+│  - AlpacaBroker (REST market/account/trading)   │
 │  - KrakenBroker (Spot REST orders + private WS) │
 │  - SqliteCache (TTBR binary, zstd compression)  │
 │  - RiskEngine (VaR, TRIM, order sizing)         │
 │  - BacktestEngine (bar-by-bar, optimization)    │
-│  - BarBuilder (WebSocket → OHLCV)               │
 │  - Research (TA-Lib + Godel parity surfaces)    │
 │  - Notifications (Discord, Pushover, ntfy,      │
 │    Matrix)                                      │

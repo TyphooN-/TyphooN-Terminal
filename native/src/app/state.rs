@@ -539,12 +539,6 @@ pub(crate) enum BrokerCmd {
         ntfy_topic: String,
         message: String,
     },
-    /// Start real-time WebSocket trade/quote stream for symbols.
-    StartStream {
-        trade_symbols: Vec<String>,
-        quote_symbols: Vec<String>,
-    },
-
     /// Scan unusual volume (background, heavy DB reads).
     ScanUnusualVolume {
         keys: Vec<(String, i64)>,
@@ -2787,19 +2781,6 @@ pub(crate) enum BrokerMsg {
     Quote(String, f64, f64, f64), // symbol, bid, ask, last
     /// Market clock status.
     MarketClock(String),
-    /// Real-time trade tick from WebSocket stream (feeds BarBuilder).
-    StreamTick {
-        symbol: String,
-        price: f64,
-        size: f64,
-        timestamp: String,
-    },
-    /// Real-time quote tick from WebSocket stream.
-    StreamQuoteTick {
-        symbol: String,
-        bid: f64,
-        ask: f64,
-    },
     /// Generic JSON results for various API calls.
     JsonResult(String, String), // (label, formatted text)
     /// Fundamentals scrape progress update.
@@ -4380,9 +4361,6 @@ pub struct TyphooNApp {
     pub(crate) matrix_access_token: String,
     pub(crate) matrix_user_id: String,
     pub(crate) matrix_last_fetch: std::time::Instant,
-    /// Real-time bar construction from WebSocket trade stream.
-    pub(crate) bar_builder:
-        std::sync::Arc<std::sync::Mutex<typhoon_engine::core::bar_builder::BarBuilder>>,
     /// Legacy cached Finnhub news tuples (headline, source, datetime) — used by the
     /// compact "News" side-pane and the WASM web mirror. Retained for backward compat.
     pub(crate) news_articles: Vec<(String, String, String)>,

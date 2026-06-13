@@ -58,6 +58,7 @@ mod app_runtime_live_quotes;
 mod app_runtime_macro_alt_data;
 mod app_runtime_market_data_fetch_results;
 mod app_runtime_menu;
+mod app_runtime_misc_msgs;
 mod app_runtime_news_results;
 mod app_runtime_order_results;
 mod app_runtime_research_core;
@@ -74,7 +75,6 @@ mod app_runtime_right_panel_recent_fills;
 mod app_runtime_right_panel_risk;
 mod app_runtime_right_panel_trading;
 mod app_runtime_right_panel_watchlist;
-mod app_runtime_stream_ticks;
 mod app_runtime_support;
 mod app_runtime_tabs;
 mod app_runtime_toolbar;
@@ -376,9 +376,6 @@ impl TyphooNApp {
             matrix_user_id: String::new(),
             matrix_last_fetch: std::time::Instant::now(),
             matrix_messages: Vec::new(),
-            bar_builder: std::sync::Arc::new(std::sync::Mutex::new(
-                typhoon_engine::core::bar_builder::BarBuilder::new(),
-            )),
             news_articles: Vec::new(),
             news_full_articles: Vec::new(),
             news_selected: None,
