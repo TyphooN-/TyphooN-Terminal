@@ -1099,59 +1099,70 @@ impl TyphooNApp {
         }
 
         if self.backfill_alpaca_kraken_equities_enabled && !fallback_timeframes.is_empty() {
-            if self.cached_alpaca_sync_state_rev != Some(self.bg_rev)
-                && (!self.heavy_sync_in_progress || self.cached_alpaca_sync_state.is_empty())
-            {
-                let previous = self.cached_alpaca_sync_state.clone();
-                let mut rebuilt = self.build_alpaca_cache_state_map();
-                merge_recent_sync_overrides(&mut rebuilt, &previous, now_s);
-                self.cached_alpaca_sync_state = rebuilt;
-                self.cached_alpaca_sync_state_rev = Some(self.bg_rev);
-            }
-            if !self.alpaca_no_data_loaded {
-                self.alpaca_no_data_load();
-            }
-            if !self.alpaca_backfill_complete_loaded {
-                self.alpaca_backfill_complete_load();
-            }
-            let capacity = self.alpaca_sync_capacity();
-            let available_slots = capacity
-                .queue_window
-                .saturating_sub(self.pending_alpaca_fetches.len())
-                .min(capacity.batch_size);
-            if available_slots > 0 {
-                let mut no_data: std::collections::HashSet<String> =
-                    self.alpaca_no_data_pairs.keys().cloned().collect();
-                if let Some(unresolvable) = self.unresolvable_fetch_keys_by_broker.get("alpaca") {
-                    no_data.extend(unresolvable.iter().cloned());
+            let alpaca_timeframes: Vec<String> = fallback_timeframes
+                .iter()
+                .filter(|tf| alpaca_sync_target_bars(tf).is_some())
+                .cloned()
+                .collect();
+            // M1/M5 broad equity sync is Kraken-native only. Alpaca assist
+            // remains disabled there so it does not burn historical RPM on
+            // rows the merged/chart path deliberately ignores.
+            if !alpaca_timeframes.is_empty() {
+                if self.cached_alpaca_sync_state_rev != Some(self.bg_rev)
+                    && (!self.heavy_sync_in_progress || self.cached_alpaca_sync_state.is_empty())
+                {
+                    let previous = self.cached_alpaca_sync_state.clone();
+                    let mut rebuilt = self.build_alpaca_cache_state_map();
+                    merge_recent_sync_overrides(&mut rebuilt, &previous, now_s);
+                    self.cached_alpaca_sync_state = rebuilt;
+                    self.cached_alpaca_sync_state_rev = Some(self.bg_rev);
                 }
-                no_data.extend(
-                    self.alpaca_retry_queue
-                        .iter()
-                        .map(|retry| alpaca_fetch_key(&retry.symbol, &retry.timeframe)),
-                );
-                let mut cursor = self.kraken_equities_alpaca_sync_cursor;
-                let candidates = select_alpaca_sync_workset_rotating(
-                    &fallback_symbols,
-                    &fallback_timeframes,
-                    &self.cached_alpaca_sync_state,
-                    &focus_symbols,
-                    &no_data,
-                    &self.alpaca_backfill_complete_pairs,
-                    &self.pending_alpaca_fetches,
-                    available_slots,
-                    capacity.foreground_reserve,
-                    if full_tilt {
-                        ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT
-                    } else {
-                        ALPACA_BACKGROUND_SCAN_LIMIT
-                    },
-                    &mut cursor,
-                    now_s,
-                    alpaca_sync_target_bars,
-                );
-                self.kraken_equities_alpaca_sync_cursor = cursor;
-                dispatched += self.queue_alpaca_batch_fetches_from_candidates(candidates);
+                if !self.alpaca_no_data_loaded {
+                    self.alpaca_no_data_load();
+                }
+                if !self.alpaca_backfill_complete_loaded {
+                    self.alpaca_backfill_complete_load();
+                }
+                let capacity = self.alpaca_sync_capacity();
+                let available_slots = capacity
+                    .queue_window
+                    .saturating_sub(self.pending_alpaca_fetches.len())
+                    .min(capacity.batch_size);
+                if available_slots > 0 {
+                    let mut no_data: std::collections::HashSet<String> =
+                        self.alpaca_no_data_pairs.keys().cloned().collect();
+                    if let Some(unresolvable) = self.unresolvable_fetch_keys_by_broker.get("alpaca")
+                    {
+                        no_data.extend(unresolvable.iter().cloned());
+                    }
+                    no_data.extend(
+                        self.alpaca_retry_queue
+                            .iter()
+                            .map(|retry| alpaca_fetch_key(&retry.symbol, &retry.timeframe)),
+                    );
+                    let mut cursor = self.kraken_equities_alpaca_sync_cursor;
+                    let candidates = select_alpaca_sync_workset_rotating(
+                        &fallback_symbols,
+                        &alpaca_timeframes,
+                        &self.cached_alpaca_sync_state,
+                        &focus_symbols,
+                        &no_data,
+                        &self.alpaca_backfill_complete_pairs,
+                        &self.pending_alpaca_fetches,
+                        available_slots,
+                        capacity.foreground_reserve,
+                        if full_tilt {
+                            ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT
+                        } else {
+                            ALPACA_BACKGROUND_SCAN_LIMIT
+                        },
+                        &mut cursor,
+                        now_s,
+                        alpaca_sync_target_bars,
+                    );
+                    self.kraken_equities_alpaca_sync_cursor = cursor;
+                    dispatched += self.queue_alpaca_batch_fetches_from_candidates(candidates);
+                }
             }
         }
 
@@ -1159,6 +1170,14 @@ impl TyphooNApp {
             if self.yahoo_chart_sync_pause_until_ts > chrono::Utc::now().timestamp() {
                 // Yahoo sync lane is on cooldown
             } else {
+                let yahoo_timeframes: Vec<String> = fallback_timeframes
+                    .iter()
+                    .filter(|tf| yahoo_chart_supports_timeframe(tf))
+                    .cloned()
+                    .collect();
+                if yahoo_timeframes.is_empty() {
+                    return dispatched;
+                }
                 let yahoo_queue_window = if full_tilt {
                     YAHOO_CHART_FULL_TILT_QUEUE_WINDOW
                 } else {
@@ -1197,7 +1216,7 @@ impl TyphooNApp {
                     let mut cursor = self.yahoo_chart_sync_cursor;
                     let candidates = select_alpaca_sync_workset_rotating(
                         &fallback_symbols,
-                        &fallback_timeframes,
+                        &yahoo_timeframes,
                         &self.cached_yahoo_chart_sync_state,
                         &focus_symbols,
                         &no_data,

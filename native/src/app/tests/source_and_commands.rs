@@ -206,34 +206,38 @@ fn chart_equity_merge_preserves_old_assist_history_and_prefers_kraken_overlap() 
 }
 
 #[test]
-fn chart_equity_merge_drops_unadjusted_depth_history() {
-    // Yahoo carries deep history but is unadjusted across a ~10,000× action: it
-    // agrees with Alpaca recently and is wildly off earlier. That inconsistency
-    // must make the merge DROP Yahoo entirely rather than splice scale-jumped
-    // bars — including Yahoo's older-than-Alpaca history. (Real-world: WOK.)
+fn chart_equity_merge_uses_adjusted_yahoo_for_multi_split_history() {
+    // WOK-style failure: Alpaca/Kraken trusted history can be raw or only
+    // partially adjusted while Yahoo/TradingView-style chart data is adjusted
+    // across multiple reverse-split eras. Recent bars agree, but older eras are
+    // stable 100x / 10,000x steps. The merge should adopt the adjusted depth OHLC
+    // for those eras instead of dropping it as an inconsistent splice.
     let day = 86_400_000i64;
-    let alpaca: Vec<(i64, f64, f64, f64, f64, f64)> = (10..=25)
+    let alpaca: Vec<(i64, f64, f64, f64, f64, f64)> = (1..=80)
         .map(|d| (d as i64 * day, 1.0, 1.1, 0.9, 1.0, 100.0))
         .collect();
-    let yahoo: Vec<(i64, f64, f64, f64, f64, f64)> = (1..=25)
+    let yahoo: Vec<(i64, f64, f64, f64, f64, f64)> = (1..=80)
         .map(|d| {
-            // Older half unadjusted (10,000×), recent half agrees with Alpaca.
-            let c = if d <= 17 { 10_000.0 } else { 1.0 };
+            let c = if d <= 20 {
+                10_000.0
+            } else if d <= 40 {
+                100.0
+            } else {
+                1.0
+            };
             (d as i64 * day, c, c * 1.1, c * 0.9, c, 50.0)
         })
         .collect();
 
     let merged =
         chart_merge_equity_raw_bars("1Day", &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)], &[]);
+    let by_ts: std::collections::HashMap<i64, f64> =
+        merged.iter().map(|b| (b.ts_ms, b.close)).collect();
 
-    // Only Alpaca's range survives; none of Yahoo's older (day1..9) garbage.
-    assert_eq!(merged.first().map(|b| b.ts_ms), Some(10 * day));
-    assert_eq!(merged.last().map(|b| b.ts_ms), Some(25 * day));
-    assert_eq!(merged.len(), 16);
-    assert!(
-        merged.iter().all(|b| b.close < 5.0),
-        "no 10,000× unadjusted bars may be spliced in"
-    );
+    assert!((by_ts[&(5 * day)] - 10_000.0).abs() < 1e-6);
+    assert!((by_ts[&(30 * day)] - 100.0).abs() < 1e-6);
+    assert!((by_ts[&(60 * day)] - 1.0).abs() < 1e-6);
+    assert_eq!(merged.len(), 80);
 }
 
 #[test]

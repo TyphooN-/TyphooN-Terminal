@@ -318,8 +318,11 @@ impl TyphooNApp {
             if !self.kraken_equities_merged_source_supported(tf) {
                 continue;
             }
-            let symbols =
-                kraken_equity_symbols_for_timeframe(&catalog_symbols, &demand_symbols, tf);
+            let symbols = self.kraken_equities_merged_symbols_for_timeframe(
+                &catalog_symbols,
+                &demand_symbols,
+                tf,
+            );
             if symbols.is_empty() {
                 continue;
             }
@@ -365,6 +368,27 @@ impl TyphooNApp {
                 pct_healthy,
             });
         }
+    }
+
+    fn kraken_equities_merged_symbols_for_timeframe(
+        &self,
+        catalog_symbols: &[String],
+        demand_symbols: &[String],
+        tf: &str,
+    ) -> Vec<String> {
+        // Full-catalog M1/M5 is not reachable today: Alpaca assist is disabled
+        // for those rows, Yahoo assist is unsupported, and native Kraken WS only
+        // exists for tokenized xStocks. Keep the Merged denominator honest so
+        // Sync Status does not show a permanent 1% red row and tempt the
+        // scheduler into wasting assist-provider RPM on ignored low-TF rows.
+        if matches!(tf, "1Min" | "5Min") {
+            let ws_symbols = self.kraken_equity_ws_sweep_symbols();
+            if !ws_symbols.is_empty() {
+                return ws_symbols;
+            }
+            return demand_symbols.to_vec();
+        }
+        kraken_equity_symbols_for_timeframe(catalog_symbols, demand_symbols, tf)
     }
 
     fn kraken_equities_merged_source_supported(&self, tf: &str) -> bool {

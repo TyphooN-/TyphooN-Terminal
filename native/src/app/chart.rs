@@ -1016,6 +1016,12 @@ pub(crate) fn chart_merge_equity_raw_bars(
     // adjusted bars so the series stays continuous.
     chart_reconcile_trusted_split_adjustment(&mut merged, &tagged);
 
+    // Independent adjusted-depth reconciliation. Kraken xStock history can be
+    // Alpaca-derived, so Kraken + Alpaca may share the same mis-adjusted split
+    // history. When Yahoo/TradingView-style data agrees recently but exposes
+    // older stable split-era ratios, let it replace those trusted OHLC eras.
+    chart_reconcile_depth_split_adjustment(&mut merged, &tagged);
+
     // Trusted-tier outlier correction. A trusted feed can momentarily emit a
     // bad print — a thin microcap whose provider mis-applies a corporate action
     // (WOK doubled to ~2× on Alpaca for two days in 2026-06 while Yahoo,
@@ -1175,6 +1181,118 @@ fn chart_reconcile_trusted_split_adjustment(
                 merged.insert(*bucket, abar.clone());
             }
         }
+    }
+}
+
+fn chart_reconcile_depth_split_adjustment(
+    merged: &mut std::collections::BTreeMap<i64, Bar>,
+    tagged: &[(u8, std::collections::BTreeMap<i64, Bar>)],
+) {
+    const TRUSTED_MAX_RANK: u8 = 2;
+    const DIVERGE_RATIO: f64 = 1.5;
+    const ERA_TOL: f64 = 1.25;
+    const MIN_ERA: usize = 5;
+
+    for (rank, depth) in tagged {
+        if *rank <= TRUSTED_MAX_RANK {
+            continue;
+        }
+        let Some((consensus, window_start)) = chart_recent_overlap_scale(merged, depth) else {
+            continue;
+        };
+        let mut run: Vec<(i64, f64)> = Vec::new();
+        let mut runs: Vec<Vec<(i64, f64)>> = Vec::new();
+        for (bucket, dbar) in depth {
+            if *bucket >= window_start {
+                break;
+            }
+            let Some(tbar) = merged.get(bucket) else {
+                chart_stage_depth_split_adjustment_run(&mut runs, &run, ERA_TOL, MIN_ERA);
+                run.clear();
+                continue;
+            };
+            if tbar.close <= 0.0 || dbar.close <= 0.0 {
+                chart_stage_depth_split_adjustment_run(&mut runs, &run, ERA_TOL, MIN_ERA);
+                run.clear();
+                continue;
+            }
+            let ratio = tbar.close / dbar.close;
+            if (ratio / consensus).max(consensus / ratio) <= DIVERGE_RATIO {
+                chart_stage_depth_split_adjustment_run(&mut runs, &run, ERA_TOL, MIN_ERA);
+                run.clear();
+                continue;
+            }
+            let same_era = run
+                .last()
+                .map(|(_, prev_ratio)| {
+                    let lo = ratio.min(*prev_ratio);
+                    let hi = ratio.max(*prev_ratio);
+                    lo > 0.0 && hi / lo <= ERA_TOL
+                })
+                .unwrap_or(true);
+            if !same_era {
+                chart_stage_depth_split_adjustment_run(&mut runs, &run, ERA_TOL, MIN_ERA);
+                run.clear();
+            }
+            run.push((*bucket, ratio));
+        }
+        chart_stage_depth_split_adjustment_run(&mut runs, &run, ERA_TOL, MIN_ERA);
+        // Require at least two older stable divergent eras before promoting a
+        // depth source over trusted history. A single old depth-only scale jump
+        // can be an unadjusted/bad provider region; two clean eras plus recent
+        // agreement matches the WOK/TradingView multi-reverse-split shape.
+        if runs.len() >= 2 {
+            for run in &runs {
+                chart_apply_depth_split_adjustment_run(merged, depth, run, consensus);
+            }
+        }
+        break;
+    }
+}
+
+fn chart_stage_depth_split_adjustment_run(
+    runs: &mut Vec<Vec<(i64, f64)>>,
+    run: &[(i64, f64)],
+    era_tol: f64,
+    min_era: usize,
+) {
+    if run.len() < min_era {
+        return;
+    }
+    let mut ratios: Vec<f64> = run.iter().map(|(_, ratio)| *ratio).collect();
+    ratios.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p25 = ratios[ratios.len() / 4];
+    let p75 = ratios[ratios.len() * 3 / 4];
+    if p25 <= 0.0 || p75 / p25 > era_tol {
+        return;
+    }
+    runs.push(run.to_vec());
+}
+
+fn chart_apply_depth_split_adjustment_run(
+    merged: &mut std::collections::BTreeMap<i64, Bar>,
+    depth: &std::collections::BTreeMap<i64, Bar>,
+    run: &[(i64, f64)],
+    consensus: f64,
+) {
+    if consensus <= 0.0 {
+        return;
+    }
+    for (bucket, _) in run {
+        let (Some(depth_bar), Some(trusted_bar)) = (depth.get(bucket), merged.get(bucket)) else {
+            continue;
+        };
+        merged.insert(
+            *bucket,
+            Bar {
+                ts_ms: trusted_bar.ts_ms,
+                open: depth_bar.open * consensus,
+                high: depth_bar.high * consensus,
+                low: depth_bar.low * consensus,
+                close: depth_bar.close * consensus,
+                volume: trusted_bar.volume,
+            },
+        );
     }
 }
 
