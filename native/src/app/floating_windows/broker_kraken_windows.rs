@@ -2,7 +2,6 @@ use super::*;
 
 impl TyphooNApp {
     pub(super) fn render_broker_kraken_windows(&mut self, ctx: &egui::Context) {
-        self.render_connect_window(ctx, false);
         self.render_indicators_window(ctx);
         self.render_kraken_spot_sell_dialog(ctx);
         // ── Kraken Trade History Window ─────────────────────────────────────

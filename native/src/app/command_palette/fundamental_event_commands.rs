@@ -171,30 +171,6 @@ impl TyphooNApp {
             }
             "HOLDERS" => self.show_holders = true,
             "COMPILE" => self.show_indicator_compiler = true,
-            "STREAM" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() && !self.stream_active {
-                    let _ = self.broker_tx.send(BrokerCmd::StartStream {
-                        trade_symbols: vec![sym.clone()],
-                        quote_symbols: vec![sym.clone()],
-                    });
-                    self.stream_active = true;
-                    self.log
-                        .push_back(LogEntry::info(format!("Starting stream for {}", sym)));
-                }
-            }
             "CORRELATION" => self.show_correlation = true,
             "SEASONALS" => self.show_seasonals = true,
             "MONTECARLO" => self.show_montecarlo = true,

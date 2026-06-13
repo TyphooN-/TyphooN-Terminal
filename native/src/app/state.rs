@@ -4383,7 +4383,6 @@ pub struct TyphooNApp {
     /// Real-time bar construction from WebSocket trade stream.
     pub(crate) bar_builder:
         std::sync::Arc<std::sync::Mutex<typhoon_engine::core::bar_builder::BarBuilder>>,
-    pub(crate) stream_active: bool,
     /// Legacy cached Finnhub news tuples (headline, source, datetime) — used by the
     /// compact "News" side-pane and the WASM web mirror. Retained for backward compat.
     pub(crate) news_articles: Vec<(String, String, String)>,

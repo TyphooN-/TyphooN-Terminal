@@ -379,7 +379,6 @@ impl TyphooNApp {
             bar_builder: std::sync::Arc::new(std::sync::Mutex::new(
                 typhoon_engine::core::bar_builder::BarBuilder::new(),
             )),
-            stream_active: false,
             news_articles: Vec::new(),
             news_full_articles: Vec::new(),
             news_selected: None,

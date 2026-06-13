@@ -8,10 +8,6 @@ impl TyphooNApp {
         egui::Panel::top("menu_bar").show(ctx, |ui| {
                     egui::MenuBar::new().ui(ui, |ui| {
                         ui.menu_button("File", |ui| {
-                            if ui.button("Connect to Broker…").clicked() {
-                                self.show_connect = true;
-                                ui.close();
-                            }
                             if ui.button("Settings").clicked() {
                                 self.show_settings = true;
                                 ui.close();

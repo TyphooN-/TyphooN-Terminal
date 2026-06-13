@@ -101,7 +101,6 @@ impl TyphooNApp {
                     }
                 }
             }
-            "CONNECT" => self.show_connect = true,
             "SETTINGS" => self.show_settings = true,
             "INDICATORS" => self.show_indicators_panel = !self.show_indicators_panel,
             "OVERLAP" => self.show_symbol_overlap = true,

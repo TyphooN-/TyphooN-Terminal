@@ -23,10 +23,6 @@ pub(crate) static COMMANDS_LOWER: std::sync::LazyLock<Vec<(String, String)>> =
 pub(crate) const COMMANDS: &[Command] = &[
     // Core
     Command {
-        name: "CONNECT",
-        desc: "Connect to broker (Alpaca / Kraken)",
-    },
-    Command {
         name: "SETTINGS",
         desc: "Application settings",
     },
@@ -237,10 +233,6 @@ pub(crate) const COMMANDS: &[Command] = &[
     Command {
         name: "COMPILE",
         desc: "Indicator compiler: MQL5/MQL4/PineScript v4+v5/EasyLanguage/thinkScript/AFL/ProBuilder/NinjaScript/cAlgo + cross-language transpiler",
-    },
-    Command {
-        name: "STREAM",
-        desc: "Start real-time WebSocket stream for current symbol",
     },
     // Analysis
     Command {
