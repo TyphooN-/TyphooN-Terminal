@@ -188,12 +188,26 @@ impl eframe::App for TyphooNApp {
         // and every 30s after. The GetWatchlistQuotes handler enriches from Yahoo
         // even with no broker connected, so this also works offline / on weekends.
         if self.cache_loaded && !self.user_watchlist.is_empty() {
-            let due = self
-                .watchlist_auto_refresh_at
-                .map(|t| now_instant.duration_since(t) >= std::time::Duration::from_secs(30))
-                .unwrap_or(true);
+            // Intraday: refresh every 30s. While the xStocks market is closed for the
+            // weekend, watchlist quotes are static (no new prints), so stop re-polling
+            // Yahoo every 30s — refresh only on a slow safety heartbeat or when the
+            // watchlist set itself changes (symbol added/removed). Friday's last
+            // after-hours snapshot is retained for display in the meantime.
+            let interval = if super::app_runtime_support::kraken_xstocks_weekend_closed_now() {
+                std::time::Duration::from_secs(300)
+            } else {
+                std::time::Duration::from_secs(30)
+            };
+            let watchlist_changed =
+                self.watchlist_quotes_fetched_count != self.user_watchlist.len();
+            let due = watchlist_changed
+                || self
+                    .watchlist_auto_refresh_at
+                    .map(|t| now_instant.duration_since(t) >= interval)
+                    .unwrap_or(true);
             if due {
                 self.watchlist_auto_refresh_at = Some(now_instant);
+                self.watchlist_quotes_fetched_count = self.user_watchlist.len();
                 let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes {
                     symbols: self.user_watchlist.clone(),
                 });

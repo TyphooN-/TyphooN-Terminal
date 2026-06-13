@@ -4487,6 +4487,9 @@ pub struct TyphooNApp {
     /// the first dispatch, so the watchlist populates on startup rather than only
     /// when the user manually adds a symbol. See the periodic refresh in `update`.
     pub(crate) watchlist_auto_refresh_at: Option<std::time::Instant>,
+    /// Watchlist length at the last quote fetch. A change forces an immediate
+    /// refresh even on the slow weekend cadence (new symbol added / removed).
+    pub(crate) watchlist_quotes_fetched_count: usize,
     /// Unix timestamp of last successful positions refresh.
     pub(crate) positions_last_update_ts: i64,
     /// Last automatic positions/orders snapshot dispatch. Separate from successful

@@ -435,6 +435,7 @@ impl TyphooNApp {
             watchlist_rows,
             watchlist_last_update_ts: 0,
             watchlist_auto_refresh_at: None,
+            watchlist_quotes_fetched_count: 0,
             positions_last_update_ts: 0,
             positions_auto_refresh_at: None,
             orders_last_update_ts: 0,
