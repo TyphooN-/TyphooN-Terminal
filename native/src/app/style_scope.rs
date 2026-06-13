@@ -98,7 +98,6 @@ impl TyphooNApp {
     }
 
     pub(super) fn sec_scrape_scope_symbols(&self) -> Vec<String> {
-        let mut raw = std::collections::HashSet::new();
         match self.broker_scope {
             EventSource::All => {
                 // Scope ALL means the whole tradable equity universe, not the
@@ -112,27 +111,26 @@ impl TyphooNApp {
                 {
                     return Vec::new();
                 }
-                raw.extend(self.kraken_equity_universe_symbols.iter().cloned());
+
+                // Manual/broad ALL still needs to honor active trading context first.
+                // The previous path threw everything into a HashSet and sorted A→Z,
+                // so active names like WOK could sit behind thousands of A/B/C... symbols
+                // while the UI appeared to be scraping recent SEC filings correctly.
+                let priority = self.active_news_scrape_symbols();
+                let mut broad = std::collections::HashSet::new();
+                broad.extend(self.kraken_equity_universe_symbols.iter().cloned());
                 for (sym, _name, class) in &self.all_broker_assets {
                     if class == "us_equity" {
-                        raw.insert(sym.clone());
+                        broad.insert(sym.clone());
                     }
                 }
-                raw.extend(self.news_focus_symbols());
+                normalize_sec_scrape_symbols_priority_order(priority, broad)
             }
             _ => {
-                if let Some(scope) = self.broker_scope_symbols() {
-                    raw.extend(scope);
-                }
+                let raw = self.broker_scope_symbols().unwrap_or_default();
+                normalize_sec_scrape_symbols_priority_order(std::collections::HashSet::new(), raw)
             }
         }
-        let mut syms: Vec<String> = raw
-            .into_iter()
-            .filter_map(|sym| normalize_sec_scrape_symbol(&sym))
-            .collect();
-        syms.sort_unstable();
-        syms.dedup();
-        syms
     }
 
     pub(super) fn active_news_scrape_symbols(&self) -> std::collections::HashSet<String> {
@@ -1027,6 +1025,30 @@ fn normalize_sec_scrape_symbol(sym: &str) -> Option<String> {
     Some(sym)
 }
 
+fn normalize_sec_scrape_symbols_priority_order(
+    priority: std::collections::HashSet<String>,
+    broad: std::collections::HashSet<String>,
+) -> Vec<String> {
+    let priority_norm: std::collections::HashSet<String> = priority
+        .iter()
+        .filter_map(|sym| normalize_sec_scrape_symbol(sym))
+        .collect();
+    let mut syms: Vec<String> = priority
+        .into_iter()
+        .chain(broad)
+        .filter_map(|sym| normalize_sec_scrape_symbol(&sym))
+        .collect();
+    syms.sort_by(
+        |a, b| match (priority_norm.contains(a), priority_norm.contains(b)) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.cmp(b),
+        },
+    );
+    syms.dedup();
+    syms
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1038,6 +1060,25 @@ mod tests {
         assert_eq!(normalize_sec_scrape_symbol("AAPL"), Some("AAPL".into()));
         assert_eq!(normalize_sec_scrape_symbol("BTC/USD"), None);
         assert_eq!(normalize_sec_scrape_symbol("TOOLONG.EQ"), None);
+    }
+
+    #[test]
+    fn sec_scrape_scope_keeps_active_symbols_before_broad_universe() {
+        let priority = ["WOK.EQ", "BABY"].into_iter().map(str::to_string).collect();
+        let broad = ["AAPL", "WOK", "ZZZ", "BABY.EQ"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+
+        assert_eq!(
+            normalize_sec_scrape_symbols_priority_order(priority, broad),
+            vec![
+                "BABY".to_string(),
+                "WOK".to_string(),
+                "AAPL".to_string(),
+                "ZZZ".to_string()
+            ]
+        );
     }
 
     #[test]

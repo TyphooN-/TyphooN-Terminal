@@ -780,13 +780,7 @@ pub async fn scrape_all_portfolio_symbols(
     // self-discovery path for non-UI callers/tests. UI-triggered scrapes must pass
     // the top-level broker Scope explicitly.
     let symbols: Vec<String> = if let Some(symbols) = scoped_symbols {
-        let mut symbols: Vec<String> = symbols
-            .into_iter()
-            .filter_map(|sym| normalize_sec_equity_symbol(&sym))
-            .collect();
-        symbols.sort_unstable();
-        symbols.dedup();
-        symbols
+        normalize_sec_equity_symbols_preserving_order(symbols)
     } else {
         let db = db_path.clone();
         tokio::task::spawn_blocking(move || {
@@ -980,6 +974,24 @@ fn normalize_sec_equity_symbol(sym: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn normalize_sec_equity_symbols_preserving_order<I>(symbols: I) -> Vec<String>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+{
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for sym in symbols {
+        let Some(normalized) = normalize_sec_equity_symbol(sym.as_ref()) else {
+            continue;
+        };
+        if seen.insert(normalized.clone()) {
+            out.push(normalized);
+        }
+    }
+    out
 }
 
 fn collect_equity_symbols_from_kv_blob(

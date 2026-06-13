@@ -150,7 +150,10 @@ impl TyphooNApp {
         }
         let pair_count = pairs.len();
         self.kraken_ws_ohlc_snapshot_sweep_in_flight = true;
-        let _ = self.broker_tx.send(BrokerCmd::KrakenOhlcSnapshotSweep { interval_min, pairs });
+        let _ = self.broker_tx.send(BrokerCmd::KrakenOhlcSnapshotSweep {
+            interval_min,
+            pairs,
+        });
         self.log.push_back(LogEntry::info(format!(
             "Kraken WS OHLC snapshot sweep: queued {pair_count} missing xStocks for {tf}"
         )));

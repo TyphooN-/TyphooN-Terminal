@@ -940,7 +940,9 @@ fn chart_known_splits_from_cache(cache: &SqliteCache, symbol: &str) -> Vec<Chart
         _ => return Vec::new(),
     };
     drop(conn);
-    rows.iter().filter_map(chart_split_from_stock_split).collect()
+    rows.iter()
+        .filter_map(chart_split_from_stock_split)
+        .collect()
 }
 
 pub(crate) fn chart_merge_equity_raw_bars(

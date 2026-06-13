@@ -144,6 +144,16 @@ fn normalize_sec_equity_symbol_strips_kraken_xstock_suffixes() {
 }
 
 #[test]
+fn scoped_sec_symbols_preserve_caller_priority_order() {
+    assert_eq!(
+        normalize_sec_equity_symbols_preserving_order([
+            "WOK.EQ", "AAPL", "WOK", "BTC/USD", "baby.eq"
+        ]),
+        vec!["WOK".to_string(), "AAPL".to_string(), "BABY".to_string()]
+    );
+}
+
+#[test]
 fn bar_cache_key_parsing_3_part() {
     // Canonical bar-cache key shape: `<source>:SYM:TF`.
     let key = "kraken-equities:MSFT:1Day";

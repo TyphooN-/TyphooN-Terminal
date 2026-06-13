@@ -2201,10 +2201,14 @@ pub(super) fn draw_chart(
                 // showing a rolling timer under it is misleading.
                 None
             } else {
-                chart
-                    .bars
-                    .last()
-                    .and_then(|latest| next_candle_countdown_label(latest.ts_ms, chart.timeframe))
+                chart.bars.last().and_then(|latest| {
+                    next_candle_countdown_label_for_market(
+                        latest.ts_ms,
+                        chart.timeframe,
+                        chart.primary_source,
+                        &chart.symbol,
+                    )
+                })
             };
             if let Some(countdown) = countdown {
                 // TradingView-style current-price tag: ticker / price / countdown
@@ -7407,6 +7411,69 @@ mod tests {
     }
 
     #[test]
+    fn candle_countdown_hides_for_closed_equity_weekend_but_not_crypto() {
+        let saturday_et = chrono::DateTime::parse_from_rfc3339("2026-06-13T12:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+
+        assert!(!super::chart_candle_countdown_allowed_at(
+            "kraken-equities",
+            "WOK",
+            saturday_et
+        ));
+        assert!(!super::chart_candle_countdown_allowed_at(
+            "kraken",
+            "WOK",
+            saturday_et
+        ));
+        assert!(super::chart_candle_countdown_allowed_at(
+            "kraken",
+            "BTC/USD",
+            saturday_et
+        ));
+    }
+
+    #[test]
+    fn candle_countdown_respects_friday_and_sunday_equity_weekend_boundary() {
+        let friday_before_xstock_close =
+            chrono::DateTime::parse_from_rfc3339("2026-06-12T23:59:00Z")
+                .unwrap()
+                .timestamp_millis();
+        let friday_after_xstock_close =
+            chrono::DateTime::parse_from_rfc3339("2026-06-13T00:01:00Z")
+                .unwrap()
+                .timestamp_millis();
+        let sunday_before_xstock_open =
+            chrono::DateTime::parse_from_rfc3339("2026-06-14T23:59:00Z")
+                .unwrap()
+                .timestamp_millis();
+        let sunday_after_xstock_open = chrono::DateTime::parse_from_rfc3339("2026-06-15T00:01:00Z")
+            .unwrap()
+            .timestamp_millis();
+
+        assert!(super::chart_candle_countdown_allowed_at(
+            "kraken-equities",
+            "WOK",
+            friday_before_xstock_close
+        ));
+        assert!(!super::chart_candle_countdown_allowed_at(
+            "kraken-equities",
+            "WOK",
+            friday_after_xstock_close
+        ));
+        assert!(!super::chart_candle_countdown_allowed_at(
+            "kraken-equities",
+            "WOK",
+            sunday_before_xstock_open
+        ));
+        assert!(super::chart_candle_countdown_allowed_at(
+            "kraken-equities",
+            "WOK",
+            sunday_after_xstock_open
+        ));
+    }
+
+    #[test]
     fn candle_countdown_formats_like_chart_axis_timer() {
         assert_eq!(super::format_candle_countdown(4_000), "00:04");
         assert_eq!(super::format_candle_countdown(65_000), "01:05");
@@ -7627,6 +7694,86 @@ fn now_unix_ms() -> Option<i64> {
         .and_then(|d| i64::try_from(d.as_millis()).ok())
 }
 
+fn chart_symbol_looks_crypto(symbol: &str) -> bool {
+    let bare = bare_symbol_from_key(symbol)
+        .replace('/', "")
+        .trim_end_matches(".P")
+        .trim_end_matches(".PF")
+        .to_ascii_uppercase();
+    const CRYPTO_BASES: &[&str] = &[
+        "BTC", "XBT", "ETH", "SOL", "DOGE", "XRP", "ADA", "LTC", "LINK", "AVAX", "DOT", "XMR",
+        "ZEC", "DASH", "UNI", "AAVE", "MATIC", "SHIB", "ATOM", "ALGO", "FTM", "NEAR", "APE", "ARB",
+        "OP", "MKR", "COMP", "SNX", "CRV", "SUSHI", "YFI", "BAT", "MANA",
+    ];
+    CRYPTO_BASES
+        .iter()
+        .any(|base| bare == *base || bare.starts_with(base) && bare.ends_with("USD"))
+}
+
+fn chart_source_trades_weekends(primary_source: &str, symbol: &str) -> bool {
+    matches!(primary_source, "kraken-futures") || chart_symbol_looks_crypto(symbol)
+}
+
+fn nth_weekday_of_month_utc_day(year: i32, month: u32, weekday: chrono::Weekday, nth: u32) -> u32 {
+    use chrono::{Datelike, NaiveDate};
+    let first = NaiveDate::from_ymd_opt(year, month, 1).expect("valid month");
+    let first_idx = first.weekday().num_days_from_sunday() as i32;
+    let target_idx = weekday.num_days_from_sunday() as i32;
+    let delta = (target_idx - first_idx).rem_euclid(7) as u32;
+    1 + delta + (nth.saturating_sub(1) * 7)
+}
+
+fn us_eastern_offset_seconds(utc: chrono::DateTime<chrono::Utc>) -> i64 {
+    use chrono::{Datelike, Timelike};
+    let year = utc.year();
+    let dst_start_day = nth_weekday_of_month_utc_day(year, 3, chrono::Weekday::Sun, 2);
+    let dst_end_day = nth_weekday_of_month_utc_day(year, 11, chrono::Weekday::Sun, 1);
+    let ordinal = utc.ordinal();
+    let start = chrono::NaiveDate::from_ymd_opt(year, 3, dst_start_day)
+        .expect("valid DST start")
+        .ordinal();
+    let end = chrono::NaiveDate::from_ymd_opt(year, 11, dst_end_day)
+        .expect("valid DST end")
+        .ordinal();
+    let hour = utc.hour();
+
+    // US Eastern DST runs from 02:00 local standard time (07:00 UTC) on the
+    // second Sunday in March until 02:00 local daylight time (06:00 UTC) on the
+    // first Sunday in November.
+    let in_dst = if ordinal < start || ordinal > end {
+        false
+    } else if ordinal > start && ordinal < end {
+        true
+    } else if ordinal == start {
+        hour >= 7
+    } else {
+        hour < 6
+    };
+
+    if in_dst { -4 * 3600 } else { -5 * 3600 }
+}
+
+fn us_equity_weekend_closed_at_ms(now_ms: i64) -> bool {
+    use chrono::{Datelike, TimeZone, Timelike};
+    let Some(now_utc) = chrono::Utc.timestamp_millis_opt(now_ms).single() else {
+        return false;
+    };
+    let now_et =
+        now_utc.naive_utc() + chrono::Duration::seconds(us_eastern_offset_seconds(now_utc));
+    let minute_of_day = now_et.hour() as i64 * 60 + now_et.minute() as i64;
+    const WEEKEND_CLOSE: i64 = 20 * 60;
+    match now_et.weekday() {
+        chrono::Weekday::Fri => minute_of_day >= WEEKEND_CLOSE,
+        chrono::Weekday::Sat => true,
+        chrono::Weekday::Sun => minute_of_day < WEEKEND_CLOSE,
+        _ => false,
+    }
+}
+
+fn chart_candle_countdown_allowed_at(primary_source: &str, symbol: &str, now_ms: i64) -> bool {
+    chart_source_trades_weekends(primary_source, symbol) || !us_equity_weekend_closed_at_ms(now_ms)
+}
+
 fn next_candle_remaining_ms_at(last_bar_ts_ms: i64, tf: Timeframe, now_ms: i64) -> Option<i64> {
     let interval_ms = i64::from(tf.minutes()).checked_mul(60_000)?;
     if interval_ms <= 0 || last_bar_ts_ms <= 0 || now_ms <= 0 {
@@ -7647,8 +7794,16 @@ fn next_candle_remaining_ms_at(last_bar_ts_ms: i64, tf: Timeframe, now_ms: i64) 
     Some(remaining.max(0))
 }
 
-fn next_candle_countdown_label(last_bar_ts_ms: i64, tf: Timeframe) -> Option<String> {
+fn next_candle_countdown_label_for_market(
+    last_bar_ts_ms: i64,
+    tf: Timeframe,
+    primary_source: &str,
+    symbol: &str,
+) -> Option<String> {
     let now_ms = now_unix_ms()?;
+    if !chart_candle_countdown_allowed_at(primary_source, symbol, now_ms) {
+        return None;
+    }
     let remaining_ms = next_candle_remaining_ms_at(last_bar_ts_ms, tf, now_ms)?;
     Some(format_candle_countdown(remaining_ms))
 }
