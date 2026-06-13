@@ -186,6 +186,7 @@ fn chart_equity_merge_preserves_old_assist_history_and_prefers_kraken_overlap() 
             ("alpaca", &alpaca_mid),
             ("kraken-equities", &kraken_fresh),
         ],
+        &[],
     );
 
     // Trusted overlap still prefers kraken > alpaca (day3=alpaca, day4=kraken).
@@ -223,7 +224,7 @@ fn chart_equity_merge_drops_unadjusted_depth_history() {
         .collect();
 
     let merged =
-        chart_merge_equity_raw_bars("1Day", &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)]);
+        chart_merge_equity_raw_bars("1Day", &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)], &[]);
 
     // Only Alpaca's range survives; none of Yahoo's older (day1..9) garbage.
     assert_eq!(merged.first().map(|b| b.ts_ms), Some(10 * day));
@@ -250,7 +251,7 @@ fn chart_equity_merge_backadjusts_consistent_deep_history() {
         .collect();
 
     let merged =
-        chart_merge_equity_raw_bars("1Day", &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)]);
+        chart_merge_equity_raw_bars("1Day", &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)], &[]);
 
     assert_eq!(merged.first().map(|b| b.ts_ms), Some(day)); // depth extends back
     assert_eq!(merged.len(), 25);
@@ -282,7 +283,7 @@ fn chart_equity_merge_corrects_trusted_outlier_print_against_recent_corroborator
         .collect();
 
     let merged =
-        chart_merge_equity_raw_bars("1Day", &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)]);
+        chart_merge_equity_raw_bars("1Day", &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)], &[]);
 
     let by_ts: std::collections::HashMap<i64, f64> =
         merged.iter().map(|b| (b.ts_ms, b.close)).collect();
@@ -316,7 +317,7 @@ fn chart_equity_merge_corrects_days_old_intraday_spike() {
         .collect();
 
     let merged =
-        chart_merge_equity_raw_bars("1Hour", &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)]);
+        chart_merge_equity_raw_bars("1Hour", &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)], &[]);
     let by_ts: std::collections::HashMap<i64, f64> =
         merged.iter().map(|b| (b.ts_ms, b.close)).collect();
     assert!(
@@ -349,6 +350,7 @@ fn chart_equity_merge_prefers_adjusted_alpaca_over_raw_kraken_across_split() {
     let merged = chart_merge_equity_raw_bars(
         "1Day",
         &[("kraken-equities", &kraken), ("alpaca", &alpaca)],
+        &[],
     );
     let by_ts: std::collections::HashMap<i64, f64> =
         merged.iter().map(|b| (b.ts_ms, b.close)).collect();
@@ -367,6 +369,38 @@ fn chart_equity_merge_prefers_adjusted_alpaca_over_raw_kraken_across_split() {
         (by_ts[&(130 * day)] - 0.10).abs() < 1e-6,
         "post-split bars unchanged; got {}",
         by_ts[&(130 * day)]
+    );
+}
+
+#[test]
+fn known_split_back_adjusts_raw_kraken_equities_even_without_alpaca() {
+    let day = 86_400_000i64;
+    // Raw kraken-equities: pre-split (days 1–10) trade at 0.50, post-split (11–20)
+    // at 50.0 — a 1-for-100 reverse split on day 11 lifts the price ×100. With NO
+    // adjusted reference (no Alpaca/Yahoo), the era-inference path cannot fire; the
+    // KNOWN split must still back-adjust the pre-split era onto the post-split scale.
+    let kraken: Vec<(i64, f64, f64, f64, f64, f64)> = (1..=20i64)
+        .map(|d| {
+            let c = if d < 11 { 0.50 } else { 50.0 };
+            (d * day, c, c, c, c, 1000.0)
+        })
+        .collect();
+    let splits = [crate::app::chart::ChartSplit {
+        ex_ts_ms: 11 * day,
+        pre_split_factor: 100.0, // denominator/numerator = 100/1
+    }];
+    let merged = chart_merge_equity_raw_bars("1Day", &[("kraken-equities", &kraken)], &splits);
+    let by_ts: std::collections::HashMap<i64, f64> =
+        merged.iter().map(|b| (b.ts_ms, b.close)).collect();
+    assert!(
+        (by_ts[&(5 * day)] - 50.0).abs() < 1e-6,
+        "pre-split bars must be lifted onto the post-split scale; got {}",
+        by_ts[&(5 * day)]
+    );
+    assert!(
+        (by_ts[&(15 * day)] - 50.0).abs() < 1e-6,
+        "post-split bars unchanged; got {}",
+        by_ts[&(15 * day)]
     );
 }
 

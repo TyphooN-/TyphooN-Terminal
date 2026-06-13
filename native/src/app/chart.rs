@@ -875,9 +875,78 @@ pub(crate) fn chart_merge_bucket_ts(timeframe: &str, ts: i64) -> i64 {
 ///
 /// With no trusted source present (Yahoo-only symbol) we fall back to per-bucket
 /// priority across the depth sources so the symbol still charts (best effort).
+/// A known stock split / reverse split: bars strictly before `ex_ts_ms` are
+/// multiplied by `pre_split_factor` (= old shares / new shares = denominator /
+/// numerator) to lift raw, unadjusted pre-split history onto the post-split price
+/// scale. For a 1-for-100 reverse split (WOK, 2025-12-29) the factor is 100.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ChartSplit {
+    pub ex_ts_ms: i64,
+    pub pre_split_factor: f64,
+}
+
+/// Back-adjust an unadjusted source's buckets for known splits: each bar before a
+/// split's ex-date is scaled by the cumulative product of all later splits' factors.
+/// Exact and source-independent — unlike the cross-source era inference, it works
+/// even when no adjusted reference (Alpaca) is present and across a single split era.
+fn chart_back_adjust_bars_for_splits(
+    bucketed: &mut std::collections::BTreeMap<i64, Bar>,
+    splits: &[ChartSplit],
+) {
+    if splits.is_empty() {
+        return;
+    }
+    for (ts, bar) in bucketed.iter_mut() {
+        let mut factor = 1.0;
+        for s in splits {
+            if *ts < s.ex_ts_ms {
+                factor *= s.pre_split_factor;
+            }
+        }
+        if (factor - 1.0).abs() > 1e-9 {
+            bar.open *= factor;
+            bar.high *= factor;
+            bar.low *= factor;
+            bar.close *= factor;
+        }
+    }
+}
+
+/// Convert a stored FMP `StockSplit` into a `ChartSplit` (parse the ex-date, derive
+/// the pre-split multiplier). Skips malformed/zero entries.
+fn chart_split_from_stock_split(
+    s: &typhoon_engine::core::research::StockSplit,
+) -> Option<ChartSplit> {
+    if s.numerator <= 0.0 || s.denominator <= 0.0 {
+        return None;
+    }
+    let date = chrono::NaiveDate::parse_from_str(&s.date, "%Y-%m-%d").ok()?;
+    let ex_ts_ms = date.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis();
+    Some(ChartSplit {
+        ex_ts_ms,
+        pre_split_factor: s.denominator / s.numerator,
+    })
+}
+
+/// Load known splits for `symbol` from the research cache (`research_stock_splits`,
+/// FMP-sourced) for use in equity-merge back-adjustment. Read-only; empty when no
+/// split data has been scraped yet (the era-inference fallback then applies).
+fn chart_known_splits_from_cache(cache: &SqliteCache, symbol: &str) -> Vec<ChartSplit> {
+    let Ok(conn) = cache.read_connection() else {
+        return Vec::new();
+    };
+    let rows = match typhoon_engine::core::research::get_stock_splits(&conn, symbol) {
+        Ok(Some(rows)) => rows,
+        _ => return Vec::new(),
+    };
+    drop(conn);
+    rows.iter().filter_map(chart_split_from_stock_split).collect()
+}
+
 pub(crate) fn chart_merge_equity_raw_bars(
     timeframe: &str,
     sources: &[(&str, &[(i64, f64, f64, f64, f64, f64)])],
+    splits: &[ChartSplit],
 ) -> Vec<Bar> {
     use std::collections::BTreeMap;
     const TRUSTED_MAX_RANK: u8 = 2; // alpaca and better define the price scale
@@ -891,7 +960,14 @@ pub(crate) fn chart_merge_equity_raw_bars(
         if !chart_source_bars_match_timeframe(source, timeframe, raw) {
             continue;
         }
-        let bucketed = chart_bucket_valid_source_bars(timeframe, raw);
+        let mut bucketed = chart_bucket_valid_source_bars(timeframe, raw);
+        // kraken-equities iapi returns RAW (unadjusted) xStock bars. Back-adjust by
+        // KNOWN splits at their known ex-dates so pre-split history lands on the
+        // post-split scale (matching Alpaca `adjustment=all` + TradingView), instead
+        // of relying solely on the cross-source era inference below.
+        if *source == "kraken-equities" {
+            chart_back_adjust_bars_for_splits(&mut bucketed, splits);
+        }
         if !bucketed.is_empty() {
             tagged.push((rank, bucketed));
         }
@@ -1694,7 +1770,8 @@ fn chart_build_merged_equity_bars_from_cache(
         .iter()
         .map(|(source, raw)| (*source, raw.as_slice()))
         .collect();
-    chart_merge_equity_raw_bars(timeframe, &views)
+    let splits = chart_known_splits_from_cache(cache, symbol);
+    chart_merge_equity_raw_bars(timeframe, &views, &splits)
 }
 
 fn chart_bars_to_raw(bars: Vec<Bar>) -> Vec<(i64, f64, f64, f64, f64, f64)> {
