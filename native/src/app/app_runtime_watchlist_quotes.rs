@@ -77,6 +77,19 @@ impl TyphooNApp {
         // weekend, which would otherwise flip ext_active off and drop the Ext% badge).
         let kraken_weekend_closed = super::app_runtime_support::kraken_xstocks_weekend_closed_now();
 
+        if kraken_weekend_closed {
+            for row in &mut rows {
+                if row.ext_change_pct.abs() > 0.001 || row.last <= 0.0 {
+                    continue;
+                }
+                if let Some(existing) = existing_good.get(&normalize_quote_symbol(&row.symbol)) {
+                    if existing.ext_change_pct.abs() > 0.001 && existing.last > 0.0 {
+                        *row = existing.clone();
+                    }
+                }
+            }
+        }
+
         let mut row_symbols: HashSet<String> = HashSet::with_capacity(rows.len());
         for row in &rows {
             if row.last <= 0.0 {

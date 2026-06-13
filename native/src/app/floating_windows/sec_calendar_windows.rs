@@ -14,11 +14,13 @@ impl TyphooNApp {
             let mut sec_pending_action = SymbolAction::None;
             let mut sec_scrape_clicked = false;
             egui::Window::new("SEC Filing Scanner")
-                        .open(&mut self.show_sec)
-                        .resizable(true).default_size([900.0, 650.0]).min_size([600.0, 200.0]).constrain(false)
-        .max_size([900.0, 640.0])
-                        .scroll([false, true])
-                        .show(ctx, |ui| {
+                .open(&mut self.show_sec)
+                .resizable(true)
+                .default_size([900.0, 650.0])
+                .min_size([600.0, 200.0])
+                .constrain(true)
+                .scroll([false, true])
+                .show(ctx, |ui| {
                             let sec_high = egui::Color32::from_rgb(231, 76, 60);
                             let sec_med = egui::Color32::from_rgb(241, 196, 15);
                             let sec_low = egui::Color32::from_rgb(100, 100, 120);

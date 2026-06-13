@@ -107,6 +107,14 @@ impl TyphooNApp {
                 // the screen bottom before the child scroll areas get a chance to
                 // take over.
                 .max_height((content_h - 24.0).max(260.0))
+                // Window resizing in egui is still content-driven: when the
+                // content reports a larger minimum than the user's dragged size,
+                // the window grows again on the next frame. Keep a thin outer
+                // vertical scroll shell as the last-resort overflow path so the
+                // header/detail content cannot force the floating window back to
+                // max height after a vertical shrink. The list/body panes still
+                // own normal scrolling at usable sizes.
+                .vscroll(true)
                 .constrain(true)
                 .show(ctx, |ui| {
                     // ── Top bar: Search-driven filter + fetch controls ────────────
