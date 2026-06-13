@@ -930,21 +930,65 @@ fn chart_split_from_stock_split(
     })
 }
 
-/// Load known splits for `symbol` from the research cache (`research_stock_splits`,
-/// FMP-sourced) for use in equity-merge back-adjustment. Read-only; empty when no
-/// split data has been scraped yet (the era-inference fallback then applies).
-fn chart_known_splits_from_cache(cache: &SqliteCache, symbol: &str) -> Vec<ChartSplit> {
-    let Ok(conn) = cache.read_connection() else {
-        return Vec::new();
-    };
-    let rows = match typhoon_engine::core::research::get_stock_splits(&conn, symbol) {
-        Ok(Some(rows)) => rows,
-        _ => return Vec::new(),
-    };
-    drop(conn);
-    rows.iter()
-        .filter_map(chart_split_from_stock_split)
+/// Curated corporate actions for symbols where the FMP split feed is missing or
+/// unreliable. Free-tier FMP omits many microcap reverse splits, and a node that
+/// has never scraped / LAN-synced `research_stock_splits` has the table empty (or
+/// absent) entirely — which starves the exact back-adjustment
+/// ([`chart_back_adjust_bars_for_splits`]) of the split it needs, so raw
+/// pre-split history (Kraken xStock bars) gets painted on the wrong scale. That
+/// is the WOK December reverse-split discontinuity vs TradingView: the merge code
+/// is correct and tested, it was simply never handed the split. These entries
+/// supplement [`chart_known_splits_from_cache`] so the back-adjust still fires
+/// offline / without an FMP key. See ADR-122.
+///
+/// `pre_split_factor` = old shares / new shares (= 100 for a 1-for-100 reverse
+/// split). Dates are the split ex-date at 00:00 UTC. Verify each against the
+/// issuer's actual action before adding.
+pub(crate) fn chart_curated_known_splits(symbol: &str) -> Vec<ChartSplit> {
+    // (symbol, ex-date "YYYY-MM-DD", pre_split_factor = denominator/numerator)
+    const CURATED: &[(&str, &str, f64)] = &[
+        // WORK Medical Technology Group — 1-for-100 reverse split.
+        ("WOK", "2025-12-29", 100.0),
+    ];
+    let su = symbol.trim().to_ascii_uppercase();
+    CURATED
+        .iter()
+        .filter(|(sym, _, _)| su == *sym)
+        .filter_map(|(_, date, factor)| {
+            let d = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
+            Some(ChartSplit {
+                ex_ts_ms: d.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis(),
+                pre_split_factor: *factor,
+            })
+        })
         .collect()
+}
+
+/// Load known splits for `symbol` for use in equity-merge back-adjustment:
+/// FMP-sourced rows from the research cache (`research_stock_splits`, read-only),
+/// supplemented by [`chart_curated_known_splits`] for actions FMP/LAN-sync missed.
+/// Empty only when neither source knows a split (the era-inference fallback then
+/// applies). Curated entries are deduped against cached rows by ex-date so real
+/// FMP data takes precedence when both are present.
+fn chart_known_splits_from_cache(cache: &SqliteCache, symbol: &str) -> Vec<ChartSplit> {
+    let mut splits: Vec<ChartSplit> = Vec::new();
+    if let Ok(conn) = cache.read_connection() {
+        if let Ok(Some(rows)) = typhoon_engine::core::research::get_stock_splits(&conn, symbol) {
+            splits = rows
+                .iter()
+                .filter_map(chart_split_from_stock_split)
+                .collect();
+        }
+    }
+    for c in chart_curated_known_splits(symbol) {
+        let dup = splits
+            .iter()
+            .any(|s| (s.ex_ts_ms - c.ex_ts_ms).abs() < 86_400_000);
+        if !dup {
+            splits.push(c);
+        }
+    }
+    splits
 }
 
 pub(crate) fn chart_merge_equity_raw_bars(

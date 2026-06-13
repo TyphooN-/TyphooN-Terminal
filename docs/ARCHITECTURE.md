@@ -55,7 +55,7 @@ No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
 
 ## Data Sources
 
-Broker & data scope is **Kraken + Alpaca only** (ADR-111). Equity bars merge a trusted tier against an independent corroborator (ADR-112/113).
+Broker & data scope is **Kraken + Alpaca only** (ADR-111). Equity bars merge a trusted tier against an independent corroborator (ADR-112/113), with known stock splits back-adjusted from a curated fallback when the FMP split feed is unavailable (ADR-122).
 
 | Tier | Source | Coverage |
 |------|--------|----------|

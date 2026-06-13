@@ -409,6 +409,62 @@ fn known_split_back_adjusts_raw_kraken_equities_even_without_alpaca() {
 }
 
 #[test]
+fn curated_known_splits_supply_wok_reverse_split() {
+    use crate::app::chart::chart_curated_known_splits;
+    // research_stock_splits can be empty / unsynced (free-tier FMP omits microcap
+    // reverse splits); the curated fallback must still supply WOK's 1-for-100 so
+    // the exact back-adjust fires — otherwise raw pre-split Kraken bars paint the
+    // December discontinuity TradingView never shows.
+    let splits = chart_curated_known_splits("wok"); // case-insensitive
+    assert_eq!(splits.len(), 1, "WOK has one curated reverse split");
+    assert!(
+        (splits[0].pre_split_factor - 100.0).abs() < 1e-9,
+        "1-for-100 reverse split → pre_split_factor 100"
+    );
+    let expected_ts = chrono::NaiveDate::from_ymd_opt(2025, 12, 29)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+    assert_eq!(splits[0].ex_ts_ms, expected_ts, "ex-date 2025-12-29 00:00 UTC");
+    assert!(
+        chart_curated_known_splits("AAPL").is_empty(),
+        "curated table is opt-in per symbol"
+    );
+
+    // End-to-end: the curated split, run through the same merge path as cached
+    // FMP splits, lifts raw pre-split kraken-equities bars onto the post-split
+    // scale (the fix for WOK rendering vs TradingView).
+    let day = 86_400_000i64;
+    let ex = splits[0].ex_ts_ms;
+    let kraken: Vec<(i64, f64, f64, f64, f64, f64)> = (-6..=5i64)
+        .map(|k| {
+            let ts = ex + k * day;
+            let c = if ts < ex { 0.50 } else { 50.0 }; // ×100 reverse split at ex
+            (ts, c, c, c, c, 1000.0)
+        })
+        .collect();
+    let merged = chart_merge_equity_raw_bars(
+        "1Day",
+        &[("kraken-equities", &kraken)],
+        &chart_curated_known_splits("WOK"),
+    );
+    let by_ts: std::collections::HashMap<i64, f64> =
+        merged.iter().map(|b| (b.ts_ms, b.close)).collect();
+    assert!(
+        (by_ts[&(ex - 3 * day)] - 50.0).abs() < 1e-6,
+        "pre-split bars lifted ×100 onto post-split scale; got {}",
+        by_ts[&(ex - 3 * day)]
+    );
+    assert!(
+        (by_ts[&(ex + 2 * day)] - 50.0).abs() < 1e-6,
+        "post-split bars unchanged; got {}",
+        by_ts[&(ex + 2 * day)]
+    );
+}
+
+#[test]
 fn chart_persists_merged_equity_bars_under_merged_cache_key() {
     let db_path = std::env::temp_dir().join(format!(
         "typhoon-merged-cache-test-{}-{}.db",
