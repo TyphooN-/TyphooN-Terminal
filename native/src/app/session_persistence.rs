@@ -233,7 +233,10 @@ impl TyphooNApp {
                 let mut enabled = self.enabled_sync_timeframes.contains(cache);
                 if ui
                     .checkbox(&mut enabled, egui::RichText::new(short).small())
-                    .on_hover_text(format!("{} automated scrape/sync", cache))
+                    .on_hover_text(format!(
+                        "{} automated scrape/sync, including new Kraken WS OHLC subscriptions",
+                        cache
+                    ))
                     .changed()
                 {
                     if enabled {
@@ -250,7 +253,7 @@ impl TyphooNApp {
         });
         ui.label(
             egui::RichText::new(
-                "Unchecked TFs are skipped by automated bar sync/backfill across brokers.",
+                "Unchecked TFs are skipped by automated bar sync/backfill and new Kraken WS OHLC subscriptions.",
             )
             .color(AXIS_TEXT)
             .small(),

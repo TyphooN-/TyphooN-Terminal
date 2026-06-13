@@ -2694,12 +2694,12 @@ pub(crate) enum BrokerCmd {
     },
     KrakenFetchEquityUniverse,
     KrakenStartPrivateWs,
-    /// Start the Kraken WS v2 OHLC streamers (one task per interval,
-    /// 1Min/5Min/15Min/30Min/1Hour/4Hour/1Day/1Week). Subscribes to the
-    /// provided pairs across every interval and merges live bar updates
+    /// Start the Kraken WS v2 OHLC streamers for the selected intervals.
+    /// Subscribes to the provided pairs and merges live bar updates
     /// into the existing `kraken:SYMBOL:TF` cache keys.
     KrakenStartOhlcStreamers {
         pairs: Vec<String>,
+        intervals_min: Vec<u32>,
     },
     /// Run one bounded Kraken WS OHLC snapshot sweep batch and then unsubscribe.
     KrakenOhlcSnapshotSweep {

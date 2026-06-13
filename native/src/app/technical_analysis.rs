@@ -7566,9 +7566,8 @@ fn format_ext_hours_symbol_badge(close: f64, ext_last: f64, prev_close: Option<f
     } else {
         0.0
     };
-    let day_pct = prev_close.and_then(|prev| {
-        (prev.abs() > f64::EPSILON).then_some((ext_last / prev - 1.0) * 100.0)
-    });
+    let day_pct = prev_close
+        .and_then(|prev| (prev.abs() > f64::EPSILON).then_some((ext_last / prev - 1.0) * 100.0));
     if let Some(day_pct) = day_pct {
         format!(
             "Daily C {}  Day {:+.2}%  EXT last {}  Δ/C {} ({:+.2}%)",

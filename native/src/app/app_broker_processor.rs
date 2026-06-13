@@ -2992,7 +2992,10 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                     }
                 }
-                BrokerCmd::KrakenStartOhlcStreamers { pairs } => {
+                BrokerCmd::KrakenStartOhlcStreamers {
+                    pairs,
+                    intervals_min,
+                } => {
                     // Bridge channels: streamers write bars into the writer;
                     // writer reports flushes back to the main loop via BrokerMsg.
                     let msg_tx = broker_msg_tx_clone.clone();
@@ -3044,11 +3047,13 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         kraken_ohlc_ws::spawn_kraken_ohlc_pipeline(
                             shared_cache_broker.clone(),
                             pairs,
+                            intervals_min.clone(),
                             commit_tx,
                             status_tx,
                         );
+                        let interval_count = intervals_min.len();
                         let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                            "Kraken WS OHLC streamers started: {pair_count} pairs × 8 intervals",
+                            "Kraken WS OHLC streamers started: {pair_count} pairs × {interval_count} enabled intervals",
                         )));
                     }
                 }

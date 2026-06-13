@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::chart_ops::mtf_visible_chart_groups;
+use crate::app::chart_ops::{MTF_GRID_TIMEFRAMES, mtf_visible_chart_groups};
 
 use super::app_runtime_support::*;
 // egui 0.34: Panel::show(ctx) deprecated in favor of show_inside(ui).
@@ -798,24 +798,37 @@ impl eframe::App for TyphooNApp {
                 deferred_chart_load_interval(self.heavy_sync_in_progress, self.mtf_enabled);
             if now_instant.duration_since(self.deferred_chart_last_load_at) >= load_interval {
                 let idx = self.deferred_chart_loads[0]; // VecDeque supports indexing
-                let mut loaded = false;
-                if let Some(cache) = self.cache.clone() {
-                    if let Some(chart) = self.charts.get_mut(idx) {
-                        let mut gpu = self.gpu_indicators.take();
-                        loaded = chart.try_load(&cache, &mut self.log, gpu.as_mut());
-                        self.gpu_indicators = gpu;
-                    } else {
-                        loaded = true; // invalid index, skip
+                let focused_chart = self.mtf_focused.unwrap_or(self.active_tab);
+                let defer_inactive_mtf_cell = self.heavy_sync_in_progress
+                    && self.mtf_enabled
+                    && idx != self.active_tab
+                    && idx != focused_chart;
+                if defer_inactive_mtf_cell {
+                    if let Some(skipped_idx) = self.deferred_chart_loads.pop_front() {
+                        self.deferred_chart_loads.push_back(skipped_idx);
                     }
-                }
-                if loaded {
                     self.deferred_chart_last_load_at = now_instant;
-                    if let Some(done_idx) = self.deferred_chart_loads.pop_front() {
-                        self.deferred_chart_load_set.remove(&done_idx);
+                    ctx.request_repaint_after(load_interval);
+                } else {
+                    let mut loaded = false;
+                    if let Some(cache) = self.cache.clone() {
+                        if let Some(chart) = self.charts.get_mut(idx) {
+                            let mut gpu = self.gpu_indicators.take();
+                            loaded = chart.try_load(&cache, &mut self.log, gpu.as_mut());
+                            self.gpu_indicators = gpu;
+                        } else {
+                            loaded = true; // invalid index, skip
+                        }
                     }
+                    if loaded {
+                        self.deferred_chart_last_load_at = now_instant;
+                        if let Some(done_idx) = self.deferred_chart_loads.pop_front() {
+                            self.deferred_chart_load_set.remove(&done_idx);
+                        }
+                    }
+                    // If !loaded, leave in queue — will retry after the pacing interval
+                    // when the Mutex is free.
                 }
-                // If !loaded, leave in queue — will retry after the pacing interval
-                // when the Mutex is free.
             }
         }
 
@@ -843,15 +856,11 @@ impl eframe::App for TyphooNApp {
             if let Ok(results) = rx.try_recv() {
                 // Merge with any preloaded data already in mtf_grid_status
                 self.mtf_grid_status.extend(results);
-                self.mtf_grid_status.sort_by_key(|r| match r.0 {
-                    "M15" => 0,
-                    "M30" => 1,
-                    "H1" => 2,
-                    "H4" => 3,
-                    "D1" => 4,
-                    "W1" => 5,
-                    "MN1" => 6,
-                    _ => 99u8,
+                self.mtf_grid_status.sort_by_key(|r| {
+                    MTF_GRID_TIMEFRAMES
+                        .iter()
+                        .position(|(label, _)| *label == r.0)
+                        .unwrap_or(usize::MAX)
                 });
                 self.mtf_grid_rx = None; // done
             }
@@ -3234,7 +3243,8 @@ impl eframe::App for TyphooNApp {
 
             if self.mtf_enabled {
                 // Filter to visible, supported MTF charts and group them by symbol. Each
-                // symbol gets its own multi-timeframe grid; M1/M5 are excluded at the helper.
+                // symbol gets its own multi-timeframe grid; the supported set is owned by
+                // MTF_GRID_TIMEFRAMES, including M1/M5 where source data is available.
                 while self.mtf_visible.len() < self.charts.len() {
                     self.mtf_visible.push(true);
                 }
@@ -3293,18 +3303,25 @@ impl eframe::App for TyphooNApp {
                     let cell_h = chart_row_h;
 
                     for (grid_pos, &vi) in group.indices.iter().enumerate() {
-                // Rebuild trade overlay every 120 frames (~30s) or on first load
-                let fc = self.frame_count;
-                if !self.heavy_sync_in_progress && self.charts[vi].cached_trade_overlay_frame == 0 || fc.wrapping_sub(self.charts[vi].cached_trade_overlay_frame) > 120 {
-                    self.charts[vi].cached_trade_overlay = self.build_trade_overlay(&self.charts[vi]);
-                    self.charts[vi].cached_trade_overlay_frame = fc;
-                }
-                // Move the cached overlay out for the duration of this cell render — avoids
-                // a Vec<TradeMarker> clone (with String tickers) per cell per frame. We
-                // restore it once draw_chart returns, before the next cell iterates.
-                let trade_ov = std::mem::take(&mut self.charts[vi].cached_trade_overlay);
-                let chart = &mut self.charts[vi];
-                let idx = grid_pos;
+                        // Rebuild trade overlay every 120 frames (~30s) or on first load.
+                        // During heavy sync, keep the cached overlay: rebuilding every
+                        // restored MTF cell adds avoidable work to already overloaded frames.
+                        let fc = self.frame_count;
+                        if !self.heavy_sync_in_progress
+                            && (self.charts[vi].cached_trade_overlay_frame == 0
+                                || fc.wrapping_sub(self.charts[vi].cached_trade_overlay_frame)
+                                    > 120)
+                        {
+                            self.charts[vi].cached_trade_overlay =
+                                self.build_trade_overlay(&self.charts[vi]);
+                            self.charts[vi].cached_trade_overlay_frame = fc;
+                        }
+                        // Move the cached overlay out for the duration of this cell render — avoids
+                        // a Vec<TradeMarker> clone (with String tickers) per cell per frame. We
+                        // restore it once draw_chart returns, before the next cell iterates.
+                        let trade_ov = std::mem::take(&mut self.charts[vi].cached_trade_overlay);
+                        let chart = &mut self.charts[vi];
+                        let idx = grid_pos;
                     let col = idx % cols;
                     let row = idx / cols;
                     let cell_rect = egui::Rect::from_min_size(

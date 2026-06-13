@@ -387,6 +387,7 @@ impl TyphooNApp {
         if sym.is_empty() {
             return;
         }
+        let sym_key = mtf_grid_symbol_key(&sym);
         let all_tfs: &[(&'static str, Timeframe)] = &MTF_GRID_TIMEFRAMES;
 
         // Collect results from already-loaded charts (no thread needed)
@@ -401,12 +402,14 @@ impl TyphooNApp {
         let mut need_load: Vec<(&'static str, Timeframe)> = Vec::new();
 
         for &(label, tf) in all_tfs {
-            if let Some(c) = self
-                .charts
-                .iter()
-                .find(|c| c.timeframe == tf && !c.bars.is_empty())
-            {
-                let close = c.bars.last().map(|b| b.close);
+            if let Some(c) = self.charts.iter().find(|c| {
+                c.timeframe == tf
+                    && !c.bars.is_empty()
+                    && mtf_grid_symbol_key(&c.symbol).eq_ignore_ascii_case(&sym_key)
+            }) {
+                let close = c
+                    .fresh_live_quote_mid()
+                    .or_else(|| c.bars.last().map(|b| b.close));
                 let sma = c.sma200.last().and_then(|v| *v);
                 let kama = c.kama.last().and_then(|v| *v);
                 let fisher = c.fisher.last().and_then(|v| *v);
@@ -424,6 +427,21 @@ impl TyphooNApp {
                 .enumerate()
                 .map(|(i, &(l, _))| (l, i))
                 .collect();
+            preloaded.sort_by_key(|r| tf_idx.get(r.0).copied().unwrap_or(99));
+            self.mtf_grid_status = preloaded;
+        } else if self.heavy_sync_in_progress {
+            // Do not kick off background cache/indicator loads for missing MTF
+            // status cells while full-universe sync is already saturating the
+            // machine. Visible chart cells load through the paced deferred loader;
+            // missing status cells can stay grey until sync pressure relaxes.
+            let tf_idx: std::collections::HashMap<&str, usize> = all_tfs
+                .iter()
+                .enumerate()
+                .map(|(i, &(l, _))| (l, i))
+                .collect();
+            for (label, _) in need_load {
+                preloaded.push((label, None, None, None, None, None));
+            }
             preloaded.sort_by_key(|r| tf_idx.get(r.0).copied().unwrap_or(99));
             self.mtf_grid_status = preloaded;
         } else {

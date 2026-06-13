@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::chart_ops::mtf_visible_chart_groups;
+use crate::app::chart_ops::{MTF_GRID_TIMEFRAMES, mtf_visible_chart_groups};
 
 #[allow(deprecated)]
 impl TyphooNApp {
@@ -14,7 +14,10 @@ impl TyphooNApp {
         .id_salt("mtf_grid_section")
         .default_open(self.right_mtf_grid_open)
         .show(ui, |ui| {
-            let tf_labels = ["M15", "M30", "H1", "H4", "D1", "W1", "MN1"];
+            let tf_labels: Vec<&'static str> = MTF_GRID_TIMEFRAMES
+                .iter()
+                .map(|(label, _)| *label)
+                .collect();
             let ma_labels = ["SMA200", "KAMA", "Fisher"];
             // Symbol count only — the Fetch News button moved into the News
             // section header and now picks the multi-symbol path automatically
@@ -24,9 +27,10 @@ impl TyphooNApp {
             let mtf_groups = mtf_visible_chart_groups(&self.charts, &self.mtf_visible);
             ui.label(
                 egui::RichText::new(format!(
-                    "{} symbol{} · M15+ only",
+                    "{} symbol{} · {} TFs",
                     mtf_news_symbols.len(),
-                    if mtf_news_symbols.len() == 1 { "" } else { "s" }
+                    if mtf_news_symbols.len() == 1 { "" } else { "s" },
+                    tf_labels.len()
                 ))
                 .color(AXIS_TEXT)
                 .small(),
@@ -102,7 +106,9 @@ impl TyphooNApp {
                                         .find(tf_match)
                                         .map(|chart| {
                                             (
-                                                chart.bars.last().map(|b| b.close),
+                                                chart
+                                                    .fresh_live_quote_mid()
+                                                    .or_else(|| chart.bars.last().map(|b| b.close)),
                                                 chart.sma200.last().and_then(|v| *v),
                                                 chart.kama.last().and_then(|v| *v),
                                                 chart.fisher.last().and_then(|v| *v),

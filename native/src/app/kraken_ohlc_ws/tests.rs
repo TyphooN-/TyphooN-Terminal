@@ -128,7 +128,10 @@ fn large_universe_disables_initial_ws_snapshots() {
 
 #[test]
 fn small_universe_plan_snapshots_every_interval_immediately() {
-    let plan = plan_kraken_ws_streamers(WS_LARGE_UNIVERSE_PAIR_THRESHOLD - 1);
+    let plan = plan_kraken_ws_streamers(
+        WS_LARGE_UNIVERSE_PAIR_THRESHOLD - 1,
+        KRAKEN_WS_OHLC_INTERVALS_MIN,
+    );
     assert_eq!(plan.len(), KRAKEN_WS_OHLC_INTERVALS_MIN.len());
     assert!(
         plan.iter()
@@ -146,7 +149,7 @@ fn small_universe_plan_snapshots_every_interval_immediately() {
 
 #[test]
 fn large_universe_plan_snapshots_only_bounded_high_timeframes() {
-    let plan = plan_kraken_ws_streamers(12_714);
+    let plan = plan_kraken_ws_streamers(12_714, KRAKEN_WS_OHLC_INTERVALS_MIN);
     assert_eq!(plan.len(), KRAKEN_WS_OHLC_INTERVALS_MIN.len());
     for &(interval_min, snapshot, delay) in &plan {
         if interval_min >= 60 {
@@ -171,11 +174,56 @@ fn large_universe_plan_snapshots_only_bounded_high_timeframes() {
 }
 
 #[test]
+fn ws_ohlc_interval_plan_respects_enabled_sync_timeframe_controls() {
+    let enabled = BTreeSet::from(["15Min".to_string(), "1Hour".to_string(), "1Day".to_string()]);
+
+    assert_eq!(
+        enabled_kraken_ws_ohlc_intervals(&enabled),
+        vec![15, 60, 1440]
+    );
+
+    let plan = plan_kraken_ws_streamers(12_714, &enabled_kraken_ws_ohlc_intervals(&enabled));
+    let intervals: Vec<u32> = plan
+        .iter()
+        .map(|(interval_min, _, _)| *interval_min)
+        .collect();
+
+    assert_eq!(intervals, vec![15, 1440, 60]);
+    assert!(
+        plan.iter()
+            .all(|(interval_min, _, _)| *interval_min != 1 && *interval_min != 5)
+    );
+}
+
+#[test]
+fn snapshot_sweep_respects_enabled_sync_timeframe_controls() {
+    let catalog = vec!["AAPL".to_string()];
+    let enabled = BTreeSet::from(["1Day".to_string(), "15Min".to_string()]);
+    let intervals = enabled_kraken_ws_ohlc_snapshot_sweep_intervals(&enabled);
+    let mut cursor = 0usize;
+
+    let first = next_kraken_ws_snapshot_sweep_batch(&catalog, &mut cursor, 1, &intervals)
+        .expect("first enabled interval");
+    let second = next_kraken_ws_snapshot_sweep_batch(&catalog, &mut cursor, 1, &intervals)
+        .expect("second enabled interval");
+
+    assert_eq!(intervals, vec![1440, 15]);
+    assert_eq!(first.interval_min, 1440);
+    assert_eq!(second.interval_min, 15);
+}
+
+#[test]
 fn snapshot_sweep_batches_catalog_high_timeframe_first() {
     let catalog = vec!["aapl".to_string(), "MSFT.EQ".to_string(), "WOK".to_string()];
     let mut cursor = 0usize;
 
-    let first = next_kraken_ws_snapshot_sweep_batch(&catalog, &mut cursor, 2).expect("first batch");
+    let first = next_kraken_ws_snapshot_sweep_batch(
+        &catalog,
+        &mut cursor,
+        2,
+        &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
+    )
+    .expect("first batch");
 
     assert_eq!(first.interval_min, 10080);
     assert_eq!(
@@ -184,13 +232,24 @@ fn snapshot_sweep_batches_catalog_high_timeframe_first() {
     );
     assert_eq!(cursor, 1);
 
-    let second =
-        next_kraken_ws_snapshot_sweep_batch(&catalog, &mut cursor, 2).expect("second batch");
+    let second = next_kraken_ws_snapshot_sweep_batch(
+        &catalog,
+        &mut cursor,
+        2,
+        &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
+    )
+    .expect("second batch");
     assert_eq!(second.interval_min, 10080);
     assert_eq!(second.pairs, vec!["WOKx/USD".to_string()]);
     assert_eq!(cursor, 2);
 
-    let third = next_kraken_ws_snapshot_sweep_batch(&catalog, &mut cursor, 2).expect("third batch");
+    let third = next_kraken_ws_snapshot_sweep_batch(
+        &catalog,
+        &mut cursor,
+        2,
+        &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
+    )
+    .expect("third batch");
     assert_eq!(third.interval_min, 1440);
     assert_eq!(
         third.pairs,
@@ -203,8 +262,13 @@ fn snapshot_sweep_cursor_wraps_after_all_interval_batches() {
     let catalog = vec!["AAPL".to_string()];
     let mut cursor = KRAKEN_WS_OHLC_INTERVALS_MIN.len();
 
-    let batch =
-        next_kraken_ws_snapshot_sweep_batch(&catalog, &mut cursor, 1).expect("wrapped batch");
+    let batch = next_kraken_ws_snapshot_sweep_batch(
+        &catalog,
+        &mut cursor,
+        1,
+        &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
+    )
+    .expect("wrapped batch");
 
     assert_eq!(batch.interval_min, 10080);
     assert_eq!(batch.pairs, vec!["AAPLx/USD".to_string()]);

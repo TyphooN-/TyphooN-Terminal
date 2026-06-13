@@ -124,7 +124,7 @@ impl TyphooNApp {
                 let _t = std::time::Instant::now();
                 $call;
                 let _ms = _t.elapsed().as_secs_f64() * 1000.0;
-                if _ms > 500.0 {
+                if _ms > 150.0 {
                     tracing::warn!("slow floating window: {} took {:.0}ms", $name, _ms);
                 }
             }};

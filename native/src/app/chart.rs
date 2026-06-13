@@ -1466,6 +1466,10 @@ pub(crate) fn chart_merged_equity_cache_key(symbol: &str, timeframe: &str) -> St
     format!("merged:{symbol}:{timeframe}")
 }
 
+fn chart_equity_low_timeframe_requires_native_source(timeframe: &str) -> bool {
+    matches!(timeframe, "1Min" | "5Min")
+}
+
 /// Serialize merged bars into the cache JSON payload, or `None` when there is
 /// nothing worth persisting (no bars, or none with a valid timestamp).
 fn chart_merged_bars_to_cache_json(bars: &[Bar]) -> Option<String> {
@@ -1641,13 +1645,20 @@ fn chart_build_merged_equity_bars_from_cache(
 
     type RawBars = Vec<(i64, f64, f64, f64, f64, f64)>;
     let mut loaded: Vec<(&'static str, RawBars)> = Vec::new();
-    for source in [
-        "yahoo-chart",
-        "alpaca",
-        "tastytrade",
-        "kraken-equities",
-        "default",
-    ] {
+    let sources: &[&'static str] = match timeframe {
+        // For equity/xStock M1/M5, only native Kraken Equities rows are valid
+        // merged inputs. Alpaca/Yahoo low-TF rows are stale provider-assist
+        // artifacts unless explicitly selected by source override.
+        tf if chart_equity_low_timeframe_requires_native_source(tf) => &["kraken-equities"],
+        _ => &[
+            "yahoo-chart",
+            "alpaca",
+            "tastytrade",
+            "kraken-equities",
+            "default",
+        ],
+    };
+    for source in sources {
         for key in chart_source_cache_keys(source, symbol, timeframe) {
             let Ok(Some(raw)) = cache.get_bars_raw(&key) else {
                 continue;
@@ -1805,6 +1816,8 @@ fn chart_aggregate_raw_to_weekly(raw: &[(i64, f64, f64, f64, f64, f64)]) -> Vec<
 }
 
 impl ChartState {
+    const MAX_LIVE_QUOTE_SPREAD_PCT_FOR_MID: f64 = 5.0;
+
     /// Point this chart at a new symbol and clear per-symbol live-quote state.
     /// `live_bid`/`live_ask`/`live_quote_at`/`live_quote_delayed` belong to the
     /// *previous* symbol: carrying them over folds a stale mid into the new
@@ -1826,11 +1839,27 @@ impl ChartState {
             .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
         if fresh && self.live_bid > 0.0 && self.live_ask > 0.0 {
             let mid = (self.live_bid + self.live_ask) * 0.5;
-            if mid > 0.0 && mid.is_finite() {
+            if mid > 0.0
+                && mid.is_finite()
+                && Self::live_quote_mid_is_usable(self.live_bid, self.live_ask)
+            {
                 return Some(mid);
             }
         }
         None
+    }
+
+    pub(crate) fn live_quote_spread_pct(bid: f64, ask: f64) -> Option<f64> {
+        let mid = (bid + ask) * 0.5;
+        if bid <= 0.0 || ask <= 0.0 || mid <= 0.0 || !bid.is_finite() || !ask.is_finite() {
+            return None;
+        }
+        Some(((ask - bid).abs() / mid) * 100.0)
+    }
+
+    fn live_quote_mid_is_usable(bid: f64, ask: f64) -> bool {
+        Self::live_quote_spread_pct(bid, ask)
+            .is_some_and(|spread_pct| spread_pct <= Self::MAX_LIVE_QUOTE_SPREAD_PCT_FOR_MID)
     }
 
     pub(crate) fn apply_forming_price_update(&mut self, price: f64) -> bool {
@@ -1861,6 +1890,12 @@ impl ChartState {
         self.live_ask = ask;
         self.live_quote_at = Some(std::time::Instant::now());
         self.live_quote_delayed = delayed;
+        if self.ext_active {
+            return false;
+        }
+        if !Self::live_quote_mid_is_usable(bid, ask) {
+            return false;
+        }
         self.apply_forming_price_update(mid)
     }
 
@@ -2689,6 +2724,8 @@ impl ChartState {
             ]);
         }
         let prefer_fresh_equity = chart_prefers_fresh_equity_source(&sym_norm);
+        let native_equity_low_tf_only =
+            prefer_fresh_equity && chart_equity_low_timeframe_requires_native_source(tf);
         let mut result: Option<(Vec<(i64, f64, f64, f64, f64, f64)>, bool, &'static str)> = None;
         let mut best_equity: Option<(
             Vec<(i64, f64, f64, f64, f64, f64)>,
@@ -2710,6 +2747,9 @@ impl ChartState {
                     let source = cache_source_from_key(k);
                     let is_gap_fill = k.starts_with("kraken:") || k.starts_with("kraken-futures:");
                     if prefer_fresh_equity {
+                        if native_equity_low_tf_only && source != "kraken-equities" {
+                            continue;
+                        }
                         if let Some(rank) = chart_equity_source_rank(source) {
                             let last_ts = chart_bar_last_valid_ts(&raw);
                             let replace = best_equity

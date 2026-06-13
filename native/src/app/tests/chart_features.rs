@@ -1179,6 +1179,50 @@ fn live_quote_update_marks_forming_bar_dirty() {
 }
 
 #[test]
+fn wide_live_quote_spread_does_not_become_current_price() {
+    let mut chart = ChartState::new("WOK", Timeframe::D1);
+    chart.bars.push(Bar {
+        ts_ms: 1000,
+        open: 0.08,
+        high: 0.081,
+        low: 0.074,
+        close: 0.0766,
+        volume: 1.0,
+    });
+
+    // Off-hours/tokenized-equity books can be real but very wide. Keep the
+    // bid/ask for spread display; do not turn that midpoint into C/current.
+    assert!(!chart.apply_live_quote_update(0.065, 0.0866, false));
+
+    let last = chart.bars.last().unwrap();
+    assert_eq!(last.close, 0.0766);
+    assert_eq!(chart.live_bid, 0.065);
+    assert_eq!(chart.live_ask, 0.0866);
+    assert!(ChartState::live_quote_spread_pct(chart.live_bid, chart.live_ask).unwrap() > 20.0);
+    assert_eq!(chart.fresh_live_quote_mid(), None);
+}
+
+#[test]
+fn extended_hours_live_quote_does_not_mutate_regular_close() {
+    let mut chart = ChartState::new("WOK", Timeframe::D1);
+    chart.bars.push(Bar {
+        ts_ms: 1000,
+        open: 0.08,
+        high: 0.081,
+        low: 0.074,
+        close: 0.0766,
+        volume: 1.0,
+    });
+    chart.ext_active = true;
+    chart.ext_close = 0.0772;
+
+    assert!(!chart.apply_live_quote_update(0.0770, 0.0774, false));
+
+    assert_eq!(chart.bars.last().unwrap().close, 0.0766);
+    assert!((chart.fresh_live_quote_mid().unwrap() - 0.0772).abs() < 1e-12);
+}
+
+#[test]
 fn full_recompute_folds_fresh_live_quote_after_cache_reload_without_fast_path() {
     let mut chart = ChartState::new("TEST", Timeframe::M1);
     for i in 0..300 {

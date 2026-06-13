@@ -13,7 +13,7 @@
 //!    timeframe, last_bar_ts_ms) triples that just committed, so the
 //!    REST scheduler can mark them WS-fresh and skip refetch.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -62,20 +62,27 @@ impl TyphooNApp {
             .into_iter()
             .filter(|pair| !self.kraken_ws_ohlc_streamed_pairs.contains(pair))
             .collect();
+        let intervals_min = enabled_kraken_ws_ohlc_intervals(&self.enabled_sync_timeframes);
+        if intervals_min.is_empty() {
+            tracing::debug!("Kraken WS OHLC deferred: no enabled WS OHLC intervals");
+            return false;
+        }
         if pairs.is_empty() {
             return false;
         }
         let count = pairs.len();
+        let interval_count = intervals_min.len();
         let total_after = self.kraken_ws_ohlc_streamed_pairs.len() + count;
         for pair in &pairs {
             self.kraken_ws_ohlc_streamed_pairs.insert(pair.clone());
         }
-        let _ = self
-            .broker_tx
-            .send(BrokerCmd::KrakenStartOhlcStreamers { pairs });
+        let _ = self.broker_tx.send(BrokerCmd::KrakenStartOhlcStreamers {
+            pairs,
+            intervals_min,
+        });
         self.kraken_ws_ohlc_started = true;
         self.log.push_back(LogEntry::info(format!(
-            "Kraken WS OHLC: streaming {count} additional pairs ({total_after} total) × 8 intervals",
+            "Kraken WS OHLC: streaming {count} additional pairs ({total_after} total) × {interval_count} enabled intervals",
         )));
         true
     }
@@ -100,10 +107,16 @@ impl TyphooNApp {
         // and starved the real tokens. Full catalog breadth still comes from the
         // Alpaca/Yahoo lanes + demand-scoped iapi (see ADR-112).
         let catalog = self.kraken_equity_ws_sweep_symbols();
+        let intervals_min =
+            enabled_kraken_ws_ohlc_snapshot_sweep_intervals(&self.enabled_sync_timeframes);
+        if intervals_min.is_empty() {
+            return false;
+        }
         let Some(batch) = next_kraken_ws_snapshot_sweep_batch(
             &catalog,
             &mut self.kraken_ws_ohlc_snapshot_sweep_cursor,
             KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE,
+            &intervals_min,
         ) else {
             return false;
         };
@@ -180,12 +193,41 @@ const KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST: [u32; 8] = [
     1,     // 1Min
 ];
 
+fn enabled_kraken_ws_ohlc_intervals(enabled_sync_timeframes: &BTreeSet<String>) -> Vec<u32> {
+    KRAKEN_WS_OHLC_INTERVALS_MIN
+        .iter()
+        .copied()
+        .filter(|&interval_min| {
+            kraken_ws_interval_to_tf_label(interval_min)
+                .is_some_and(|tf| enabled_sync_timeframes.contains(tf))
+        })
+        .collect()
+}
+
+fn enabled_kraken_ws_ohlc_snapshot_sweep_intervals(
+    enabled_sync_timeframes: &BTreeSet<String>,
+) -> Vec<u32> {
+    KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST
+        .iter()
+        .copied()
+        .filter(|&interval_min| {
+            kraken_ws_interval_to_tf_label(interval_min)
+                .is_some_and(|tf| enabled_sync_timeframes.contains(tf))
+        })
+        .collect()
+}
+
 fn next_kraken_ws_snapshot_sweep_batch(
     catalog_symbols: &[String],
     cursor: &mut usize,
     batch_size: usize,
+    intervals_high_first: &[u32],
 ) -> Option<KrakenWsSnapshotSweepBatch> {
     let batch_size = batch_size.max(1);
+    if intervals_high_first.is_empty() {
+        *cursor = 0;
+        return None;
+    }
     let pairs: Vec<String> = catalog_symbols
         .iter()
         .filter_map(|symbol| format_xstock_ws_symbol(symbol))
@@ -197,7 +239,7 @@ fn next_kraken_ws_snapshot_sweep_batch(
         return None;
     }
     let batches_per_interval = pairs.len().div_ceil(batch_size).max(1);
-    let total_steps = batches_per_interval * KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST.len();
+    let total_steps = batches_per_interval * intervals_high_first.len();
     let step = *cursor % total_steps;
     let interval_idx = step / batches_per_interval;
     let batch_idx = step % batches_per_interval;
@@ -205,7 +247,7 @@ fn next_kraken_ws_snapshot_sweep_batch(
     let end = (start + batch_size).min(pairs.len());
     *cursor = (step + 1) % total_steps;
     Some(KrakenWsSnapshotSweepBatch {
-        interval_min: KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST[interval_idx],
+        interval_min: intervals_high_first[interval_idx],
         pairs: pairs[start..end].to_vec(),
     })
 }
@@ -274,7 +316,6 @@ fn format_ws_symbol(pair_name: &str, display: &str) -> Option<String> {
     }
     None
 }
-
 
 /// Coalesce-and-flush cadence for the WS bar writer. Keep this tight so the
 /// initial full-universe snapshots mark REST slots WS-fresh almost immediately;
@@ -357,14 +398,17 @@ fn chunk_grouped_ws_bar_entries(
 pub(super) fn spawn_kraken_ohlc_pipeline(
     shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
     pairs: Vec<String>,
+    intervals_min: Vec<u32>,
     commit_tx: mpsc::UnboundedSender<Vec<WsFreshEntry>>,
     status_tx: mpsc::UnboundedSender<KrakenOhlcStreamerEvent>,
 ) {
-    if pairs.is_empty() {
+    if pairs.is_empty() || intervals_min.is_empty() {
         return;
     }
     let (bar_tx, bar_rx) = mpsc::channel::<KrakenWsOhlcBar>(WS_BAR_CHANNEL_CAPACITY);
-    for (interval_min, snapshot, startup_delay) in plan_kraken_ws_streamers(pairs.len()) {
+    for (interval_min, snapshot, startup_delay) in
+        plan_kraken_ws_streamers(pairs.len(), &intervals_min)
+    {
         let pairs = pairs.clone();
         let bar_tx = bar_tx.clone();
         let status_tx = status_tx.clone();
@@ -439,15 +483,15 @@ fn kraken_ws_interval_is_bounded_snapshot_tf(interval_min: u32) -> bool {
 /// payload) first — so each drains under the writer's backpressure before the
 /// next begins. Live-only intervals carry no startup burst, so they start
 /// immediately regardless of the stagger.
-fn plan_kraken_ws_streamers(pairs_len: usize) -> Vec<(u32, bool, Duration)> {
+fn plan_kraken_ws_streamers(pairs_len: usize, intervals_min: &[u32]) -> Vec<(u32, bool, Duration)> {
     if kraken_ws_should_request_initial_snapshot(pairs_len) {
-        return KRAKEN_WS_OHLC_INTERVALS_MIN
+        return intervals_min
             .iter()
             .map(|&interval_min| (interval_min, true, Duration::ZERO))
             .collect();
     }
     // Live-only low timeframes: no snapshot, no startup burst, start now.
-    let mut plan: Vec<(u32, bool, Duration)> = KRAKEN_WS_OHLC_INTERVALS_MIN
+    let mut plan: Vec<(u32, bool, Duration)> = intervals_min
         .iter()
         .copied()
         .filter(|&interval_min| !kraken_ws_interval_is_bounded_snapshot_tf(interval_min))
@@ -455,7 +499,7 @@ fn plan_kraken_ws_streamers(pairs_len: usize) -> Vec<(u32, bool, Duration)> {
         .collect();
     // Bounded high-timeframe snapshots: highest TF first (smallest payload), one
     // staggered wave each so the writer can persist before the next lands.
-    let mut snapshot_intervals: Vec<u32> = KRAKEN_WS_OHLC_INTERVALS_MIN
+    let mut snapshot_intervals: Vec<u32> = intervals_min
         .iter()
         .copied()
         .filter(|&interval_min| kraken_ws_interval_is_bounded_snapshot_tf(interval_min))

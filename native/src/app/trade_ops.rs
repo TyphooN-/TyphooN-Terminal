@@ -1623,10 +1623,7 @@ impl TyphooNApp {
             if bare_symbol_from_key(&c.symbol).to_ascii_uppercase() != want {
                 return None;
             }
-            let fresh = c
-                .live_quote_at
-                .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
-            (fresh && c.live_bid > 0.0 && c.live_ask > 0.0).then(|| (c.live_bid + c.live_ask) * 0.5)
+            c.fresh_live_quote_mid()
         })
     }
 

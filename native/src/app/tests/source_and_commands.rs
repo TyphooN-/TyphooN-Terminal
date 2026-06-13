@@ -686,6 +686,69 @@ fn chart_loads_merged_weekly_from_corrected_daily_bars() {
 }
 
 #[test]
+fn chart_merged_equity_low_timeframes_ignore_provider_assist_rows() {
+    use chrono::TimeZone;
+
+    let db_path = std::env::temp_dir().join(format!(
+        "typhoon-merged-lowtf-assist-test-{}-{}.db",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let base = chrono::Utc
+        .with_ymd_and_hms(2026, 6, 12, 13, 30, 0)
+        .unwrap();
+    let minute = chrono::Duration::minutes(1);
+
+    let assist_bars: Vec<serde_json::Value> = (0..20i64)
+        .map(|i| {
+            serde_json::json!({
+                "timestamp": (base + minute * i as i32).to_rfc3339(),
+                "open": 0.10, "high": 0.11, "low": 0.09, "close": 0.10, "volume": 100.0
+            })
+        })
+        .collect();
+    cache
+        .put_bars(
+            "alpaca:WOK:1Min",
+            &serde_json::to_string(&assist_bars).unwrap(),
+        )
+        .unwrap();
+    cache
+        .put_bars(
+            "yahoo-chart:WOK:1Min",
+            &serde_json::to_string(&assist_bars).unwrap(),
+        )
+        .unwrap();
+
+    let merged = chart_load_merged_equity_bars_from_cache(&cache, "WOK", "1Min");
+    assert!(
+        merged.is_empty(),
+        "equity M1 merged charts must not resurrect stale Alpaca/Yahoo assist rows"
+    );
+
+    let kraken_bars: Vec<serde_json::Value> = (0..20i64)
+        .map(|i| {
+            serde_json::json!({
+                "timestamp": (base + minute * i as i32).to_rfc3339(),
+                "open": 0.20, "high": 0.21, "low": 0.19, "close": 0.20, "volume": 50.0
+            })
+        })
+        .collect();
+    cache
+        .put_bars(
+            "kraken-equities:WOK:1Min",
+            &serde_json::to_string(&kraken_bars).unwrap(),
+        )
+        .unwrap();
+
+    let merged = chart_load_merged_equity_bars_from_cache(&cache, "WOK", "1Min");
+    assert_eq!(merged.len(), 20);
+    assert!(merged.iter().all(|bar| (bar.close - 0.20).abs() < 1e-9));
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn chart_mtf_overlays_load_from_merged_cache_rows() {
     let db_path = std::env::temp_dir().join(format!(
         "typhoon-merged-mtf-overlay-test-{}-{}.db",
