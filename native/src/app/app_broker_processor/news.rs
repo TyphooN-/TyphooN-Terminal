@@ -201,6 +201,11 @@ pub(super) fn handle_news_command(
                             let _ = msg_tx_db.send(BrokerMsg::Error(format!("News read: {e}")));
                         }
                     }
+                    // Fresh fetch grew the corpus — push the new DB total to the
+                    // header off the render thread.
+                    if let Ok(total) = news::count_all_articles(&conn) {
+                        let _ = msg_tx_db.send(BrokerMsg::NewsDbTotal(total));
+                    }
                 })
                 .await;
                 // Foreground hydrate the bodies for this symbol so they
@@ -268,6 +273,12 @@ pub(super) fn handle_news_command(
                     Err(e) => {
                         let _ = msg_tx.send(BrokerMsg::Error(format!("Cached news read: {e}")));
                     }
+                }
+                // Seed the header's "· N in DB" off the render thread. This is
+                // the path the auto-load on first News-window open takes, so the
+                // count populates without the UI ever touching SQLite.
+                if let Ok(total) = news::count_all_articles(&conn) {
+                    let _ = msg_tx.send(BrokerMsg::NewsDbTotal(total));
                 }
             });
         }
@@ -515,6 +526,11 @@ pub(super) fn handle_news_command(
                                                 symbol: first.clone(),
                                                 articles: list,
                                             });
+                                        }
+                                        // A scope scrape can add a large batch —
+                                        // push the new DB total to the header.
+                                        if let Ok(total) = news::count_all_articles(&conn) {
+                                            let _ = msg_tx.send(BrokerMsg::NewsDbTotal(total));
                                         }
                                     }
                                 }

@@ -1496,7 +1496,8 @@ impl eframe::App for TyphooNApp {
                     self.handle_extended_indicator_snapshot_msg(msg);
                 }
                 msg @ (BrokerMsg::IngestResearchResult { .. }
-                | BrokerMsg::NewsArticlesLoaded { .. }) => {
+                | BrokerMsg::NewsArticlesLoaded { .. }
+                | BrokerMsg::NewsDbTotal(_)) => {
                     self.handle_news_ingest_msg(msg);
                 }
                 msg @ (BrokerMsg::UnusualVolumeResults(_) | BrokerMsg::MarketClock(_)) => {

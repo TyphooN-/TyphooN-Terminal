@@ -3882,6 +3882,11 @@ pub(crate) enum BrokerMsg {
         symbol: String,
         articles: Vec<typhoon_engine::core::news::NewsArticle>,
     },
+    /// Total article rows in the news DB, computed broker-side and pushed to
+    /// the UI header ("· N in DB"). Replaces the old render-thread
+    /// `count_all_articles` poll, which grabbed the write mutex behind bulk
+    /// bar-sync writers and caused the 10–17s News-window frame stalls.
+    NewsDbTotal(i64),
 }
 
 pub(crate) fn should_emit_fundamentals_scrape_progress(processed: usize, total: usize) -> bool {
@@ -4400,15 +4405,12 @@ pub struct TyphooNApp {
     /// firing every frame the window stays open, while still
     /// re-triggering on the next restart.
     pub(crate) news_initial_load_done: bool,
-    /// Total rows in the `research_news` SQLite table, queried via the
-    /// cheap COUNT helper after each cache load and again periodically
-    /// so the counter shows "N in DB" even when the in-memory list is
-    /// empty. `None` until the first query completes.
+    /// Total rows in the `research_news` SQLite table, pushed from the broker
+    /// via `BrokerMsg::NewsDbTotal` after each cache load / fresh fetch / scope
+    /// scrape so the header shows "· N in DB" even when the in-memory list is
+    /// empty. `None` until the first push arrives. The render thread never
+    /// queries this itself (the old poll blocked on the write mutex).
     pub(crate) news_db_total: Option<i64>,
-    /// Anchor for the periodic DB-count refresh — we re-query every few
-    /// seconds so the user sees new articles arriving from background
-    /// scrapes without having to reopen the window.
-    pub(crate) news_db_total_last_refresh: std::time::Instant,
     /// User-entered Marketaux API key (free tier 100/day).
     pub(crate) marketaux_key: String,
     /// User-entered Alpha Vantage API key (free tier 25/day).

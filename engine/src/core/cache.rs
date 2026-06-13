@@ -2279,6 +2279,23 @@ impl SqliteCache {
         Ok((deleted, (before - after).max(0)))
     }
 
+    /// Bound the news corpus: drop articles older than `cutoff_ts` and then cap
+    /// the table at `max_rows`. Runs on the write connection from the background
+    /// maintenance loop so `research_news` (and its FTS mirror) stays small no
+    /// matter how many full-universe news scrapes the user runs — keeping the
+    /// header COUNT and FTS search cheap and the on-disk footprint bounded.
+    /// Returns `(purged_by_age, purged_by_cap)`.
+    pub fn enforce_news_retention(
+        &self,
+        cutoff_ts: i64,
+        max_rows: i64,
+    ) -> Result<(usize, usize), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let by_age = crate::core::news::purge_older_than(&conn, cutoff_ts)?;
+        let by_cap = crate::core::news::enforce_max_rows(&conn, max_rows)?;
+        Ok((by_age, by_cap))
+    }
+
     /// Run PRAGMA incremental_vacuum to reclaim freed pages without full VACUUM.
     /// Lighter than VACUUM — doesn't rewrite the entire DB, just reclaims free pages.
     /// Safe to call periodically (e.g., on shutdown, after compaction).

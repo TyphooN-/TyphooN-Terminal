@@ -38,6 +38,9 @@ impl TyphooNApp {
             BrokerMsg::NewsArticlesLoaded { symbol, articles } => {
                 self.handle_news_articles_loaded(symbol, articles);
             }
+            BrokerMsg::NewsDbTotal(n) => {
+                self.news_db_total = Some(n);
+            }
             _ => {}
         }
     }

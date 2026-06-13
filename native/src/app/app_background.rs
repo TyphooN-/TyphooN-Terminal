@@ -20,6 +20,12 @@ pub(super) fn spawn_background_refresh(
             const FULL_REFRESH_INTERVAL: std::time::Duration =
                 std::time::Duration::from_secs(300); // 5 minutes
             const VACUUM_INTERVAL: std::time::Duration = std::time::Duration::from_secs(21600); // 6 hours
+            // News retention: bound research_news (and its FTS mirror) by both
+            // age and row count so a full-universe "Fetch (All)" scrape can't
+            // leave the table — and the header COUNT / FTS search that walk it —
+            // growing without limit. Runs on the 6-hour VACUUM cadence. See ADR-121.
+            const NEWS_RETENTION_DAYS: i64 = 45;
+            const NEWS_MAX_ROWS: i64 = 250_000;
             // Persist data across loops so lightweight refreshes keep prior results.
             let mut data = BgData::default();
             let mut last_regsho_refresh: Option<std::time::Instant> = None;
@@ -239,6 +245,25 @@ pub(super) fn spawn_background_refresh(
                                     freed / (1024 * 1024)
                                 );
                             }
+                        }
+                        // News retention: age purge + hard row cap. Keeps the
+                        // news corpus bounded so the header COUNT and FTS search
+                        // stay cheap regardless of how many full-universe news
+                        // scrapes have run.
+                        let news_cutoff = chrono::Utc::now().timestamp()
+                            - NEWS_RETENTION_DAYS * 24 * 60 * 60;
+                        match cache.enforce_news_retention(news_cutoff, NEWS_MAX_ROWS) {
+                            Ok((by_age, by_cap)) if by_age + by_cap > 0 => {
+                                tracing::info!(
+                                    "BG: news retention purged {} (age >{}d) + {} (cap {}) article(s)",
+                                    by_age,
+                                    NEWS_RETENTION_DAYS,
+                                    by_cap,
+                                    NEWS_MAX_ROWS
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e) => tracing::warn!("BG: news retention failed: {e}"),
                         }
                         last_vacuum = std::time::Instant::now();
                         tracing::info!("BG: incremental_vacuum(500) completed");

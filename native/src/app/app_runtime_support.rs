@@ -452,6 +452,7 @@ pub(super) fn broker_msg_kind(msg: &BrokerMsg) -> &'static str {
         BrokerMsg::SecScrapeResult(_) => "SecScrapeResult",
         BrokerMsg::FilingContent(_) => "FilingContent",
         BrokerMsg::FinnhubNewsResult(_) => "FinnhubNewsResult",
+        BrokerMsg::NewsDbTotal(_) => "NewsDbTotal",
         BrokerMsg::Quote(_, _, _, _) => "Quote",
         BrokerMsg::MarketClock(_) => "MarketClock",
         BrokerMsg::JsonResult(_, _) => "JsonResult",

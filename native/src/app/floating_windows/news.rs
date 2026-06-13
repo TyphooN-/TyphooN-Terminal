@@ -28,26 +28,16 @@ impl TyphooNApp {
             // articles are visible.
             let _ = &self.news_symbol_filter; // keep the borrow live for any future use
 
-            // Refresh the DB article count so the header can show "N in
-            // DB" even when the in-memory list is empty (fresh launch,
-            // before Load Cached fires). This must not run during heavy
-            // sync: opening NEWS in the user's stall log lined up with an
-            // 8.8s UI-frame block while broad bar writes/fundamentals were
-            // active, and this synchronous SQLite read sits directly on the
-            // egui update path. Under load, skip the nice-to-have count and
-            // let the async LoadCachedNews request populate the panel.
-            if !self.heavy_sync_in_progress
-                && self.news_db_total_last_refresh.elapsed().as_secs() >= 5
-            {
-                self.news_db_total_last_refresh = std::time::Instant::now();
-                if let Some(cache) = &self.cache {
-                    if let Ok(conn) = cache.connection() {
-                        if let Ok(n) = typhoon_engine::core::news::count_all_articles(&conn) {
-                            self.news_db_total = Some(n);
-                        }
-                    }
-                }
-            }
+            // The header's "· N in DB" count is computed broker-side and pushed
+            // via BrokerMsg::NewsDbTotal (see the count emits in
+            // app_broker_processor::news on cached-load / fresh-fetch / scrape,
+            // handled in app_runtime_news_results). The render thread does ZERO
+            // SQLite work for it: the old poll here called count_all_articles on
+            // the write connection, so it blocked behind the bulk bar-sync
+            // writers and produced the 10–17s News-window frame stalls. The
+            // auto-load below fires a LoadCachedNews on first open, whose
+            // response carries the count, so the header still populates promptly.
+            // See ADR-121.
 
             // Auto-load cached articles into memory on first open this
             // session. Without this, fresh launches show "0 cached"

@@ -540,6 +540,75 @@ fn count_all_articles_returns_total() {
 }
 
 #[test]
+fn count_all_articles_readonly_matches_and_tolerates_missing_table() {
+    // Fresh connection with no tables created: read-only count must report 0
+    // instead of erroring (the render thread treats this as a best-effort
+    // header value and must never CREATE TABLE on the read-only connection).
+    let bare = Connection::open_in_memory().expect("open in-memory");
+    assert_eq!(count_all_articles_readonly(&bare).unwrap(), 0);
+
+    // Once the table exists and rows are present, it matches count_all_articles.
+    let conn = mem_conn();
+    assert_eq!(count_all_articles_readonly(&conn).unwrap(), 0);
+    for i in 0..5 {
+        let a = NewsArticle {
+            symbol: "AAPL".into(),
+            url: format!("https://example.com/ro/{i}"),
+            published_at: 1_700_000_000 + i,
+            ..Default::default()
+        }
+        .with_hash();
+        upsert_news(&conn, &a).unwrap();
+    }
+    assert_eq!(count_all_articles_readonly(&conn).unwrap(), 5);
+    assert_eq!(
+        count_all_articles_readonly(&conn).unwrap(),
+        count_all_articles(&conn).unwrap()
+    );
+}
+
+#[test]
+fn enforce_max_rows_keeps_newest_and_syncs_fts() {
+    let conn = mem_conn();
+    // Insert 6 articles with increasing publish times (i is the recency rank).
+    for i in 0..6 {
+        let a = NewsArticle {
+            symbol: "AAPL".into(),
+            url: format!("https://example.com/cap/{i}"),
+            headline: format!("cap headline {i}"),
+            published_at: 1_700_000_000 + i,
+            ..Default::default()
+        }
+        .with_hash();
+        upsert_news(&conn, &a).unwrap();
+    }
+    // Cap above the row count is a no-op.
+    assert_eq!(enforce_max_rows(&conn, 10).unwrap(), 0);
+    assert_eq!(count_all_articles(&conn).unwrap(), 6);
+
+    // Cap to 4 drops the 2 oldest (published_at 1_700_000_000 and …001).
+    assert_eq!(enforce_max_rows(&conn, 4).unwrap(), 2);
+    assert_eq!(count_all_articles(&conn).unwrap(), 4);
+
+    // The survivors are the 4 newest.
+    let remaining = get_news_by_symbol(&conn, "AAPL", 100).unwrap();
+    let mut times: Vec<i64> = remaining.iter().map(|a| a.published_at).collect();
+    times.sort_unstable();
+    assert_eq!(times, vec![
+        1_700_000_002,
+        1_700_000_003,
+        1_700_000_004,
+        1_700_000_005
+    ]);
+    // The FTS mirror is kept in sync: the row count in research_news_fts must
+    // match the base table after the cap (no orphaned index entries).
+    let fts_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM research_news_fts", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(fts_rows, 4, "FTS index must drop the capped rows too");
+}
+
+#[test]
 fn search_news_falls_back_for_comma_separated_terms() {
     let conn = mem_conn();
     let a = NewsArticle {

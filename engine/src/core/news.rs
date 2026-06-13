@@ -1202,6 +1202,35 @@ pub fn count_all_articles(conn: &Connection) -> Result<i64, String> {
     .map_err(|e| format!("count all articles: {e}"))
 }
 
+/// DDL-free article count for UI hot paths.
+///
+/// Unlike [`count_all_articles`], this never issues `CREATE TABLE`, so it is
+/// safe to run on the dedicated read-only connection (`Cache::try_connection`).
+/// The News header's "N in DB" refresh previously called `count_all_articles`
+/// through the *write* connection on the render thread; that grabbed the same
+/// mutex the bulk bar-sync writers hold, so it blocked for the whole in-flight
+/// OHLC-sweep transaction — the 10–17s News-window frame stalls that recurred
+/// once per sweep cycle. Counting on the read connection reads the committed
+/// WAL snapshot without ever waiting on a writer. A not-yet-created table
+/// (fresh cache) returns 0 rather than erroring, since this is a best-effort
+/// header count.
+pub fn count_all_articles_readonly(conn: &Connection) -> Result<i64, String> {
+    let table_exists = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='research_news'",
+            [],
+            |_| Ok(()),
+        )
+        .is_ok();
+    if !table_exists {
+        return Ok(0);
+    }
+    conn.query_row("SELECT COUNT(*) FROM research_news", [], |r| {
+        r.get::<_, i64>(0)
+    })
+    .map_err(|e| format!("count all articles (ro): {e}"))
+}
+
 /// Count articles whose `published_at` is older than `cutoff_ts`. Paired
 /// with `purge_older_than` for the Storage Manager UI: the count gives
 /// the user a preview ("N articles would be deleted") before the
@@ -1228,6 +1257,47 @@ pub fn purge_older_than(conn: &Connection, cutoff_ts: i64) -> Result<usize, Stri
             .map_err(|e| format!("query purge: {e}"))?;
         let mut v = Vec::new();
         while let Some(r) = rows.next().map_err(|e| format!("row purge: {e}"))? {
+            v.push(r.get::<_, String>(0).unwrap_or_default());
+        }
+        v
+    };
+    for h in &hashes {
+        let _ = conn.execute("DELETE FROM research_news WHERE url_hash = ?1", params![h]);
+        let _ = conn.execute(
+            "DELETE FROM research_news_fts WHERE url_hash = ?1",
+            params![h],
+        );
+    }
+    Ok(hashes.len())
+}
+
+/// Cap `research_news` at `max_rows` by deleting the oldest articles beyond the
+/// newest `max_rows`. Keeps the FTS5 mirror in sync. Paired with
+/// [`purge_older_than`]: age-based retention can't bound a burst of
+/// full-universe scraping that lands inside the retention window, so this row
+/// cap is the hard ceiling that keeps COUNT(*)/FTS search and the on-disk
+/// footprint bounded. No-op when the table already holds `max_rows` or fewer
+/// (or when `max_rows` is negative). Ordering matches the UI's newest-first
+/// view: `published_at DESC, rowid DESC`, so a tie on timestamp drops the
+/// earlier-inserted row first.
+pub fn enforce_max_rows(conn: &Connection, max_rows: i64) -> Result<usize, String> {
+    if max_rows < 0 {
+        return Ok(0);
+    }
+    let _ = create_news_tables(conn);
+    let hashes: Vec<String> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT url_hash FROM research_news \
+                 ORDER BY published_at DESC, rowid DESC \
+                 LIMIT -1 OFFSET ?1",
+            )
+            .map_err(|e| format!("prepare cap select: {e}"))?;
+        let mut rows = stmt
+            .query(params![max_rows])
+            .map_err(|e| format!("query cap: {e}"))?;
+        let mut v = Vec::new();
+        while let Some(r) = rows.next().map_err(|e| format!("row cap: {e}"))? {
             v.push(r.get::<_, String>(0).unwrap_or_default());
         }
         v

@@ -388,8 +388,6 @@ impl TyphooNApp {
             news_input_hash: 0,
             news_initial_load_done: false,
             news_db_total: None,
-            news_db_total_last_refresh: std::time::Instant::now()
-                - std::time::Duration::from_secs(60),
             marketaux_key: String::new(),
             alpha_vantage_key: String::new(),
             fmp_key: String::new(),
