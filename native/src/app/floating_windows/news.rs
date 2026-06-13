@@ -395,8 +395,16 @@ impl TyphooNApp {
                         // the window back open; when the user expands, the scroll
                         // areas advertise that larger height so egui preserves the
                         // new resize state instead of snapping back to content size.
-                        let pane_h = ui
-                            .available_height()
+                        // Reserve a small slack below the two-pane row. Allocating
+                        // exactly `available_height` made the row + its trailing
+                        // item-spacing overflow the window content rect by a few px
+                        // every frame, so egui's resize kept growing the window back
+                        // to `max_height` — the "can't shrink vertically" bug. Keeping
+                        // the row strictly inside the available area lets the user
+                        // shrink the window and have it stay shrunk.
+                        let pane_h = (ui.available_height()
+                            - ui.spacing().item_spacing.y
+                            - 4.0)
                             .min((content_h * 0.82).max(96.0))
                             .max(96.0);
                         ui.allocate_ui_with_layout(
