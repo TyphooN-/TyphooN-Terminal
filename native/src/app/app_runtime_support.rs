@@ -204,6 +204,30 @@ pub(super) fn kraken_xstocks_session_status_now(overnight_enabled: bool) -> Stri
     kraken_xstocks_session_status_at(chrono::Utc::now(), overnight_enabled)
 }
 
+/// True during the Kraken xStocks weekend close — Friday ≥ 20:00 ET through Sunday
+/// < 20:00 ET — when no pre/core/after/overnight session of any kind exists. During
+/// this window live bid/ask and extended-hours quotes are stale (the market is shut),
+/// so callers suppress them and skip equity snapshot work. Symbol-independent: the
+/// weekend closes every xStock regardless of its overnight-trading flag. Mirrors the
+/// weekend CLOSED branch of `kraken_xstocks_session_status_at`.
+pub(super) fn kraken_xstocks_weekend_closed_at(now_utc: chrono::DateTime<chrono::Utc>) -> bool {
+    use chrono::{Datelike, Timelike};
+    let now_et =
+        now_utc.naive_utc() + chrono::Duration::seconds(us_eastern_offset_seconds(now_utc));
+    let minute_of_day = now_et.hour() as i64 * 60 + now_et.minute() as i64;
+    const OVERNIGHT: i64 = 20 * 60; // 8:00 PM ET — Friday close / Sunday open
+    match now_et.weekday() {
+        chrono::Weekday::Fri => minute_of_day >= OVERNIGHT,
+        chrono::Weekday::Sat => true,
+        chrono::Weekday::Sun => minute_of_day < OVERNIGHT,
+        _ => false,
+    }
+}
+
+pub(super) fn kraken_xstocks_weekend_closed_now() -> bool {
+    kraken_xstocks_weekend_closed_at(chrono::Utc::now())
+}
+
 /// Session-aware status for the regular US-equities market clock (Alpaca
 /// `/v2/clock`). Unlike Kraken xStocks (24/5 with an overnight session), the
 /// regular US market has four states: pre-market (4:00–9:30 ET), core/regular

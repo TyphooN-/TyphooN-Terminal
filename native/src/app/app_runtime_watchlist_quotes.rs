@@ -72,6 +72,10 @@ impl TyphooNApp {
             wl_sym_to_charts.entry(bare.clone()).or_default().push(ci);
             wl_chart_bares.push(bare);
         }
+        // During the xStocks weekend close, retain Friday's last extended-hours
+        // snapshot instead of clearing it (Yahoo returns no extended change over the
+        // weekend, which would otherwise flip ext_active off and drop the Ext% badge).
+        let kraken_weekend_closed = super::app_runtime_support::kraken_xstocks_weekend_closed_now();
 
         let mut row_symbols: HashSet<String> = HashSet::with_capacity(rows.len());
         for row in &rows {
@@ -121,7 +125,7 @@ impl TyphooNApp {
                             chart.ext_low = ext_price;
                         }
                     }
-                } else {
+                } else if !kraken_weekend_closed {
                     chart.ext_active = false;
                 }
 

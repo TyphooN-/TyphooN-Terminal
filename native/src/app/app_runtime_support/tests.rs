@@ -335,3 +335,19 @@ pub(super) fn deferred_chart_load_interval_paces_heavy_mtf_restores() {
     assert!(deferred_chart_load_interval(true, false) > deferred_chart_load_interval(false, false));
     assert!(deferred_chart_load_interval(false, true) > deferred_chart_load_interval(false, false));
 }
+
+#[test]
+fn xstocks_weekend_closed_spans_friday_8pm_to_sunday_8pm_et() {
+    fn at(ts: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(ts)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+    // June ⇒ EDT (UTC−4). 2026-06-12 is a Friday.
+    assert!(!kraken_xstocks_weekend_closed_at(at("2026-06-12T18:00:00Z"))); // Fri 14:00 ET — open
+    assert!(kraken_xstocks_weekend_closed_at(at("2026-06-13T01:00:00Z"))); // Fri 21:00 ET — closed
+    assert!(kraken_xstocks_weekend_closed_at(at("2026-06-13T12:00:00Z"))); // Sat 08:00 ET — closed
+    assert!(kraken_xstocks_weekend_closed_at(at("2026-06-14T20:00:00Z"))); // Sun 16:00 ET — closed
+    assert!(!kraken_xstocks_weekend_closed_at(at("2026-06-15T01:00:00Z"))); // Sun 21:00 ET — reopened
+    assert!(!kraken_xstocks_weekend_closed_at(at("2026-06-10T15:00:00Z"))); // Wed 11:00 ET — open
+}

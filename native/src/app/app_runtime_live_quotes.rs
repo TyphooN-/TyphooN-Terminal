@@ -72,6 +72,7 @@ impl TyphooNApp {
         if !self.kraken_enabled {
             return;
         }
+        let weekend_closed = super::app_runtime_support::kraken_xstocks_weekend_closed_now();
         let symbol = ticker.symbol.to_ascii_uppercase();
         let last = ticker.price;
         if last <= 0.0 || !last.is_finite() {
@@ -113,7 +114,11 @@ impl TyphooNApp {
                     && chart
                         .live_quote_at
                         .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
-                if !(ticker.delayed && realtime_fresh) {
+                // Weekend close: there is no live xStocks session, so do not refresh
+                // the chart bid/ask overlay — let the 30s staleness guard hide Friday's
+                // frozen book instead of drawing it as if live (no Kraken orderbook
+                // exists while xStocks is shut).
+                if !weekend_closed && !(ticker.delayed && realtime_fresh) {
                     chart.apply_live_quote_update(ticker.bid, ticker.ask, ticker.delayed);
                 }
             }
