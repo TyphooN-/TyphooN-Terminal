@@ -96,16 +96,9 @@ impl TyphooNApp {
             return false;
         }
         let now = std::time::Instant::now();
-        // When the xStocks market is shut for the weekend, OHLC bars don't change, so
-        // re-sweeping the full token catalog every 10s is pure waste that spikes UI
-        // frames (the overnight stall storm). Back off to a slow heartbeat; the normal
-        // 10s cadence resumes automatically on the Sunday 8pm ET reopen.
-        let cadence = if super::app_runtime_support::kraken_xstocks_weekend_closed_now() {
-            KRAKEN_WS_SNAPSHOT_SWEEP_CLOSED_CADENCE
-        } else {
-            KRAKEN_WS_SNAPSHOT_SWEEP_CADENCE
-        };
-        if now.duration_since(self.kraken_ws_ohlc_snapshot_sweep_last_schedule) < cadence {
+        if now.duration_since(self.kraken_ws_ohlc_snapshot_sweep_last_schedule)
+            < KRAKEN_WS_SNAPSHOT_SWEEP_CADENCE
+        {
             return false;
         }
         // Scope the sweep to WS-tokenized xStocks (the `{SYM}x/USD` pairs that
@@ -350,10 +343,6 @@ const WS_LARGE_UNIVERSE_INTERVAL_STAGGER: Duration = Duration::from_secs(120);
 const WS_LARGE_UNIVERSE_PAIR_THRESHOLD: usize = 5_000;
 const KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE: usize = 250;
 const KRAKEN_WS_SNAPSHOT_SWEEP_CADENCE: Duration = Duration::from_secs(10);
-/// Slow heartbeat used while the xStocks market is closed for the weekend — the
-/// catalog OHLC is static, so a 10-minute cadence keeps a minimal catch-up sweep
-/// without the per-10s full-catalog storm that spiked UI frames overnight.
-const KRAKEN_WS_SNAPSHOT_SWEEP_CLOSED_CADENCE: Duration = Duration::from_secs(600);
 
 /// Maximum grouped `(symbol, timeframe)` merges to process in one blocking task.
 /// Keeps startup snapshot persistence in bounded slices so tokio can schedule
