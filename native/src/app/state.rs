@@ -177,6 +177,11 @@ pub(crate) struct BgData {
     pub(crate) all_fundamentals: Vec<fundamentals::Fundamentals>,
     pub(crate) upcoming_earnings: Vec<(String, String, String)>,
     pub(crate) upcoming_dividends: Vec<(String, String, String, Option<f64>)>,
+    /// Active symbol-level regulatory warnings keyed by normalized ticker.
+    /// Populated by the background thread from cached public outlier lists
+    /// (currently NasdaqTrader Reg SHO threshold securities).
+    pub(crate) regulatory_alerts_by_symbol:
+        std::collections::HashMap<String, Vec<regulatory_alerts::RegulatoryAlert>>,
 }
 
 /// Bottom panel mode.
@@ -205,9 +210,19 @@ pub(crate) enum FinancialsPeriod {
 /// markdown header level: 2 = `## `, 3 = `### `, 4 = `#### `.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PacketTreeNode {
-    pub(crate) depth: u8,
     pub(crate) title: String,
+    pub(crate) depth: u8,
     pub(crate) byte_offset: usize, // offset into packet_viewer_text where the header starts
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ImportedResearchArtifact {
+    pub(crate) symbol: String,
+    pub(crate) report_date: String,
+    pub(crate) filename: String,
+    pub(crate) source_path: String,
+    pub(crate) imported_at: String,
+    pub(crate) content: String,
 }
 
 /// Right panel section tabs (matching old WebKit layout).

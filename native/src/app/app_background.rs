@@ -22,6 +22,7 @@ pub(super) fn spawn_background_refresh(
             const VACUUM_INTERVAL: std::time::Duration = std::time::Duration::from_secs(21600); // 6 hours
             // Persist data across loops so lightweight refreshes keep prior results.
             let mut data = BgData::default();
+            let mut last_regsho_refresh: Option<std::time::Instant> = None;
             // BG thread opens its OWN read-only SQLite connection via SqliteCache::open_bg_read_connection().
             // This eliminates all Mutex contention with the UI thread's read_conn.
             // WAL mode allows unlimited concurrent readers — each connection reads
@@ -74,12 +75,47 @@ pub(super) fn spawn_background_refresh(
                     if let Ok(wconn) = cache.connection() {
                         let _ = sec_filing::create_sec_tables(&wconn);
                         let _ = fundamentals::create_fundamentals_tables(&wconn);
+                        let _ = regulatory_alerts::create_regulatory_alert_tables(&wconn);
+                        let regsho_due = last_regsho_refresh
+                            .map(|t| t.elapsed() >= std::time::Duration::from_secs(30 * 60))
+                            .unwrap_or(true);
+                        if regsho_due {
+                            let fetched = tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .map_err(|e| format!("runtime build failed: {e}"))
+                                .and_then(|rt| rt.block_on(regulatory_alerts::fetch_regsho_threshold_entries()));
+                            match fetched {
+                                Ok((as_of, rows)) => {
+                                    match regulatory_alerts::replace_regsho_threshold_alerts(
+                                        &wconn, &as_of, &rows,
+                                    ) {
+                                        Ok(n) => {
+                                            tracing::info!(
+                                                "Reg SHO threshold list refreshed: {n} symbols for {as_of}"
+                                            );
+                                            last_regsho_refresh = Some(std::time::Instant::now());
+                                        }
+                                        Err(e) => tracing::warn!(
+                                            "Reg SHO threshold list cache update failed: {e}"
+                                        ),
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Reg SHO threshold list refresh failed: {e}");
+                                    last_regsho_refresh = Some(std::time::Instant::now());
+                                }
+                            }
+                        }
                     }
                     // SEC data + cache stats — all via BG's own connection (growing database — no limit)
                     data.sec_filings = sec_filing::get_all_filings(conn).unwrap_or_default();
                     data.sec_alerts =
                         sec_filing::get_filing_alerts(conn, false).unwrap_or_default();
                     data.sec_content_stats = sec_filing::filing_content_stats(conn);
+                    data.regulatory_alerts_by_symbol = regulatory_alerts::regulatory_alert_map(
+                        &regulatory_alerts::get_regulatory_alerts(conn).unwrap_or_default(),
+                    );
                     // Keep the BG summary consistent with Storage Manager's on-demand
                     // refresh path: user-visible rows + total on-disk footprint.
                     if let Ok(stats) = cache.stats() {

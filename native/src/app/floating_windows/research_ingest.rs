@@ -67,6 +67,9 @@ impl TyphooNApp {
                                     self.ingest_research_text.clear();
                                     self.ingest_research_status.clear();
                                 }
+                                if ui.button("Import .md/.txt…").clicked() {
+                                    self.import_research_artifact_file();
+                                }
                                 if self.ingest_research_busy {
                                     ui.label(egui::RichText::new("Working…").color(AXIS_TEXT).small());
                                 }
@@ -122,6 +125,9 @@ impl TyphooNApp {
                                 if ui.button("Copy").clicked() {
                                     ui.ctx().copy_text(self.packet_viewer_text.clone());
                                     self.log.push_back(LogEntry::info("Packet copied to clipboard"));
+                                }
+                                if ui.button("Import Artifact…").clicked() {
+                                    self.import_research_artifact_file();
                                 }
                                 if ui.button("Save…").clicked() {
                                     if let Some(path) = rfd::FileDialog::new()
@@ -228,4 +234,114 @@ impl TyphooNApp {
             self.show_packet_viewer = open;
         }
     }
+
+    pub(super) fn import_research_artifact_file(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Import symbol research artifact")
+            .add_filter("Research Markdown/Text", &["md", "txt"])
+            .pick_file()
+        else {
+            return;
+        };
+        let filename = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("research.md")
+            .to_string();
+        let ext_ok = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| matches!(s.to_ascii_lowercase().as_str(), "md" | "txt"))
+            .unwrap_or(false);
+        if !ext_ok {
+            self.log.push_back(LogEntry::warn(format!(
+                "Research artifact import skipped — unsupported file: {}",
+                path.display()
+            )));
+            return;
+        }
+        let content = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                self.log.push_back(LogEntry::err(format!(
+                    "Research artifact import failed: {e}"
+                )));
+                return;
+            }
+        };
+        let symbol = research_artifact_symbol_from_filename(&filename)
+            .or_else(|| self.charts.get(self.active_tab).map(|c| c.symbol.clone()))
+            .map(|s| regulatory_alerts::normalize_regulatory_symbol(&s))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "UNKNOWN".to_string());
+        let report_date = research_artifact_date_from_filename(&filename).unwrap_or_else(|| {
+            path.metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .and_then(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0))
+                .map(|dt| dt.format("%Y-%m-%d").to_string())
+                .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string())
+        });
+        let artifact = ImportedResearchArtifact {
+            symbol: symbol.clone(),
+            report_date: report_date.clone(),
+            filename: filename.clone(),
+            source_path: path.display().to_string(),
+            imported_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            content,
+        };
+        let safe_name: String = filename
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let key = format!("research_artifact:{symbol}:{report_date}:{safe_name}");
+        let Some(cache) = self.cache.as_ref() else {
+            self.log.push_back(LogEntry::warn(
+                "Research artifact import skipped — cache not open yet".to_string(),
+            ));
+            return;
+        };
+        match serde_json::to_string(&artifact)
+            .map_err(|e| e.to_string())
+            .and_then(|json| cache.put_kv(&key, &json))
+        {
+            Ok(()) => {
+                self.packet_viewer_symbol = symbol.clone();
+                self.log.push_back(LogEntry::info(format!(
+                    "Imported research artifact for {symbol}: {filename} ({report_date})"
+                )));
+            }
+            Err(e) => self.log.push_back(LogEntry::err(format!(
+                "Research artifact import failed: {e}"
+            ))),
+        }
+    }
+}
+
+fn research_artifact_symbol_from_filename(filename: &str) -> Option<String> {
+    filename
+        .split('_')
+        .next()
+        .map(|s| s.trim().to_ascii_uppercase())
+        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphabetic()))
+}
+
+fn research_artifact_date_from_filename(filename: &str) -> Option<String> {
+    let chars: Vec<char> = filename.chars().collect();
+    for i in 0..chars.len().saturating_sub(9) {
+        if chars.get(i + 4) == Some(&'-') && chars.get(i + 7) == Some(&'-') {
+            let candidate: String = chars[i..i + 10].iter().collect();
+            if chrono::NaiveDate::parse_from_str(&candidate, "%Y-%m-%d").is_ok() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }

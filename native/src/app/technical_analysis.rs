@@ -88,6 +88,7 @@ pub(super) fn draw_chart(
     tp_price: Option<f64>,
     trade_overlay: &TradeOverlay,
     alerts: &[(f64, String)],
+    regulatory_alerts: &[typhoon_engine::core::regulatory_alerts::RegulatoryAlert],
     draw_mode: &DrawMode,
 ) {
     // Do not early-return for a stable chart. egui is immediate-mode: if this
@@ -2815,6 +2816,7 @@ pub(super) fn draw_chart(
         egui::Color32::WHITE,
     );
 
+    let mut header_right = sym_rect.right();
     if chart.ext_active && chart.ext_close > 0.0 {
         if let Some(last) = bars.last() {
             let ext_text = format_ext_hours_symbol_badge(
@@ -2854,7 +2856,46 @@ pub(super) fn draw_chart(
                 ext_galley,
                 egui::Color32::from_rgb(245, 220, 250),
             );
+            header_right = ext_rect.right();
         }
+    }
+
+    for alert in regulatory_alerts {
+        let alert_galley = painter.layout_no_wrap(
+            alert.label.clone(),
+            egui::FontId::monospace(10.0),
+            egui::Color32::from_rgb(255, 245, 220),
+        );
+        let alert_rect = egui::Rect::from_min_size(
+            egui::pos2(header_right + 2.0, sym_rect.top()),
+            egui::vec2(
+                alert_galley.rect.width() + header_pad_x * 2.0,
+                sym_rect.height(),
+            ),
+        );
+        if alert_rect.right() > chart_rect.right() - 4.0 {
+            break;
+        }
+        painter.rect_filled(
+            alert_rect,
+            3.0,
+            egui::Color32::from_rgba_premultiplied(80, 12, 12, 238),
+        );
+        painter.rect_stroke(
+            alert_rect,
+            3.0,
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 70, 70)),
+            egui::StrokeKind::Inside,
+        );
+        painter.galley(
+            egui::pos2(
+                alert_rect.left() + header_pad_x,
+                alert_rect.center().y - alert_galley.rect.height() * 0.5,
+            ),
+            alert_galley,
+            egui::Color32::from_rgb(255, 245, 220),
+        );
+        header_right = alert_rect.right();
     }
 
     // ── indicator legend ─────────────────────────────────────────────────────

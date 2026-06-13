@@ -31,6 +31,7 @@ use typhoon_engine::core::cache::{BgConnection, SqliteCache};
 use typhoon_engine::core::fundamentals;
 use typhoon_engine::core::keyring;
 use typhoon_engine::core::margin;
+use typhoon_engine::core::regulatory_alerts;
 use typhoon_engine::core::risk;
 use typhoon_engine::core::sec_filing;
 use typhoon_engine::core::var;

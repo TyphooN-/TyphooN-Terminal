@@ -13,6 +13,7 @@ pub mod margin;
 pub mod news;
 pub mod options;
 pub mod position;
+pub mod regulatory_alerts;
 pub mod research;
 pub mod risk;
 pub mod screener;

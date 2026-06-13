@@ -307,6 +307,8 @@ pub(crate) struct ChartState {
     /// User-forced chart source for debugging provider-specific cache rows.
     /// Empty means automatic source selection.
     pub(crate) source_override: &'static str,
+    /// Active symbol-level regulatory warnings shown next to the chart symbol.
+    pub(crate) regulatory_alerts: Vec<typhoon_engine::core::regulatory_alerts::RegulatoryAlert>,
     /// Chart rendering style.
     pub(crate) chart_type: ChartType,
     /// Logarithmic price scale (vs linear).
@@ -2107,6 +2109,7 @@ impl ChartState {
             timeframe: tf,
             primary_source: "",
             source_override: "",
+            regulatory_alerts: Vec::new(),
             chart_type: ChartType::Candle,
             log_scale: false,
             sma_slow_period: 200,
