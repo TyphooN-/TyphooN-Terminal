@@ -120,17 +120,39 @@ impl TyphooNApp {
         ) else {
             return false;
         };
-        let pair_count = batch.pairs.len();
-        self.kraken_ws_ohlc_snapshot_sweep_in_flight = true;
         self.kraken_ws_ohlc_snapshot_sweep_last_schedule = now;
         let interval_min = batch.interval_min;
-        let _ = self.broker_tx.send(BrokerCmd::KrakenOhlcSnapshotSweep {
-            interval_min,
-            pairs: batch.pairs,
-        });
         let tf = kraken_ws_interval_to_tf_label(interval_min).unwrap_or("?");
+        // Pull bars only where we're MISSING them: drop pairs already WS-fresh for
+        // this TF. The sweep then targets gaps and goes quiet once the catalog is
+        // filled (e.g. over the weekend, after one pass) instead of re-snapshotting
+        // bars we already have every 10s — which both wasted work (the overnight
+        // stall storm) and never moved coverage. A pair re-arms automatically once
+        // its newest bar ages past the WS-fresh window, so live gaps still refill.
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let pairs: Vec<String> = batch
+            .pairs
+            .into_iter()
+            .filter(|ws| match kraken_ws_bar_cache_target(ws) {
+                Some((_src, symbol)) => !Self::kraken_ws_pair_is_fresh_at(
+                    &self.kraken_ws_fresh_until,
+                    &symbol,
+                    tf,
+                    now_ms,
+                ),
+                None => true,
+            })
+            .collect();
+        if pairs.is_empty() {
+            // Whole batch already fresh — nothing to pull; advance to the next batch
+            // on the next tick. Keeps the sweep idle (no WS work) once fully synced.
+            return false;
+        }
+        let pair_count = pairs.len();
+        self.kraken_ws_ohlc_snapshot_sweep_in_flight = true;
+        let _ = self.broker_tx.send(BrokerCmd::KrakenOhlcSnapshotSweep { interval_min, pairs });
         self.log.push_back(LogEntry::info(format!(
-            "Kraken WS OHLC snapshot sweep: queued {pair_count} xStocks for {tf}"
+            "Kraken WS OHLC snapshot sweep: queued {pair_count} missing xStocks for {tf}"
         )));
         true
     }
