@@ -358,3 +358,8 @@ ADR-066). Follow-up compiler frontend comb-overs have since raised
   MQL4 / NinjaScript asks)
 - ADR-066 — EasyLanguage + thinkScript compilers (directly preceding ADR;
   this one picks up the "adding a fifth frontend" hint and takes it to six)
+
+## Consolidated execution-log ADRs (2026-06)
+
+- **ADR-068** — Transpiler Phase 2 (full cross-language matrix): the phase-2 round
+  that completed the frontend matrix begun here. Now a stub; detail in git history.

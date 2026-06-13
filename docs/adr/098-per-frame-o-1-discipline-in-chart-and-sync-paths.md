@@ -1,4 +1,6 @@
-# ADR-098: Per-Frame O(1) Discipline in Chart and Sync Paths
+# ADR-098: Performance & O(1) Optimization Program
+
+> Formerly "Per-Frame O(1) Discipline in Chart and Sync Paths." Retitled 2026-06 when this became the durable home for the terminal's performance program — see *Consolidated execution-log ADRs* at the end.
 
 **Date:** 2026-05-22
 **Status:** Accepted
@@ -138,3 +140,25 @@ remove redundant work.
 - **Neutral:** Bitset and `mem::take` patterns are slightly less
   immediately readable than `Vec::contains` / `Clone`. Comments cite
   the cost they're cutting so the intent survives.
+
+## Consolidated execution-log ADRs (2026-06)
+
+This ADR is the durable home for the terminal's performance & O(1) program. The
+following round/pass ADRs were execution logs and are now stubs pointing here;
+their durable outcomes are the discipline above, and round-by-round detail lives
+in git history:
+
+- **ADR-060** — Optimization Roadmap (2026-04-08): the initial 10-item audit (GPU
+  utilization, UX responsiveness, hot-path perf) that seeded the program.
+- **ADR-072** — O(1) hot-path pass + scope-regression fix: eliminated
+  O(quotes × charts) nested loops in the broker drain; fixed a scope-filter regression.
+- **ADR-074** — Comprehensive performance / UX / memory pass (18-item audit).
+- **ADR-075** — Full O(1) algorithmic pass + UX polish: completed ADR-074's deferred items.
+- **ADR-076** — Table wiring + O(1) passes (the cleanup that itself noted seven
+  per-round records were execution journaling, not durable decisions).
+- **ADR-105** — Performance optimization plan & focus areas.
+
+> Note (2026-06): the overnight log still shows multi-second `chrome_panels_ms` /
+> `render_after_broker_ms` stalls during full-universe Kraken WS snapshot sweeps —
+> this program is **not closed**; the render-thread cost of large sweeps is an open
+> item (see the sync-performance investigation tracking this).

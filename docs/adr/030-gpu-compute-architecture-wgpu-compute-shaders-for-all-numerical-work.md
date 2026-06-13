@@ -152,3 +152,17 @@ This ensures the GPU path works for arbitrarily large DarwinIA datasets without 
 - Sequential indicators (EMA, RSI, KAMA) dispatch as single workgroup — still benefits from GPU clock speed and VRAM bandwidth
 - GPU readback adds ~1ms latency per indicator — batched to minimize round-trips
 - WGSL shaders harder to debug than Rust — CPU implementations serve as validation reference
+
+## Consolidated execution-log ADRs (2026-06)
+
+GPU compute parity rounds fold into this architecture ADR; the following are now
+stubs, with detail in git history:
+
+- **ADR-041** — GPU/CPU indicator audit & parity verification: audited every GPU
+  shader against its CPU fallback after several were found using different
+  algorithms; established GPU/CPU output parity as mandatory.
+- **ADR-071** — GPU parity for all indicators + analytics UX overhaul: extended the
+  WGSL shader set toward full indicator coverage.
+
+The durable rule from these rounds: **every GPU shader must produce output
+identical to its CPU implementation**, and the CPU path is the validation reference.

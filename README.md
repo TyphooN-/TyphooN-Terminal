@@ -240,7 +240,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [038](docs/adr/038-gpu-strategy-optimizer-and-mql5-export-pipeline.md) | GPU Strategy Optimizer & MQL5 Export Pipeline |
 | [039](docs/adr/039-security-by-design-credential-and-data-protection.md) | Security by Design — Credential & Data Protection |
 | [040](docs/adr/040-mql5-compiler-pipeline-source-to-gpu-cpu-execution.md) | MQL5 Compiler Pipeline — Source to GPU/CPU Execution |
-| [041](docs/adr/041-gpu-cpu-indicator-audit-parity-verification.md) | GPU/CPU Indicator Audit — Parity Verification |
+| [041](docs/adr/041-gpu-cpu-indicator-audit-parity-verification.md) | GPU/CPU Indicator Audit — Parity Verification _(→ merged into ADR-030)_ |
 | [043](docs/adr/043-bettervolume-full-mql5-port-emini-watch-algorithm.md) | BetterVolume — Full MQL5 Port (Emini-Watch Algorithm) |
 | [044](docs/adr/044-performance-and-security-audit.md) | Performance & Security Audit |
 | [047](docs/adr/047-feature-audit-and-gap-closure-record.md) | Feature Audit and Gap-Closure Record |
@@ -251,7 +251,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [056](docs/adr/056-screener-framework-ev-fundamentals-and-signal-scanning.md) | Screener Framework — EV, Fundamentals, and Signal Scanning |
 | [057](docs/adr/057-yahoo-finance-extended-hours-watchlist.md) | Yahoo Finance Extended Hours Watchlist |
 | [059](docs/adr/059-ssd-write-reduction-strategy.md) | SSD Write Reduction Strategy |
-| [060](docs/adr/060-optimization-roadmap-2026-04-08.md) | Optimization Roadmap (2026-04-08) |
+| [060](docs/adr/060-optimization-roadmap-2026-04-08.md) | Optimization Roadmap (2026-04-08) _(→ merged into ADR-098)_ |
 | [061](docs/adr/061-no-unwrap-policy-production-error-handling.md) | No Unwrap Policy — Production Error Handling |
 | [062](docs/adr/062-analytics-and-screening-expansion.md) | Analytics & Screening Expansion |
 | [063](docs/adr/063-event-calendar-and-targeted-outlier-scanners.md) | Event Calendar & Targeted Outlier Scanners |
@@ -259,14 +259,14 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [065](docs/adr/065-ux-pass-calendar-ui-staleness-alerts-help-order-entry-function-renames.md) | UX Pass: Calendar UI, Staleness, Alerts, Help, Order Entry, Function Renames |
 | [066](docs/adr/066-easylanguage-thinkscript-compilers-phone-order-entry.md) | EasyLanguage + thinkScript Compilers, Phone Order Entry |
 | [067](docs/adr/067-multi-frontend-expansion-cross-language-transpiler.md) | Multi-Frontend Expansion + Cross-Language Transpiler |
-| [068](docs/adr/068-transpiler-phase-2-full-cross-language-matrix.md) | Transpiler Phase 2: Full Cross-Language Matrix |
+| [068](docs/adr/068-transpiler-phase-2-full-cross-language-matrix.md) | Transpiler Phase 2: Full Cross-Language Matrix _(→ merged into ADR-067)_ |
 | [069](docs/adr/069-ux-improvements-gpu-compute-expansion-and-client-parity.md) | UX Improvements, GPU Compute Expansion, and Client Parity |
-| [071](docs/adr/071-gpu-parity-for-all-indicators-analytics-ux-overhaul.md) | GPU Parity for All Indicators + Analytics UX Overhaul |
-| [072](docs/adr/072-o-1-hot-path-optimizations-scope-regression-fix.md) | O(1) Hot-Path Optimizations + Scope Regression Fix |
+| [071](docs/adr/071-gpu-parity-for-all-indicators-analytics-ux-overhaul.md) | GPU Parity for All Indicators + Analytics UX Overhaul _(→ merged into ADR-030)_ |
+| [072](docs/adr/072-o-1-hot-path-optimizations-scope-regression-fix.md) | O(1) Hot-Path Optimizations + Scope Regression Fix _(→ merged into ADR-098)_ |
 | [073](docs/adr/073-sec-filing-database-expansion.md) | SEC Filing Database Expansion |
-| [074](docs/adr/074-comprehensive-performance-ux-memory-pass.md) | Comprehensive Performance / UX / Memory Pass |
-| [075](docs/adr/075-full-o-1-algorithmic-optimization-pass-ux-polish.md) | Full O(1) Algorithmic Optimization Pass + UX Polish |
-| [076](docs/adr/076-table-wiring-and-o-1-optimization-passes.md) | Table Wiring and O(1) Optimization Passes |
+| [074](docs/adr/074-comprehensive-performance-ux-memory-pass.md) | Comprehensive Performance / UX / Memory Pass _(→ merged into ADR-098)_ |
+| [075](docs/adr/075-full-o-1-algorithmic-optimization-pass-ux-polish.md) | Full O(1) Algorithmic Optimization Pass + UX Polish _(→ merged into ADR-098)_ |
+| [076](docs/adr/076-table-wiring-and-o-1-optimization-passes.md) | Table Wiring and O(1) Optimization Passes _(→ merged into ADR-098)_ |
 | [077](docs/adr/077-mimalloc-custom-allocator-optimal-release-profile.md) | mimalloc Custom Allocator + Optimal Release Profile |
 | [078](docs/adr/078-multi-source-news-ingest-pipeline.md) | Multi-source News Ingest Pipeline |
 | [079](docs/adr/079-godel-ta-lib-parity-program.md) | Godel / TA-Lib Parity Program |
@@ -290,7 +290,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [102](docs/adr/102-kraken-equities-gap-fill-via-alpaca-and-provider-fallback.md) | Kraken Equities Gap Fill via Alpaca and Provider Fallback |
 | [103](docs/adr/103-dedicated-market-data-provider-lanes.md) | Dedicated Market-Data Provider Lanes for Deep/Fresh Bars |
 | [104](docs/adr/104-async-multi-output-indicator-dispatch.md) | Async Multi-Output Indicator Dispatch |
-| [105](docs/adr/105-performance-optimization-plan.md) | Performance Optimization Plan |
+| [105](docs/adr/105-performance-optimization-plan.md) | Performance Optimization Plan _(→ merged into ADR-098)_ |
 | [106](docs/adr/106-remove-stooq-daily-fallback.md) | Remove Stooq Daily Fallback |
 | [107](docs/adr/107-no-user-interacting-sync-throttle.md) | No `user_interacting` Sync Throttle |
 | [108](docs/adr/108-research-module-compile-time-modularization.md) | Research Module Compile-Time Modularization |
