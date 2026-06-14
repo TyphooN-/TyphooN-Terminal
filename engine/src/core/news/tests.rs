@@ -268,6 +268,8 @@ fn crypto_base_for_symbol_recognises_pair_forms() {
     assert_eq!(crypto_base_for_symbol("eth-usd").as_deref(), Some("ETH"));
     assert_eq!(crypto_base_for_symbol("SOLUSDT").as_deref(), Some("SOL"));
     assert_eq!(crypto_base_for_symbol("BTC").as_deref(), Some("BTC"));
+    assert_eq!(crypto_base_for_symbol("BABY").as_deref(), Some("BABY"));
+    assert_eq!(crypto_base_for_symbol("BABY/EUR").as_deref(), Some("BABY"));
     // lowercase still works
     assert_eq!(crypto_base_for_symbol("doge/usd").as_deref(), Some("DOGE"));
 }

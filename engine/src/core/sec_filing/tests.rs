@@ -170,8 +170,9 @@ fn is_equity_symbol_boundary_cases() {
 #[test]
 fn normalize_sec_equity_symbol_strips_kraken_xstock_suffixes() {
     assert_eq!(normalize_sec_equity_symbol("WOK.EQ"), Some("WOK".into()));
-    assert_eq!(normalize_sec_equity_symbol("baby.eq"), Some("BABY".into()));
+    assert_eq!(normalize_sec_equity_symbol("baby.eq"), None);
     assert_eq!(normalize_sec_equity_symbol("AAPL"), Some("AAPL".into()));
+    assert_eq!(normalize_sec_equity_symbol("BABY"), None);
     assert_eq!(normalize_sec_equity_symbol("BTC/USD"), None);
     assert_eq!(normalize_sec_equity_symbol("TOOLONG.EQ"), None);
 }
@@ -182,7 +183,7 @@ fn scoped_sec_symbols_preserve_caller_priority_order() {
         normalize_sec_equity_symbols_preserving_order([
             "WOK.EQ", "AAPL", "WOK", "BTC/USD", "baby.eq"
         ]),
-        vec!["WOK".to_string(), "AAPL".to_string(), "BABY".to_string()]
+        vec!["WOK".to_string(), "AAPL".to_string()]
     );
 }
 
@@ -225,7 +226,7 @@ fn collect_equity_symbols_from_kv_blob_extracts_watchlist_and_positions() {
     collect_equity_symbols_from_kv_blob(&compressed, &mut symbols);
     assert!(symbols.contains("TNDM"));
     assert!(symbols.contains("WOK"));
-    assert!(symbols.contains("BABY"));
+    assert!(!symbols.contains("BABY"));
     assert!(symbols.contains("POM"));
     assert!(symbols.contains("ARAY"));
     assert!(!symbols.contains("BUY"));

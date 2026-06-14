@@ -996,6 +996,21 @@ fn fundamentals_provider_coverage_gaps_are_non_actionable() {
 }
 
 #[test]
+fn fundamentals_scrape_symbol_filter_rejects_crypto_before_provider_calls() {
+    assert_eq!(
+        normalize_fundamentals_scrape_symbol("AAPL"),
+        Some("AAPL".to_string())
+    );
+    assert_eq!(
+        normalize_fundamentals_scrape_symbol("WOK.EQ"),
+        Some("WOK".to_string())
+    );
+    assert_eq!(normalize_fundamentals_scrape_symbol("BABY"), None);
+    assert_eq!(normalize_fundamentals_scrape_symbol("BABY.EQ"), None);
+    assert_eq!(normalize_fundamentals_scrape_symbol("BTC/USD"), None);
+}
+
+#[test]
 fn yahoo_extended_quote_state_filter_blocks_regular_session() {
     assert!(yahoo_market_state_allows_extended_quote("PRE"));
     assert!(yahoo_market_state_allows_extended_quote("post"));

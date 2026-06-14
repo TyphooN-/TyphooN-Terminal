@@ -999,13 +999,16 @@ fn normalize_sec_equity_symbol(sym: &str) -> Option<String> {
         return None;
     }
     // Kraken xStocks can be stored/transmitted as venue-qualified symbols
-    // (WOK.EQ, BABY.EQ, etc.). SEC EDGAR lookup needs the underlying equity
+    // (WOK.EQ, etc.). SEC EDGAR lookup needs the underlying equity
     // ticker. Normalize before applying the equity filter so scoped SEC scrapes
     // don't silently drop xStock holdings.
     if let Some(stripped) = sym.strip_suffix(".EQ") {
         sym = stripped.to_string();
     } else if let Some(stripped) = sym.strip_suffix(".X") {
         sym = stripped.to_string();
+    }
+    if crate::core::news::is_crypto_symbol(&sym) {
+        return None;
     }
     if is_equity_symbol(&sym) {
         Some(sym)

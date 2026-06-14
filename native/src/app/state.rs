@@ -3921,6 +3921,22 @@ pub(crate) fn is_fundamentals_provider_coverage_gap(error: &str) -> bool {
         || error.contains("HTTP 400")
 }
 
+pub(crate) fn normalize_fundamentals_scrape_symbol(symbol: &str) -> Option<String> {
+    let mut symbol = symbol.trim().to_ascii_uppercase();
+    if symbol.is_empty() || symbol.starts_with("__") || symbol.contains('/') {
+        return None;
+    }
+    if let Some(stripped) = symbol.strip_suffix(".EQ") {
+        symbol = stripped.to_string();
+    } else if let Some(stripped) = symbol.strip_suffix(".X") {
+        symbol = stripped.to_string();
+    }
+    if symbol.is_empty() || typhoon_engine::core::news::is_crypto_symbol(&symbol) {
+        return None;
+    }
+    Some(symbol)
+}
+
 /// Reusable sort state for clickable column headers.
 #[derive(Clone, Default)]
 pub(crate) struct SortState {

@@ -126,6 +126,12 @@ impl TyphooNApp {
                 }
                 normalize_sec_scrape_symbols_priority_order(priority, broad)
             }
+            EventSource::Kraken => kraken_sec_scrape_scope_symbols(
+                &self.kr_positions,
+                &self.kraken_equity_universe_symbols,
+                &self.kraken_pairs,
+                &self.kraken_futures_symbols,
+            ),
             _ => {
                 let raw = self.broker_scope_symbols().unwrap_or_default();
                 normalize_sec_scrape_symbols_priority_order(std::collections::HashSet::new(), raw)
@@ -1006,7 +1012,7 @@ fn normalize_sec_scrape_symbol(sym: &str) -> Option<String> {
     if sym.is_empty() || sym.starts_with("__") || sym.contains('/') {
         return None;
     }
-    // Kraken xStocks positions can arrive as WOK.EQ/BABY.EQ before the full
+    // Kraken xStocks positions can arrive as WOK.EQ before the full
     // Kraken equities catalog is loaded. SEC has the underlying equity ticker,
     // not the venue-qualified synthetic symbol. Filtering before stripping .EQ
     // silently dropped those symbols and made the SEC scrape report 0 tickers.
@@ -1014,6 +1020,9 @@ fn normalize_sec_scrape_symbol(sym: &str) -> Option<String> {
         sym = stripped.to_string();
     } else if let Some(stripped) = sym.strip_suffix(".X") {
         sym = stripped.to_string();
+    }
+    if typhoon_engine::core::news::is_crypto_symbol(&sym) {
+        return None;
     }
     if sym.is_empty()
         || sym.len() > 5
@@ -1049,6 +1058,39 @@ fn normalize_sec_scrape_symbols_priority_order(
     syms
 }
 
+fn kraken_sec_scrape_scope_symbols(
+    kr_positions: &[PositionInfo],
+    kraken_equity_universe_symbols: &[String],
+    kraken_pairs: &[(String, String)],
+    _kraken_futures_symbols: &[String],
+) -> Vec<String> {
+    let mut raw = std::collections::HashSet::new();
+
+    for pos in kr_positions {
+        let asset_id_upper = pos.asset_id.to_ascii_uppercase();
+        let is_equity_position = pos.asset_class.eq_ignore_ascii_case("stock")
+            || asset_id_upper.starts_with("EQUITY_BALANCE:")
+            || asset_id_upper.contains(".EQ");
+        if !is_equity_position {
+            continue;
+        }
+        raw.insert(pos.symbol.clone());
+        if let Some(asset) = pos.asset_id.strip_prefix("equity_balance:") {
+            raw.insert(asset.to_string());
+        }
+    }
+
+    raw.extend(kraken_equity_universe_symbols.iter().cloned());
+
+    for (pair, display) in kraken_pairs {
+        if let Some(equity) = kraken_xstock_fundamental_symbol(pair, display) {
+            raw.insert(equity);
+        }
+    }
+
+    normalize_sec_scrape_symbols_priority_order(std::collections::HashSet::new(), raw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1056,15 +1098,16 @@ mod tests {
     #[test]
     fn sec_scrape_symbol_normalizes_kraken_xstock_suffixes() {
         assert_eq!(normalize_sec_scrape_symbol("WOK.EQ"), Some("WOK".into()));
-        assert_eq!(normalize_sec_scrape_symbol("baby.eq"), Some("BABY".into()));
+        assert_eq!(normalize_sec_scrape_symbol("baby.eq"), None);
         assert_eq!(normalize_sec_scrape_symbol("AAPL"), Some("AAPL".into()));
+        assert_eq!(normalize_sec_scrape_symbol("BABY"), None);
         assert_eq!(normalize_sec_scrape_symbol("BTC/USD"), None);
         assert_eq!(normalize_sec_scrape_symbol("TOOLONG.EQ"), None);
     }
 
     #[test]
     fn sec_scrape_scope_keeps_active_symbols_before_broad_universe() {
-        let priority = ["WOK.EQ", "BABY"].into_iter().map(str::to_string).collect();
+        let priority = ["WOK.EQ", "POM"].into_iter().map(str::to_string).collect();
         let broad = ["AAPL", "WOK", "ZZZ", "BABY.EQ"]
             .into_iter()
             .map(str::to_string)
@@ -1073,10 +1116,52 @@ mod tests {
         assert_eq!(
             normalize_sec_scrape_symbols_priority_order(priority, broad),
             vec![
-                "BABY".to_string(),
+                "POM".to_string(),
                 "WOK".to_string(),
                 "AAPL".to_string(),
                 "ZZZ".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn kraken_sec_scope_uses_equities_not_spot_or_futures_pairs() {
+        let positions = vec![
+            PositionInfo {
+                symbol: "WOK".to_string(),
+                qty: 1.0,
+                side: "long".to_string(),
+                avg_entry_price: 0.0,
+                market_value: 0.0,
+                unrealized_pl: 0.0,
+                asset_class: "stock".to_string(),
+                asset_id: "equity_balance:WOK.EQ".to_string(),
+            },
+            PositionInfo {
+                symbol: "BTC/USD".to_string(),
+                qty: 1.0,
+                side: "long".to_string(),
+                avg_entry_price: 0.0,
+                market_value: 0.0,
+                unrealized_pl: 0.0,
+                asset_class: "crypto".to_string(),
+                asset_id: "margin:btc".to_string(),
+            },
+        ];
+        let catalog = vec!["BABY.EQ".to_string(), "AAPL".to_string()];
+        let spot_pairs = vec![
+            ("ABEUR".to_string(), "ABE/EUR".to_string()),
+            ("ETHUSD".to_string(), "ETH/USD".to_string()),
+            ("HRTX.EQUSD".to_string(), "HRTX.EQ/USD".to_string()),
+        ];
+        let futures = vec!["PI_XBTUSD".to_string(), "PF_ETHUSD".to_string()];
+
+        assert_eq!(
+            kraken_sec_scrape_scope_symbols(&positions, &catalog, &spot_pairs, &futures),
+            vec![
+                "AAPL".to_string(),
+                "HRTX".to_string(),
+                "WOK".to_string(),
             ]
         );
     }

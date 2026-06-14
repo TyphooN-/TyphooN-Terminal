@@ -1924,7 +1924,7 @@ const CRYPTO_BASES: &[&str] = &[
     "XMR", "ZEC", "DASH", "EOS", "NEO", "BAT", "ENJ", "CHZ", "CAKE", "GALA", "AXS", "FLOW", "ROSE",
     "1INCH", "YFI", "BAL", "ZRX", "KSM", "WAVES", "DCR", "OMG", "REN", "STORJ", "ANKR", "CELO",
     "NMR", "RLC", "BAND", "REP", "KAVA", "BNT", "OXT", "GNO", "POLY", "LRC", "NU", "PAXG", "KNC",
-    "REQ", "WLD",
+    "REQ", "WLD", "BABY",
 ];
 
 /// Quote currencies recognised when parsing trading-pair symbols.

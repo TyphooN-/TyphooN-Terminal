@@ -3347,7 +3347,8 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 Ok(assets) => {
                                     let syms: Vec<String> = assets.iter()
                                         .filter(|a| a.asset_class == "us_equity" && a.tradable)
-                                        .map(|a| a.symbol.clone()).collect();
+                                        .filter_map(|a| normalize_fundamentals_scrape_symbol(&a.symbol))
+                                        .collect();
                                     let _ = broker_msg_tx_clone.send(BrokerMsg::FundamentalsProgress(format!("Alpaca: {} stock tickers", syms.len())));
                                     extra_tickers.extend(syms);
                                 }
@@ -3358,7 +3359,10 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                     }
                     if use_kraken {
-                        let syms = normalize_kraken_equity_symbol_list(kraken_equity_symbols.iter());
+                        let syms: Vec<String> = normalize_kraken_equity_symbol_list(kraken_equity_symbols.iter())
+                            .into_iter()
+                            .filter_map(|sym| normalize_fundamentals_scrape_symbol(&sym))
+                            .collect();
                         if syms.is_empty() {
                             let _ = broker_msg_tx_clone.send(
                                 BrokerMsg::FundamentalsProgress(
@@ -3387,7 +3391,11 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                 Ok(cache) => {
                                     let mut all_tickers: std::collections::HashSet<String> = std::collections::HashSet::new();
                                     // Add broker tickers gathered before thread spawn
-                                    all_tickers.extend(extra_tickers);
+                                    all_tickers.extend(
+                                        extra_tickers
+                                            .into_iter()
+                                            .filter_map(|ticker| normalize_fundamentals_scrape_symbol(&ticker)),
+                                    );
                                     let mut tickers: Vec<String> = all_tickers.into_iter().collect();
                                     tickers.sort();
                                     if let Ok(conn) = cache.connection() {
