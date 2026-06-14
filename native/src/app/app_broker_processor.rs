@@ -914,7 +914,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
 
                         // ── cross-client AI response cache lookup ──
                         // Compute deterministic hash over the full prompt tuple and check
-                        // the LAN-synced cache before spending tokens. On hit, emit the
+                        // the AI response cache before spending tokens. On hit, emit the
                         // cached response and skip the HTTP call entirely.
                         use typhoon_engine::core::ai_response_cache as arc_cache;
                         let cache_provider_tag = match provider.as_str() {
@@ -959,7 +959,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     let text = resp.json::<serde_json::Value>().await.ok()
                                         .and_then(|j| j["content"][0]["text"].as_str().map(|s| s.to_string()))
                                         .unwrap_or_else(|| "(no response)".into());
-                                    // record the fresh response in the LAN-synced cache.
+                                    // record the fresh response in the AI response cache.
                                     if text != "(no response)" {
                                         if let Some(cache) = cache_snapshot.as_ref() {
                                             let preview: String = message.chars().take(400).collect();
@@ -1010,7 +1010,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     let text = resp.json::<serde_json::Value>().await.ok()
                                         .and_then(|j| j["choices"][0]["message"]["content"].as_str().map(|s| s.to_string()))
                                         .unwrap_or_else(|| "(no response)".into());
-                                    // record the fresh response in the LAN-synced cache.
+                                    // record the fresh response in the AI response cache.
                                     if text != "(no response)" {
                                         if let Some(cache) = cache_snapshot.as_ref() {
                                             let preview: String = message.chars().take(400).collect();
@@ -3420,7 +3420,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                         let mut consecutive_fail = 0usize;
                                         for ticker in &tickers {
                                             // Acquire write lock per-ticker — release between iterations
-                                            // so other threads (BG, LAN sync, KV writes) aren't starved.
+                                            // so other threads (BG, KV writes) aren't starved.
                                             let skip = if force { false } else if let Ok(conn) = cache.connection() {
                                                 if let Ok(Some(existing)) = fundamentals::get_fundamentals(&conn, ticker) {
                                                     existing.last_updated >= cutoff

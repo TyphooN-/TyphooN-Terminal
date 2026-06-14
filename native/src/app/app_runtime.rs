@@ -457,7 +457,7 @@ impl eframe::App for TyphooNApp {
                     self.kraken_futures_backfill_complete_pairs.len()
                 )));
             }
-            // Load credentials FIRST (needed for LAN auto-connect passphrase)
+            // Load credentials FIRST (needed for broker auto-connect)
             {
                 let mut keyring_ok = true;
                 let cache_ref = self.cache.clone();

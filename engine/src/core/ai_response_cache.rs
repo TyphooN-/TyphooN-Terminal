@@ -34,7 +34,7 @@ pub struct AiResponseCacheEntry {
     pub token_count_prompt: i64, // best-effort estimate; 0 if unknown
     pub token_count_completion: i64, // best-effort estimate; 0 if unknown
     pub created_at: i64,  // unix seconds — when the entry was first inserted
-    pub updated_at: i64,  // unix seconds — touched by each hit (used for LAN sync timestamp)
+    pub updated_at: i64,  // unix seconds — refreshed on each cache hit
     pub hit_count: i64,   // incremented on every cache-hit; the original insertion counts as 0
     pub source_client: String, // hostname of the client that originated this entry; empty if unknown
 }
@@ -160,9 +160,8 @@ pub fn upsert_response(cache: &Cache, entry: &AiResponseCacheEntry) -> Result<()
 
 /// Look up a cached response by prompt hash. Returns None on miss.
 ///
-/// On hit, increments `hit_count` and refreshes `updated_at` so the LAN sync
-/// timestamp column reflects recent use (and peers learn that this entry is
-/// still being hit, not cold storage).
+/// On hit, increments `hit_count` and refreshes `updated_at` so the timestamp
+/// column reflects recent use (rather than cold storage).
 pub fn lookup_response(
     cache: &Cache,
     prompt_hash: &str,

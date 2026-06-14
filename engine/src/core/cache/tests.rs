@@ -972,9 +972,6 @@ fn obsolete_low_tf_provider_purge_keeps_native_kraken_and_higher_tf_rows() {
     cache.put_kv("alpaca:AAPL:1Min", "stale-kv").unwrap();
     cache.put_kv("yahoo-chart:AAPL:5Min", "stale-kv").unwrap();
     cache.put_kv("kraken:BTC/USD:1Min", "spot-kv").unwrap();
-    cache.set_sync_ts("kraken-equities:AAPL:1Min", 123).unwrap();
-    cache.set_sync_ts("alpaca:AAPL:5Min", 123).unwrap();
-    cache.set_sync_ts("kraken:BTC/USD:1Min", 123).unwrap();
 
     let conn = cache.connection().unwrap();
     let purged = SqliteCache::purge_obsolete_low_tf_provider_bars_locked(&conn).unwrap();
@@ -1009,9 +1006,6 @@ fn obsolete_low_tf_provider_purge_keeps_native_kraken_and_higher_tf_rows() {
     assert!(cache.get_kv("alpaca:AAPL:1Min").unwrap().is_none());
     assert!(cache.get_kv("yahoo-chart:AAPL:5Min").unwrap().is_none());
     assert!(cache.get_kv("kraken:BTC/USD:1Min").unwrap().is_some());
-    assert_eq!(cache.get_sync_ts("kraken-equities:AAPL:1Min"), 123);
-    assert_eq!(cache.get_sync_ts("alpaca:AAPL:5Min"), 0);
-    assert_eq!(cache.get_sync_ts("kraken:BTC/USD:1Min"), 123);
 
     let _ = std::fs::remove_file(db_path);
 }

@@ -932,7 +932,7 @@ fn chart_split_from_stock_split(
 
 /// Curated corporate actions for symbols where the FMP split feed is missing or
 /// unreliable. Free-tier FMP omits many microcap reverse splits, and a node that
-/// has never scraped / LAN-synced `research_stock_splits` has the table empty (or
+/// has never scraped `research_stock_splits` has the table empty (or
 /// absent) entirely — which starves the exact back-adjustment
 /// ([`chart_back_adjust_bars_for_splits`]) of the split it needs, so raw
 /// pre-split history (Kraken xStock bars) gets painted on the wrong scale. That
@@ -966,7 +966,7 @@ pub(crate) fn chart_curated_known_splits(symbol: &str) -> Vec<ChartSplit> {
 
 /// Load known splits for `symbol` for use in equity-merge back-adjustment:
 /// FMP-sourced rows from the research cache (`research_stock_splits`, read-only),
-/// supplemented by [`chart_curated_known_splits`] for actions FMP/LAN-sync missed.
+/// supplemented by [`chart_curated_known_splits`] for actions FMP missed.
 /// Empty only when neither source knows a split (the era-inference fallback then
 /// applies). Curated entries are deduped against cached rows by ex-date so real
 /// FMP data takes precedence when both are present.

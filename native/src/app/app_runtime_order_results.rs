@@ -15,7 +15,7 @@ impl TyphooNApp {
         }
 
         // Only refresh positions after actual trade operations (not every log message).
-        // OrderResult is used for many non-trade messages (LAN sync, backfill, etc.)
+        // OrderResult is used for many non-trade messages (backfill, etc.)
         // that would spam GetPositions → HTTP 429 Too Many Requests.
         let is_trade = msg.contains("filled")
             || msg.contains("order")

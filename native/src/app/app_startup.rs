@@ -67,7 +67,7 @@ pub(super) fn spawn_async_cache_open(
         match SqliteCache::open(&db_path) {
             Ok(c) => {
                 tracing::info!("Cache-open thread: opened OK");
-                // Repair bar_count=0 entries (from LAN sync or old versions)
+                // Repair bar_count=0 entries (from old versions)
                 match c.repair_bar_counts() {
                     Ok(n) if n > 0 => {
                         tracing::info!("Cache-open thread: repaired {} bar_count entries", n)

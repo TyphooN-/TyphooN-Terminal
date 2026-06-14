@@ -6,8 +6,7 @@ use super::*;
 // "Return Path" footer asks an AI agent to emit a fenced
 // `===TYPHOON_INGEST===` block of article objects, the INGEST_RESEARCH
 // command parses that block and merges the articles into the
-// `research_web_articles` cache. LAN sync then distributes the
-// ingested corpus to peer terminals.
+// `research_web_articles` cache.
 
 /// One web research article captured from an AI agent's reply.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -23,7 +22,7 @@ pub struct WebArticle {
     /// browse tools). Empty when the agent only had access to the headline / their
     /// own synthesis — in that case `summary` is the only content. `serde` default
     /// keeps this field backward-compatible with pre-existing
-    /// `research_web_articles` JSON blobs and with LAN peers running older builds.
+    /// `research_web_articles` JSON blobs (and older builds).
     #[serde(default)]
     pub body: String,
 }

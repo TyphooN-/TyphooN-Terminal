@@ -174,7 +174,7 @@ pub fn create_fundamentals_tables(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|e| format!("Create fundamentals tables failed: {e}"))?;
 
-    // Schema migration: add updated_at columns for incremental LAN sync
+    // Schema migration: add updated_at columns (last-modified tracking)
     let _ = conn.execute(
         "ALTER TABLE fundamentals ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
         [],

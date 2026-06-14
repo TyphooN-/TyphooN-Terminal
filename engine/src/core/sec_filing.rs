@@ -189,7 +189,7 @@ pub fn create_sec_tables(conn: &Connection) -> Result<(), String> {
         );
     ").map_err(|e| format!("Failed to create SEC tables: {e}"))?;
 
-    // Schema migration: add updated_at column for incremental LAN sync
+    // Schema migration: add updated_at column (last-modified tracking)
     let _ = conn.execute(
         "ALTER TABLE sec_scrape_index ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
         [],

@@ -25,7 +25,7 @@ impl TyphooNApp {
 
         // ── Return Path: instruct the agent to emit a structured
         //    ingest block so TyphooN can absorb the web-search findings
-        //    back into the cache and share them across LAN peers. ──
+        //    back into the local cache. ──
         let _ = writeln!(p);
         let _ = writeln!(p, "---");
         let _ = writeln!(p, "## Return Path — Web Research Ingest");
@@ -33,8 +33,8 @@ impl TyphooNApp {
         let _ = writeln!(
             p,
             "If you consulted any web sources to answer the above, **please emit a \
-            fenced ingest block at the very end of your reply** so TyphooN-Terminal can cache and \
-            share your findings with LAN peers. Use this exact format:"
+            fenced ingest block at the very end of your reply** so TyphooN-Terminal can cache \
+            your findings. Use this exact format:"
         );
         let _ = writeln!(p);
         let _ = writeln!(p, "```");

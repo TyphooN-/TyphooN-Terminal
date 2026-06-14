@@ -54,7 +54,7 @@ pub(super) fn spawn_background_refresh(
                 }
 
                 // Reopen BG read connection EVERY cycle so it always sees the latest
-                // WAL writes from Mt5Sync, LAN sync, broker fetches, etc.
+                // WAL writes from broker fetches and bar sync, etc.
                 // A persistent read-only connection may hold a stale WAL snapshot.
                 // Opening is cheap (~1ms) compared to the 3s sleep between cycles.
                 if let Some(ref cache) = cache_arc {
@@ -454,7 +454,7 @@ pub(super) fn spawn_background_refresh(
                     }
 
                     // Insider trades: load ALL from the local sec_insider_trades table
-                    // (LAN-synced as a research table), grouped by uppercased ticker.
+                    // (a research table), grouped by uppercased ticker.
                     {
                         let all_trades =
                             sec_filing::get_all_insider_trades(conn).unwrap_or_default();

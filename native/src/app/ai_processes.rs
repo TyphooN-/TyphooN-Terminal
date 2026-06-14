@@ -147,7 +147,7 @@ impl TyphooNApp {
 
     /// Queue Return Path ingestion when an AI reply includes a
     /// `===TYPHOON_INGEST===` block. The broker owns parsing and cache writes
-    /// so manual paste, LAN remote ingest, and auto-ingest stay identical.
+    /// so manual paste and auto-ingest stay identical.
     pub(super) fn maybe_queue_ingest_from_ai_response(&mut self, agent: &str, response: &str) {
         if !response.contains("===TYPHOON_INGEST===") {
             return;

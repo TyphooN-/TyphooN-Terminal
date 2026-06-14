@@ -2604,8 +2604,7 @@ pub(crate) enum BrokerCmd {
     // ── web article ingestion ──
     /// Parse an AI agent reply, extract any `===TYPHOON_INGEST===` fenced
     /// blocks, and merge the discovered articles into the per-symbol
-    /// `research_web_articles` cache. LAN sync will propagate results
-    /// to peer terminals on the next sync window.
+    /// `research_web_articles` cache.
     IngestResearchArticles {
         text: String,
         agent_override: String,
@@ -2896,7 +2895,7 @@ pub(crate) enum BrokerMsg {
     /// Structured fills for chart overlay (symbol, side, qty, price, time).
     RecentFills(Vec<(String, String, f64, f64, String)>),
     /// Bar sync completed with N keys updated — trigger chart reloads.
-    /// Emitted by LAN sync and bulk Alpaca fetches after new bars land.
+    /// Emitted by bulk Alpaca fetches after new bars land.
     BarsSynced(usize),
     /// Crypto Top 50 from CoinGecko (name, price, 24h%, market_cap).
     CryptoTop50(Vec<(String, f64, f64, f64)>),

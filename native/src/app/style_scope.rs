@@ -40,7 +40,7 @@ impl TyphooNApp {
     }
 
     /// Write to KV cache only if content changed AND at least 30s since last write.
-    /// Reduces KV timestamp churn → less LAN sync traffic.
+    /// Reduces KV timestamp churn.
     /// Key is `&'static str` so hashmap inserts don't allocate a new String per call.
     pub(super) fn put_kv_dedup(&mut self, key: &'static str, json: &str) {
         use std::hash::{Hash, Hasher};

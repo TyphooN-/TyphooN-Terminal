@@ -7,7 +7,7 @@ impl TyphooNApp {
         if !self.alpaca_enabled {
             return;
         }
-        // Store to cache KV for LAN sync — dedup to avoid timestamp churn
+        // Store to cache KV — dedup to avoid timestamp churn
         if let Ok(json) = serde_json::to_string(&acct) {
             self.put_kv_dedup("broker:account", &json);
         }

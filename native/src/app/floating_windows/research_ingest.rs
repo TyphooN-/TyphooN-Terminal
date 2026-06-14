@@ -14,8 +14,7 @@ impl TyphooNApp {
                                 egui::RichText::new(
                                     "Paste the full reply from an AI agent (Claude, Gemini, ChatGPT, …). \
                                  Any ===TYPHOON_INGEST=== block will be parsed and merged into the \
-                                 per-symbol web-article cache. LAN peers will pick up the new articles \
-                                 on the next sync window.",
+                                 per-symbol web-article cache.",
                                 )
                                 .color(AXIS_TEXT)
                                 .small(),

@@ -450,7 +450,7 @@ impl TyphooNApp {
         // Risk tools, alerts, outlier scanner, trade journal, and margin windows
         self.render_risk_journal_windows(ctx);
 
-        // Cache stats, storage manager, and LAN sync windows
+        // Cache stats and storage manager windows
         timed_window!("storage_sync", self.render_storage_sync_windows(ctx));
 
         // Object list, command reference, and data-window overlays

@@ -533,14 +533,6 @@ impl SqliteCache {
                  OR key LIKE 'yahoo-chart:%:5Min')",
             [],
         );
-        let _ = conn.execute(
-            "DELETE FROM sync_state
-             WHERE (key LIKE 'alpaca:%:1Min'
-                 OR key LIKE 'alpaca:%:5Min'
-                 OR key LIKE 'yahoo-chart:%:1Min'
-                 OR key LIKE 'yahoo-chart:%:5Min')",
-            [],
-        );
         Ok(deleted)
     }
 
@@ -553,7 +545,7 @@ impl SqliteCache {
         // TyphooN-Terminal (Linux native). WAL shared memory works fine here.
         // busy_timeout=5000ms: retry for 5s on SQLITE_BUSY instead of failing
         // immediately. Critical when compact_storage() holds the write lock in
-        // batches and other threads (e.g. LAN sync, bar fetches) need to write concurrently.
+        // batches and other threads (e.g. bar fetches, SEC scraping) need to write concurrently.
         conn.execute_batch(
             "
             PRAGMA journal_mode=WAL;
@@ -586,10 +578,6 @@ impl SqliteCache {
             CREATE INDEX IF NOT EXISTS idx_bar_cache_ts ON bar_cache(timestamp);
             CREATE INDEX IF NOT EXISTS idx_bar_meta ON bar_cache(key, timestamp, bar_count);
             CREATE INDEX IF NOT EXISTS idx_kv_cache_ts ON kv_cache(timestamp);
-            CREATE TABLE IF NOT EXISTS sync_state (
-                key TEXT PRIMARY KEY,
-                last_sync_ts INTEGER NOT NULL DEFAULT 0
-            );
         ",
         )
         .map_err(|e| format!("SQLite create tables failed: {e}"))?;
@@ -967,19 +955,6 @@ impl SqliteCache {
         Ok(())
     }
 
-    /// Store a pre-compressed KV blob directly (skip re-compression).
-    /// Used by LAN sync to avoid decompress-on-server + recompress-on-client overhead.
-    pub fn put_kv_compressed(&self, key: &str, compressed: &[u8]) -> Result<(), String> {
-        let timestamp = chrono::Utc::now().timestamp();
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        conn.execute(
-            "INSERT OR REPLACE INTO kv_cache (key, value, timestamp) VALUES (?1, ?2, ?3)",
-            params![key, compressed, timestamp],
-        )
-        .map_err(|e| format!("SQLite insert failed: {e}"))?;
-        Ok(())
-    }
-
     /// Load key-value data.
     pub fn get_kv(&self, key: &str) -> Result<Option<String>, String> {
         let conn = self
@@ -1081,10 +1056,9 @@ impl SqliteCache {
         Ok(result.into_iter().map(|(_, v)| v).collect())
     }
 
-    /// Load raw compressed KV blob (skip zstd decompression + UTF-8 decode).
-    /// Used by the LAN sync pass-through path: the client decompresses on its end,
-    /// so the server should not pay the decompression cost. Also useful for
-    /// "is this key present?" probes without the decode overhead.
+    /// Load the raw stored KV blob (skip zstd decompression + UTF-8 decode).
+    /// Useful for inspecting the on-disk compressed form (e.g. compression-level
+    /// checks) or cheap "is this key present?" probes without the decode overhead.
     pub fn get_kv_raw(&self, key: &str) -> Result<Option<(Vec<u8>, i64)>, String> {
         let conn = self
             .read_conn
@@ -1925,217 +1899,6 @@ impl SqliteCache {
         Ok(keys)
     }
 
-    // ── Sync State (LAN incremental sync tracking) ──────────────────
-
-    /// Get the last sync timestamp for a given sync key.
-    /// Returns 0 if no sync has been recorded (triggers full sync).
-    pub fn get_sync_ts(&self, key: &str) -> i64 {
-        let conn = match self.read_conn.lock() {
-            Ok(c) => c,
-            Err(_) => return 0,
-        };
-        conn.query_row(
-            "SELECT last_sync_ts FROM sync_state WHERE key = ?1",
-            params![key],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or(0)
-    }
-
-    /// Set the last sync timestamp for a given sync key.
-    pub fn set_sync_ts(&self, key: &str, ts: i64) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        conn.execute(
-            "INSERT OR REPLACE INTO sync_state (key, last_sync_ts) VALUES (?1, ?2)",
-            params![key, ts],
-        )
-        .map_err(|e| format!("SQLite insert sync_state failed: {e}"))?;
-        Ok(())
-    }
-
-    // ── KV cache incremental queries (LAN sync) ─────────────────────
-
-    /// List KV entries updated since a given timestamp.
-    /// Returns (key, compressed_value) pairs for entries with timestamp > since_ts.
-    /// Used by LAN sync server to send only new/updated KV entries.
-    pub fn list_kv_entries_since(
-        &self,
-        since_ts: i64,
-    ) -> Result<Vec<(String, Vec<u8>, i64)>, String> {
-        let conn = self
-            .read_conn
-            .lock()
-            .map_err(|e| format!("Lock failed: {e}"))?;
-        // prepare_cached avoids reparse on the hot LAN-sync polling loop.
-        let mut stmt = conn.prepare_cached(
-            "SELECT key, value, timestamp FROM kv_cache WHERE timestamp > ?1 ORDER BY timestamp ASC"
-        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
-        let rows = stmt
-            .query_map(params![since_ts], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            })
-            .map_err(|e| format!("SQLite query failed: {e}"))?;
-        let mut entries = Vec::new();
-        for row in rows {
-            if let Ok(entry) = row {
-                entries.push(entry);
-            }
-        }
-        Ok(entries)
-    }
-
-    /// Get the max timestamp in kv_cache (for sync state tracking).
-    pub fn kv_max_timestamp(&self) -> i64 {
-        let conn = match self.read_conn.lock() {
-            Ok(c) => c,
-            Err(_) => return 0,
-        };
-        conn.query_row(
-            "SELECT COALESCE(MAX(timestamp), 0) FROM kv_cache",
-            [],
-            |r| r.get::<_, i64>(0),
-        )
-        .unwrap_or(0)
-    }
-
-    /// Count rows in kv_cache.
-    pub fn kv_count(&self) -> i64 {
-        let conn = match self.read_conn.lock() {
-            Ok(c) => c,
-            Err(_) => return 0,
-        };
-        conn.query_row("SELECT COUNT(*) FROM kv_cache", [], |r| r.get::<_, i64>(0))
-            .unwrap_or(0)
-    }
-
-    /// Get raw bar cache entry without decompression (for LAN sync transfer).
-    /// Returns the compressed blob and its timestamp as stored in SQLite.
-    pub fn get_raw_bar_entry(&self, key: &str) -> Result<Option<(Vec<u8>, i64)>, String> {
-        let conn = self
-            .read_conn
-            .lock()
-            .map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn
-            .prepare_cached("SELECT data, timestamp FROM bar_cache WHERE key = ?1")
-            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
-
-        match stmt.query_row(params![key], |row| {
-            let data: Vec<u8> = row.get(0)?;
-            let timestamp: i64 = row.get(1)?;
-            Ok((data, timestamp))
-        }) {
-            Ok(result) => Ok(Some(result)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(format!("SQLite query failed: {e}")),
-        }
-    }
-
-    /// Write raw bar cache entry (from LAN sync, no compression needed — already compressed).
-    pub fn put_raw_bar_entry(
-        &self,
-        key: &str,
-        data: &[u8],
-        timestamp: i64,
-        bar_count: i64,
-    ) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        conn.execute(
-            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![key, data, timestamp, bar_count, 3],
-        ).map_err(|e| format!("SQLite insert failed: {e}"))?;
-        Ok(())
-    }
-
-    /// List all keys in bar_cache.
-    pub fn all_keys(&self) -> Result<Vec<String>, String> {
-        let conn = self
-            .read_conn
-            .lock()
-            .map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn
-            .prepare_cached("SELECT key FROM bar_cache")
-            .map_err(|e| format!("Prepare failed: {e}"))?;
-        let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| format!("Query failed: {e}"))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Collect failed: {e}"))
-    }
-
-    /// Get the raw compressed blob, timestamp, and bar_count for a key.
-    /// Used for zero-copy sync between databases.
-    pub fn get_raw_blob(&self, key: &str) -> Result<Option<(Vec<u8>, i64, i64)>, String> {
-        let conn = self
-            .read_conn
-            .lock()
-            .map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn
-            .prepare_cached("SELECT data, timestamp, bar_count FROM bar_cache WHERE key = ?1")
-            .map_err(|e| format!("Prepare failed: {e}"))?;
-        let result = stmt.query_row(params![key], |row| {
-            // Use get_ref to accept both BLOB and TEXT without UTF-8 validation.
-            // MQL5's DatabaseBindArray can bind uchar[] as TEXT type, making SQLite
-            // store the result of BLOB || TEXT concatenation as TEXT. A String fallback
-            // fails with "invalid utf-8 sequence" because binary bar data is not UTF-8.
-            // get_ref returns the raw SQLite value regardless of type.
-            let data: Vec<u8> = match row.get_ref(0)? {
-                rusqlite::types::ValueRef::Blob(b) => b.to_vec(),
-                rusqlite::types::ValueRef::Text(t) => t.to_vec(),
-                _ => {
-                    return Err(rusqlite::Error::InvalidColumnType(
-                        0,
-                        "data".into(),
-                        rusqlite::types::Type::Blob,
-                    ));
-                }
-            };
-            Ok((data, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
-        });
-        match result {
-            Ok(r) => Ok(Some(r)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(format!("Query failed: {e}")),
-        }
-    }
-
-    /// Batched raw-blob insert — writes all supplied rows inside a
-    /// single SQLite transaction so the WAL fsync cost is amortised across
-    /// the batch instead of paid per row. The same idempotent ON CONFLICT
-    /// guard is applied, so older blobs never clobber newer ones even if
-    /// the caller's metadata was stale. Returns the count of `execute()`
-    /// calls that succeeded (a row whose timestamp wasn't newer still
-    /// counts as a success — the SQL just updates zero rows).
-    pub fn put_raw_blobs(&self, items: &[(String, Vec<u8>, i64, i64)]) -> Result<usize, String> {
-        if items.is_empty() {
-            return Ok(0);
-        }
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| format!("Batch begin failed: {e}"))?;
-        let mut ok = 0usize;
-        {
-            let mut stmt = tx.prepare_cached(
-                "INSERT INTO bar_cache (key, data, timestamp, bar_count)
-                 VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(key) DO UPDATE SET data=excluded.data, timestamp=excluded.timestamp, bar_count=excluded.bar_count
-                 WHERE excluded.timestamp > bar_cache.timestamp",
-            ).map_err(|e| format!("Batch prepare failed: {e}"))?;
-            for (key, blob, ts, bar_count) in items {
-                if stmt.execute(params![key, blob, ts, bar_count]).is_ok() {
-                    ok += 1;
-                }
-            }
-        }
-        tx.commit()
-            .map_err(|e| format!("Batch commit failed: {e}"))?;
-        Ok(ok)
-    }
-
     /// Delete all cache entries matching a symbol prefix (e.g., "AAPL:" deletes all TFs for AAPL).
     pub fn delete_symbol(&self, symbol_prefix: &str) -> Result<u64, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
@@ -2324,7 +2087,7 @@ impl SqliteCache {
     }
 
     /// Scan bar_cache for entries with bar_count=0 and repair from TTBR header.
-    /// LAN sync and earlier versions may have left stale 0 values. Returns
+    /// Earlier versions may have left stale 0 values. Returns
     /// number of entries repaired.
     pub fn repair_bar_counts(&self) -> Result<usize, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
@@ -2573,163 +2336,6 @@ impl SqliteCache {
         Ok((processed, bytes_saved))
     }
 
-    /// Export selected cache keys to a portable binary bundle for LAN sync.
-    /// Bundle format: [u32 entry_count][per entry: u32 key_len, key_bytes, u32 data_len, data_bytes, i64 timestamp, i64 bar_count]
-    /// Returns the serialized bundle bytes.
-    pub fn export_keys(&self, key_patterns: &[&str]) -> Result<Vec<u8>, String> {
-        let conn = self
-            .read_conn
-            .lock()
-            .map_err(|e| format!("Lock failed: {e}"))?;
-        let all_keys = {
-            let mut stmt = conn
-                .prepare("SELECT key FROM bar_cache")
-                .map_err(|e| format!("Prepare failed: {e}"))?;
-            let rows = stmt
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(|e| format!("Query failed: {e}"))?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format!("Collect failed: {e}"))?
-        };
-
-        // Filter keys matching any pattern (prefix match or substring match)
-        let matched: Vec<&String> = all_keys
-            .iter()
-            .filter(|k| {
-                key_patterns
-                    .iter()
-                    .any(|p| k.contains(p) || k.starts_with(p))
-            })
-            .collect();
-
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&(matched.len() as u32).to_le_bytes());
-
-        for key in &matched {
-            // Read raw compressed data directly (no decompression needed)
-            let mut stmt = conn
-                .prepare_cached("SELECT data, timestamp, bar_count FROM bar_cache WHERE key = ?1")
-                .map_err(|e| format!("Prepare failed: {e}"))?;
-
-            if let Ok(row) = stmt.query_row(params![key], |row| {
-                Ok((
-                    row.get::<_, Vec<u8>>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            }) {
-                let (data, timestamp, bar_count) = row;
-                let key_bytes = key.as_bytes();
-                buf.extend_from_slice(&(key_bytes.len() as u32).to_le_bytes());
-                buf.extend_from_slice(key_bytes);
-                buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
-                buf.extend_from_slice(&data);
-                buf.extend_from_slice(&timestamp.to_le_bytes());
-                buf.extend_from_slice(&bar_count.to_le_bytes());
-            }
-        }
-
-        Ok(buf)
-    }
-
-    /// Import a portable bundle into this cache (from LAN sync).
-    /// Returns number of entries imported.
-    pub fn import_keys(&self, bundle: &[u8]) -> Result<usize, String> {
-        if bundle.len() < 4 {
-            return Err("Bundle too small".into());
-        }
-        let count = u32::from_le_bytes(bundle[0..4].try_into().map_err(|_| "Bad header")?) as usize;
-        let mut offset = 4;
-        let mut imported = 0;
-
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-
-        for _ in 0..count {
-            if offset + 4 > bundle.len() {
-                break;
-            }
-            let key_len = u32::from_le_bytes(
-                bundle[offset..offset + 4]
-                    .try_into()
-                    .map_err(|_| "Bad key_len")?,
-            ) as usize;
-            offset += 4;
-            if offset + key_len > bundle.len() {
-                break;
-            }
-            let key = std::str::from_utf8(&bundle[offset..offset + key_len])
-                .map_err(|_| "Bad key UTF-8")?
-                .to_string();
-            offset += key_len;
-
-            if offset + 4 > bundle.len() {
-                break;
-            }
-            let data_len = u32::from_le_bytes(
-                bundle[offset..offset + 4]
-                    .try_into()
-                    .map_err(|_| "Bad data_len")?,
-            ) as usize;
-            offset += 4;
-            if offset + data_len > bundle.len() {
-                break;
-            }
-            let data = &bundle[offset..offset + data_len];
-            offset += data_len;
-
-            if offset + 16 > bundle.len() {
-                break;
-            }
-            let timestamp = i64::from_le_bytes(
-                bundle[offset..offset + 8]
-                    .try_into()
-                    .map_err(|_| "Bad timestamp")?,
-            );
-            offset += 8;
-            let bar_count = i64::from_le_bytes(
-                bundle[offset..offset + 8]
-                    .try_into()
-                    .map_err(|_| "Bad bar_count")?,
-            );
-            offset += 8;
-
-            conn.execute(
-                "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![key, data, timestamp, bar_count, 3],
-            ).map_err(|e| format!("Insert failed: {e}"))?;
-            imported += 1;
-        }
-
-        Ok(imported)
-    }
-
-    /// List keys matching patterns with their sizes (for sync preview).
-    /// Returns Vec of (key, bar_count, compressed_size_bytes).
-    pub fn list_matching_keys(
-        &self,
-        patterns: &[&str],
-    ) -> Result<Vec<(String, i64, usize)>, String> {
-        let conn = self
-            .read_conn
-            .lock()
-            .map_err(|e| format!("Lock failed: {e}"))?;
-        let mut stmt = conn
-            .prepare("SELECT key, bar_count, length(data) FROM bar_cache")
-            .map_err(|e| format!("Prepare failed: {e}"))?;
-        let rows: Vec<(String, i64, usize)> = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)? as usize,
-                ))
-            })
-            .map_err(|e| format!("Query failed: {e}"))?
-            .filter_map(|r| r.ok())
-            .filter(|(k, _, _)| patterns.iter().any(|p| k.contains(p) || k.starts_with(p)))
-            .collect();
-        Ok(rows)
-    }
 }
 
 #[cfg(test)]
