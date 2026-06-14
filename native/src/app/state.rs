@@ -4735,6 +4735,12 @@ pub struct TyphooNApp {
     pub(crate) storage_filtered_rows_cache_key: Option<u64>,
     pub(crate) storage_disabled_kraken_quote_keys_cache: Vec<String>,
     pub(crate) storage_disabled_kraken_quote_keys_cache_rev: Option<u64>,
+    /// Broader "out-of-scope" Kraken purge: confirm latch + cached key set
+    /// (keys the current sync config would not fetch — disabled sector or no
+    /// longer in Kraken's loaded universe). Mirrors the disabled-quote prune.
+    pub(crate) storage_prune_out_of_scope_kraken_confirm: bool,
+    pub(crate) storage_out_of_scope_kraken_keys_cache: Vec<String>,
+    pub(crate) storage_out_of_scope_kraken_keys_cache_rev: Option<u64>,
     pub(crate) cache_stats_sort_col: usize,
     pub(crate) cache_stats_sort_asc: bool,
     /// Canonical cache suffix selected for "delete this timeframe across all brokers".

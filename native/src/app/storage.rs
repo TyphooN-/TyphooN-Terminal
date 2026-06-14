@@ -268,6 +268,73 @@ impl TyphooNApp {
         &self.storage_disabled_kraken_quote_keys_cache
     }
 
+    /// Cache keys for Kraken Spot pairs the *current* sync config would not fetch.
+    /// Broader than `disabled_kraken_quote_cache_keys`: it reuses the authoritative
+    /// `kraken_spot_symbol_scrape_enabled` predicate, so it catches both
+    /// disabled-quote/-sector pairs AND pairs no longer in Kraken's loaded universe
+    /// (delisted / residual from a past "everything ticked" selection, e.g. a
+    /// USD-quoted token that is no longer a tradable pair). Two safety guards mirror
+    /// the narrower prune and must stay: xStocks (`.EQ`) are fetched via Kraken's
+    /// equities API — not public Spot OHLC, so spot-eligibility reports them
+    /// "disabled" even though they're wanted — and pure fiat-FX pairs are always
+    /// kept. When Kraken pairs have not loaded yet `kraken_spot_symbol_in_loaded_pairs`
+    /// is permissive, so only disabled-sector keys match until the universe arrives.
+    pub(super) fn out_of_scope_kraken_cache_keys(&self) -> Vec<String> {
+        const FIAT_BASES: [&str; 7] = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF"];
+        let mut keys = Vec::new();
+        for (key, _, _) in &self.bg.detailed_stats {
+            let Some(rest) = key.strip_prefix("kraken:") else {
+                continue;
+            };
+            let Some((symbol, _timeframe)) = rest.split_once(':') else {
+                continue;
+            };
+            let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
+            // Never purge xStocks — tokenized equities sync via the equities API.
+            if symbol.ends_with(".EQ") {
+                continue;
+            }
+            // Always keep pure fiat-FX pairs (EUR/USD, GBP/JPY, …).
+            if let Some(quote) = Self::kraken_symbol_quote(&symbol) {
+                let base = symbol
+                    .strip_suffix(quote)
+                    .unwrap_or(symbol.as_str())
+                    .trim_end_matches('/');
+                if FIAT_BASES.contains(&base) {
+                    continue;
+                }
+            }
+            if !self.kraken_spot_symbol_scrape_enabled(&symbol) {
+                keys.push(key.clone());
+            }
+        }
+        keys.sort();
+        keys.dedup();
+        keys
+    }
+
+    pub(super) fn cached_out_of_scope_kraken_cache_keys(&mut self) -> &[String] {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.bg_rev.hash(&mut h);
+        self.bg.detailed_stats.len().hash(&mut h);
+        // Eligibility inputs: every sector/quote flag plus the loaded-pairs set
+        // (its size flips the delisted-residue half of the predicate on/off).
+        self.kraken_scrape_xstocks.hash(&mut h);
+        self.kraken_scrape_crypto_crosses.hash(&mut h);
+        for quote in [
+            "USD", "USDT", "USDC", "USDG", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF",
+        ] {
+            self.crypto_fiat_quote_scrape_enabled(quote).hash(&mut h);
+        }
+        self.kraken_pairs_normalized.len().hash(&mut h);
+        let key = h.finish();
+        if self.storage_out_of_scope_kraken_keys_cache_rev != Some(key) {
+            self.storage_out_of_scope_kraken_keys_cache = self.out_of_scope_kraken_cache_keys();
+            self.storage_out_of_scope_kraken_keys_cache_rev = Some(key);
+        }
+        &self.storage_out_of_scope_kraken_keys_cache
+    }
+
     pub(super) fn cached_storage_filtered_rows(&mut self) -> &[(String, i64, i64)] {
         let key = self.storage_filtered_rows_cache_key();
         if self.storage_filtered_rows_cache_key != Some(key) {
@@ -485,6 +552,72 @@ impl TyphooNApp {
                 .clicked()
             {
                 self.storage_prune_disabled_kraken_quotes_confirm = true;
+            }
+        });
+        let out_of_scope_kraken_keys = self.cached_out_of_scope_kraken_cache_keys().to_vec();
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Out-of-scope Kraken caches: {}",
+                    out_of_scope_kraken_keys.len()
+                ))
+                .small()
+                .color(AXIS_TEXT),
+            );
+            if self.storage_prune_out_of_scope_kraken_confirm {
+                if ui
+                    .add_enabled(
+                        !out_of_scope_kraken_keys.is_empty(),
+                        egui::Button::new(
+                            egui::RichText::new(format!(
+                                "Confirm purge {} out-of-scope Kraken caches?",
+                                out_of_scope_kraken_keys.len()
+                            ))
+                            .small()
+                            .strong()
+                            .color(egui::Color32::from_rgb(231, 76, 60)),
+                        ),
+                    )
+                    .on_hover_text("Delete cached Kraken Spot pairs the current sync config would NOT fetch: disabled quote/sector pairs PLUS pairs no longer in Kraken's loaded universe (delisted / residual from a past 'everything ticked' selection). Always keeps xStocks and pure fiat-FX pairs.")
+                    .clicked()
+                {
+                    if let Some(cache) = self.cache.clone() {
+                        match cache.delete_keys(&out_of_scope_kraken_keys) {
+                            Ok(deleted) => self.log.push_back(LogEntry::info(format!(
+                                "Purged {} out-of-scope Kraken cache entr{}",
+                                deleted,
+                                if deleted == 1 { "y" } else { "ies" }
+                            ))),
+                            Err(e) => self.log.push_back(LogEntry::err(format!(
+                                "Purge out-of-scope Kraken caches failed: {}",
+                                e
+                            ))),
+                        }
+                        self.refresh_storage_snapshot_after_action("out-of-scope Kraken purge");
+                    }
+                    self.pending_kraken_fetches.clear();
+                    self.storage_prune_out_of_scope_kraken_confirm = false;
+                    self.storage_delete_confirm = None;
+                    self.storage_delete_filtered_confirm = false;
+                    self.storage_page = 0;
+                }
+                if ui.small_button(egui::RichText::new("Cancel").small()).clicked() {
+                    self.storage_prune_out_of_scope_kraken_confirm = false;
+                }
+            } else if ui
+                .add_enabled(
+                    !out_of_scope_kraken_keys.is_empty(),
+                    egui::Button::new(
+                        egui::RichText::new("Purge out-of-scope Kraken caches")
+                            .small()
+                            .color(egui::Color32::from_rgb(231, 76, 60)),
+                    ),
+                )
+                .on_hover_text("Delete cached Kraken Spot pairs the current sync config would not fetch (disabled quote/sector, or no longer in Kraken's loaded universe). Keeps xStocks and fiat-FX. Catches residual like delisted tokens once Kraken pairs are loaded.")
+                .on_disabled_hover_text("No cached Kraken Spot entries are currently out of sync scope.")
+                .clicked()
+            {
+                self.storage_prune_out_of_scope_kraken_confirm = true;
             }
         });
         ui.separator();
