@@ -505,10 +505,18 @@ impl TyphooNApp {
                 let symbols = self.sec_scrape_scope_symbols();
                 let symbol_count = symbols.len();
                 if symbol_count > 0 {
+                    // SEC writes go through their own WAL connection with a busy
+                    // timeout (see `open_conn` in engine sec_filing), fully decoupled
+                    // from the SqliteCache write connection the UI/bar-sync share. A
+                    // broad SEC scrape therefore can't freeze the render thread even
+                    // mid-catch-up, so it is exempt from the heavy-sync guard (pass
+                    // `false`) — you can pull filings any time the scope enumerates.
+                    // News still routes writes through the shared conn, so its guard
+                    // (and the auto-start bound) stay as-is.
                     if !should_start_manual_background_scope_scrape(
                         self.broker_scope,
                         symbol_count,
-                        self.heavy_sync_in_progress,
+                        false,
                     ) {
                         self.scrape_sec_last_msg = format!(
                             "deferred: Scope {} scrape waits for market-data catch-up",

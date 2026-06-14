@@ -116,6 +116,16 @@ fn open_conn(db_path: &Path) -> Result<Connection, String> {
     let conn = Connection::open(db_path).map_err(|e| format!("SQLite open failed: {e}"))?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
         .map_err(|e| format!("Pragma failed: {e}"))?;
+    // SEC scraping writes on this dedicated connection — independent of the
+    // `SqliteCache` write connection the UI thread and bar-sync share. Under WAL a
+    // single writer holds the lock at a time, so WITHOUT a busy timeout an SEC write
+    // that collides with a UI/bar-sync write fails *instantly* with SQLITE_BUSY —
+    // silently dropping filings — and thrashes the lock. Retrying for 5s lets SEC and
+    // the shared writer interleave politely, while WAL keeps the UI's *reads* (a
+    // separate `read_conn`) unblocked throughout. This is what decouples SEC writes
+    // from the render path and lets a broad scrape run during heavy market-data sync.
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| format!("busy_timeout failed: {e}"))?;
     Ok(conn)
 }
 
@@ -314,6 +324,28 @@ async fn fetch_sec_ticker_cik_map(
 
 // ── Filing Scraper ──────────────────────────────────────────────────
 
+/// Returns true if `ticker` was already scraped on `today` (YYYY-MM-DD).
+///
+/// `last_scrape_date` is nullable: the SEC universe is pre-seeded into
+/// `sec_scrape_index` with a resolved CIK but a NULL date (never scraped). A SQL
+/// NULL read into `String` fails with `InvalidColumnType`, and `.optional()` only
+/// swallows the *no-row* case — so reading the column as bare `String` once turned
+/// every never-scraped ticker (WOK plus ~6.3k others) into a hard error that bailed
+/// out before fetching submissions, permanently freezing them at NULL. Reading as
+/// `Option<String>` maps NULL → None → "not scraped today" so the scrape proceeds.
+fn ticker_scraped_on(conn: &Connection, ticker: &str, today: &str) -> Result<bool, String> {
+    let last: Option<String> = conn
+        .query_row(
+            "SELECT last_scrape_date FROM sec_scrape_index WHERE ticker = ?1",
+            params![ticker],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|e| format!("SEC scrape index check failed: {e}"))?
+        .flatten();
+    Ok(last.as_deref() == Some(today))
+}
+
 /// Scrape filings for a single ticker from SEC EDGAR.
 /// Returns (new_filings, new_insider_trades, new_alerts).
 pub async fn scrape_filings_for_ticker(
@@ -331,15 +363,7 @@ pub async fn scrape_filings_for_ticker(
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
         if tokio::task::spawn_blocking(move || -> Result<bool, String> {
             let conn = open_conn(&db)?;
-            let last: Option<String> = conn
-                .query_row(
-                    "SELECT last_scrape_date FROM sec_scrape_index WHERE ticker = ?1",
-                    params![t],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| format!("SEC scrape index check failed: {e}"))?;
-            Ok(last.as_deref() == Some(today.as_str()))
+            ticker_scraped_on(&conn, &t, &today)
         })
         .await
         .map_err(|e| format!("spawn_blocking: {e}"))??
@@ -779,7 +803,7 @@ pub async fn scrape_all_portfolio_symbols(
     // Step 1: collect caller-provided scope symbols, or fall back to the legacy
     // self-discovery path for non-UI callers/tests. UI-triggered scrapes must pass
     // the top-level broker Scope explicitly.
-    let symbols: Vec<String> = if let Some(symbols) = scoped_symbols {
+    let mut symbols: Vec<String> = if let Some(symbols) = scoped_symbols {
         normalize_sec_equity_symbols_preserving_order(symbols)
     } else {
         let db = db_path.clone();
@@ -887,6 +911,20 @@ pub async fn scrape_all_portfolio_symbols(
         .await
         .map_err(|e| format!("spawn_blocking: {e}"))??
     };
+
+    // Stale-first ordering: visit never-scraped tickers (absent from `scrape_dates`
+    // → no row / NULL date → empty key) first, then oldest `last_scrape_date`
+    // first. Without this the scrape re-walks the same head-of-list order on every
+    // run, so an interrupted/quota-bounded pass keeps redoing the front and never
+    // reaches the long tail — which is how never-scraped names sat empty while the
+    // same symbols got re-checked. `sort_by` is stable, so the caller's active/
+    // priority-first ordering is preserved as the tiebreaker within each bucket.
+    symbols.sort_by(|a, b| {
+        let da = scrape_dates.get(a).map(String::as_str).unwrap_or("");
+        let db = scrape_dates.get(b).map(String::as_str).unwrap_or("");
+        da.cmp(db)
+    });
+
     let mut sec_ticker_cik_map: Option<std::collections::HashMap<String, String>> = None;
 
     for sym in &symbols {

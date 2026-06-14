@@ -62,6 +62,39 @@ fn create_tables_idempotent() {
     create_sec_tables(&conn).unwrap(); // second call should not fail
 }
 
+// ── scrape gate (ticker_scraped_on) ────────────────────────────
+
+#[test]
+fn scrape_gate_treats_null_date_as_not_scraped() {
+    // Regression: the SEC universe is pre-seeded with a CIK but a NULL
+    // last_scrape_date. Reading that NULL as bare String once errored and froze
+    // ~6.3k tickers (incl. WOK) before they were ever scraped. NULL must read as
+    // "not scraped today" so the scrape proceeds, never as an error.
+    let conn = setup_test_db();
+    let today = "2026-06-14";
+    conn.execute(
+        "INSERT INTO sec_scrape_index (ticker, last_scrape_date, filing_count, cik, updated_at)
+         VALUES ('WOK', NULL, 0, '0001929783', 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO sec_scrape_index (ticker, last_scrape_date, filing_count, cik, updated_at)
+         VALUES ('WDAY', ?1, 988, '0001327811', 0)",
+        params![today],
+    )
+    .unwrap();
+
+    // NULL date → not gated, and crucially does not error.
+    assert_eq!(ticker_scraped_on(&conn, "WOK", today), Ok(false));
+    // A row stamped today → gated.
+    assert_eq!(ticker_scraped_on(&conn, "WDAY", today), Ok(true));
+    // Same row on a later day → no longer gated.
+    assert_eq!(ticker_scraped_on(&conn, "WDAY", "2026-06-15"), Ok(false));
+    // Absent ticker → not gated.
+    assert_eq!(ticker_scraped_on(&conn, "NOPE", today), Ok(false));
+}
+
 // ── compute_importance ─────────────────────────────────────────
 
 #[test]
