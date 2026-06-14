@@ -48,6 +48,22 @@ ASKAI CC what is the debt load?             → packet for CC, custom question
 ASKCLAUDE AAPL,MSFT,NVDA write me a memo    → 3-symbol packet to the Claude CLI
 ```
 
+### Exporting the packet to a file (no AI)
+
+`EXPORT_PACKET SYM[,SYM] [question]` builds the exact same packet through the
+same `parse_ask_args` + `investigate_symbols` path, but instead of dispatching
+it to a model it opens a native Save-As dialog (Markdown filter, suggested
+name `<SYMS>_research_packet_<YYYYMMDD-HHMMSS>.md`) and writes the packet
+verbatim to the chosen file. Cancelling the dialog is a no-op; the resulting
+path and byte count are written to the log. An optional trailing question is
+embedded in the packet's closing question block, identical to the ASK commands.
+Aliases: `EXPORTPACKET`, `PACKET_EXPORT`, `SAVE_PACKET`, `SAVEPACKET`.
+
+```
+EXPORT_PACKET CC                            → Save-As dialog for the CC packet
+EXPORT_PACKET CC,NCLH risk summary?         → 2-symbol packet, question embedded
+```
+
 ---
 
 ## Packet Layout

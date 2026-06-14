@@ -1138,6 +1138,24 @@ fn parse_ask_args_empty_input() {
 }
 
 #[test]
+fn packet_export_stem_sanitizes_path_unsafe_chars() {
+    // '/', '.', '+' are valid in tickers (is_tickerish) but unsafe in a
+    // filename component — EXPORT_PACKET collapses them to '_'.
+    assert_eq!(
+        TyphooNApp::packet_export_stem(&["BTC/USD".to_string(), "BRK.B".to_string()]),
+        "BTC_USD_BRK_B"
+    );
+    assert_eq!(
+        TyphooNApp::packet_export_stem(&["CC".to_string(), "NCLH".to_string()]),
+        "CC_NCLH"
+    );
+    assert_eq!(
+        TyphooNApp::packet_export_stem(&["BHP.AX".to_string()]),
+        "BHP_AX"
+    );
+}
+
+#[test]
 fn gemini_cli_default_prefers_3_1_pro_preview() {
     assert_eq!(
         TyphooNApp::default_gemini_cli_model(),

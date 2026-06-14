@@ -626,6 +626,66 @@ impl TyphooNApp {
                     }
                 }
             }
+            // Export the assembled research packet to a Markdown file (no AI
+            // dispatch). Same arg parser + packet builder as the ASK commands —
+            // this is the "packet half" of ASK without sending it to a model.
+            "EXPORT_PACKET" | "EXPORTPACKET" | "PACKET_EXPORT" | "SAVE_PACKET" | "SAVEPACKET" => {
+                self.log.push_back(LogEntry::warn(
+                    "Usage: EXPORT_PACKET SYM1[,SYM2] [optional question]",
+                ));
+            }
+            cmd if cmd.starts_with("EXPORT_PACKET ")
+                || cmd.starts_with("EXPORTPACKET ")
+                || cmd.starts_with("PACKET_EXPORT ")
+                || cmd.starts_with("SAVE_PACKET ")
+                || cmd.starts_with("SAVEPACKET ") =>
+            {
+                let args = cmd
+                    .splitn(2, char::is_whitespace)
+                    .nth(1)
+                    .unwrap_or("")
+                    .trim();
+                let (syms, question) = Self::parse_ask_args(args);
+                if syms.is_empty() {
+                    self.log.push_back(LogEntry::warn(
+                        "Usage: EXPORT_PACKET SYM1[,SYM2] [optional question]",
+                    ));
+                    return true;
+                }
+                let packet = self.investigate_symbols(&syms, &question);
+                let default_name = format!(
+                    "{}_research_packet_{}.md",
+                    Self::packet_export_stem(&syms),
+                    chrono::Local::now().format("%Y%m%d-%H%M%S")
+                );
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Markdown", &["md"])
+                    .set_file_name(&default_name)
+                    .set_title("Export Research Packet")
+                    .save_file()
+                {
+                    match std::fs::write(&path, &packet) {
+                        Ok(()) => {
+                            self.log.push_back(LogEntry::info(format!(
+                                "Research packet exported: {} ({} symbols, {} bytes) → {}",
+                                syms.join(", "),
+                                syms.len(),
+                                packet.len(),
+                                path.display()
+                            )));
+                        }
+                        Err(e) => {
+                            self.log.push_back(LogEntry::err(format!(
+                                "Research packet export failed: {}",
+                                e
+                            )));
+                        }
+                    }
+                } else {
+                    self.log
+                        .push_back(LogEntry::info("Research packet export cancelled"));
+                }
+            }
             _ => return false,
         }
         true

@@ -900,6 +900,10 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "Ask Grok Build CLI with full TyphooN data packet — ASKGROK SYM[,SYM] [question]",
     },
     Command {
+        name: "EXPORT_PACKET",
+        desc: "Export the TyphooN research packet to a Markdown file — EXPORT_PACKET SYM[,SYM] [question] (Save-As dialog, no AI dispatch)",
+    },
+    Command {
         name: "AICACHE",
         desc: "Cross-client AI response cache stats",
     },

@@ -110,6 +110,24 @@ impl TyphooNApp {
         (syms, question)
     }
 
+    /// Filesystem-safe filename stem for an exported research packet
+    /// (`EXPORT_PACKET`). Symbols may legitimately contain `/`, `.`, `+` (see
+    /// the `is_tickerish` allow-list in `parse_ask_args`), none of which are
+    /// safe in a path component, so collapse anything that is not
+    /// ASCII-alphanumeric / `-` / `_` to `_`. Symbols are joined with `_`.
+    pub(super) fn packet_export_stem(syms: &[String]) -> String {
+        syms.join("_")
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    }
+
     #[cfg(test)]
     #[allow(dead_code)]
     pub(super) fn parse_ask_args_test(args: &str) -> (Vec<String>, String) {
