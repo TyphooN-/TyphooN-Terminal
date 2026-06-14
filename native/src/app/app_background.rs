@@ -170,10 +170,16 @@ pub(super) fn spawn_background_refresh(
                         // cycle; now covers every key in detailed_stats but only decompresses
                         // entries that are new or whose write_ts has advanced since the last
                         // extraction. Rate-limited to BAR_TS_CACHE_DECOMPRESSIONS_PER_CYCLE so
-                        // a cold startup with ~7500 keys doesn't monopolise the BG loop
-                        // (~600 µs per decompression → 300 ms at 500/cycle, full backfill
-                        // in ~15 cycles ≈ 45 s).
-                        const BAR_TS_CACHE_DECOMPRESSIONS_PER_CYCLE: usize = 500;
+                        // a cold startup doesn't monopolise the BG loop. This runs on
+                        // the BG thread's own read-only WAL connection (zero UI/render
+                        // contention), so the only cost of a larger budget is delaying
+                        // the *other* BG phases within a warm-up cycle. At ~600 µs per
+                        // decompression, 2000/cycle ≈ 1.2 s of work and warms the real
+                        // ~68k-key universe in ~34 cycles (~1.7 min) instead of ~7 min at
+                        // 500. After warm-up the write_ts gate skips everything, so steady
+                        // state is ~free. (Persisting the cache across restarts is the
+                        // proper follow-up so this warm-up only happens once, ever.)
+                        const BAR_TS_CACHE_DECOMPRESSIONS_PER_CYCLE: usize = 2000;
                         let mut ts_cache = std::mem::take(&mut data.bar_ts_cache);
                         let current_keys: std::collections::HashSet<&str> = data
                             .detailed_stats

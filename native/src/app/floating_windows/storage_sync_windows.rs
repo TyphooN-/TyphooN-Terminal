@@ -82,7 +82,22 @@ impl TyphooNApp {
                                     }
                                 });
                                 ui.horizontal(|ui| {
-                                    if ui.button(egui::RichText::new(format!("Compact (zstd-{})", auto_compact::TARGET_LEVEL)).small()).clicked() {
+                                    // Guard against double-launch: the button stays
+                                    // clickable across frames, so two quick clicks used to
+                                    // queue two concurrent compacts (interleaved progress at
+                                    // different totals, fighting for the write conn). Disable
+                                    // it while any compact — manual or auto — is in progress.
+                                    let compact_btn = egui::Button::new(
+                                        egui::RichText::new(format!(
+                                            "Compact (zstd-{})",
+                                            auto_compact::TARGET_LEVEL
+                                        ))
+                                        .small(),
+                                    );
+                                    if ui
+                                        .add_enabled(!self.auto_compact_in_progress, compact_btn)
+                                        .clicked()
+                                    {
                                         let db_path = cache_db_path();
                                         let log_tx = self.broker_tx.clone();
                                         let size_before = size;
