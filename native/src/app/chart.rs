@@ -1287,7 +1287,19 @@ fn chart_reconcile_depth_split_adjustment(
         // depth source over trusted history. A single old depth-only scale jump
         // can be an unadjusted/bad provider region; two clean eras plus recent
         // agreement matches the WOK/TradingView multi-reverse-split shape.
-        if runs.len() >= 2 {
+        //
+        // ...AND only when promoting does not let the depth source REDEFINE the
+        // price scale. The trusted tier defines the scale (ADR-113); depth may
+        // smooth a mis-adjusted continuity but must not relocate bars by orders of
+        // magnitude. WOK did two 1-for-100 reverse splits with no kraken-equities
+        // source: Alpaca is raw (compact, with split cliffs) while Yahoo is
+        // back-adjusted across BOTH splits and so explodes to ~10,000× the recent
+        // price in deep history. Promoting that pasted Yahoo's ~36,000 bars over
+        // Alpaca's compact ones — the H1/H4 spikes, and an inconsistency vs the
+        // (compact) D1/W1 views. The guard keeps depth promotion on the trusted
+        // scale, so an exploded-scale depth source is refused and the series stays
+        // compact and identical across timeframes.
+        if runs.len() >= 2 && chart_depth_promotion_keeps_trusted_scale(depth, &runs, window_start) {
             for run in &runs {
                 chart_apply_depth_split_adjustment_run(merged, depth, run, consensus);
             }
@@ -1340,6 +1352,58 @@ fn chart_apply_depth_split_adjustment_run(
             },
         );
     }
+}
+
+/// Guard for the depth-era promotion: refuse it when adopting the depth source
+/// would let it REDEFINE the price scale rather than merely smooth a continuity.
+///
+/// The trusted tier defines the scale (ADR-113). The "≥2 stable divergent eras"
+/// signal is symmetric — it looks the same whether trusted is raw across reverse
+/// splits (and depth is the adjusted reference) or depth is back-adjusted onto a
+/// runaway scale (and trusted is the compact, real-price one). WOK is the latter:
+/// two 1-for-100 reverse splits, no kraken-equities source, so Yahoo's depth
+/// history is back-adjusted ×10,000 into the tens of thousands while Alpaca stays
+/// on the compact traded scale. Promoting Yahoo there pastes ~36,000-priced bars
+/// over the chart (the H1/H4 spikes).
+///
+/// We keep promotion only while the depth source stays within `SCALE_CAP` of its
+/// own recent (consensus-window) level across every divergent era — i.e. depth is
+/// correcting a few-fold mis-adjustment, not relocating the series by orders of
+/// magnitude. A genuinely adjusted depth reference (compact multi-split history)
+/// passes; a runaway back-adjusted one (WOK/Yahoo) is refused and the merge keeps
+/// the trusted scale, identical across every timeframe.
+fn chart_depth_promotion_keeps_trusted_scale(
+    depth: &std::collections::BTreeMap<i64, Bar>,
+    runs: &[Vec<(i64, f64)>],
+    window_start: i64,
+) -> bool {
+    // A single common reverse split is ~10×; two stacked are ~100×. Beyond this a
+    // divergent era is a back-adjustment runaway, not a real multi-era price range.
+    const SCALE_CAP: f64 = 50.0;
+
+    let median = |mut v: Vec<f64>| -> Option<f64> {
+        v.retain(|c| *c > 0.0 && c.is_finite());
+        if v.is_empty() {
+            return None;
+        }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Some(v[v.len() / 2])
+    };
+    // The scale the corrected series would sit on: depth's own recent level.
+    let Some(recent) = median(
+        depth
+            .range(window_start..)
+            .map(|(_, bar)| bar.close)
+            .collect(),
+    ) else {
+        return false;
+    };
+    runs.iter().all(|run| {
+        match median(run.iter().filter_map(|(b, _)| depth.get(b)).map(|bar| bar.close).collect()) {
+            Some(era) => (era / recent).max(recent / era) <= SCALE_CAP,
+            None => true,
+        }
+    })
 }
 
 fn chart_trusted_equity_merge_is_stale(

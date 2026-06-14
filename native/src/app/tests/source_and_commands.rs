@@ -207,23 +207,28 @@ fn chart_equity_merge_preserves_old_assist_history_and_prefers_kraken_overlap() 
 
 #[test]
 fn chart_equity_merge_uses_adjusted_yahoo_for_multi_split_history() {
-    // WOK-style failure: Alpaca/Kraken trusted history can be raw or only
-    // partially adjusted while Yahoo/TradingView-style chart data is adjusted
-    // across multiple reverse-split eras. Recent bars agree, but older eras are
-    // stable 100x / 10,000x steps. The merge should adopt the adjusted depth OHLC
-    // for those eras instead of dropping it as an inconsistent splice.
+    // Alpaca/Kraken trusted history can be raw or only partially adjusted while
+    // Yahoo/TradingView is split-adjusted across multiple reverse-split eras. Recent
+    // bars agree; older eras are stable, MODEST few-fold steps. The merge adopts the
+    // adjusted depth OHLC for those eras instead of dropping it as an inconsistent
+    // splice. (A depth source that instead explodes the scale by orders of magnitude
+    // — WOK/Yahoo's runaway back-adjustment — is refused by
+    // `chart_depth_promotion_keeps_trusted_scale`; see
+    // `chart_equity_merge_keeps_compact_trusted_scale_over_exploded_depth`.)
     let day = 86_400_000i64;
+    // Trusted is stuck near the recent price and never reflects the older eras.
     let alpaca: Vec<(i64, f64, f64, f64, f64, f64)> = (1..=80)
-        .map(|d| (d as i64 * day, 1.0, 1.1, 0.9, 1.0, 100.0))
+        .map(|d| (d as i64 * day, 3.0, 3.3, 2.7, 3.0, 100.0))
         .collect();
+    // Yahoo carries the real, adjusted multi-era history on a compact scale.
     let yahoo: Vec<(i64, f64, f64, f64, f64, f64)> = (1..=80)
         .map(|d| {
             let c = if d <= 20 {
-                10_000.0
+                30.0
             } else if d <= 40 {
-                100.0
+                10.0
             } else {
-                1.0
+                3.0
             };
             (d as i64 * day, c, c * 1.1, c * 0.9, c, 50.0)
         })
@@ -234,10 +239,57 @@ fn chart_equity_merge_uses_adjusted_yahoo_for_multi_split_history() {
     let by_ts: std::collections::HashMap<i64, f64> =
         merged.iter().map(|b| (b.ts_ms, b.close)).collect();
 
-    assert!((by_ts[&(5 * day)] - 10_000.0).abs() < 1e-6);
-    assert!((by_ts[&(30 * day)] - 100.0).abs() < 1e-6);
-    assert!((by_ts[&(60 * day)] - 1.0).abs() < 1e-6);
+    assert!((by_ts[&(5 * day)] - 30.0).abs() < 1e-6);
+    assert!((by_ts[&(30 * day)] - 10.0).abs() < 1e-6);
+    assert!((by_ts[&(60 * day)] - 3.0).abs() < 1e-6);
     assert_eq!(merged.len(), 80);
+}
+
+#[test]
+fn chart_equity_merge_keeps_compact_trusted_scale_over_exploded_depth() {
+    // WOK reality: two 1-for-100 reverse splits, no kraken-equities source. Alpaca is
+    // raw — compact, traded prices with a ×100 step at each split — while Yahoo is
+    // back-adjusted across BOTH splits and so runs away to ~10,000× the recent price
+    // in deep history. Yahoo's per-split eras are individually stable, which used to
+    // make the depth-era reconciliation paste Yahoo's tens-of-thousands bars over
+    // Alpaca's compact ones: the H1/H4 spikes, and a divergence from the compact
+    // D1/W1 views. The trusted tier defines the scale (ADR-113); an exploded-scale
+    // depth source must NOT redefine it, so the merge keeps the compact trusted
+    // bars — identically across every timeframe.
+    let day = 86_400_000i64;
+    let n = 120i64;
+    // Era A (deep) and Era B (between splits) are both raw ~0.02 on Alpaca; recent
+    // (post both splits) is ~2.0. Yahoo back-adjusts A by ×10,000 and B by ×100.
+    let alpaca: Vec<(i64, f64, f64, f64, f64, f64)> = (1..=n)
+        .map(|d| {
+            let c = if d <= 80 { 0.02 } else { 2.0 };
+            (d * day, c, c * 1.05, c * 0.95, c, 100.0)
+        })
+        .collect();
+    let yahoo: Vec<(i64, f64, f64, f64, f64, f64)> = (1..=n)
+        .map(|d| {
+            let c = if d <= 40 {
+                20_000.0
+            } else if d <= 80 {
+                200.0
+            } else {
+                2.0
+            };
+            (d * day, c, c * 1.05, c * 0.95, c, 50.0)
+        })
+        .collect();
+
+    let merged =
+        chart_merge_equity_raw_bars("1Day", &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)], &[]);
+    assert!(
+        merged.iter().all(|b| b.close <= 3.0),
+        "exploded back-adjusted depth must not overwrite the compact trusted scale"
+    );
+    let by_ts: std::collections::HashMap<i64, f64> =
+        merged.iter().map(|b| (b.ts_ms, b.close)).collect();
+    assert!((by_ts[&(20 * day)] - 0.02).abs() < 1e-9, "deep raw era kept");
+    assert!((by_ts[&(60 * day)] - 0.02).abs() < 1e-9, "between-split raw era kept");
+    assert!((by_ts[&(100 * day)] - 2.0).abs() < 1e-9, "recent bars unchanged");
 }
 
 #[test]
@@ -1296,4 +1348,3 @@ fn make_close_bars(closes: &[f64]) -> Vec<Bar> {
         })
         .collect()
 }
-
