@@ -5318,6 +5318,104 @@ impl ChartState {
     /// Compute Auto Fibonacci levels from fractal swing points.
     /// Mirrors AutoFibonacci.mqh: finds most significant recent swing high/low
     /// and computes retracement (0-100%) + extension (127.2-423.6%) levels.
+    /// Load higher-timeframe bars for an MTF overlay (MTF_MA / MultiKAMA),
+    /// preferring the SAME cache source the chart's candles loaded from so the
+    /// overlay never mixes price scales / adjustments with the displayed bars
+    /// (ADR-123, source consistency). When the chart's source is known we
+    /// restrict to it and return `None` — dropping the line — if that timeframe
+    /// is absent, rather than crossing to a differently-adjusted source. Only
+    /// when the source is unknown (`""`) do we fall back to the legacy
+    /// broad-prefix search (still scale-guarded by `mtf_line_scale_ok`).
+    fn load_mtf_htf_bars(
+        &self,
+        cache: &SqliteCache,
+        bare_sym: &str,
+        base_sym: &str,
+        tf_suffix: &str,
+    ) -> Option<Vec<Bar>> {
+        let try_key = |key: &str| -> Option<Vec<Bar>> {
+            let raw = cache.get_bars_raw(key).ok().flatten()?;
+            if !chart_source_bars_match_timeframe(cache_source_from_key(key), tf_suffix, &raw) {
+                return None;
+            }
+            Some(
+                raw.into_iter()
+                    .map(|(ts, o, h, l, c, v)| Bar {
+                        ts_ms: ts,
+                        open: o,
+                        high: h,
+                        low: l,
+                        close: c,
+                        volume: v,
+                    })
+                    .collect(),
+            )
+        };
+
+        // ADR-123 #2: restrict to the candles' own source — canonical
+        // "{source}:{sym}:{tf}" — and drop the line if that TF is absent there.
+        if !self.primary_source.is_empty() {
+            return try_key(&format!("{}:{}:{}", self.primary_source, bare_sym, tf_suffix));
+        }
+
+        // Unknown source: legacy broad search.
+        let prefixes = [
+            "merged:",
+            "default:",
+            "kraken-equities:",
+            "kraken:",
+            "kraken-futures:",
+            "tastytrade:",
+            "alpaca:",
+            "yahoo-chart:",
+            "paper_TyphooN:",
+            "alpaca_paper_TyphooN:",
+            "",
+        ];
+        for prefix in &prefixes {
+            if let Some(bars) = try_key(&format!("{}{}:{}", prefix, bare_sym, tf_suffix)) {
+                return Some(bars);
+            }
+        }
+        if let Some(bars) = try_key(&format!("{}:{}", base_sym, tf_suffix)) {
+            return Some(bars);
+        }
+        if let Ok(keys) = cache.search_keys(bare_sym, 32) {
+            let tf_lower = tf_suffix.to_lowercase();
+            for k in &keys {
+                if k.to_lowercase().ends_with(&tf_lower) {
+                    if let Some(bars) = try_key(k) {
+                        return Some(bars);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// ADR-123 #1: price-scale sanity guard. Rejects an MTF/KAMA overlay line
+    /// whose values sit on a wildly different scale than the candles (e.g. an
+    /// un-back-adjusted or pre-split feed). Uses the median `value / close` ratio
+    /// at the matched bars: a legitimately lagging average has a median near 1,
+    /// whereas a mis-scaled feed is persistently many-fold off. Kept when the
+    /// median ratio is within `[1/SCALE_TOL, SCALE_TOL]`.
+    pub(crate) fn mtf_line_scale_ok(bars: &[Bar], projected: &[(usize, f64)]) -> bool {
+        const SCALE_TOL: f64 = 4.0;
+        let mut ratios: Vec<f64> = projected
+            .iter()
+            .filter_map(|&(i, v)| {
+                let close = bars.get(i).map(|b| b.close).unwrap_or(0.0);
+                (close > 0.0 && v.is_finite() && v > 0.0).then_some(v / close)
+            })
+            .collect();
+        if ratios.is_empty() {
+            return false;
+        }
+        ratios.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = ratios[ratios.len() / 2];
+        (1.0 / SCALE_TOL..=SCALE_TOL).contains(&median)
+    }
+
     /// Compute MultiKAMA: load bars from higher timeframes and compute KAMA(10,2,30) on each.
     /// Projects KAMA values onto this chart's x-axis by matching timestamps.
     /// Compute MTF SMA lines matching MTF_MA.mqh behavior.
@@ -5392,103 +5490,13 @@ impl ChartState {
                 .to_string()
         };
 
-        let prefixes = [
-            "merged:",
-            "default:",
-            "kraken-equities:",
-            "kraken:",
-            "kraken-futures:",
-            "tastytrade:",
-            "alpaca:",
-            "yahoo-chart:",
-            "paper_TyphooN:",
-            "alpaca_paper_TyphooN:",
-            "",
-        ];
-
         for &(label, tf_suffix, period, _tf_min) in mtf_lines {
             // 1:1 MT5 parity: MTF_MA.mqh declares all 6 plotted buffers as INDICATOR_DATA
             // (see MTF_MA.mqh lines 72-77) with no chart-period guard, so every line is
             // drawn on every host timeframe. We match that exactly — lower-TF lines
             // projected onto higher-TF bars are informationally thin but MT5-accurate.
-            let mut htf_bars: Option<Vec<Bar>> = None;
-            // Try with bare symbol under each prefix, plus the original base_sym
-            for prefix in &prefixes {
-                // e.g. "kraken:EURUSD:1Hour" — canonical 3-part key format.
-                let key = format!("{}{}:{}", prefix, bare_sym, tf_suffix);
-                if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
-                    if !chart_source_bars_match_timeframe(
-                        cache_source_from_key(&key),
-                        tf_suffix,
-                        &raw,
-                    ) {
-                        continue;
-                    }
-                    htf_bars = Some(
-                        raw.into_iter()
-                            .map(|(ts, o, h, l, c, v)| Bar {
-                                ts_ms: ts,
-                                open: o,
-                                high: h,
-                                low: l,
-                                close: c,
-                                volume: v,
-                            })
-                            .collect(),
-                    );
-                    break;
-                }
-            }
-            // Also try with full base_sym (i.e. the raw chart symbol incl. its prefix).
-            if htf_bars.is_none() {
-                let key = format!("{}:{}", base_sym, tf_suffix);
-                if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
-                    if !chart_source_bars_match_timeframe(
-                        cache_source_from_key(&key),
-                        tf_suffix,
-                        &raw,
-                    ) {
-                        continue;
-                    }
-                    htf_bars = Some(
-                        raw.into_iter()
-                            .map(|(ts, o, h, l, c, v)| Bar {
-                                ts_ms: ts,
-                                open: o,
-                                high: h,
-                                low: l,
-                                close: c,
-                                volume: v,
-                            })
-                            .collect(),
-                    );
-                }
-            }
-            // Fallback: indexed partial-match search via SQL LIKE.
-            if htf_bars.is_none() {
-                if let Ok(keys) = cache.search_keys(&bare_sym, 32) {
-                    let tf_lower = tf_suffix.to_lowercase();
-                    for k in &keys {
-                        if k.to_lowercase().ends_with(&tf_lower) {
-                            if let Ok(Some(raw)) = cache.get_bars_raw(k) {
-                                htf_bars = Some(
-                                    raw.into_iter()
-                                        .map(|(ts, o, h, l, c, v)| Bar {
-                                            ts_ms: ts,
-                                            open: o,
-                                            high: h,
-                                            low: l,
-                                            close: c,
-                                            volume: v,
-                                        })
-                                        .collect(),
-                                );
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+            // ADR-123 #2: source-consistent load (prefers the candles' own source).
+            let htf_bars = self.load_mtf_htf_bars(cache, &bare_sym, &base_sym, tf_suffix);
 
             if let Some(htf) = htf_bars {
                 if htf.len() < period {
@@ -5510,7 +5518,8 @@ impl ChartState {
                     }
                 }
 
-                if !projected.is_empty() {
+                // ADR-123 #1: drop the line if it sits on a mismatched price scale.
+                if !projected.is_empty() && Self::mtf_line_scale_ok(&self.bars, &projected) {
                     self.mtf_sma.push((label.to_string(), projected));
                 }
             }
@@ -5610,102 +5619,13 @@ impl ChartState {
                 .to_string()
         };
 
-        let prefixes = [
-            "merged:",
-            "default:",
-            "kraken-equities:",
-            "kraken:",
-            "kraken-futures:",
-            "tastytrade:",
-            "alpaca:",
-            "yahoo-chart:",
-            "paper_TyphooN:",
-            "alpaca_paper_TyphooN:",
-            "",
-        ];
-
         for &(tf_label, tf_suffix, _tf_min) in higher_tfs {
             // 1:1 MT5 parity: MultiKAMA.mqh declares all 5 plotted buffers
             // (ExtAMABuffer_H1/H4/D1/W1/MN1) as INDICATOR_DATA with no chart-period
             // guard (see MultiKAMA.mqh lines 47-58), so every KAMA line is drawn on
             // every host timeframe. We match that exactly.
-            let mut htf_bars: Option<Vec<Bar>> = None;
-            // Try bare symbol with each prefix
-            for prefix in &prefixes {
-                let key = format!("{}{}:{}", prefix, bare_sym, tf_suffix);
-                if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
-                    if !chart_source_bars_match_timeframe(
-                        cache_source_from_key(&key),
-                        tf_suffix,
-                        &raw,
-                    ) {
-                        continue;
-                    }
-                    htf_bars = Some(
-                        raw.into_iter()
-                            .map(|(ts, o, h, l, c, v)| Bar {
-                                ts_ms: ts,
-                                open: o,
-                                high: h,
-                                low: l,
-                                close: c,
-                                volume: v,
-                            })
-                            .collect(),
-                    );
-                    break;
-                }
-            }
-            // Fallback: try with full base_sym
-            if htf_bars.is_none() {
-                let key = format!("{}:{}", base_sym, tf_suffix);
-                if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
-                    if !chart_source_bars_match_timeframe(
-                        cache_source_from_key(&key),
-                        tf_suffix,
-                        &raw,
-                    ) {
-                        continue;
-                    }
-                    htf_bars = Some(
-                        raw.into_iter()
-                            .map(|(ts, o, h, l, c, v)| Bar {
-                                ts_ms: ts,
-                                open: o,
-                                high: h,
-                                low: l,
-                                close: c,
-                                volume: v,
-                            })
-                            .collect(),
-                    );
-                }
-            }
-            // Fallback: indexed partial-match search via SQL LIKE.
-            if htf_bars.is_none() {
-                if let Ok(keys) = cache.search_keys(&bare_sym, 32) {
-                    let tf_lower = tf_suffix.to_lowercase();
-                    for k in &keys {
-                        if k.to_lowercase().ends_with(&tf_lower) {
-                            if let Ok(Some(raw)) = cache.get_bars_raw(k) {
-                                htf_bars = Some(
-                                    raw.into_iter()
-                                        .map(|(ts, o, h, l, c, v)| Bar {
-                                            ts_ms: ts,
-                                            open: o,
-                                            high: h,
-                                            low: l,
-                                            close: c,
-                                            volume: v,
-                                        })
-                                        .collect(),
-                                );
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+            // ADR-123 #2: source-consistent load (prefers the candles' own source).
+            let htf_bars = self.load_mtf_htf_bars(cache, &bare_sym, &base_sym, tf_suffix);
 
             if let Some(htf) = htf_bars {
                 if htf.len() < 12 {
@@ -5729,7 +5649,8 @@ impl ChartState {
                     }
                 }
 
-                if !projected.is_empty() {
+                // ADR-123 #1: drop the line if it sits on a mismatched price scale.
+                if !projected.is_empty() && Self::mtf_line_scale_ok(&self.bars, &projected) {
                     self.multi_kama.push((tf_label.to_string(), projected));
                 }
             }
@@ -5935,5 +5856,68 @@ impl ChartState {
         let start = start.min(end);
         let first_slot = ((start as f64 - virtual_start).max(0.0)) as f32;
         (start, end, first_slot, slot_count)
+    }
+}
+
+#[cfg(test)]
+mod mtf_scale_guard_tests {
+    use super::*;
+
+    fn bars_at(price: f64, n: usize) -> Vec<Bar> {
+        (0..n)
+            .map(|i| Bar {
+                ts_ms: 1_700_000_000_000 + i as i64 * 86_400_000,
+                open: price,
+                high: price,
+                low: price,
+                close: price,
+                volume: 1.0,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn keeps_line_near_price() {
+        let bars = bars_at(2.0, 5);
+        let projected: Vec<(usize, f64)> = (0..5).map(|i| (i, 2.1)).collect();
+        assert!(ChartState::mtf_line_scale_ok(&bars, &projected));
+    }
+
+    #[test]
+    fn drops_overscaled_line() {
+        // CDLX-style: candles ~$2, line parked at ~$15 (ratio ~7.5).
+        let bars = bars_at(2.0, 5);
+        let projected: Vec<(usize, f64)> = (0..5).map(|i| (i, 15.0)).collect();
+        assert!(!ChartState::mtf_line_scale_ok(&bars, &projected));
+    }
+
+    #[test]
+    fn drops_underscaled_line() {
+        // WOK-style: an un-back-adjusted feed orders of magnitude below price.
+        let bars = bars_at(2.0, 5);
+        let projected: Vec<(usize, f64)> = (0..5).map(|i| (i, 0.0002)).collect();
+        assert!(!ChartState::mtf_line_scale_ok(&bars, &projected));
+    }
+
+    #[test]
+    fn keeps_lagging_average_within_tolerance() {
+        // A slow MA lagging at ~3x price is legitimate (median ratio 3 <= 4).
+        let bars = bars_at(2.0, 5);
+        let projected: Vec<(usize, f64)> = (0..5).map(|i| (i, 6.0)).collect();
+        assert!(ChartState::mtf_line_scale_ok(&bars, &projected));
+    }
+
+    #[test]
+    fn median_ignores_brief_excursion() {
+        // One wild point but the median stays near 1 → keep the line (no gaps).
+        let bars = bars_at(2.0, 5);
+        let projected = vec![(0, 2.0), (1, 2.1), (2, 50.0), (3, 1.9), (4, 2.0)];
+        assert!(ChartState::mtf_line_scale_ok(&bars, &projected));
+    }
+
+    #[test]
+    fn empty_projection_is_rejected() {
+        let bars = bars_at(2.0, 5);
+        assert!(!ChartState::mtf_line_scale_ok(&bars, &[]));
     }
 }
