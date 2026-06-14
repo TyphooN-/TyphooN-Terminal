@@ -7218,6 +7218,11 @@ pub struct TyphooNApp {
     /// Tab being dragged (for drag-and-drop reordering).
     pub(crate) dragging_tab: Option<usize>,
 
+    /// Last active tab index the tab strip handled — used to detect active-tab
+    /// changes (clicking a tab, the + button, NEW_TAB, close adjustments) so the
+    /// horizontally-scrollable tab bar can scroll the active tab into view.
+    pub(crate) tab_bar_last_active: usize,
+
     // ── async broker ─────────────────────────────────────────────────────
     /// Tokio runtime handle for spawning async tasks.
     pub(crate) rt_handle: tokio::runtime::Handle,

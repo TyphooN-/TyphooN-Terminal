@@ -25,6 +25,14 @@ impl TyphooNApp {
         let n_charts = self.charts.len();
         let dragging_tab = self.dragging_tab;
 
+        // Detect an active-tab change since last frame so the active tab can be
+        // scrolled into view (covers tab clicks, the + button, NEW_TAB, and close
+        // adjustments). Deferred actions mutate active_tab *after* the strip is
+        // drawn, so the change is picked up on the following frame — by which
+        // point a newly-added tab already exists in the scroll content.
+        let scroll_to_active = self.active_tab != self.tab_bar_last_active;
+        self.tab_bar_last_active = self.active_tab;
+
         egui::Panel::top("tab_bar")
             .exact_size(26.0) // WebKit: height: 26px
             .show(ctx, |ui| {
@@ -34,6 +42,7 @@ impl TyphooNApp {
                     let mut close_tab: Option<usize> = None;
                     let mut drop_target: Option<(usize, usize)> = None; // (drag_src, insert_at)
                     let mut start_drag: Option<usize> = None;
+                    let mut active_rect: Option<egui::Rect> = None;
                     let pointer_pos = ctx.input(|i| i.pointer.hover_pos());
                     let pointer_released = ctx.input(|i| i.pointer.primary_released());
 
@@ -88,6 +97,9 @@ impl TyphooNApp {
                                         egui::Sense::click_and_drag(),
                                     );
                                     tab_rects.push(tab_rect);
+                                    if active && scroll_to_active {
+                                        active_rect = Some(tab_rect);
+                                    }
 
                                     // Draw tab background
                                     ui.painter().rect_filled(tab_rect, 0.0, tab_bg);
@@ -198,6 +210,11 @@ impl TyphooNApp {
                                     if tab_resp.dragged() && dragging_tab.is_none() {
                                         start_drag = Some(idx);
                                     }
+                                }
+                                // Bring the active tab into view after an active-tab
+                                // change (None = scroll the minimum needed).
+                                if let Some(rect) = active_rect {
+                                    ui.scroll_to_rect(rect, None);
                                 }
                             });
                         });

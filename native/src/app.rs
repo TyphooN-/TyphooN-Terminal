@@ -2688,6 +2688,7 @@ impl TyphooNApp {
             crosshair: None,
             frame_count: 0,
             dragging_tab: None,
+            tab_bar_last_active: 0,
             rt_handle: rt,
             broker_tx,
             broker_rx,
