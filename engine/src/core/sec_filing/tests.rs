@@ -95,6 +95,45 @@ fn scrape_gate_treats_null_date_as_not_scraped() {
     assert_eq!(ticker_scraped_on(&conn, "NOPE", today), Ok(false));
 }
 
+#[test]
+fn sec_scrape_order_targets_unfilled_cik_gaps_before_recent_refreshes() {
+    let mut symbols = vec![
+        "WOK".to_string(),
+        "AAPL".to_string(),
+        "FNGR".to_string(),
+        "MSFT".to_string(),
+    ];
+    let mut index = std::collections::HashMap::new();
+    index.insert(
+        "WOK".to_string(),
+        SecScrapeIndexState {
+            last_scrape_date: Some("2026-06-14".to_string()),
+            filing_count: 71,
+            cik: Some("0001929783".to_string()),
+        },
+    );
+    index.insert(
+        "AAPL".to_string(),
+        SecScrapeIndexState {
+            last_scrape_date: Some("2026-06-01".to_string()),
+            filing_count: 500,
+            cik: Some("0000320193".to_string()),
+        },
+    );
+    index.insert(
+        "FNGR".to_string(),
+        SecScrapeIndexState {
+            last_scrape_date: None,
+            filing_count: 0,
+            cik: Some("0001602409".to_string()),
+        },
+    );
+
+    prioritize_sec_scrape_symbols(&mut symbols, &index, "2026-06-14");
+
+    assert_eq!(symbols, vec!["FNGR", "MSFT", "AAPL", "WOK"]);
+}
+
 // ── compute_importance ─────────────────────────────────────────
 
 #[test]

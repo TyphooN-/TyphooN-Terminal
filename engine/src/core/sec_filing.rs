@@ -346,6 +346,64 @@ fn ticker_scraped_on(conn: &Connection, ticker: &str, today: &str) -> Result<boo
     Ok(last.as_deref() == Some(today))
 }
 
+#[derive(Clone, Debug, Default)]
+struct SecScrapeIndexState {
+    last_scrape_date: Option<String>,
+    filing_count: i64,
+    cik: Option<String>,
+}
+
+fn prioritize_sec_scrape_symbols(
+    symbols: &mut [String],
+    index: &std::collections::HashMap<String, SecScrapeIndexState>,
+    today: &str,
+) {
+    let original_rank: std::collections::HashMap<String, usize> = symbols
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.clone(), i))
+        .collect();
+    symbols.sort_by(|a, b| {
+        let default_a;
+        let state_a = if let Some(state) = index.get(a) {
+            state
+        } else {
+            default_a = SecScrapeIndexState::default();
+            &default_a
+        };
+        let default_b;
+        let state_b = if let Some(state) = index.get(b) {
+            state
+        } else {
+            default_b = SecScrapeIndexState::default();
+            &default_b
+        };
+
+        let key = |sym: &String, state: &SecScrapeIndexState| {
+            let date = state.last_scrape_date.as_deref().unwrap_or("");
+            let scraped_today = date == today;
+            let has_cik = !state.cik.as_deref().unwrap_or("").is_empty();
+            let gap_rank = if state.filing_count == 0 && has_cik && date.is_empty() {
+                0u8
+            } else if state.filing_count == 0 && date.is_empty() {
+                1u8
+            } else if state.filing_count == 0 {
+                2u8
+            } else {
+                3u8
+            };
+            (
+                scraped_today,
+                gap_rank,
+                date.to_string(),
+                *original_rank.get(sym).unwrap_or(&usize::MAX),
+            )
+        };
+
+        key(a, state_a).cmp(&key(b, state_b))
+    });
+}
+
 /// Scrape filings for a single ticker from SEC EDGAR.
 /// Returns (new_filings, new_insider_trades, new_alerts).
 pub async fn scrape_filings_for_ticker(
@@ -876,67 +934,70 @@ pub async fn scrape_all_portfolio_symbols(
     // PERF: single batch load of last_scrape_date and cached CIKs for ALL tickers.
     // Broad tradable-universe SEC sync can be 12k+ symbols; doing a SQLite open
     // and SEC company_tickers.json fetch per symbol turns that into a crawl.
-    let (scrape_dates, cached_ciks): (
-        std::collections::HashMap<String, String>,
-        std::collections::HashMap<String, String>,
-    ) = {
+    let scrape_index: std::collections::HashMap<String, SecScrapeIndexState> = {
         let db = db_path.clone();
         tokio::task::spawn_blocking(move || -> Result<_, String> {
             let conn = open_conn(&db)?;
             let mut stmt = conn
-                .prepare("SELECT ticker, last_scrape_date, cik FROM sec_scrape_index")
+                .prepare("SELECT ticker, last_scrape_date, filing_count, cik FROM sec_scrape_index")
                 .map_err(|e| format!("prepare scrape_index: {e}"))?;
             let rows = stmt
                 .query_map([], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, i64>(2).unwrap_or(0),
+                        row.get::<_, Option<String>>(3)?,
                     ))
                 })
                 .map_err(|e| format!("query scrape_index: {e}"))?;
-            let mut dates = std::collections::HashMap::with_capacity(1024);
-            let mut ciks = std::collections::HashMap::with_capacity(1024);
+            let mut index = std::collections::HashMap::with_capacity(1024);
             for r in rows.flatten() {
                 let ticker = r.0.to_uppercase();
-                if let Some(date) = r.1.filter(|date| !date.is_empty()) {
-                    dates.insert(ticker.clone(), date);
-                }
-                if let Some(cik) = r.2.filter(|cik| !cik.is_empty()) {
-                    ciks.insert(ticker, cik);
-                }
+                index.insert(
+                    ticker,
+                    SecScrapeIndexState {
+                        last_scrape_date: r.1.filter(|date| !date.is_empty()),
+                        filing_count: r.2,
+                        cik: r.3.filter(|cik| !cik.is_empty()),
+                    },
+                );
             }
-            Ok((dates, ciks))
+            Ok(index)
         })
         .await
         .map_err(|e| format!("spawn_blocking: {e}"))??
     };
 
-    // Stale-first ordering: visit never-scraped tickers (absent from `scrape_dates`
-    // → no row / NULL date → empty key) first, then oldest `last_scrape_date`
-    // first. Without this the scrape re-walks the same head-of-list order on every
-    // run, so an interrupted/quota-bounded pass keeps redoing the front and never
-    // reaches the long tail — which is how never-scraped names sat empty while the
-    // same symbols got re-checked. `sort_by` is stable, so the caller's active/
-    // priority-first ordering is preserved as the tiebreaker within each bucket.
-    symbols.sort_by(|a, b| {
-        let da = scrape_dates.get(a).map(String::as_str).unwrap_or("");
-        let db = scrape_dates.get(b).map(String::as_str).unwrap_or("");
-        da.cmp(db)
-    });
+    // Gap-first ordering: visit resolved CIKs with no indexed filings first, then
+    // other never-scraped names, then zero-filing stale names, then oldest normal
+    // refreshes, with already-scraped-today names last. Without this, interrupted
+    // or quota-bounded passes can keep rechecking recently warm names while symbols
+    // like FNGR sit at NULL/0 even though the CIK is known and SEC has filings.
+    // The caller's active/watchlist priority order is preserved as the final
+    // tiebreaker within each bucket.
+    prioritize_sec_scrape_symbols(&mut symbols, &scrape_index, &today);
 
     let mut sec_ticker_cik_map: Option<std::collections::HashMap<String, String>> = None;
 
     for sym in &symbols {
         // O(1) HashMap lookup replaces the N+1 per-symbol SELECT.
-        if scrape_dates.get(sym).map(|d| d.as_str()) == Some(today.as_str()) {
+        if scrape_index
+            .get(sym)
+            .and_then(|state| state.last_scrape_date.as_deref())
+            == Some(today.as_str())
+        {
             continue;
         }
 
         // Look up CIK. For broad universes, fetch SEC's ticker map once and
         // reuse it for every uncached symbol instead of hitting SEC once per
         // ticker before even reaching submissions.
-        let cik = if let Some(cik) = cached_ciks.get(sym).filter(|cik| !cik.is_empty()) {
+        let cik = if let Some(cik) = scrape_index
+            .get(sym)
+            .and_then(|state| state.cik.as_ref())
+            .filter(|cik| !cik.is_empty())
+        {
             cik.clone()
         } else {
             if sec_ticker_cik_map.is_none() {

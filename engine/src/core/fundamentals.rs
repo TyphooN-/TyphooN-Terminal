@@ -191,6 +191,51 @@ pub fn create_fundamentals_tables(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+pub fn prioritize_fundamentals_symbols(conn: &Connection, tickers: &mut [String], force: bool) {
+    let original_rank: HashMap<String, usize> = tickers
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.clone(), i))
+        .collect();
+
+    let mut last_updated: HashMap<String, String> = HashMap::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT symbol, last_updated FROM fundamentals") {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }) {
+            for row in rows.flatten() {
+                last_updated.insert(row.0.to_uppercase(), row.1);
+            }
+        }
+    }
+
+    let mut failures = std::collections::HashSet::new();
+    if !force {
+        if let Ok(mut stmt) = conn.prepare("SELECT symbol FROM scrape_failures") {
+            if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                for row in rows.flatten() {
+                    failures.insert(row.to_uppercase());
+                }
+            }
+        }
+    }
+
+    tickers.sort_by(|a, b| {
+        let key = |sym: &String| {
+            let upper = sym.to_uppercase();
+            let failed = failures.contains(&upper);
+            let updated = last_updated.get(&upper).cloned().unwrap_or_default();
+            (
+                failed,
+                !updated.is_empty(),
+                updated,
+                *original_rank.get(sym).unwrap_or(&usize::MAX),
+            )
+        };
+        key(a).cmp(&key(b))
+    });
+}
+
 // ── CIK Lookup ──────────────────────────────────────────────────────
 
 /// SEC company_tickers.json entry.
@@ -1205,9 +1250,13 @@ pub async fn scrape_batch(
         map
     };
 
+    let mut ordered_tickers: Vec<String> =
+        tickers.iter().map(|ticker| ticker.to_string()).collect();
+    prioritize_fundamentals_symbols(conn, &mut ordered_tickers, false);
+
     let mut results = Vec::new();
 
-    for ticker in tickers {
+    for ticker in &ordered_tickers {
         let ticker = ticker.trim().to_uppercase();
 
         // Skip forex pairs and indices
@@ -1723,6 +1772,30 @@ mod tests {
         let conn = setup_test_db();
         let result = get_fundamentals(&conn, "ZZZZ").unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn fundamentals_scrape_order_targets_missing_then_oldest_then_recent() {
+        let conn = setup_test_db();
+        let fresh = Fundamentals {
+            symbol: "WOK".to_string(),
+            company_name: "WORK Medical".to_string(),
+            last_updated: "2026-06-14T00:00:00Z".to_string(),
+            ..Default::default()
+        };
+        let stale = Fundamentals {
+            symbol: "AAPL".to_string(),
+            company_name: "Apple".to_string(),
+            last_updated: "2026-06-01T00:00:00Z".to_string(),
+            ..Default::default()
+        };
+        upsert_fundamentals(&conn, &fresh).unwrap();
+        upsert_fundamentals(&conn, &stale).unwrap();
+
+        let mut tickers = vec!["WOK".to_string(), "AAPL".to_string(), "FNGR".to_string()];
+        prioritize_fundamentals_symbols(&conn, &mut tickers, false);
+
+        assert_eq!(tickers, vec!["FNGR", "AAPL", "WOK"]);
     }
 
     #[test]

@@ -3400,6 +3400,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                                     tickers.sort();
                                     if let Ok(conn) = cache.connection() {
                                         let _ = fundamentals::create_fundamentals_tables(&conn);
+                                        fundamentals::prioritize_fundamentals_symbols(&conn, &mut tickers, force);
                                     }
                                     {
                                         let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Fundamentals scrape: {} stock tickers found", tickers.len())));
