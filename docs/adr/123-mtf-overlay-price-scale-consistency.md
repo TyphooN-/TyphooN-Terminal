@@ -42,7 +42,7 @@ sitting *above* a −90% price is expected lag, not a scale fault.)
 
 ## Decision
 
-Two guards in both overlays, belt-and-suspenders:
+Three guards in both overlays, belt-and-suspenders:
 
 1. **Source consistency** — `ChartState::load_mtf_htf_bars` prefers the **same**
    cache source the candles loaded from (`self.primary_source`). When that source
@@ -57,9 +57,22 @@ Two guards in both overlays, belt-and-suspenders:
    excursions, so a legitimately lagging average (median near 1) survives while a
    persistently many-fold-off feed (CDLX ~7–15×, WOK ~10,000×) is dropped whole —
    no per-point gaps.
+3. **Bar-level source-scale check** — `ChartState::htf_source_matches_host_scale`
+   rejects an HTF source whose **bars** (not the projected average) sit off the
+   host candle scale for more than 8% of their overlap (`value/host_close` outside
+   `[1/4, 4]`). This catches a **localized** mis-scaled era that the median guard
+   (#2) cannot — e.g. **YI**'s `1Hour`/`4Hour`/`30Min`/`15Min` ran ~10× high in the
+   pre-split window (unadjusted intraday across a reverse split, with no intraday
+   corroborator to correct it) while its `1Day`/`1Week` were adjusted, so the H1/H4
+   `MTF_MA` + `MultiKAMA` lines plateaued ~10× above price for months. Because the
+   line's median over its whole span stayed near 1, #2 kept it. Checking the source
+   **bars** distinguishes this from a clean higher-TF whose *lagging* SMA legitimately
+   rides above a crashed price (a `W1/200` over a −90% move): there the bars are
+   on-scale (the lag lives only in the average), so the line is kept. Applied in
+   `load_mtf_htf_bars`, so both overlays drop the bad source at load time.
 
 Both `compute_mtf_sma` and `compute_multi_kama` route through the shared loader
-and apply the guard at the push site, replacing their duplicated per-timeframe
+and apply the guards at the push site, replacing their duplicated per-timeframe
 prefix-resolution blocks.
 
 ## Consequences
@@ -74,6 +87,11 @@ prefix-resolution blocks.
 - The guard is relative to local price, so it catches mismatches the stock's own
   history would hide (CDLX traded at $13–19 in 2024, so a global min/max guard
   would not have flagged $13–19 lines in 2026).
+- The bar-level check (#3) catches a *localized* mis-scaled era (YI's unadjusted
+  intraday) that the whole-line median (#2) averages away, while still keeping a
+  clean source whose only "excursion" is a lagging average over a crashed price.
+  It is a render-time guard: the deeper cause is the unadjusted intraday merge
+  with no corroborator, which a populated split feed (ADR-122) would back-adjust.
 
 ## Future work (#3 — not addressed here)
 

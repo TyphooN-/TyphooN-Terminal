@@ -1348,3 +1348,44 @@ fn make_close_bars(closes: &[f64]) -> Vec<Bar> {
         })
         .collect()
 }
+
+#[test]
+fn mtf_overlay_drops_misscaled_intraday_source_but_keeps_lagging_average() {
+    // YI [W1]: the intraday HTF source was unadjusted across a reverse split (~10×
+    // the adjusted daily/weekly in the pre-split era, with no intraday corroborator
+    // to correct it), so the H1/H4 MTF_MA + MultiKAMA lines plateaued ~10× above
+    // price. The bar-level guard drops such a source. A clean higher-TF whose
+    // *lagging* average rides far above a crashed price must be KEPT — its bars are
+    // on-scale; only the projected SMA lags (ADR-123).
+    let day = 86_400_000i64;
+    // Host weekly candles: a clean −90% decline 10 → 1.
+    let host: Vec<Bar> = (0..120i64)
+        .map(|i| {
+            let c = 10.0 - (i as f64 / 119.0) * 9.0;
+            Bar { ts_ms: i * day, open: c, high: c * 1.02, low: c * 0.98, close: c, volume: 100.0 }
+        })
+        .collect();
+
+    // A clean source on the same scale is kept even though a 200-period SMA of it
+    // would lag far above the recent low (the bars themselves are on-scale).
+    assert!(ChartState::htf_source_matches_host_scale(&host, &host));
+
+    // A uniformly offset-but-consistent source (within tolerance everywhere) is kept.
+    let shifted: Vec<Bar> = host
+        .iter()
+        .map(|b| Bar { close: b.close * 1.5, ..*b })
+        .collect();
+    assert!(ChartState::htf_source_matches_host_scale(&host, &shifted));
+
+    // A mis-scaled era — the first 40% of bars sit ~10× high (unadjusted), the rest
+    // match — is dropped.
+    let misscaled: Vec<Bar> = host
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let f = if i < 48 { 10.0 } else { 1.0 };
+            Bar { open: b.open * f, high: b.high * f, low: b.low * f, close: b.close * f, ..*b }
+        })
+        .collect();
+    assert!(!ChartState::htf_source_matches_host_scale(&host, &misscaled));
+}

@@ -5402,18 +5402,27 @@ impl ChartState {
             if !chart_source_bars_match_timeframe(cache_source_from_key(key), tf_suffix, &raw) {
                 return None;
             }
-            Some(
-                raw.into_iter()
-                    .map(|(ts, o, h, l, c, v)| Bar {
-                        ts_ms: ts,
-                        open: o,
-                        high: h,
-                        low: l,
-                        close: c,
-                        volume: v,
-                    })
-                    .collect(),
-            )
+            let bars: Vec<Bar> = raw
+                .into_iter()
+                .map(|(ts, o, h, l, c, v)| Bar {
+                    ts_ms: ts,
+                    open: o,
+                    high: h,
+                    low: l,
+                    close: c,
+                    volume: v,
+                })
+                .collect();
+            // ADR-123 #3: reject an HTF source carrying a mis-scaled era vs the host
+            // candles (unadjusted intraday across a split — YI's 1Hour/4Hour sat ~10×
+            // high in the pre-split window while its 1Day/1Week were adjusted). Checked
+            // at the BAR level, so a clean higher-TF source whose *lagging average*
+            // legitimately rides above a crashed price (e.g. W1/200 over a −90% move)
+            // is kept — its bars match scale; only the projected SMA lags.
+            if !Self::htf_source_matches_host_scale(&self.bars, &bars) {
+                return None;
+            }
+            Some(bars)
         };
 
         // ADR-123 #2: restrict to the candles' own source — canonical
@@ -5478,6 +5487,50 @@ impl ChartState {
         ratios.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let median = ratios[ratios.len() / 2];
         (1.0 / SCALE_TOL..=SCALE_TOL).contains(&median)
+    }
+
+    /// ADR-123 #3: bar-level scale check for an MTF/KAMA higher-timeframe source.
+    /// Rejects a source whose bars sit on a different price scale than the host
+    /// candles over more than `MAX_OFFSCALE_FRAC` of their overlap — the signature
+    /// of an unadjusted intraday era across a corporate action (YI's `1Hour`/`4Hour`
+    /// ran ~10× the adjusted `1Day`/`1Week` in the pre-split window, since the
+    /// intraday feed had no corroborator there to correct it).
+    ///
+    /// Distinct from [`Self::mtf_line_scale_ok`], which takes the **median** ratio of
+    /// the projected average and so (by design) ignores a *localized* bad era. This
+    /// looks at the **source bars** instead of the lagging average, so a clean
+    /// higher-TF whose SMA legitimately rides far above a crashed price (a W1/200
+    /// over a −90% move — expected lag, not a scale fault) is kept, while a feed that
+    /// is genuinely mis-scaled for a sustained block of bars is dropped.
+    pub(crate) fn htf_source_matches_host_scale(host: &[Bar], htf: &[Bar]) -> bool {
+        const SCALE_TOL: f64 = 4.0;
+        const MAX_OFFSCALE_FRAC: f64 = 0.08; // clean sources ~0–1%; mis-scaled eras ≥12%
+        if host.len() < 2 {
+            return true; // no host scale to validate against
+        }
+        let host_ts: Vec<i64> = host.iter().map(|b| b.ts_ms).collect();
+        let (mut off, mut tot) = (0usize, 0usize);
+        for b in htf {
+            if b.close <= 0.0 || !b.close.is_finite() {
+                continue;
+            }
+            // Host candle whose bucket contains this HTF bar (nearest prior close).
+            let j = match host_ts.binary_search(&b.ts_ms) {
+                Ok(k) => k,
+                Err(0) => continue, // before the host range — nothing to compare against
+                Err(k) => k - 1,
+            };
+            let hc = host[j].close;
+            if hc <= 0.0 {
+                continue;
+            }
+            tot += 1;
+            let r = b.close / hc;
+            if r < 1.0 / SCALE_TOL || r > SCALE_TOL {
+                off += 1;
+            }
+        }
+        tot == 0 || (off as f64 / tot as f64) <= MAX_OFFSCALE_FRAC
     }
 
     /// Compute MultiKAMA: load bars from higher timeframes and compute KAMA(10,2,30) on each.
