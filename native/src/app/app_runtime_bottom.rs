@@ -271,6 +271,8 @@ impl TyphooNApp {
                         .first()
                         .map(|c| c.timeframe.label())
                         .unwrap_or("—");
+                    // Full company name for the active chart's symbol, when known.
+                    let company = chart_overlay_company_name(&self.bg.all_fundamentals, sym);
                     let data_source = self
                         .charts
                         .first()
@@ -299,6 +301,13 @@ impl TyphooNApp {
                             .small()
                             .monospace(),
                     );
+                    if let Some(name) = company {
+                        ui.label(
+                            egui::RichText::new(name)
+                                .color(AXIS_TEXT)
+                                .small(),
+                        );
+                    }
                     ui.label(
                         egui::RichText::new("|")
                             .color(egui::Color32::from_rgb(40, 50, 70))

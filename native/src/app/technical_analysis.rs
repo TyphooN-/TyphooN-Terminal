@@ -50,6 +50,26 @@ fn clamp_f32_bounds(value: f32, a: f32, b: f32) -> f32 {
     value.clamp(lo, hi)
 }
 
+/// Resolve the display company name for a chart's symbol from the in-memory
+/// fundamentals table (`self.bg.all_fundamentals`). The chart symbol is
+/// normalized to the bare ticker the table keys on — drop a forward slash
+/// (crypto pairs like "BTC/USD") and trim a trailing ".EQ" Kraken-equity
+/// suffix — then matched case-insensitively, the same way the research packet's
+/// company header resolves it. Returns None when there is no row or the name is
+/// blank, so the caller falls back to the plain "SYM [TF]" header.
+pub(super) fn chart_overlay_company_name<'a>(
+    fundamentals: &'a [typhoon_engine::core::fundamentals::Fundamentals],
+    chart_symbol: &str,
+) -> Option<&'a str> {
+    let stripped = chart_symbol.replace('/', "");
+    let bare = stripped.trim_end_matches(".EQ").trim_end_matches(".eq");
+    fundamentals
+        .iter()
+        .find(|f| f.symbol.eq_ignore_ascii_case(bare))
+        .map(|f| f.company_name.trim())
+        .filter(|name| !name.is_empty())
+}
+
 /// Draw a single chart viewport into `rect` using `painter`.
 pub(super) fn draw_chart(
     painter: &egui::Painter,
@@ -90,6 +110,7 @@ pub(super) fn draw_chart(
     alerts: &[(f64, String)],
     regulatory_alerts: &[typhoon_engine::core::regulatory_alerts::RegulatoryAlert],
     draw_mode: &DrawMode,
+    company_name: Option<&str>,
 ) {
     // Do not early-return for a stable chart. egui is immediate-mode: if this
     // function skips painting for a frame, the chart area can be left blank or
@@ -2588,7 +2609,15 @@ pub(super) fn draw_chart(
     // ── symbol / tf header geometry ─────────────────────────────────────────
     // Compute this before the crosshair data window so the hover readout can
     // anchor underneath the same decorated header instead of being hidden by it.
-    let sym_label = format!("{} [{}]", chart.symbol, chart.timeframe.label());
+    // Append the full company name when one is known and the viewport is wide
+    // enough to carry it — keeps tiny MTF grid cells to the compact "SYM [TF]"
+    // badge while the single chart and larger cells show "SYM [TF] · Company".
+    let sym_label = match company_name {
+        Some(name) if chart_rect.width() >= 300.0 => {
+            format!("{} [{}] · {}", chart.symbol, chart.timeframe.label(), name)
+        }
+        _ => format!("{} [{}]", chart.symbol, chart.timeframe.label()),
+    };
     let header_pos = egui::pos2(chart_rect.left() + 8.0, chart_rect.top() + 6.0);
     let header_pad_x = 6.0_f32;
     let header_pad_y = 3.0_f32;
@@ -7998,6 +8027,62 @@ fn draw_intraday_time_axis(
         );
         last_label_x = x;
         last_label_date = Some(date);
+    }
+}
+
+#[cfg(test)]
+mod company_name_overlay_tests {
+    use super::chart_overlay_company_name;
+    use typhoon_engine::core::fundamentals::Fundamentals;
+
+    fn fund(symbol: &str, name: &str) -> Fundamentals {
+        Fundamentals {
+            symbol: symbol.to_string(),
+            company_name: name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn resolves_company_name_case_insensitively() {
+        let funds = vec![fund("MS", "Morgan Stanley"), fund("FI", "Fiserv, Inc.")];
+        assert_eq!(
+            chart_overlay_company_name(&funds, "MS"),
+            Some("Morgan Stanley")
+        );
+        assert_eq!(
+            chart_overlay_company_name(&funds, "ms"),
+            Some("Morgan Stanley")
+        );
+        assert_eq!(chart_overlay_company_name(&funds, "FI"), Some("Fiserv, Inc."));
+    }
+
+    #[test]
+    fn returns_none_for_unknown_or_blank() {
+        let funds = vec![fund("MS", "Morgan Stanley"), fund("ZZZ", "   ")];
+        assert_eq!(chart_overlay_company_name(&funds, "NVDA"), None);
+        // Whitespace-only name is treated as missing.
+        assert_eq!(chart_overlay_company_name(&funds, "ZZZ"), None);
+        // Empty fundamentals table.
+        assert_eq!(chart_overlay_company_name(&[], "MS"), None);
+    }
+
+    #[test]
+    fn normalizes_slash_and_eq_suffix() {
+        let funds = vec![fund("BTCUSD", "Bitcoin"), fund("AAPL", "Apple Inc")];
+        // Crypto pair "BTC/USD" collapses to "BTCUSD".
+        assert_eq!(chart_overlay_company_name(&funds, "BTC/USD"), Some("Bitcoin"));
+        // Kraken-equity ".EQ" suffix is trimmed before matching.
+        assert_eq!(chart_overlay_company_name(&funds, "AAPL.EQ"), Some("Apple Inc"));
+    }
+
+    #[test]
+    fn trims_surrounding_whitespace_in_name() {
+        let funds = vec![fund("MS", "  Morgan Stanley  ")];
+        assert_eq!(
+            chart_overlay_company_name(&funds, "MS"),
+            Some("Morgan Stanley")
+        );
     }
 }
 
