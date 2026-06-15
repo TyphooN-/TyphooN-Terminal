@@ -4077,8 +4077,8 @@ pub(super) fn draw_chart(
                 );
                 fx += dash_len + gap_len;
             }
-            // Label with volume
-            let label = format!("{} {:.2}", label_prefix, pl.volume);
+            // Label with entry price (not quantity)
+            let label = format!("{} {:.4}", label_prefix, pl.price);
             painter.text(
                 egui::pos2(chart_rect.left() + 4.0, y - 10.0),
                 egui::Align2::LEFT_TOP,
