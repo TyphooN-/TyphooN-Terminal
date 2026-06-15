@@ -225,8 +225,10 @@ impl TyphooNApp {
                 let hdr_font = egui::FontId::monospace(9.0);
                 let avail_w = ui.available_width();
 
-                // Column layout: Symbol | RegSHO | Last | Chg | Chg% | Ext% | Vol | + | x
-                let col_regsho = avail_w * 0.09;
+                // Column layout: Symbol | Last | Chg | Chg% | Ext% | Vol | + | x
+                // Reg SHO status is shown inline (red ticker + "!!" badge) right
+                // after the symbol — a dedicated column does not fit the packed
+                // right panel without pushing Vol/buttons off the edge.
                 let col_last = avail_w * 0.26;
                 let col_chg = avail_w * 0.42;
                 let col_pct = avail_w * 0.56;
@@ -262,13 +264,6 @@ impl TyphooNApp {
                     egui::pos2(hdr_rect.left() + 2.0, hy),
                     egui::Align2::LEFT_CENTER,
                     &format!("Symbol{}", sort_arrow(0)),
-                    hdr_font.clone(),
-                    hdr_col,
-                );
-                hp.text(
-                    egui::pos2(hdr_rect.left() + col_regsho - 2.0, hy),
-                    egui::Align2::RIGHT_CENTER,
-                    &format!("Reg SHO{}", sort_arrow(1)),
                     hdr_font.clone(),
                     hdr_col,
                 );
@@ -346,7 +341,13 @@ impl TyphooNApp {
                 for (idx, wl) in sorted_wl.iter().enumerate() {
                     let sym_color = WL_COLORS[idx % WL_COLORS.len()];
                     let chg_color = if wl.change >= 0.0 { UP } else { DOWN };
-                    let is_reg_sho = self.bg.regulatory_alerts_by_symbol.contains_key(&wl.symbol.to_ascii_uppercase());
+                    // Match the chart-header lookup: normalize (.EQ/`/` stripped,
+                    // upper-cased) so xStock/equity ticker variants resolve to the
+                    // same key the map is built with. A plain to_ascii_uppercase()
+                    // missed any symbol carrying a suffix.
+                    let is_reg_sho = self.bg.regulatory_alerts_by_symbol.contains_key(
+                        &regulatory_alerts::normalize_regulatory_symbol(&wl.symbol),
+                    );
                     let is_selected = self
                         .charts
                         .get(self.active_tab)
@@ -377,7 +378,9 @@ impl TyphooNApp {
                     let ry = row_rect.center().y;
                     let rx = row_rect.left();
 
-                    // Symbol with colored dot
+                    // Symbol with colored dot. Reg SHO names render in red; the
+                    // "!!" badge itself is drawn after the value columns (below) so
+                    // the right-aligned Last/Chg text can never overpaint it.
                     rp.text(
                         egui::pos2(rx + 2.0, ry),
                         egui::Align2::LEFT_CENTER,
@@ -385,23 +388,17 @@ impl TyphooNApp {
                         font.clone(),
                         sym_color,
                     );
-                    rp.text(
+                    let sym_rect = rp.text(
                         egui::pos2(rx + 14.0, ry),
                         egui::Align2::LEFT_CENTER,
                         &wl.symbol,
                         font.clone(),
-                        egui::Color32::WHITE,
+                        if is_reg_sho {
+                            egui::Color32::from_rgb(255, 90, 90)
+                        } else {
+                            egui::Color32::WHITE
+                        },
                     );
-                    if is_reg_sho {
-                        // Place Reg SHO badge AFTER the ticker, in a fixed small offset
-                        rp.text(
-                            egui::pos2(rx + 14.0 + 70.0, ry),  // ~70px after symbol start
-                            egui::Align2::LEFT_CENTER,
-                            "!!",
-                            egui::FontId::monospace(9.0),
-                            egui::Color32::from_rgb(255, 70, 70),
-                        );
-                    }
 
                     // Last / Change / Change% — show extended hours price if available
                     let (disp_last, disp_chg, disp_pct, disp_color) = if wl.ext_change_pct.abs()
@@ -488,6 +485,19 @@ impl TyphooNApp {
                         font.clone(),
                         AXIS_TEXT,
                     );
+
+                    // Reg SHO "!!" badge — drawn last (on top of the value columns)
+                    // so the right-aligned Last/Chg text never covers it. Sits just
+                    // after the ticker; bright red to flag threshold-list status.
+                    if is_reg_sho {
+                        rp.text(
+                            egui::pos2(sym_rect.right() + 4.0, ry),
+                            egui::Align2::LEFT_CENTER,
+                            "!!",
+                            egui::FontId::monospace(10.0),
+                            egui::Color32::from_rgb(255, 70, 70),
+                        );
+                    }
 
                     // "+" button (open new chart tab)
                     rp.text(
