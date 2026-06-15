@@ -84,6 +84,9 @@ pub(crate) fn watchlist_row_from_raw_bars(
         change_pct,
         volume: last_bar.5,
         ext_change_pct: 0.0,
+        live_bid: 0.0,
+        live_ask: 0.0,
+        live_quote_at: None,
     })
 }
 
@@ -98,6 +101,9 @@ pub(crate) fn empty_watchlist_row(symbol: &str) -> WatchlistRow {
         change_pct: 0.0,
         volume: 0.0,
         ext_change_pct: 0.0,
+        live_bid: 0.0,
+        live_ask: 0.0,
+        live_quote_at: None,
     }
 }
 

@@ -334,6 +334,9 @@ pub(super) fn spawn_broker_message_processor(
                                     change_pct,
                                     volume: snap.daily_volume,
                                     ext_change_pct,
+                                    live_bid: 0.0,
+                                    live_ask: 0.0,
+                                    live_quote_at: None,
                                 };
                             }
                         }
