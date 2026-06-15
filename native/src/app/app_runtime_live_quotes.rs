@@ -132,8 +132,10 @@ impl TyphooNApp {
         );
     }
 
-    /// Inject fresh live mid into any matching watchlist row so "Last" + change react instantly.
-    /// Uses the same 30s freshness rule as the chart overlays.
+    /// Inject fresh live bid/ask into any matching watchlist row.
+    /// Stores full bid/ask + timestamp so the watchlist can render Ask/Bid
+    /// the same way the chart price axis does. Uses live mid for the "Last"
+    /// column so change calculations stay perfectly in sync.
     fn apply_live_quote_to_watchlist(&mut self, bare_symbol: &str, bid: f64, ask: f64) {
         if bid <= 0.0 || ask <= 0.0 {
             return;
@@ -147,8 +149,15 @@ impl TyphooNApp {
                 .replace('/', "")
                 .trim_end_matches(".EQ")
                 .to_ascii_uppercase();
-            if row_sym == bare_symbol || row_sym.contains(bare_symbol) || bare_symbol.contains(&row_sym) {
-                // Only override if we have a previous close to compute change from
+            if row_sym == bare_symbol
+                || row_sym.contains(bare_symbol)
+                || bare_symbol.contains(&row_sym)
+            {
+                row.live_bid = bid;
+                row.live_ask = ask;
+                row.live_quote_at = Some(now);
+
+                // Prefer live mid for the displayed Last so change calculations stay live
                 if row.prev_close > 0.0 {
                     row.last = mid;
                     row.change = mid - row.prev_close;
@@ -156,9 +165,7 @@ impl TyphooNApp {
                 } else {
                     row.last = mid;
                 }
-                // Touch the global timestamp so the watchlist header shows "now"
                 self.watchlist_last_update_ts = chrono::Utc::now().timestamp();
-                // Store freshness for potential future guards (we can expand later)
                 break;
             }
         }

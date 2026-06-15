@@ -37,6 +37,15 @@ pub(crate) struct WatchlistRow {
     pub(crate) volume: f64,
     /// Extended hours change % (pre/post market).
     pub(crate) ext_change_pct: f64,
+    /// Live bid from WS (0.0 when none or stale >30s).
+    #[serde(default, skip)]
+    pub(crate) live_bid: f64,
+    /// Live ask from WS (0.0 when none or stale >30s).
+    #[serde(default, skip)]
+    pub(crate) live_ask: f64,
+    /// When the live quote arrived (for freshness check, same rule as charts).
+    #[serde(default, skip)]
+    pub(crate) live_quote_at: Option<std::time::Instant>,
 }
 
 pub(crate) fn watchlist_row_from_raw_bars(
