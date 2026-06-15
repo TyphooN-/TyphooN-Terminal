@@ -555,13 +555,20 @@ impl TyphooNApp {
                         .corner_radius(4.0)
                         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 70)))
                         .show(ui, |ui| {
-                            ui.set_min_width(350.0);
+                            // Fixed row width so the company name has a bound to
+                            // truncate against — otherwise a long name (e.g.
+                            // "Direxion Shares ETF Trust …") overruns and overprints
+                            // the right-aligned exchange/class label.
+                            const AC_ROW_W: f32 = 480.0;
+                            ui.set_min_width(AC_ROW_W);
                             let suggestions: Vec<_> = self.symbol_suggestions.clone();
                             let mut clicked_sym: Option<String> = None;
                             for (idx, (sym, company, sector)) in suggestions.iter().enumerate() {
                                 let selected = idx == self.symbol_ac_selected;
                                 let bg = if selected { ac_sel } else { ac_bg };
                                 egui::Frame::NONE.fill(bg).inner_margin(4.0).show(ui, |ui| {
+                                    ui.set_min_width(AC_ROW_W);
+                                    ui.set_max_width(AC_ROW_W);
                                     let resp = ui
                                         .horizontal(|ui| {
                                             ui.label(
@@ -570,27 +577,33 @@ impl TyphooNApp {
                                                     .color(ac_cyan)
                                                     .monospace(),
                                             );
-                                            if !company.is_empty() {
-                                                ui.label(
-                                                    egui::RichText::new(company).small().color(
-                                                        egui::Color32::from_rgb(180, 180, 190),
-                                                    ),
-                                                );
-                                            }
-                                            if !sector.is_empty() {
-                                                ui.with_layout(
-                                                    egui::Layout::right_to_left(
-                                                        egui::Align::Center,
-                                                    ),
-                                                    |ui| {
+                                            // Pin the exchange/class to the far right,
+                                            // then let the company name fill the gap and
+                                            // truncate so the two never overlap.
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    if !sector.is_empty() {
                                                         ui.label(
                                                             egui::RichText::new(sector)
                                                                 .small()
                                                                 .color(ac_dim),
                                                         );
-                                                    },
-                                                );
-                                            }
+                                                    }
+                                                    if !company.is_empty() {
+                                                        ui.add(
+                                                            egui::Label::new(
+                                                                egui::RichText::new(company)
+                                                                    .small()
+                                                                    .color(egui::Color32::from_rgb(
+                                                                        180, 180, 190,
+                                                                    )),
+                                                            )
+                                                            .truncate(),
+                                                        );
+                                                    }
+                                                },
+                                            );
                                         })
                                         .response;
                                     if resp.clicked() {

@@ -1643,12 +1643,24 @@ impl eframe::App for TyphooNApp {
                     if self.symbol_ac_visible {
                         for (sym, name, class) in results {
                             let normalized = sym.replace('/', "");
-                            let already = self.symbol_suggestions.iter().any(|(s, _, _)| {
-                                let s_norm = s.replace('/', "");
-                                s_norm.eq_ignore_ascii_case(&normalized)
+                            let existing = self.symbol_suggestions.iter_mut().find(|(s, _, _)| {
+                                s.replace('/', "").eq_ignore_ascii_case(&normalized)
                             });
-                            if !already {
-                                self.symbol_suggestions.push((normalized, name, class));
+                            match existing {
+                                // Already present from a local source. Local cache/universe
+                                // entries carry an empty company name (e.g. WOK from
+                                // cached_active_symbols); the broker search result *does*
+                                // resolve the name ("WORK Medical Technology…"), so fill in
+                                // the blanks instead of dropping the richer result.
+                                Some((_, ex_name, ex_class)) => {
+                                    if ex_name.trim().is_empty() && !name.trim().is_empty() {
+                                        *ex_name = name;
+                                    }
+                                    if ex_class.trim().is_empty() && !class.trim().is_empty() {
+                                        *ex_class = class;
+                                    }
+                                }
+                                None => self.symbol_suggestions.push((normalized, name, class)),
                             }
                         }
                         self.symbol_suggestions.truncate(20);

@@ -117,8 +117,13 @@ impl TyphooNApp {
             self.positions_last_update_ts = chrono::Utc::now().timestamp();
         }
 
-        // Always push live mid to watchlist for instant reactivity
-        if !weekend_closed {
+        // Push live mid to the watchlist for instant reactivity — but only from a
+        // real-time quote. The iapi equities feed is always delayed=true; letting it
+        // overwrite a watchlist row's Last with a stale mid is what made the
+        // watchlist disagree with the (consolidated) chart price. Delayed symbols
+        // keep the watchlist's own consolidated quote (handle_watchlist_quotes);
+        // real-time WS L2 book ticks still flow via handle_kraken_book_quote_tick.
+        if !weekend_closed && !ticker.delayed {
             self.apply_live_quote_to_watchlist(&symbol, ticker.bid, ticker.ask);
         }
 

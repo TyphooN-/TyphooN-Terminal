@@ -1223,6 +1223,39 @@ fn extended_hours_live_quote_does_not_mutate_regular_close() {
 }
 
 #[test]
+fn delayed_live_quote_does_not_drive_realtime_display() {
+    // A non-WS-tokenized xStock (e.g. WOK) has no Kraken WS L2 book, so the chart's
+    // only bid/ask is the iapi equities ticker — always fetched delayed=true. A
+    // delayed quote must be stored for reference but never folded into the forming
+    // bar nor exposed as the live mid; otherwise its stale price decouples the
+    // chart's candle/bid-ask from the watchlist's fresher consolidated last (the
+    // "big desync between chart / watchlist" report).
+    let mut chart = ChartState::new("WOK", Timeframe::H1);
+    chart.bars.push(Bar {
+        ts_ms: 1000,
+        open: 0.10,
+        high: 0.103,
+        low: 0.099,
+        close: 0.1026,
+        volume: 1.0,
+    });
+
+    assert!(!chart.apply_live_quote_update(0.0858, 0.0870, true));
+    // Stored so the rest of the app can see the latest (delayed) quote…
+    assert_eq!(chart.live_bid, 0.0858);
+    assert_eq!(chart.live_ask, 0.0870);
+    assert!(chart.live_quote_delayed);
+    // …but it neither moved the forming candle nor became the real-time mid.
+    assert_eq!(chart.bars.last().unwrap().close, 0.1026);
+    assert_eq!(chart.fresh_live_quote_mid(), None);
+
+    // A real-time (delayed=false) quote at the same spread still drives the chart.
+    assert!(chart.apply_live_quote_update(0.1020, 0.1032, false));
+    assert!((chart.fresh_live_quote_mid().unwrap() - 0.1026).abs() < 1e-9);
+    assert!((chart.bars.last().unwrap().close - 0.1026).abs() < 1e-9);
+}
+
+#[test]
 fn full_recompute_folds_fresh_live_quote_after_cache_reload_without_fast_path() {
     let mut chart = ChartState::new("TEST", Timeframe::M1);
     for i in 0..300 {

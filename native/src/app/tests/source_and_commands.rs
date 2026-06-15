@@ -597,6 +597,78 @@ fn chart_source_override_loads_requested_provider_rows() {
 }
 
 #[test]
+fn prev_candle_levels_use_native_higher_timeframe_candles() {
+    // PreviousCandleLevels.mqh reads iHigh(_Symbol, PERIOD_D1, 1) / PERIOD_W1 from
+    // each timeframe's *own* series. The native refinement must mirror that:
+    // previous = second-to-last native HTF bar, current = last native HTF bar — not
+    // a re-aggregation of the host H1 chart bars, which for a 24/7 merged-source
+    // xStock can miss the true weekly/daily high (the reported bug).
+    use chrono::{Duration, TimeZone, Utc};
+    let db_path = std::env::temp_dir().join(format!(
+        "typhoon-prev-levels-native-test-{}-{}.db",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let base = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
+    let day = Duration::days(1);
+    let week = Duration::weeks(1);
+
+    // Native 1Day candles: highs 0.12 / 0.13 / 0.14 (closes ~0.10 to match host scale).
+    let daily = serde_json::json!([
+        {"timestamp": base.to_rfc3339(),         "open":0.10,"high":0.12,"low":0.090,"close":0.10,"volume":1.0},
+        {"timestamp": (base+day).to_rfc3339(),   "open":0.10,"high":0.13,"low":0.095,"close":0.10,"volume":1.0},
+        {"timestamp": (base+day*2).to_rfc3339(), "open":0.10,"high":0.14,"low":0.100,"close":0.10,"volume":1.0},
+    ]);
+    cache
+        .put_bars("alpaca:WOK:1Day", &serde_json::to_string(&daily).unwrap())
+        .unwrap();
+
+    // Native 1Week candles: highs 0.15 / 0.16 / 0.17.
+    let weekly = serde_json::json!([
+        {"timestamp": base.to_rfc3339(),          "open":0.10,"high":0.15,"low":0.080,"close":0.10,"volume":1.0},
+        {"timestamp": (base+week).to_rfc3339(),   "open":0.10,"high":0.16,"low":0.085,"close":0.10,"volume":1.0},
+        {"timestamp": (base+week*2).to_rfc3339(), "open":0.10,"high":0.17,"low":0.090,"close":0.10,"volume":1.0},
+    ]);
+    cache
+        .put_bars("alpaca:WOK:1Week", &serde_json::to_string(&weekly).unwrap())
+        .unwrap();
+
+    let mut chart = ChartState::new("WOK", Timeframe::H1);
+    chart.primary_source = "alpaca";
+    // Host H1 bars on the same (~0.10) scale so the HTF scale guard accepts the
+    // native series. Their own highs (0.105) are intentionally *below* the true
+    // daily/weekly highs to prove the levels come from the native HTF candles, not
+    // from re-aggregating these host bars.
+    for i in 0..5i64 {
+        chart.bars.push(Bar {
+            ts_ms: (base + Duration::hours(i)).timestamp_millis(),
+            open: 0.10,
+            high: 0.105,
+            low: 0.095,
+            close: 0.10,
+            volume: 1.0,
+        });
+    }
+
+    chart.compute_prev_candle_levels_native(&cache);
+
+    let approx = |a: Option<f64>, b: f64| (a.unwrap() - b).abs() < 1e-9;
+    // Daily: previous = 2nd-to-last native day, current = last native day.
+    assert!(approx(chart.prev_daily_high, 0.13), "{:?}", chart.prev_daily_high);
+    assert!(approx(chart.prev_daily_low, 0.095));
+    assert!(approx(chart.current_daily_high, 0.14));
+    assert!(approx(chart.current_daily_low, 0.100));
+    // Weekly: previous = 2nd-to-last native week, current = last native week.
+    assert!(approx(chart.prev_weekly_high, 0.16), "{:?}", chart.prev_weekly_high);
+    assert!(approx(chart.prev_weekly_low, 0.085));
+    assert!(approx(chart.current_weekly_high, 0.17));
+    assert!(approx(chart.current_weekly_low, 0.090));
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn chart_materializes_merged_equity_cache_from_provider_rows() {
     let db_path = std::env::temp_dir().join(format!(
         "typhoon-merged-materialize-test-{}-{}.db",

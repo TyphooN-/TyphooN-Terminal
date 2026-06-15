@@ -2155,6 +2155,15 @@ impl ChartState {
     }
 
     pub(crate) fn fresh_live_quote_mid(&self) -> Option<f64> {
+        // A *delayed* quote (Kraken iapi equities is always fetched delayed=true) is
+        // not a real-time top-of-book: for a non-WS-tokenized xStock it can sit far
+        // from the fresher consolidated last that the watchlist folds into the
+        // forming bar, which is exactly the "chart bid/ask decoupled from watchlist"
+        // desync. Only treat a streaming, real-time quote as the live mid; the
+        // forming-bar close (fed by the watchlist) carries the price otherwise.
+        if self.live_quote_delayed {
+            return None;
+        }
         let fresh = self
             .live_quote_at
             .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
@@ -2211,6 +2220,15 @@ impl ChartState {
         self.live_ask = ask;
         self.live_quote_at = Some(std::time::Instant::now());
         self.live_quote_delayed = delayed;
+        // A delayed quote (Kraken iapi equities is always delayed=true) is stored
+        // for reference but must not drive the forming candle: the consolidated
+        // last folded by the watchlist is fresher, and folding a stale delayed mid
+        // here is what decoupled the candle/bid/ask from the watchlist. Leave the
+        // forming bar to the watchlist path (which prefers row.last when the chart
+        // quote is delayed/stale — see handle_watchlist_quotes' realtime_fresh).
+        if delayed {
+            return false;
+        }
         if self.ext_active {
             return false;
         }
@@ -3372,6 +3390,7 @@ impl ChartState {
             self.compute_indicators_gpu(gpu);
             self.compute_mtf_sma(cache);
             self.compute_multi_kama(cache);
+            self.compute_prev_candle_levels_native(cache);
             let mtf_info = if !self.mtf_sma.is_empty() || !self.multi_kama.is_empty() {
                 format!(
                     " | MTF_MA: {} lines, MultiKAMA: {} TFs",
@@ -3485,6 +3504,7 @@ impl ChartState {
                 self.compute_indicators_gpu(gpu);
                 self.compute_mtf_sma(cache);
                 self.compute_multi_kama(cache);
+                self.compute_prev_candle_levels_native(cache);
                 return;
             }
         }
@@ -3772,6 +3792,7 @@ impl ChartState {
             self.compute_indicators_gpu(gpu);
             self.compute_mtf_sma(cache);
             self.compute_multi_kama(cache);
+            self.compute_prev_candle_levels_native(cache);
             let mtf_info = if !self.mtf_sma.is_empty() || !self.multi_kama.is_empty() {
                 format!(
                     " | MTF_MA: {} lines, MultiKAMA: {} TFs",
@@ -3832,7 +3853,11 @@ impl ChartState {
 
                 // When live quotes are present, fold the live mid into the forming bar so
                 // the candle grows with real-time data (prevents the stale/grey candle).
-                let has_live_quotes = self.live_bid > 0.0 && self.live_ask > 0.0;
+                // Delayed quotes (iapi equities) are excluded: folding a stale delayed
+                // mid would fight the consolidated last the watchlist already folds in,
+                // decoupling the candle from the watchlist (see `fresh_live_quote_mid`).
+                let has_live_quotes =
+                    !self.live_quote_delayed && self.live_bid > 0.0 && self.live_ask > 0.0;
                 if has_live_quotes {
                     let mid = (self.live_bid + self.live_ask) * 0.5;
                     last.close = mid;
@@ -3842,11 +3867,7 @@ impl ChartState {
                 }
 
                 if let Some(gpu) = gpu {
-                    let is_live = if self.live_bid > 0.0 && self.live_ask > 0.0 {
-                        1.0
-                    } else {
-                        0.0
-                    };
+                    let is_live = if has_live_quotes { 1.0 } else { 0.0 };
                     gpu.upload_forming_bar(
                         last.open as f32,
                         last.high as f32,
@@ -5811,6 +5832,134 @@ impl ChartState {
         }
     }
 
+    /// `(base_sym, bare_sym)` used to locate this chart's higher-timeframe series
+    /// in cache — mirrors the extraction in `compute_mtf_sma`/`compute_multi_kama`.
+    fn mtf_base_and_bare_sym(&self) -> (String, String) {
+        let base_sym = {
+            let parts: Vec<&str> = self.symbol.split(':').collect();
+            let is_tf = matches!(
+                parts.last().copied(),
+                Some(
+                    "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week"
+                        | "1Month"
+                )
+            );
+            if is_tf && parts.len() > 1 {
+                parts[..parts.len() - 1].join(":")
+            } else {
+                self.symbol.clone()
+            }
+        };
+        let bare_sym = {
+            let known_prefixes = [
+                "default:",
+                "kraken-futures:",
+                "kraken-equities:",
+                "kraken:",
+                "tastytrade:",
+                "alpaca:",
+                "yahoo-chart:",
+                "paper_TyphooN:",
+                "alpaca_paper_TyphooN:",
+            ];
+            let mut s = base_sym.as_str();
+            for pfx in &known_prefixes {
+                if s.starts_with(pfx) {
+                    s = &s[pfx.len()..];
+                    break;
+                }
+            }
+            let parts: Vec<&str> = s.split(':').collect();
+            parts
+                .last()
+                .copied()
+                .unwrap_or(s)
+                .replace('/', "")
+                .trim_end_matches(".EQ")
+                .to_string()
+        };
+        (base_sym, bare_sym)
+    }
+
+    /// Refine previous/current candle levels from the **native per-timeframe**
+    /// candles in cache, matching `PreviousCandleLevels.mqh`, which reads
+    /// `iHigh(_Symbol, PERIOD_X, n)` from each timeframe's own series rather than
+    /// re-aggregating the host chart's bars. For a 24/7 merged-source symbol (e.g.
+    /// a Kraken xStock) the host H1 series need not fully cover each higher-TF
+    /// period — gaps, partial sessions, or a cross-source scale era make the
+    /// re-aggregated weekly/daily/H4 highs wrong. The native HTF candle is
+    /// authoritative: its last bar is the current (forming) period and its
+    /// second-to-last is the previous (last closed) period. Only overrides a level
+    /// when its HTF series is present and passes `load_mtf_htf_bars`' scale guards;
+    /// otherwise the aggregated value from `compute_indicators` is kept as a
+    /// fallback. Cache-bound, so call from the load paths (not per render frame).
+    pub(crate) fn compute_prev_candle_levels_native(&mut self, cache: &SqliteCache) {
+        if self.bars.is_empty() {
+            return;
+        }
+        let (base_sym, bare_sym) = self.mtf_base_and_bare_sym();
+        // Owned loads first (each releases its &self borrow) so the field writes
+        // below can take &mut self.
+        let h1 = self.load_mtf_htf_bars(cache, &bare_sym, &base_sym, "1Hour");
+        let h4 = self.load_mtf_htf_bars(cache, &bare_sym, &base_sym, "4Hour");
+        let d1 = self.load_mtf_htf_bars(cache, &bare_sym, &base_sym, "1Day");
+        let w1 = self.load_mtf_htf_bars(cache, &bare_sym, &base_sym, "1Week");
+        let mn1 = self.load_mtf_htf_bars(cache, &bare_sym, &base_sym, "1Month");
+
+        // Previous = second-to-last native bar (last *closed* HTF candle).
+        let prev = |bars: &[Bar]| -> Option<(f64, f64)> {
+            (bars.len() >= 2).then(|| {
+                let p = &bars[bars.len() - 2];
+                (p.high, p.low)
+            })
+        };
+        // Current = last native bar (the forming HTF candle).
+        let cur = |bars: &[Bar]| -> Option<(f64, f64)> { bars.last().map(|b| (b.high, b.low)) };
+
+        if let Some(b) = h1.as_deref().filter(|b| !b.is_empty()) {
+            if let Some((h, l)) = prev(b) {
+                self.prev_h1_high = Some(h);
+                self.prev_h1_low = Some(l);
+            }
+        }
+        if let Some(b) = h4.as_deref().filter(|b| !b.is_empty()) {
+            if let Some((h, l)) = prev(b) {
+                self.prev_h4_high = Some(h);
+                self.prev_h4_low = Some(l);
+            }
+        }
+        if let Some(b) = d1.as_deref().filter(|b| !b.is_empty()) {
+            if let Some((h, l)) = prev(b) {
+                self.prev_daily_high = Some(h);
+                self.prev_daily_low = Some(l);
+            }
+            if let Some((h, l)) = cur(b) {
+                self.current_daily_high = Some(h);
+                self.current_daily_low = Some(l);
+            }
+        }
+        if let Some(b) = w1.as_deref().filter(|b| !b.is_empty()) {
+            if let Some((h, l)) = prev(b) {
+                self.prev_weekly_high = Some(h);
+                self.prev_weekly_low = Some(l);
+            }
+            if let Some((h, l)) = cur(b) {
+                self.current_weekly_high = Some(h);
+                self.current_weekly_low = Some(l);
+            }
+        }
+        if let Some(b) = mn1.as_deref().filter(|b| !b.is_empty()) {
+            if let Some((h, l)) = prev(b) {
+                self.prev_monthly_high = Some(h);
+                self.prev_monthly_low = Some(l);
+            }
+            if let Some((h, l)) = cur(b) {
+                self.current_monthly_high = Some(h);
+                self.current_monthly_low = Some(l);
+            }
+        }
+    }
+
     pub(crate) fn compute_auto_fibonacci(&mut self) {
         self.auto_fib_levels.clear();
         self.auto_fib_swing = None;
@@ -6039,9 +6188,13 @@ mod mtf_scale_guard_tests {
 
     #[test]
     fn drops_overscaled_line() {
-        // CDLX-style: candles ~$2, line parked at ~$15 (ratio ~7.5).
+        // Grossly mis-scaled: candles ~$2, line parked at ~$250 (ratio ~125 > the
+        // SCALE_TOL=100 ceiling). A merely-lagging average (a post-crash SMA200 at
+        // 7.5–100× price) is intentionally *kept* now — see
+        // `keeps_lagging_average_within_tolerance` — so only an outright scale
+        // fault like this is dropped.
         let bars = bars_at(2.0, 5);
-        let projected: Vec<(usize, f64)> = (0..5).map(|i| (i, 15.0)).collect();
+        let projected: Vec<(usize, f64)> = (0..5).map(|i| (i, 250.0)).collect();
         assert!(!ChartState::mtf_line_scale_ok(&bars, &projected));
     }
 
@@ -6055,7 +6208,7 @@ mod mtf_scale_guard_tests {
 
     #[test]
     fn keeps_lagging_average_within_tolerance() {
-        // A slow MA lagging at ~3x price is legitimate (median ratio 3 <= 4).
+        // A slow MA lagging at ~3x price is legitimate (median ratio 3 <= SCALE_TOL).
         let bars = bars_at(2.0, 5);
         let projected: Vec<(usize, f64)> = (0..5).map(|i| (i, 6.0)).collect();
         assert!(ChartState::mtf_line_scale_ok(&bars, &projected));

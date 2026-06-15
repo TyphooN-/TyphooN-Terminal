@@ -2388,10 +2388,14 @@ pub(super) fn draw_chart(
     // ── Bid/Ask spread lines (live streaming quotes) ──────────────────────
     // Hide the spread lines once the streaming quote goes stale (>30s without a
     // tick) so a frozen bid/ask isn't drawn as if live next to a moving candle —
-    // the source of the "ask/bid/last decoupled" confusion.
-    let quote_fresh = chart
-        .live_quote_at
-        .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
+    // the source of the "ask/bid/last decoupled" confusion. Delayed quotes (iapi
+    // equities, always delayed=true) are likewise not real-time top-of-book: for a
+    // non-WS-tokenized xStock they sit far from the consolidated last and are the
+    // direct cause of the chart-vs-watchlist bid/ask desync, so never draw them.
+    let quote_fresh = !chart.live_quote_delayed
+        && chart
+            .live_quote_at
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
     if quote_fresh && chart.live_bid > 0.0 && chart.live_ask > 0.0 {
         let bid_y = price_to_y(chart.live_bid);
         let ask_y = price_to_y(chart.live_ask);
@@ -2657,6 +2661,14 @@ pub(super) fn draw_chart(
     // badge while the single chart and larger cells show "SYM [TF] · Company".
     let sym_label = match company_name {
         Some(name) if chart_rect.width() >= 300.0 => {
+            // Cap the company suffix so a long name (e.g. "WORK Medical Technology
+            // Group LTD Class A Ordinary Shares") can't dominate the header row and
+            // crowd the regulatory-alert badge off the right edge.
+            let name = if name.chars().count() > 32 {
+                format!("{}…", name.chars().take(31).collect::<String>())
+            } else {
+                name.to_string()
+            };
             format!("{} [{}] · {}", chart.symbol, chart.timeframe.label(), name)
         }
         _ => format!("{} [{}]", chart.symbol, chart.timeframe.label()),
@@ -2889,59 +2901,12 @@ pub(super) fn draw_chart(
     );
 
     let mut header_right = sym_rect.right();
-    if chart.ext_active && chart.ext_close > 0.0 {
-        if let Some(last) = bars.last() {
-            // Daily close and previous-day close come from the shared, timeframe-
-            // independent quote (set on the chart from the watchlist row); fall
-            // back to this chart's own bars only when those are unavailable, so the
-            // badge reads identically across H1/H4/W1 instead of using each
-            // timeframe's last/previous bar.
-            let daily_close = if chart.ext_open > 0.0 {
-                chart.ext_open
-            } else {
-                last.close
-            };
-            let prev_close = (chart.prev_daily_close > 0.0)
-                .then_some(chart.prev_daily_close)
-                .or_else(|| previous_daily_close_from_bars(&chart.bars));
-            let ext_text =
-                format_ext_hours_symbol_badge(daily_close, chart.ext_close, prev_close);
-            let ext_col = egui::Color32::from_rgb(200, 50, 200);
-            let ext_galley = painter.layout_no_wrap(
-                ext_text,
-                egui::FontId::monospace(10.0),
-                egui::Color32::from_rgb(245, 220, 250),
-            );
-            let ext_rect = egui::Rect::from_min_size(
-                egui::pos2(sym_rect.right() + 2.0, sym_rect.top()),
-                egui::vec2(
-                    ext_galley.rect.width() + header_pad_x * 2.0,
-                    sym_rect.height(),
-                ),
-            );
-            painter.rect_filled(
-                ext_rect,
-                3.0,
-                egui::Color32::from_rgba_premultiplied(30, 8, 34, 235),
-            );
-            painter.rect_stroke(
-                ext_rect,
-                3.0,
-                egui::Stroke::new(1.0, ext_col),
-                egui::StrokeKind::Inside,
-            );
-            painter.galley(
-                egui::pos2(
-                    ext_rect.left() + header_pad_x,
-                    ext_rect.center().y - ext_galley.rect.height() * 0.5,
-                ),
-                ext_galley,
-                egui::Color32::from_rgb(245, 220, 250),
-            );
-            header_right = ext_rect.right();
-        }
-    }
 
+    // Regulatory alerts (e.g. "!! Reg SHO !!") are drawn *before* the
+    // extended-hours / daily-close chip so a critical compliance badge is never
+    // the element pushed past the right edge (and silently dropped) by a long
+    // company name or the EXT chip — the regression that hid it on narrower
+    // charts after the company-name overlay was added.
     for alert in regulatory_alerts {
         let alert_galley = painter.layout_no_wrap(
             alert.label.clone(),
@@ -2978,6 +2943,58 @@ pub(super) fn draw_chart(
             egui::Color32::from_rgb(255, 245, 220),
         );
         header_right = alert_rect.right();
+    }
+
+    if chart.ext_active && chart.ext_close > 0.0 {
+        if let Some(last) = bars.last() {
+            // Daily close and previous-day close come from the shared, timeframe-
+            // independent quote (set on the chart from the watchlist row); fall
+            // back to this chart's own bars only when those are unavailable, so the
+            // badge reads identically across H1/H4/W1 instead of using each
+            // timeframe's last/previous bar.
+            let daily_close = if chart.ext_open > 0.0 {
+                chart.ext_open
+            } else {
+                last.close
+            };
+            let prev_close = (chart.prev_daily_close > 0.0)
+                .then_some(chart.prev_daily_close)
+                .or_else(|| previous_daily_close_from_bars(&chart.bars));
+            let ext_text =
+                format_ext_hours_symbol_badge(daily_close, chart.ext_close, prev_close);
+            let ext_col = egui::Color32::from_rgb(200, 50, 200);
+            let ext_galley = painter.layout_no_wrap(
+                ext_text,
+                egui::FontId::monospace(10.0),
+                egui::Color32::from_rgb(245, 220, 250),
+            );
+            let ext_rect = egui::Rect::from_min_size(
+                egui::pos2(header_right + 2.0, sym_rect.top()),
+                egui::vec2(
+                    ext_galley.rect.width() + header_pad_x * 2.0,
+                    sym_rect.height(),
+                ),
+            );
+            painter.rect_filled(
+                ext_rect,
+                3.0,
+                egui::Color32::from_rgba_premultiplied(30, 8, 34, 235),
+            );
+            painter.rect_stroke(
+                ext_rect,
+                3.0,
+                egui::Stroke::new(1.0, ext_col),
+                egui::StrokeKind::Inside,
+            );
+            painter.galley(
+                egui::pos2(
+                    ext_rect.left() + header_pad_x,
+                    ext_rect.center().y - ext_galley.rect.height() * 0.5,
+                ),
+                ext_galley,
+                egui::Color32::from_rgb(245, 220, 250),
+            );
+        }
     }
 
     // ── indicator legend ─────────────────────────────────────────────────────
