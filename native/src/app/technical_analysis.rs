@@ -1401,40 +1401,74 @@ pub(super) fn draw_chart(
         // so labels for levels that sit within a few ticks of each other (e.g.
         // H4 Hi vs D Hi) get spread into separate vertical bands instead of
         // overprinting into an unreadable smear.
-        let mut label_bands: Vec<(f32, f32)> = Vec::new();
+        // Collect visible levels, then group by exact price so we can emit a
+        // single comma-separated label (with per-segment colour) when multiple
+        // levels land on the identical price.
+        let mut visible: Vec<(f64, &'static str, egui::Color32)> = Vec::new();
         for (price_opt, label, color, max_rank) in &level_pairs {
-            // Shown only while the chart is at or below the level's cutoff (.mqh).
-            if chart_rank > *max_rank {
-                continue;
-            }
+            if chart_rank > *max_rank { continue; }
             if let Some(p) = price_opt {
                 let y = price_to_y(*p);
                 if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                    painter.line_segment(
-                        [
-                            egui::pos2(chart_rect.left(), y),
-                            egui::pos2(chart_rect.right(), y),
-                        ],
-                        egui::Stroke::new(0.5, *color),
-                    );
-                    // Anchor the label just above its line, then de-conflict, and
-                    // right-align at the chart edge so the "Prev/Cur …" text grows
-                    // leftward instead of overflowing past the price axis.
-                    let center = place_level_label(
-                        y - 8.0,
-                        5.0,
-                        chart_rect.top(),
-                        chart_rect.bottom(),
-                        &mut label_bands,
-                    );
-                    painter.text(
-                        egui::pos2(chart_rect.right() - 4.0, center),
-                        egui::Align2::RIGHT_CENTER,
-                        label,
-                        egui::FontId::monospace(8.0),
-                        *color,
-                    );
+                    visible.push((*p, *label, *color));
                 }
+            }
+        }
+
+        // Sort by price so identical prices are adjacent
+        visible.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut label_bands: Vec<(f32, f32)> = Vec::new();
+        let mut i = 0;
+        while i < visible.len() {
+            let price = visible[i].0;
+            let y = price_to_y(price);
+
+            // Collect all entries with this exact price
+            let mut group: Vec<(&'static str, egui::Color32)> = Vec::new();
+            while i < visible.len() && (visible[i].0 - price).abs() < f64::EPSILON {
+                group.push((visible[i].1, visible[i].2));
+                i += 1;
+            }
+
+            // Draw the horizontal line once (use first colour)
+            if let Some((_, first_col)) = group.first() {
+                painter.line_segment(
+                    [egui::pos2(chart_rect.left(), y), egui::pos2(chart_rect.right(), y)],
+                    egui::Stroke::new(0.5, *first_col),
+                );
+            }
+
+            // Place the label (de-conflict with other price bands)
+            let center = place_level_label(
+                y - 8.0, 5.0, chart_rect.top(), chart_rect.bottom(), &mut label_bands,
+            );
+
+            // Render combined label with per-segment colour when >1 entry at same price
+            let base_x = chart_rect.right() - 4.0;
+            let mut x = base_x;
+            let font = egui::FontId::monospace(8.0);
+
+            for (idx, (lab, col)) in group.iter().enumerate() {
+                if idx > 0 {
+                    // comma separator (neutral colour)
+                    let comma = painter.layout_no_wrap(", ".to_string(), font.clone(), egui::Color32::LIGHT_GRAY);
+                    x -= comma.rect.width();
+                    painter.galley(
+                        egui::pos2(x, center - comma.rect.height() * 0.5),
+                        comma,
+                        egui::Color32::LIGHT_GRAY,
+                    );
+                    x -= 1.5;
+                }
+
+                let g = painter.layout_no_wrap(lab.to_string(), font.clone(), *col);
+                x -= g.rect.width();
+                painter.galley(
+                    egui::pos2(x, center - g.rect.height() * 0.5),
+                    g,
+                    *col,
+                );
             }
         }
     }
