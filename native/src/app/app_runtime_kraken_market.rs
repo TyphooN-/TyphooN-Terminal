@@ -95,15 +95,21 @@ impl TyphooNApp {
         self.start_deferred_scope_scrapes_after_kraken_universe();
 
         // Always ensure we have the latest Reg SHO list when xStock symbols become
-        // available (chart load / MTF grid / tab open). The smart refresh is a
-        // no-op if the remote file has not changed.
+        // available (chart load / MTF grid / tab open).
         if let Some(cache) = &self.cache {
             if let Ok(wconn) = cache.connection() {
+                // Force a refresh (smart no-op if file unchanged) then immediately
+                // rebuild the in-memory map so the badge appears right away.
                 let _ = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
                     .map_err(|e| format!("runtime: {e}"))
                     .and_then(|rt| rt.block_on(typhoon_engine::core::regulatory_alerts::refresh_regsho_threshold_alerts(&wconn)));
+
+                // Rebuild the map from DB right now
+                if let Ok(alerts) = typhoon_engine::core::regulatory_alerts::get_regulatory_alerts(&wconn) {
+                    self.bg.regulatory_alerts_by_symbol = typhoon_engine::core::regulatory_alerts::regulatory_alert_map(&alerts);
+                }
             }
         }
 
