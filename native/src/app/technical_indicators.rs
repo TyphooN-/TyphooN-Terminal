@@ -1192,20 +1192,21 @@ fn prev_and_current_group(groups: &[(f64, f64)]) -> (HiLo, HiLo) {
     (prev, current)
 }
 
-/// Group bars by a fixed period (ms) and return the previous (last closed) and
-/// current (forming) period high/low — `((prev_hi, prev_lo), (cur_hi, cur_lo))`.
-fn group_period_levels(bars: &[Bar], period_ms: i64) -> (HiLo, HiLo) {
+/// Group bars into consecutive periods keyed by `key(ts_ms)` and return the
+/// previous (last closed) and current (forming) period high/low —
+/// `((prev_hi, prev_lo), (cur_hi, cur_lo))`.
+fn group_levels_by(bars: &[Bar], key: impl Fn(i64) -> i64) -> (HiLo, HiLo) {
     let mut groups: Vec<(f64, f64)> = Vec::new();
-    let mut current_period = -1_i64;
+    let mut cur_key: Option<i64> = None;
     let mut hi = f64::MIN;
     let mut lo = f64::MAX;
     for bar in bars {
-        let p = bar.ts_ms / period_ms;
-        if p != current_period {
-            if current_period >= 0 {
+        let k = key(bar.ts_ms);
+        if cur_key != Some(k) {
+            if cur_key.is_some() {
                 groups.push((hi, lo));
             }
-            current_period = p;
+            cur_key = Some(k);
             hi = bar.high;
             lo = bar.low;
         } else {
@@ -1213,38 +1214,34 @@ fn group_period_levels(bars: &[Bar], period_ms: i64) -> (HiLo, HiLo) {
             lo = lo.min(bar.low);
         }
     }
-    if current_period >= 0 {
+    if cur_key.is_some() {
         groups.push((hi, lo));
     }
     prev_and_current_group(&groups)
 }
 
-/// Monthly variant of [`group_period_levels`] — groups by calendar year-month.
-fn group_month_levels(bars: &[Bar]) -> (HiLo, HiLo) {
-    let mut groups: Vec<(f64, f64)> = Vec::new();
-    let mut cur_ym = 0i32;
-    let mut hi = f64::MIN;
-    let mut lo = f64::MAX;
-    for bar in bars {
-        let dt = chrono::DateTime::from_timestamp(bar.ts_ms / 1000, 0).unwrap_or_default();
-        use chrono::Datelike;
-        let ym = dt.year() * 100 + dt.month() as i32;
-        if ym != cur_ym {
-            if cur_ym > 0 {
-                groups.push((hi, lo));
-            }
-            cur_ym = ym;
-            hi = bar.high;
-            lo = bar.low;
-        } else {
-            hi = hi.max(bar.high);
-            lo = lo.min(bar.low);
-        }
-    }
-    if cur_ym > 0 {
-        groups.push((hi, lo));
-    }
-    prev_and_current_group(&groups)
+// Period keys aligned to the app's own candle boundaries (chart_merge_bucket_ts):
+// UTC-midnight days, Monday-start weeks, calendar months. The old weekly key
+// (ts / 7 days) bucketed from the epoch, a Thursday, so weekly levels disagreed
+// with the chart's own W1 candles by several days.
+fn hour_key(ts_ms: i64) -> i64 {
+    ts_ms.div_euclid(3_600_000)
+}
+fn four_hour_key(ts_ms: i64) -> i64 {
+    ts_ms.div_euclid(14_400_000)
+}
+fn day_key(ts_ms: i64) -> i64 {
+    ts_ms.div_euclid(86_400_000)
+}
+fn week_key(ts_ms: i64) -> i64 {
+    // Epoch day 0 (1970-01-01) is a Thursday — 3 days after Monday — so shifting
+    // by 3 puts week boundaries on Monday 00:00 UTC.
+    (ts_ms.div_euclid(86_400_000) + 3).div_euclid(7)
+}
+fn month_key(ts_ms: i64) -> i64 {
+    use chrono::Datelike;
+    chrono::DateTime::from_timestamp(ts_ms / 1000, 0)
+        .map_or(0, |dt| dt.year() as i64 * 100 + dt.month() as i64)
 }
 
 /// Previous candle levels for multiple timeframes — matches PreviousCandleLevels.mqh.
@@ -1254,25 +1251,25 @@ pub(super) fn compute_prev_candle_levels(bars: &[Bar]) -> (HiLo, HiLo, HiLo, HiL
     if bars.len() < 2 {
         return ((None, None), (None, None), (None, None), (None, None), (None, None));
     }
-    let h1 = group_period_levels(bars, 3_600_000).0; // 1 hour
-    let h4 = group_period_levels(bars, 14_400_000).0; // 4 hours
-    let d1 = group_period_levels(bars, 86_400_000).0; // 1 day
-    let w1 = group_period_levels(bars, 7 * 86_400_000).0; // 1 week
-    let mn1 = group_month_levels(bars).0;
+    let h1 = group_levels_by(bars, hour_key).0;
+    let h4 = group_levels_by(bars, four_hour_key).0;
+    let d1 = group_levels_by(bars, day_key).0;
+    let w1 = group_levels_by(bars, week_key).0;
+    let mn1 = group_levels_by(bars, month_key).0;
     (h1, h4, d1, w1, mn1)
 }
 
 /// Current ("Judas") candle levels — the *forming* D1/W1/MN1 period high/low.
-/// PreviousCandleLevels.mqh draws these (magenta) alongside the previous levels.
+/// PreviousCandleLevels.mqh draws these alongside the previous levels.
 /// Returns (D1, W1, MN1) current candle high/low.
 #[allow(clippy::type_complexity)]
 pub(super) fn compute_current_candle_levels(bars: &[Bar]) -> (HiLo, HiLo, HiLo) {
     if bars.is_empty() {
         return ((None, None), (None, None), (None, None));
     }
-    let d1 = group_period_levels(bars, 86_400_000).1; // 1 day
-    let w1 = group_period_levels(bars, 7 * 86_400_000).1; // 1 week
-    let mn1 = group_month_levels(bars).1;
+    let d1 = group_levels_by(bars, day_key).1;
+    let w1 = group_levels_by(bars, week_key).1;
+    let mn1 = group_levels_by(bars, month_key).1;
     (d1, w1, mn1)
 }
 
