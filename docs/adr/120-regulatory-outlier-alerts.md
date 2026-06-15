@@ -79,14 +79,46 @@ Negative / risks:
 - This is an informational alert, not legal/compliance advice.
 - Additional alert sources will need source-specific parsing and stale-data policy.
 
+## Additional source: trading halts / LULD pauses (2026-06-15)
+
+Implemented as the second free source. NasdaqTrader publishes a public, no-key
+RSS feed of current US trading halts and LULD volatility pauses
+(`rss.aspx?feed=tradehalts`). It feeds the **same** `regulatory_alerts` table
+(`kind = 'trade_halt'`, label `!! HALT !!`) so it renders through the existing
+chart-header and watchlist badges with no new UI.
+
+Differences from the Reg SHO list:
+
+- **Transient, not daily.** Halts resolve intraday, so the background loop
+  re-fetches on a tight cadence (~2 min vs Reg SHO's 30 min) and **fully
+  replaces** the cached `trade_halt` rows each time — no smart as-of skip.
+- **Resumed halts are dropped.** An entry with a published resumption trade time
+  is no longer halted, so it is excluded; only currently-halted symbols carry a
+  badge. An empty feed (all resolved) clears the rows.
+- The reason code is mapped to a human description in `details` (e.g. `LUDP →
+  Volatility trading pause (LULD)`).
+
+Because the `regulatory_alerts` map is now multi-kind, the `REG_SHO` window
+filters to `kind = 'reg_sho_threshold'` so halts don't appear mislabeled there,
+and the watchlist red-ticker/`!!` flag means "has any regulatory alert."
+
 ## Future Extensions
 
-Possible additional sources:
+Status of the remaining candidates (free sources only, per project policy):
 
-- exchange halt / LULD / trading pause feeds
-- short sale restriction lists
-- exchange delisting / non-compliance notices
-- hard-to-borrow or borrow-rate feeds if a reliable source is available
-- SEC / FINRA outlier datasets when machine-readable and useful
+- **Short Sale Restriction (Reg SHO Rule 201 / SSR)** — free: derivable from
+  data already held (a ≥10% drop from the prior daily close arms SSR for the
+  rest of that day plus the next trading day). No feed needed; the open work is
+  an intraday trigger + next-trading-day expiry state machine feeding a
+  `kind = 'ssr'` alert. Next free extension to build.
+- **SEC Fails-to-Deliver / FINRA daily short-sale volume** — free, public,
+  machine-readable, but bulk + delayed (semi-monthly / T+1); better as an
+  enrichment metric than a real-time badge.
+- **Exchange delisting / non-compliance notices** — no reliable free
+  machine-readable consolidated feed identified; deferred pending a source.
+- **Hard-to-borrow / borrow-rate feeds** — **deferred: requires a paid data
+  source** (IBKR account / Ortex / S3 etc.). Out of scope per the free-source
+  policy.
 
-Each source should feed the same `regulatory_alerts` table and render as compact chart-header badges.
+Each new free source should feed the same `regulatory_alerts` table and render
+as compact chart-header / watchlist badges.
