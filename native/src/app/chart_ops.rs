@@ -830,8 +830,26 @@ impl TyphooNApp {
                 continue;
             }
             let is_buy = pos.side == "long";
+            // Kraken xStock positions are derived from cash-account balances and
+            // arrive with avg_entry_price = 0.0 (the balance snapshot carries no
+            // cost basis). Resolve the real entry from trade-history cost basis —
+            // the same source the positions panel uses (kraken_balance_avg_price)
+            // — so the line sits at the entry instead of being pinned to price 0
+            // (the chart bottom), which is the BUY 0.0000 regression.
+            let entry_price = if pos.avg_entry_price > 0.0 {
+                pos.avg_entry_price
+            } else if let Some(asset) = pos.asset_id.strip_prefix("equity_balance:") {
+                self.kraken_balance_avg_price(asset).unwrap_or(0.0)
+            } else {
+                pos.avg_entry_price
+            };
+            if !(entry_price > 0.0 && entry_price.is_finite()) {
+                // No usable entry price (cost basis not loaded yet) — skip rather
+                // than draw a meaningless dashed line pinned to price 0.
+                continue;
+            }
             overlay.position_lines.push(PositionLine {
-                price: pos.avg_entry_price,
+                price: entry_price,
                 volume: pos.qty,
                 is_buy,
                 line_type: 0, // entry
@@ -875,18 +893,23 @@ impl TyphooNApp {
             }
         }
 
-        // Deduplicate position lines (aggregate same price+type)
+        // Deduplicate position lines (aggregate same price+type, sum volume).
+        // Bucket by a rounded 5-decimal price key, but keep the EXACT first
+        // price for display. The positions panel formats the raw avg, so a
+        // truncated bucket value (pk/100000) could round differently at the
+        // 4th decimal and make the on-chart label disagree with the navbar
+        // (e.g. 0.1057 vs 0.1058). Preserving the real price keeps them in sync.
         {
-            let mut agg: HashMap<(i64, u8), (f64, bool)> = HashMap::new();
+            let mut agg: HashMap<(i64, u8), (f64, f64, bool)> = HashMap::new();
             for pl in &overlay.position_lines {
-                let key = ((pl.price * 100000.0) as i64, pl.line_type);
-                let entry = agg.entry(key).or_insert((0.0, pl.is_buy));
-                entry.0 += pl.volume;
+                let key = ((pl.price * 100000.0).round() as i64, pl.line_type);
+                let entry = agg.entry(key).or_insert((pl.price, 0.0, pl.is_buy));
+                entry.1 += pl.volume;
             }
             overlay.position_lines = agg
                 .into_iter()
-                .map(|((pk, lt), (vol, is_buy))| PositionLine {
-                    price: pk as f64 / 100000.0,
+                .map(|((_, lt), (price, vol, is_buy))| PositionLine {
+                    price,
                     volume: vol,
                     is_buy,
                     line_type: lt,
