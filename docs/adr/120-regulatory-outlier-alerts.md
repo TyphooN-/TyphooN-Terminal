@@ -85,7 +85,12 @@ Implemented as the second free source. NasdaqTrader publishes a public, no-key
 RSS feed of current US trading halts and LULD volatility pauses
 (`rss.aspx?feed=tradehalts`). It feeds the **same** `regulatory_alerts` table
 (`kind = 'trade_halt'`, label `!! HALT !!`) so it renders through the existing
-chart-header and watchlist badges with no new UI.
+chart-header and watchlist badges, plus a dedicated **`HALTS` command + floating
+window** (aliases `HALT` / `TRADE_HALTS` / `LULD`) that mirrors the `REG_SHO`
+window: a sortable list of currently-halted symbols with Last / Chg% / halt info
+(reason · time · market) and the same `+WL` / `D1` / `W1` row actions. Both
+windows share one off-render-thread price loader (`regulatory_prices`, keyed by
+normalized symbol) that covers every regulatory-alert symbol.
 
 Differences from the Reg SHO list:
 
