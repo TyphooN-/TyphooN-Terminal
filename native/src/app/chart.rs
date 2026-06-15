@@ -5508,7 +5508,9 @@ impl ChartState {
     /// whereas a mis-scaled feed is persistently many-fold off. Kept when the
     /// median ratio is within `[1/SCALE_TOL, SCALE_TOL]`.
     pub(crate) fn mtf_line_scale_ok(bars: &[Bar], projected: &[(usize, f64)]) -> bool {
-        const SCALE_TOL: f64 = 4.0;
+        // Raised from 4.0 to allow legitimate SMA lag on post-crash equities (WOK H1 SMA200 can be 20-100x price).
+        // Prevents MTF_MA from being silently dropped while still catching grossly mis-scaled feeds.
+        const SCALE_TOL: f64 = 100.0;
         let mut ratios: Vec<f64> = projected
             .iter()
             .filter_map(|&(i, v)| {
