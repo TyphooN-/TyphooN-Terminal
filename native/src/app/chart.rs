@@ -413,6 +413,14 @@ pub(crate) struct ChartState {
     pub(crate) prev_h1_low: Option<f64>,
     pub(crate) prev_monthly_high: Option<f64>,
     pub(crate) prev_monthly_low: Option<f64>,
+    // Current ("Judas") candle levels — the forming D1/W1/MN1 period high/low,
+    // drawn alongside the previous-candle levels (PreviousCandleLevels.mqh).
+    pub(crate) current_daily_high: Option<f64>,
+    pub(crate) current_daily_low: Option<f64>,
+    pub(crate) current_weekly_high: Option<f64>,
+    pub(crate) current_weekly_low: Option<f64>,
+    pub(crate) current_monthly_high: Option<f64>,
+    pub(crate) current_monthly_low: Option<f64>,
     /// WMA(20), HMA(20).
     pub(crate) wma: Vec<Option<f64>>,
     pub(crate) hma: Vec<Option<f64>>,
@@ -2290,6 +2298,12 @@ impl ChartState {
             prev_h1_low: None,
             prev_monthly_high: None,
             prev_monthly_low: None,
+            current_daily_high: None,
+            current_daily_low: None,
+            current_weekly_high: None,
+            current_weekly_low: None,
+            current_monthly_high: None,
+            current_monthly_low: None,
             wma: Vec::new(),
             hma: Vec::new(),
             cci: Vec::new(),
@@ -4781,6 +4795,13 @@ impl ChartState {
                 self.prev_weekly_low = w1.1;
                 self.prev_monthly_high = mn1.0;
                 self.prev_monthly_low = mn1.1;
+                let (cur_d1, cur_w1, cur_mn1) = compute_current_candle_levels(&self.bars);
+                self.current_daily_high = cur_d1.0;
+                self.current_daily_low = cur_d1.1;
+                self.current_weekly_high = cur_w1.0;
+                self.current_weekly_low = cur_w1.1;
+                self.current_monthly_high = cur_mn1.0;
+                self.current_monthly_low = cur_mn1.1;
                 if let (Some(h), Some(l)) = (d1.0, d1.1) {
                     let prev_close = self
                         .bars
@@ -5287,6 +5308,13 @@ impl ChartState {
         self.prev_weekly_low = w1.1;
         self.prev_monthly_high = mn1.0;
         self.prev_monthly_low = mn1.1;
+        let (cur_d1, cur_w1, cur_mn1) = compute_current_candle_levels(&self.bars);
+        self.current_daily_high = cur_d1.0;
+        self.current_daily_low = cur_d1.1;
+        self.current_weekly_high = cur_w1.0;
+        self.current_weekly_low = cur_w1.1;
+        self.current_monthly_high = cur_mn1.0;
+        self.current_monthly_low = cur_mn1.1;
         // Pivot points from previous day
         if let (Some(h), Some(l)) = (d1.0, d1.1) {
             // Hoist last_day out of the find closure — was recomputed on every

@@ -1347,63 +1347,35 @@ pub(super) fn draw_chart(
 
     // ── previous candle levels ─────────────────────────────────────────────
     if flags.prev_levels {
-        // Matching PreviousCandleLevels.mqh — White for previous, per-TF colors.
-        // The 4th field is the level's timeframe group rank (1 hour, 2 day,
-        // 3 week, 4 month); a level is drawn only when the chart's own group is
-        // strictly lower, so an H1/H4 chart shows D/W/MN (not H1/H4), a daily
-        // chart shows W/MN, and a weekly chart shows only MN — never its own or a
-        // lower timeframe's previous candle.
+        // Matching PreviousCandleLevels.mqh. White = previous sub-daily candle
+        // (H1/H4); magenta = daily+ "Judas" levels — both the previous candle and
+        // the current/forming candle (suffix "•") for D1/W1/MN1. The 4th field is
+        // the highest chart group_rank at which the level still draws (0 sub-hour,
+        // 1 hour, 2 day, 3 week): the level shows only while the chart sits at or
+        // below it. So an H1/H4 chart drops its own H1/H4 previous levels but
+        // keeps D/W/MN; a weekly chart keeps only MN; the current D1/W1 stay
+        // visible through the daily chart and current MN1 through the weekly chart.
+        let white = egui::Color32::WHITE;
+        let magenta = egui::Color32::from_rgb(255, 0, 255);
         let level_pairs = [
-            (
-                chart.prev_h1_high,
-                "H1 Hi",
-                egui::Color32::from_rgb(180, 180, 180),
-                1u8,
-            ),
-            (
-                chart.prev_h1_low,
-                "H1 Lo",
-                egui::Color32::from_rgb(180, 180, 180),
-                1,
-            ),
-            (
-                chart.prev_h4_high,
-                "H4 Hi",
-                egui::Color32::from_rgb(200, 200, 200),
-                1,
-            ),
-            (
-                chart.prev_h4_low,
-                "H4 Lo",
-                egui::Color32::from_rgb(200, 200, 200),
-                1,
-            ),
-            (chart.prev_daily_high, "D Hi", egui::Color32::WHITE, 2),
-            (chart.prev_daily_low, "D Lo", egui::Color32::WHITE, 2),
-            (
-                chart.prev_weekly_high,
-                "W Hi",
-                egui::Color32::from_rgb(255, 0, 255),
-                3,
-            ), // Magenta
-            (
-                chart.prev_weekly_low,
-                "W Lo",
-                egui::Color32::from_rgb(255, 0, 255),
-                3,
-            ),
-            (
-                chart.prev_monthly_high,
-                "MN Hi",
-                egui::Color32::from_rgb(255, 0, 255),
-                4,
-            ),
-            (
-                chart.prev_monthly_low,
-                "MN Lo",
-                egui::Color32::from_rgb(255, 0, 255),
-                4,
-            ),
+            // Previous (last closed) candle high/low.
+            (chart.prev_h1_high, "H1 Hi", white, 0u8),
+            (chart.prev_h1_low, "H1 Lo", white, 0),
+            (chart.prev_h4_high, "H4 Hi", white, 0),
+            (chart.prev_h4_low, "H4 Lo", white, 0),
+            (chart.prev_daily_high, "D Hi", magenta, 1),
+            (chart.prev_daily_low, "D Lo", magenta, 1),
+            (chart.prev_weekly_high, "W Hi", magenta, 2),
+            (chart.prev_weekly_low, "W Lo", magenta, 2),
+            (chart.prev_monthly_high, "MN Hi", magenta, 3),
+            (chart.prev_monthly_low, "MN Lo", magenta, 3),
+            // Current (forming) candle high/low — the "Judas" levels.
+            (chart.current_daily_high, "D Hi•", magenta, 2),
+            (chart.current_daily_low, "D Lo•", magenta, 2),
+            (chart.current_weekly_high, "W Hi•", magenta, 2),
+            (chart.current_weekly_low, "W Lo•", magenta, 2),
+            (chart.current_monthly_high, "MN Hi•", magenta, 3),
+            (chart.current_monthly_low, "MN Lo•", magenta, 3),
         ];
         let chart_rank = chart.timeframe.group_rank();
         // Draw each level line at its true price immediately, but defer the text
@@ -1411,9 +1383,9 @@ pub(super) fn draw_chart(
         // H4 Hi vs D Hi) get spread into separate vertical bands instead of
         // overprinting into an unreadable smear.
         let mut label_bands: Vec<(f32, f32)> = Vec::new();
-        for (price_opt, label, color, group) in &level_pairs {
-            // Only higher-timeframe levels than the chart itself (see .mqh).
-            if *group <= chart_rank {
+        for (price_opt, label, color, max_rank) in &level_pairs {
+            // Shown only while the chart is at or below the level's cutoff (.mqh).
+            if chart_rank > *max_rank {
                 continue;
             }
             if let Some(p) = price_opt {
@@ -7736,26 +7708,40 @@ mod tests {
     #[test]
     fn prev_candle_levels_only_show_higher_timeframes() {
         use crate::app::types::Timeframe;
-        // (label, group rank) must mirror the draw site in draw_indicators.
-        let levels = [("H1", 1u8), ("H4", 1), ("D", 2), ("W", 3), ("MN", 4)];
+        // (label, max chart group_rank at which the level still draws) — must
+        // mirror the draw site: a level shows iff chart.group_rank() <= max_rank.
+        // "•" marks the current/forming ("Judas") candle levels.
+        let levels = [
+            ("H1", 0u8),
+            ("H4", 0),
+            ("D", 1),
+            ("W", 2),
+            ("MN", 3),
+            ("D•", 2),
+            ("W•", 2),
+            ("MN•", 3),
+        ];
         let visible = |tf: Timeframe| -> Vec<&'static str> {
             let rank = tf.group_rank();
             levels
                 .iter()
-                .filter(|(_, g)| *g > rank)
+                .filter(|(_, m)| rank <= *m)
                 .map(|(l, _)| *l)
                 .collect()
         };
-        // Sub-hour chart shows every higher timeframe.
-        assert_eq!(visible(Timeframe::M15), vec!["H1", "H4", "D", "W", "MN"]);
-        // Hourly charts drop their own group (H1/H4), keep D/W/MN.
-        assert_eq!(visible(Timeframe::H1), vec!["D", "W", "MN"]);
-        assert_eq!(visible(Timeframe::H4), vec!["D", "W", "MN"]);
+        // Sub-hour chart shows every previous + every current level.
+        assert_eq!(
+            visible(Timeframe::M15),
+            vec!["H1", "H4", "D", "W", "MN", "D•", "W•", "MN•"]
+        );
+        // Hourly charts drop their own H1/H4 previous; keep daily+ and all current.
+        assert_eq!(visible(Timeframe::H1), vec!["D", "W", "MN", "D•", "W•", "MN•"]);
+        assert_eq!(visible(Timeframe::H4), vec!["D", "W", "MN", "D•", "W•", "MN•"]);
         // H12 is grouped with daily in the reference.
-        assert_eq!(visible(Timeframe::H12), vec!["W", "MN"]);
-        assert_eq!(visible(Timeframe::D1), vec!["W", "MN"]);
-        // Weekly chart shows only MN; monthly+ show nothing.
-        assert_eq!(visible(Timeframe::W1), vec!["MN"]);
+        assert_eq!(visible(Timeframe::H12), vec!["W", "MN", "D•", "W•", "MN•"]);
+        assert_eq!(visible(Timeframe::D1), vec!["W", "MN", "D•", "W•", "MN•"]);
+        // Weekly chart keeps only MN previous + MN current; monthly+ show nothing.
+        assert_eq!(visible(Timeframe::W1), vec!["MN", "MN•"]);
         assert!(visible(Timeframe::MN1).is_empty());
         assert!(visible(Timeframe::Y1).is_empty());
     }
