@@ -225,7 +225,8 @@ impl TyphooNApp {
                 let hdr_font = egui::FontId::monospace(9.0);
                 let avail_w = ui.available_width();
 
-                // Column layout: Symbol | Last | Chg | Chg% | Ext% | Vol | + | x
+                // Column layout: Symbol | RegSHO | Last | Chg | Chg% | Ext% | Vol | + | x
+                let col_regsho = avail_w * 0.09;
                 let col_last = avail_w * 0.26;
                 let col_chg = avail_w * 0.42;
                 let col_pct = avail_w * 0.56;
@@ -261,6 +262,13 @@ impl TyphooNApp {
                     egui::pos2(hdr_rect.left() + 2.0, hy),
                     egui::Align2::LEFT_CENTER,
                     &format!("Symbol{}", sort_arrow(0)),
+                    hdr_font.clone(),
+                    hdr_col,
+                );
+                hp.text(
+                    egui::pos2(hdr_rect.left() + col_regsho - 2.0, hy),
+                    egui::Align2::RIGHT_CENTER,
+                    &format!("Reg SHO{}", sort_arrow(1)),
                     hdr_font.clone(),
                     hdr_col,
                 );
