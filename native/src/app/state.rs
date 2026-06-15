@@ -37,6 +37,9 @@ pub(crate) struct WatchlistRow {
     pub(crate) volume: f64,
     /// Extended hours change % (pre/post market).
     pub(crate) ext_change_pct: f64,
+    /// True if the symbol is currently on the Nasdaq Reg SHO threshold list.
+    #[serde(default)]
+    pub(crate) reg_sho: bool,
     /// Live bid from WS (0.0 when none or stale >30s).
     #[serde(default, skip)]
     pub(crate) live_bid: f64,
@@ -87,6 +90,7 @@ pub(crate) fn watchlist_row_from_raw_bars(
         live_bid: 0.0,
         live_ask: 0.0,
         live_quote_at: None,
+        reg_sho: false,
     })
 }
 
@@ -97,6 +101,7 @@ pub(crate) fn empty_watchlist_row(symbol: &str) -> WatchlistRow {
         last: 0.0,
         prev_close: 0.0,
         regular_close: 0.0,
+        reg_sho: false,
         change: 0.0,
         change_pct: 0.0,
         volume: 0.0,
