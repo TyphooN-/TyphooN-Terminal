@@ -384,10 +384,8 @@ impl TyphooNApp {
                                     .unwrap_or(false);
                             if has_broker || has_api || has_cache {
                                 let mut sources: Vec<String> = Vec::new();
-                                if self.broker_connected {
-                                    let mode = if self.broker_paper { "Paper" } else { "Live" };
-                                    sources.push(format!("Alpaca ({})", mode));
-                                }
+                                // Alpaca is already named by the account-equity chip further left
+                                // (e.g. "[Alpaca (Paper) $90379]"), so don't repeat it here.
                                 if self.kraken_connected {
                                     sources.push("Kraken (REST + WS)".into());
                                 }
@@ -397,15 +395,15 @@ impl TyphooNApp {
                                 if !self.fred_key.is_empty() {
                                     sources.push("FRED".into());
                                 }
-                                let src_text = sources.join(" + ");
                                 // Any data source connected = Connected. OFFLINE only when nothing connected.
                                 // Market hours per-symbol can be refined later using symbol specs.
                                 let (status, color) = ("Connected", UP);
-                                ui.label(
-                                    egui::RichText::new(format!("\u{25CF} {} [{}]", status, src_text))
-                                        .color(color)
-                                        .small(),
-                                );
+                                let status_text = if sources.is_empty() {
+                                    format!("\u{25CF} {}", status)
+                                } else {
+                                    format!("\u{25CF} {} [{}]", status, sources.join(" + "))
+                                };
+                                ui.label(egui::RichText::new(status_text).color(color).small());
                                 let active_session = self.charts.get(self.active_tab).and_then(|chart| {
                                     let chart_source = chart.primary_source;
                                     let symbol = chart.symbol.split(':').next_back().unwrap_or("");

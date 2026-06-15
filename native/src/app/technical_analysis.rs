@@ -1347,57 +1347,75 @@ pub(super) fn draw_chart(
 
     // ── previous candle levels ─────────────────────────────────────────────
     if flags.prev_levels {
-        // Matching PreviousCandleLevels.mqh — White for previous, per-TF colors
+        // Matching PreviousCandleLevels.mqh — White for previous, per-TF colors.
+        // The 4th field is the level's timeframe group rank (1 hour, 2 day,
+        // 3 week, 4 month); a level is drawn only when the chart's own group is
+        // strictly lower, so an H1/H4 chart shows D/W/MN (not H1/H4), a daily
+        // chart shows W/MN, and a weekly chart shows only MN — never its own or a
+        // lower timeframe's previous candle.
         let level_pairs = [
             (
                 chart.prev_h1_high,
                 "H1 Hi",
                 egui::Color32::from_rgb(180, 180, 180),
+                1u8,
             ),
             (
                 chart.prev_h1_low,
                 "H1 Lo",
                 egui::Color32::from_rgb(180, 180, 180),
+                1,
             ),
             (
                 chart.prev_h4_high,
                 "H4 Hi",
                 egui::Color32::from_rgb(200, 200, 200),
+                1,
             ),
             (
                 chart.prev_h4_low,
                 "H4 Lo",
                 egui::Color32::from_rgb(200, 200, 200),
+                1,
             ),
-            (chart.prev_daily_high, "D Hi", egui::Color32::WHITE),
-            (chart.prev_daily_low, "D Lo", egui::Color32::WHITE),
+            (chart.prev_daily_high, "D Hi", egui::Color32::WHITE, 2),
+            (chart.prev_daily_low, "D Lo", egui::Color32::WHITE, 2),
             (
                 chart.prev_weekly_high,
                 "W Hi",
                 egui::Color32::from_rgb(255, 0, 255),
+                3,
             ), // Magenta
             (
                 chart.prev_weekly_low,
                 "W Lo",
                 egui::Color32::from_rgb(255, 0, 255),
+                3,
             ),
             (
                 chart.prev_monthly_high,
                 "MN Hi",
                 egui::Color32::from_rgb(255, 0, 255),
+                4,
             ),
             (
                 chart.prev_monthly_low,
                 "MN Lo",
                 egui::Color32::from_rgb(255, 0, 255),
+                4,
             ),
         ];
+        let chart_rank = chart.timeframe.group_rank();
         // Draw each level line at its true price immediately, but defer the text
         // so labels for levels that sit within a few ticks of each other (e.g.
         // H4 Hi vs D Hi) get spread into separate vertical bands instead of
         // overprinting into an unreadable smear.
         let mut label_bands: Vec<(f32, f32)> = Vec::new();
-        for (price_opt, label, color) in &level_pairs {
+        for (price_opt, label, color, group) in &level_pairs {
+            // Only higher-timeframe levels than the chart itself (see .mqh).
+            if *group <= chart_rank {
+                continue;
+            }
             if let Some(p) = price_opt {
                 let y = price_to_y(*p);
                 if y >= chart_rect.top() && y <= chart_rect.bottom() {
@@ -2896,11 +2914,21 @@ pub(super) fn draw_chart(
     let mut header_right = sym_rect.right();
     if chart.ext_active && chart.ext_close > 0.0 {
         if let Some(last) = bars.last() {
-            let ext_text = format_ext_hours_symbol_badge(
-                last.close,
-                chart.ext_close,
-                previous_daily_close_from_bars(&chart.bars),
-            );
+            // Daily close and previous-day close come from the shared, timeframe-
+            // independent quote (set on the chart from the watchlist row); fall
+            // back to this chart's own bars only when those are unavailable, so the
+            // badge reads identically across H1/H4/W1 instead of using each
+            // timeframe's last/previous bar.
+            let daily_close = if chart.ext_open > 0.0 {
+                chart.ext_open
+            } else {
+                last.close
+            };
+            let prev_close = (chart.prev_daily_close > 0.0)
+                .then_some(chart.prev_daily_close)
+                .or_else(|| previous_daily_close_from_bars(&chart.bars));
+            let ext_text =
+                format_ext_hours_symbol_badge(daily_close, chart.ext_close, prev_close);
             let ext_col = egui::Color32::from_rgb(200, 50, 200);
             let ext_galley = painter.layout_no_wrap(
                 ext_text,
@@ -7689,20 +7717,47 @@ mod tests {
     fn extended_hours_symbol_badge_lists_close_ext_and_move() {
         assert_eq!(
             super::format_ext_hours_symbol_badge(100.0, 101.25, Some(98.0)),
-            "Daily C 100.0000  Day +3.32%  EXT last 101.2500  Δ/C +1.2500 (+1.25%)"
+            "Daily Close 100.0000 (+3.32%)  EXT last 101.2500  Δ/C +1.2500 (+1.25%)"
         );
         assert_eq!(
             super::format_ext_hours_symbol_badge(100.0, 99.5, Some(100.0)),
-            "Daily C 100.0000  Day -0.50%  EXT last 99.5000  Δ/C -0.500000 (-0.50%)"
+            "Daily Close 100.0000 (-0.50%)  EXT last 99.5000  Δ/C -0.500000 (-0.50%)"
         );
         assert_eq!(
             super::format_ext_hours_symbol_badge(0.0925, 0.0924, Some(0.0900)),
-            "Daily C 0.092500  Day +2.67%  EXT last 0.092400  Δ/C -0.000100 (-0.11%)"
+            "Daily Close 0.092500 (+2.67%)  EXT last 0.092400  Δ/C -0.000100 (-0.11%)"
         );
         assert_eq!(
             super::format_ext_hours_symbol_badge(0.0925, 0.0924, None),
-            "Daily C 0.092500  EXT last 0.092400  Δ/C -0.000100 (-0.11%)"
+            "Daily Close 0.092500  EXT last 0.092400  Δ/C -0.000100 (-0.11%)"
         );
+    }
+
+    #[test]
+    fn prev_candle_levels_only_show_higher_timeframes() {
+        use crate::app::types::Timeframe;
+        // (label, group rank) must mirror the draw site in draw_indicators.
+        let levels = [("H1", 1u8), ("H4", 1), ("D", 2), ("W", 3), ("MN", 4)];
+        let visible = |tf: Timeframe| -> Vec<&'static str> {
+            let rank = tf.group_rank();
+            levels
+                .iter()
+                .filter(|(_, g)| *g > rank)
+                .map(|(l, _)| *l)
+                .collect()
+        };
+        // Sub-hour chart shows every higher timeframe.
+        assert_eq!(visible(Timeframe::M15), vec!["H1", "H4", "D", "W", "MN"]);
+        // Hourly charts drop their own group (H1/H4), keep D/W/MN.
+        assert_eq!(visible(Timeframe::H1), vec!["D", "W", "MN"]);
+        assert_eq!(visible(Timeframe::H4), vec!["D", "W", "MN"]);
+        // H12 is grouped with daily in the reference.
+        assert_eq!(visible(Timeframe::H12), vec!["W", "MN"]);
+        assert_eq!(visible(Timeframe::D1), vec!["W", "MN"]);
+        // Weekly chart shows only MN; monthly+ show nothing.
+        assert_eq!(visible(Timeframe::W1), vec!["MN"]);
+        assert!(visible(Timeframe::MN1).is_empty());
+        assert!(visible(Timeframe::Y1).is_empty());
     }
 
     #[test]
@@ -7755,7 +7810,7 @@ fn format_ext_hours_symbol_badge(close: f64, ext_last: f64, prev_close: Option<f
         .and_then(|prev| (prev.abs() > f64::EPSILON).then_some((ext_last / prev - 1.0) * 100.0));
     if let Some(day_pct) = day_pct {
         format!(
-            "Daily C {}  Day {:+.2}%  EXT last {}  Δ/C {} ({:+.2}%)",
+            "Daily Close {} ({:+.2}%)  EXT last {}  Δ/C {} ({:+.2}%)",
             format_price(close),
             day_pct,
             format_price(ext_last),
@@ -7764,7 +7819,7 @@ fn format_ext_hours_symbol_badge(close: f64, ext_last: f64, prev_close: Option<f
         )
     } else {
         format!(
-            "Daily C {}  EXT last {}  Δ/C {} ({:+.2}%)",
+            "Daily Close {}  EXT last {}  Δ/C {} ({:+.2}%)",
             format_price(close),
             format_price(ext_last),
             format_signed_price(delta),

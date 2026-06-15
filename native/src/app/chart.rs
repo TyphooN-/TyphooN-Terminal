@@ -348,6 +348,12 @@ pub(crate) struct ChartState {
     pub(crate) ext_low: f64,
     pub(crate) ext_close: f64,
     pub(crate) ext_active: bool, // true when ext hours data is available
+    /// Authoritative previous-day regular close (Alpaca `prevDailyBar.c` /
+    /// Yahoo `regularMarketPreviousClose`), sourced from the shared watchlist
+    /// quote so it is timeframe-independent. `0.0` when unknown. Drives the
+    /// extended-hours badge "Day %" so a W1/MN chart shows the day move, not a
+    /// week/month-ago comparison from its own previous bar.
+    pub(crate) prev_daily_close: f64,
     /// Raw bar data loaded from cache.
     pub(crate) bars: Vec<Bar>,
     /// Reusable buffers for full GPU upload path (avoids repeated allocations).
@@ -2244,6 +2250,7 @@ impl ChartState {
             ext_low: 0.0,
             ext_close: 0.0,
             ext_active: false,
+            prev_daily_close: 0.0,
             bars: Vec::new(),
             upload_opens: Vec::new(),
             upload_closes: Vec::new(),

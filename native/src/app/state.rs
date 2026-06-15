@@ -23,6 +23,12 @@ pub(crate) struct WatchlistRow {
     pub(crate) last: f64,
     /// Previous close (for change calculation).
     pub(crate) prev_close: f64,
+    /// Current-day regular-session close (authoritative daily close, e.g.
+    /// Alpaca `dailyBar.c` / Yahoo `regularMarketPrice`). Timeframe-independent,
+    /// unlike a chart's own last-bar close, which differs between H1/H4/W1.
+    /// `0.0` when unknown. Used to drive the extended-hours "Daily Close" badge.
+    #[serde(default)]
+    pub(crate) regular_close: f64,
     /// Absolute change.
     pub(crate) change: f64,
     /// Percentage change.
@@ -63,6 +69,8 @@ pub(crate) fn watchlist_row_from_raw_bars(
         cache_key: cache_key.to_string(),
         last: last_bar.4,
         prev_close: prev_bar.4,
+        // Offline cache fallback has no separate regular-session close.
+        regular_close: 0.0,
         change,
         change_pct,
         volume: last_bar.5,
@@ -76,6 +84,7 @@ pub(crate) fn empty_watchlist_row(symbol: &str) -> WatchlistRow {
         cache_key: symbol.to_string(),
         last: 0.0,
         prev_close: 0.0,
+        regular_close: 0.0,
         change: 0.0,
         change_pct: 0.0,
         volume: 0.0,

@@ -329,6 +329,7 @@ pub(super) fn spawn_broker_message_processor(
                                     cache_key: row.symbol.clone(),
                                     last: snap.last,
                                     prev_close: snap.prev_close,
+                                    regular_close: snap.regular_close,
                                     change,
                                     change_pct,
                                     volume: snap.daily_volume,
@@ -378,6 +379,12 @@ pub(super) fn spawn_broker_message_processor(
 
                                                     if row.prev_close <= 0.0 && reg_prev > 0.0 {
                                                         row.prev_close = reg_prev;
+                                                    }
+                                                    // Yahoo's regular price is the authoritative current-day
+                                                    // close and is often fresher than Alpaca's snapshot, so the
+                                                    // ext "Daily Close" badge agrees across timeframes.
+                                                    if reg_price > 0.0 {
+                                                        row.regular_close = reg_price;
                                                     }
                                                     if yah_vol > 0.0 {
                                                         row.volume = yah_vol;

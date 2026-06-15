@@ -118,12 +118,26 @@ impl TyphooNApp {
             }
             for ci in matched_indices {
                 let chart = &mut self.charts[ci];
+                // Carry the authoritative previous-day close from the shared quote so the
+                // ext badge "Day %" is timeframe-independent (a W1/MN chart's own previous
+                // bar is a week/month ago, not yesterday).
+                if row.prev_close > 0.0 {
+                    chart.prev_daily_close = row.prev_close;
+                }
                 // Update ext-hours candle if ext data is available. row.last is already set to
                 // the ext price by Yahoo enrichment when ext_change_pct != 0.
                 if row.ext_change_pct.abs() > 0.001 && row.last > 0.0 {
                     let ext_price = row.last;
                     if !chart.ext_active {
-                        let reg_close = chart.bars.last().map(|bar| bar.close).unwrap_or(ext_price);
+                        // Prefer the timeframe-independent regular-session close from the
+                        // shared quote; the chart's own last-bar close differs across
+                        // H1/H4/W1. Fall back to it only when the authoritative close is
+                        // unavailable.
+                        let reg_close = if row.regular_close > 0.0 {
+                            row.regular_close
+                        } else {
+                            chart.bars.last().map(|bar| bar.close).unwrap_or(ext_price)
+                        };
                         chart.ext_open = reg_close;
                         chart.ext_high = ext_price.max(reg_close);
                         chart.ext_low = ext_price.min(reg_close);

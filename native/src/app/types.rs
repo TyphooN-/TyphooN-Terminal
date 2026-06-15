@@ -257,6 +257,42 @@ impl Timeframe {
             _ => None,
         }
     }
+
+    /// Coarse timeframe group used to decide which "previous candle level" lines
+    /// to draw. Mirrors PreviousCandleLevels.mqh: a level is shown only when the
+    /// chart's period sits in a *lower* group than the level's timeframe, so a
+    /// sub-hour chart shows H1/H4/D/W/MN, an hourly chart shows D/W/MN, a daily
+    /// chart shows W/MN, a weekly chart shows MN, and monthly+/yearly charts show
+    /// none. H12 is grouped with the daily timeframes, matching the reference.
+    /// Ranks: 0 sub-hour, 1 hour, 2 day, 3 week, 4 month, 5 year.
+    pub(crate) fn group_rank(self) -> u8 {
+        match self {
+            Timeframe::M1
+            | Timeframe::M2
+            | Timeframe::M3
+            | Timeframe::M5
+            | Timeframe::M10
+            | Timeframe::M15
+            | Timeframe::M20
+            | Timeframe::M30
+            | Timeframe::M45 => 0,
+            Timeframe::H1
+            | Timeframe::H2
+            | Timeframe::H3
+            | Timeframe::H4
+            | Timeframe::H6
+            | Timeframe::H8 => 1,
+            Timeframe::H12
+            | Timeframe::D1
+            | Timeframe::D2
+            | Timeframe::D3
+            | Timeframe::D5
+            | Timeframe::D10 => 2,
+            Timeframe::W1 | Timeframe::W2 | Timeframe::W3 => 3,
+            Timeframe::MN1 | Timeframe::MN2 | Timeframe::MN3 | Timeframe::MN6 => 4,
+            Timeframe::Y1 | Timeframe::Y2 | Timeframe::Y3 | Timeframe::Y5 | Timeframe::Y10 => 5,
+        }
+    }
 }
 
 pub(crate) fn alpaca_incremental_fetch_limit(
