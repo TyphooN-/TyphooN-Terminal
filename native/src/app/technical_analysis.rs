@@ -50,6 +50,53 @@ fn clamp_f32_bounds(value: f32, a: f32, b: f32) -> f32 {
     value.clamp(lo, hi)
 }
 
+/// Nudge a horizontal price-level text label to the nearest free vertical band
+/// so clustered levels don't overprint each other into an unreadable smear.
+/// The level line itself stays at its true price (`desired_center`); only the
+/// label moves. Labels are placed in draw order, so earlier (higher-priority)
+/// labels keep their preferred y and later ones flow around them. The chosen
+/// band is recorded in `occupied` for subsequent calls. This is the same
+/// policy the right price-axis tags use (`place_axis_label`); keep them in sync.
+fn place_level_label(
+    desired_center: f32,
+    half_h: f32,
+    top: f32,
+    bot: f32,
+    occupied: &mut Vec<(f32, f32)>,
+) -> f32 {
+    let lo_bound = top + half_h;
+    let hi_bound = (bot - half_h).max(lo_bound);
+    let clamp_center = |c: f32| clamp_f32_bounds(c, lo_bound, hi_bound);
+    let collides = |c: f32, bands: &[(f32, f32)]| {
+        bands
+            .iter()
+            .any(|&(lo, hi)| c - half_h < hi + 1.0 && c + half_h + 1.0 > lo)
+    };
+    let mut center = clamp_center(desired_center);
+    if collides(center, occupied.as_slice()) {
+        let span = bot - top;
+        let mut offset = 1.0_f32;
+        loop {
+            let up = clamp_center(desired_center - offset);
+            if !collides(up, occupied.as_slice()) {
+                center = up;
+                break;
+            }
+            let down = clamp_center(desired_center + offset);
+            if !collides(down, occupied.as_slice()) {
+                center = down;
+                break;
+            }
+            offset += 1.0;
+            if offset > span {
+                break;
+            }
+        }
+    }
+    occupied.push((center - half_h, center + half_h));
+    center
+}
+
 /// Resolve the display company name for a chart's symbol from the in-memory
 /// fundamentals table (`self.bg.all_fundamentals`). The chart symbol is
 /// normalized to the bare ticker the table keys on — drop a forward slash
@@ -1168,6 +1215,10 @@ pub(super) fn draw_chart(
     // tessellation/GPU-upload pressure and did not add price accuracy.
     if flags.atr_proj {
         let atr_yellow = egui::Color32::from_rgb(255, 255, 0); // clrYellow
+        // A timeframe whose ATR band is narrow puts its Hi and Lo labels on top
+        // of each other ("ATR W1 Hi" / "ATR W1 Lo" smearing into "ATR WL HL").
+        // Spread the labels into separate bands; the lines stay at true price.
+        let mut label_bands: Vec<(f32, f32)> = Vec::new();
         for &(label, htf_open, atr_val, line_start_idx) in &chart.atr_proj_levels {
             let upper_price = htf_open + atr_val;
             let lower_price = htf_open - atr_val;
@@ -1185,10 +1236,18 @@ pub(super) fn draw_chart(
                         [egui::pos2(x_start, y), egui::pos2(x_end, y)],
                         egui::Stroke::new(1.5, atr_yellow),
                     );
-                    // Label: "ATR D1 Hi 1.2345"
+                    // Label: "ATR D1 Hi 1.2345" — anchored above its line, then
+                    // de-conflicted so a tight Hi/Lo pair stays legible.
+                    let center = place_level_label(
+                        y - 8.0,
+                        5.0,
+                        chart_rect.top(),
+                        chart_rect.bottom(),
+                        &mut label_bands,
+                    );
                     painter.text(
-                        egui::pos2(x_start + 4.0, y - 10.0),
-                        egui::Align2::LEFT_BOTTOM,
+                        egui::pos2(x_start + 4.0, center),
+                        egui::Align2::LEFT_CENTER,
                         &format!("ATR {} {} {}", label, suffix, format_price(price)),
                         egui::FontId::monospace(8.0),
                         atr_yellow,
@@ -1333,6 +1392,11 @@ pub(super) fn draw_chart(
                 egui::Color32::from_rgb(255, 0, 255),
             ),
         ];
+        // Draw each level line at its true price immediately, but defer the text
+        // so labels for levels that sit within a few ticks of each other (e.g.
+        // H4 Hi vs D Hi) get spread into separate vertical bands instead of
+        // overprinting into an unreadable smear.
+        let mut label_bands: Vec<(f32, f32)> = Vec::new();
         for (price_opt, label, color) in &level_pairs {
             if let Some(p) = price_opt {
                 let y = price_to_y(*p);
@@ -1344,9 +1408,17 @@ pub(super) fn draw_chart(
                         ],
                         egui::Stroke::new(0.5, *color),
                     );
+                    // Anchor the label just above its line, then de-conflict.
+                    let center = place_level_label(
+                        y - 8.0,
+                        5.0,
+                        chart_rect.top(),
+                        chart_rect.bottom(),
+                        &mut label_bands,
+                    );
                     painter.text(
-                        egui::pos2(chart_rect.right() - 40.0, y - 10.0),
-                        egui::Align2::LEFT_TOP,
+                        egui::pos2(chart_rect.right() - 40.0, center),
+                        egui::Align2::LEFT_CENTER,
                         label,
                         egui::FontId::monospace(8.0),
                         *color,
@@ -2145,37 +2217,13 @@ pub(super) fn draw_chart(
     let axis_bot = chart_rect.bottom();
     let mut occupied_label_bands: Vec<(f32, f32)> = Vec::new();
     let mut place_axis_label = move |desired_center: f32, half_h: f32| -> f32 {
-        let lo_bound = axis_top + half_h;
-        let hi_bound = (axis_bot - half_h).max(lo_bound);
-        let clamp_center = |c: f32| clamp_f32_bounds(c, lo_bound, hi_bound);
-        let collides = |c: f32, bands: &[(f32, f32)]| {
-            bands
-                .iter()
-                .any(|&(lo, hi)| c - half_h < hi + 1.0 && c + half_h + 1.0 > lo)
-        };
-        let mut center = clamp_center(desired_center);
-        if collides(center, &occupied_label_bands) {
-            let span = axis_bot - axis_top;
-            let mut offset = 1.0_f32;
-            loop {
-                let up = clamp_center(desired_center - offset);
-                if !collides(up, &occupied_label_bands) {
-                    center = up;
-                    break;
-                }
-                let down = clamp_center(desired_center + offset);
-                if !collides(down, &occupied_label_bands) {
-                    center = down;
-                    break;
-                }
-                offset += 1.0;
-                if offset > span {
-                    break;
-                }
-            }
-        }
-        occupied_label_bands.push((center - half_h, center + half_h));
-        center
+        place_level_label(
+            desired_center,
+            half_h,
+            axis_top,
+            axis_bot,
+            &mut occupied_label_bands,
+        )
     };
 
     // ── last/core close line ─────────────────────────────────────────────────
