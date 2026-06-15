@@ -882,12 +882,12 @@ impl eframe::App for TyphooNApp {
         }
 
         // ── receive Reg SHO cached prices from background thread (non-blocking) ──
-        if let Some(ref rx) = self.reg_sho_prices_rx {
+        if let Some(ref rx) = self.regulatory_prices_rx {
             if let Ok(results) = rx.try_recv() {
                 for (sym, row) in results {
-                    self.reg_sho_prices.insert(sym, row);
+                    self.regulatory_prices.insert(sym, row);
                 }
-                self.reg_sho_prices_rx = None; // done
+                self.regulatory_prices_rx = None; // done
             }
         }
 
@@ -1824,15 +1824,19 @@ impl eframe::App for TyphooNApp {
         self.draw_floating_windows(ctx);
         perf_floating_windows_ms = floating_windows_started.elapsed().as_secs_f64() * 1000.0;
 
-        // === Reg SHO floating window ===
+        // === Regulatory floating windows (Reg SHO + Halts) ===
+        // Populate price columns for every regulatory-alert symbol (not just the
+        // few in the watchlist) by loading cached daily bars off the render
+        // thread — once while either window is open; reset when both close.
+        if (self.show_reg_sho_window || self.show_halts_window)
+            && !self.regulatory_prices_loaded
+            && self.regulatory_prices_rx.is_none()
+        {
+            self.spawn_regulatory_price_load();
+            self.regulatory_prices_loaded = true;
+        }
+
         if self.show_reg_sho_window {
-            // Populate price columns for every Reg SHO symbol (not just the few
-            // that happen to be in the watchlist) by loading cached daily bars
-            // off the render thread — once per window open.
-            if !self.reg_sho_prices_loaded && self.reg_sho_prices_rx.is_none() {
-                self.spawn_reg_sho_price_load();
-                self.reg_sho_prices_loaded = true;
-            }
             let mut open = true;
             // Button clicks are collected here and applied after the window
             // closure (which holds an immutable borrow of self).
@@ -1903,7 +1907,7 @@ impl eframe::App for TyphooNApp {
                                 .watchlist_rows
                                 .iter()
                                 .find(|r| &r.symbol == sym)
-                                .or_else(|| self.reg_sho_prices.get(sym.as_str()));
+                                .or_else(|| self.regulatory_prices.get(sym.as_str()));
 
                             body.row(18.0, |mut row| {
                                 row.col(|ui| {
@@ -1962,8 +1966,119 @@ impl eframe::App for TyphooNApp {
             }
             if !open {
                 self.show_reg_sho_window = false;
-                self.reg_sho_prices_loaded = false; // reload fresh on next open
             }
+        }
+
+        // === Trading Halts / LULD floating window ===
+        if self.show_halts_window {
+            let mut open = true;
+            let mut halts_action: Option<SymbolAction> = None;
+            egui::Window::new("Trading Halts / LULD Pauses")
+                .open(&mut open)
+                .default_width(820.0)
+                .default_height(460.0)
+                .show(ctx, |ui| {
+                    ui.label("Securities currently halted (live NasdaqTrader feed, cached)");
+                    ui.separator();
+
+                    let alerts_map = &self.bg.regulatory_alerts_by_symbol;
+                    let mut rows: Vec<_> = alerts_map
+                        .iter()
+                        .filter(|(_, alerts)| alerts.iter().any(|a| a.kind == "trade_halt"))
+                        .collect();
+                    if rows.is_empty() {
+                        ui.label("No active trading halts.");
+                        return;
+                    }
+                    rows.sort_by_key(|(sym, _)| *sym);
+
+                    let fmt_px = |v: f64| -> String {
+                        if v > 0.0 { format!("{:.4}", v) } else { "—".to_string() }
+                    };
+
+                    let table = egui_extras::TableBuilder::new(ui)
+                        .striped(true)
+                        .resizable(true)
+                        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                        .column(egui_extras::Column::auto().at_least(80.0))   // Symbol
+                        .column(egui_extras::Column::auto().at_least(70.0))   // Last
+                        .column(egui_extras::Column::auto().at_least(70.0))   // Chg%
+                        .column(egui_extras::Column::auto().at_least(120.0))  // Actions
+                        .column(egui_extras::Column::remainder().at_least(240.0)); // Halt info
+
+                    table.header(20.0, |mut header| {
+                        header.col(|ui| { ui.strong("Symbol"); });
+                        header.col(|ui| { ui.strong("Last"); });
+                        header.col(|ui| { ui.strong("Chg%"); });
+                        header.col(|ui| { ui.strong("Actions"); });
+                        header.col(|ui| { ui.strong("Halt info"); });
+                    })
+                    .body(|mut body| {
+                        for (sym, alerts) in rows {
+                            let alert = alerts
+                                .iter()
+                                .find(|a| a.kind == "trade_halt")
+                                .unwrap_or(&alerts[0]);
+                            let wl = self
+                                .watchlist_rows
+                                .iter()
+                                .find(|r| &r.symbol == sym)
+                                .or_else(|| self.regulatory_prices.get(sym.as_str()));
+                            body.row(18.0, |mut row| {
+                                row.col(|ui| {
+                                    ui.label(egui::RichText::new(sym).monospace().color(egui::Color32::from_rgb(255, 90, 90)));
+                                });
+                                row.col(|ui| {
+                                    ui.label(wl.map(|w| fmt_px(w.last)).unwrap_or_else(|| "—".into()));
+                                });
+                                row.col(|ui| {
+                                    match wl {
+                                        Some(w) if w.last > 0.0 => {
+                                            let c = if w.change_pct >= 0.0 { egui::Color32::from_rgb(0,200,0) } else { egui::Color32::from_rgb(200,0,0) };
+                                            ui.colored_label(c, format!("{:.2}%", w.change_pct));
+                                        }
+                                        _ => { ui.label("—"); }
+                                    }
+                                });
+                                row.col(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 3.0;
+                                    let already_watched = self
+                                        .user_watchlist
+                                        .iter()
+                                        .any(|s| s.eq_ignore_ascii_case(sym));
+                                    if already_watched {
+                                        ui.add_enabled(false, egui::Button::new(egui::RichText::new("✓WL").small()))
+                                            .on_hover_text("Already in watchlist");
+                                    } else if ui.add(egui::Button::new(egui::RichText::new("+WL").small())).on_hover_text("Add to watchlist").clicked() {
+                                        halts_action = Some(SymbolAction::AddWatchlist(sym.clone()));
+                                    }
+                                    if ui.add(egui::Button::new(egui::RichText::new("D1").small())).on_hover_text("Open D1 chart").clicked() {
+                                        halts_action = Some(SymbolAction::OpenChartTf(sym.clone(), Timeframe::D1));
+                                    }
+                                    if ui.add(egui::Button::new(egui::RichText::new("W1").small())).on_hover_text("Open W1 chart").clicked() {
+                                        halts_action = Some(SymbolAction::OpenChartTf(sym.clone(), Timeframe::W1));
+                                    }
+                                });
+                                row.col(|ui| {
+                                    ui.label(&alert.details);
+                                });
+                            });
+                        }
+                    });
+                });
+
+            if let Some(action) = halts_action {
+                self.deferred_symbol_action = action;
+            }
+            if !open {
+                self.show_halts_window = false;
+            }
+        }
+
+        // Both regulatory windows closed → drop the one-shot price load so the
+        // next open re-fetches fresh cached prices.
+        if !self.show_reg_sho_window && !self.show_halts_window {
+            self.regulatory_prices_loaded = false;
         }
 
         // ── central panel (chart area) ────────────────────────────────────────

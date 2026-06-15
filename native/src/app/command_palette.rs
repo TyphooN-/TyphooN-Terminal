@@ -46,6 +46,9 @@ impl TyphooNApp {
             "REG_SHO" | "REGSHO" => {
                 self.show_reg_sho_window = true;
             }
+            "HALTS" | "HALT" | "TRADE_HALTS" | "LULD" => {
+                self.show_halts_window = true;
+            }
             "MTF" | "MTF_GRID" => {
                 self.mtf_enabled = !self.mtf_enabled;
                 // When enabling MTF grid, load any charts with empty bars

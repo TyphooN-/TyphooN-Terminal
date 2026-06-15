@@ -195,13 +195,14 @@ impl TyphooNApp {
         }
     }
 
-    /// Load cached daily-bar prices for every Reg SHO threshold symbol not
-    /// already in the watchlist, off the render thread (the same SQLite-read
-    /// stall pitfall as the MTF grid: a bulk bar-sync writer can hold the conn
-    /// mutex). Results are merged into `reg_sho_prices` so the Reg SHO window
-    /// fills its Last / Daily-close / Chg% columns for the whole list; live
-    /// bid/ask still come from watchlisted symbols only (window is cache-based).
-    pub(super) fn spawn_reg_sho_price_load(&mut self) {
+    /// Load cached daily-bar prices for every regulatory-alert symbol (Reg SHO
+    /// threshold OR trading halt) not already in the watchlist, off the render
+    /// thread (the same SQLite-read stall pitfall as the MTF grid: a bulk
+    /// bar-sync writer can hold the conn mutex). Results are merged into
+    /// `regulatory_prices` so the Reg SHO and Halts windows fill their Last /
+    /// Daily-close / Chg% columns for the whole list; live bid/ask still come
+    /// from watchlisted symbols only (the windows are cache-based).
+    pub(super) fn spawn_regulatory_price_load(&mut self) {
         let cache = match &self.cache {
             Some(c) => Arc::clone(c),
             None => return,
@@ -250,7 +251,7 @@ impl TyphooNApp {
             }
             let _ = tx.send(out);
         });
-        self.reg_sho_prices_rx = Some(rx);
+        self.regulatory_prices_rx = Some(rx);
     }
 
     pub(super) fn reload_symbol(&mut self, symbol: &str, tf: Timeframe) {

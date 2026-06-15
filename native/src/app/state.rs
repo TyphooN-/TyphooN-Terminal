@@ -4708,17 +4708,21 @@ pub struct TyphooNApp {
     pub(crate) kraken_equity_no_overnight: std::collections::HashSet<String>,
     pub(crate) kraken_equity_universe_requested: bool,
     pub(crate) show_reg_sho_window: bool,
-    /// Cache-loaded price snapshots (last / prev close / chg%) for Reg SHO
-    /// threshold symbols not already in the watchlist, so the Reg SHO window can
-    /// fill its price columns for every listed symbol — keyed by the normalized
-    /// alert symbol. Populated off the render thread when the window opens.
-    pub(crate) reg_sho_prices: std::collections::HashMap<String, WatchlistRow>,
+    /// Floating window listing current trading halts / LULD pauses (parallels the
+    /// Reg SHO window). Opened by the HALTS command.
+    pub(crate) show_halts_window: bool,
+    /// Cache-loaded price snapshots (last / prev close / chg%) for regulatory
+    /// alert symbols (Reg SHO threshold OR trading halt) not already in the
+    /// watchlist, so the Reg SHO and Halts windows can fill their price columns
+    /// for every listed symbol — keyed by the normalized alert symbol. Populated
+    /// off the render thread when either window opens.
+    pub(crate) regulatory_prices: std::collections::HashMap<String, WatchlistRow>,
     /// Receiver for the async Reg SHO price load (off the render thread to avoid
     /// the SQLite-read stall when a bulk bar-sync writer holds the conn mutex).
-    pub(crate) reg_sho_prices_rx:
+    pub(crate) regulatory_prices_rx:
         Option<std::sync::mpsc::Receiver<Vec<(String, WatchlistRow)>>>,
     /// Guards the one-time price load per window open (reset when it closes).
-    pub(crate) reg_sho_prices_loaded: bool,
+    pub(crate) regulatory_prices_loaded: bool,
     pub(crate) kraken_equity_universe_retry_after_ts: i64,
     pub(crate) kraken_equities_sync_pause_until_ts: i64,
     pub(crate) kraken_equities_sync_pause_reason: String,

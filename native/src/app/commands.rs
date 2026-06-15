@@ -179,6 +179,10 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "Reg SHO threshold list — naked-short / fail-to-deliver watch",
     },
     Command {
+        name: "HALTS",
+        desc: "Trading halts / LULD volatility pauses (live from cache)",
+    },
+    Command {
         name: "FUNDAMENTALS",
         desc: "Fundamentals viewer (EV, ratios, profile)",
     },
