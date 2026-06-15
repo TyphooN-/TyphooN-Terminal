@@ -251,7 +251,7 @@ pub(super) fn draw_chart(
     );
 
     // Price axis margins
-    let price_axis_w = 86.0_f32;
+    let price_axis_w = 98.0_f32;
     let time_axis_h = 24.0_f32;
     let chart_rect = egui::Rect::from_min_max(
         main_rect.min,
@@ -2418,7 +2418,7 @@ pub(super) fn draw_chart(
                 egui::Stroke::new(1.0, bid_text_col),
                 egui::StrokeKind::Inside,
             );
-            let label = format!("B {}", format_price(chart.live_bid));
+            let label = format!("Bid {}", format_price(chart.live_bid));
             painter.text(
                 egui::pos2(chart_rect.right() + 4.0, bid_label_y),
                 egui::Align2::LEFT_CENTER,
@@ -2447,7 +2447,7 @@ pub(super) fn draw_chart(
                 egui::Stroke::new(1.0, ask_text_col),
                 egui::StrokeKind::Inside,
             );
-            let label = format!("A {}", format_price(chart.live_ask));
+            let label = format!("Ask {}", format_price(chart.live_ask));
             painter.text(
                 egui::pos2(chart_rect.right() + 4.0, ask_label_y),
                 egui::Align2::LEFT_CENTER,
