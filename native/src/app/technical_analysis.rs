@@ -104,17 +104,33 @@ fn place_level_label(
 /// suffix — then matched case-insensitively, the same way the research packet's
 /// company header resolves it. Returns None when there is no row or the name is
 /// blank, so the caller falls back to the plain "SYM [TF]" header.
-pub(super) fn chart_overlay_company_name<'a>(
-    fundamentals: &'a [typhoon_engine::core::fundamentals::Fundamentals],
+pub(super) fn chart_overlay_company_name(
+    fundamentals: &[typhoon_engine::core::fundamentals::Fundamentals],
+    equity_names: &std::collections::HashMap<String, String>,
     chart_symbol: &str,
-) -> Option<&'a str> {
+) -> Option<String> {
     let stripped = chart_symbol.replace('/', "");
-    let bare = stripped.trim_end_matches(".EQ").trim_end_matches(".eq");
-    fundamentals
+    let bare = stripped.trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
+
+    // 1. Full fundamentals (highest quality)
+    if let Some(name) = fundamentals
         .iter()
-        .find(|f| f.symbol.eq_ignore_ascii_case(bare))
-        .map(|f| f.company_name.trim())
+        .find(|f| f.symbol.eq_ignore_ascii_case(&bare))
+        .map(|f| f.company_name.trim().to_string())
         .filter(|name| !name.is_empty())
+    {
+        return Some(name);
+    }
+
+    // 2. Lightweight Kraken equity catalog name (fast path for xStocks)
+    if let Some(name) = equity_names.get(&bare) {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    None
 }
 
 /// Draw a single chart viewport into `rect` using `painter`.

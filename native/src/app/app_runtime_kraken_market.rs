@@ -59,6 +59,7 @@ impl TyphooNApp {
         tokenized.dedup();
         self.kraken_equity_tokenized_symbols = tokenized;
 
+        let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         let mut symbols: Vec<String> = markets
             .into_iter()
             .filter(|market| {
@@ -66,12 +67,21 @@ impl TyphooNApp {
                     && market.status.as_deref().unwrap_or("active") != "disabled"
                     && market.instrument_status.as_deref().unwrap_or("enabled") != "disabled"
             })
-            .map(|market| market.symbol.trim_end_matches(".EQ").to_ascii_uppercase())
+            .map(|market| {
+                let bare = market.symbol.trim_end_matches(".EQ").to_ascii_uppercase();
+                if let Some(n) = market.name.as_ref() {
+                    if !n.trim().is_empty() {
+                        names.insert(bare.clone(), n.trim().to_string());
+                    }
+                }
+                bare
+            })
             .filter(|symbol| !symbol.is_empty())
             .collect();
         symbols.sort();
         symbols.dedup();
         self.kraken_equity_universe_symbols = symbols;
+        self.kraken_equity_names = names;
         self.kraken_equity_universe_requested = true;
         self.kraken_equity_universe_retry_after_ts = 0;
         self.bg_rev = self.bg_rev.wrapping_add(1);
