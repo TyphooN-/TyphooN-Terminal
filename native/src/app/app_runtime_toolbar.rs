@@ -375,7 +375,12 @@ impl TyphooNApp {
                             ui.separator();
                             // Determine if we have any data source (broker, API keys, cache)
                             let has_broker = self.broker_connected || self.kraken_connected;
-                            let has_api = !self.finnhub_key.is_empty() || !self.fred_key.is_empty();
+                            let has_api = !self.finnhub_key.is_empty()
+                                || !self.fred_key.is_empty()
+                                || !self.fmp_key.is_empty()
+                                || !self.marketaux_key.is_empty()
+                                || !self.alpha_vantage_key.is_empty()
+                                || !self.cryptopanic_key.is_empty();
                             let has_cache = self.cache.is_some()
                                 && self
                                     .bg
@@ -383,17 +388,43 @@ impl TyphooNApp {
                                     .map(|(bars, _, _)| bars > 0)
                                     .unwrap_or(false);
                             if has_broker || has_api || has_cache {
+                                // Show every active data connection with its protocol(s). Alpaca's
+                                // mode (Paper/Live) is on the account chip further left; here we name
+                                // the data protocol instead so the two aren't redundant. Keyless
+                                // sources (Yahoo quotes/charts, GDELT/CoinDesk news) are listed when
+                                // online; keyed providers when their API key is configured.
+                                let online = self.broker_connected || self.kraken_connected;
                                 let mut sources: Vec<String> = Vec::new();
-                                // Alpaca is already named by the account-equity chip further left
-                                // (e.g. "[Alpaca (Paper) $90379]"), so don't repeat it here.
+                                if self.broker_connected {
+                                    sources.push("Alpaca (REST)".into());
+                                }
                                 if self.kraken_connected {
                                     sources.push("Kraken (REST + WS)".into());
+                                }
+                                if online {
+                                    sources.push("Yahoo".into());
                                 }
                                 if !self.finnhub_key.is_empty() {
                                     sources.push("Finnhub".into());
                                 }
+                                if !self.fmp_key.is_empty() {
+                                    sources.push("FMP".into());
+                                }
+                                if !self.marketaux_key.is_empty() {
+                                    sources.push("Marketaux".into());
+                                }
+                                if !self.alpha_vantage_key.is_empty() {
+                                    sources.push("Alpha Vantage".into());
+                                }
+                                if !self.cryptopanic_key.is_empty() {
+                                    sources.push("CryptoPanic".into());
+                                }
                                 if !self.fred_key.is_empty() {
                                     sources.push("FRED".into());
+                                }
+                                if online {
+                                    sources.push("GDELT".into());
+                                    sources.push("CoinDesk".into());
                                 }
                                 // Any data source connected = Connected. OFFLINE only when nothing connected.
                                 // Market hours per-symbol can be refined later using symbol specs.
