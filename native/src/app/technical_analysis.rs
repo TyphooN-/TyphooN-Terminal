@@ -2992,13 +2992,10 @@ pub(super) fn draw_chart(
         header_right = alert_rect.right();
     }
 
+    // Draw EXT hours badge on a second line below the symbol box
+    // to save horizontal space. Reg SHO stays on the first line.
     if chart.ext_active && chart.ext_close > 0.0 {
         if let Some(last) = bars.last() {
-            // Daily close and previous-day close come from the shared, timeframe-
-            // independent quote (set on the chart from the watchlist row); fall
-            // back to this chart's own bars only when those are unavailable, so the
-            // badge reads identically across H1/H4/W1 instead of using each
-            // timeframe's last/previous bar.
             let daily_close = if chart.ext_open > 0.0 {
                 chart.ext_open
             } else {
@@ -3016,7 +3013,7 @@ pub(super) fn draw_chart(
                 egui::Color32::from_rgb(245, 220, 250),
             );
             let ext_rect = egui::Rect::from_min_size(
-                egui::pos2(header_right + 2.0, sym_rect.top()),
+                egui::pos2(sym_rect.left(), sym_rect.bottom() + 2.0),
                 egui::vec2(
                     ext_galley.rect.width() + header_pad_x * 2.0,
                     sym_rect.height(),
