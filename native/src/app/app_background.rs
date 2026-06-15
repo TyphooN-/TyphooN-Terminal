@@ -93,12 +93,10 @@ pub(super) fn spawn_background_refresh(
                                 .and_then(|rt| rt.block_on(regulatory_alerts::refresh_regsho_threshold_alerts(&wconn)));
 
                             match refreshed {
-                                Ok(n) if n > 0 => {
-                                    tracing::info!("Reg SHO threshold list refreshed: {n} symbols");
-                                    last_regsho_refresh = Some(std::time::Instant::now());
-                                }
-                                Ok(0) => {
-                                    // No new file on NasdaqTrader — cached copy is still current
+                                Ok(n) => {
+                                    if n > 0 {
+                                        tracing::info!("Reg SHO threshold list refreshed: {n} symbols");
+                                    }
                                     last_regsho_refresh = Some(std::time::Instant::now());
                                 }
                                 Err(e) => {
