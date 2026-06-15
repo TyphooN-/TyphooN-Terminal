@@ -2713,14 +2713,9 @@ pub(super) fn draw_chart(
     // after the 25-char name cap.
     let sym_label = match company_name {
         Some(name) if chart_rect.width() >= 240.0 => {
-            // Cap the company suffix so a long name (e.g. "WORK Medical Technology
-            // Group LTD Class A Ordinary Shares") can't dominate the header row and
-            // crowd the regulatory-alert badge off the right edge.
-            let name = if name.chars().count() > 26 {
-                format!("{}…", name.chars().take(25).collect::<String>())
-            } else {
-                name.to_string()
-            };
+            // Always show the full company name (no truncation).
+            // The Reg SHO badge is protected by drawing order and the dynamic
+            // 18-char cap only when a regulatory alert is present.
             format!("{} [{}] · {}", chart.symbol, chart.timeframe.label(), name)
         }
         _ => format!("{} [{}]", chart.symbol, chart.timeframe.label()),
