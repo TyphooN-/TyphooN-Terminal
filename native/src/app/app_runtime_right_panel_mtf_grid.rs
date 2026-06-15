@@ -1,9 +1,23 @@
 use super::*;
-use crate::app::chart_ops::{MTF_GRID_TIMEFRAMES, mtf_visible_chart_groups};
+use crate::app::chart_ops::{MTF_GRID_TIMEFRAMES, mtf_grid_symbol_key, mtf_visible_chart_groups};
 
 #[allow(deprecated)]
 impl TyphooNApp {
     pub(super) fn render_right_panel_mtf_grid_section(&mut self, ui: &mut egui::Ui) {
+        // Keep the cache-loaded all-timeframe status in sync with the active
+        // symbol so the grid shows values for EVERY timeframe, not just the ones
+        // that happen to have an open chart tab. compute_mtf_grid_status loads
+        // missing timeframes from cache in the background; we only (re)trigger it
+        // when the active symbol changed and no load is already in flight, so the
+        // render path never re-spawns the loader every frame.
+        if self.right_mtf_grid_open
+            && self.cache.is_some()
+            && self.mtf_grid_rx.is_none()
+            && !self.symbol_input.trim().is_empty()
+            && self.mtf_grid_status_symbol != self.symbol_input.trim()
+        {
+            self.compute_mtf_grid_status();
+        }
         // ── MTF Grid ────────────────────────────────────────
         let mtf_grid_section = egui::CollapsingHeader::new(
             egui::RichText::new("☰ MTF Grid")
@@ -79,6 +93,10 @@ impl TyphooNApp {
                         }
                     });
             } else {
+                // The cache-loaded all-timeframe status is computed for the
+                // active symbol; use it to fill timeframes that have no open
+                // chart so the grid is not limited to open tabs.
+                let active_sym_key = mtf_grid_symbol_key(&self.symbol_input);
                 for group in mtf_groups {
                     ui.label(
                         egui::RichText::new(&group.symbol)
@@ -114,6 +132,23 @@ impl TyphooNApp {
                                                 chart.fisher.last().and_then(|v| *v),
                                                 chart.fisher_signal.last().and_then(|v| *v),
                                             )
+                                        })
+                                        .or_else(|| {
+                                            // No open chart for this timeframe — fall
+                                            // back to the cache-loaded status (active
+                                            // symbol only; it is the one we precompute).
+                                            if mtf_grid_symbol_key(&group.symbol)
+                                                .eq_ignore_ascii_case(&active_sym_key)
+                                            {
+                                                self.mtf_grid_status
+                                                    .iter()
+                                                    .find(|s| s.0 == *tf)
+                                                    .map(|&(_, c, sma, kama, fisher, fsig)| {
+                                                        (c, sma, kama, fisher, fsig)
+                                                    })
+                                            } else {
+                                                None
+                                            }
                                         });
                                     let dot_color =
                                         if let Some((close, sma, kama, fisher, fsig)) = status {

@@ -4092,6 +4092,11 @@ pub struct TyphooNApp {
             )>,
         >,
     >,
+    /// Symbol that `mtf_grid_status` was last computed for. Lets the grid panel
+    /// keep the cache-loaded all-timeframe status in sync with the active symbol
+    /// so non-open timeframes still render their values (grid is not limited to
+    /// whichever chart tabs happen to be open).
+    pub(crate) mtf_grid_status_symbol: String,
     /// Deferred chart loads: indices of charts to load, one per frame (avoids startup freeze).
     pub(crate) deferred_chart_loads: VecDeque<usize>,
     /// Side index for O(1) duplicate suppression in `deferred_chart_loads`.

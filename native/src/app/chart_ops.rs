@@ -24,7 +24,7 @@ fn mtf_timeframe_rank(tf: Timeframe) -> Option<usize> {
         .position(|(_, candidate)| *candidate == tf)
 }
 
-fn mtf_grid_symbol_key(symbol: &str) -> String {
+pub(super) fn mtf_grid_symbol_key(symbol: &str) -> String {
     let mut candidate = bare_symbol_from_key(symbol);
     if let Some(stripped) = candidate.strip_suffix(".EQ") {
         candidate = stripped.to_string();
@@ -387,6 +387,10 @@ impl TyphooNApp {
         if sym.is_empty() {
             return;
         }
+        // Mark which symbol the status now covers so the grid panel can detect a
+        // stale status (active symbol changed) and refresh without re-spawning
+        // the loader every frame.
+        self.mtf_grid_status_symbol = sym.clone();
         let sym_key = mtf_grid_symbol_key(&sym);
         let all_tfs: &[(&'static str, Timeframe)] = &MTF_GRID_TIMEFRAMES;
 
