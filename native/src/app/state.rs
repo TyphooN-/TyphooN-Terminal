@@ -4707,6 +4707,7 @@ pub struct TyphooNApp {
     /// Absence ⇒ overnight-enabled (the common case); drives the session label.
     pub(crate) kraken_equity_no_overnight: std::collections::HashSet<String>,
     pub(crate) kraken_equity_universe_requested: bool,
+    pub(crate) show_reg_sho_window: bool,
     pub(crate) kraken_equity_universe_retry_after_ts: i64,
     pub(crate) kraken_equities_sync_pause_until_ts: i64,
     pub(crate) kraken_equities_sync_pause_reason: String,

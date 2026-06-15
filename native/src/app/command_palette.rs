@@ -43,6 +43,9 @@ impl TyphooNApp {
                 self.save_session();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
+            "REG_SHO" | "REGSHO" => {
+                self.show_reg_sho_window = true;
+            }
             "MTF" | "MTF_GRID" => {
                 self.mtf_enabled = !self.mtf_enabled;
                 // When enabling MTF grid, load any charts with empty bars

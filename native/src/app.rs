@@ -539,6 +539,7 @@ impl TyphooNApp {
             kraken_equity_tokenized_symbols: Vec::new(),
             kraken_equity_no_overnight: std::collections::HashSet::new(),
             kraken_equity_universe_requested: false,
+            show_reg_sho_window: false,
             kraken_equity_universe_retry_after_ts: 0,
             kraken_equities_sync_pause_until_ts: 0,
             kraken_equities_sync_pause_reason: String::new(),
