@@ -260,22 +260,14 @@ impl TyphooNApp {
             .exact_size(20.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    let n_bars = self.charts.first().map(|c| c.bars.len()).unwrap_or(0);
-                    let sym = self
-                        .charts
-                        .first()
-                        .map(|c| c.symbol.as_str())
-                        .unwrap_or("—");
-                    let tf = self
-                        .charts
-                        .first()
-                        .map(|c| c.timeframe.label())
-                        .unwrap_or("—");
-                    // Full company name for the active chart's symbol, when known.
-                    let company = chart_overlay_company_name(&self.bg.all_fundamentals, sym);
+                    // Footer tracks the chart you're actually viewing (focused
+                    // MTF cell, else the active tab) — not charts[0]. Symbol/TF/
+                    // company/bar-count already appear in the chart title and tab
+                    // bar, so the status bar carries only the resolved data
+                    // source, position count, and any cache error.
                     let data_source = self
                         .charts
-                        .first()
+                        .get(self.mtf_focused.unwrap_or(self.active_tab))
                         .map(|c| {
                             if c.primary_source.is_empty() {
                                 "Data: unresolved".to_string()
@@ -285,38 +277,10 @@ impl TyphooNApp {
                         })
                         .unwrap_or_else(|| "Data: unresolved".to_string());
                     ui.label(
-                        egui::RichText::new(format!("TyphooN Terminal"))
+                        egui::RichText::new("TyphooN Terminal")
                             .color(QUAKE_CMD)
                             .small()
                             .strong(),
-                    );
-                    ui.label(
-                        egui::RichText::new("|")
-                            .color(egui::Color32::from_rgb(40, 50, 70))
-                            .small(),
-                    );
-                    ui.label(
-                        egui::RichText::new(format!("{} [{}]", sym, tf))
-                            .color(egui::Color32::WHITE)
-                            .small()
-                            .monospace(),
-                    );
-                    if let Some(name) = company {
-                        ui.label(
-                            egui::RichText::new(name)
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                    }
-                    ui.label(
-                        egui::RichText::new("|")
-                            .color(egui::Color32::from_rgb(40, 50, 70))
-                            .small(),
-                    );
-                    ui.label(
-                        egui::RichText::new(format!("{} bars", n_bars))
-                            .color(AXIS_TEXT)
-                            .small(),
                     );
                     ui.label(
                         egui::RichText::new("|")
