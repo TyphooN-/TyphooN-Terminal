@@ -337,7 +337,6 @@ pub(super) fn spawn_broker_message_processor(
                                     live_bid: 0.0,
                                     live_ask: 0.0,
                                     live_quote_at: None,
-                                    reg_sho: row.reg_sho,
                                 };
                             }
                         }
