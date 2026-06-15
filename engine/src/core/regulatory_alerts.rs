@@ -244,9 +244,38 @@ pub async fn fetch_regsho_threshold_entries() -> Result<(String, Vec<RegShoEntry
     Err("Reg SHO threshold list unavailable from NasdaqTrader".to_string())
 }
 
+pub fn get_latest_regsho_as_of(conn: &Connection) -> Result<Option<String>, String> {
+    create_regulatory_alert_tables(conn)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT as_of FROM regulatory_alerts
+             WHERE kind = 'reg_sho_threshold' AND source = 'nasdaqtrader'
+             ORDER BY as_of DESC LIMIT 1",
+        )
+        .map_err(|e| format!("prepare latest regsho as_of: {e}"))?;
+    let mut rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("query latest regsho as_of: {e}"))?;
+    Ok(rows.next().and_then(|r| r.ok()))
+}
+
+/// Smart refresh: only downloads the Nasdaq Reg SHO TXT when the remote
+/// file's as_of date is newer than what we already have cached.
+/// This avoids hammering the public endpoint every 30 minutes when the
+/// list has not changed.
 pub async fn refresh_regsho_threshold_alerts(conn: &Connection) -> Result<usize, String> {
-    let (as_of, rows) = fetch_regsho_threshold_entries().await?;
-    replace_regsho_threshold_alerts(conn, &as_of, &rows)
+    let cached_as_of = get_latest_regsho_as_of(conn).ok().flatten();
+
+    let (remote_as_of, rows) = fetch_regsho_threshold_entries().await?;
+
+    if let Some(cached) = cached_as_of {
+        if cached == remote_as_of {
+            // No new file uploaded yet — reuse cache
+            return Ok(0);
+        }
+    }
+
+    replace_regsho_threshold_alerts(conn, &remote_as_of, &rows)
 }
 
 #[cfg(test)]

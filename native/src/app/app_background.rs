@@ -86,26 +86,20 @@ pub(super) fn spawn_background_refresh(
                             .map(|t| t.elapsed() >= std::time::Duration::from_secs(30 * 60))
                             .unwrap_or(true);
                         if regsho_due {
-                            let fetched = tokio::runtime::Builder::new_current_thread()
+                            let refreshed = tokio::runtime::Builder::new_current_thread()
                                 .enable_all()
                                 .build()
                                 .map_err(|e| format!("runtime build failed: {e}"))
-                                .and_then(|rt| rt.block_on(regulatory_alerts::fetch_regsho_threshold_entries()));
-                            match fetched {
-                                Ok((as_of, rows)) => {
-                                    match regulatory_alerts::replace_regsho_threshold_alerts(
-                                        &wconn, &as_of, &rows,
-                                    ) {
-                                        Ok(n) => {
-                                            tracing::info!(
-                                                "Reg SHO threshold list refreshed: {n} symbols for {as_of}"
-                                            );
-                                            last_regsho_refresh = Some(std::time::Instant::now());
-                                        }
-                                        Err(e) => tracing::warn!(
-                                            "Reg SHO threshold list cache update failed: {e}"
-                                        ),
-                                    }
+                                .and_then(|rt| rt.block_on(regulatory_alerts::refresh_regsho_threshold_alerts(&wconn)));
+
+                            match refreshed {
+                                Ok(n) if n > 0 => {
+                                    tracing::info!("Reg SHO threshold list refreshed: {n} symbols");
+                                    last_regsho_refresh = Some(std::time::Instant::now());
+                                }
+                                Ok(0) => {
+                                    // No new file on NasdaqTrader — cached copy is still current
+                                    last_regsho_refresh = Some(std::time::Instant::now());
                                 }
                                 Err(e) => {
                                     tracing::warn!("Reg SHO threshold list refresh failed: {e}");
