@@ -367,7 +367,7 @@ impl TyphooNApp {
                     rp.rect_filled(row_rect, 0.0, row_bg);
 
                     let ry = row_rect.center().y;
-                    let mut rx = row_rect.left();
+                    let rx = row_rect.left();
 
                     // Symbol with colored dot
                     rp.text(
