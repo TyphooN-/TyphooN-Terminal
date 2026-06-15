@@ -338,6 +338,7 @@ impl TyphooNApp {
                 for (idx, wl) in sorted_wl.iter().enumerate() {
                     let sym_color = WL_COLORS[idx % WL_COLORS.len()];
                     let chg_color = if wl.change >= 0.0 { UP } else { DOWN };
+                    let is_reg_sho = self.bg.regulatory_alerts_by_symbol.contains_key(&wl.symbol.to_ascii_uppercase());
                     let is_selected = self
                         .charts
                         .get(self.active_tab)
@@ -366,7 +367,7 @@ impl TyphooNApp {
                     rp.rect_filled(row_rect, 0.0, row_bg);
 
                     let ry = row_rect.center().y;
-                    let rx = row_rect.left();
+                    let mut rx = row_rect.left();
 
                     // Symbol with colored dot
                     rp.text(
@@ -376,6 +377,16 @@ impl TyphooNApp {
                         font.clone(),
                         sym_color,
                     );
+                    if is_reg_sho {
+                        rp.text(
+                            egui::pos2(rx + 14.0, ry),
+                            egui::Align2::LEFT_CENTER,
+                            "!!",
+                            egui::FontId::monospace(9.0),
+                            egui::Color32::from_rgb(255, 70, 70),
+                        );
+                        rx += 18.0;
+                    }
                     rp.text(
                         egui::pos2(rx + 14.0, ry),
                         egui::Align2::LEFT_CENTER,
