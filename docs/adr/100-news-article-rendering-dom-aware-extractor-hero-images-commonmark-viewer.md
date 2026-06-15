@@ -92,6 +92,21 @@ The body and summary panes render through `egui_commonmark::CommonMarkViewer` wi
 - Inline images via `![alt](url)` — useful when an AI agent's TYPHOON_INGEST `body` field includes markdown image syntax.
 - Heading / list formatting for AI-supplied bodies, which often arrive structured.
 
+### 4. Render-time readability cleanup of cached bodies (2026-06-15)
+
+The DOM drop-list (section 1) removes structural chrome, but some publishers — notably the Stocktwits / Yahoo syndication path — leak inline cruft into the extracted *text* that no CSS selector catches: repeated `Loading...` lazy-loader placeholders, inline `Advertisement|Remove ads.` markers, and a trailing reader-comments blob that runs straight into the article copy. Worse, the extractor emits single-`\n` paragraph separators, and CommonMark treats a lone `\n` as a soft break — so the whole body collapses into one unreadable wall.
+
+`engine::core::news::clean_article_body` is a **pure string transform applied at render time** (not at scrape time) so it cleans the entire already-cached corpus (~63k bodies) without a re-scrape or schema change:
+
+- inline ad markers → paragraph breaks (they sit between real paragraphs);
+- `Loading...` placeholders dropped;
+- the reader-comments section gets a `**Reader comments**` header + per-comment bullet lines — only the **first** publisher-stable marker (`One user said` / `Another user said` / `Comments posted here`) splits, so `said` in legitimate article copy is never mistaken for a comment;
+- every extracted line becomes its own CommonMark paragraph.
+
+It is invoked from the News window body render (a free function returning an owned `String`, so it does not borrow `self` — `news_md_cache` is a disjoint field borrow). Four unit tests cover ad/loader stripping, comment delineation, the no-false-split guarantee, and empty input.
+
+Render-time (vs scrape-time) was chosen deliberately: it is reversible (tweaking heuristics needs no migration), applies retroactively to cached bodies, and keeps the stored body as the faithful extractor output.
+
 ## Rejected: full HTML renderer (webview / wry / tao / similar)
 
 Rejected explicitly on **security**, **maintenance**, and **value** grounds:
