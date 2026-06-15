@@ -1851,8 +1851,15 @@ impl eframe::App for TyphooNApp {
                         return;
                     }
 
-                    // Build table data
-                    let mut rows: Vec<_> = alerts_map.iter().collect();
+                    // Build table data — this window is Reg SHO threshold only, so
+                    // exclude symbols whose only alert is another kind (e.g. a
+                    // trade halt), which shares the regulatory_alerts map.
+                    let mut rows: Vec<_> = alerts_map
+                        .iter()
+                        .filter(|(_, alerts)| {
+                            alerts.iter().any(|a| a.kind == "reg_sho_threshold")
+                        })
+                        .collect();
                     rows.sort_by_key(|(sym, _)| *sym);
 
                     let table = egui_extras::TableBuilder::new(ui)
@@ -1886,7 +1893,10 @@ impl eframe::App for TyphooNApp {
                     })
                     .body(|mut body| {
                         for (sym, alerts) in rows {
-                            let alert = &alerts[0];
+                            let alert = alerts
+                                .iter()
+                                .find(|a| a.kind == "reg_sho_threshold")
+                                .unwrap_or(&alerts[0]);
                             // Live watchlist row first (has bid/ask); otherwise the
                             // cache-loaded snapshot so every symbol's columns fill.
                             let wl = self

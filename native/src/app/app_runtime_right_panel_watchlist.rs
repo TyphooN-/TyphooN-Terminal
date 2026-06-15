@@ -341,11 +341,12 @@ impl TyphooNApp {
                 for (idx, wl) in sorted_wl.iter().enumerate() {
                     let sym_color = WL_COLORS[idx % WL_COLORS.len()];
                     let chg_color = if wl.change >= 0.0 { UP } else { DOWN };
-                    // Match the chart-header lookup: normalize (.EQ/`/` stripped,
-                    // upper-cased) so xStock/equity ticker variants resolve to the
-                    // same key the map is built with. A plain to_ascii_uppercase()
-                    // missed any symbol carrying a suffix.
-                    let is_reg_sho = self.bg.regulatory_alerts_by_symbol.contains_key(
+                    // Flags any regulatory alert (Reg SHO threshold OR trading halt)
+                    // on the symbol. Match the chart-header lookup: normalize
+                    // (.EQ/`/` stripped, upper-cased) so xStock/equity ticker
+                    // variants resolve to the same key the map is built with — a
+                    // plain to_ascii_uppercase() missed any suffixed symbol.
+                    let has_regulatory_alert = self.bg.regulatory_alerts_by_symbol.contains_key(
                         &regulatory_alerts::normalize_regulatory_symbol(&wl.symbol),
                     );
                     let is_selected = self
@@ -393,7 +394,7 @@ impl TyphooNApp {
                         egui::Align2::LEFT_CENTER,
                         &wl.symbol,
                         font.clone(),
-                        if is_reg_sho {
+                        if has_regulatory_alert {
                             egui::Color32::from_rgb(255, 90, 90)
                         } else {
                             egui::Color32::WHITE
@@ -486,10 +487,10 @@ impl TyphooNApp {
                         AXIS_TEXT,
                     );
 
-                    // Reg SHO "!!" badge — drawn last (on top of the value columns)
-                    // so the right-aligned Last/Chg text never covers it. Sits just
-                    // after the ticker; bright red to flag threshold-list status.
-                    if is_reg_sho {
+                    // Regulatory "!!" badge (Reg SHO or trading halt) — drawn last
+                    // (on top of the value columns) so the right-aligned Last/Chg
+                    // text never covers it. Sits just after the ticker; bright red.
+                    if has_regulatory_alert {
                         rp.text(
                             egui::pos2(sym_rect.right() + 4.0, ry),
                             egui::Align2::LEFT_CENTER,

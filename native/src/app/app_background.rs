@@ -29,6 +29,9 @@ pub(super) fn spawn_background_refresh(
             // Persist data across loops so lightweight refreshes keep prior results.
             let mut data = BgData::default();
             let mut last_regsho_refresh: Option<std::time::Instant> = None;
+            // Halts are transient (LULD pauses can resolve in minutes), so this
+            // refreshes far more often than the daily Reg SHO list.
+            let mut last_halt_refresh: Option<std::time::Instant> = None;
             // BG thread opens its OWN read-only SQLite connection via SqliteCache::open_bg_read_connection().
             // This eliminates all Mutex contention with the UI thread's read_conn.
             // WAL mode allows unlimited concurrent readers — each connection reads
@@ -104,6 +107,29 @@ pub(super) fn spawn_background_refresh(
                                     last_regsho_refresh = Some(std::time::Instant::now());
                                 }
                             }
+                        }
+
+                        // Trading halts / LULD pauses — short cadence (transient).
+                        let halts_due = last_halt_refresh
+                            .map(|t| t.elapsed() >= std::time::Duration::from_secs(2 * 60))
+                            .unwrap_or(true);
+                        if halts_due {
+                            let refreshed = tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .map_err(|e| format!("runtime build failed: {e}"))
+                                .and_then(|rt| rt.block_on(regulatory_alerts::refresh_trade_halt_alerts(&wconn)));
+                            match refreshed {
+                                Ok(n) => {
+                                    if n > 0 {
+                                        tracing::info!("Trading halts refreshed: {n} active");
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Trading halts refresh failed: {e}");
+                                }
+                            }
+                            last_halt_refresh = Some(std::time::Instant::now());
                         }
                     }
                     // SEC data + cache stats — all via BG's own connection (growing database — no limit)
