@@ -2664,8 +2664,8 @@ pub(super) fn draw_chart(
             // Cap the company suffix so a long name (e.g. "WORK Medical Technology
             // Group LTD Class A Ordinary Shares") can't dominate the header row and
             // crowd the regulatory-alert badge off the right edge.
-            let name = if name.chars().count() > 32 {
-                format!("{}…", name.chars().take(31).collect::<String>())
+            let name = if name.chars().count() > 26 {
+                format!("{}…", name.chars().take(25).collect::<String>())
             } else {
                 name.to_string()
             };
