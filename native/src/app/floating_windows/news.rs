@@ -735,8 +735,18 @@ impl TyphooNApp {
                                                 // ADR-215 for the threat-model decision
                                                 // against a full HTML/JS renderer.
                                                 if !a.body.is_empty() {
+                                                    // Readability pass over the raw scraped body:
+                                                    // strips Loading.../ad cruft, delineates the
+                                                    // reader-comments blob, and forces real
+                                                    // CommonMark paragraph breaks. Free fn returning
+                                                    // an owned String so it doesn't borrow self
+                                                    // (news_md_cache is a disjoint field borrow).
+                                                    let cleaned =
+                                                        typhoon_engine::core::news::clean_article_body(
+                                                            &a.body,
+                                                        );
                                                     egui_commonmark::CommonMarkViewer::new()
-                                                        .show(ui, &mut self.news_md_cache, &a.body);
+                                                        .show(ui, &mut self.news_md_cache, &cleaned);
                                                 } else {
                                                     let hydration_exhausted = a.body_fetch_attempts
                                                         >= typhoon_engine::core::news::MAX_BODY_FETCH_ATTEMPTS;

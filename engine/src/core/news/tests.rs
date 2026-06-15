@@ -7,6 +7,49 @@ fn mem_conn() -> Connection {
 }
 
 #[test]
+fn clean_article_body_strips_ad_and_loading_cruft() {
+    let raw = "First paragraph. Advertisement|Remove ads. Second paragraph. \
+               Loading...Loading...Loading... Third paragraph.";
+    let cleaned = clean_article_body(raw);
+    assert!(!cleaned.contains("Advertisement"), "ad marker survived: {cleaned}");
+    assert!(!cleaned.contains("Remove ads"), "remove-ads survived: {cleaned}");
+    assert!(!cleaned.contains("Loading..."), "loader survived: {cleaned}");
+    assert!(cleaned.contains("First paragraph."));
+    assert!(cleaned.contains("Third paragraph."));
+    // Ad marker became a paragraph break between the first two paragraphs.
+    assert!(cleaned.contains("First paragraph.\n\nSecond paragraph."));
+}
+
+#[test]
+fn clean_article_body_delineates_reader_comments() {
+    let raw = "The company reported earnings. \
+               One user said, \"to the moon\". Another user said, \"sell now\".";
+    let cleaned = clean_article_body(raw);
+    assert!(cleaned.contains("**Reader comments**"), "no comments header: {cleaned}");
+    // Article copy is kept above the comments section.
+    let header_at = cleaned.find("**Reader comments**").unwrap();
+    assert!(cleaned[..header_at].contains("The company reported earnings."));
+    // Each comment is its own bullet line below the header.
+    assert!(cleaned[header_at..].contains("- One user said"));
+    assert!(cleaned[header_at..].contains("- Another user said"));
+}
+
+#[test]
+fn clean_article_body_does_not_split_on_said_in_article_copy() {
+    // "said" in normal article copy (no comment marker) must not trigger a split.
+    let raw = "The CEO said the merger closes in Q3 and guidance is unchanged.";
+    let cleaned = clean_article_body(raw);
+    assert!(!cleaned.contains("Reader comments"), "false comment split: {cleaned}");
+    assert!(cleaned.contains("The CEO said the merger closes in Q3"));
+}
+
+#[test]
+fn clean_article_body_handles_empty() {
+    assert_eq!(clean_article_body(""), "");
+    assert_eq!(clean_article_body("   \n  \n "), "");
+}
+
+#[test]
 fn hash_is_stable_and_lowercases_url() {
     let a = NewsArticle::compute_hash("https://Example.com/News/Article?Id=1");
     let b = NewsArticle::compute_hash("HTTPS://EXAMPLE.COM/NEWS/ARTICLE?ID=1");

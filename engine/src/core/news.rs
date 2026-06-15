@@ -836,6 +836,66 @@ fn finalize_extracted_text(raw_bytes: Vec<u8>) -> String {
     out.trim().to_string()
 }
 
+/// Heuristic readability pass for scraped article bodies shown in the News
+/// panel. The DOM extractor's drop-list removes most chrome, but on some
+/// publishers (notably Stocktwits / Yahoo syndication) inline cruft still
+/// leaks into the plain text: repeated "Loading..." lazy-loader placeholders,
+/// inline "Advertisement|Remove ads." markers, and a trailing reader-comments
+/// blob that runs straight into the article copy with no break.
+///
+/// Pure string transform applied at render time, so it cleans the already
+/// cached bodies without a re-scrape. It:
+///   - turns inline ad markers into paragraph breaks (they sit between paras),
+///   - drops the "Loading..." placeholders,
+///   - delineates the reader-comments section with a header + per-comment lines,
+///   - makes every extracted line its own CommonMark paragraph (a single '\n'
+///     is a soft break in CommonMark and otherwise collapses the whole body
+///     into one unreadable wall of text).
+pub fn clean_article_body(body: &str) -> String {
+    let mut text = body.to_string();
+
+    // Inline ad markers → paragraph breaks (they separate real paragraphs).
+    for junk in [
+        "Advertisement|Remove ads.",
+        "Advertisement | Remove ads.",
+        "|Remove ads.",
+        "Remove ads.",
+        "Advertisement",
+    ] {
+        text = text.replace(junk, "\n\n");
+    }
+
+    // Lazy-loader placeholders → gone (often repeated dozens of times).
+    text = text.replace("Loading...", " ").replace("Loading…", " ");
+
+    // Delineate the trailing reader-comments blob. Markers are publisher-stable
+    // Stocktwits phrasings; only the FIRST match splits, so legitimate uses of
+    // "said" earlier in the article copy are left untouched.
+    const COMMENT_MARKERS: &[&str] =
+        &["One user said", "Another user said", "Comments posted here"];
+    if let Some(idx) = COMMENT_MARKERS.iter().filter_map(|m| text.find(m)).min() {
+        let (article, comments) = text.split_at(idx);
+        let comments = comments
+            .replace("One user said", "\n- One user said")
+            .replace("Another user said", "\n- Another user said");
+        text = format!(
+            "{}\n\n---\n\n**Reader comments**\n\n{}",
+            article.trim_end(),
+            comments.trim_start()
+        );
+    }
+
+    // Normalize whitespace and force CommonMark paragraph breaks: collapse each
+    // line's internal whitespace, drop empties, and join with blank lines.
+    text.split('\n')
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+        .trim()
+        .to_string()
+}
+
 fn decode_html_entities(s: &str) -> String {
     // Walk by chars but track byte position so we can spot `&...;` entities
     // (which are pure ASCII) without breaking up multi-byte UTF-8 sequences
