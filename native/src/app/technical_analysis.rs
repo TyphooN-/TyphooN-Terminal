@@ -1356,27 +1356,29 @@ pub(super) fn draw_chart(
         // H1/H4 chart drops its own H1/H4 previous levels but keeps D/W/MN, a
         // weekly chart keeps only MN, current D1/W1 stay visible through the daily
         // chart and current MN1 through the weekly chart.
-        let prev_col = egui::Color32::from_rgb(255, 0, 255); // magenta = previous
-        let cur_col = egui::Color32::from_rgb(0, 220, 255); // cyan = current (Judas)
+        let white = egui::Color32::WHITE;
+        let magenta = egui::Color32::from_rgb(255, 0, 255);
+        // Non-magenta levels are white; magenta (D/W/MN prev) drawn last so they
+        // appear in foreground when multiple levels coincide at same price.
         let level_pairs = [
-            // Previous (last closed) candle high/low.
-            (chart.prev_h1_high, "Prev H1 Hi", prev_col, 0u8),
-            (chart.prev_h1_low, "Prev H1 Lo", prev_col, 0),
-            (chart.prev_h4_high, "Prev H4 Hi", prev_col, 0),
-            (chart.prev_h4_low, "Prev H4 Lo", prev_col, 0),
-            (chart.prev_daily_high, "Prev D Hi", prev_col, 1),
-            (chart.prev_daily_low, "Prev D Lo", prev_col, 1),
-            (chart.prev_weekly_high, "Prev W Hi", prev_col, 2),
-            (chart.prev_weekly_low, "Prev W Lo", prev_col, 2),
-            (chart.prev_monthly_high, "Prev MN Hi", prev_col, 3),
-            (chart.prev_monthly_low, "Prev MN Lo", prev_col, 3),
-            // Current (forming) candle high/low — the "Judas" levels.
-            (chart.current_daily_high, "Cur D Hi", cur_col, 2),
-            (chart.current_daily_low, "Cur D Lo", cur_col, 2),
-            (chart.current_weekly_high, "Cur W Hi", cur_col, 2),
-            (chart.current_weekly_low, "Cur W Lo", cur_col, 2),
-            (chart.current_monthly_high, "Cur MN Hi", cur_col, 3),
-            (chart.current_monthly_low, "Cur MN Lo", cur_col, 3),
+            // White (non-magenta) first — H1/H4 prev + all Cur levels.
+            (chart.prev_h1_high, "Prev H1 Hi", white, 0u8),
+            (chart.prev_h1_low, "Prev H1 Lo", white, 0),
+            (chart.prev_h4_high, "Prev H4 Hi", white, 0),
+            (chart.prev_h4_low, "Prev H4 Lo", white, 0),
+            (chart.current_daily_high, "Cur D Hi", white, 2),
+            (chart.current_daily_low, "Cur D Lo", white, 2),
+            (chart.current_weekly_high, "Cur W Hi", white, 2),
+            (chart.current_weekly_low, "Cur W Lo", white, 2),
+            (chart.current_monthly_high, "Cur MN Hi", white, 3),
+            (chart.current_monthly_low, "Cur MN Lo", white, 3),
+            // Magenta (D/W/MN prev) last for foreground priority on overlaps.
+            (chart.prev_daily_high, "Prev D Hi", magenta, 1),
+            (chart.prev_daily_low, "Prev D Lo", magenta, 1),
+            (chart.prev_weekly_high, "Prev W Hi", magenta, 2),
+            (chart.prev_weekly_low, "Prev W Lo", magenta, 2),
+            (chart.prev_monthly_high, "Prev MN Hi", magenta, 3),
+            (chart.prev_monthly_low, "Prev MN Lo", magenta, 3),
         ];
         let chart_rank = chart.timeframe.group_rank();
         // Draw each level line at its true price immediately, but defer the text
