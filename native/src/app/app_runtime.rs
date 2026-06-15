@@ -881,6 +881,16 @@ impl eframe::App for TyphooNApp {
             }
         }
 
+        // ── receive Reg SHO cached prices from background thread (non-blocking) ──
+        if let Some(ref rx) = self.reg_sho_prices_rx {
+            if let Ok(results) = rx.try_recv() {
+                for (sym, row) in results {
+                    self.reg_sho_prices.insert(sym, row);
+                }
+                self.reg_sho_prices_rx = None; // done
+            }
+        }
+
         // ── poll async broker messages ───────────────────────────────────
         perf_pre_broker_ms = now_instant.elapsed().as_secs_f64() * 1000.0;
         // Cap drain per frame so a flood of messages can't stall the render thread.
@@ -1816,10 +1826,20 @@ impl eframe::App for TyphooNApp {
 
         // === Reg SHO floating window ===
         if self.show_reg_sho_window {
+            // Populate price columns for every Reg SHO symbol (not just the few
+            // that happen to be in the watchlist) by loading cached daily bars
+            // off the render thread — once per window open.
+            if !self.reg_sho_prices_loaded && self.reg_sho_prices_rx.is_none() {
+                self.spawn_reg_sho_price_load();
+                self.reg_sho_prices_loaded = true;
+            }
             let mut open = true;
+            // Button clicks are collected here and applied after the window
+            // closure (which holds an immutable borrow of self).
+            let mut reg_sho_action: Option<SymbolAction> = None;
             egui::Window::new("Reg SHO Threshold Securities")
                 .open(&mut open)
-                .default_width(900.0)
+                .default_width(960.0)
                 .default_height(500.0)
                 .show(ctx, |ui| {
                     ui.label("All symbols currently on the Nasdaq Reg SHO Threshold List (live from cache)");
@@ -1845,7 +1865,14 @@ impl eframe::App for TyphooNApp {
                         .column(egui_extras::Column::auto().at_least(70.0))   // Ask
                         .column(egui_extras::Column::auto().at_least(80.0))   // Daily Close
                         .column(egui_extras::Column::auto().at_least(70.0))   // Chg%
+                        .column(egui_extras::Column::auto().at_least(120.0))  // Actions
                         .column(egui_extras::Column::remainder().at_least(200.0)); // Details
+
+                    // Cells show "—" when a value is absent (0.0) instead of a
+                    // misleading 0.0000.
+                    let fmt_px = |v: f64| -> String {
+                        if v > 0.0 { format!("{:.4}", v) } else { "—".to_string() }
+                    };
 
                     table.header(20.0, |mut header| {
                         header.col(|ui| { ui.strong("Symbol"); });
@@ -1854,44 +1881,62 @@ impl eframe::App for TyphooNApp {
                         header.col(|ui| { ui.strong("Ask"); });
                         header.col(|ui| { ui.strong("Dly Close"); });
                         header.col(|ui| { ui.strong("Chg%"); });
+                        header.col(|ui| { ui.strong("Actions"); });
                         header.col(|ui| { ui.strong("Details"); });
                     })
                     .body(|mut body| {
                         for (sym, alerts) in rows {
                             let alert = &alerts[0];
-                            // Try to get price from watchlist if present
-                            let wl = self.watchlist_rows.iter().find(|r| &r.symbol == sym);
+                            // Live watchlist row first (has bid/ask); otherwise the
+                            // cache-loaded snapshot so every symbol's columns fill.
+                            let wl = self
+                                .watchlist_rows
+                                .iter()
+                                .find(|r| &r.symbol == sym)
+                                .or_else(|| self.reg_sho_prices.get(sym.as_str()));
 
                             body.row(18.0, |mut row| {
                                 row.col(|ui| {
                                     ui.label(egui::RichText::new(sym).monospace());
                                 });
                                 row.col(|ui| {
-                                    if let Some(w) = wl {
-                                        ui.label(format!("{:.4}", w.last));
-                                    } else {
-                                        ui.label("—");
+                                    ui.label(wl.map(|w| fmt_px(w.last)).unwrap_or_else(|| "—".into()));
+                                });
+                                row.col(|ui| {
+                                    ui.label(wl.map(|w| fmt_px(w.live_bid)).unwrap_or_else(|| "—".into()));
+                                });
+                                row.col(|ui| {
+                                    ui.label(wl.map(|w| fmt_px(w.live_ask)).unwrap_or_else(|| "—".into()));
+                                });
+                                row.col(|ui| {
+                                    ui.label(wl.map(|w| fmt_px(w.regular_close)).unwrap_or_else(|| "—".into()));
+                                });
+                                row.col(|ui| {
+                                    match wl {
+                                        Some(w) if w.last > 0.0 => {
+                                            let c = if w.change_pct >= 0.0 { egui::Color32::from_rgb(0,200,0) } else { egui::Color32::from_rgb(200,0,0) };
+                                            ui.colored_label(c, format!("{:.2}%", w.change_pct));
+                                        }
+                                        _ => { ui.label("—"); }
                                     }
                                 });
                                 row.col(|ui| {
-                                    if let Some(w) = wl { ui.label(format!("{:.4}", w.live_bid)); } else { ui.label("—"); }
-                                });
-                                row.col(|ui| {
-                                    if let Some(w) = wl { ui.label(format!("{:.4}", w.live_ask)); } else { ui.label("—"); }
-                                });
-                                row.col(|ui| {
-                                    if let Some(w) = wl && w.regular_close > 0.0 {
-                                        ui.label(format!("{:.4}", w.regular_close));
-                                    } else {
-                                        ui.label("—");
+                                    ui.spacing_mut().item_spacing.x = 3.0;
+                                    let already_watched = self
+                                        .user_watchlist
+                                        .iter()
+                                        .any(|s| s.eq_ignore_ascii_case(sym));
+                                    if already_watched {
+                                        ui.add_enabled(false, egui::Button::new(egui::RichText::new("✓WL").small()))
+                                            .on_hover_text("Already in watchlist");
+                                    } else if ui.add(egui::Button::new(egui::RichText::new("+WL").small())).on_hover_text("Add to watchlist").clicked() {
+                                        reg_sho_action = Some(SymbolAction::AddWatchlist(sym.clone()));
                                     }
-                                });
-                                row.col(|ui| {
-                                    if let Some(w) = wl {
-                                        let c = if w.change_pct >= 0.0 { egui::Color32::from_rgb(0,200,0) } else { egui::Color32::from_rgb(200,0,0) };
-                                        ui.colored_label(c, format!("{:.2}%", w.change_pct));
-                                    } else {
-                                        ui.label("—");
+                                    if ui.add(egui::Button::new(egui::RichText::new("D1").small())).on_hover_text("Open D1 chart").clicked() {
+                                        reg_sho_action = Some(SymbolAction::OpenChartTf(sym.clone(), Timeframe::D1));
+                                    }
+                                    if ui.add(egui::Button::new(egui::RichText::new("W1").small())).on_hover_text("Open W1 chart").clicked() {
+                                        reg_sho_action = Some(SymbolAction::OpenChartTf(sym.clone(), Timeframe::W1));
                                     }
                                 });
                                 row.col(|ui| {
@@ -1902,8 +1947,12 @@ impl eframe::App for TyphooNApp {
                     });
                 });
 
+            if let Some(action) = reg_sho_action {
+                self.deferred_symbol_action = action;
+            }
             if !open {
                 self.show_reg_sho_window = false;
+                self.reg_sho_prices_loaded = false; // reload fresh on next open
             }
         }
 

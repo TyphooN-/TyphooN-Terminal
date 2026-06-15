@@ -648,6 +648,30 @@ impl TyphooNApp {
                     }
                 }
             }
+            SymbolAction::OpenChartTf(sym, tf) => {
+                let sym = normalize_market_data_symbol(&sym);
+                let target = sym.to_uppercase();
+                // Reuse an existing tab already showing this symbol at this TF;
+                // otherwise open a fresh tab at the requested TF.
+                if let Some(idx) = self
+                    .charts
+                    .iter()
+                    .position(|c| c.timeframe == tf && c.symbol.to_uppercase().contains(&target))
+                {
+                    self.active_tab = idx;
+                } else {
+                    let mut chart = ChartState::new(&sym, tf);
+                    if let Some(ref cache) = self.cache.clone() {
+                        let mut gpu = self.gpu_indicators.take();
+                        chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut());
+                        self.gpu_indicators = gpu;
+                    }
+                    self.charts.push(chart);
+                    self.active_tab = self.charts.len() - 1;
+                }
+                // Fill bars if the cache was cold for this symbol/TF.
+                self.queue_open_symbol_sync_all_timeframes(&sym);
+            }
             SymbolAction::AddWatchlist(sym) => {
                 if !self
                     .user_watchlist
@@ -655,6 +679,13 @@ impl TyphooNApp {
                     .any(|s| s.eq_ignore_ascii_case(&sym))
                 {
                     self.user_watchlist.push(sym.clone());
+                    // Force the cache-fallback re-scan and request a fresh quote so
+                    // the newly added symbol fills in without waiting for the next
+                    // rotation tick.
+                    self.watchlist_cache_tried = false;
+                    let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes {
+                        symbols: self.user_watchlist.clone(),
+                    });
                     self.log
                         .push_back(LogEntry::info(format!("Added {} to watchlist", sym)));
                 }

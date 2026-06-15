@@ -960,6 +960,9 @@ pub(crate) fn fuzzy_match(query: &str, target: &str) -> bool {
 pub(crate) enum SymbolAction {
     None,
     OpenChart(String),
+    /// Open (or focus) a chart for the symbol at a specific timeframe — used by
+    /// the Reg SHO window's D1 / W1 quick buttons, where the target TF matters.
+    OpenChartTf(String, Timeframe),
     AddWatchlist(String),
     ShowFundamentals,
     ShowSec(String),

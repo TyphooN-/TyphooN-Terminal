@@ -195,6 +195,64 @@ impl TyphooNApp {
         }
     }
 
+    /// Load cached daily-bar prices for every Reg SHO threshold symbol not
+    /// already in the watchlist, off the render thread (the same SQLite-read
+    /// stall pitfall as the MTF grid: a bulk bar-sync writer can hold the conn
+    /// mutex). Results are merged into `reg_sho_prices` so the Reg SHO window
+    /// fills its Last / Daily-close / Chg% columns for the whole list; live
+    /// bid/ask still come from watchlisted symbols only (window is cache-based).
+    pub(super) fn spawn_reg_sho_price_load(&mut self) {
+        let cache = match &self.cache {
+            Some(c) => Arc::clone(c),
+            None => return,
+        };
+        let in_watchlist: std::collections::HashSet<String> = self
+            .watchlist_rows
+            .iter()
+            .map(|r| r.symbol.to_ascii_uppercase())
+            .collect();
+        let symbols: Vec<String> = self
+            .bg
+            .regulatory_alerts_by_symbol
+            .keys()
+            .filter(|s| !in_watchlist.contains(&s.to_ascii_uppercase()))
+            .cloned()
+            .collect();
+        if symbols.is_empty() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let rt_handle = self.rt_handle.clone();
+        rt_handle.spawn_blocking(move || {
+            // Daily first — the window's columns are daily close / daily change.
+            let tfs = ["1Day", "4Hour", "1Hour"];
+            let mut out: Vec<(String, WatchlistRow)> = Vec::new();
+            for sym in symbols {
+                'search: for tf in tfs {
+                    for source in ["alpaca", "kraken", "kraken-equities", "default"] {
+                        for key in chart_source_cache_keys(source, &sym, tf) {
+                            if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
+                                if let Some(mut row) =
+                                    watchlist_row_from_raw_bars(&sym, &key, &raw)
+                                {
+                                    // For a daily bar the last close IS the daily
+                                    // close — surface it so Dly Close fills too.
+                                    if tf.eq_ignore_ascii_case("1Day") {
+                                        row.regular_close = row.last;
+                                    }
+                                    out.push((sym.clone(), row));
+                                    break 'search;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let _ = tx.send(out);
+        });
+        self.reg_sho_prices_rx = Some(rx);
+    }
+
     pub(super) fn reload_symbol(&mut self, symbol: &str, tf: Timeframe) {
         // NOTE: For live Kraken WS forming-bar updates, prefer
         // chart.apply_forming_bar_update() + chart.mark_structural_change()
