@@ -175,6 +175,10 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "Insider trades (Form 4)",
     },
     Command {
+        name: "REG_SHO",
+        desc: "Reg SHO threshold list — naked-short / fail-to-deliver watch",
+    },
+    Command {
         name: "FUNDAMENTALS",
         desc: "Fundamentals viewer (EV, ratios, profile)",
     },
