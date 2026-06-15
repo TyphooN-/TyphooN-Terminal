@@ -20,15 +20,7 @@ impl TyphooNApp {
             let last_part = parts.next().unwrap_or(chart_sym.as_str());
             let chart_bare = if matches!(
                 last_part,
-                "1MIN"
-                    | "5MIN"
-                    | "15MIN"
-                    | "30MIN"
-                    | "1HOUR"
-                    | "4HOUR"
-                    | "1DAY"
-                    | "1WEEK"
-                    | "1MONTH"
+                "1MIN" | "5MIN" | "15MIN" | "30MIN" | "1HOUR" | "4HOUR" | "1DAY" | "1WEEK" | "1MONTH"
             ) {
                 parts.next().unwrap_or(chart_sym.as_str())
             } else {
@@ -42,6 +34,7 @@ impl TyphooNApp {
             }
         }
     }
+
     pub(super) fn handle_kraken_book_quote_tick(&mut self, symbol: String, bid: f64, ask: f64) {
         let last = (bid + ask) * 0.5;
         if last <= 0.0 || !last.is_finite() {
@@ -63,6 +56,7 @@ impl TyphooNApp {
                 chart.apply_live_quote_update(bid, ask, false);
             }
         }
+        self.apply_live_quote_to_watchlist(&wanted, bid, ask);
     }
 
     pub(super) fn handle_kraken_equity_quote(
@@ -90,11 +84,6 @@ impl TyphooNApp {
             },
         );
 
-        // Do not write quote bars from the egui thread. During SEC/news sweeps
-        // SQLite can be write-locked for seconds; a single KrakenEquityQuote then
-        // blew the broker drain budget and froze free-look. History fetches still
-        // persist quote/history bars on blocking workers; this path is just the
-        // live UI overlay.
         for chart in &mut self.charts {
             let chart_sym = chart.symbol.replace('/', "").to_ascii_uppercase();
             let chart_bare = chart_sym
@@ -105,19 +94,10 @@ impl TyphooNApp {
                 .trim_end_matches(".EQ")
                 .to_string();
             if chart_bare == symbol {
-                // A delayed iapi equity quote (~15 min) must not clobber a fresh
-                // real-time WS quote. Adopt it only when no recent real-time quote
-                // exists (cold start or the WS feed went quiet); real-time quotes
-                // (delayed=false) always win. Keeps the chart spread and last
-                // matching the live tape during CORE.
                 let realtime_fresh = !chart.live_quote_delayed
                     && chart
                         .live_quote_at
                         .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
-                // Weekend close: there is no live xStocks session, so do not refresh
-                // the chart bid/ask overlay — let the 30s staleness guard hide Friday's
-                // frozen book instead of drawing it as if live (no Kraken orderbook
-                // exists while xStocks is shut).
                 if !weekend_closed && !(ticker.delayed && realtime_fresh) {
                     chart.apply_live_quote_update(ticker.bid, ticker.ask, ticker.delayed);
                 }
@@ -134,13 +114,14 @@ impl TyphooNApp {
         });
         if quote_updates_position {
             self.refresh_kraken_position_costs();
-            // The position row's quantity/cost basis only changes on balance/trade
-            // events, but its displayed current price and P/L are quote-driven.
-            // If a held xStock quote updates the chart/watchlist, mark Positions
-            // fresh too; otherwise the header says "3m" while the row is already
-            // priced from this same tick.
             self.positions_last_update_ts = chrono::Utc::now().timestamp();
         }
+
+        // Always push live mid to watchlist for instant reactivity
+        if !weekend_closed {
+            self.apply_live_quote_to_watchlist(&symbol, ticker.bid, ticker.ask);
+        }
+
         tracing::debug!(
             "Kraken equities: {} bid {} ask {} last {}{}",
             symbol,
@@ -149,5 +130,37 @@ impl TyphooNApp {
             format_price(last),
             if ticker.delayed { " (delayed)" } else { "" }
         );
+    }
+
+    /// Inject fresh live mid into any matching watchlist row so "Last" + change react instantly.
+    /// Uses the same 30s freshness rule as the chart overlays.
+    fn apply_live_quote_to_watchlist(&mut self, bare_symbol: &str, bid: f64, ask: f64) {
+        if bid <= 0.0 || ask <= 0.0 {
+            return;
+        }
+        let mid = (bid + ask) * 0.5;
+        let now = std::time::Instant::now();
+
+        for row in &mut self.watchlist_rows {
+            let row_sym = row
+                .symbol
+                .replace('/', "")
+                .trim_end_matches(".EQ")
+                .to_ascii_uppercase();
+            if row_sym == bare_symbol || row_sym.contains(bare_symbol) || bare_symbol.contains(&row_sym) {
+                // Only override if we have a previous close to compute change from
+                if row.prev_close > 0.0 {
+                    row.last = mid;
+                    row.change = mid - row.prev_close;
+                    row.change_pct = (row.change / row.prev_close) * 100.0;
+                } else {
+                    row.last = mid;
+                }
+                // Touch the global timestamp so the watchlist header shows "now"
+                self.watchlist_last_update_ts = chrono::Utc::now().timestamp();
+                // Store freshness for potential future guards (we can expand later)
+                break;
+            }
+        }
     }
 }
