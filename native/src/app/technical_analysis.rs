@@ -3042,7 +3042,12 @@ pub(super) fn draw_chart(
     }
 
     // ── indicator legend ─────────────────────────────────────────────────────
-    let ly = chart_rect.top() + 34.0;
+    // Push legend down when EXT badge is present so it does not overlap
+    let ly = if chart.ext_active && chart.ext_close > 0.0 {
+        sym_rect.bottom() + 24.0
+    } else {
+        chart_rect.top() + 34.0
+    };
     let mut lx = chart_rect.left() + 8.0;
     let (ma_legend_label, kama_legend_label) =
         nnfx_trend_legend_labels(!chart.mtf_sma.is_empty(), !chart.multi_kama.is_empty());
