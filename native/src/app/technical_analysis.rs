@@ -2659,8 +2659,10 @@ pub(super) fn draw_chart(
     // Append the full company name when one is known and the viewport is wide
     // enough to carry it — keeps tiny MTF grid cells to the compact "SYM [TF]"
     // badge while the single chart and larger cells show "SYM [TF] · Company".
+    // 240 px threshold chosen so Reg SHO / EXT badges still fit on the right
+    // after the 25-char name cap.
     let sym_label = match company_name {
-        Some(name) if chart_rect.width() >= 300.0 => {
+        Some(name) if chart_rect.width() >= 240.0 => {
             // Cap the company suffix so a long name (e.g. "WORK Medical Technology
             // Group LTD Class A Ordinary Shares") can't dominate the header row and
             // crowd the regulatory-alert badge off the right edge.
