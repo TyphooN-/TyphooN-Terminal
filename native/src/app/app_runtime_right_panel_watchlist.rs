@@ -377,16 +377,6 @@ impl TyphooNApp {
                         font.clone(),
                         sym_color,
                     );
-                    if is_reg_sho {
-                        rp.text(
-                            egui::pos2(rx + 14.0, ry),
-                            egui::Align2::LEFT_CENTER,
-                            "!!",
-                            egui::FontId::monospace(9.0),
-                            egui::Color32::from_rgb(255, 70, 70),
-                        );
-                        rx += 18.0;
-                    }
                     rp.text(
                         egui::pos2(rx + 14.0, ry),
                         egui::Align2::LEFT_CENTER,
@@ -394,6 +384,16 @@ impl TyphooNApp {
                         font.clone(),
                         egui::Color32::WHITE,
                     );
+                    if is_reg_sho {
+                        // Place Reg SHO badge AFTER the ticker, in a fixed small offset
+                        rp.text(
+                            egui::pos2(rx + 14.0 + 70.0, ry),  // ~70px after symbol start
+                            egui::Align2::LEFT_CENTER,
+                            "!!",
+                            egui::FontId::monospace(9.0),
+                            egui::Color32::from_rgb(255, 70, 70),
+                        );
+                    }
 
                     // Last / Change / Change% — show extended hours price if available
                     let (disp_last, disp_chg, disp_pct, disp_color) = if wl.ext_change_pct.abs()
