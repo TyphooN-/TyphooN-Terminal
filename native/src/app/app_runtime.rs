@@ -242,10 +242,11 @@ impl eframe::App for TyphooNApp {
 
         // Refresh the cached Sync Status coverage % so auto-full-tilt sees
         // current data even when the Sync Status window isn't open. The
-        // compute call self-throttles by mode; broad heavy-sync snapshots are
-        // deliberately slower because they scan the full xStocks/Merged matrix
-        // on the UI thread.
+        // full xStocks/Merged matrix scan runs on a blocking worker (never the
+        // render thread); poll applies any finished result, refresh dispatches
+        // a new snapshot compute when the cached rows go stale.
         if self.cache_loaded {
+            self.poll_bar_sync_compute();
             self.refresh_bar_sync_rows_if_stale();
         }
 

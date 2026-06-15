@@ -4667,6 +4667,12 @@ pub struct TyphooNApp {
     /// render-thread waste.
     pub(super) cached_bar_sync_rows: Vec<SyncStatsRow>,
     pub(crate) cached_bar_sync_rows_last: std::time::Instant,
+    /// Receiver for an in-flight bar-sync matrix recompute running on a blocking
+    /// worker. The full xStocks/Merged scan is hundreds of ms of CPU on a 12k
+    /// universe, so it is never run on the render thread; `Some` means a compute
+    /// is in flight and a new one must not be dispatched.
+    pub(crate) bar_sync_compute_rx:
+        Option<std::sync::mpsc::Receiver<super::sync_status::BarSyncResult>>,
     /// Coverage % across live brokers from the most recent Sync Status snapshot.
     /// Refreshed on every `compute_bar_sync_rows` call (cached, ≤1Hz).
     /// `auto_full_tilt_until_caught_up` consults it to keep request pressure

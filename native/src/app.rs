@@ -531,6 +531,7 @@ impl TyphooNApp {
             cached_bar_sync_rows_last: std::time::Instant::now()
                 .checked_sub(std::time::Duration::from_secs(10))
                 .unwrap_or_else(std::time::Instant::now),
+            bar_sync_compute_rx: None,
             cached_bar_sync_overall_pct: 0.0,
             auto_full_tilt_active: false,
             kraken_equity_universe_symbols: Vec::new(),

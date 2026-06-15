@@ -38,84 +38,92 @@ impl TyphooNApp {
             self.show_sync_status,
             self.kraken_equity_catalog_symbol_count(),
         );
+        if self.bar_sync_compute_rx.is_some() {
+            // A snapshot compute is already running on a worker — don't stack another.
+            return;
+        }
         if !self.cached_bar_sync_rows.is_empty()
             && now.duration_since(self.cached_bar_sync_rows_last) < refresh_interval
         {
             return;
         }
-        // NOTE: do NOT synchronously refresh the storage snapshot here. That
-        // path (`detailed_stats_with_size`) walks the entire ~86k-row bar_cache
-        // table and, run on the render thread, produced multi-second
-        // `floating_windows` stalls at startup. The background thread populates
-        // `bg.cache_stats` + `bg.detailed_stats` every ~3s from its own
-        // connection (zero render-thread I/O); until then we compute over
-        // whatever is loaded and the table fills in within a cycle.
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let checked_or_complete_lookup = |key: &str| -> bool {
-            let mut parts = key.splitn(3, ':');
-            let Some(prefix) = parts.next() else {
-                return false;
-            };
-            let Some(symbol) = parts.next() else {
-                return false;
-            };
-            let Some(tf) = parts.next() else {
-                return false;
-            };
-            // Kraken Spot WS OHLC snapshots/updates are authoritative liveness checks for
-            // subscribed low-timeframe pairs. Illiquid pairs may have an old last trade,
-            // but if WS just delivered the recent-window snapshot/update, the cache is in
-            // sync; counting that row stale keeps auto full-tilt pinned forever and wastes
-            // REST budget chasing bars the market has not printed.
-            if matches!(prefix, "kraken" | "kraken-equities")
-                && Self::kraken_ws_pair_is_fresh_at(&self.kraken_ws_fresh_until, symbol, tf, now_ms)
-            {
-                return true;
-            }
-            let fetch_key = alpaca_fetch_key(symbol, tf);
-            match prefix {
-                "alpaca" => self.alpaca_backfill_complete_pairs.contains_key(&fetch_key),
-                "kraken" | "kraken-equities" => {
-                    self.kraken_backfill_complete_pairs.contains_key(&fetch_key)
-                }
-                "kraken-futures" => self
-                    .kraken_futures_backfill_complete_pairs
-                    .contains_key(&fetch_key),
-                _ => false,
-            }
-        };
-        let mut rows = compute_bar_sync_stats(
-            &self.bg.detailed_stats,
-            &self.bg.bar_ts_cache,
-            &checked_or_complete_lookup,
-        );
-        self.add_kraken_equities_tradable_catalog_row(&mut rows);
-        self.add_expected_kraken_sync_rows(&mut rows);
-        self.add_kraken_equities_merged_rows(&mut rows, &checked_or_complete_lookup);
-        sort_sync_stats_rows(&mut rows);
-        let (total, healthy) = rows
-            .iter()
-            .filter(|row| row.broker != "Merged" && !sync_stats_row_is_informational(row))
-            .fold((0u64, 0u64), |(t, h), row| (t + row.total, h + row.healthy));
-        self.cached_bar_sync_overall_pct = if total == 0 {
-            100.0
-        } else {
-            (healthy as f32 / total as f32) * 100.0
-        };
-        // Latched flag with hysteresis: engage below 97%, release at 99%.
-        // Read by `full_tilt_sync_enabled` to keep request pressure high
-        // until coverage actually catches up, then drop back to the balanced
-        // cadence on AC and the battery-saving cadence on battery.
-        let pct = self.cached_bar_sync_overall_pct;
-        if self.auto_full_tilt_active {
-            if pct >= 99.0 {
-                self.auto_full_tilt_active = false;
-            }
-        } else if pct < 97.0 && total > 0 {
-            self.auto_full_tilt_active = true;
+        // The bar-sync matrix scan (full xStocks/Merged catalog × enabled
+        // timeframes) is hundreds of ms of pure CPU on a 12k-symbol universe and
+        // must never run on the render thread. Snapshot the inputs (cheap next to
+        // the scan itself) and compute on a blocking worker; `poll_bar_sync_compute`
+        // applies the finished rows + coverage % on a later frame.
+        let inputs = self.build_bar_sync_inputs();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.bar_sync_compute_rx = Some(rx);
+        self.rt_handle.spawn_blocking(move || {
+            let _ = tx.send(inputs.compute());
+        });
+    }
+
+    /// Snapshot every input the bar-sync matrix scan reads into an owned, `Send`
+    /// struct so the scan can run off the render thread. The clones here
+    /// (detailed-stats, bar-ts cache, backfill key sets) are O(rows) but far
+    /// cheaper than the per-symbol×timeframe×source status scan they feed.
+    fn build_bar_sync_inputs(&self) -> BarSyncInputs {
+        BarSyncInputs {
+            detailed_stats: self.bg.detailed_stats.clone(),
+            bar_ts_cache: self.bg.bar_ts_cache.clone(),
+            cache_stats_present: self.bg.cache_stats.is_some(),
+            catalog_symbol_count: self.kraken_equity_catalog_symbol_count() as u64,
+            catalog_symbols: self.kraken_equity_catalog_symbols(),
+            demand_symbols: self.kraken_equity_demand_symbols(),
+            ws_sweep_symbols: self.kraken_equity_ws_sweep_symbols(),
+            spot_symbols: self
+                .kraken_sync_symbol_sectors()
+                .into_iter()
+                .flatten()
+                .collect(),
+            futures_symbols: self.kraken_futures_sync_symbols(),
+            timeframes: self.enabled_standard_sync_timeframes(),
+            backfill_alpaca_kraken_equities_enabled: self.backfill_alpaca_kraken_equities_enabled,
+            backfill_yahoo_chart_enabled: self.backfill_yahoo_chart_enabled,
+            kraken_ws_fresh_until: self.kraken_ws_fresh_until.clone(),
+            alpaca_backfill_keys: self.alpaca_backfill_complete_pairs.keys().cloned().collect(),
+            kraken_backfill_keys: self.kraken_backfill_complete_pairs.keys().cloned().collect(),
+            kraken_futures_backfill_keys: self
+                .kraken_futures_backfill_complete_pairs
+                .keys()
+                .cloned()
+                .collect(),
         }
-        self.cached_bar_sync_rows = rows;
-        self.cached_bar_sync_rows_last = now;
+    }
+
+    /// Apply the result of an off-thread bar-sync recompute, if one has
+    /// finished. Cheap: a non-blocking channel poll plus a move of the rows.
+    pub(super) fn poll_bar_sync_compute(&mut self) {
+        let Some(rx) = self.bar_sync_compute_rx.as_ref() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(result) => {
+                self.cached_bar_sync_overall_pct = result.overall_pct;
+                // Latched flag with hysteresis: engage below 97%, release at 99%.
+                // Read by `full_tilt_sync_enabled` to keep request pressure high
+                // until coverage actually catches up, then drop back to the
+                // balanced cadence on AC and the battery-saving cadence on battery.
+                if self.auto_full_tilt_active {
+                    if result.overall_pct >= 99.0 {
+                        self.auto_full_tilt_active = false;
+                    }
+                } else if result.overall_pct < 97.0 && result.total > 0 {
+                    self.auto_full_tilt_active = true;
+                }
+                self.cached_bar_sync_rows = result.rows;
+                self.cached_bar_sync_rows_last = std::time::Instant::now();
+                self.bar_sync_compute_rx = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                // Worker dropped the sender without sending (should not happen);
+                // clear the slot so a later frame can retry.
+                self.bar_sync_compute_rx = None;
+            }
+        }
     }
 
     pub(super) fn compute_bar_sync_rows(&mut self) -> Vec<SyncStatsRow> {
@@ -268,9 +276,103 @@ impl TyphooNApp {
             self.save_session();
         }
     }
+}
+
+/// Owned snapshot of every app input the bar-sync matrix scan reads, so the
+/// scan (hundreds of ms on a 12k-symbol universe) can run on a blocking worker
+/// instead of the render thread. Built by `TyphooNApp::build_bar_sync_inputs`.
+pub(super) struct BarSyncInputs {
+    detailed_stats: Vec<(String, i64, i64)>,
+    bar_ts_cache: std::collections::HashMap<String, (i64, i64, i64)>,
+    cache_stats_present: bool,
+    catalog_symbol_count: u64,
+    catalog_symbols: Vec<String>,
+    demand_symbols: Vec<String>,
+    ws_sweep_symbols: Vec<String>,
+    spot_symbols: Vec<String>,
+    futures_symbols: Vec<String>,
+    timeframes: Vec<String>,
+    backfill_alpaca_kraken_equities_enabled: bool,
+    backfill_yahoo_chart_enabled: bool,
+    kraken_ws_fresh_until: std::collections::HashMap<(String, String), i64>,
+    alpaca_backfill_keys: std::collections::HashSet<String>,
+    kraken_backfill_keys: std::collections::HashSet<String>,
+    kraken_futures_backfill_keys: std::collections::HashSet<String>,
+}
+
+/// Result of an off-thread bar-sync recompute, applied by `poll_bar_sync_compute`.
+pub(crate) struct BarSyncResult {
+    rows: Vec<SyncStatsRow>,
+    overall_pct: f32,
+    total: u64,
+}
+
+impl BarSyncInputs {
+    /// Run the full bar-sync matrix scan. Pure CPU over the owned snapshot — no
+    /// app state, no I/O — so it is safe to call from a blocking worker thread.
+    pub(super) fn compute(self) -> BarSyncResult {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let checked_or_complete_lookup = |key: &str| -> bool {
+            let mut parts = key.splitn(3, ':');
+            let Some(prefix) = parts.next() else {
+                return false;
+            };
+            let Some(symbol) = parts.next() else {
+                return false;
+            };
+            let Some(tf) = parts.next() else {
+                return false;
+            };
+            // Kraken Spot WS OHLC snapshots/updates are authoritative liveness checks for
+            // subscribed low-timeframe pairs. Illiquid pairs may have an old last trade,
+            // but if WS just delivered the recent-window snapshot/update, the cache is in
+            // sync; counting that row stale keeps auto full-tilt pinned forever and wastes
+            // REST budget chasing bars the market has not printed.
+            if matches!(prefix, "kraken" | "kraken-equities")
+                && TyphooNApp::kraken_ws_pair_is_fresh_at(
+                    &self.kraken_ws_fresh_until,
+                    symbol,
+                    tf,
+                    now_ms,
+                )
+            {
+                return true;
+            }
+            let fetch_key = alpaca_fetch_key(symbol, tf);
+            match prefix {
+                "alpaca" => self.alpaca_backfill_keys.contains(&fetch_key),
+                "kraken" | "kraken-equities" => self.kraken_backfill_keys.contains(&fetch_key),
+                "kraken-futures" => self.kraken_futures_backfill_keys.contains(&fetch_key),
+                _ => false,
+            }
+        };
+        let mut rows = compute_bar_sync_stats(
+            &self.detailed_stats,
+            &self.bar_ts_cache,
+            &checked_or_complete_lookup,
+        );
+        self.add_kraken_equities_tradable_catalog_row(&mut rows);
+        self.add_expected_kraken_sync_rows(&mut rows);
+        self.add_kraken_equities_merged_rows(&mut rows, &checked_or_complete_lookup);
+        sort_sync_stats_rows(&mut rows);
+        let (total, healthy) = rows
+            .iter()
+            .filter(|row| row.broker != "Merged" && !sync_stats_row_is_informational(row))
+            .fold((0u64, 0u64), |(t, h), row| (t + row.total, h + row.healthy));
+        let overall_pct = if total == 0 {
+            100.0
+        } else {
+            (healthy as f32 / total as f32) * 100.0
+        };
+        BarSyncResult {
+            rows,
+            overall_pct,
+            total,
+        }
+    }
 
     fn add_kraken_equities_tradable_catalog_row(&self, rows: &mut Vec<SyncStatsRow>) {
-        let total = self.kraken_equity_catalog_symbol_count() as u64;
+        let total = self.catalog_symbol_count;
         if total == 0 {
             return;
         }
@@ -295,19 +397,19 @@ impl TyphooNApp {
         rows: &mut Vec<SyncStatsRow>,
         checked_or_complete_lookup: &dyn Fn(&str) -> bool,
     ) {
-        let timeframes = self.enabled_standard_sync_timeframes();
+        let timeframes = self.timeframes.clone();
         if timeframes.is_empty() {
             return;
         }
-        let catalog_symbols = self.kraken_equity_catalog_symbols();
-        let demand_symbols = self.kraken_equity_demand_symbols();
+        let catalog_symbols = self.catalog_symbols.clone();
+        let demand_symbols = self.demand_symbols.clone();
         if catalog_symbols.is_empty() && demand_symbols.is_empty() {
             return;
         }
         let now_ms = chrono::Utc::now().timestamp_millis();
         let mut detailed: std::collections::HashMap<&str, (i64, i64)> =
-            std::collections::HashMap::with_capacity(self.bg.detailed_stats.len());
-        for (key, bar_count, write_ts_s) in &self.bg.detailed_stats {
+            std::collections::HashMap::with_capacity(self.detailed_stats.len());
+        for (key, bar_count, write_ts_s) in &self.detailed_stats {
             detailed.insert(key.as_str(), (*bar_count, *write_ts_s));
         }
 
@@ -382,7 +484,7 @@ impl TyphooNApp {
         // Sync Status does not show a permanent 1% red row and tempt the
         // scheduler into wasting assist-provider RPM on ignored low-TF rows.
         if matches!(tf, "1Min" | "5Min") {
-            let ws_symbols = self.kraken_equity_ws_sweep_symbols();
+            let ws_symbols = self.ws_sweep_symbols.clone();
             if !ws_symbols.is_empty() {
                 return ws_symbols;
             }
@@ -416,7 +518,6 @@ impl TyphooNApp {
         if let Some((bar_count, write_ts_s)) = detailed.get(merged_key.as_str()).copied() {
             if bar_count > 0 {
                 let last_ms = self
-                    .bg
                     .bar_ts_cache
                     .get(&merged_key)
                     .map(|(_, last_ms, _)| *last_ms)
@@ -462,7 +563,6 @@ impl TyphooNApp {
                 continue;
             }
             let last_ms = self
-                .bg
                 .bar_ts_cache
                 .get(&key)
                 .map(|(_, last_ms, _)| *last_ms)
@@ -492,26 +592,21 @@ impl TyphooNApp {
     }
 
     fn add_expected_kraken_sync_rows(&self, rows: &mut Vec<SyncStatsRow>) {
-        let timeframes = self.enabled_standard_sync_timeframes();
+        let timeframes = self.timeframes.clone();
         if timeframes.is_empty()
-            || (self.bg.cache_stats.is_none() && self.bg.detailed_stats.is_empty())
+            || (!self.cache_stats_present && self.detailed_stats.is_empty())
         {
             return;
         }
         let existing: std::collections::HashSet<String> = self
-            .bg
             .detailed_stats
             .iter()
             .map(|(key, _, _)| key.clone())
             .collect();
-        let spot_symbols: Vec<String> = self
-            .kraken_sync_symbol_sectors()
-            .into_iter()
-            .flatten()
-            .collect();
-        let futures_symbols = self.kraken_futures_sync_symbols();
-        let kraken_equity_catalog_symbols = self.kraken_equity_catalog_symbols();
-        let kraken_equity_demand_symbols = self.kraken_equity_demand_symbols();
+        let spot_symbols: Vec<String> = self.spot_symbols.clone();
+        let futures_symbols = self.futures_symbols.clone();
+        let kraken_equity_catalog_symbols = self.catalog_symbols.clone();
+        let kraken_equity_demand_symbols = self.demand_symbols.clone();
         let mut expected_sources: Vec<(&str, &str)> = vec![
             ("kraken", "Kraken Spot"),
             ("kraken-equities", "Kraken Equities"),
