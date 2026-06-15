@@ -2274,9 +2274,18 @@ pub(super) fn draw_chart(
     // ── last/core close line ─────────────────────────────────────────────────
     if let Some(last) = bars.last() {
         let current_price = if chart.ext_active && chart.ext_close > 0.0 {
-            // During extended hours keep the regular-session close explicitly
-            // visible. The magenta EXT tag below owns the extended-hours last.
-            last.close
+            // During extended hours the `C` tag is the regular-session daily-close
+            // reference (the magenta EXT tag below owns the extended-hours last).
+            // Use the SAME authoritative close as the "Daily Close" header
+            // (chart.ext_open = the shared quote's regular_close), which is
+            // timeframe-independent. last.close is the chart's own last-bar close
+            // and can desync across timeframes / data sources (e.g. delayed-iapi
+            // xStocks like WOK), which made the `C` tag disagree with the header.
+            if chart.ext_open > 0.0 {
+                chart.ext_open
+            } else {
+                last.close
+            }
         } else {
             fresh_live_mid.unwrap_or(last.close)
         };
@@ -3051,19 +3060,18 @@ pub(super) fn draw_chart(
     let mut lx = chart_rect.left() + 8.0;
     let (ma_legend_label, kama_legend_label) =
         nnfx_trend_legend_labels(!chart.mtf_sma.is_empty(), !chart.multi_kama.is_empty());
-    if flags.sma200 {
+    // MTF_MA / MultiKAMA legend labels are intentionally suppressed — the
+    // colored overlay lines speak for themselves and the text was clutter.
+    // Only the current-TF SMA200 / KAMA labels remain (drawn when no MTF data).
+    if flags.sma200 && chart.mtf_sma.is_empty() {
         painter.text(
             egui::pos2(lx, ly),
             egui::Align2::LEFT_TOP,
             ma_legend_label,
             egui::FontId::monospace(10.0),
-            if chart.mtf_sma.is_empty() {
-                SMA200_COL
-            } else {
-                egui::Color32::from_rgb(255, 0, 255)
-            },
+            SMA200_COL,
         );
-        lx += if chart.mtf_sma.is_empty() { 57.0 } else { 65.0 };
+        lx += 57.0;
     }
     if flags.sma100 {
         painter.text(
@@ -3075,7 +3083,7 @@ pub(super) fn draw_chart(
         );
         lx += 57.0;
     }
-    if flags.kama {
+    if flags.kama && chart.multi_kama.is_empty() {
         painter.text(
             egui::pos2(lx, ly),
             egui::Align2::LEFT_TOP,
@@ -4082,8 +4090,22 @@ pub(super) fn draw_chart(
                 );
                 fx += dash_len + gap_len;
             }
-            // Label with entry price (not quantity)
-            let label = format!("{} {:.4}", label_prefix, pl.price);
+            // Entry lines (BUY/SELL) show size + average entry ("BUY 11155 @ 0.1058");
+            // SL/TP lines just show the price level. Quantity is trimmed of trailing
+            // zeros so whole-share lots read cleanly.
+            let label = if pl.line_type == 0 {
+                let qty_str = if pl.volume.fract().abs() < 1e-9 {
+                    format!("{:.0}", pl.volume)
+                } else {
+                    format!("{:.8}", pl.volume)
+                        .trim_end_matches('0')
+                        .trim_end_matches('.')
+                        .to_string()
+                };
+                format!("{} {} @ {:.4}", label_prefix, qty_str, pl.price)
+            } else {
+                format!("{} {:.4}", label_prefix, pl.price)
+            };
             painter.text(
                 egui::pos2(chart_rect.left() + 4.0, y - 10.0),
                 egui::Align2::LEFT_TOP,
@@ -8204,6 +8226,7 @@ fn draw_intraday_time_axis(
 #[cfg(test)]
 mod company_name_overlay_tests {
     use super::chart_overlay_company_name;
+    use std::collections::HashMap;
     use typhoon_engine::core::fundamentals::Fundamentals;
 
     fn fund(symbol: &str, name: &str) -> Fundamentals {
@@ -8214,44 +8237,72 @@ mod company_name_overlay_tests {
         }
     }
 
+    fn no_names() -> HashMap<String, String> {
+        HashMap::new()
+    }
+
     #[test]
     fn resolves_company_name_case_insensitively() {
         let funds = vec![fund("MS", "Morgan Stanley"), fund("FI", "Fiserv, Inc.")];
+        let names = no_names();
         assert_eq!(
-            chart_overlay_company_name(&funds, "MS"),
+            chart_overlay_company_name(&funds, &names, "MS").as_deref(),
             Some("Morgan Stanley")
         );
         assert_eq!(
-            chart_overlay_company_name(&funds, "ms"),
+            chart_overlay_company_name(&funds, &names, "ms").as_deref(),
             Some("Morgan Stanley")
         );
-        assert_eq!(chart_overlay_company_name(&funds, "FI"), Some("Fiserv, Inc."));
+        assert_eq!(
+            chart_overlay_company_name(&funds, &names, "FI").as_deref(),
+            Some("Fiserv, Inc.")
+        );
     }
 
     #[test]
     fn returns_none_for_unknown_or_blank() {
         let funds = vec![fund("MS", "Morgan Stanley"), fund("ZZZ", "   ")];
-        assert_eq!(chart_overlay_company_name(&funds, "NVDA"), None);
+        let names = no_names();
+        assert_eq!(chart_overlay_company_name(&funds, &names, "NVDA"), None);
         // Whitespace-only name is treated as missing.
-        assert_eq!(chart_overlay_company_name(&funds, "ZZZ"), None);
+        assert_eq!(chart_overlay_company_name(&funds, &names, "ZZZ"), None);
         // Empty fundamentals table.
-        assert_eq!(chart_overlay_company_name(&[], "MS"), None);
+        assert_eq!(chart_overlay_company_name(&[], &names, "MS"), None);
     }
 
     #[test]
     fn normalizes_slash_and_eq_suffix() {
         let funds = vec![fund("BTCUSD", "Bitcoin"), fund("AAPL", "Apple Inc")];
+        let names = no_names();
         // Crypto pair "BTC/USD" collapses to "BTCUSD".
-        assert_eq!(chart_overlay_company_name(&funds, "BTC/USD"), Some("Bitcoin"));
+        assert_eq!(
+            chart_overlay_company_name(&funds, &names, "BTC/USD").as_deref(),
+            Some("Bitcoin")
+        );
         // Kraken-equity ".EQ" suffix is trimmed before matching.
-        assert_eq!(chart_overlay_company_name(&funds, "AAPL.EQ"), Some("Apple Inc"));
+        assert_eq!(
+            chart_overlay_company_name(&funds, &names, "AAPL.EQ").as_deref(),
+            Some("Apple Inc")
+        );
+    }
+
+    #[test]
+    fn resolves_from_equity_names_catalog_when_no_fundamentals() {
+        let mut names = HashMap::new();
+        names.insert("WOK".to_string(), "WORK Medical Technology Group".to_string());
+        // No fundamentals row — the lightweight Kraken equity catalog resolves it.
+        assert_eq!(
+            chart_overlay_company_name(&[], &names, "WOK.EQ").as_deref(),
+            Some("WORK Medical Technology Group")
+        );
     }
 
     #[test]
     fn trims_surrounding_whitespace_in_name() {
         let funds = vec![fund("MS", "  Morgan Stanley  ")];
+        let names = no_names();
         assert_eq!(
-            chart_overlay_company_name(&funds, "MS"),
+            chart_overlay_company_name(&funds, &names, "MS").as_deref(),
             Some("Morgan Stanley")
         );
     }
