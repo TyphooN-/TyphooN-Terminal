@@ -4307,8 +4307,6 @@ pub struct TyphooNApp {
     /// Lets Spot start from AssetPairs and xStocks join later from the
     /// instrument universe without duplicate subscriptions.
     pub(crate) kraken_ws_ohlc_streamed_pairs: std::collections::HashSet<String>,
-    /// Rotating cursor for the one-batch-at-a-time Kraken xStocks OHLC snapshot sweep.
-    pub(crate) kraken_ws_ohlc_snapshot_sweep_cursor: usize,
     pub(crate) kraken_ws_ohlc_snapshot_sweep_last_schedule: std::time::Instant,
     pub(crate) kraken_ws_ohlc_snapshot_sweep_in_flight: bool,
     pub(crate) crypto_fiat_quote_usd: bool,

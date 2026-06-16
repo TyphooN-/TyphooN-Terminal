@@ -101,6 +101,9 @@ impl TyphooNApp {
         {
             return false;
         }
+        // Spend this cadence slot now, whether or not there is work, so an
+        // all-fresh catalog doesn't re-scan every frame.
+        self.kraken_ws_ohlc_snapshot_sweep_last_schedule = now;
         // Scope the sweep to WS-tokenized xStocks (the `{SYM}x/USD` pairs that
         // actually exist on Kraken's WS v2), not the full ~12k iapi catalog — the
         // catalog is ~99% non-WS Securities, so subscribing it was ~99% phantom
@@ -112,42 +115,23 @@ impl TyphooNApp {
         if intervals_min.is_empty() {
             return false;
         }
-        let Some(batch) = next_kraken_ws_snapshot_sweep_batch(
+        // High-timeframe-FIRST coverage: sweep the highest enabled interval that
+        // still has MISSING (non-WS-fresh) pairs. W1/D1 finish before the low-TF
+        // breadth (1Min/5Min) is touched; already-fresh high TFs fall through, so
+        // low TFs still refresh on their short fresh windows once covered. A pair
+        // re-arms automatically once its newest bar ages past the WS-fresh window,
+        // and a fully-fresh catalog yields no batch (the sweep stays idle).
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let Some((interval_min, pairs)) = select_kraken_ws_snapshot_sweep_batch_high_first(
             &catalog,
-            &mut self.kraken_ws_ohlc_snapshot_sweep_cursor,
-            KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE,
             &intervals_min,
+            &self.kraken_ws_fresh_until,
+            now_ms,
+            KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE,
         ) else {
             return false;
         };
-        self.kraken_ws_ohlc_snapshot_sweep_last_schedule = now;
-        let interval_min = batch.interval_min;
         let tf = kraken_ws_interval_to_tf_label(interval_min).unwrap_or("?");
-        // Pull bars only where we're MISSING them: drop pairs already WS-fresh for
-        // this TF. The sweep then targets gaps and goes quiet once the catalog is
-        // filled (e.g. over the weekend, after one pass) instead of re-snapshotting
-        // bars we already have every 10s — which both wasted work (the overnight
-        // stall storm) and never moved coverage. A pair re-arms automatically once
-        // its newest bar ages past the WS-fresh window, so live gaps still refill.
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let pairs: Vec<String> = batch
-            .pairs
-            .into_iter()
-            .filter(|ws| match kraken_ws_bar_cache_target(ws) {
-                Some((_src, symbol)) => !Self::kraken_ws_pair_is_fresh_at(
-                    &self.kraken_ws_fresh_until,
-                    &symbol,
-                    tf,
-                    now_ms,
-                ),
-                None => true,
-            })
-            .collect();
-        if pairs.is_empty() {
-            // Whole batch already fresh — nothing to pull; advance to the next batch
-            // on the next tick. Keeps the sweep idle (no WS work) once fully synced.
-            return false;
-        }
         let pair_count = pairs.len();
         self.kraken_ws_ohlc_snapshot_sweep_in_flight = true;
         let _ = self.broker_tx.send(BrokerCmd::KrakenOhlcSnapshotSweep {
@@ -155,7 +139,7 @@ impl TyphooNApp {
             pairs,
         });
         self.log.push_back(LogEntry::info(format!(
-            "Kraken WS OHLC snapshot sweep: queued {pair_count} missing xStocks for {tf}"
+            "Kraken WS OHLC snapshot sweep: queued {pair_count} missing xStocks for {tf} (high-TF-first)"
         )));
         true
     }
@@ -201,11 +185,6 @@ pub(super) fn build_kraken_ws_subscribe_symbols_for_app(
     out.into_iter().collect()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct KrakenWsSnapshotSweepBatch {
-    interval_min: u32,
-    pairs: Vec<String>,
-}
 
 const KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST: [u32; 8] = [
     10080, // 1Week
@@ -242,17 +221,24 @@ fn enabled_kraken_ws_ohlc_snapshot_sweep_intervals(
         .collect()
 }
 
-fn next_kraken_ws_snapshot_sweep_batch(
+/// Pick the snapshot-sweep batch high-timeframe-FIRST: the highest enabled
+/// interval that still has missing (non-WS-fresh) xStock pairs, capped at
+/// `batch_size`. `None` when every interval is fully fresh.
+///
+/// This finishes high-TF coverage (W1/D1) before spending sweep ticks on the
+/// low-TF breadth (1Min/5Min) that dominates the snapshot cost and produced the
+/// multi-second stalls in the overnight log. Once a high TF is fully fresh it
+/// falls through to the next; high-TF fresh windows are long (days), so after
+/// initial coverage the low TFs — which re-arm on their short fresh windows —
+/// get serviced, just at lower priority than any high-TF gap.
+fn select_kraken_ws_snapshot_sweep_batch_high_first(
     catalog_symbols: &[String],
-    cursor: &mut usize,
-    batch_size: usize,
     intervals_high_first: &[u32],
-) -> Option<KrakenWsSnapshotSweepBatch> {
+    fresh_until: &std::collections::HashMap<(String, String), i64>,
+    now_ms: i64,
+    batch_size: usize,
+) -> Option<(u32, Vec<String>)> {
     let batch_size = batch_size.max(1);
-    if intervals_high_first.is_empty() {
-        *cursor = 0;
-        return None;
-    }
     let pairs: Vec<String> = catalog_symbols
         .iter()
         .filter_map(|symbol| format_xstock_ws_symbol(symbol))
@@ -260,21 +246,32 @@ fn next_kraken_ws_snapshot_sweep_batch(
         .into_iter()
         .collect();
     if pairs.is_empty() {
-        *cursor = 0;
         return None;
     }
-    let batches_per_interval = pairs.len().div_ceil(batch_size).max(1);
-    let total_steps = batches_per_interval * intervals_high_first.len();
-    let step = *cursor % total_steps;
-    let interval_idx = step / batches_per_interval;
-    let batch_idx = step % batches_per_interval;
-    let start = batch_idx * batch_size;
-    let end = (start + batch_size).min(pairs.len());
-    *cursor = (step + 1) % total_steps;
-    Some(KrakenWsSnapshotSweepBatch {
-        interval_min: intervals_high_first[interval_idx],
-        pairs: pairs[start..end].to_vec(),
-    })
+    for &interval_min in intervals_high_first {
+        let Some(tf) = kraken_ws_interval_to_tf_label(interval_min) else {
+            continue;
+        };
+        let mut missing: Vec<String> = Vec::new();
+        for ws in &pairs {
+            let is_missing = match kraken_ws_bar_cache_target(ws) {
+                Some((_src, symbol)) => {
+                    !TyphooNApp::kraken_ws_pair_is_fresh_at(fresh_until, &symbol, tf, now_ms)
+                }
+                None => true,
+            };
+            if is_missing {
+                missing.push(ws.clone());
+                if missing.len() >= batch_size {
+                    break;
+                }
+            }
+        }
+        if !missing.is_empty() {
+            return Some((interval_min, missing));
+        }
+    }
+    None
 }
 
 fn format_xstock_ws_symbol(symbol: &str) -> Option<String> {

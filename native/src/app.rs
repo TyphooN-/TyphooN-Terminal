@@ -2737,7 +2737,6 @@ impl TyphooNApp {
             kraken_ws_ohlc_enabled: true,
             kraken_ws_ohlc_started: false,
             kraken_ws_ohlc_streamed_pairs: std::collections::HashSet::new(),
-            kraken_ws_ohlc_snapshot_sweep_cursor: 0,
             kraken_ws_ohlc_snapshot_sweep_last_schedule: std::time::Instant::now()
                 - std::time::Duration::from_secs(60),
             kraken_ws_ohlc_snapshot_sweep_in_flight: false,

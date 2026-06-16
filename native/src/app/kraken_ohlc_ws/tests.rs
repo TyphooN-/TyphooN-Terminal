@@ -197,82 +197,107 @@ fn ws_ohlc_interval_plan_respects_enabled_sync_timeframe_controls() {
 
 #[test]
 fn snapshot_sweep_respects_enabled_sync_timeframe_controls() {
-    let catalog = vec!["AAPL".to_string()];
+    // Disabled TFs are excluded from the interval list, so the highest ENABLED
+    // interval with missing pairs is chosen.
     let enabled = BTreeSet::from(["1Day".to_string(), "15Min".to_string()]);
     let intervals = enabled_kraken_ws_ohlc_snapshot_sweep_intervals(&enabled);
-    let mut cursor = 0usize;
-
-    let first = next_kraken_ws_snapshot_sweep_batch(&catalog, &mut cursor, 1, &intervals)
-        .expect("first enabled interval");
-    let second = next_kraken_ws_snapshot_sweep_batch(&catalog, &mut cursor, 1, &intervals)
-        .expect("second enabled interval");
-
     assert_eq!(intervals, vec![1440, 15]);
-    assert_eq!(first.interval_min, 1440);
-    assert_eq!(second.interval_min, 15);
-}
-
-#[test]
-fn snapshot_sweep_batches_catalog_high_timeframe_first() {
-    let catalog = vec!["aapl".to_string(), "MSFT.EQ".to_string(), "WOK".to_string()];
-    let mut cursor = 0usize;
-
-    let first = next_kraken_ws_snapshot_sweep_batch(
-        &catalog,
-        &mut cursor,
-        2,
-        &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
-    )
-    .expect("first batch");
-
-    assert_eq!(first.interval_min, 10080);
-    assert_eq!(
-        first.pairs,
-        vec!["AAPLx/USD".to_string(), "MSFTx/USD".to_string()]
-    );
-    assert_eq!(cursor, 1);
-
-    let second = next_kraken_ws_snapshot_sweep_batch(
-        &catalog,
-        &mut cursor,
-        2,
-        &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
-    )
-    .expect("second batch");
-    assert_eq!(second.interval_min, 10080);
-    assert_eq!(second.pairs, vec!["WOKx/USD".to_string()]);
-    assert_eq!(cursor, 2);
-
-    let third = next_kraken_ws_snapshot_sweep_batch(
-        &catalog,
-        &mut cursor,
-        2,
-        &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
-    )
-    .expect("third batch");
-    assert_eq!(third.interval_min, 1440);
-    assert_eq!(
-        third.pairs,
-        vec!["AAPLx/USD".to_string(), "MSFTx/USD".to_string()]
-    );
-}
-
-#[test]
-fn snapshot_sweep_cursor_wraps_after_all_interval_batches() {
     let catalog = vec!["AAPL".to_string()];
-    let mut cursor = KRAKEN_WS_OHLC_INTERVALS_MIN.len();
-
-    let batch = next_kraken_ws_snapshot_sweep_batch(
-        &catalog,
-        &mut cursor,
-        1,
-        &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
+    let fresh = std::collections::HashMap::new();
+    let (interval_min, _pairs) = select_kraken_ws_snapshot_sweep_batch_high_first(
+        &catalog, &intervals, &fresh, 0, 250,
     )
-    .expect("wrapped batch");
+    .expect("highest enabled interval");
+    assert_eq!(interval_min, 1440, "1Day chosen over 15Min");
+}
 
-    assert_eq!(batch.interval_min, 10080);
-    assert_eq!(batch.pairs, vec!["AAPLx/USD".to_string()]);
-    assert_eq!(cursor, 1);
+#[test]
+fn snapshot_sweep_picks_highest_timeframe_with_missing_pairs() {
+    // Nothing fresh yet → every interval has missing pairs → the HIGHEST interval
+    // wins (high-TF-first coverage), symbols normalized + sorted.
+    let catalog = vec!["aapl".to_string(), "MSFT.EQ".to_string()];
+    let fresh = std::collections::HashMap::new();
+    let (interval_min, pairs) = select_kraken_ws_snapshot_sweep_batch_high_first(
+        &catalog,
+        &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
+        &fresh,
+        10_000_000_000,
+        250,
+    )
+    .expect("a batch when pairs are missing");
+    assert_eq!(interval_min, 10080, "1Week (highest) swept first");
+    assert_eq!(
+        pairs,
+        vec!["AAPLx/USD".to_string(), "MSFTx/USD".to_string()]
+    );
+}
+
+#[test]
+fn snapshot_sweep_skips_fresh_high_timeframes_to_the_lowest_gap() {
+    // AAPL is WS-fresh for every interval except 1Min → the selector skips the
+    // fresh high TFs and sweeps the one remaining gap instead of re-pulling
+    // already-fresh high-TF bars.
+    let now_ms = 10_000_000_000i64;
+    let mut fresh = std::collections::HashMap::new();
+    for &interval_min in &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST {
+        let tf = kraken_ws_interval_to_tf_label(interval_min).unwrap();
+        if tf != "1Min" {
+            fresh.insert(("AAPL".to_string(), tf.to_string()), now_ms);
+        }
+    }
+    let catalog = vec!["AAPL".to_string()];
+    let (interval_min, pairs) = select_kraken_ws_snapshot_sweep_batch_high_first(
+        &catalog,
+        &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
+        &fresh,
+        now_ms,
+        250,
+    )
+    .expect("the 1Min gap is swept");
+    assert_eq!(interval_min, 1, "only 1Min still missing");
+    assert_eq!(pairs, vec!["AAPLx/USD".to_string()]);
+}
+
+#[test]
+fn snapshot_sweep_none_when_every_interval_is_fresh() {
+    let now_ms = 10_000_000_000i64;
+    let mut fresh = std::collections::HashMap::new();
+    for &interval_min in &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST {
+        let tf = kraken_ws_interval_to_tf_label(interval_min).unwrap();
+        fresh.insert(("AAPL".to_string(), tf.to_string()), now_ms);
+    }
+    let catalog = vec!["AAPL".to_string()];
+    assert!(
+        select_kraken_ws_snapshot_sweep_batch_high_first(
+            &catalog,
+            &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
+            &fresh,
+            now_ms,
+            250,
+        )
+        .is_none(),
+        "fully-fresh catalog → no sweep"
+    );
+}
+
+#[test]
+fn snapshot_sweep_caps_batch_size_within_the_chosen_timeframe() {
+    let catalog = vec!["aapl".to_string(), "MSFT".to_string(), "WOK".to_string()];
+    let fresh = std::collections::HashMap::new();
+    let (interval_min, pairs) = select_kraken_ws_snapshot_sweep_batch_high_first(
+        &catalog,
+        &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
+        &fresh,
+        0,
+        2,
+    )
+    .expect("a capped batch");
+    assert_eq!(interval_min, 10080);
+    assert_eq!(
+        pairs,
+        vec!["AAPLx/USD".to_string(), "MSFTx/USD".to_string()],
+        "batch capped at 2, sorted"
+    );
 }
 
 fn mk_bar(interval_min: u32, interval_begin_ms: i64) -> KrakenWsOhlcBar {
