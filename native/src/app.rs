@@ -546,6 +546,8 @@ impl TyphooNApp {
             regulatory_prices_rx: None,
             regulatory_prices_loaded: false,
             regulatory_price_read_at: None,
+            reg_sho_sort: None,
+            halts_sort: None,
             kraken_equity_universe_retry_after_ts: 0,
             kraken_equities_sync_pause_until_ts: 0,
             kraken_equities_sync_pause_reason: String::new(),

@@ -1909,13 +1909,49 @@ impl eframe::App for TyphooNApp {
                         if v > 0.0 { format!("{:.4}", v) } else { "—".to_string() }
                     };
 
+                    // Apply user-selected sort (if any)
+                    if let Some((col, asc)) = self.reg_sho_sort {
+                        rows.sort_by(|a, b| {
+                            let (sym_a, alerts_a) = a;
+                            let (sym_b, alerts_b) = b;
+                            let wa = self.watchlist_rows.iter().find(|r| &r.symbol == *sym_a)
+                                .or_else(|| self.regulatory_prices.get(sym_a.as_str()));
+                            let wb = self.watchlist_rows.iter().find(|r| &r.symbol == *sym_b)
+                                .or_else(|| self.regulatory_prices.get(sym_b.as_str()));
+                            let cmp = match col {
+                                0 => sym_a.cmp(sym_b),
+                                1 => wa.map(|w| w.last).partial_cmp(&wb.map(|w| w.last)).unwrap_or(std::cmp::Ordering::Equal),
+                                2 => wa.map(|w| w.live_bid).partial_cmp(&wb.map(|w| w.live_bid)).unwrap_or(std::cmp::Ordering::Equal),
+                                3 => wa.map(|w| w.live_ask).partial_cmp(&wb.map(|w| w.live_ask)).unwrap_or(std::cmp::Ordering::Equal),
+                                4 => wa.map(|w| w.prev_close).partial_cmp(&wb.map(|w| w.prev_close)).unwrap_or(std::cmp::Ordering::Equal),
+                                5 => {
+                                    let ca = wa.map(|w| if w.prev_close > 0.0 { (w.last - w.prev_close) / w.prev_close * 100.0 } else { 0.0 });
+                                    let cb = wb.map(|w| if w.prev_close > 0.0 { (w.last - w.prev_close) / w.prev_close * 100.0 } else { 0.0 });
+                                    ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
+                                }
+                                _ => sym_a.cmp(sym_b),
+                            };
+                            if asc { cmp } else { cmp.reverse() }
+                        });
+                    }
+
                     table.header(20.0, |mut header| {
-                        header.col(|ui| { ui.strong("Symbol"); });
-                        header.col(|ui| { ui.strong("Last"); });
-                        header.col(|ui| { ui.strong("Bid"); });
-                        header.col(|ui| { ui.strong("Ask"); });
-                        header.col(|ui| { ui.strong("Dly Close"); });
-                        header.col(|ui| { ui.strong("Chg%"); });
+                        let mut sort_click = |ui: &mut egui::Ui, label: &str, col_idx: usize| {
+                            let resp = ui.strong(label);
+                            if resp.clicked() {
+                                self.reg_sho_sort = match self.reg_sho_sort {
+                                    Some((c, asc)) if c == col_idx => Some((c, !asc)),
+                                    _ => Some((col_idx, true)),
+                                };
+                            }
+                            resp
+                        };
+                        header.col(|ui| { sort_click(ui, "Symbol", 0); });
+                        header.col(|ui| { sort_click(ui, "Last", 1); });
+                        header.col(|ui| { sort_click(ui, "Bid", 2); });
+                        header.col(|ui| { sort_click(ui, "Ask", 3); });
+                        header.col(|ui| { sort_click(ui, "Dly Close", 4); });
+                        header.col(|ui| { sort_click(ui, "Chg%", 5); });
                         header.col(|ui| { ui.strong("Actions"); });
                         header.col(|ui| { ui.strong("Details"); });
                     })
@@ -2049,10 +2085,43 @@ impl eframe::App for TyphooNApp {
                         .column(egui_extras::Column::auto().at_least(120.0))  // Actions
                         .column(egui_extras::Column::remainder().at_least(240.0)); // Halt info
 
+                    // Apply user-selected sort (if any)
+                    if let Some((col, asc)) = self.halts_sort {
+                        rows.sort_by(|a, b| {
+                            let (sym_a, alerts_a) = a;
+                            let (sym_b, alerts_b) = b;
+                            let wa = self.watchlist_rows.iter().find(|r| &r.symbol == *sym_a)
+                                .or_else(|| self.regulatory_prices.get(sym_a.as_str()));
+                            let wb = self.watchlist_rows.iter().find(|r| &r.symbol == *sym_b)
+                                .or_else(|| self.regulatory_prices.get(sym_b.as_str()));
+                            let cmp = match col {
+                                0 => sym_a.cmp(sym_b),
+                                1 => wa.map(|w| w.last).partial_cmp(&wb.map(|w| w.last)).unwrap_or(std::cmp::Ordering::Equal),
+                                2 => {
+                                    let ca = wa.map(|w| if w.prev_close > 0.0 { (w.last - w.prev_close) / w.prev_close * 100.0 } else { 0.0 });
+                                    let cb = wb.map(|w| if w.prev_close > 0.0 { (w.last - w.prev_close) / w.prev_close * 100.0 } else { 0.0 });
+                                    ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
+                                }
+                                _ => sym_a.cmp(sym_b),
+                            };
+                            if asc { cmp } else { cmp.reverse() }
+                        });
+                    }
+
                     table.header(20.0, |mut header| {
-                        header.col(|ui| { ui.strong("Symbol"); });
-                        header.col(|ui| { ui.strong("Last"); });
-                        header.col(|ui| { ui.strong("Chg%"); });
+                        let mut sort_click = |ui: &mut egui::Ui, label: &str, col_idx: usize| {
+                            let resp = ui.strong(label);
+                            if resp.clicked() {
+                                self.halts_sort = match self.halts_sort {
+                                    Some((c, asc)) if c == col_idx => Some((c, !asc)),
+                                    _ => Some((col_idx, true)),
+                                };
+                            }
+                            resp
+                        };
+                        header.col(|ui| { sort_click(ui, "Symbol", 0); });
+                        header.col(|ui| { sort_click(ui, "Last", 1); });
+                        header.col(|ui| { sort_click(ui, "Chg%", 2); });
                         header.col(|ui| { ui.strong("Actions"); });
                         header.col(|ui| { ui.strong("Halt info"); });
                     })

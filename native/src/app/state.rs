@@ -4735,6 +4735,8 @@ pub struct TyphooNApp {
     /// Throttle anchor for the periodic off-thread regulatory price re-read while
     /// either window is open; `None` forces an immediate read next frame.
     pub(crate) regulatory_price_read_at: Option<std::time::Instant>,
+    pub(crate) reg_sho_sort: Option<(usize, bool)>,
+    pub(crate) halts_sort: Option<(usize, bool)>,
     pub(crate) kraken_equity_universe_retry_after_ts: i64,
     pub(crate) kraken_equities_sync_pause_until_ts: i64,
     pub(crate) kraken_equities_sync_pause_reason: String,
