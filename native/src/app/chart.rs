@@ -1430,7 +1430,7 @@ fn chart_reconcile_depth_split_adjustment(
         // (compact) D1/W1 views. The guard keeps depth promotion on the trusted
         // scale, so an exploded-scale depth source is refused and the series stays
         // compact and identical across timeframes.
-        if runs.len() >= 2 && chart_depth_promotion_keeps_trusted_scale(depth, &runs, window_start) {
+        if runs.len() >= 1 && chart_depth_promotion_keeps_trusted_scale(depth, &runs, window_start) {
             for run in &runs {
                 chart_apply_depth_split_adjustment_run(merged, depth, run, consensus);
             }
