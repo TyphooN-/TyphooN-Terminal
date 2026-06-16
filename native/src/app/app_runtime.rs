@@ -1912,8 +1912,8 @@ impl eframe::App for TyphooNApp {
                     // Apply user-selected sort (if any)
                     if let Some((col, asc)) = self.reg_sho_sort {
                         rows.sort_by(|a, b| {
-                            let (sym_a, alerts_a) = a;
-                            let (sym_b, alerts_b) = b;
+                            let (sym_a, _alerts_a) = a;
+                            let (sym_b, _alerts_b) = b;
                             let wa = self.watchlist_rows.iter().find(|r| &r.symbol == *sym_a)
                                 .or_else(|| self.regulatory_prices.get(sym_a.as_str()));
                             let wb = self.watchlist_rows.iter().find(|r| &r.symbol == *sym_b)
@@ -2088,8 +2088,8 @@ impl eframe::App for TyphooNApp {
                     // Apply user-selected sort (if any)
                     if let Some((col, asc)) = self.halts_sort {
                         rows.sort_by(|a, b| {
-                            let (sym_a, alerts_a) = a;
-                            let (sym_b, alerts_b) = b;
+                            let (sym_a, _alerts_a) = a;
+                            let (sym_b, _alerts_b) = b;
                             let wa = self.watchlist_rows.iter().find(|r| &r.symbol == *sym_a)
                                 .or_else(|| self.regulatory_prices.get(sym_a.as_str()));
                             let wb = self.watchlist_rows.iter().find(|r| &r.symbol == *sym_b)
