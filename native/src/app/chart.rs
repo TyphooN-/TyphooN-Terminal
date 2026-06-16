@@ -928,6 +928,106 @@ fn chart_back_adjust_bars_for_splits(
     }
 }
 
+/// Median of the positive closes in `[lo, hi)` of a bucket map; `None` if empty.
+fn chart_median_close(
+    bucketed: &std::collections::BTreeMap<i64, Bar>,
+    lo: i64,
+    hi: i64,
+) -> Option<f64> {
+    let mut v: Vec<f64> = bucketed
+        .range(lo..hi)
+        .map(|(_, b)| b.close)
+        .filter(|c| *c > 0.0)
+        .collect();
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Some(v[v.len() / 2])
+}
+
+/// Back-adjust a RAW *trusted* source (Alpaca/Tastytrade, normally
+/// `adjustment=all`) that nonetheless served UNADJUSTED bars across a fresh
+/// reverse split — the HUBC 1-for-20 case (2026-06): Alpaca carried a raw ~20×
+/// cliff, there was no kraken-equities source to anchor the dated back-adjust
+/// above, and a lone reverse-split era is below the depth-inference's ≥2-era
+/// bar, so the 20× discontinuity painted vs TradingView.
+///
+/// Distinct from the date-exact kraken-equities path, this fires ONLY when the
+/// source itself shows a reverse-split-shaped scale step near a known split, so
+/// an already-adjusted (continuous) source has no step and is left untouched —
+/// it can never be double-adjusted. Two robustness choices matter:
+///   * the cut snaps to the source's *actual* step bucket (Alpaca's lands ~2
+///     sessions before the published ex-date — HUBC stepped 06-04 vs 06-08), and
+///   * the lift uses the PUBLISHED factor, not the realized step ratio, so a
+///     concurrent split-day price move (HUBC fell ~68% that day) can't distort it.
+fn chart_back_adjust_raw_trusted_source_for_splits(
+    bucketed: &mut std::collections::BTreeMap<i64, Bar>,
+    splits: &[ChartSplit],
+) {
+    const DAY_MS: i64 = 86_400_000;
+    const PRE_SLACK_MS: i64 = 14 * DAY_MS; // search back this far for the step
+    const POST_SLACK_MS: i64 = 7 * DAY_MS; // ...and a little past the ex-date
+    const ERA_MS: i64 = 21 * DAY_MS; // era windows confirming the step
+    const MIN_STEP_RATIO: f64 = 2.0; // a reverse split shows ≥2× even after a same-day drop
+    // Detect qualifying cuts on the ORIGINAL series first, then apply the
+    // cumulative product (order-independent across multiple splits).
+    let mut cuts: Vec<(i64, f64)> = Vec::new(); // (boundary_ts, factor)
+    for s in splits {
+        if s.pre_split_factor <= 1.0 + 1e-9 {
+            continue; // reverse splits only; forward/era cases handled elsewhere
+        }
+        // Boundary = the largest single-bar upward close step near the ex-date.
+        let mut prev: Option<f64> = None;
+        let mut boundary: Option<(i64, f64)> = None;
+        for (ts, bar) in bucketed.range(s.ex_ts_ms - PRE_SLACK_MS..=s.ex_ts_ms + POST_SLACK_MS) {
+            if let Some(pc) = prev {
+                if pc > 0.0 && bar.close > 0.0 {
+                    let r = bar.close / pc;
+                    if boundary.map(|(_, br)| r > br).unwrap_or(true) {
+                        boundary = Some((*ts, r));
+                    }
+                }
+            }
+            prev = Some(bar.close);
+        }
+        let Some((boundary_ts, step_ratio)) = boundary else {
+            continue;
+        };
+        if step_ratio < MIN_STEP_RATIO {
+            continue; // no raw split step → source already adjusted, skip
+        }
+        // Era-level confirmation (robust to the split-day's own move): the
+        // post-cut scale must sit well above the pre-cut scale.
+        match (
+            chart_median_close(bucketed, boundary_ts - ERA_MS, boundary_ts),
+            chart_median_close(bucketed, boundary_ts, boundary_ts + ERA_MS),
+        ) {
+            (Some(pre), Some(post)) if pre > 0.0 && post / pre >= s.pre_split_factor.sqrt() => {
+                cuts.push((boundary_ts, s.pre_split_factor));
+            }
+            _ => {}
+        }
+    }
+    if cuts.is_empty() {
+        return;
+    }
+    for (ts, bar) in bucketed.iter_mut() {
+        let mut factor = 1.0;
+        for &(boundary_ts, f) in &cuts {
+            if *ts < boundary_ts {
+                factor *= f;
+            }
+        }
+        if (factor - 1.0).abs() > 1e-9 {
+            bar.open *= factor;
+            bar.high *= factor;
+            bar.low *= factor;
+            bar.close *= factor;
+        }
+    }
+}
+
 /// Convert a stored FMP `StockSplit` into a `ChartSplit` (parse the ex-date, derive
 /// the pre-split multiplier). Skips malformed/zero entries.
 fn chart_split_from_stock_split(
@@ -963,6 +1063,14 @@ pub(crate) fn chart_curated_known_splits(symbol: &str) -> Vec<ChartSplit> {
     const CURATED: &[(&str, &str, f64)] = &[
         // WORK Medical Technology Group — 1-for-100 reverse split.
         ("WOK", "2025-12-29", 100.0),
+        // HUB Cyber Security — 1-for-20 reverse split. Effective 11:59pm ET
+        // 2026-06-05; Nasdaq split-adjusted trading from 2026-06-08 (new CUSIP
+        // M6000J192). FMP omitted it and there is no kraken-equities source, so
+        // the merge had no split to anchor on: Alpaca's pre-split history is raw
+        // (unadjusted) while its post-split bars sit ~20× higher, and the lone
+        // reverse-split era is below the depth-inference's ≥2-era bar — so the
+        // 20× discontinuity painted vs TradingView's adjusted series.
+        ("HUBC", "2026-06-08", 20.0),
     ];
     let su = symbol.trim().to_ascii_uppercase();
     CURATED
@@ -1029,6 +1137,12 @@ pub(crate) fn chart_merge_equity_raw_bars(
         // of relying solely on the cross-source era inference below.
         if *source == "kraken-equities" {
             chart_back_adjust_bars_for_splits(&mut bucketed, splits);
+        } else if rank <= TRUSTED_MAX_RANK {
+            // Alpaca/Tastytrade are normally split-adjusted, but serve RAW bars
+            // across a fresh microcap reverse split (HUBC 1-for-20). Lift their
+            // pre-split history only when the bars themselves show the split
+            // step — already-adjusted bars are continuous and left untouched.
+            chart_back_adjust_raw_trusted_source_for_splits(&mut bucketed, splits);
         }
         if !bucketed.is_empty() {
             tagged.push((rank, bucketed));

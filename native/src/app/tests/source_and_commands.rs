@@ -485,6 +485,22 @@ fn curated_known_splits_supply_wok_reverse_split() {
         "curated table is opt-in per symbol"
     );
 
+    // HUB Cyber Security — 1-for-20 reverse split (issuer-verified: effective
+    // 2026-06-05 ET, Nasdaq split-adjusted trading 2026-06-08).
+    let hubc = chart_curated_known_splits("hubc");
+    assert_eq!(hubc.len(), 1, "HUBC has one curated reverse split");
+    assert!(
+        (hubc[0].pre_split_factor - 20.0).abs() < 1e-9,
+        "1-for-20 reverse split → pre_split_factor 20"
+    );
+    let hubc_ex = chrono::NaiveDate::from_ymd_opt(2026, 6, 8)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+    assert_eq!(hubc[0].ex_ts_ms, hubc_ex, "ex-date 2026-06-08 00:00 UTC");
+
     // End-to-end: the curated split, run through the same merge path as cached
     // FMP splits, lifts raw pre-split kraken-equities bars onto the post-split
     // scale (the fix for WOK rendering vs TradingView).
@@ -513,6 +529,85 @@ fn curated_known_splits_supply_wok_reverse_split() {
         (by_ts[&(ex + 2 * day)] - 50.0).abs() < 1e-6,
         "post-split bars unchanged; got {}",
         by_ts[&(ex + 2 * day)]
+    );
+}
+
+#[test]
+fn known_split_back_adjusts_raw_alpaca_trusted_source_without_kraken() {
+    // HUBC shape: Alpaca (trusted, rank 2) served RAW bars across a 1-for-20
+    // reverse split — no kraken-equities source, and a lone split era — so the
+    // known split must lift Alpaca's pre-split history itself. The split day
+    // also crashed (~ -60%, step only 8× not 20×) and the actual step lands two
+    // sessions BEFORE the published ex-date, so the boundary is detected from
+    // the bars, not the date, and the lift uses the published factor.
+    let day = 86_400_000i64;
+    let ex = 100 * day; // published ex-date
+    let step = 96 * day; // Alpaca's actual scale step (2 sessions early)
+    let factor = 20.0;
+    let mut alpaca: Vec<(i64, f64, f64, f64, f64, f64)> = Vec::new();
+    for d in 70..96i64 {
+        // Pre-split low scale ~0.50, with a volatile spike to 2.00 that must be
+        // lifted along with the rest (not misclassified by price level).
+        let c = if d == 80 { 2.00 } else { 0.50 };
+        alpaca.push((d * day, c, c, c, c, 1000.0));
+    }
+    for d in 96..110i64 {
+        // Post-split high scale ~4.00 (0.50×20 then a same-day ~60% drop).
+        let c = 4.00;
+        alpaca.push((d * day, c, c, c, c, 1000.0));
+    }
+    let splits = [crate::app::chart::ChartSplit {
+        ex_ts_ms: ex,
+        pre_split_factor: factor,
+    }];
+    let merged = chart_merge_equity_raw_bars("1Day", &[("alpaca", &alpaca)], &splits);
+    let by_ts: std::collections::HashMap<i64, f64> =
+        merged.iter().map(|b| (b.ts_ms, b.close)).collect();
+    assert!(
+        (by_ts[&(72 * day)] - 10.0).abs() < 1e-6,
+        "pre-split bars lifted ×20 onto post scale; got {}",
+        by_ts[&(72 * day)]
+    );
+    assert!(
+        (by_ts[&(80 * day)] - 40.0).abs() < 1e-6,
+        "volatile pre-split spike lifted ×20 (boundary is time-based, not price); got {}",
+        by_ts[&(80 * day)]
+    );
+    assert!(
+        (by_ts[&step] - 4.0).abs() < 1e-6,
+        "the detected step bar (pre-ex-date) is post-split, unchanged; got {}",
+        by_ts[&step]
+    );
+    assert!(
+        (by_ts[&(105 * day)] - 4.0).abs() < 1e-6,
+        "post-split bars unchanged; got {}",
+        by_ts[&(105 * day)]
+    );
+}
+
+#[test]
+fn known_split_leaves_already_adjusted_trusted_source_untouched() {
+    // When Alpaca already applied the split (continuous series, no scale step),
+    // the known split must NOT fire — otherwise we'd double-adjust the history.
+    let day = 86_400_000i64;
+    let ex = 100 * day;
+    let mut alpaca: Vec<(i64, f64, f64, f64, f64, f64)> = Vec::new();
+    for d in 70..110i64 {
+        // Already-adjusted, continuous ~10.0 with only ordinary <2× moves.
+        let c = if d == 96 { 12.0 } else { 10.0 };
+        alpaca.push((d * day, c, c, c, c, 1000.0));
+    }
+    let splits = [crate::app::chart::ChartSplit {
+        ex_ts_ms: ex,
+        pre_split_factor: 20.0,
+    }];
+    let merged = chart_merge_equity_raw_bars("1Day", &[("alpaca", &alpaca)], &splits);
+    let by_ts: std::collections::HashMap<i64, f64> =
+        merged.iter().map(|b| (b.ts_ms, b.close)).collect();
+    assert!(
+        (by_ts[&(72 * day)] - 10.0).abs() < 1e-6,
+        "continuous (already-adjusted) bars must stay put, not ×20; got {}",
+        by_ts[&(72 * day)]
     );
 }
 
