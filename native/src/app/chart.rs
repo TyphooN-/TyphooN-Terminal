@@ -977,7 +977,7 @@ fn chart_back_adjust_raw_trusted_source_for_splits(
         if s.pre_split_factor <= 1.0 + 1e-9 {
             continue; // reverse splits only; forward/era cases handled elsewhere
         }
-        // Boundary = the largest single-bar upward close step near the ex-date.
+        // Prefer a visible single-bar step if present (largest upward close jump).
         let mut prev: Option<f64> = None;
         let mut boundary: Option<(i64, f64)> = None;
         for (ts, bar) in bucketed.range(s.ex_ts_ms - PRE_SLACK_MS..=s.ex_ts_ms + POST_SLACK_MS) {
@@ -991,14 +991,17 @@ fn chart_back_adjust_raw_trusted_source_for_splits(
             }
             prev = Some(bar.close);
         }
-        let Some((boundary_ts, step_ratio)) = boundary else {
-            continue;
+        // Era-level confirmation around the known ex-date (handles volatile
+        // split days where no single close ratio reaches MIN_STEP_RATIO).
+        // Use ex-date itself as boundary when the step is masked by price action.
+        let use_ex_boundary = boundary
+            .as_ref()
+            .map_or(true, |(_, r)| *r < MIN_STEP_RATIO);
+        let boundary_ts = if use_ex_boundary {
+            s.ex_ts_ms
+        } else {
+            boundary.unwrap().0
         };
-        if step_ratio < MIN_STEP_RATIO {
-            continue; // no raw split step → source already adjusted, skip
-        }
-        // Era-level confirmation (robust to the split-day's own move): the
-        // post-cut scale must sit well above the pre-cut scale.
         match (
             chart_median_close(bucketed, boundary_ts - ERA_MS, boundary_ts),
             chart_median_close(bucketed, boundary_ts, boundary_ts + ERA_MS),
