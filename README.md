@@ -305,6 +305,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [117](docs/adr/117-stocktwits-social-sentiment-ingest.md) | StockTwits Social-Sentiment Ingest into Research Packet |
 | [118](docs/adr/118-test-module-decomposition-convention.md) | Test Module Decomposition Convention (`include!`-tree + dir-module tests) |
 | [119](docs/adr/119-live-forming-bar-overlay-source-policy.md) | Live Forming-Bar Overlay Source Policy |
+|| [120](docs/adr/120-regulatory-outlier-alerts.md) | Regulatory Outlier Alerts (Reg SHO + Halts) |
 
 ---
 
