@@ -300,6 +300,39 @@ fn snapshot_sweep_caps_batch_size_within_the_chosen_timeframe() {
     );
 }
 
+#[test]
+fn snapshot_sweep_caps_low_timeframe_batch_smaller_than_high() {
+    // Force selection of the 1Min gap (all higher TFs fresh) over a large
+    // catalog: the 1Min batch is capped at the small low-TF size, not the full
+    // 250, so the breadth lands spread across ticks rather than one burst.
+    let now_ms = 10_000_000_000i64;
+    let catalog: Vec<String> = (0..40).map(|i| format!("SYM{i}")).collect();
+    let mut fresh = std::collections::HashMap::new();
+    for &interval_min in &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST {
+        let tf = kraken_ws_interval_to_tf_label(interval_min).unwrap();
+        if tf == "1Min" {
+            continue;
+        }
+        for sym in &catalog {
+            fresh.insert((sym.to_ascii_uppercase(), tf.to_string()), now_ms);
+        }
+    }
+    let (interval_min, pairs) = select_kraken_ws_snapshot_sweep_batch_high_first(
+        &catalog,
+        &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
+        &fresh,
+        now_ms,
+        KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE,
+    )
+    .expect("1Min gap");
+    assert_eq!(interval_min, 1, "1Min is the only remaining gap");
+    assert_eq!(
+        pairs.len(),
+        KRAKEN_WS_SNAPSHOT_SWEEP_LOW_TF_BATCH_SIZE,
+        "1Min batch capped at the low-TF size, not the full sweep batch"
+    );
+}
+
 fn mk_bar(interval_min: u32, interval_begin_ms: i64) -> KrakenWsOhlcBar {
     KrakenWsOhlcBar {
         symbol: "BTC/USD".into(),

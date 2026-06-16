@@ -252,6 +252,13 @@ fn select_kraken_ws_snapshot_sweep_batch_high_first(
         let Some(tf) = kraken_ws_interval_to_tf_label(interval_min) else {
             continue;
         };
+        // Low TFs carry the breadth + snapshot cost — cap their per-tick batch
+        // smaller so a large 1Min/5Min gap is spread across ticks.
+        let cap = if matches!(tf, "1Min" | "5Min") {
+            batch_size.min(KRAKEN_WS_SNAPSHOT_SWEEP_LOW_TF_BATCH_SIZE)
+        } else {
+            batch_size
+        };
         let mut missing: Vec<String> = Vec::new();
         for ws in &pairs {
             let is_missing = match kraken_ws_bar_cache_target(ws) {
@@ -262,7 +269,7 @@ fn select_kraken_ws_snapshot_sweep_batch_high_first(
             };
             if is_missing {
                 missing.push(ws.clone());
-                if missing.len() >= batch_size {
+                if missing.len() >= cap {
                     break;
                 }
             }
@@ -364,6 +371,11 @@ const WS_BAR_MAX_BUFFERED_BUCKETS: usize = 16_384;
 const WS_LARGE_UNIVERSE_INTERVAL_STAGGER: Duration = Duration::from_secs(120);
 const WS_LARGE_UNIVERSE_PAIR_THRESHOLD: usize = 5_000;
 const KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE: usize = 250;
+/// Smaller per-tick cap for the low timeframes (1Min/5Min), which carry the
+/// breadth and the bulk of the snapshot-processing cost. A 150+-pair 1Min gap is
+/// spread across sweep ticks (10s apart) instead of landing as one multi-second
+/// snapshot burst on the render thread (the overnight 3-5s stalls).
+const KRAKEN_WS_SNAPSHOT_SWEEP_LOW_TF_BATCH_SIZE: usize = 32;
 const KRAKEN_WS_SNAPSHOT_SWEEP_CADENCE: Duration = Duration::from_secs(10);
 
 /// Maximum grouped `(symbol, timeframe)` merges to process in one blocking task.
