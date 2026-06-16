@@ -4721,8 +4721,13 @@ pub struct TyphooNApp {
     /// the SQLite-read stall when a bulk bar-sync writer holds the conn mutex).
     pub(crate) regulatory_prices_rx:
         Option<std::sync::mpsc::Receiver<Vec<(String, WatchlistRow)>>>,
-    /// Guards the one-time price load per window open (reset when it closes).
+    /// Guards the one-time staleness-ordered fetch kick per window open (reset
+    /// when both windows close). The cached-price *read* re-runs on a throttle
+    /// (`regulatory_price_read_at`) so freshly fetched bars keep surfacing.
     pub(crate) regulatory_prices_loaded: bool,
+    /// Throttle anchor for the periodic off-thread regulatory price re-read while
+    /// either window is open; `None` forces an immediate read next frame.
+    pub(crate) regulatory_price_read_at: Option<std::time::Instant>,
     pub(crate) kraken_equity_universe_retry_after_ts: i64,
     pub(crate) kraken_equities_sync_pause_until_ts: i64,
     pub(crate) kraken_equities_sync_pause_reason: String,

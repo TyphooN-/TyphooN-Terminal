@@ -254,6 +254,57 @@ impl TyphooNApp {
         self.regulatory_prices_rx = Some(rx);
     }
 
+    /// Force a market-data refresh for every symbol shown in the regulatory
+    /// windows (Reg SHO threshold + trading halts) by queueing a daily-bar fetch
+    /// per symbol — least-fresh, or no-data, symbols first so the emptiest rows
+    /// fill soonest. One `1Day` fetch per symbol (the windows' columns are daily
+    /// close / daily change); the broker queue's pending cap, per-symbol cooldown
+    /// and freshness classifier throttle or skip the rest. Freshly fetched bars
+    /// surface through the window's throttled `spawn_regulatory_price_load` read.
+    pub(super) fn refresh_regulatory_prices(&mut self) {
+        if self.bg.regulatory_alerts_by_symbol.is_empty() {
+            return;
+        }
+        // Rank by the newest cache write-ts across the same source/timeframe keys
+        // the price load reads; symbols with no cached bar sort first (i64::MIN).
+        // Compute the order in a block so all immutable `self.bg` borrows end
+        // before the `&mut self` fetch loop.
+        let symbols: Vec<String> = {
+            let ts_by_key: std::collections::HashMap<&str, i64> = self
+                .bg
+                .detailed_stats
+                .iter()
+                .map(|(key, _bars, ts)| (key.as_str(), *ts))
+                .collect();
+            let freshness = |sym: &str| -> i64 {
+                let mut newest = i64::MIN;
+                for tf in ["1Day", "4Hour", "1Hour"] {
+                    for source in ["alpaca", "kraken", "kraken-equities", "default"] {
+                        for key in chart_source_cache_keys(source, sym, tf) {
+                            if let Some(&ts) = ts_by_key.get(key.as_str()) {
+                                newest = newest.max(ts);
+                            }
+                        }
+                    }
+                }
+                newest
+            };
+            let mut ranked: Vec<(i64, String)> = self
+                .bg
+                .regulatory_alerts_by_symbol
+                .keys()
+                .map(|sym| (freshness(sym), sym.clone()))
+                .collect();
+            ranked.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+            ranked.into_iter().map(|(_, sym)| sym).collect()
+        };
+        for sym in &symbols {
+            self.queue_symbol_fetch_for_source(sym, "1Day");
+        }
+        // Re-read the cache promptly so the table reflects fetched bars as they land.
+        self.regulatory_price_read_at = None;
+    }
+
     pub(super) fn reload_symbol(&mut self, symbol: &str, tf: Timeframe) {
         // NOTE: For live Kraken WS forming-bar updates, prefer
         // chart.apply_forming_bar_update() + chart.mark_structural_change()

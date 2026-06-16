@@ -1826,14 +1826,22 @@ impl eframe::App for TyphooNApp {
 
         // === Regulatory floating windows (Reg SHO + Halts) ===
         // Populate price columns for every regulatory-alert symbol (not just the
-        // few in the watchlist) by loading cached daily bars off the render
-        // thread — once while either window is open; reset when both close.
-        if (self.show_reg_sho_window || self.show_halts_window)
-            && !self.regulatory_prices_loaded
-            && self.regulatory_prices_rx.is_none()
-        {
-            self.spawn_regulatory_price_load();
-            self.regulatory_prices_loaded = true;
+        // few in the watchlist). On open, force a market-data refresh ordered
+        // least-fresh / no-data first; then re-read cached daily bars off the
+        // render thread on a throttle so fetched bars surface while open.
+        if self.show_reg_sho_window || self.show_halts_window {
+            if !self.regulatory_prices_loaded && !self.bg.regulatory_alerts_by_symbol.is_empty() {
+                self.refresh_regulatory_prices();
+                self.regulatory_prices_loaded = true;
+            }
+            let read_due = self
+                .regulatory_price_read_at
+                .map(|at| at.elapsed() >= std::time::Duration::from_secs(3))
+                .unwrap_or(true);
+            if read_due && self.regulatory_prices_rx.is_none() {
+                self.spawn_regulatory_price_load();
+                self.regulatory_price_read_at = Some(std::time::Instant::now());
+            }
         }
 
         if self.show_reg_sho_window {
@@ -1841,6 +1849,7 @@ impl eframe::App for TyphooNApp {
             // Button clicks are collected here and applied after the window
             // closure (which holds an immutable borrow of self).
             let mut reg_sho_action: Option<SymbolAction> = None;
+            let mut reg_sho_refresh = false;
             egui::Window::new("Reg SHO Threshold Securities")
                 .open(&mut open)
                 .default_width(960.0)
@@ -1865,6 +1874,21 @@ impl eframe::App for TyphooNApp {
                         })
                         .collect();
                     rows.sort_by_key(|(sym, _)| *sym);
+
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("Refresh prices")
+                            .on_hover_text(
+                                "Re-fetch the daily bar for every row — least-fresh / no-data symbols first",
+                            )
+                            .clicked()
+                        {
+                            reg_sho_refresh = true;
+                        }
+                        ui.label(
+                            egui::RichText::new(format!("{} symbols", rows.len())).weak(),
+                        );
+                    });
 
                     let table = egui_extras::TableBuilder::new(ui)
                         .striped(true)
@@ -1964,6 +1988,9 @@ impl eframe::App for TyphooNApp {
             if let Some(action) = reg_sho_action {
                 self.deferred_symbol_action = action;
             }
+            if reg_sho_refresh {
+                self.refresh_regulatory_prices();
+            }
             if !open {
                 self.show_reg_sho_window = false;
             }
@@ -1973,6 +2000,7 @@ impl eframe::App for TyphooNApp {
         if self.show_halts_window {
             let mut open = true;
             let mut halts_action: Option<SymbolAction> = None;
+            let mut halts_refresh = false;
             egui::Window::new("Trading Halts / LULD Pauses")
                 .open(&mut open)
                 .default_width(820.0)
@@ -1991,6 +2019,21 @@ impl eframe::App for TyphooNApp {
                         return;
                     }
                     rows.sort_by_key(|(sym, _)| *sym);
+
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("Refresh prices")
+                            .on_hover_text(
+                                "Re-fetch the daily bar for every row — least-fresh / no-data symbols first",
+                            )
+                            .clicked()
+                        {
+                            halts_refresh = true;
+                        }
+                        ui.label(
+                            egui::RichText::new(format!("{} symbols", rows.len())).weak(),
+                        );
+                    });
 
                     let fmt_px = |v: f64| -> String {
                         if v > 0.0 { format!("{:.4}", v) } else { "—".to_string() }
@@ -2070,15 +2113,19 @@ impl eframe::App for TyphooNApp {
             if let Some(action) = halts_action {
                 self.deferred_symbol_action = action;
             }
+            if halts_refresh {
+                self.refresh_regulatory_prices();
+            }
             if !open {
                 self.show_halts_window = false;
             }
         }
 
-        // Both regulatory windows closed → drop the one-shot price load so the
-        // next open re-fetches fresh cached prices.
+        // Both regulatory windows closed → drop the one-shot fetch kick and the
+        // read throttle so the next open re-fetches and re-reads fresh prices.
         if !self.show_reg_sho_window && !self.show_halts_window {
             self.regulatory_prices_loaded = false;
+            self.regulatory_price_read_at = None;
         }
 
         // ── central panel (chart area) ────────────────────────────────────────

@@ -107,6 +107,33 @@ Because the `regulatory_alerts` map is now multi-kind, the `REG_SHO` window
 filters to `kind = 'reg_sho_threshold'` so halts don't appear mislabeled there,
 and the watchlist red-ticker/`!!` flag means "has any regulatory alert."
 
+## Force-refresh on open + live re-read (2026-06-16)
+
+The cache-based loader only surfaced bars that *happened* to already be cached,
+so most threshold/halt rows opened blank (these are obscure low-liquidity names
+the background sync rarely touches). Both windows now **drive** the data instead
+of passively reading it:
+
+- **On open, force a fetch ordered least-fresh first.** `refresh_regulatory_prices`
+  ranks every regulatory-alert symbol by the newest cache write-ts across the same
+  source/timeframe keys the loader reads (`detailed_stats` → no cached bar sorts
+  first, `i64::MIN`) and queues **one `1Day` fetch per symbol** in that order via
+  `queue_symbol_fetch_for_source`. Daily is the window's unit (Last / Dly Close /
+  Chg%), so one fetch per symbol covers every fillable column; the broker queue's
+  pending cap, per-symbol cooldown and freshness classifier throttle or skip the
+  rest, so already-fresh symbols cost nothing and the emptiest rows fill soonest.
+- **Throttled live re-read.** While either window is open the off-thread price
+  read (`spawn_regulatory_price_load`) re-runs every ~3 s (`regulatory_price_read_at`)
+  so fetched bars surface without reopening; the one-shot guard
+  (`regulatory_prices_loaded`) now gates only the *fetch kick*, not the read, and
+  the kick waits for a non-empty alert map. Both reset when both windows close.
+- **Manual `Refresh prices` button** in each window re-runs the staleness-ordered
+  fetch on demand (and clears the read throttle for an immediate re-read).
+
+Bid/Ask remain watchlist-only (no live quote subscription for the broad list), so
+those columns still render `—` for non-watchlisted symbols — the fetch fills the
+daily-derived columns only.
+
 ## Future Extensions
 
 Status of the remaining candidates (free sources only, per project policy):
