@@ -319,6 +319,14 @@ pub(super) fn apply_storage_snapshot(
         .collect();
     bg.bar_ts_cache
         .retain(|key, _| current_keys.contains(key.as_str()));
+
+    // Keep the per-lane sync-state maps consistent with the detailed_stats this
+    // snapshot just set — this path bumps bg_rev (storage.rs), which is what the
+    // sync scheduler keys its rebuild on.
+    bg.source_sync_state = super::market_data_sync::build_source_sync_state_maps(
+        &bg.detailed_stats,
+        &bg.bar_ts_cache,
+    );
 }
 
 pub(super) fn format_bytes_human(bytes: i64) -> String {

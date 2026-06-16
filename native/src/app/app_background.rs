@@ -236,6 +236,13 @@ pub(super) fn spawn_background_refresh(
                             );
                         }
                         data.bar_ts_cache = ts_cache;
+                        // One catalog scan on the BG thread builds every sync
+                        // lane's (symbol, timeframe) state map, so the render
+                        // thread reads them instead of rescanning per lane.
+                        data.source_sync_state = super::market_data_sync::build_source_sync_state_maps(
+                            &data.detailed_stats,
+                            &data.bar_ts_cache,
+                        );
                     }
                     // Fundamentals come from research tables (synced via LAN) — query locally on both
                     data.all_fundamentals =

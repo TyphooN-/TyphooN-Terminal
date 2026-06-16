@@ -192,6 +192,15 @@ pub(crate) struct BgData {
     /// when thousands of entries need decompression. Storage Manager and the
     /// crypto backfill window both read directly from this map.
     pub(crate) bar_ts_cache: std::collections::HashMap<String, (i64, i64, i64)>,
+    /// Per-source `(symbol, timeframe) -> SyncCacheState` maps keyed by the
+    /// `"<source>:"` cache-key prefix (e.g. `"alpaca:"`), built in ONE pass over
+    /// `detailed_stats` on the BG worker. The sync scheduler reads these instead
+    /// of rescanning the whole catalog per lane on the render thread (the
+    /// recurring ~130ms `pre_broker` hitch). See `build_source_sync_state_maps`.
+    pub(super) source_sync_state: std::collections::HashMap<
+        &'static str,
+        std::collections::HashMap<(String, String), SyncCacheState>,
+    >,
 
     // ── SEC / Insider ──
     pub(crate) insider_trades: std::collections::HashMap<String, Vec<sec_filing::InsiderTrade>>,

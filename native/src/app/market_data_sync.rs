@@ -45,6 +45,83 @@ fn background_market_data_fetch_allowed(focus: bool, pending_fetches: usize) -> 
     true
 }
 
+/// Canonical `"<source>:"` cache-key prefix for a source segment, or `None` for
+/// keys the sync scheduler doesn't track (merged/default/legacy variants).
+fn sync_state_source_prefix_for_segment(seg: &str) -> Option<&'static str> {
+    match seg {
+        "alpaca" => Some("alpaca:"),
+        "kraken" => Some("kraken:"),
+        "kraken-futures" => Some("kraken-futures:"),
+        "kraken-equities" => Some("kraken-equities:"),
+        "yahoo-chart" => Some("yahoo-chart:"),
+        _ => None,
+    }
+}
+
+/// Build the per-source `(symbol, timeframe) -> SyncCacheState` maps the sync
+/// scheduler consumes, in a SINGLE pass over `detailed_stats`. Each lane used to
+/// rescan the whole catalog on the render thread (`build_source_cache_state_map`,
+/// up to five full scans per sync tick — the recurring ~130ms `pre_broker`
+/// hitch); the BG worker now does the one scan off the render thread and ships
+/// the small result maps in `BgData::source_sync_state`. Parsing matches the old
+/// per-prefix scan exactly (skip `__`-meta keys, `SYM:TF` only, newest write
+/// wins per pair).
+pub(super) fn build_source_sync_state_maps(
+    detailed_stats: &[(String, i64, i64)],
+    bar_ts_cache: &std::collections::HashMap<String, (i64, i64, i64)>,
+) -> std::collections::HashMap<
+    &'static str,
+    std::collections::HashMap<(String, String), SyncCacheState>,
+> {
+    let mut maps: std::collections::HashMap<
+        &'static str,
+        std::collections::HashMap<(String, String), SyncCacheState>,
+    > = std::collections::HashMap::new();
+    for (key, bars, ts) in detailed_stats {
+        let Some((seg, rest)) = key.split_once(':') else {
+            continue;
+        };
+        let Some(prefix) = sync_state_source_prefix_for_segment(seg) else {
+            continue;
+        };
+        if rest.starts_with("__") {
+            continue;
+        }
+        let mut it = rest.split(':');
+        let sym = match it.next() {
+            Some(s) if !s.is_empty() => normalize_market_data_symbol(s).replace('/', ""),
+            _ => continue,
+        };
+        let tf = match it.next() {
+            Some(s) if !s.is_empty() => match normalize_sync_timeframe_key(s) {
+                Some(tf) => tf.to_string(),
+                None => continue,
+            },
+            _ => continue,
+        };
+        if it.next().is_some() {
+            continue;
+        }
+        let last_bar_ts_s = bar_ts_cache
+            .get(key)
+            .map(|(_, last_ms, _)| last_ms.div_euclid(1000))
+            .unwrap_or(0);
+        let entry = maps
+            .entry(prefix)
+            .or_default()
+            .entry((sym, tf))
+            .or_default();
+        if *ts > entry.write_ts_s {
+            *entry = SyncCacheState {
+                last_bar_ts_s,
+                write_ts_s: *ts,
+                bar_count: *bars,
+            };
+        }
+    }
+    maps
+}
+
 pub(super) fn normalize_kraken_equity_symbol_list<'a, I>(symbols: I) -> Vec<String>
 where
     I: IntoIterator<Item = &'a String>,
@@ -491,47 +568,15 @@ impl TyphooNApp {
         &self,
         prefix: &str,
     ) -> std::collections::HashMap<(String, String), SyncCacheState> {
-        let mut map: std::collections::HashMap<(String, String), SyncCacheState> =
-            std::collections::HashMap::with_capacity(self.bg.detailed_stats.len());
-        for (key, bars, ts) in &self.bg.detailed_stats {
-            let rest = match key.strip_prefix(prefix) {
-                Some(r) => r,
-                None => continue,
-            };
-            if rest.starts_with("__") {
-                continue;
-            }
-            let mut it = rest.split(':');
-            let sym = match it.next() {
-                Some(s) if !s.is_empty() => normalize_market_data_symbol(s).replace('/', ""),
-                _ => continue,
-            };
-            let tf = match it.next() {
-                Some(s) if !s.is_empty() => match normalize_sync_timeframe_key(s) {
-                    Some(tf) => tf.to_string(),
-                    None => continue,
-                },
-                _ => continue,
-            };
-            if it.next().is_some() {
-                continue;
-            }
-            let last_bar_ts_s = self
-                .bg
-                .bar_ts_cache
-                .get(key)
-                .map(|(_, last_ms, _)| last_ms.div_euclid(1000))
-                .unwrap_or(0);
-            let entry = map.entry((sym, tf)).or_default();
-            if *ts > entry.write_ts_s {
-                *entry = SyncCacheState {
-                    last_bar_ts_s,
-                    write_ts_s: *ts,
-                    bar_count: *bars,
-                };
-            }
-        }
-        map
+        // Read the BG-worker-precomputed map (built once, off the render thread,
+        // in `build_source_sync_state_maps`) instead of rescanning the whole
+        // catalog here. Empty until the first BG snapshot arrives — cold-cache
+        // semantics, i.e. everything reads as Missing → coverage-first sync.
+        self.bg
+            .source_sync_state
+            .get(prefix)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub(super) fn build_alpaca_cache_state_map(
@@ -2070,6 +2115,48 @@ impl TyphooNApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_source_sync_state_maps_buckets_by_source_and_keeps_newest() {
+        let detailed = vec![
+            ("alpaca:AAPL:1Day".to_string(), 100i64, 1_000i64),
+            ("alpaca:AAPL:1Day".to_string(), 250, 2_000), // newer write wins
+            ("kraken:ETHUSD:1Hour".to_string(), 50, 1_500),
+            ("yahoo-chart:msft:1Week".to_string(), 7, 1_200), // lowercase symbol
+            ("kraken-equities:TNDM.EQ:1Day".to_string(), 9, 1_100), // .EQ stripped
+            ("kraken-futures:XBTUSD:4Hour".to_string(), 3, 1_050),
+            ("merged:AAPL:1Day".to_string(), 999, 9_999), // untracked source
+            ("default:AAPL:1Day".to_string(), 999, 9_999), // untracked source
+            ("alpaca:__META__:1Day".to_string(), 1, 9_999), // meta key skipped
+            ("alpaca:BADKEY".to_string(), 1, 9_999),        // no timeframe → skipped
+            ("alpaca:AAPL:1Day:extra".to_string(), 1, 9_999), // extra segment → skipped
+        ];
+        let bar_ts: std::collections::HashMap<String, (i64, i64, i64)> =
+            std::collections::HashMap::from([(
+                "alpaca:AAPL:1Day".to_string(),
+                (0, 5_000_000, 0),
+            )]);
+        let maps = build_source_sync_state_maps(&detailed, &bar_ts);
+
+        let alpaca = &maps["alpaca:"];
+        assert_eq!(
+            alpaca.len(),
+            1,
+            "only the valid AAPL:1Day pair; meta/malformed keys skipped"
+        );
+        let aapl = alpaca[&("AAPL".to_string(), "1Day".to_string())];
+        assert_eq!(aapl.bar_count, 250, "newest write_ts wins");
+        assert_eq!(aapl.write_ts_s, 2_000);
+        assert_eq!(aapl.last_bar_ts_s, 5_000, "last_bar_ts from bar_ts_cache, ms→s");
+
+        // Every tracked lane buckets under its own prefix; untracked sources don't.
+        assert_eq!(maps["kraken:"].len(), 1);
+        assert_eq!(maps["yahoo-chart:"].len(), 1);
+        assert_eq!(maps["kraken-equities:"].len(), 1);
+        assert_eq!(maps["kraken-futures:"].len(), 1);
+        assert!(!maps.contains_key("merged:"), "merged is not a sync lane");
+        assert!(!maps.contains_key("default:"), "default is not a sync lane");
+    }
 
     #[test]
     fn kraken_equity_native_symbols_for_timeframe_is_demand_scoped() {
