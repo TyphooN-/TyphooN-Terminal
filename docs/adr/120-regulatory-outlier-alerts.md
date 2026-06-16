@@ -47,8 +47,8 @@ Symbol normalization:
 The alert layer is consumed at three points, all reading the same in-memory `regulatory_alerts_by_symbol` map (no per-frame DB/network):
 
 1. **Chart header badge** — the original surface: `!! Reg SHO !!` drawn before the EXT/daily-close chip so a compliance badge is never the element pushed off the right edge.
-2. **Watchlist badge** — the ticker renders red with a `!!` drawn on the *top* layer (after the value columns) so the right-aligned Last/Chg text can never overpaint it. A dedicated sortable column was tried and reverted: it does not fit the packed right panel without pushing Vol/buttons off the edge.
-3. **`REG_SHO` command + floating window** — `REG_SHO` (registered in the command palette `COMMANDS` registry) opens a floating `egui_extras` table of every threshold symbol. Columns: Symbol · Last · Bid · Ask · Dly Close · Chg% · Actions · Details.
+2. **Watchlist badge** — the ticker renders red with a `!!` drawn on the *top* layer (after the value columns) so the right-aligned Last/Chg text can never overpaint it.
+3. **`REG_SHO` / `HALTS` floating windows** — `REG_SHO` / `HALTS` (registered in the command palette) open floating `egui_extras` tables. Both windows expose clickable sortable column headers for Symbol, Last, Bid, Ask, Dly Close, Chg% (implemented 2026-06-16); sort state is held in `AppState` (`reg_sho_sort`, `halts_sort`) and applied before row emission. The sort closures explicitly bind the alert tuples as `_alerts_*` to silence unused-variable warnings.
 
 Window data population:
 
