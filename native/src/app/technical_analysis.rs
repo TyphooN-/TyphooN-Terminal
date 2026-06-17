@@ -2783,6 +2783,45 @@ pub(super) fn draw_chart(
             let bar_idx = ((rel_x / bar_w) as usize).min(bars.len().saturating_sub(1));
             if bar_idx < bars.len() {
                 let b = &bars[bar_idx];
+
+                // Date/time tag on the bottom time axis (mirrors the right-axis
+                // price tag) — the TradingView-style readout of the hovered bar's
+                // timestamp, formatted per timeframe (intraday shows time, daily+
+                // shows the date).
+                {
+                    let mut ts_buf = String::with_capacity(20);
+                    format_ts_buf(b.ts_ms, chart.timeframe, &mut ts_buf);
+                    let ts_galley = painter.layout_no_wrap(
+                        ts_buf,
+                        egui::FontId::monospace(10.0),
+                        egui::Color32::WHITE,
+                    );
+                    let tw = ts_galley.rect.width();
+                    let th = ts_galley.rect.height();
+                    let box_w = tw + 10.0;
+                    let half = box_w * 0.5;
+                    // Centre on the crosshair x, clamped to keep the tag inside the
+                    // chart's horizontal span. Guard the clamp: a very narrow MTF
+                    // cell can be slimmer than the tag, where lo > hi would panic.
+                    let lo = chart_rect.left() + half;
+                    let hi = chart_rect.right() - half;
+                    let cx = if lo <= hi {
+                        pos.x.clamp(lo, hi)
+                    } else {
+                        chart_rect.center().x
+                    };
+                    let ts_rect = egui::Rect::from_center_size(
+                        egui::pos2(cx, chart_rect.bottom() + 10.0),
+                        egui::vec2(box_w, 16.0),
+                    );
+                    painter.rect_filled(ts_rect, 2.0, egui::Color32::from_rgb(50, 50, 80));
+                    painter.galley(
+                        egui::pos2(cx - tw * 0.5, ts_rect.center().y - th * 0.5),
+                        ts_galley,
+                        egui::Color32::WHITE,
+                    );
+                }
+
                 let abs_idx = start_idx + bar_idx;
                 let tooltip = format!(
                     "O:{} H:{} L:{} C:{} V:{:.0}",
