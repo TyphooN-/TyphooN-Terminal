@@ -1289,6 +1289,7 @@ fn kraken_xstock_detection_does_not_strip_crypto_x_suffixes() {
 
 #[test]
 fn kraken_equity_balances_use_bare_underlying_symbol() {
+    // Market-data / price-cache key: bare underlying ticker.
     assert_eq!(
         TyphooNApp::kraken_spot_pair_for_balance_asset("WOK.EQ"),
         "WOK"
@@ -1299,6 +1300,27 @@ fn kraken_equity_balances_use_bare_underlying_symbol() {
     );
     assert_eq!(
         TyphooNApp::kraken_spot_pair_for_balance_asset("XXBT"),
+        "BTCUSD"
+    );
+}
+
+#[test]
+fn kraken_equity_orders_use_eq_usd_pair_not_bare_ticker() {
+    // AddOrder pair must keep `.EQ` and append USD so Kraken accepts it — the
+    // bare ticker `WOK` is an unknown Spot pair and the order is rejected. The
+    // expected form matches the `pair` Kraken reports in TradesHistory (e.g.
+    // `HRTX.EQUSD`).
+    assert_eq!(
+        TyphooNApp::kraken_order_pair_for_balance_asset("WOK.EQ"),
+        "WOK.EQUSD"
+    );
+    assert_eq!(
+        TyphooNApp::kraken_order_pair_for_balance_asset("HRTX.EQ"),
+        "HRTX.EQUSD"
+    );
+    // Crypto is unaffected: still `{DISPLAY}USD`.
+    assert_eq!(
+        TyphooNApp::kraken_order_pair_for_balance_asset("XXBT"),
         "BTCUSD"
     );
 }

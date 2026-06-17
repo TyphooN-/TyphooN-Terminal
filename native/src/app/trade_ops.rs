@@ -1460,6 +1460,43 @@ impl TyphooNApp {
         }
     }
 
+    /// Kraken **AddOrder** `pair` for a wallet balance asset.
+    ///
+    /// Distinct from [`Self::kraken_spot_pair_for_balance_asset`], which returns
+    /// the bare underlying ticker (`WOK`) for market-data / price-cache lookups.
+    /// Orders need the real tradeable pair name: Kraken Securities/equity
+    /// holdings (`WOK.EQ`) trade as `{asset}USD` → `WOK.EQUSD` — the exact `pair`
+    /// Kraken echoes back in TradesHistory (e.g. `HRTX.EQUSD`) — NOT the bare
+    /// ticker `WOK`, which Kraken Spot rejects as an unknown asset pair. Crypto
+    /// stays `{DISPLAY}USD` (`XXBT` → `BTCUSD`), unchanged.
+    pub(super) fn kraken_order_pair_for_balance_asset(asset: &str) -> String {
+        format!("{}USD", Self::kraken_display_asset(asset))
+    }
+
+    /// Kraken **AddOrder** `pair` for an active-chart / plan market symbol routed
+    /// to Kraken. xStock/equity symbols trade as `{TICKER}.EQUSD` (same form as
+    /// the wallet-balance path above); everything else — crypto pairs — passes
+    /// through unchanged so non-equity Kraken routing is untouched.
+    pub(super) fn kraken_order_pair_for_symbol(&self, symbol: &str) -> String {
+        let normalized = normalize_market_data_symbol(symbol).to_ascii_uppercase();
+        let bare = normalized
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .to_string();
+        let is_kraken_equity = self.kraken_scrape_xstocks
+            && !bare.is_empty()
+            && (normalized.ends_with(".EQ")
+                || self
+                    .kraken_equity_universe_symbols
+                    .iter()
+                    .any(|candidate| candidate.as_str() == bare.as_str()));
+        if is_kraken_equity {
+            format!("{bare}.EQUSD")
+        } else {
+            symbol.to_string()
+        }
+    }
+
     pub(super) fn kraken_quote_balance(&self) -> f64 {
         self.kraken_balances
             .iter()
@@ -1958,7 +1995,9 @@ impl TyphooNApp {
     }
 
     pub(super) fn open_kraken_spot_sell_dialog(&mut self, asset: String, available: f64) {
-        self.kraken_spot_sell_pair = Self::kraken_spot_pair_for_balance_asset(&asset);
+        // Order pair, not the bare-ticker market-data key: `WOK.EQ` → `WOK.EQUSD`
+        // so Kraken AddOrder accepts it (a bare `WOK` is an unknown Spot pair).
+        self.kraken_spot_sell_pair = Self::kraken_order_pair_for_balance_asset(&asset);
         self.kraken_spot_sell_asset = Self::kraken_display_asset(&asset);
         self.kraken_spot_sell_available = available.max(0.0);
         self.kraken_spot_sell_qty = self.kraken_spot_sell_available;
@@ -2316,8 +2355,12 @@ impl TyphooNApp {
         }
 
         if send_kraken {
+            // xStock/equity symbols must route as `{TICKER}.EQUSD`; crypto passes
+            // through unchanged. A bare equity ticker (e.g. `WOK`) is an unknown
+            // Spot pair and Kraken rejects the order.
+            let kraken_pair = self.kraken_order_pair_for_symbol(&plan.symbol);
             let _ = self.broker_tx.send(BrokerCmd::KrakenPlaceOrder {
-                pair: plan.symbol.clone(),
+                pair: kraken_pair.clone(),
                 side: side_str,
                 order_type: "market".to_string(),
                 volume: plan.qty,
@@ -2326,10 +2369,10 @@ impl TyphooNApp {
             });
             self.log.push_back(LogEntry::info(format!(
                 "Open Trade: Kraken market {} {} {}",
-                side_label, plan.qty, plan.symbol
+                side_label, plan.qty, kraken_pair
             )));
             let _ = self.broker_tx.send(BrokerCmd::KrakenSyncExits {
-                pair: plan.symbol.clone(),
+                pair: kraken_pair.clone(),
                 sl_price: Some(plan.sl),
                 tp_price: Some(plan.tp),
                 wait_for_position: true,
@@ -2337,7 +2380,7 @@ impl TyphooNApp {
             });
             self.log.push_back(LogEntry::info(format!(
                 "Open Trade: Kraken exit sync queued for {} (sl={} tp={})",
-                plan.symbol,
+                kraken_pair,
                 format_price(plan.sl),
                 format_price(plan.tp)
             )));
