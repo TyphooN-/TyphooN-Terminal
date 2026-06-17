@@ -177,6 +177,11 @@ impl TyphooNApp {
                         .partial_cmp(&b.ext_change_pct)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 }),
+                6 => sorted_wl.sort_by(|a, b| {
+                    a.regular_close
+                        .partial_cmp(&b.regular_close)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                }),
                 _ => {}
             }
             if !self.watchlist_sort.ascending {
@@ -229,17 +234,34 @@ impl TyphooNApp {
                 // Reg SHO status is shown inline (red ticker + "!!" badge) right
                 // after the symbol — a dedicated column does not fit the packed
                 // right panel without pushing Vol/buttons off the edge.
-                let col_last = avail_w * 0.26;
-                let col_chg = avail_w * 0.42;
-                let col_pct = avail_w * 0.56;
-                // Show the Ext% column only when there is extended-hours data to
-                // show. During pre/after/overnight the broker populates
-                // ext_change_pct; during CORE every row resets to 0, so the
-                // column auto-hides and reclaims its space — matching the
-                // original "hide during CORE" intent without session plumbing.
+                // Show the Ext% + Close columns only when there is extended-hours
+                // data. During pre/after/overnight the broker populates
+                // ext_change_pct; during CORE every row resets to 0, so the columns
+                // auto-hide and the value columns reclaim their space — matching the
+                // original "hide during CORE" intent without session plumbing. When
+                // shown, Close (regular-session close) sits beside Last so close vs
+                // last is visible; the value columns compress to keep Vol off the
+                // "+"/"x" buttons.
                 let show_ext = sorted_wl.iter().any(|r| r.ext_change_pct.abs() > 0.001);
-                let col_ext = if show_ext { avail_w * 0.70 } else { 0.0 };
-                let col_vol = avail_w * 0.82;
+                let (col_last, col_chg, col_pct, col_close, col_ext, col_vol) = if show_ext {
+                    (
+                        avail_w * 0.20,
+                        avail_w * 0.33,
+                        avail_w * 0.46,
+                        avail_w * 0.60,
+                        avail_w * 0.74,
+                        avail_w * 0.86,
+                    )
+                } else {
+                    (
+                        avail_w * 0.26,
+                        avail_w * 0.42,
+                        avail_w * 0.56,
+                        0.0,
+                        0.0,
+                        avail_w * 0.82,
+                    )
+                };
                 let col_x = avail_w - 12.0;
                 let col_plus = avail_w - 28.0; // "+" button (open new chart)
 
@@ -290,6 +312,13 @@ impl TyphooNApp {
                 );
                 if show_ext {
                     hp.text(
+                        egui::pos2(hdr_rect.left() + col_close - 2.0, hy),
+                        egui::Align2::RIGHT_CENTER,
+                        &format!("Close{}", sort_arrow(6)),
+                        hdr_font.clone(),
+                        hdr_col,
+                    );
+                    hp.text(
                         egui::pos2(hdr_rect.left() + col_ext - 2.0, hy),
                         egui::Align2::RIGHT_CENTER,
                         &format!("Ext%{}", sort_arrow(5)),
@@ -315,10 +344,12 @@ impl TyphooNApp {
                         } else if rx < (col_chg + col_pct) * 0.5 {
                             2
                         } else if !show_ext {
-                            // No Ext% column: Chg% | Vol split directly.
+                            // No Ext%/Close columns: Chg% | Vol split directly.
                             if rx < (col_pct + col_vol) * 0.5 { 3 } else { 4 }
-                        } else if rx < (col_pct + col_ext) * 0.5 {
+                        } else if rx < (col_pct + col_close) * 0.5 {
                             3
+                        } else if rx < (col_close + col_ext) * 0.5 {
+                            6
                         } else if rx < (col_ext + col_vol) * 0.5 {
                             5
                         } else {
@@ -447,6 +478,24 @@ impl TyphooNApp {
                         font.clone(),
                         disp_color,
                     );
+
+                    // Regular-session Close — only drawn during extended hours, so
+                    // close vs the (extended) Last is visible. Neutral/dimmed to set
+                    // it apart from the colored Last/Chg cells; "-" when unknown.
+                    if show_ext {
+                        let close_str = if wl.regular_close > 0.0 {
+                            format_price(wl.regular_close)
+                        } else {
+                            "-".to_string()
+                        };
+                        rp.text(
+                            egui::pos2(rx + col_close - 2.0, ry),
+                            egui::Align2::RIGHT_CENTER,
+                            &close_str,
+                            font.clone(),
+                            AXIS_TEXT,
+                        );
+                    }
 
                     // Extended hours change % — only drawn when the Ext% column is
                     // visible (extended session). Dimmed "-" for rows with no move.
