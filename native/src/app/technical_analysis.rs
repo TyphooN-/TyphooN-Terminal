@@ -7920,7 +7920,7 @@ pub(super) fn format_price(p: f64) -> String {
     } else if abs >= 1.0 {
         format!("{:.4}", p)
     } else {
-        format!("{:.6}", p)
+        format!("{:.4}", p)
     }
 }
 
