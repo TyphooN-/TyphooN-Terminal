@@ -205,7 +205,7 @@ fn snapshot_sweep_respects_enabled_sync_timeframe_controls() {
     let catalog = vec!["AAPL".to_string()];
     let fresh = std::collections::HashMap::new();
     let (interval_min, _pairs) = select_kraken_ws_snapshot_sweep_batch_high_first(
-        &catalog, &intervals, &fresh, 0, 250,
+        &catalog, &intervals, &fresh, &std::collections::HashMap::new(), 0, 250,
     )
     .expect("highest enabled interval");
     assert_eq!(interval_min, 1440, "1Day chosen over 15Min");
@@ -221,6 +221,7 @@ fn snapshot_sweep_picks_highest_timeframe_with_missing_pairs() {
         &catalog,
         &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
         &fresh,
+        &std::collections::HashMap::new(),
         10_000_000_000,
         250,
     )
@@ -250,6 +251,7 @@ fn snapshot_sweep_skips_fresh_high_timeframes_to_the_lowest_gap() {
         &catalog,
         &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
         &fresh,
+        &std::collections::HashMap::new(),
         now_ms,
         250,
     )
@@ -272,12 +274,55 @@ fn snapshot_sweep_none_when_every_interval_is_fresh() {
             &catalog,
             &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
             &fresh,
+            &std::collections::HashMap::new(),
             now_ms,
             250,
         )
         .is_none(),
         "fully-fresh catalog → no sweep"
     );
+}
+
+#[test]
+fn snapshot_sweep_backs_off_recently_attempted_no_data_pairs() {
+    // A pair Kraken serves no bars for never goes WS-fresh, so without an attempt
+    // backoff it reads "missing" forever and wedges the high-TF-first sweep on it.
+    // Here AAPL is not fresh anywhere but was JUST attempted on every interval →
+    // every interval is backed off → no sweep is selected this cadence.
+    let now_ms = 10_000_000_000i64;
+    let fresh = std::collections::HashMap::new();
+    let mut attempt = std::collections::HashMap::new();
+    for &interval_min in &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST {
+        let tf = kraken_ws_interval_to_tf_label(interval_min).unwrap();
+        attempt.insert(("AAPL".to_string(), tf.to_string()), now_ms);
+    }
+    let catalog = vec!["AAPL".to_string()];
+    assert!(
+        select_kraken_ws_snapshot_sweep_batch_high_first(
+            &catalog,
+            &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
+            &fresh,
+            &attempt,
+            now_ms,
+            250,
+        )
+        .is_none(),
+        "every interval just attempted → backed off → no sweep"
+    );
+
+    // Once the backoff window elapses, the pair is eligible again (highest TF first).
+    let later = now_ms + KRAKEN_WS_SNAPSHOT_SWEEP_RETRY_BACKOFF_MS;
+    let (interval_min, pairs) = select_kraken_ws_snapshot_sweep_batch_high_first(
+        &catalog,
+        &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
+        &fresh,
+        &attempt,
+        later,
+        250,
+    )
+    .expect("backoff elapsed → eligible again");
+    assert_eq!(interval_min, 10080, "retries highest TF first after backoff");
+    assert_eq!(pairs, vec!["AAPLx/USD".to_string()]);
 }
 
 #[test]
@@ -288,6 +333,7 @@ fn snapshot_sweep_caps_batch_size_within_the_chosen_timeframe() {
         &catalog,
         &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
         &fresh,
+        &std::collections::HashMap::new(),
         0,
         2,
     )
@@ -321,6 +367,7 @@ fn snapshot_sweep_caps_low_timeframe_batch_smaller_than_high() {
         &catalog,
         &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
         &fresh,
+        &std::collections::HashMap::new(),
         now_ms,
         KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE,
     )

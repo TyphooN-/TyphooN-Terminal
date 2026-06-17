@@ -2728,6 +2728,7 @@ impl TyphooNApp {
             kraken_cost_basis: std::collections::HashMap::new(),
             kraken_open_orders: Vec::new(),
             kraken_ws_fresh_until: std::collections::HashMap::new(),
+            kraken_ws_snapshot_attempt: std::collections::HashMap::new(),
             kraken_pairs: Vec::new(),
             kraken_pairs_normalized: std::collections::HashSet::new(),
             kraken_futures_symbols: Vec::new(),

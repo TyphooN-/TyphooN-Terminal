@@ -4279,6 +4279,13 @@ pub struct TyphooNApp {
     /// lookup; entries are not actively pruned because the per-key check
     /// already age-bounds them with the TF period.
     pub(crate) kraken_ws_fresh_until: std::collections::HashMap<(String, String), i64>,
+    /// Last snapshot-sweep attempt per `(symbol, tf)`. Distinct from
+    /// `kraken_ws_fresh_until` (which is only set on a NON-empty bar commit):
+    /// this records that we *tried*, so a pair Kraken serves no bars for backs
+    /// off instead of being re-swept every cadence (which would wedge the
+    /// high-timeframe-first sweep). Not REST-visible, so it can't suppress REST
+    /// refetch the way a real freshness anchor would.
+    pub(crate) kraken_ws_snapshot_attempt: std::collections::HashMap<(String, String), i64>,
     pub(crate) kraken_pairs: Vec<(String, String)>,
     /// Normalized pair/display symbols cached as a set so
     /// `kraken_spot_symbol_in_loaded_pairs` is O(1) — the previous linear

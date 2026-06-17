@@ -126,6 +126,7 @@ impl TyphooNApp {
             &catalog,
             &intervals_min,
             &self.kraken_ws_fresh_until,
+            &self.kraken_ws_snapshot_attempt,
             now_ms,
             KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE,
         ) else {
@@ -133,6 +134,14 @@ impl TyphooNApp {
         };
         let tf = kraken_ws_interval_to_tf_label(interval_min).unwrap_or("?");
         let pair_count = pairs.len();
+        // Record the attempt so a no-data pair backs off instead of being
+        // re-selected next cadence; a non-empty commit will set real WS-freshness.
+        for ws in &pairs {
+            if let Some((_src, symbol)) = kraken_ws_bar_cache_target(ws) {
+                self.kraken_ws_snapshot_attempt
+                    .insert((symbol, tf.to_string()), now_ms);
+            }
+        }
         self.kraken_ws_ohlc_snapshot_sweep_in_flight = true;
         let _ = self.broker_tx.send(BrokerCmd::KrakenOhlcSnapshotSweep {
             interval_min,
@@ -235,6 +244,7 @@ fn select_kraken_ws_snapshot_sweep_batch_high_first(
     catalog_symbols: &[String],
     intervals_high_first: &[u32],
     fresh_until: &std::collections::HashMap<(String, String), i64>,
+    attempt: &std::collections::HashMap<(String, String), i64>,
     now_ms: i64,
     batch_size: usize,
 ) -> Option<(u32, Vec<String>)> {
@@ -263,7 +273,17 @@ fn select_kraken_ws_snapshot_sweep_batch_high_first(
         for ws in &pairs {
             let is_missing = match kraken_ws_bar_cache_target(ws) {
                 Some((_src, symbol)) => {
-                    !TyphooNApp::kraken_ws_pair_is_fresh_at(fresh_until, &symbol, tf, now_ms)
+                    let fresh =
+                        TyphooNApp::kraken_ws_pair_is_fresh_at(fresh_until, &symbol, tf, now_ms);
+                    // Swept recently but still not fresh → Kraken serves no bars for
+                    // this pair/interval. Back off instead of re-arming it every
+                    // cadence (which wedges high-TF-first on no-data pairs).
+                    let backed_off = attempt
+                        .get(&(symbol.clone(), tf.to_string()))
+                        .is_some_and(|&t| {
+                            now_ms.saturating_sub(t) < KRAKEN_WS_SNAPSHOT_SWEEP_RETRY_BACKOFF_MS
+                        });
+                    !fresh && !backed_off
                 }
                 None => true,
             };
@@ -377,6 +397,15 @@ const KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE: usize = 250;
 /// snapshot burst on the render thread (the overnight 3-5s stalls).
 const KRAKEN_WS_SNAPSHOT_SWEEP_LOW_TF_BATCH_SIZE: usize = 32;
 const KRAKEN_WS_SNAPSHOT_SWEEP_CADENCE: Duration = Duration::from_secs(10);
+/// After a pair is swept, suppress re-selecting it for this long *unless* it goes
+/// WS-fresh first. Kraken serves no bars for some `{SYM}x/USD` at some intervals
+/// (e.g. weekly on a thinly-traded token); freshness is only marked on a NON-empty
+/// commit, so without this backoff those pairs read "missing" forever and — because
+/// the sweep is high-timeframe-FIRST — wedge the whole sweep on them every 10s
+/// cadence, starving the lower intervals and churning the WS connection. 20 min is
+/// shorter than the smallest fresh window (1Min = 24 min), so pairs that DO get
+/// data are unaffected; pairs that don't simply retry every 20 min instead of 10s.
+const KRAKEN_WS_SNAPSHOT_SWEEP_RETRY_BACKOFF_MS: i64 = 20 * 60 * 1000;
 
 /// Maximum grouped `(symbol, timeframe)` merges to process in one blocking task.
 /// Keeps startup snapshot persistence in bounded slices so tokio can schedule
