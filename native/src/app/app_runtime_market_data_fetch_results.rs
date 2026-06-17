@@ -105,7 +105,47 @@ impl TyphooNApp {
         if should_reload {
             self.queue_chart_reload(self.active_tab);
         }
+
+        // MTF_MA / MultiKAMA overlays project a symbol's higher-timeframe series
+        // (H1/H4/D1/W1/MN1) onto its lower-timeframe charts. `ensure_mql_mtf_overlays_for_render`
+        // only (re)computes those lines while the overlay buffer is *empty*, so a
+        // higher timeframe that lands in the cache AFTER a chart first rendered
+        // never backfills — the "missing SMAs on chart" report. When such a
+        // higher-timeframe series is freshly fetched, queue an overlay-refreshing
+        // reload for the OTHER open charts of the same symbol (the active chart is
+        // handled above). Gated on an overlay being enabled and suppressed during
+        // full-universe sync; the deferred loader dedupes/paces the reloads.
+        if (self.show_sma200 || self.show_kama)
+            && !self.heavy_sync_in_progress
+            && Self::is_mtf_overlay_source_timeframe(&timeframe)
+        {
+            self.queue_same_symbol_overlay_reloads(&symbol, self.active_tab);
+        }
         !source_has_terminal_settlement && matches!(source.as_str(), "kraken" | "kraken-futures")
+    }
+
+    /// True when `timeframe` is one of the higher-timeframe series the MTF_MA /
+    /// MultiKAMA overlays project onto lower-timeframe charts. Lower timeframes
+    /// (M1–M30) are never overlay inputs, so a fetch on them can't backfill a
+    /// missing overlay line and doesn't warrant a same-symbol reload sweep.
+    fn is_mtf_overlay_source_timeframe(timeframe: &str) -> bool {
+        matches!(timeframe, "1Hour" | "4Hour" | "1Day" | "1Week" | "1Month")
+    }
+
+    /// Queue an overlay-refreshing reload for every open chart of `symbol` except
+    /// `skip_idx` (already handled by the active-chart path). Reuses the deferred,
+    /// O(1)-deduped chart loader so repeated fetches during a sync don't pile up.
+    fn queue_same_symbol_overlay_reloads(&mut self, symbol: &str, skip_idx: usize) {
+        let targets: Vec<usize> = self
+            .charts
+            .iter()
+            .enumerate()
+            .filter(|(idx, c)| *idx != skip_idx && c.symbol_matches(symbol))
+            .map(|(idx, _)| idx)
+            .collect();
+        for idx in targets {
+            self.queue_chart_reload(idx);
+        }
     }
 
     fn handle_alpaca_fetch_settled(
