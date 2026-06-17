@@ -1460,23 +1460,64 @@ impl TyphooNApp {
         }
     }
 
-    /// Kraken **AddOrder** `pair` for a wallet balance asset.
-    ///
-    /// Distinct from [`Self::kraken_spot_pair_for_balance_asset`], which returns
-    /// the bare underlying ticker (`WOK`) for market-data / price-cache lookups.
-    /// Orders need the real tradeable pair name: Kraken Securities/equity
-    /// holdings (`WOK.EQ`) trade as `{asset}USD` → `WOK.EQUSD` — the exact `pair`
-    /// Kraken echoes back in TradesHistory (e.g. `HRTX.EQUSD`) — NOT the bare
-    /// ticker `WOK`, which Kraken Spot rejects as an unknown asset pair. Crypto
-    /// stays `{DISPLAY}USD` (`XXBT` → `BTCUSD`), unchanged.
-    pub(super) fn kraken_order_pair_for_balance_asset(asset: &str) -> String {
-        format!("{}USD", Self::kraken_display_asset(asset))
+    /// Bare ticker behind a Kraken pair name / wsname: take the part before the
+    /// quote slash, then peel a tokenized lowercase-`x` or a `.EQ` securities
+    /// marker. `ADTXx/USD`→`ADTX`, `WOK.EQ/USD`→`WOK`, `XBT/USD`→`XBT`.
+    pub(super) fn kraken_pair_base_ticker(pair: &str) -> String {
+        let head = pair.split('/').next().unwrap_or(pair);
+        head.strip_suffix('x')
+            .or_else(|| head.strip_suffix(".EQ"))
+            .or_else(|| head.strip_suffix(".eq"))
+            .unwrap_or(head)
+            .to_ascii_uppercase()
     }
 
-    /// Kraken **AddOrder** `pair` for an active-chart / plan market symbol routed
-    /// to Kraken. xStock/equity symbols trade as `{TICKER}.EQUSD` (same form as
-    /// the wallet-balance path above); everything else — crypto pairs — passes
-    /// through unchanged so non-equity Kraken routing is untouched.
+    /// Resolve the tradeable pair Kraken actually lists for `bare` (e.g. `ADTX`) in
+    /// the loaded AssetPairs catalog, returning the catalog wsname — the form
+    /// `AddOrder` accepts. `None` when the symbol is not a listed Kraken pair (the
+    /// catalog may be empty pre-load, or the holding is a Securities-only equity
+    /// with no Spot pair), so callers can warn instead of placing a doomed order.
+    pub(super) fn kraken_resolved_equity_pair(&self, bare: &str) -> Option<String> {
+        if bare.is_empty() {
+            return None;
+        }
+        self.kraken_pairs.iter().find_map(|(name, wsname)| {
+            let candidate = if wsname.trim().is_empty() { name } else { wsname };
+            (Self::kraken_pair_base_ticker(candidate) == bare).then(|| candidate.clone())
+        })
+    }
+
+    /// Construction fallback for an equity `AddOrder` pair (catalog miss): the app's
+    /// tradeable xStock form `{TICKER}x/USD` — the same `{SYM}x/USD` the WS book and
+    /// OHLC use for these symbols. Crypto/cash stays `{DISPLAY}USD` (`XXBT`→`BTCUSD`).
+    /// The earlier `{TICKER}.EQUSD` form (taken from a TradesHistory sample) was
+    /// rejected by AddOrder as an unknown asset pair, so it is gone.
+    pub(super) fn kraken_order_pair_for_balance_asset(asset: &str) -> String {
+        let display = Self::kraken_display_asset(asset);
+        match display.strip_suffix(".EQ") {
+            Some(bare) => format!("{}x/USD", bare.replace('/', "").to_ascii_uppercase()),
+            None => format!("{display}USD"),
+        }
+    }
+
+    /// Kraken **AddOrder** `pair` for a wallet balance asset, preferring the live
+    /// AssetPairs catalog (authoritative for what AddOrder accepts) matched by bare
+    /// ticker, and falling back to the `{TICKER}x/USD` construction on a catalog
+    /// miss. Crypto/cash stays `{DISPLAY}USD`.
+    pub(super) fn kraken_resolved_order_pair_for_balance_asset(&self, asset: &str) -> String {
+        let display = Self::kraken_display_asset(asset);
+        let Some(bare_eq) = display.strip_suffix(".EQ") else {
+            return format!("{display}USD"); // crypto / cash — unchanged
+        };
+        let bare = bare_eq.replace('/', "").to_ascii_uppercase();
+        self.kraken_resolved_equity_pair(&bare)
+            .unwrap_or_else(|| Self::kraken_order_pair_for_balance_asset(asset))
+    }
+
+    /// Kraken **AddOrder** `pair` for an active-chart / plan market symbol routed to
+    /// Kraken. xStock/equity symbols resolve via the live catalog (then the
+    /// `{TICKER}x/USD` fallback); everything else — crypto pairs — passes through
+    /// unchanged so non-equity Kraken routing is untouched.
     pub(super) fn kraken_order_pair_for_symbol(&self, symbol: &str) -> String {
         let normalized = normalize_market_data_symbol(symbol).to_ascii_uppercase();
         let bare = normalized
@@ -1491,7 +1532,8 @@ impl TyphooNApp {
                     .iter()
                     .any(|candidate| candidate.as_str() == bare.as_str()));
         if is_kraken_equity {
-            format!("{bare}.EQUSD")
+            self.kraken_resolved_equity_pair(&bare)
+                .unwrap_or_else(|| format!("{bare}x/USD"))
         } else {
             symbol.to_string()
         }
@@ -1995,9 +2037,11 @@ impl TyphooNApp {
     }
 
     pub(super) fn open_kraken_spot_sell_dialog(&mut self, asset: String, available: f64) {
-        // Order pair, not the bare-ticker market-data key: `WOK.EQ` → `WOK.EQUSD`
-        // so Kraken AddOrder accepts it (a bare `WOK` is an unknown Spot pair).
-        self.kraken_spot_sell_pair = Self::kraken_order_pair_for_balance_asset(&asset);
+        // Order pair, not the bare-ticker market-data key. Resolve against the live
+        // AssetPairs catalog (authoritative for what AddOrder accepts), falling back
+        // to the `{TICKER}x/USD` xStock form. A bare `WOK` — and the earlier
+        // `WOK.EQUSD` — are unknown Spot pairs.
+        self.kraken_spot_sell_pair = self.kraken_resolved_order_pair_for_balance_asset(&asset);
         self.kraken_spot_sell_asset = Self::kraken_display_asset(&asset);
         self.kraken_spot_sell_available = available.max(0.0);
         self.kraken_spot_sell_qty = self.kraken_spot_sell_available;
@@ -2355,9 +2399,9 @@ impl TyphooNApp {
         }
 
         if send_kraken {
-            // xStock/equity symbols must route as `{TICKER}.EQUSD`; crypto passes
-            // through unchanged. A bare equity ticker (e.g. `WOK`) is an unknown
-            // Spot pair and Kraken rejects the order.
+            // xStock/equity symbols resolve to their real Kraken pair (catalog,
+            // then `{TICKER}x/USD` fallback); crypto passes through unchanged. A bare
+            // equity ticker (e.g. `WOK`) is an unknown Spot pair and Kraken rejects it.
             let kraken_pair = self.kraken_order_pair_for_symbol(&plan.symbol);
             let _ = self.broker_tx.send(BrokerCmd::KrakenPlaceOrder {
                 pair: kraken_pair.clone(),

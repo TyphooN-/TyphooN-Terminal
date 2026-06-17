@@ -1305,24 +1305,35 @@ fn kraken_equity_balances_use_bare_underlying_symbol() {
 }
 
 #[test]
-fn kraken_equity_orders_use_eq_usd_pair_not_bare_ticker() {
-    // AddOrder pair must keep `.EQ` and append USD so Kraken accepts it — the
-    // bare ticker `WOK` is an unknown Spot pair and the order is rejected. The
-    // expected form matches the `pair` Kraken reports in TradesHistory (e.g.
-    // `HRTX.EQUSD`).
+fn kraken_equity_order_pair_construction_uses_xstock_form_not_bare_or_equsd() {
+    // Construction fallback (catalog miss). The bare ticker `WOK` is an unknown
+    // Spot pair, and the earlier `WOK.EQUSD` (taken from a TradesHistory sample)
+    // is ALSO rejected by AddOrder — so the fallback is the app's tradeable xStock
+    // form `{TICKER}x/USD`, the same `{SYM}x/USD` the WS book/OHLC use. The live
+    // path (`kraken_resolved_order_pair_for_balance_asset`) prefers the real
+    // AssetPairs catalog wsname over this when one exists.
     assert_eq!(
         TyphooNApp::kraken_order_pair_for_balance_asset("WOK.EQ"),
-        "WOK.EQUSD"
+        "WOKx/USD"
     );
     assert_eq!(
         TyphooNApp::kraken_order_pair_for_balance_asset("HRTX.EQ"),
-        "HRTX.EQUSD"
+        "HRTXx/USD"
     );
     // Crypto is unaffected: still `{DISPLAY}USD`.
     assert_eq!(
         TyphooNApp::kraken_order_pair_for_balance_asset("XXBT"),
         "BTCUSD"
     );
+}
+
+#[test]
+fn kraken_pair_base_ticker_peels_tokenized_and_eq_markers() {
+    // The catalog matcher must reduce every tradeable form to the bare ticker so a
+    // balance like `ADTX.EQ` finds whatever Kraken actually lists for ADTX.
+    assert_eq!(TyphooNApp::kraken_pair_base_ticker("ADTXx/USD"), "ADTX");
+    assert_eq!(TyphooNApp::kraken_pair_base_ticker("WOK.EQ/USD"), "WOK");
+    assert_eq!(TyphooNApp::kraken_pair_base_ticker("XBT/USD"), "XBT");
 }
 
 // ── parse_ask_args (ASKAI/ASKCLAUDE/ASKGEMINI argument parser) ───────────
