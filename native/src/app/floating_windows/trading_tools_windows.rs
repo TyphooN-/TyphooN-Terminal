@@ -129,22 +129,28 @@ impl TyphooNApp {
                                     });
                             }
 
-                            // Footprint-style summary (price levels with buy/sell volume)
-                            ui.label(
-                                egui::RichText::new("Footprint Summary (last 20 bars)")
-                                    .small()
-                                    .strong(),
-                            );
-                            let last20 = &recent[recent.len().saturating_sub(20)..];
-                            let min_p = last20.iter().map(|b| b.low).fold(f64::MAX, f64::min);
-                            let max_p = last20.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+                            // Footprint-style summary with +/- control
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Footprint Summary").small().strong());
+                                if ui.small_button("−").clicked() {
+                                    self.order_flow_footprint_bars = (self.order_flow_footprint_bars.saturating_sub(10)).max(10);
+                                }
+                                ui.label(format!("last {} bars", self.order_flow_footprint_bars));
+                                if ui.small_button("+").clicked() {
+                                    self.order_flow_footprint_bars = (self.order_flow_footprint_bars + 10).min(200);
+                                }
+                            });
+                            let footprint_bars = self.order_flow_footprint_bars;
+                            let last_n = &recent[recent.len().saturating_sub(footprint_bars)..];
+                            let min_p = last_n.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+                            let max_p = last_n.iter().map(|b| b.high).fold(f64::MIN, f64::max);
                             let range = max_p - min_p;
                             if range > 0.0 {
                                 let levels = 15_usize;
                                 let step = range / levels as f64;
                                 let mut buy_vol = vec![0.0_f64; levels];
                                 let mut sell_vol = vec![0.0_f64; levels];
-                                for b in last20 {
+                                for b in last_n {
                                     let mid_level =
                                         ((((b.high + b.low) / 2.0) - min_p) / step) as usize;
                                     let idx = mid_level.min(levels - 1);

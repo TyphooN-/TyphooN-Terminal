@@ -4792,6 +4792,7 @@ pub struct TyphooNApp {
     pub(crate) show_stat_arb: bool,
     pub(crate) show_risk_budget: bool,
     pub(crate) show_order_flow: bool,
+    pub(crate) order_flow_footprint_bars: usize,
     pub(crate) show_bookmap: bool,
     pub(crate) bookmap_windows: Vec<BookmapWindowState>,
     pub(crate) show_outliers: bool,

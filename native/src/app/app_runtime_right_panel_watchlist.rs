@@ -248,9 +248,16 @@ impl TyphooNApp {
                         avail_w * 0.19, avail_w * 0.31, avail_w * 0.43, avail_w * 0.57, avail_w * 0.71, avail_w * 0.83,
                     )
                 } else {
-                    (
-                        avail_w * 0.23, avail_w * 0.39, avail_w * 0.53, 0.0, 0.0, avail_w * 0.81,
-                    )
+                    // When panel is narrow, use more compact layout so symbol column stays usable
+                    if avail_w < 260.0 {
+                        (
+                            avail_w * 0.22, avail_w * 0.38, avail_w * 0.52, 0.0, 0.0, avail_w * 0.76,
+                        )
+                    } else {
+                        (
+                            avail_w * 0.25, avail_w * 0.42, avail_w * 0.55, 0.0, 0.0, avail_w * 0.78,
+                        )
+                    }
                 };
                 let col_x = avail_w - 12.0;
                 let col_plus = avail_w - 28.0; // "+" button (open new chart)

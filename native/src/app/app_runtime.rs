@@ -809,8 +809,12 @@ impl eframe::App for TyphooNApp {
         // indicators + MTF overlays — so pace restored MTF grids instead of burning
         // consecutive UI frames while broad sync/news/SEC/fundamentals are active.
         if !self.deferred_chart_loads.is_empty() {
-            let load_interval =
-                deferred_chart_load_interval(self.heavy_sync_in_progress, self.mtf_enabled);
+            let load_interval = if self.mtf_enabled {
+                // Much more aggressive loading for open MTF tabs
+                std::time::Duration::from_millis(80)
+            } else {
+                deferred_chart_load_interval(self.heavy_sync_in_progress, self.mtf_enabled)
+            };
             if now_instant.duration_since(self.deferred_chart_last_load_at) >= load_interval {
                 let idx = self.deferred_chart_loads[0]; // VecDeque supports indexing
                 let _focused_chart = self.mtf_focused.unwrap_or(self.active_tab);

@@ -576,6 +576,7 @@ impl TyphooNApp {
             show_stat_arb: false,
             show_risk_budget: false,
             show_order_flow: false,
+            order_flow_footprint_bars: 50,
             show_bookmap: false,
             bookmap_windows: Vec::new(),
             show_outliers: false,

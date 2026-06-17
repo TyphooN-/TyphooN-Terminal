@@ -9,7 +9,6 @@ impl TyphooNApp {
             egui::Window::new("Kraken Trade History")
                 .open(&mut self.show_kraken_trade_history)
                 .default_size([900.0, 500.0])
-                .max_size([900.0, 560.0])
                 .resizable(true)
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
