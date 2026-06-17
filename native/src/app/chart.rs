@@ -2069,6 +2069,21 @@ pub(crate) fn chart_load_merged_equity_bars_from_cache(
     symbol: &str,
     timeframe: &str,
 ) -> Vec<Bar> {
+    // Prefer the pre-materialized merged blob: one cheap read instead of rebuilding
+    // the full multi-source merge — which, for 4H/1W/1M, recursively rebuilds AND
+    // aggregates the 1Day merge. The blob is re-materialized off-thread by
+    // `chart_materialize_merged_equity_cache` after every component write (see
+    // `fallback_bars`), so it is accuracy-equivalent; rebuilding it here on the
+    // render-thread deferred-load path cost ~0.1-0.3s per load and stacked into the
+    // multi-second egui stalls in the field log. The live tip is still applied by
+    // the chart's quote overlay after the load, so a blob lagging the newest WS bar
+    // by one sync cycle is invisible. On a miss/degenerate blob, rebuild as before.
+    let merged_key = chart_merged_equity_cache_key(symbol, timeframe);
+    if let Ok(Some(raw)) = cache.get_bars_raw(&merged_key) {
+        if raw.len() >= 2 {
+            return chart_raw_to_bars(raw);
+        }
+    }
     let merged = chart_build_merged_equity_bars_from_cache(cache, symbol, timeframe);
     chart_persist_merged_equity_bars_best_effort(cache, symbol, timeframe, &merged);
     merged
