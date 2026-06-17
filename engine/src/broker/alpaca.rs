@@ -285,7 +285,14 @@ impl RateLimiter {
         let interval_ms = rpm_to_interval_ms(rpm);
         self.requests_per_minute.store(rpm, Ordering::Relaxed);
         *self.base_interval_ms.lock().await = interval_ms;
-        *self.adaptive_ms.lock().await = interval_ms;
+        // Raise the floor without discarding an active 429 backoff. Clobbering
+        // `adaptive_ms` here let an observed `x-ratelimit-limit` header reset the
+        // backoff to base on the very next response, so the interval bounced
+        // (630↔1260ms in the field log) and the AIMD throttle never actually bit
+        // — driving repeat 429 storms. Keep the larger of the two; `report_latency`
+        // still recovers it gradually once responses are healthy.
+        let mut adaptive = self.adaptive_ms.lock().await;
+        *adaptive = (*adaptive).max(interval_ms);
     }
 
     pub async fn apply_requests_per_minute_hint(&self, rpm: u32) {

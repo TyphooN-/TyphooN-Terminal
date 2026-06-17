@@ -219,8 +219,15 @@ pub(super) fn spawn_broker_message_processor(
                     let msg_tx = broker_msg_tx_clone.clone();
                     tokio::spawn(async move {
                         let _ = msg_tx.send(BrokerMsg::OrderResult("SEC scrape started...".into()));
-                        match sec_filing::scrape_all_portfolio_symbols(db_path, Some(symbols)).await {
-                            Ok(stats) => {
+                        // Overall cap so a stalled batch (slow EDGAR pacing or SQLite
+                        // write-lock contention under heavy sync — the per-request
+                        // client timeout is only 15s, but the whole batch can still
+                        // grind) always reports back and clears the UI busy flag in
+                        // minutes rather than waiting out the 30-min stale watchdog.
+                        let scrape = sec_filing::scrape_all_portfolio_symbols(db_path, Some(symbols));
+                        match tokio::time::timeout(std::time::Duration::from_secs(600), scrape).await
+                        {
+                            Ok(Ok(stats)) => {
                                 let error_suffix = if stats.errors.is_empty() {
                                     String::new()
                                 } else {
@@ -230,11 +237,16 @@ pub(super) fn spawn_broker_message_processor(
                                     format!("SEC scrape complete: {} tickers, {} filings, {} insider trades, {} alerts{}", stats.tickers_scanned, stats.new_filings, stats.new_insider_trades, stats.new_alerts, error_suffix)
                                 ));
                             }
-                            Err(e) => {
+                            Ok(Err(e)) => {
                                 let _ = msg_tx.send(BrokerMsg::SecScrapeResult(format!(
                                     "SEC scrape error: {}",
                                     e
                                 )));
+                            }
+                            Err(_) => {
+                                let _ = msg_tx.send(BrokerMsg::SecScrapeResult(
+                                    "SEC scrape timed out after 10m — busy flag cleared".into(),
+                                ));
                             }
                         }
                     });
