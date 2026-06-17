@@ -4101,6 +4101,16 @@ pub struct TyphooNApp {
     /// so non-open timeframes still render their values (grid is not limited to
     /// whichever chart tabs happen to be open).
     pub(crate) mtf_grid_status_symbol: String,
+    /// Signature of the open-chart (symbol, timeframe) set at the last
+    /// `compute_mtf_grid_status`. The grid prefers live open-chart values and
+    /// falls back to the cache-loaded status for the rest; opening or closing a
+    /// chart must recompute that fallback or a just-closed timeframe would drop
+    /// to a stale/empty cell. `0` = never computed.
+    pub(crate) mtf_grid_status_open_sig: u64,
+    /// When `mtf_grid_status` was last (re)computed. Drives a self-terminating
+    /// throttled refresh so timeframes the async all-TF sync fills into the cache
+    /// after the first compute still appear without needing the symbol to change.
+    pub(crate) mtf_grid_status_at: Option<std::time::Instant>,
     /// Deferred chart loads: indices of charts to load, one per frame (avoids startup freeze).
     pub(crate) deferred_chart_loads: VecDeque<usize>,
     /// Side index for O(1) duplicate suppression in `deferred_chart_loads`.

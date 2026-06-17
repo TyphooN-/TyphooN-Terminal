@@ -4,19 +4,35 @@ use crate::app::chart_ops::{MTF_GRID_TIMEFRAMES, mtf_grid_symbol_key, mtf_visibl
 #[allow(deprecated)]
 impl TyphooNApp {
     pub(super) fn render_right_panel_mtf_grid_section(&mut self, ui: &mut egui::Ui) {
-        // Keep the cache-loaded all-timeframe status in sync with the active
-        // symbol so the grid shows values for EVERY timeframe, not just the ones
-        // that happen to have an open chart tab. compute_mtf_grid_status loads
-        // missing timeframes from cache in the background; we only (re)trigger it
-        // when the active symbol changed and no load is already in flight, so the
-        // render path never re-spawns the loader every frame.
+        // Keep the cache-loaded all-timeframe status fresh so the grid shows
+        // values for EVERY timeframe, not just the ones with an open chart tab.
+        // compute_mtf_grid_status loads missing timeframes from cache in the
+        // background. We (re)trigger it — only when no load is already in flight,
+        // so the render path never re-spawns the loader every frame — when:
+        //   • the active symbol changed (whole snapshot is now wrong), or
+        //   • a chart was opened/closed/retimeframed (a just-closed timeframe
+        //     would otherwise fall back to a stale/empty cell — the reported bug), or
+        //   • some cell is still empty and a short throttle elapsed, so timeframes
+        //     the async all-TF sync fills into the cache appear on their own. This
+        //     last path is self-terminating: once every cell is filled it stops.
         if self.right_mtf_grid_open
             && self.cache.is_some()
             && self.mtf_grid_rx.is_none()
             && !self.symbol_input.trim().is_empty()
-            && self.mtf_grid_status_symbol != self.symbol_input.trim()
         {
-            self.compute_mtf_grid_status();
+            let symbol_changed = self.mtf_grid_status_symbol != self.symbol_input.trim();
+            let open_changed = self.mtf_grid_status_open_sig != self.mtf_open_chart_signature();
+            let has_missing = self.mtf_grid_status.len() < MTF_GRID_TIMEFRAMES.len()
+                || self.mtf_grid_status.iter().any(|s| {
+                    s.1.is_none() && s.2.is_none() && s.3.is_none() && s.4.is_none() && s.5.is_none()
+                });
+            let throttle_ok = self
+                .mtf_grid_status_at
+                .map(|t| t.elapsed().as_secs() >= 6)
+                .unwrap_or(true);
+            if symbol_changed || open_changed || (has_missing && throttle_ok) {
+                self.compute_mtf_grid_status();
+            }
         }
         // ── MTF Grid ────────────────────────────────────────
         let mtf_grid_section = egui::CollapsingHeader::new(

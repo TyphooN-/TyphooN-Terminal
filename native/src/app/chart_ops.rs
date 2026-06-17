@@ -12,6 +12,17 @@ pub(super) const MTF_GRID_TIMEFRAMES: [(&str, Timeframe); 9] = [
     ("MN1", Timeframe::MN1),
 ];
 
+/// One MTF grid cell snapshot: `(tf_label, close, sma200, kama, fisher, fisher_signal)`.
+/// `None` for an indicator means "no value" (not loaded / insufficient history).
+pub(super) type MtfStatusRow = (
+    &'static str,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct MtfChartGroup {
     pub(super) symbol: String,
@@ -487,8 +498,52 @@ impl TyphooNApp {
 
     /// Compute MTF Grid indicator status for all timeframes from cache.
     /// Parallel: spawns threads for TFs not already loaded in chart tabs.
+    /// Order-independent hash of the open-chart `(symbol-key, timeframe)` set. It
+    /// changes whenever a chart is opened, closed, or retimeframed, so the grid's
+    /// cache fallback (`mtf_grid_status`) can be recomputed for the new layout —
+    /// otherwise a just-closed timeframe drops to a stale/empty cell.
+    pub(super) fn mtf_open_chart_signature(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        // XOR per-chart hashes → independent of tab order; fold in the count so
+        // adding then removing different charts can't alias to the same value.
+        let mut acc: u64 = self.charts.len() as u64;
+        for c in &self.charts {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            mtf_grid_symbol_key(&c.symbol).hash(&mut h);
+            c.timeframe.label().hash(&mut h);
+            acc ^= h.finish();
+        }
+        acc
+    }
+
+    /// Merge MTF grid rows in place, keeping them in timeframe order. `authoritative`
+    /// rows (live open charts) always overwrite. Non-authoritative rows (cache /
+    /// background loads) fill empty or missing cells but never clobber an existing
+    /// concrete value with an all-`None` miss — that no-clobber rule is what stops
+    /// already-filled cells from flickering back to grey on a throttled refresh.
+    pub(super) fn mtf_grid_status_upsert(&mut self, rows: Vec<MtfStatusRow>, authoritative: bool) {
+        let has_data = |r: &MtfStatusRow| {
+            r.1.is_some() || r.2.is_some() || r.3.is_some() || r.4.is_some() || r.5.is_some()
+        };
+        for row in rows {
+            match self.mtf_grid_status.iter_mut().find(|s| s.0 == row.0) {
+                Some(slot) => {
+                    if authoritative || has_data(&row) || !has_data(slot) {
+                        *slot = row;
+                    }
+                }
+                None => self.mtf_grid_status.push(row),
+            }
+        }
+        self.mtf_grid_status.sort_by_key(|r| {
+            MTF_GRID_TIMEFRAMES
+                .iter()
+                .position(|(label, _)| *label == r.0)
+                .unwrap_or(usize::MAX)
+        });
+    }
+
     pub(super) fn compute_mtf_grid_status(&mut self) {
-        self.mtf_grid_status.clear();
         let cache = match &self.cache {
             Some(c) => Arc::clone(c),
             None => return,
@@ -497,22 +552,20 @@ impl TyphooNApp {
         if sym.is_empty() {
             return;
         }
-        // Mark which symbol the status now covers so the grid panel can detect a
-        // stale status (active symbol changed) and refresh without re-spawning
-        // the loader every frame.
+        // A symbol change invalidates the whole snapshot (old symbol's values are
+        // meaningless); an open/close or throttled cache-fill refresh keeps prior
+        // values and only upserts, so filled cells never flicker.
+        if self.mtf_grid_status_symbol != sym {
+            self.mtf_grid_status.clear();
+        }
         self.mtf_grid_status_symbol = sym.clone();
+        self.mtf_grid_status_open_sig = self.mtf_open_chart_signature();
+        self.mtf_grid_status_at = Some(std::time::Instant::now());
         let sym_key = mtf_grid_symbol_key(&sym);
         let all_tfs: &[(&'static str, Timeframe)] = &MTF_GRID_TIMEFRAMES;
 
         // Collect results from already-loaded charts (no thread needed)
-        let mut preloaded: Vec<(
-            &'static str,
-            Option<f64>,
-            Option<f64>,
-            Option<f64>,
-            Option<f64>,
-            Option<f64>,
-        )> = Vec::new();
+        let mut preloaded: Vec<MtfStatusRow> = Vec::new();
         let mut need_load: Vec<(&'static str, Timeframe)> = Vec::new();
 
         for &(label, tf) in all_tfs {
@@ -534,43 +587,28 @@ impl TyphooNApp {
             }
         }
 
+        // Open-chart values are authoritative — always overwrite the snapshot.
+        self.mtf_grid_status_upsert(preloaded, true);
+
         if need_load.is_empty() {
-            // All TFs already loaded — just use preloaded data, no blocking work needed
-            let tf_idx: std::collections::HashMap<&str, usize> = all_tfs
-                .iter()
-                .enumerate()
-                .map(|(i, &(l, _))| (l, i))
-                .collect();
-            preloaded.sort_by_key(|r| tf_idx.get(r.0).copied().unwrap_or(99));
-            self.mtf_grid_status = preloaded;
+            // All TFs came from open charts — nothing else to load.
         } else if self.heavy_sync_in_progress {
-            // Do not kick off background cache/indicator loads for missing MTF
-            // status cells while full-universe sync is already saturating the
-            // machine. Visible chart cells load through the paced deferred loader;
-            // missing status cells can stay grey until sync pressure relaxes.
-            let tf_idx: std::collections::HashMap<&str, usize> = all_tfs
+            // Don't kick off background cache/indicator loads for missing MTF
+            // cells while full-universe sync is saturating the machine. Seed any
+            // not-yet-present cell as grey (no-clobber keeps prior good values);
+            // the throttled refresh retries once sync pressure relaxes.
+            let placeholders: Vec<MtfStatusRow> = need_load
                 .iter()
-                .enumerate()
-                .map(|(i, &(l, _))| (l, i))
+                .map(|(label, _)| (*label, None, None, None, None, None))
                 .collect();
-            for (label, _) in need_load {
-                preloaded.push((label, None, None, None, None, None));
-            }
-            preloaded.sort_by_key(|r| tf_idx.get(r.0).copied().unwrap_or(99));
-            self.mtf_grid_status = preloaded;
+            self.mtf_grid_status_upsert(placeholders, false);
         } else {
             // Spawn background thread for TFs that need cache loading — don't block UI
-            self.mtf_grid_status = preloaded; // show what we have immediately
             let (tx, rx) = std::sync::mpsc::channel();
             let need_load_owned: Vec<(&'static str, Timeframe)> = need_load;
-            let all_tfs_idx: std::collections::HashMap<&'static str, usize> = all_tfs
-                .iter()
-                .enumerate()
-                .map(|(i, &(l, _))| (l, i))
-                .collect();
             let rt_handle = self.rt_handle.clone();
             rt_handle.spawn_blocking(move || {
-                let mut results: Vec<_> = Vec::new();
+                let mut results: Vec<MtfStatusRow> = Vec::new();
                 for (label, tf) in need_load_owned {
                     let mut temp = ChartState::new(&sym, tf);
                     let dsm = typhoon_engine::core::data_source::DataSourceManager::default();
@@ -586,7 +624,6 @@ impl TyphooNApp {
                         results.push((label, close, sma, kama, fisher, fsig));
                     }
                 }
-                results.sort_by_key(|r| all_tfs_idx.get(r.0).copied().unwrap_or(99));
                 let _ = tx.send(results);
             });
             self.mtf_grid_rx = Some(rx);

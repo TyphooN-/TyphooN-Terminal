@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::chart_ops::{MTF_GRID_TIMEFRAMES, mtf_visible_chart_groups};
+use crate::app::chart_ops::mtf_visible_chart_groups;
 
 use super::app_runtime_support::*;
 // egui 0.34: Panel::show(ctx) deprecated in favor of show_inside(ui).
@@ -867,18 +867,13 @@ impl eframe::App for TyphooNApp {
         }
 
         // ── receive MTF grid status from background thread (non-blocking) ──
-        if let Some(ref rx) = self.mtf_grid_rx {
-            if let Ok(results) = rx.try_recv() {
-                // Merge with any preloaded data already in mtf_grid_status
-                self.mtf_grid_status.extend(results);
-                self.mtf_grid_status.sort_by_key(|r| {
-                    MTF_GRID_TIMEFRAMES
-                        .iter()
-                        .position(|(label, _)| *label == r.0)
-                        .unwrap_or(usize::MAX)
-                });
-                self.mtf_grid_rx = None; // done
-            }
+        // Take the results out first so the immutable borrow of `mtf_grid_rx`
+        // ends before the mutable upsert. Cache loads are non-authoritative:
+        // they fill missing cells without clobbering live open-chart values.
+        let mtf_grid_results = self.mtf_grid_rx.as_ref().and_then(|rx| rx.try_recv().ok());
+        if let Some(results) = mtf_grid_results {
+            self.mtf_grid_rx = None; // done
+            self.mtf_grid_status_upsert(results, false);
         }
 
         // ── receive Reg SHO cached prices from background thread (non-blocking) ──
@@ -1896,8 +1891,6 @@ impl eframe::App for TyphooNApp {
                         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                         .column(egui_extras::Column::auto().at_least(80.0))   // Symbol
                         .column(egui_extras::Column::auto().at_least(70.0))   // Last
-                        .column(egui_extras::Column::auto().at_least(70.0))   // Bid
-                        .column(egui_extras::Column::auto().at_least(70.0))   // Ask
                         .column(egui_extras::Column::auto().at_least(80.0))   // Daily Close
                         .column(egui_extras::Column::auto().at_least(70.0))   // Chg%
                         .column(egui_extras::Column::auto().at_least(120.0))  // Actions
@@ -1921,10 +1914,8 @@ impl eframe::App for TyphooNApp {
                             let cmp = match col {
                                 0 => sym_a.cmp(sym_b),
                                 1 => wa.map(|w| w.last).partial_cmp(&wb.map(|w| w.last)).unwrap_or(std::cmp::Ordering::Equal),
-                                2 => wa.map(|w| w.live_bid).partial_cmp(&wb.map(|w| w.live_bid)).unwrap_or(std::cmp::Ordering::Equal),
-                                3 => wa.map(|w| w.live_ask).partial_cmp(&wb.map(|w| w.live_ask)).unwrap_or(std::cmp::Ordering::Equal),
-                                4 => wa.map(|w| w.prev_close).partial_cmp(&wb.map(|w| w.prev_close)).unwrap_or(std::cmp::Ordering::Equal),
-                                5 => {
+                                2 => wa.map(|w| w.regular_close).partial_cmp(&wb.map(|w| w.regular_close)).unwrap_or(std::cmp::Ordering::Equal),
+                                3 => {
                                     let ca = wa.map(|w| if w.prev_close > 0.0 { (w.last - w.prev_close) / w.prev_close * 100.0 } else { 0.0 });
                                     let cb = wb.map(|w| if w.prev_close > 0.0 { (w.last - w.prev_close) / w.prev_close * 100.0 } else { 0.0 });
                                     ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
@@ -1948,10 +1939,8 @@ impl eframe::App for TyphooNApp {
                         };
                         header.col(|ui| { sort_click(ui, "Symbol", 0); });
                         header.col(|ui| { sort_click(ui, "Last", 1); });
-                        header.col(|ui| { sort_click(ui, "Bid", 2); });
-                        header.col(|ui| { sort_click(ui, "Ask", 3); });
-                        header.col(|ui| { sort_click(ui, "Dly Close", 4); });
-                        header.col(|ui| { sort_click(ui, "Chg%", 5); });
+                        header.col(|ui| { sort_click(ui, "Dly Close", 2); });
+                        header.col(|ui| { sort_click(ui, "Chg%", 3); });
                         header.col(|ui| { ui.strong("Actions"); });
                         header.col(|ui| { ui.strong("Details"); });
                     })
@@ -1975,12 +1964,6 @@ impl eframe::App for TyphooNApp {
                                 });
                                 row.col(|ui| {
                                     ui.label(wl.map(|w| fmt_px(w.last)).unwrap_or_else(|| "—".into()));
-                                });
-                                row.col(|ui| {
-                                    ui.label(wl.map(|w| fmt_px(w.live_bid)).unwrap_or_else(|| "—".into()));
-                                });
-                                row.col(|ui| {
-                                    ui.label(wl.map(|w| fmt_px(w.live_ask)).unwrap_or_else(|| "—".into()));
                                 });
                                 row.col(|ui| {
                                     ui.label(wl.map(|w| fmt_px(w.regular_close)).unwrap_or_else(|| "—".into()));
@@ -2081,6 +2064,7 @@ impl eframe::App for TyphooNApp {
                         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                         .column(egui_extras::Column::auto().at_least(80.0))   // Symbol
                         .column(egui_extras::Column::auto().at_least(70.0))   // Last
+                        .column(egui_extras::Column::auto().at_least(80.0))   // Prev Close
                         .column(egui_extras::Column::auto().at_least(70.0))   // Chg%
                         .column(egui_extras::Column::auto().at_least(120.0))  // Actions
                         .column(egui_extras::Column::remainder().at_least(240.0)); // Halt info
@@ -2097,7 +2081,8 @@ impl eframe::App for TyphooNApp {
                             let cmp = match col {
                                 0 => sym_a.cmp(sym_b),
                                 1 => wa.map(|w| w.last).partial_cmp(&wb.map(|w| w.last)).unwrap_or(std::cmp::Ordering::Equal),
-                                2 => {
+                                2 => wa.map(|w| w.prev_close).partial_cmp(&wb.map(|w| w.prev_close)).unwrap_or(std::cmp::Ordering::Equal),
+                                3 => {
                                     let ca = wa.map(|w| if w.prev_close > 0.0 { (w.last - w.prev_close) / w.prev_close * 100.0 } else { 0.0 });
                                     let cb = wb.map(|w| if w.prev_close > 0.0 { (w.last - w.prev_close) / w.prev_close * 100.0 } else { 0.0 });
                                     ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
@@ -2121,7 +2106,8 @@ impl eframe::App for TyphooNApp {
                         };
                         header.col(|ui| { sort_click(ui, "Symbol", 0); });
                         header.col(|ui| { sort_click(ui, "Last", 1); });
-                        header.col(|ui| { sort_click(ui, "Chg%", 2); });
+                        header.col(|ui| { sort_click(ui, "Prev Close", 2); });
+                        header.col(|ui| { sort_click(ui, "Chg%", 3); });
                         header.col(|ui| { ui.strong("Actions"); });
                         header.col(|ui| { ui.strong("Halt info"); });
                     })
@@ -2142,6 +2128,9 @@ impl eframe::App for TyphooNApp {
                                 });
                                 row.col(|ui| {
                                     ui.label(wl.map(|w| fmt_px(w.last)).unwrap_or_else(|| "—".into()));
+                                });
+                                row.col(|ui| {
+                                    ui.label(wl.map(|w| fmt_px(w.prev_close)).unwrap_or_else(|| "—".into()));
                                 });
                                 row.col(|ui| {
                                     match wl {

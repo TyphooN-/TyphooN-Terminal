@@ -198,6 +198,8 @@ impl TyphooNApp {
             mtf_grid_status: Vec::new(),
             mtf_grid_rx: None,
             mtf_grid_status_symbol: String::new(),
+            mtf_grid_status_open_sig: 0,
+            mtf_grid_status_at: None,
             deferred_chart_loads: VecDeque::new(),
             deferred_chart_load_set: HashSet::new(),
             deferred_chart_last_load_at: std::time::Instant::now()
