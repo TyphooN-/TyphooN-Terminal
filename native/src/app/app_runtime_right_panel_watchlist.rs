@@ -245,21 +245,11 @@ impl TyphooNApp {
                 let show_ext = sorted_wl.iter().any(|r| r.ext_change_pct.abs() > 0.001);
                 let (col_last, col_chg, col_pct, col_close, col_ext, col_vol) = if show_ext {
                     (
-                        avail_w * 0.20,
-                        avail_w * 0.33,
-                        avail_w * 0.46,
-                        avail_w * 0.60,
-                        avail_w * 0.74,
-                        avail_w * 0.86,
+                        avail_w * 0.19, avail_w * 0.31, avail_w * 0.43, avail_w * 0.57, avail_w * 0.71, avail_w * 0.83,
                     )
                 } else {
                     (
-                        avail_w * 0.26,
-                        avail_w * 0.42,
-                        avail_w * 0.56,
-                        0.0,
-                        0.0,
-                        avail_w * 0.82,
+                        avail_w * 0.23, avail_w * 0.39, avail_w * 0.53, 0.0, 0.0, avail_w * 0.81,
                     )
                 };
                 let col_x = avail_w - 12.0;

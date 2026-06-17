@@ -2414,6 +2414,28 @@ impl ChartState {
         } else {
             price
         };
+
+        // Live update "Cur" levels for Previous Candle Levels so they reflect
+        // new highs/lows inside the forming higher-timeframe bar (D1/W1/MN1).
+        if let Some(h) = self.current_daily_high {
+            if bar.high > h { self.current_daily_high = Some(bar.high); }
+        }
+        if let Some(l) = self.current_daily_low {
+            if bar.low < l { self.current_daily_low = Some(bar.low); }
+        }
+        if let Some(h) = self.current_weekly_high {
+            if bar.high > h { self.current_weekly_high = Some(bar.high); }
+        }
+        if let Some(l) = self.current_weekly_low {
+            if bar.low < l { self.current_weekly_low = Some(bar.low); }
+        }
+        if let Some(h) = self.current_monthly_high {
+            if bar.high > h { self.current_monthly_high = Some(bar.high); }
+        }
+        if let Some(l) = self.current_monthly_low {
+            if bar.low < l { self.current_monthly_low = Some(bar.low); }
+        }
+
         self.forming_bar_dirty = true;
         self.last_visible_bar_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
         true
@@ -3555,35 +3577,7 @@ impl ChartState {
                 }
             }
 
-            // Aggregate bars for custom timeframes (H2, D3, Y1, etc.)
-            let agg_info = if let Some(factor) = self.timeframe.aggregation() {
-                if factor > 1 && !self.bars.is_empty() {
-                    let base_count = self.bars.len();
-                    let mut aggregated = Vec::with_capacity(base_count / factor + 1);
-                    let mut i = 0;
-                    while i < self.bars.len() {
-                        let end = (i + factor).min(self.bars.len());
-                        let chunk = &self.bars[i..end];
-                        let bar = Bar {
-                            ts_ms: chunk[0].ts_ms,
-                            open: chunk[0].open,
-                            high: chunk.iter().map(|b| b.high).fold(f64::MIN, f64::max),
-                            low: chunk.iter().map(|b| b.low).fold(f64::MAX, f64::min),
-                            close: chunk[chunk.len() - 1].close,
-                            volume: chunk.iter().map(|b| b.volume).sum(),
-                        };
-                        aggregated.push(bar);
-                        i = end;
-                    }
-                    let agg_count = aggregated.len();
-                    self.bars = aggregated;
-                    format!(" ({}→{} aggregated ×{})", base_count, agg_count, factor)
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            };
+            let agg_info = String::new(); // custom TFs removed
 
             let ltf_rebuilt = self.rebuild_from_lower_timeframe_if_dislocated(cache, &sym);
             let quote_overlaid = self.apply_quote_cache_overlay(cache, &sym);

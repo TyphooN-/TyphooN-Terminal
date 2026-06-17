@@ -1476,7 +1476,7 @@ impl KrakenBroker {
         count: usize,
     ) -> Result<serde_json::Value, String> {
         let pair = crate::core::kraken::to_kraken_pair_lossy(symbol)
-            .ok_or_else(|| format!("Kraken orderbook: unsupported pair {symbol}"))?;
+            .ok_or_else(|| format!("Kraken orderbook: L2 depth not available for this symbol ({symbol}). Only supported on Kraken spot pairs."))?;
         let url = format!("{}/0/public/Depth", KRAKEN_BASE_URL);
         let count = count.min(500).to_string();
         let resp = self

@@ -813,12 +813,11 @@ impl eframe::App for TyphooNApp {
                 deferred_chart_load_interval(self.heavy_sync_in_progress, self.mtf_enabled);
             if now_instant.duration_since(self.deferred_chart_last_load_at) >= load_interval {
                 let idx = self.deferred_chart_loads[0]; // VecDeque supports indexing
-                let focused_chart = self.mtf_focused.unwrap_or(self.active_tab);
-                let defer_inactive_mtf_cell = self.heavy_sync_in_progress
-                    && self.mtf_enabled
-                    && idx != self.active_tab
-                    && idx != focused_chart;
-                if defer_inactive_mtf_cell {
+                let _focused_chart = self.mtf_focused.unwrap_or(self.active_tab);
+                // All open chart tabs (including background MTF cells and non-active
+                // single-chart tabs) should load proactively so data+indicators are
+                // ready when user switches. No more "click to load" behavior.
+                if false {  // was: defer_inactive_mtf_cell during heavy sync
                     if let Some(skipped_idx) = self.deferred_chart_loads.pop_front() {
                         self.deferred_chart_loads.push_back(skipped_idx);
                     }

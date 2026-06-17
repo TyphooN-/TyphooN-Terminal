@@ -1686,15 +1686,15 @@ pub(super) fn draw_chart(
                     let (fill_col, label_col) = match status {
                         0 => (
                             egui::Color32::from_rgba_premultiplied(143, 188, 143, 50),
-                            egui::Color32::from_rgb(143, 188, 143),
+                            egui::Color32::from_rgb(200, 255, 200), // high contrast
                         ),
                         1 => (
                             egui::Color32::from_rgba_premultiplied(60, 179, 113, 60),
-                            egui::Color32::from_rgb(60, 179, 113),
+                            egui::Color32::from_rgb(220, 255, 220),
                         ),
                         _ => (
                             egui::Color32::from_rgba_premultiplied(46, 139, 87, 70),
-                            egui::Color32::from_rgb(46, 139, 87),
+                            egui::Color32::WHITE,
                         ),
                     };
                     painter.rect_filled(
@@ -1732,15 +1732,15 @@ pub(super) fn draw_chart(
                     let (fill_col, label_col) = match status {
                         0 => (
                             egui::Color32::from_rgba_premultiplied(135, 206, 235, 50),
-                            egui::Color32::from_rgb(135, 206, 235),
+                            egui::Color32::from_rgb(200, 230, 255), // high contrast on blue zones
                         ),
                         1 => (
                             egui::Color32::from_rgba_premultiplied(0, 191, 255, 60),
-                            egui::Color32::from_rgb(0, 191, 255),
+                            egui::Color32::from_rgb(220, 245, 255),
                         ),
                         _ => (
                             egui::Color32::from_rgba_premultiplied(30, 144, 255, 70),
-                            egui::Color32::from_rgb(30, 144, 255),
+                            egui::Color32::WHITE,
                         ),
                     };
                     painter.rect_filled(

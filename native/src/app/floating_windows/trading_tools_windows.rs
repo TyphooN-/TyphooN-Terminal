@@ -28,7 +28,8 @@ impl TyphooNApp {
                         .unwrap_or_default();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("Order Flow: {}", sym)).strong());
-                        if ui.button("Fetch L2").clicked() && !sym.is_empty() {
+                        let l2_supported = kraken_bookmap_stream_supported(&sym, &self.kraken_pairs);
+                        if ui.add_enabled(l2_supported, egui::Button::new("Fetch L2")).clicked() && !sym.is_empty() {
                             let _ = self.broker_tx.send(BrokerCmd::GetOrderbook {
                                 symbol: sym.clone(),
                             });

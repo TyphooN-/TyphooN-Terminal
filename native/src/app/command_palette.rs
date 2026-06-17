@@ -520,7 +520,8 @@ impl TyphooNApp {
             }
             "FILLS" => {
                 if self.broker_connected {
-                    let _ = self.broker_tx.send(BrokerCmd::GetActivities { limit: 20 });
+                    self.show_kraken_trade_history = true;
+                    let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
                 } else {
                     self.log
                         .push_back(LogEntry::warn("Connect to broker first"));
