@@ -2,6 +2,97 @@
 
 use super::*;
 
+// ─── Shared MTF higher-timeframe bar cache ───────────────────────────────────
+// MTF_MA / MultiKAMA overlays and the right-panel MTF Grid both need a symbol's
+// higher-timeframe (H1/H4/D1/W1/MN1) bars. Rather than each re-reading + parsing
+// from SQLite, the MTF Grid loader (a canonical DataSourceManager load, off the
+// render thread) publishes the bars it loads to this process-global memo keyed by
+// `(mtf_grid_symbol_key(symbol), Timeframe::cache_suffix)`; the overlay loaders
+// read it first and fall back to their own source-pinned load on a miss. A short
+// TTL bounds staleness without explicit invalidation — HTF bars change at most
+// once per (long) period, so a freshly-fetched bar is reflected within the TTL.
+struct MtfHtfCacheEntry {
+    bars: std::sync::Arc<Vec<Bar>>,
+    written_ms: i64,
+}
+
+#[allow(clippy::type_complexity)]
+fn mtf_htf_cache()
+-> &'static std::sync::RwLock<std::collections::HashMap<(String, String), MtfHtfCacheEntry>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::RwLock<std::collections::HashMap<(String, String), MtfHtfCacheEntry>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
+const MTF_HTF_CACHE_TTL_MS: i64 = 90_000;
+
+/// Read a symbol's higher-timeframe bars from the shared MTF cache when a fresh
+/// (within-TTL) entry exists. Key: `(mtf_grid_symbol_key(symbol), tf_suffix)`.
+pub(crate) fn mtf_htf_cache_get(
+    symbol_key: &str,
+    tf_suffix: &str,
+    now_ms: i64,
+) -> Option<std::sync::Arc<Vec<Bar>>> {
+    let guard = mtf_htf_cache().read().ok()?;
+    let entry = guard.get(&(symbol_key.to_string(), tf_suffix.to_string()))?;
+    (now_ms.saturating_sub(entry.written_ms) < MTF_HTF_CACHE_TTL_MS)
+        .then(|| std::sync::Arc::clone(&entry.bars))
+}
+
+/// Publish a symbol's higher-timeframe bars to the shared MTF cache (called by the
+/// MTF Grid background loader). Opportunistically prunes stale entries to bound
+/// growth; the map only ever holds the active symbol's recently-loaded timeframes.
+pub(crate) fn mtf_htf_cache_put(
+    symbol_key: &str,
+    tf_suffix: &str,
+    bars: std::sync::Arc<Vec<Bar>>,
+    now_ms: i64,
+) {
+    if let Ok(mut guard) = mtf_htf_cache().write() {
+        guard.retain(|_, e| now_ms.saturating_sub(e.written_ms) < MTF_HTF_CACHE_TTL_MS);
+        guard.insert(
+            (symbol_key.to_string(), tf_suffix.to_string()),
+            MtfHtfCacheEntry {
+                bars,
+                written_ms: now_ms,
+            },
+        );
+    }
+}
+
+#[cfg(test)]
+mod mtf_htf_cache_tests {
+    use super::*;
+
+    #[test]
+    fn shared_htf_cache_round_trips_within_ttl_then_expires() {
+        let bars = std::sync::Arc::new(vec![Bar {
+            ts_ms: 1,
+            open: 1.0,
+            high: 1.0,
+            low: 1.0,
+            close: 1.0,
+            volume: 1.0,
+        }]);
+        // Unique key so the process-global cache can't collide with other tests.
+        let now = 1_000_000_000_000i64;
+        mtf_htf_cache_put("ZZSHAREDTEST", "1Week", std::sync::Arc::clone(&bars), now);
+        assert!(
+            mtf_htf_cache_get("ZZSHAREDTEST", "1Week", now).is_some(),
+            "fresh entry returned"
+        );
+        assert!(
+            mtf_htf_cache_get("ZZSHAREDTEST", "1Week", now + MTF_HTF_CACHE_TTL_MS).is_none(),
+            "entry expires at/after the TTL"
+        );
+        assert!(
+            mtf_htf_cache_get("ZZSHAREDTEST", "1Day", now).is_none(),
+            "a different timeframe suffix is a miss"
+        );
+    }
+}
+
 // ─── Ichimoku data ───────────────────────────────────────────────────────────
 
 pub(crate) const ICHI_TENKAN: egui::Color32 = egui::Color32::from_rgb(0, 180, 230);
@@ -5597,6 +5688,18 @@ impl ChartState {
             }
             Some(bars)
         };
+
+        // Shared MTF cache (the chosen MTF_MA / MTF_Grid unification): prefer the
+        // Grid loader's canonical bars so the two always agree and SQLite is read
+        // once. Keep the host-scale guard so a mis-scaled era is still rejected; on
+        // a miss or scale-reject, fall through to the source-pinned load below.
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let sym_key = super::chart_ops::mtf_grid_symbol_key(&self.symbol);
+        if let Some(shared) = mtf_htf_cache_get(&sym_key, tf_suffix, now_ms) {
+            if Self::htf_source_matches_host_scale(&self.bars, &shared) {
+                return Some((*shared).clone());
+            }
+        }
 
         // ADR-123 #2: restrict to the candles' own source — canonical
         // "{source}:{sym}:{tf}" — and drop the line if that TF is absent there.

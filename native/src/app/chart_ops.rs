@@ -622,6 +622,17 @@ impl TyphooNApp {
                         let fisher = temp.fisher.last().and_then(|v| *v);
                         let fsig = temp.fisher_signal.last().and_then(|v| *v);
                         results.push((label, close, sma, kama, fisher, fsig));
+                        // Publish the canonical bars to the shared MTF cache so this
+                        // symbol's MTF_MA / MultiKAMA chart overlay reuses them rather
+                        // than re-reading SQLite (the same-cache unification). Moves
+                        // the Vec out of `temp` (dropped next) — no clone.
+                        let now_ms = chrono::Utc::now().timestamp_millis();
+                        super::chart::mtf_htf_cache_put(
+                            &mtf_grid_symbol_key(&sym),
+                            tf.cache_suffix(),
+                            std::sync::Arc::new(std::mem::take(&mut temp.bars)),
+                            now_ms,
+                        );
                     }
                 }
                 let _ = tx.send(results);
