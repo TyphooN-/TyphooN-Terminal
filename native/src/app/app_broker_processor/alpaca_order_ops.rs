@@ -80,7 +80,10 @@ pub(super) async fn handle_alpaca_order_command(
             side,
             stop_loss,
             take_profit,
-        } => match b.bracket_order(&symbol, qty, &side, take_profit, stop_loss).await {
+        } => match b
+            .bracket_order(&symbol, qty, &side, take_profit, stop_loss)
+            .await
+        {
             Ok(r) => {
                 let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
                     "Bracket {} {} {}: {}",
@@ -88,7 +91,8 @@ pub(super) async fn handle_alpaca_order_command(
                 )));
             }
             Err(e) => {
-                let _ = broker_msg_tx.send(BrokerMsg::Error(format!("Bracket order failed: {}", e)));
+                let _ =
+                    broker_msg_tx.send(BrokerMsg::Error(format!("Bracket order failed: {}", e)));
             }
         },
         BrokerCmd::AlpacaCancelOrder { order_id } => match b.cancel_order(&order_id).await {
@@ -108,7 +112,10 @@ pub(super) async fn handle_alpaca_order_command(
             side,
             tp_price,
             sl_price,
-        } => match b.oco_order(&symbol, qty, &side, tp_price, sl_price, None).await {
+        } => match b
+            .oco_order(&symbol, qty, &side, tp_price, sl_price, None)
+            .await
+        {
             Ok(r) => {
                 let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
                     "OCO {} {} {} @ TP:{} SL:{}: {}",
@@ -124,7 +131,10 @@ pub(super) async fn handle_alpaca_order_command(
             qty,
             limit_price,
             stop_price,
-        } => match b.modify_order(&order_id, qty, limit_price, stop_price, None).await {
+        } => match b
+            .modify_order(&order_id, qty, limit_price, stop_price, None)
+            .await
+        {
             Ok(r) => {
                 let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
                     "Order {} modified: {}",
@@ -133,6 +143,46 @@ pub(super) async fn handle_alpaca_order_command(
             }
             Err(e) => {
                 let _ = broker_msg_tx.send(BrokerMsg::Error(format!("Modify failed: {}", e)));
+            }
+        },
+        BrokerCmd::AlpacaTrailingStop {
+            symbol,
+            qty,
+            side,
+            trail_percent,
+        } => match b
+            .trailing_stop_order(&symbol, qty, &side, None, Some(trail_percent), "gtc")
+            .await
+        {
+            Ok(r) => {
+                let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                    "Trailing stop {} {} {} trail {}%: {}",
+                    side, qty, symbol, trail_percent, r.status
+                )));
+            }
+            Err(e) => {
+                let _ =
+                    broker_msg_tx.send(BrokerMsg::Error(format!("Trailing stop failed: {}", e)));
+            }
+        },
+        BrokerCmd::AlpacaStopLimitOrder {
+            symbol,
+            qty,
+            side,
+            stop_price,
+            limit_price,
+        } => match b
+            .stop_limit_order(&symbol, qty, &side, stop_price, limit_price, "gtc")
+            .await
+        {
+            Ok(r) => {
+                let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                    "Stop-limit {} {} {} stop={} lim={}: {}",
+                    side, qty, symbol, stop_price, limit_price, r.status
+                )));
+            }
+            Err(e) => {
+                let _ = broker_msg_tx.send(BrokerMsg::Error(format!("Stop-limit failed: {}", e)));
             }
         },
         BrokerCmd::AlpacaSyncExits {

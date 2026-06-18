@@ -1,9 +1,10 @@
 use super::*;
 
-mod external_feeds;
-mod market_data_commands;
 mod alpaca_account_data;
 mod alpaca_order_ops;
+mod external_feeds;
+mod kraken_order_ops;
+mod market_data_commands;
 mod news;
 mod research_compute;
 mod storage;
@@ -347,7 +348,9 @@ pub(super) fn spawn_broker_message_processor(
                 | BrokerCmd::AlpacaCancelOrder { .. }
                 | BrokerCmd::AlpacaOcoOrder { .. }
                 | BrokerCmd::AlpacaModifyOrder { .. }
-                | BrokerCmd::AlpacaSyncExits { .. }) => {
+                | BrokerCmd::AlpacaSyncExits { .. }
+                | BrokerCmd::AlpacaTrailingStop { .. }
+                | BrokerCmd::AlpacaStopLimitOrder { .. }) => {
                     alpaca_order_ops::handle_alpaca_order_command(
                         cmd,
                         broker.as_ref(),
@@ -656,82 +659,13 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                     });
                 }
-                BrokerCmd::AlpacaTrailingStop { symbol, qty, side, trail_percent } => {
-                    if let Some(ref b) = broker {
-                        match b.trailing_stop_order(&symbol, qty, &side, None, Some(trail_percent), "gtc").await {
-                            Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Trailing stop {} {} {} trail {}%: {}", side, qty, symbol, trail_percent, r.status))); }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Trailing stop failed: {}", e))); }
-                        }
-                    }
-                }
-                BrokerCmd::AlpacaStopLimitOrder { symbol, qty, side, stop_price, limit_price } => {
-                    if let Some(ref b) = broker {
-                        match b.stop_limit_order(&symbol, qty, &side, stop_price, limit_price, "gtc").await {
-                            Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Stop-limit {} {} {} stop={} lim={}: {}", side, qty, symbol, stop_price, limit_price, r.status))); }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Stop-limit failed: {}", e))); }
-                        }
-                    }
-                }
-                BrokerCmd::KrakenSyncExits {
-                    pair,
-                    sl_price,
-                    tp_price,
-                    wait_for_position,
-                    wait_for_qty_at_most,
-                } => {
-                    if let Some(ref kb) = kraken_broker {
-                        if wait_for_position || wait_for_qty_at_most.is_some() {
-                            let mut found = false;
-                            for _ in 0..12 {
-                                match kb.get_position_summaries().await {
-                                    Ok(positions)
-                                        if positions.iter().any(|p| {
-                                            p.symbol.eq_ignore_ascii_case(&pair)
-                                                && p.qty.abs() > 0.0
-                                                && wait_for_qty_at_most
-                                                    .map(|max_qty| p.qty.abs() <= max_qty + 1e-8)
-                                                    .unwrap_or(true)
-                                        }) =>
-                                    {
-                                        found = true;
-                                        break;
-                                    }
-                                    Ok(_) => {
-                                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                                    }
-                                    Err(e) => {
-                                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                            "Kraken exit sync {}: position poll failed: {}",
-                                            pair, e
-                                        )));
-                                        break;
-                                    }
-                                }
-                            }
-                            if !found {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                    "Kraken exit sync {}: position not visible at target size yet",
-                                    pair
-                                )));
-                                continue;
-                            }
-                        }
-                        match kb.sync_position_exits(&pair, sl_price, tp_price).await {
-                            Ok(summary) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
-                                    format!("Kraken exits {}: {}", pair, summary),
-                                ));
-                            }
-                            Err(e) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                    "Kraken exit sync failed for {}: {}",
-                                    pair, e
-                                )));
-                            }
-                        }
-                    } else {
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error("Kraken: not connected".into()));
-                    }
+                cmd @ BrokerCmd::KrakenSyncExits { .. } => {
+                    kraken_order_ops::handle_kraken_order_command(
+                        cmd,
+                        kraken_broker.as_ref(),
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
                 }
                 BrokerCmd::FetchFearGreed => {
                     let msg_tx = broker_msg_tx_clone.clone();
