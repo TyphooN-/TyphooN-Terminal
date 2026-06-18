@@ -1,6 +1,62 @@
 use super::*;
 
 impl TyphooNApp {
+    pub(crate) fn tick_screenshot_capture(&mut self, ctx: &egui::Context) {
+        // ── Screenshot: issue capture command ────────────────────────────
+        if self.screenshot_requested {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            self.screenshot_requested = false;
+        }
+
+        // ── Screenshot: handle captured image (offload PNG encode to background thread) ──
+        {
+            let screenshot_data: Option<(Vec<u8>, u32, u32, std::path::PathBuf)> = ctx.input(|i| {
+                for event in &i.events {
+                    if let egui::Event::Screenshot { image, .. } = event {
+                        let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                        let pictures_dir = if let Ok(home) = std::env::var("HOME") {
+                            let p = std::path::PathBuf::from(home).join("Pictures");
+                            let _ = std::fs::create_dir_all(&p);
+                            p
+                        } else {
+                            std::path::PathBuf::from("/tmp")
+                        };
+                        let path = pictures_dir.join(format!("typhoon_chart_{}.webp", ts));
+                        let w = image.width() as u32;
+                        let h = image.height() as u32;
+                        let rgba: Vec<u8> = image
+                            .pixels
+                            .iter()
+                            .flat_map(|c| [c.r(), c.g(), c.b(), c.a()])
+                            .collect();
+                        return Some((rgba, w, h, path));
+                    }
+                }
+                None
+            });
+            if let Some((rgba, w, h, path)) = screenshot_data {
+                // Lossless WebP encoding on background thread (smaller than PNG, no quality loss)
+                let last_screenshot_path = path.clone();
+                self.log.push_back(LogEntry::info(format!(
+                    "Saving screenshot ({w}x{h}) to {}...",
+                    path.display()
+                )));
+                self.last_screenshot_path = Some(last_screenshot_path);
+                self.rt_handle.spawn_blocking(move || {
+                    if let Some(img) = image::RgbaImage::from_raw(w, h, rgba) {
+                        let dyn_img = image::DynamicImage::ImageRgba8(img);
+                        match dyn_img.save(&path) {
+                            Ok(()) => tracing::info!("Screenshot saved: {}", path.display()),
+                            Err(e) => tracing::error!("Screenshot save failed: {}", e),
+                        }
+                    } else {
+                        tracing::error!("Screenshot: failed to construct image from RGBA data");
+                    }
+                });
+            }
+        }
+    }
+
     pub(super) fn render_screenshots_gallery_window(&mut self, ctx: &egui::Context) {
         // ── Screenshots Gallery (palette: SCREENSHOTS / GALLERY) ──
         if self.show_screenshots_gallery {
