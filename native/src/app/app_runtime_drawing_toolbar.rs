@@ -1,10 +1,11 @@
 use super::*;
 
 impl TyphooNApp {
+    #[allow(deprecated)]
     pub(crate) fn render_drawing_toolbar(&mut self, ctx: &egui::Context) {
         // ── Drawing toolbar (horizontal top bar, TradingView style) ─────────
         egui::Panel::top("drawing_toolbar")
-            .max_height(24.0)
+            .max_size(24.0)
             .frame(
                 egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(18, 18, 25))
