@@ -121,13 +121,13 @@ the root:
 | `research/return_risk_stats.rs` | ~55 | Thin re-export parent after the return-risk compute families were split into semantic children, including `distribution_shape.rs`, `autocorr_regime.rs`, `downside_efficiency.rs`, `drawdown_liquidity_normality.rs`, `drawup_gap_range.rs`, `seasonality_spread.rs`, `volatility_estimators.rs`, `performance_runs_tests.rs`, `significance_stationarity.rs`, `tail_risk_diagnostics.rs`, `entropy_dependence.rs`, `upside_drawdown_risk.rs`, `entropy_stationarity.rs`, `robust_quantile_volatility.rs`, `normality_liquidity_tail.rs`, `fractal_rank_dynamics.rs`, `jump_trend_diagnostics.rs`, and `spectral_nonlinear_diagnostics.rs`. |
 | `research/candlestick_pattern_models.rs` | ~80 | Thin candlestick parent/helpers after extracting `basic_reversal.rs`, `multibar_reversal.rs`, `doji_shadow_star.rs`, `body_line_shapes.rs`, `neck_line_reversal.rs`, `crow_line_reversal.rs`, `separating_sandwich_doji.rs`, `rare_multibar_reversal.rs`, `gap_breakaway_reversal.rs`, and `continuation_gap_patterns.rs`. |
 | `research/price_transform_indicator_models.rs` | ~21 | Thin price-transform parent after extracting `adaptive_average_transforms.rs`, `price_average_variance.rs`, `directional_movement.rs`, `rate_correlation.rs`, `rolling_extrema.rs`, `bands_accumulation_regression.rs`, `aroon_macd_variable_average.rs`, `oscillator_squeeze_range.rs`, and `regression_hilbert_oscillators.rs`. |
-| `research/technical_indicator_models.rs` | ~3,806 | TA indicator compute. |
+| `research/technical_indicator_models.rs` | ~12 | Thin technical-indicator parent after extracting `squeeze_trend_channels.rs`, `directional_flow_trend.rs`, `volume_momentum_oscillators.rs`, `momentum_volume_pressure.rs`, and `cycle_trend_value.rs`. |
 | `research/moving_average_oscillator_models.rs` | ~3,630 | MA/oscillator compute. |
 | `research/mod.rs` | ~1,668 | Orchestration + residual storage. No longer the hotspot. |
 
 ### Next targets (in order)
 
-1. **Move to the next engine hotspots.** `return_risk_stats`, `candlestick_pattern_models`, and `price_transform_indicator_models` are now thin parents; the next high-value engine files are `technical_indicator_models.rs` and `moving_average_oscillator_models.rs`. Split each by semantic indicator family while preserving the `pub use` re-export surface.
+1. **Move to the next engine hotspot.** `return_risk_stats`, `candlestick_pattern_models`, `price_transform_indicator_models`, and `technical_indicator_models` are now thin parents; the next high-value engine file is `moving_average_oscillator_models.rs`. Split it by semantic average/oscillator family while preserving the `pub use` re-export surface.
 2. **Extract residual `mod.rs` storage** into `storage_*` modules if `mod.rs` regrows.
 3. **Keep semantic type modules and re-exports stable.** `types.rs` is now a small root surface; future DTO additions should land in the matching semantic child module, not back in a monolith.
 
