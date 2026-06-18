@@ -2,29 +2,25 @@ use super::*;
 
 fn kraken_equity_quote_meta_candidates(symbol: &str) -> Vec<String> {
     let raw = symbol.trim();
-    let symbol_part = {
-        let parts: Vec<&str> = raw.split(':').collect();
-        if parts.len() >= 3 {
-            parts[parts.len() - 2]
-        } else {
-            raw.rsplit(':').next().unwrap_or(raw)
-        }
-    };
+    let mut colon_parts = raw.rsplit(':');
+    let last = colon_parts.next().unwrap_or(raw);
+    let symbol_part = colon_parts.next().unwrap_or(last);
     let normalized = typhoon_engine::core::kraken::normalize_pair_symbol(symbol_part)
         .replace('/', "")
         .to_ascii_uppercase();
     let no_eq = normalized.strip_suffix(".EQ").unwrap_or(&normalized);
-    let mut candidates = Vec::new();
+    let mut candidates = Vec::with_capacity(4);
+    let mut seen = std::collections::HashSet::with_capacity(4);
     for candidate in [no_eq, normalized.as_str()] {
         let candidate = candidate
             .trim()
             .trim_end_matches(".EQ")
             .to_ascii_uppercase();
-        if !candidate.is_empty() && !candidates.iter().any(|existing| existing == &candidate) {
+        if !candidate.is_empty() && seen.insert(candidate.clone()) {
             candidates.push(candidate.clone());
         }
         if let Some(stripped) = candidate.strip_suffix("USD") {
-            if !stripped.is_empty() && !candidates.iter().any(|existing| existing == stripped) {
+            if !stripped.is_empty() && seen.insert(stripped.to_string()) {
                 candidates.push(stripped.to_string());
             }
         }
