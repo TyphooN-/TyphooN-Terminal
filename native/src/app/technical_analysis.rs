@@ -2883,54 +2883,7 @@ pub(super) fn draw_chart(
         regulatory_alerts,
     );
 
-    // Draw EXT hours badge on a second line below the symbol box
-    // to save horizontal space. Reg SHO stays on the first line.
-    if chart.ext_active && chart.ext_close > 0.0 {
-        if let Some(last) = bars.last() {
-            let daily_close = if chart.ext_open > 0.0 {
-                chart.ext_open
-            } else {
-                last.close
-            };
-            let prev_close = (chart.prev_daily_close > 0.0)
-                .then_some(chart.prev_daily_close)
-                .or_else(|| previous_daily_close_from_bars(&chart.bars));
-            let ext_text =
-                format_ext_hours_symbol_badge(daily_close, chart.ext_close, prev_close);
-            let ext_col = egui::Color32::from_rgb(200, 50, 200);
-            let ext_galley = painter.layout_no_wrap(
-                ext_text,
-                egui::FontId::monospace(10.0),
-                egui::Color32::from_rgb(245, 220, 250),
-            );
-            let ext_rect = egui::Rect::from_min_size(
-                egui::pos2(sym_rect.left(), sym_rect.bottom() + 2.0),
-                egui::vec2(
-                    ext_galley.rect.width() + header_pad_x * 2.0,
-                    sym_rect.height(),
-                ),
-            );
-            painter.rect_filled(
-                ext_rect,
-                3.0,
-                egui::Color32::from_rgba_premultiplied(30, 8, 34, 235),
-            );
-            painter.rect_stroke(
-                ext_rect,
-                3.0,
-                egui::Stroke::new(1.0, ext_col),
-                egui::StrokeKind::Inside,
-            );
-            painter.galley(
-                egui::pos2(
-                    ext_rect.left() + header_pad_x,
-                    ext_rect.center().y - ext_galley.rect.height() * 0.5,
-                ),
-                ext_galley,
-                egui::Color32::from_rgb(245, 220, 250),
-            );
-        }
-    }
+    draw_extended_hours_header_badge(painter, chart, bars, sym_rect, header_pad_x);
 
     // ── indicator legend ─────────────────────────────────────────────────────
     draw_indicator_legend(painter, chart, chart_rect, sym_rect, flags);
