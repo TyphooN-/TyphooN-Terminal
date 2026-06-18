@@ -464,7 +464,7 @@ pub fn compute_mrhl_snapshot(
     }
 }
 
-// ── Round 25 computes (DOWNVOL / SHARPR / EFFRATIO / WICKBIAS / VOLOFVOL) ──
+// Downside-volatility, Sharpe, efficiency, wick-bias, and volatility-of-volatility computes
 
 /// DOWNVOL compute: semi-deviation + Sortino ratio.
 pub fn compute_downvol_snapshot(
@@ -873,7 +873,7 @@ pub fn compute_volofvol_snapshot(
     }
 }
 
-// ── Round 26 computes (CALMAR / ULCER / VARRATIO / AMIHUD / JBNORM) ──
+// Calmar, ulcer, variance-ratio, Amihud, and normality-test computes
 
 pub fn compute_calmar_snapshot(
     symbol: &str,
@@ -1289,7 +1289,7 @@ pub fn compute_jbnorm_snapshot(
     }
 }
 
-// ── Round 27 computes (OMEGA / DFA / BURKE / MONTHSEAS / ROLLSPRD) ──
+// Omega, DFA, Burke, monthly-seasonality, and roll-spread computes
 
 pub fn compute_omega_snapshot(
     symbol: &str,
@@ -1871,7 +1871,7 @@ pub fn compute_rollsprd_snapshot(
     }
 }
 
-// ── Round 28 computes ──
+// Parkinson, Garman-Klass, Rogers-Satchell, CVaR, and day-of-week computes
 
 fn annualized_vol_label(annualized_pct: f64) -> &'static str {
     if annualized_pct < 10.0 {
@@ -2249,7 +2249,7 @@ pub fn compute_doweffect_snapshot(
     }
 }
 
-// ── Round 29 computes ──
+// Sterling, Kelly, Ljung-Box, runs-test, and zero-return computes
 
 /// Standard normal CDF via Abramowitz & Stegun 7.1.26 rational erf approximation.
 /// Max error ~1.5e-7 — plenty for label-granularity p-values.
@@ -2707,7 +2707,7 @@ pub fn compute_zeroret_snapshot(
     }
 }
 
-// ── Round 30 computes: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──
+// PSR, ADF, Mann-Kendall, bipower, and drawdown-duration computes
 
 pub fn compute_psr_snapshot(
     symbol: &str,
@@ -3144,7 +3144,7 @@ pub fn compute_dddur_snapshot(
     }
 }
 
-// ── Round 31: HILLTAIL / ARCHLM / PAINRATIO / CUSUM / CFVAR ──
+// Hill-tail, ARCH-LM, pain-ratio, CUSUM, and Cornish-Fisher VaR computes
 
 pub fn compute_hilltail_snapshot(
     symbol: &str,
@@ -3609,7 +3609,7 @@ pub fn compute_cfvar_snapshot(
     }
 }
 
-// ── Round 32 compute fns ──────────────────────────────────────────
+// Entropy, Rachev, gain-pain, PACF, and approximate-entropy computes
 
 /// ENTROPY compute: Shannon entropy over a histogram of daily log-returns.
 pub fn compute_entropy_snapshot(
@@ -4005,7 +4005,7 @@ pub fn compute_apen_snapshot(
     }
 }
 
-// ── Round 33 compute fns ──────────────────────────────────────────
+// Upside-potential, leverage-effect, drawdown-at-risk, VaR-half-life, and Gini computes
 
 /// UPR compute: Upside Potential Ratio = E[max(r,0)] / √E[min(r,0)²] (MAR=0).
 pub fn compute_upr_snapshot(symbol: &str, as_of: &str, bars: &[HistoricalPriceRow]) -> UprSnapshot {
@@ -4362,7 +4362,7 @@ pub fn compute_gini_snapshot(
     }
 }
 
-// ── Round 34 compute ──
+// Sample-entropy, permutation-entropy, recurrence-factor, KPSS, and spectral-entropy computes
 
 /// SAMPEN compute: Sample Entropy (Richman & Moorman 2000).
 pub fn compute_sampen_snapshot(
@@ -4726,7 +4726,7 @@ pub fn compute_specent_snapshot(
     }
 }
 
-// ── Round 35 compute ──
+// Robust-volatility, Renyi-entropy, return-quantile, market-sentiment, and EWMA-volatility computes
 
 /// ROBVOL compute: Robust Volatility via MAD and IQR.
 pub fn compute_robvol_snapshot(
@@ -5141,7 +5141,7 @@ pub fn compute_ewmavol_snapshot(
     }
 }
 
-// ── Round 36 computes ────────────────────────────────────────────
+// KS-normality, Anderson-Darling, L-moment, Kyle-lambda, and peak-over-threshold computes
 
 /// Standard normal CDF via Abramowitz-Stegun 7.1.26 approximation.
 fn norm_cdf_as(z: f64) -> f64 {
@@ -5600,7 +5600,7 @@ pub fn compute_peakover_snapshot(
     }
 }
 
-// ── Round 37 computes ────────────────────────────────────────────
+// Higuchi, Pickands, kappa, Lyapunov, and rank-autocorrelation computes
 
 /// HIGUCHI compute: Higuchi 1988 fractal dimension.
 pub fn compute_higuchi_snapshot(
@@ -6112,7 +6112,7 @@ pub fn compute_rankac_snapshot(
     }
 }
 
-// ── Round 38 computes ────────────────────────────────────────────
+// Jump-test, Phillips-Perron, MF-DFA, Hill-KS, and trend-strength computes
 
 /// BNSJUMP compute: Barndorff-Nielsen & Shephard 2006 jump-test Z-statistic.
 pub fn compute_bnsjump_snapshot(
@@ -6662,7 +6662,7 @@ pub fn compute_tsi_snapshot(symbol: &str, as_of: &str, bars: &[HistoricalPriceRo
     }
 }
 
-// ── Round 39 computes ────────────────────────────────────────────
+// GARCH, SADF, correlation-dimension, spectral-skew, and automutual-information computes
 
 /// GARCH11 compute: Bollerslev 1986 GARCH(1,1) fit via coordinate-descent MLE.
 pub fn compute_garch11_snapshot(

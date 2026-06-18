@@ -1231,7 +1231,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::DayrangeSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 23 handlers ──
+        // Autocorrelation, Hurst, hit-rate, asymmetry, and volatility-ratio research
         BrokerCmd::ComputeAutocorSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -1347,7 +1347,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::VolratioSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 24 handlers ──
+        // Draw-up, gap-statistics, volatility-cluster, close-position, and range-location research
         BrokerCmd::ComputeDrawupSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -1463,7 +1463,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::MrhlSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 25 handlers ──
+        // Downside-volatility, Sharpe, efficiency, wick-bias, and volatility-of-volatility research
         BrokerCmd::ComputeDownvolSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -1579,7 +1579,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::VolofvolSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 26 handlers ──
+        // Calmar, ulcer, variance-ratio, Amihud, and normality-test research
         BrokerCmd::ComputeCalmarSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -1695,7 +1695,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::JbnormSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 27 handlers ──
+        // Omega, DFA, Burke, monthly-seasonality, and roll-spread research
         BrokerCmd::ComputeOmegaSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -1811,7 +1811,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::RollsprdSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 28 handlers ──
+        // Parkinson, Garman-Klass, Rogers-Satchell, CVaR, and day-of-week research
         BrokerCmd::ComputeParkinsonSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -1927,7 +1927,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::DoweffectSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 29 handlers ──
+        // Sterling, Kelly, Ljung-Box, runs-test, and zero-return research
         BrokerCmd::ComputeSterlingSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -2043,7 +2043,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::ZeroretSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 30 handlers ──
+        // PSR, ADF, Mann-Kendall, bipower, and drawdown-duration research
         BrokerCmd::ComputePsrSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -2159,7 +2159,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::DddurSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 31 handlers ──
+        // Hill-tail, ARCH-LM, pain-ratio, CUSUM, and Cornish-Fisher VaR research
         BrokerCmd::ComputeHilltailSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -2275,7 +2275,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::CfvarSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 32 handlers ──
+        // Entropy, Rachev, gain-pain, PACF, and approximate-entropy research
         BrokerCmd::ComputeEntropySnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -2391,7 +2391,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::ApenSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 33 handlers ──
+        // Upside-potential, leverage-effect, drawdown-at-risk, VaR-half-life, and Gini research
         BrokerCmd::ComputeUprSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -2507,7 +2507,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::GiniSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 34 handlers ──
+        // Sample-entropy, permutation-entropy, recurrence-factor, KPSS, and spectral-entropy research
         BrokerCmd::ComputeSampenSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -2623,7 +2623,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::SpecentSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 35 handlers ──
+        // Robust-volatility, Renyi-entropy, return-quantile, market-sentiment, and EWMA-volatility research
         BrokerCmd::ComputeRobvolSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -2739,7 +2739,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::EwmavolSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 36 handlers ──
+        // KS-normality, Anderson-Darling, L-moment, Kyle-lambda, and peak-over-threshold research
         BrokerCmd::ComputeKsnormSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -2855,7 +2855,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::PeakoverSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 37 handlers ──
+        // Higuchi, Pickands, kappa, Lyapunov, and rank-autocorrelation research
         BrokerCmd::ComputeHiguchiSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -2971,7 +2971,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::RankacSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 38 handlers ──
+        // Jump-test, Phillips-Perron, MF-DFA, Hill-KS, and trend-strength research
         BrokerCmd::ComputeBnsjumpSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -3087,7 +3087,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::TsiSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 39 handlers ──
+        // GARCH, SADF, correlation-dimension, spectral-skew, and automutual-information research
         BrokerCmd::ComputeGarch11Snapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -3203,7 +3203,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::AutomiSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 40 handlers ──
+        // RPDE, Hurst-cycle, IAAFT, bid-ask bounce, break-even volatility, and related quant research
         BrokerCmd::ComputeDurbinWatsonSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -3434,7 +3434,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::KendallTauSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 42 handlers ──
+        // Structural-break, ICSS, Hurst-rolling, tail-dependence, volatility-spillover, and correlation-stability research
         cmd @ (BrokerCmd::ComputeSqueezeSnapshot { .. }
         | BrokerCmd::ComputeSqueezeRankSnapshot { .. }
         | BrokerCmd::RefreshSqueezeWatchlist
@@ -3794,7 +3794,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::HlvClustSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 77 (Quant Stats) handlers ──
+        // Quant-statistics validation, break-test, and coverage-test research
         BrokerCmd::ComputeYangZhangSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
