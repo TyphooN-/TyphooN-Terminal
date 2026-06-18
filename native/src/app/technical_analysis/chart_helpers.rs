@@ -1039,7 +1039,6 @@ pub fn parse_range_f32(s: &str, default_lo: f64, default_hi: f64) -> (f64, f64) 
 }
 
 /// Draw regulatory alerts (e.g. Reg SHO badges) in the chart header.
-/// Returns the updated header_right x position after drawing badges.
 /// Extracted for modularity (technical_analysis.rs draw_chart is large).
 pub(super) fn draw_regulatory_alerts_header(
     painter: &egui::Painter,
@@ -1047,7 +1046,7 @@ pub(super) fn draw_regulatory_alerts_header(
     chart_rect: egui::Rect,
     header_pad_x: f32,
     regulatory_alerts: &[typhoon_engine::core::regulatory_alerts::RegulatoryAlert],
-) -> f32 {
+) {
     let mut header_right = sym_rect.right();
     for alert in regulatory_alerts {
         let alert_galley = painter.layout_no_wrap(
@@ -1086,7 +1085,6 @@ pub(super) fn draw_regulatory_alerts_header(
         );
         header_right = alert_rect.right();
     }
-    header_right
 }
 
 /// Draw price alert lines (orange dotted + bell labels) on the chart.

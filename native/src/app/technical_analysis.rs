@@ -2875,7 +2875,7 @@ pub(super) fn draw_chart(
     );
 
     // Regulatory alerts extracted to chart_helpers for modularity.
-    let _header_right = draw_regulatory_alerts_header(
+    draw_regulatory_alerts_header(
         painter,
         sym_rect,
         chart_rect,
