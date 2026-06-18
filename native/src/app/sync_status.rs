@@ -615,6 +615,11 @@ impl BarSyncInputs {
             .iter()
             .map(|(key, _, _)| key.clone())
             .collect();
+        let mut row_index: std::collections::HashMap<(String, String), usize> = rows
+            .iter()
+            .enumerate()
+            .map(|(idx, row)| ((row.broker.clone(), row.tf.clone()), idx))
+            .collect();
         let spot_symbols: Vec<String> = self.spot_symbols.clone();
         let futures_symbols = self.futures_symbols.clone();
         let kraken_equity_catalog_symbols = self.catalog_symbols.clone();
@@ -671,14 +676,14 @@ impl BarSyncInputs {
                     ),
                     _ => Vec::new(),
                 };
+                let row_key = (broker.to_string(), tf.to_string());
                 for symbol in symbols {
-                    if existing.contains(&format!("{source}:{symbol}:{tf}")) {
+                    let expected_key = format!("{source}:{symbol}:{tf}");
+                    if existing.contains(&expected_key) {
                         continue;
                     }
-                    if let Some(row) = rows
-                        .iter_mut()
-                        .find(|row| row.broker == broker && row.tf == tf)
-                    {
+                    if let Some(&idx) = row_index.get(&row_key) {
+                        let row = &mut rows[idx];
                         row.total += 1;
                         row.empty += 1;
                         row.pct_healthy = if row.total == 0 {
@@ -687,9 +692,10 @@ impl BarSyncInputs {
                             (row.healthy as f32 / row.total as f32) * 100.0
                         };
                     } else {
+                        let idx = rows.len();
                         rows.push(SyncStatsRow {
-                            broker: broker.to_string(),
-                            tf: tf.to_string(),
+                            broker: row_key.0.clone(),
+                            tf: row_key.1.clone(),
                             total: 1,
                             healthy: 0,
                             stale: 0,
@@ -698,6 +704,7 @@ impl BarSyncInputs {
                             note: None,
                             pct_healthy: 0.0,
                         });
+                        row_index.insert(row_key.clone(), idx);
                     }
                 }
             }
