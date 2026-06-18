@@ -665,6 +665,8 @@ pub(crate) struct ChartState {
     pub(super) harmonics: Vec<HarmonicPattern>,
     /// Drawing annotations.
     pub(crate) drawings: Vec<Drawing>,
+    /// O(1) for HLine dedup (price key) during sync (replaces .any).
+    pub(crate) hline_set: std::collections::HashSet<String>,
     /// Per-drawing style: (line_width, line_style). Indexed parallel to `drawings`.
     pub(crate) drawing_styles: Vec<(f32, LineStyle)>,
     /// Undo stack for drawings (Ctrl+Z pops from drawings into here, Ctrl+Shift+Z restores)
@@ -2556,6 +2558,7 @@ impl ChartState {
             multi_kama: Vec::new(),
             harmonics: Vec::new(),
             drawings: Vec::new(),
+            hline_set: std::collections::HashSet::new(),
             drawing_styles: Vec::new(),
             drawings_undo: Vec::new(),
             selected_drawing: None,

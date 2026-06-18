@@ -1330,10 +1330,13 @@ impl TyphooNApp {
                             match d["type"].as_str() {
                                 Some("hline") => {
                                     if let Some(price) = d["price"].as_f64() {
-                                        chart.drawings.push(Drawing::HLine {
-                                            price,
-                                            color: parse_col(d),
-                                        });
+                                        let key = format!("{:.10}", price);
+                                        if chart.hline_set.insert(key) {
+                                            chart.drawings.push(Drawing::HLine {
+                                                price,
+                                                color: parse_col(d),
+                                            });
+                                        }
                                     }
                                 }
                                 Some("vline") => {

@@ -32,10 +32,10 @@ impl TyphooNApp {
                     // Sync HLines (price-only drawings are TF-independent)
                     for (di, d) in src_drawings.iter().enumerate() {
                         if let Drawing::HLine { price, color } = d {
-                            let already = chart.drawings.iter().any(|existing| {
-                                        matches!(existing, Drawing::HLine { price: p, .. } if (*p - price).abs() < 1e-10)
-                                    });
+                            let key = format!("{:.10}", price);
+                            let already = chart.hline_set.contains(&key);
                             if !already {
+                                chart.hline_set.insert(key);
                                 chart.drawings.push(Drawing::HLine {
                                     price: *price,
                                     color: *color,
