@@ -3,6 +3,7 @@ use super::*;
 mod technical_indicators;
 mod valuation;
 mod analytics;
+mod volatility;
 
 pub(super) fn handle_research_compute_command(
     cmd: BrokerCmd,
@@ -13,21 +14,8 @@ pub(super) fn handle_research_compute_command(
         cmd @ (BrokerCmd::ComputeDdmSnapshot { .. } | BrokerCmd::ComputeRelativeValuation { .. } | BrokerCmd::ComputeDcfSnapshot { .. } | BrokerCmd::ComputeSvmSnapshot { .. }) => {
             valuation::handle_valuation_compute(cmd, broker_msg_tx_clone.clone(), shared_cache_broker.clone());
         }
-        BrokerCmd::ComputeIvolSnapshot {
-            symbol,
-            current_atm_iv_pct,
-            history_json,
-        } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let history: Vec<research::IvolObservation> =
-                    serde_json::from_str(&history_json).unwrap_or_default();
-                let snap =
-                    research::compute_ivol_snapshot(&symbol, &today, current_atm_iv_pct, &history);
-                let _ = msg_tx.send(BrokerMsg::IvolSnapshotMsg(symbol, snap));
-            });
+        cmd @ BrokerCmd::ComputeIvolSnapshot { .. } => {
+            volatility::handle_volatility_compute(cmd, broker_msg_tx_clone.clone(), shared_cache_broker.clone());
         }
         // ── Round 9 analytics
         cmd @ (BrokerCmd::ComputeSeasonalitySnapshot { .. } | BrokerCmd::ComputeCorrelationMatrix { .. } | BrokerCmd::ComputeTotalReturnSnapshot { .. } | BrokerCmd::ComputeTechnicalsSnapshot { .. } | BrokerCmd::ComputeVolSkewSnapshot { .. }) => {
