@@ -40,6 +40,10 @@ pub use godel_round7::{CurrencyRate, BetaWindow, BetaSnapshot, DdmSnapshot, RvMe
 mod godel_round8;
 pub use godel_round8::{HraWindow, HraSnapshot, DcfYear, DcfSnapshot, SvmModelRow, SvmSnapshot, OptionContract, OptionExpiry, OptionsChainSnapshot, IvolObservation, IvolSnapshot};
 
+mod godel_round9;
+pub use godel_round9::{SeasonalityMonth, SeasonalityDow, SeasonalitySnapshot, CorrelationCell, CorrelationMatrix, TotalReturnWindow, TotalReturnSnapshot, TechnicalIndicator, TechnicalSnapshot, SkewPoint, SkewExpiry, VolatilitySkew};
+
+
 
 
 mod transcripts_sentiment;
