@@ -1005,3 +1005,65 @@ pub(super) fn draw_price_alert_lines(
         }
     }
 }
+
+/// Draw a line segment respecting the per-drawing LineStyle (solid/dashed/dotted).
+/// Extracted from technical_analysis draw_chart for modularity.
+pub(super) fn draw_styled_line(
+    painter: &egui::Painter,
+    p1: egui::Pos2,
+    p2: egui::Pos2,
+    stroke: egui::Stroke,
+    style: LineStyle,
+) {
+    match style {
+        LineStyle::Solid => {
+            painter.line_segment([p1, p2], stroke);
+        }
+        LineStyle::Dashed => {
+            let dx = p2.x - p1.x;
+            let dy = p2.y - p1.y;
+            let len = (dx * dx + dy * dy).sqrt();
+            if len < 0.1 {
+                return;
+            }
+            let (nx, ny) = (dx / len, dy / len);
+            let dash = 8.0f32;
+            let gap = 5.0f32;
+            let mut t = 0.0f32;
+            while t < len {
+                let t1 = (t + dash).min(len);
+                painter.line_segment(
+                    [
+                        egui::pos2(p1.x + nx * t, p1.y + ny * t),
+                        egui::pos2(p1.x + nx * t1, p1.y + ny * t1),
+                    ],
+                    stroke,
+                );
+                t += dash + gap;
+            }
+        }
+        LineStyle::Dotted => {
+            let dx = p2.x - p1.x;
+            let dy = p2.y - p1.y;
+            let len = (dx * dx + dy * dy).sqrt();
+            if len < 0.1 {
+                return;
+            }
+            let (nx, ny) = (dx / len, dy / len);
+            let dot = stroke.width.max(2.0);
+            let gap = 4.0f32;
+            let mut t = 0.0f32;
+            while t < len {
+                let t1 = (t + dot).min(len);
+                painter.line_segment(
+                    [
+                        egui::pos2(p1.x + nx * t, p1.y + ny * t),
+                        egui::pos2(p1.x + nx * t1, p1.y + ny * t1),
+                    ],
+                    stroke,
+                );
+                t += dot + gap;
+            }
+        }
+    }
+}

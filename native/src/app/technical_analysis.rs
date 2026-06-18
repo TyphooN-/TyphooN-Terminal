@@ -4178,66 +4178,7 @@ pub(super) fn draw_chart(
     // ── alert price lines (extracted) ─────────────────────────────────────────
     draw_price_alert_lines(painter, chart_rect, price_to_y, alerts, format_price);
 
-    // ── drawing annotations ──────────────────────────────────────────────────
-    // Helper: draw a line segment respecting the per-drawing LineStyle.
-    let draw_line = |painter: &egui::Painter,
-                     p1: egui::Pos2,
-                     p2: egui::Pos2,
-                     stroke: egui::Stroke,
-                     style: LineStyle| {
-        match style {
-            LineStyle::Solid => {
-                painter.line_segment([p1, p2], stroke);
-            }
-            LineStyle::Dashed => {
-                let dx = p2.x - p1.x;
-                let dy = p2.y - p1.y;
-                let len = (dx * dx + dy * dy).sqrt();
-                if len < 0.1 {
-                    return;
-                }
-                let (nx, ny) = (dx / len, dy / len);
-                let dash = 8.0f32;
-                let gap = 5.0f32;
-                let mut t = 0.0f32;
-                while t < len {
-                    let t1 = (t + dash).min(len);
-                    painter.line_segment(
-                        [
-                            egui::pos2(p1.x + nx * t, p1.y + ny * t),
-                            egui::pos2(p1.x + nx * t1, p1.y + ny * t1),
-                        ],
-                        stroke,
-                    );
-                    t += dash + gap;
-                }
-            }
-            LineStyle::Dotted => {
-                let dx = p2.x - p1.x;
-                let dy = p2.y - p1.y;
-                let len = (dx * dx + dy * dy).sqrt();
-                if len < 0.1 {
-                    return;
-                }
-                let (nx, ny) = (dx / len, dy / len);
-                let dot = stroke.width.max(2.0);
-                let gap = 4.0f32;
-                let mut t = 0.0f32;
-                while t < len {
-                    let t1 = (t + dot).min(len);
-                    painter.line_segment(
-                        [
-                            egui::pos2(p1.x + nx * t, p1.y + ny * t),
-                            egui::pos2(p1.x + nx * t1, p1.y + ny * t1),
-                        ],
-                        stroke,
-                    );
-                    t += dot + gap;
-                }
-            }
-        }
-    };
-
+    // ── drawing annotations (draw_line extracted to chart_helpers) ───
     for (draw_idx, drawing) in chart.drawings.iter().enumerate() {
         // Per-drawing style: line width + style (with fallback defaults)
         let (d_width, d_style) = chart
@@ -4264,7 +4205,7 @@ pub(super) fn draw_chart(
             Drawing::HLine { price, color } => {
                 let y = price_to_y(*price);
                 if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(chart_rect.left(), y),
                         egui::pos2(chart_rect.right(), y),
@@ -4295,7 +4236,7 @@ pub(super) fn draw_chart(
                 if let (Some(x1), Some(x2)) = (x1, x2) {
                     let y1 = price_to_y(p1.1);
                     let y2 = price_to_y(p2.1);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1),
                         egui::pos2(x2, y2),
@@ -4343,7 +4284,7 @@ pub(super) fn draw_chart(
             Drawing::VLine { bar_idx, color } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
                     let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x, chart_rect.top()),
                         egui::pos2(x, chart_rect.bottom()),
@@ -4387,7 +4328,7 @@ pub(super) fn draw_chart(
                     let bars_to_edge = ((chart_rect.right() - x1) / bar_w) as f64;
                     let end_price = origin.1 + slope * bars_to_edge;
                     let y2 = price_to_y(end_price);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1),
                         egui::pos2(chart_rect.right(), y2),
@@ -4418,14 +4359,14 @@ pub(super) fn draw_chart(
                     let y1b = price_to_y(p1.1 + width);
                     let y2b = price_to_y(p2.1 + width);
                     let sc = sel_tint(*color);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1),
                         egui::pos2(x2, y2),
                         egui::Stroke::new(effective_width, sc),
                         d_style,
                     );
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1b),
                         egui::pos2(x2, y2b),
@@ -4451,7 +4392,7 @@ pub(super) fn draw_chart(
                     let price_at_end = p1.1 + slope * (end_idx as f64 - p1.0 as f64);
                     let y1 = price_to_y(price_at_start);
                     let y2 = price_to_y(price_at_end);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(chart_rect.left(), y1),
                         egui::pos2(chart_rect.right(), y2),
@@ -4471,7 +4412,7 @@ pub(super) fn draw_chart(
                 } else {
                     chart_rect.left()
                 }; // bar left of view — draw full width
-                draw_line(
+                draw_styled_line(
                     &painter,
                     egui::pos2(x_start, y),
                     egui::pos2(chart_rect.right(), y),
@@ -4489,14 +4430,14 @@ pub(super) fn draw_chart(
                     let y = price_to_y(*price);
                     let sc = sel_tint(*color);
                     let sw = egui::Stroke::new(effective_width, sc);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x, chart_rect.top()),
                         egui::pos2(x, chart_rect.bottom()),
                         sw,
                         d_style,
                     );
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(chart_rect.left(), y),
                         egui::pos2(chart_rect.right(), y),
@@ -4520,7 +4461,7 @@ pub(super) fn draw_chart(
                     let y1 = price_to_y(p1.1);
                     let y2 = price_to_y(p2.1);
                     let sc = sel_tint(*color);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1),
                         egui::pos2(x2, y2),
@@ -4559,7 +4500,7 @@ pub(super) fn draw_chart(
                 if let (Some(x1), Some(x2)) = (x1, x2) {
                     let y1 = price_to_y(p1.1);
                     let y2 = price_to_y(p2.1);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1),
                         egui::pos2(x2, y2),
@@ -4622,7 +4563,7 @@ pub(super) fn draw_chart(
                     let end_y = yp + dy * ext;
                     let sc = sel_tint(*color);
                     let sw = egui::Stroke::new(effective_width, sc);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(xp, yp),
                         egui::pos2(end_x, end_y),
@@ -4632,7 +4573,7 @@ pub(super) fn draw_chart(
                     // Upper line (through p2, parallel to median)
                     let ux = x2 + dx * ext;
                     let uy = y2 + dy * ext;
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x2, y2),
                         egui::pos2(ux.min(chart_rect.right()), uy),
@@ -4642,7 +4583,7 @@ pub(super) fn draw_chart(
                     // Lower line (through p3, parallel to median)
                     let lx = x3 + dx * ext;
                     let ly = y3 + dy * ext;
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x3, y3),
                         egui::pos2(lx.min(chart_rect.right()), ly),
@@ -4682,7 +4623,7 @@ pub(super) fn draw_chart(
                             } else {
                                 effective_width * 0.65
                             };
-                            draw_line(
+                            draw_styled_line(
                                 &painter,
                                 egui::pos2(x3, y),
                                 egui::pos2(chart_rect.right(), y),
@@ -4733,7 +4674,7 @@ pub(super) fn draw_chart(
                         } else {
                             effective_width * 0.55
                         };
-                        draw_line(
+                        draw_styled_line(
                             &painter,
                             egui::pos2(ox, oy),
                             egui::pos2(chart_rect.right(), end_y),
@@ -4750,7 +4691,7 @@ pub(super) fn draw_chart(
                         // Downward mirror
                         let dn_price = origin.1 - scale * ratio * bars_to_edge;
                         let dn_y = price_to_y(dn_price);
-                        draw_line(
+                        draw_styled_line(
                             &painter,
                             egui::pos2(ox, oy),
                             egui::pos2(chart_rect.right(), dn_y),
@@ -5003,7 +4944,7 @@ pub(super) fn draw_chart(
                 if let (Some(x1), Some(x2)) = (x1, x2) {
                     let y1 = price_to_y(p1.1);
                     let y2 = price_to_y(p2.1);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1),
                         egui::pos2(x2, y2),
@@ -5048,7 +4989,7 @@ pub(super) fn draw_chart(
                     let y2d = price_to_y(p2.1 - offset);
                     let sc = sel_tint(*color);
                     // Center line (dashed-style: thinner)
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1),
                         egui::pos2(x2, y2),
@@ -5056,7 +4997,7 @@ pub(super) fn draw_chart(
                         d_style,
                     );
                     // Upper boundary
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1u),
                         egui::pos2(x2, y2u),
@@ -5064,7 +5005,7 @@ pub(super) fn draw_chart(
                         d_style,
                     );
                     // Lower boundary
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1d),
                         egui::pos2(x2, y2d),
@@ -5113,7 +5054,7 @@ pub(super) fn draw_chart(
                         } else {
                             effective_width * 0.55
                         };
-                        draw_line(
+                        draw_styled_line(
                             &painter,
                             egui::pos2(x1, ly1),
                             egui::pos2(x2, ly2),
@@ -5152,7 +5093,7 @@ pub(super) fn draw_chart(
                         let sc = sel_tint(*color);
                         let c =
                             egui::Color32::from_rgba_premultiplied(sc.r(), sc.g(), sc.b(), alpha);
-                        draw_line(
+                        draw_styled_line(
                             &painter,
                             egui::pos2(x, chart_rect.top()),
                             egui::pos2(x, chart_rect.bottom()),
@@ -5185,7 +5126,7 @@ pub(super) fn draw_chart(
                         return; // bar beyond visible range
                     };
                     let sc = sel_tint(*color);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x_start, y),
                         egui::pos2(chart_rect.right(), y),
@@ -5314,14 +5255,14 @@ pub(super) fn draw_chart(
                     let sc = sel_tint(*color);
                     let sw = egui::Stroke::new(effective_width, sc);
                     // + shape
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x - sz, y),
                         egui::pos2(x + sz, y),
                         sw,
                         d_style,
                     );
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x, y - sz),
                         egui::pos2(x, y + sz),
@@ -5434,7 +5375,7 @@ pub(super) fn draw_chart(
                         let reg_y2 = price_to_y(intercept + slope * n);
                         let sc = sel_tint(*color);
                         // Center line
-                        draw_line(
+                        draw_styled_line(
                             &painter,
                             egui::pos2(x_start, reg_y1),
                             egui::pos2(x_end, reg_y2),
@@ -5444,7 +5385,7 @@ pub(super) fn draw_chart(
                         // Upper band (+1 StdDev)
                         let uy1 = price_to_y(intercept + std_dev);
                         let uy2 = price_to_y(intercept + slope * n + std_dev);
-                        draw_line(
+                        draw_styled_line(
                             &painter,
                             egui::pos2(x_start, uy1),
                             egui::pos2(x_end, uy2),
@@ -5454,7 +5395,7 @@ pub(super) fn draw_chart(
                         // Lower band (-1 StdDev)
                         let dy1 = price_to_y(intercept - std_dev);
                         let dy2 = price_to_y(intercept + slope * n - std_dev);
-                        draw_line(
+                        draw_styled_line(
                             &painter,
                             egui::pos2(x_start, dy1),
                             egui::pos2(x_end, dy2),
@@ -5560,7 +5501,7 @@ pub(super) fn draw_chart(
                 let sc = sel_tint(*color);
                 for i in 0..screen_pts.len() {
                     if i + 1 < screen_pts.len() {
-                        draw_line(
+                        draw_styled_line(
                             &painter,
                             egui::pos2(screen_pts[i].0, screen_pts[i].1),
                             egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1),
@@ -5592,7 +5533,7 @@ pub(super) fn draw_chart(
                 let sc = sel_tint(*color);
                 for i in 0..screen_pts.len() {
                     if i + 1 < screen_pts.len() {
-                        draw_line(
+                        draw_styled_line(
                             &painter,
                             egui::pos2(screen_pts[i].0, screen_pts[i].1),
                             egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1),
@@ -5717,7 +5658,7 @@ pub(super) fn draw_chart(
                 let sc = sel_tint(*color);
                 for i in 0..screen_pts.len() {
                     if i + 1 < screen_pts.len() {
-                        draw_line(
+                        draw_styled_line(
                             &painter,
                             egui::pos2(screen_pts[i].0, screen_pts[i].1),
                             egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1),
@@ -5739,7 +5680,7 @@ pub(super) fn draw_chart(
                 if screen_pts.len() >= 5 {
                     let nk_col =
                         egui::Color32::from_rgba_premultiplied(sc.r(), sc.g(), sc.b(), 150);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(screen_pts[0].0, screen_pts[0].1),
                         egui::pos2(screen_pts[4].0, screen_pts[4].1),
@@ -5771,7 +5712,7 @@ pub(super) fn draw_chart(
                 let sc = sel_tint(*color);
                 for i in 0..screen_pts.len() {
                     if i + 1 < screen_pts.len() {
-                        draw_line(
+                        draw_styled_line(
                             &painter,
                             egui::pos2(screen_pts[i].0, screen_pts[i].1),
                             egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1),
@@ -5792,14 +5733,14 @@ pub(super) fn draw_chart(
                 // XA→BD dashed line (harmonic diagonal)
                 if screen_pts.len() >= 5 {
                     let diag = egui::Color32::from_rgba_premultiplied(sc.r(), sc.g(), sc.b(), 80);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(screen_pts[0].0, screen_pts[0].1),
                         egui::pos2(screen_pts[3].0, screen_pts[3].1),
                         egui::Stroke::new(0.6, diag),
                         LineStyle::Dashed,
                     );
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(screen_pts[1].0, screen_pts[1].1),
                         egui::pos2(screen_pts[4].0, screen_pts[4].1),
@@ -5854,7 +5795,7 @@ pub(super) fn draw_chart(
                 let sc = sel_tint(*color);
                 // Median line: shifted pivot → midpoint of p2,p3
                 if let (Some(sx), Some(mx)) = (bar_to_x(shifted_bar), bar_to_x(mid_bar)) {
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(sx, price_to_y(shifted_price)),
                         egui::pos2(mx, price_to_y(mid_price)),
@@ -5873,14 +5814,14 @@ pub(super) fn draw_chart(
                     let dy = price_to_y(mid_price) - price_to_y(shifted_price);
                     let y2 = price_to_y(p2.1);
                     let y3 = price_to_y(p3.1);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x2, y2),
                         egui::pos2(x2 + dx, y2 + dy),
                         egui::Stroke::new(effective_width * 0.7, sc),
                         d_style,
                     );
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x3, y3),
                         egui::pos2(x3 + dx, y3 + dy),
@@ -5903,7 +5844,7 @@ pub(super) fn draw_chart(
                 while b < start_idx + (end_idx - start_idx) + interval * 20 {
                     if b >= start_idx && b < end_idx {
                         let x = data_left + ((b - start_idx) as f32 + 0.5) * bar_w;
-                        draw_line(
+                        draw_styled_line(
                             &painter,
                             egui::pos2(x, chart_rect.top()),
                             egui::pos2(x, chart_rect.bottom()),
@@ -5964,7 +5905,7 @@ pub(super) fn draw_chart(
                     let y = price_to_y(*price);
                     let sc = sel_tint(*color);
                     // Pole
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x, y),
                         egui::pos2(x, y - 20.0),
@@ -5997,7 +5938,7 @@ pub(super) fn draw_chart(
                     let ay = price_to_y(anchor.1);
                     let ly = price_to_y(label_pos.1);
                     // Line from anchor to label
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(ax, ay),
                         egui::pos2(lx, ly),
@@ -6033,7 +5974,7 @@ pub(super) fn draw_chart(
                     let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let sc = sel_tint(*color);
                     // Dashed vertical line — delegate to draw_line for style support
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x, chart_rect.top()),
                         egui::pos2(x, chart_rect.bottom()),
@@ -6071,7 +6012,7 @@ pub(super) fn draw_chart(
                         effective_width
                     };
                     let draw_color = base_col;
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(chart_rect.left(), y),
                         egui::pos2(chart_rect.right(), y),
@@ -6318,7 +6259,7 @@ pub(super) fn draw_chart(
                 let y2 = price_to_y(p2.1);
                 let sc = sel_tint(*color);
                 // Solid trend line
-                draw_line(
+                draw_styled_line(
                     &painter,
                     egui::pos2(x1, y1),
                     egui::pos2(x2, y2),
@@ -6330,7 +6271,7 @@ pub(super) fn draw_chart(
                 let dy = y2 - y1;
                 let proj_x = x2 + dx;
                 let proj_y = y2 + dy;
-                draw_line(
+                draw_styled_line(
                     &painter,
                     egui::pos2(x2, y2),
                     egui::pos2(proj_x, proj_y),
@@ -6402,7 +6343,7 @@ pub(super) fn draw_chart(
                     let y = price_to_y(*price);
                     let sc = sel_tint(*color);
                     // Pole
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x, y + 15.0),
                         egui::pos2(x, y - 15.0),
@@ -6417,7 +6358,7 @@ pub(super) fn draw_chart(
                     ];
                     painter.add(egui::Shape::convex_polygon(arrow, sc, egui::Stroke::NONE));
                     // Base
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x - 5.0, y + 15.0),
                         egui::pos2(x + 5.0, y + 15.0),
@@ -6434,7 +6375,7 @@ pub(super) fn draw_chart(
                 let x2 = bar_to_x(p2.0);
                 let y2 = price_to_y(p2.1);
                 let sc = sel_tint(*color);
-                draw_line(
+                draw_styled_line(
                     &painter,
                     egui::pos2(x1, y1),
                     egui::pos2(x2, y2),
@@ -6491,7 +6432,7 @@ pub(super) fn draw_chart(
                     if b >= start_idx && b < end_idx {
                         let x = data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w;
                         let sc = sel_tint(*color);
-                        draw_line(
+                        draw_styled_line(
                             &painter,
                             egui::pos2(x, chart_rect.top()),
                             egui::pos2(x, chart_rect.bottom()),
@@ -6551,7 +6492,7 @@ pub(super) fn draw_chart(
                     };
                     let end_x = x1 + extend;
                     let end_y = y1 + slope * extend;
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1),
                         egui::pos2(end_x, end_y),
@@ -6567,7 +6508,7 @@ pub(super) fn draw_chart(
                     );
                 }
                 // Base line
-                draw_line(
+                draw_styled_line(
                     &painter,
                     egui::pos2(x1, y1),
                     egui::pos2(x2, y2),
@@ -6586,7 +6527,7 @@ pub(super) fn draw_chart(
                 let base_r = ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt();
                 let sc = sel_tint(*color);
                 // Base line
-                draw_line(
+                draw_styled_line(
                     &painter,
                     egui::pos2(x1, y1),
                     egui::pos2(x2, y2),
@@ -6731,7 +6672,7 @@ pub(super) fn draw_chart(
                     let ch_offset = p3.1 - p1.1;
                     let sc = sel_tint(*color);
                     // Main trendline
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1),
                         egui::pos2(x2, y2),
@@ -6741,7 +6682,7 @@ pub(super) fn draw_chart(
                     // Parallel line
                     let y1p = price_to_y(p1.1 + ch_offset);
                     let y2p = price_to_y(p2.1 + ch_offset);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1p),
                         egui::pos2(x2, y2p),
@@ -6751,7 +6692,7 @@ pub(super) fn draw_chart(
                     // Mid line (dashed)
                     let y1m = price_to_y(p1.1 + ch_offset * 0.5);
                     let y2m = price_to_y(p2.1 + ch_offset * 0.5);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1m),
                         egui::pos2(x2, y2m),
@@ -6798,7 +6739,7 @@ pub(super) fn draw_chart(
                     let dx = mid.x - pv.x;
                     let dy = mid.y - pv.y;
                     let ext = egui::pos2(pv.x + dx * 2.5, pv.y + dy * 2.5);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         pv,
                         ext,
@@ -6808,14 +6749,14 @@ pub(super) fn draw_chart(
                     // Prongs from p2 and p3, parallel to median
                     let ext_a = egui::pos2(a.x + dx * 2.0, a.y + dy * 2.0);
                     let ext_b = egui::pos2(b.x + dx * 2.0, b.y + dy * 2.0);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         a,
                         ext_a,
                         egui::Stroke::new(effective_width * 0.7, sc),
                         d_style,
                     );
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         b,
                         ext_b,
@@ -6823,14 +6764,14 @@ pub(super) fn draw_chart(
                         d_style,
                     );
                     // Connect pivot to p2 and p3
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         pv,
                         a,
                         egui::Stroke::new(effective_width * 0.4, sc),
                         d_style,
                     );
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         pv,
                         b,
@@ -6855,14 +6796,14 @@ pub(super) fn draw_chart(
                 {
                     let sc = sel_tint(*color);
                     // Two converging trendlines: p1->p2 and p1->p3
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         a,
                         b,
                         egui::Stroke::new(effective_width, sc),
                         d_style,
                     );
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         a,
                         c,
@@ -6970,7 +6911,7 @@ pub(super) fn draw_chart(
                     let y2 = price_to_y(p2.1);
                     // Connecting line
                     let sc = sel_tint(*color);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1),
                         egui::pos2(x2, y2),
@@ -7150,7 +7091,7 @@ pub(super) fn draw_chart(
                     let x2 = data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w;
                     let y2 = price_to_y(p2.1);
                     let sc = sel_tint(*color);
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(x1, y1),
                         egui::pos2(x2, y2),
@@ -7190,7 +7131,7 @@ pub(super) fn draw_chart(
                     .collect();
                 let sc = sel_tint(*color);
                 for w in screen_pts.windows(2) {
-                    draw_line(
+                    draw_styled_line(
                         &painter,
                         egui::pos2(w[0].0, w[0].1),
                         egui::pos2(w[1].0, w[1].1),
