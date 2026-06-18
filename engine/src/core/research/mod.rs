@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 mod types;
 pub use types::*;
 
+mod godel_round2;
+pub use godel_round2::{DividendRecord, EarningsEstimate, RatingChange, TreasuryYield, TREASURY_TENORS};
+
 mod transcripts_sentiment;
 pub use transcripts_sentiment::{TranscriptMeta, Transcript, SocialSentimentRow, PressRelease};
 
