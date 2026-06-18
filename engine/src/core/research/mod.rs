@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 mod types;
 pub use types::*;
 
+mod exec_cot;
+pub use exec_cot::{Executive, CotReport};
+
 mod godel_round5;
 pub use godel_round5::{InsiderTrade, InstitutionalHolder, SharesFloat, HistoricalPriceRow, EarningsSurprise};
 
