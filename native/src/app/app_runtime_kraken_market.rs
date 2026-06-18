@@ -56,6 +56,67 @@ impl TyphooNApp {
         }
     }
 
+    pub(super) fn refresh_active_crypto_chart_if_due(&mut self, now_instant: std::time::Instant) {
+        // Periodic crypto bar refresh (~60s).
+        // Uses Kraken (free, no auth) as primary source, Alpaca as fallback
+        if now_instant.duration_since(self.periodic_crypto_last_refresh)
+            >= std::time::Duration::from_secs(60)
+            && self.cache_loaded
+        {
+            self.periodic_crypto_last_refresh = now_instant;
+            if let Some(chart) = self.charts.get(self.active_tab) {
+                let sym = chart.symbol.clone();
+                let bare = sym.split(':').last().unwrap_or(&sym).to_string();
+                let crypto_bases = [
+                    "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "LTC", "LINK", "AVAX", "DOT", "XMR",
+                    "ZEC", "DASH",
+                ];
+                let su = bare.to_uppercase();
+                let is_crypto = crypto_bases
+                    .iter()
+                    .any(|b| su.starts_with(b) && su.ends_with("USD"));
+                if is_crypto {
+                    let tf_label = chart.timeframe.cache_suffix().to_string(); // "1Month" not "MN1"
+                    if self.sync_timeframe_enabled(&tf_label) {
+                        let tf_minutes = chart.timeframe.minutes();
+                        // Fetch from Kraken (free, no auth, works on weekends)
+                        // Fetch chart's TF + all lower TFs for gap fill and forming bar synthesis
+                        let mut timeframes = vec![tf_label.clone()];
+                        let all_tfs = [
+                            "1Week", "1Day", "4Hour", "1Hour", "30Min", "15Min", "5Min", "1Min",
+                        ];
+                        for ltf in &all_tfs {
+                            let ltf_min: u32 = match *ltf {
+                                "1Week" => 10080,
+                                "1Day" => 1440,
+                                "4Hour" => 240,
+                                "1Hour" => 60,
+                                "30Min" => 30,
+                                "15Min" => 15,
+                                "5Min" => 5,
+                                _ => 1,
+                            };
+                            if ltf_min < tf_minutes && tf_label != *ltf {
+                                timeframes.push(ltf.to_string());
+                                break; // just the next lower TF for forming bar (Kraken has rate limits)
+                            }
+                        }
+                        // Server/standalone: queue through the scheduler path so periodic chart
+                        // refreshes respect pending slots, no-data tombstones, and persisted
+                        // backfill-complete markers instead of forcing full-history attempts.
+                        let timeframes =
+                            self.filtered_sync_timeframes(timeframes.iter().map(|tf| tf.as_str()));
+                        if self.kraken_spot_symbol_scrape_enabled(&bare) {
+                            for tf in timeframes {
+                                self.queue_kraken_fetch(&bare, &tf);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub(super) fn handle_kraken_equity_universe(
         &mut self,
         markets: Vec<KrakenEquityMarket>,
