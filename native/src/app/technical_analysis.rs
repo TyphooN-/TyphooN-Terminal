@@ -2874,50 +2874,14 @@ pub(super) fn draw_chart(
         egui::Color32::WHITE,
     );
 
-    let mut header_right = sym_rect.right();
-
-    // Regulatory alerts (e.g. "!! Reg SHO !!") are drawn *before* the
-    // extended-hours / daily-close chip so a critical compliance badge is never
-    // the element pushed past the right edge (and silently dropped) by a long
-    // company name or the EXT chip — the regression that hid it on narrower
-    // charts after the company-name overlay was added.
-    for alert in regulatory_alerts {
-        let alert_galley = painter.layout_no_wrap(
-            alert.label.clone(),
-            egui::FontId::monospace(10.0),
-            egui::Color32::from_rgb(255, 245, 220),
-        );
-        let alert_rect = egui::Rect::from_min_size(
-            egui::pos2(header_right + 2.0, sym_rect.top()),
-            egui::vec2(
-                alert_galley.rect.width() + header_pad_x * 2.0,
-                sym_rect.height(),
-            ),
-        );
-        if alert_rect.right() > chart_rect.right() - 4.0 {
-            break;
-        }
-        painter.rect_filled(
-            alert_rect,
-            3.0,
-            egui::Color32::from_rgba_premultiplied(80, 12, 12, 238),
-        );
-        painter.rect_stroke(
-            alert_rect,
-            3.0,
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 70, 70)),
-            egui::StrokeKind::Inside,
-        );
-        painter.galley(
-            egui::pos2(
-                alert_rect.left() + header_pad_x,
-                alert_rect.center().y - alert_galley.rect.height() * 0.5,
-            ),
-            alert_galley,
-            egui::Color32::from_rgb(255, 245, 220),
-        );
-        header_right = alert_rect.right();
-    }
+    // Regulatory alerts extracted to chart_helpers for modularity.
+    let _header_right = draw_regulatory_alerts_header(
+        painter,
+        sym_rect,
+        chart_rect,
+        header_pad_x,
+        regulatory_alerts,
+    );
 
     // Draw EXT hours badge on a second line below the symbol box
     // to save horizontal space. Reg SHO stays on the first line.

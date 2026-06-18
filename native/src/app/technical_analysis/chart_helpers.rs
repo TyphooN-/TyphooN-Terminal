@@ -905,3 +905,54 @@ pub fn parse_range_f32(s: &str, default_lo: f64, default_hi: f64) -> (f64, f64) 
         (default_lo, default_hi)
     }
 }
+
+/// Draw regulatory alerts (e.g. Reg SHO badges) in the chart header.
+/// Returns the updated header_right x position after drawing badges.
+/// Extracted for modularity (technical_analysis.rs draw_chart is large).
+pub(super) fn draw_regulatory_alerts_header(
+    painter: &egui::Painter,
+    sym_rect: egui::Rect,
+    chart_rect: egui::Rect,
+    header_pad_x: f32,
+    regulatory_alerts: &[typhoon_engine::core::regulatory_alerts::RegulatoryAlert],
+) -> f32 {
+    let mut header_right = sym_rect.right();
+    for alert in regulatory_alerts {
+        let alert_galley = painter.layout_no_wrap(
+            alert.label.clone(),
+            egui::FontId::monospace(10.0),
+            egui::Color32::from_rgb(255, 245, 220),
+        );
+        let alert_rect = egui::Rect::from_min_size(
+            egui::pos2(header_right + 2.0, sym_rect.top()),
+            egui::vec2(
+                alert_galley.rect.width() + header_pad_x * 2.0,
+                sym_rect.height(),
+            ),
+        );
+        if alert_rect.right() > chart_rect.right() - 4.0 {
+            break;
+        }
+        painter.rect_filled(
+            alert_rect,
+            3.0,
+            egui::Color32::from_rgba_premultiplied(80, 12, 12, 238),
+        );
+        painter.rect_stroke(
+            alert_rect,
+            3.0,
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 70, 70)),
+            egui::StrokeKind::Inside,
+        );
+        painter.galley(
+            egui::pos2(
+                alert_rect.left() + header_pad_x,
+                alert_rect.center().y - alert_galley.rect.height() * 0.5,
+            ),
+            alert_galley,
+            egui::Color32::from_rgb(255, 245, 220),
+        );
+        header_right = alert_rect.right();
+    }
+    header_right
+}
