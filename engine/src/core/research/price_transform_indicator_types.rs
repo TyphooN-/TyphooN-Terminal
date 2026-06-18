@@ -596,7 +596,7 @@ pub struct MavpSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLDOJI — Doji candlestick pattern. A doji is a single-bar
+/// candlestick patternDOJI — Doji candlestick pattern. A doji is a single-bar
 /// pattern where open ≈ close (body very small relative to range),
 /// signalling indecision. TA-Lib convention: pattern_value is 100 for
 /// bullish match, -100 for bearish match, 0 for no match. Doji is
@@ -619,7 +619,7 @@ pub struct CdlDojiSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLHAMMER — Hammer pattern. Single-bar bullish reversal
+/// candlestick patternHAMMER — Hammer pattern. Single-bar bullish reversal
 /// signal: small body in upper third of range, long lower shadow
 /// (≥ 2× body), minimal upper shadow. TA-Lib emits 100 on match
 /// (always treated as bullish in TA-Lib's reference implementation).
@@ -640,7 +640,7 @@ pub struct CdlHammerSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLSHOOTINGSTAR — Shooting Star pattern. Mirror of hammer:
+/// candlestick patternSHOOTINGSTAR — Shooting Star pattern. Mirror of hammer:
 /// small body in lower third of range, long upper shadow (≥ 2× body),
 /// minimal lower shadow. Bearish reversal signal. TA-Lib emits -100
 /// on match.
@@ -661,7 +661,7 @@ pub struct CdlShootingStarSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLENGULFING — Engulfing pattern. Two-bar reversal signal:
+/// candlestick patternENGULFING — Engulfing pattern. Two-bar reversal signal:
 /// current bar's body fully engulfs prior bar's body AND the direction
 /// is opposite (prior red → current green = bullish engulfing, prior
 /// green → current red = bearish engulfing). TA-Lib emits 100 for
@@ -683,7 +683,7 @@ pub struct CdlEngulfingSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLHARAMI — Harami pattern. Two-bar reversal signal
+/// candlestick patternHARAMI — Harami pattern. Two-bar reversal signal
 /// (inside-bar): current bar's body fully contained within prior
 /// bar's body AND direction is opposite. TA-Lib emits 100 for
 /// bullish harami (prior red, current green inside), -100 for
@@ -705,7 +705,7 @@ pub struct CdlHaramiSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLMORNINGSTAR — Morning Star (3-bar bullish reversal).
+/// candlestick patternMORNINGSTAR — Morning Star (3-bar bullish reversal).
 /// Bar 0 = large red body, bar 1 = small star (gapped or near
 /// bar-0 close), bar 2 = large green body closing above bar-0
 /// midpoint. Emits +100 when all three conditions hold.
@@ -727,7 +727,7 @@ pub struct CdlMorningStarSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLEVENINGSTAR — Evening Star (3-bar bearish reversal).
+/// candlestick patternEVENINGSTAR — Evening Star (3-bar bearish reversal).
 /// Mirror of morning star: bar 0 = large green body, bar 1 = small
 /// star, bar 2 = large red body closing below bar-0 midpoint.
 /// Emits -100 on match.
@@ -749,7 +749,7 @@ pub struct CdlEveningStarSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDL3BLACKCROWS — Three Black Crows (3-bar bearish
+/// candlestick pattern3BLACKCROWS — Three Black Crows (3-bar bearish
 /// continuation). Three consecutive red bars, each closing below
 /// the prior close AND opening within the prior body. TA-Lib emits
 /// -100 on match.
@@ -769,7 +769,7 @@ pub struct CdlThreeBlackCrowsSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDL3WHITESOLDIERS — Three White Soldiers (3-bar bullish
+/// candlestick pattern3WHITESOLDIERS — Three White Soldiers (3-bar bullish
 /// continuation). Three consecutive green bars, each closing above
 /// the prior close AND opening within the prior body. TA-Lib emits
 /// +100 on match.
@@ -789,7 +789,7 @@ pub struct CdlThreeWhiteSoldiersSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLDARKCLOUDCOVER — Dark Cloud Cover (2-bar bearish
+/// candlestick patternDARKCLOUDCOVER — Dark Cloud Cover (2-bar bearish
 /// reversal). Prior bar green with large body; current bar red,
 /// opens above prior high, closes below prior midpoint (standard
 /// TA-Lib penetration threshold 0.5). Emits -100 on match.

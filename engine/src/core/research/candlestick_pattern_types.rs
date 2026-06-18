@@ -1,6 +1,6 @@
 // Candlestick pattern research types
 
-/// TA-Lib CDLPIERCING — Piercing Line (2-bar bullish reversal, mirror
+/// candlestick patternPIERCING — Piercing Line (2-bar bullish reversal, mirror
 /// of Dark Cloud Cover). Prior bar red with large body; current bar
 /// green, opens below prior low, closes above prior midpoint (≥ 50%
 /// penetration). Emits +100 on match.
@@ -21,7 +21,7 @@ pub struct CdlPiercingSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLDRAGONFLYDOJI — Dragonfly Doji (single-bar support
+/// candlestick patternDRAGONFLYDOJI — Dragonfly Doji (single-bar support
 /// signal). Doji body (≤ 5% of range) with open ≈ high ≈ close
 /// and long lower shadow. T-shape indicating rejection of lower
 /// prices. TA-Lib emits +100 on match.
@@ -42,7 +42,7 @@ pub struct CdlDragonflyDojiSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLGRAVESTONEDOJI — Gravestone Doji (single-bar resistance
+/// candlestick patternGRAVESTONEDOJI — Gravestone Doji (single-bar resistance
 /// signal). Doji body (≤ 5% of range) with open ≈ low ≈ close and
 /// long upper shadow. Inverted-T shape indicating rejection of
 /// higher prices. TA-Lib emits -100 on match.
@@ -63,7 +63,7 @@ pub struct CdlGravestoneDojiSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLHANGINGMAN — Hanging Man (single-bar bearish reversal
+/// candlestick patternHANGINGMAN — Hanging Man (single-bar bearish reversal
 /// at tops). Geometrically identical to the Hammer but appearing at
 /// market tops instead of bottoms: small body in the upper third,
 /// long lower shadow ≥ 2× body, minimal upper shadow. TA-Lib emits
@@ -86,7 +86,7 @@ pub struct CdlHangingManSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLINVERTEDHAMMER — Inverted Hammer (single-bar bullish
+/// candlestick patternINVERTEDHAMMER — Inverted Hammer (single-bar bullish
 /// reversal at bottoms). Mirror of Shooting Star but appearing at
 /// bottoms instead of tops: small body in the lower third, long
 /// upper shadow ≥ 2× body, minimal lower shadow. TA-Lib emits
@@ -108,7 +108,7 @@ pub struct CdlInvertedHammerSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLHARAMICROSS — Harami Cross (stricter 2-bar reversal).
+/// candlestick patternHARAMICROSS — Harami Cross (stricter 2-bar reversal).
 /// Variant of Harami where the inside bar is a doji (body ≤ 5% of
 /// range) rather than any small opposite-direction body. TA-Lib
 /// treats this as a more potent reversal signal than regular
@@ -131,7 +131,7 @@ pub struct CdlHaramiCrossSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLLONGLEGGEDDOJI — Long-Legged Doji (single-bar
+/// candlestick patternLONGLEGGEDDOJI — Long-Legged Doji (single-bar
 /// indecision with wide range). Doji body (≤ 5% of range) with
 /// BOTH upper and lower shadows dominant (each ≥ 30% of range).
 /// Signals strong indecision after a meaningful price excursion
@@ -155,7 +155,7 @@ pub struct CdlLongLeggedDojiSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLMARUBOZU — Marubozu (single-bar pure-body
+/// candlestick patternMARUBOZU — Marubozu (single-bar pure-body
 /// conviction). Bar with little to no shadows (each ≤ 5% of
 /// range) and body ≥ 90% of range. Bullish marubozu = green
 /// (open == low, close == high), bearish marubozu = red
@@ -179,7 +179,7 @@ pub struct CdlMarubozuSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLSPINNINGTOP — Spinning Top (single-bar indecision
+/// candlestick patternSPINNINGTOP — Spinning Top (single-bar indecision
 /// with moderate shadows). Small body (≤ 30% of range) centred in
 /// range with BOTH upper and lower shadows larger than the body.
 /// Indicates indecision but less extreme than long-legged doji.
@@ -202,7 +202,7 @@ pub struct CdlSpinningTopSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLTRISTAR — Tri-Star (3-bar rare triple-doji
+/// candlestick patternTRISTAR — Tri-Star (3-bar rare triple-doji
 /// reversal). Three consecutive doji bars (each body ≤ 5% of
 /// range). TA-Lib emits +100 (bullish) when middle doji gaps
 /// below the outer two and the third doji closes above the
@@ -224,7 +224,7 @@ pub struct CdlTristarSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLDOJISTAR — Doji Star (2-bar reversal precursor).
+/// candlestick patternDOJISTAR — Doji Star (2-bar reversal precursor).
 /// Prior bar has a real body (body ≥ 30% of range), current bar
 /// is a doji (body ≤ 5% of range) that gaps away from the prior
 /// close. -100 (bearish) when prior is green and current doji
@@ -248,7 +248,7 @@ pub struct CdlDojiStarSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLMORNINGDOJISTAR — Morning Doji Star (3-bar bullish
+/// candlestick patternMORNINGDOJISTAR — Morning Doji Star (3-bar bullish
 /// reversal, doji-middle variant of R73 MORNINGSTAR). Bar 1 is a
 /// long red body (≥ 30% of range); bar 2 is a doji (body ≤ 5%)
 /// that gaps below bar 1's close; bar 3 is green and closes above
@@ -272,7 +272,7 @@ pub struct CdlMorningDojiStarSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLEVENINGDOJISTAR — Evening Doji Star (3-bar bearish
+/// candlestick patternEVENINGDOJISTAR — Evening Doji Star (3-bar bearish
 /// reversal, doji-middle variant of R73 EVENINGSTAR). Bar 1 is a
 /// long green body; bar 2 is a doji that gaps above bar 1's close;
 /// bar 3 is red and closes below bar 1's midpoint. Stronger
@@ -296,7 +296,7 @@ pub struct CdlEveningDojiStarSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLABANDONEDBABY — Abandoned Baby (strongest 3-bar star
+/// candlestick patternABANDONEDBABY — Abandoned Baby (strongest 3-bar star
 /// variant). Doji "abandoned" by full-body-and-shadow gaps on both
 /// sides. Bullish: bar 1 long red, bar 2 doji with bar2.high <
 /// bar1.low (no overlap), bar 3 green with bar3.low > bar2.high
@@ -320,7 +320,7 @@ pub struct CdlAbandonedBabySnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDL3INSIDE — Three Inside Up/Down (confirmed Harami).
+/// candlestick pattern3INSIDE — Three Inside Up/Down (confirmed Harami).
 /// Bar 1 has a long body; bar 2 is a small body of the opposite
 /// colour fully contained within bar 1's body (Harami geometry);
 /// bar 3 closes beyond bar 1's body in the direction opposite to
@@ -346,7 +346,7 @@ pub struct CdlThreeInsideSnapshot {
 // ── Round 77 — CDLBELTHOLD / CDLCLOSINGMARUBOZU / CDLHIGHWAVE /
 //    CDLLONGLINE / CDLSHORTLINE ──
 
-/// TA-Lib CDLBELTHOLD — Belt-hold line. Long real body with virtually
+/// candlestick patternBELTHOLD — Belt-hold line. Long real body with virtually
 /// no opening shadow. Bullish when a green candle opens at/near the low
 /// of the range; bearish when a red candle opens at/near the high.
 /// Strong single-bar conviction pattern. TA-Lib emits +100 / -100.
@@ -367,7 +367,7 @@ pub struct CdlBeltHoldSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLCLOSINGMARUBOZU — Closing Marubozu. Long real body with
+/// candlestick patternCLOSINGMARUBOZU — Closing Marubozu. Long real body with
 /// virtually no closing shadow. Bullish when a green candle closes at/
 /// near the high; bearish when a red candle closes at/near the low.
 /// TA-Lib emits +100 / -100.
@@ -388,7 +388,7 @@ pub struct CdlClosingMarubozuSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLHIGHWAVE — High-Wave Candle. Small body but long shadows
+/// candlestick patternHIGHWAVE — High-Wave Candle. Small body but long shadows
 /// on both sides, signalling strong intrabar indecision with large
 /// excursion in both directions. TA-Lib emits +100 for green body,
 /// -100 for red body.
@@ -409,7 +409,7 @@ pub struct CdlHighWaveSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLLONGLINE — Long Line Candle. Long real body with relatively
+/// candlestick patternLONGLINE — Long Line Candle. Long real body with relatively
 /// small shadows at both ends. TA-Lib emits +100 for green body and
 /// -100 for red body.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -429,7 +429,7 @@ pub struct CdlLongLineSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLSHORTLINE — Short Line Candle. Short real body with
+/// candlestick patternSHORTLINE — Short Line Candle. Short real body with
 /// relatively small shadows. TA-Lib emits +100 for green body and
 /// -100 for red body.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -452,7 +452,7 @@ pub struct CdlShortLineSnapshot {
 // ── Round 78 — CDLCOUNTERATTACK / CDLHOMINGPIGEON / CDLINNECK /
 //    CDLONNECK / CDLTHRUSTING ──
 
-/// TA-Lib CDLCOUNTERATTACK — Counterattack lines. Two opposite-colour
+/// candlestick patternCOUNTERATTACK — Counterattack lines. Two opposite-colour
 /// long candles with a gap open in the direction of the prior bar, then
 /// a close back at/near the prior close. Bullish when the first bar is
 /// red and the second green; bearish mirror for green→red.
@@ -474,7 +474,7 @@ pub struct CdlCounterattackSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLHOMINGPIGEON — Homing Pigeon. A bearish harami variant:
+/// candlestick patternHOMINGPIGEON — Homing Pigeon. A bearish harami variant:
 /// long red body followed by a smaller red body fully inside the first.
 /// Bullish reversal pattern in TA-Lib, emitting +100.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -495,7 +495,7 @@ pub struct CdlHomingPigeonSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLINNECK — In-Neck pattern. Long red body followed by a
+/// candlestick patternINNECK — In-Neck pattern. Long red body followed by a
 /// green candle that gaps below the prior low and closes slightly into
 /// the prior real body. Bearish continuation, TA-Lib emits -100.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -516,7 +516,7 @@ pub struct CdlInNeckSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLONNECK — On-Neck pattern. Long red body followed by a
+/// candlestick patternONNECK — On-Neck pattern. Long red body followed by a
 /// green candle that gaps below the prior low and closes back at/near
 /// the prior close. Bearish continuation, TA-Lib emits -100.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -537,7 +537,7 @@ pub struct CdlOnNeckSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLTHRUSTING — Thrusting pattern. Long red body followed by a
+/// candlestick patternTHRUSTING — Thrusting pattern. Long red body followed by a
 /// green candle that gaps below the prior low and closes into the prior
 /// body, but not as deep as the midpoint. Bearish continuation, emits
 /// -100.
@@ -562,7 +562,7 @@ pub struct CdlThrustingSnapshot {
 // ── Round 79 — CDL2CROWS / CDL3LINESTRIKE / CDL3OUTSIDE /
 //    CDLMATCHINGLOW ──
 
-/// TA-Lib CDL2CROWS — Two Crows. Long green body, then a gap-up red
+/// candlestick pattern2CROWS — Two Crows. Long green body, then a gap-up red
 /// candle, followed by another red candle that opens inside the second
 /// body and closes back inside the first real body. Bearish reversal.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -582,7 +582,7 @@ pub struct CdlTwoCrowsSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDL3LINESTRIKE — Three Line Strike. Three same-direction
+/// candlestick pattern3LINESTRIKE — Three Line Strike. Three same-direction
 /// candles followed by a large opposite-colour strike candle that
 /// closes beyond the first bar's open. Reversal signal.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -602,7 +602,7 @@ pub struct CdlThreeLineStrikeSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDL3OUTSIDE — Three Outside Up/Down. An engulfing reversal
+/// candlestick pattern3OUTSIDE — Three Outside Up/Down. An engulfing reversal
 /// confirmed by a third candle continuing in the same direction.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CdlThreeOutsideSnapshot {
@@ -621,7 +621,7 @@ pub struct CdlThreeOutsideSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLMATCHINGLOW — Matching Low. Two red candles that close at
+/// candlestick patternMATCHINGLOW — Matching Low. Two red candles that close at
 /// nearly the same level, signalling potential support. Bullish in
 /// TA-Lib (+100).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -644,7 +644,7 @@ pub struct CdlMatchingLowSnapshot {
 // ── Round 80 — CDLSEPARATINGLINES / CDLSTICKSANDWICH /
 //    CDLRICKSHAWMAN / CDLTAKURI ──
 
-/// TA-Lib CDLSEPARATINGLINES — Separating Lines. Opposite-colour
+/// candlestick patternSEPARATINGLINES — Separating Lines. Opposite-colour
 /// candles with the same open, where the second resumes the prevailing
 /// direction. Continuation pattern with both bullish and bearish forms.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -665,7 +665,7 @@ pub struct CdlSeparatingLinesSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLSTICKSANDWICH — Stick Sandwich. Red / green / red where
+/// candlestick patternSTICKSANDWICH — Stick Sandwich. Red / green / red where
 /// the first and third closes match, marking potential support.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CdlStickSandwichSnapshot {
@@ -685,7 +685,7 @@ pub struct CdlStickSandwichSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLRICKSHAWMAN — Rickshaw Man. A centered doji with long
+/// candlestick patternRICKSHAWMAN — Rickshaw Man. A centered doji with long
 /// upper and lower shadows. Neutral indecision pattern, reported here
 /// as +100 when present for parity/discoverability.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -706,7 +706,7 @@ pub struct CdlRickshawManSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLTAKURI — Takuri. Dragonfly-like doji with an especially
+/// candlestick patternTAKURI — Takuri. Dragonfly-like doji with an especially
 /// long lower shadow. Bullish reversal variant.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CdlTakuriSnapshot {
@@ -726,9 +726,9 @@ pub struct CdlTakuriSnapshot {
     pub note: String,
 }
 
-// ── Round 81/82 — harder candlestick pattern pack ──────────────────
+// Candlestick pattern storage/helpers
 
-/// TA-Lib CDL3STARSINSOUTH — Three Stars in the South. A 3-bar bullish
+/// candlestick pattern3STARSINSOUTH — Three Stars in the South. A 3-bar bullish
 /// reversal made of three descending red candles where downside pressure
 /// progressively contracts: a long black candle with a long lower shadow,
 /// then a smaller black candle with a higher low, then a small black bar
@@ -752,7 +752,7 @@ pub struct CdlThreeStarsInSouthSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLIDENTICAL3CROWS — Identical Three Crows. Bearish 3-bar
+/// candlestick patternIDENTICAL3CROWS — Identical Three Crows. Bearish 3-bar
 /// continuation: three long red candles with each new candle opening
 /// near the prior close and extending the decline.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -773,7 +773,7 @@ pub struct CdlIdenticalThreeCrowsSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLKICKING — Kicking. Two opposite-colour marubozu candles
+/// candlestick patternKICKING — Kicking. Two opposite-colour marubozu candles
 /// separated by a clean gap between their full ranges.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CdlKickingSnapshot {
@@ -793,7 +793,7 @@ pub struct CdlKickingSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLKICKINGBYLENGTH — Kicking where bull/bear direction is
+/// candlestick patternKICKINGBYLENGTH — Kicking where bull/bear direction is
 /// assigned from the longer of the two marubozu bodies.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CdlKickingByLengthSnapshot {
@@ -814,7 +814,7 @@ pub struct CdlKickingByLengthSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLLADDERBOTTOM — Ladder Bottom. Five-bar bullish reversal:
+/// candlestick patternLADDERBOTTOM — Ladder Bottom. Five-bar bullish reversal:
 /// three descending red candles, a fourth red "rung" with an upper
 /// shadow, then a strong green breakout candle.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -836,7 +836,7 @@ pub struct CdlLadderBottomSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLUNIQUE3RIVER — Unique 3 River. Three-bar bullish reversal:
+/// candlestick patternUNIQUE3RIVER — Unique 3 River. Three-bar bullish reversal:
 /// long red candle, then a smaller red candle with an extended lower
 /// shadow, followed by a small green candle tucked inside the second.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -858,9 +858,9 @@ pub struct CdlUniqueThreeRiverSnapshot {
     pub note: String,
 }
 
-// ── Round 83/84 — next candlestick pattern pack ────────────────────
+// Candlestick pattern storage/helpers
 
-/// TA-Lib CDLADVANCEBLOCK — Advance Block. Three rising green candles
+/// candlestick patternADVANCEBLOCK — Advance Block. Three rising green candles
 /// whose progress weakens as bodies shrink and upper shadows lengthen.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CdlAdvanceBlockSnapshot {
@@ -881,7 +881,7 @@ pub struct CdlAdvanceBlockSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLBREAKAWAY — Breakaway. Five-bar reversal pattern with an
+/// candlestick patternBREAKAWAY — Breakaway. Five-bar reversal pattern with an
 /// initial gap in trend direction and a final candle that closes back
 /// into that gap.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -902,7 +902,7 @@ pub struct CdlBreakawaySnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLGAPSIDESIDEWHITE — Up/Down-gap side-by-side white lines.
+/// candlestick patternGAPSIDESIDEWHITE — Up/Down-gap side-by-side white lines.
 /// Two similar green candles that hold a gap versus the prior candle.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CdlGapSideSideWhiteSnapshot {
@@ -923,7 +923,7 @@ pub struct CdlGapSideSideWhiteSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLUPSIDEGAP2CROWS — Upside Gap Two Crows. Long green candle,
+/// candlestick patternUPSIDEGAP2CROWS — Upside Gap Two Crows. Long green candle,
 /// gap-up red candle, then another red candle that opens higher and
 /// closes back into the gap.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -944,7 +944,7 @@ pub struct CdlUpsideGapTwoCrowsSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLXSIDEGAP3METHODS — Upside/Downside Gap Three Methods.
+/// candlestick patternXSIDEGAP3METHODS — Upside/Downside Gap Three Methods.
 /// Two same-direction candles gap away from the first, then an
 /// opposite-colour candle closes into that gap without fully reversing it.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -965,7 +965,7 @@ pub struct CdlXSideGapThreeMethodsSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLCONCEALBABYSWALL — Concealing Baby Swallow. Four black
+/// candlestick patternCONCEALBABYSWALL — Concealing Baby Swallow. Four black
 /// candles where the first two are marubozu-like, the third gaps down,
 /// and the fourth engulfs the third candle's range.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -986,9 +986,9 @@ pub struct CdlConcealBabySwallowSnapshot {
     pub note: String,
 }
 
-// ── Round 85/86 — stateful candlestick pattern pack ────────────────
+// Candlestick pattern storage/helpers
 
-/// TA-Lib CDLHIKKAKE — Hikkake. Inside-bar setup followed by a false
+/// candlestick patternHIKKAKE — Hikkake. Inside-bar setup followed by a false
 /// break to one side of the inside bar.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CdlHikkakeSnapshot {
@@ -1007,7 +1007,7 @@ pub struct CdlHikkakeSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLHIKKAKEMOD — Modified Hikkake. Hikkake-like inside-bar
+/// candlestick patternHIKKAKEMOD — Modified Hikkake. Hikkake-like inside-bar
 /// trap followed by an explicit confirmation bar.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CdlHikkakeModSnapshot {
@@ -1026,7 +1026,7 @@ pub struct CdlHikkakeModSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLMATHOLD — Mat Hold. A strong trend candle, a gapped pause,
+/// candlestick patternMATHOLD — Mat Hold. A strong trend candle, a gapped pause,
 /// two holding candles, then a continuation breakout.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CdlMatHoldSnapshot {
@@ -1047,7 +1047,7 @@ pub struct CdlMatHoldSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLRISEFALL3METHODS — Rising/Falling Three Methods. Long
+/// candlestick patternRISEFALL3METHODS — Rising/Falling Three Methods. Long
 /// trend candle, three small counter-trend candles inside it, then a
 /// continuation candle in the original direction.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -1068,9 +1068,9 @@ pub struct CdlRiseFallThreeMethodsSnapshot {
     pub note: String,
 }
 
-// ── Round 87/88 — remaining candlestick pattern pack ───────────────
+// Candlestick pattern storage/helpers
 
-/// TA-Lib CDLSTALLEDPATTERN — Stalled Pattern. Three advancing white
+/// candlestick patternSTALLEDPATTERN — Stalled Pattern. Three advancing white
 /// candles where the third gaps up but loses momentum with a small real
 /// body and meaningful upper shadow.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -1093,7 +1093,7 @@ pub struct CdlStalledPatternSnapshot {
     pub note: String,
 }
 
-/// TA-Lib CDLTASUKIGAP — Tasuki Gap. Two same-direction candles with a
+/// candlestick patternTASUKIGAP — Tasuki Gap. Two same-direction candles with a
 /// trend gap, followed by an opposite-colour candle that retraces into
 /// the gap without fully closing it.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]

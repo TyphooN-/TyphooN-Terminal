@@ -655,7 +655,7 @@ pub(crate) enum BrokerCmd {
     },
     /// Fetch Yahoo quote batch for the GLCO commodities dashboard.
     FetchCommoditiesQuotes,
-    // ── Godel Parity Round 2 ──
+    // Dividend, earnings-estimate, rating, and treasury research
     /// FMP historical dividend payment schedule for a symbol.
     FetchDividendHistory {
         symbol: String,
@@ -673,7 +673,7 @@ pub(crate) enum BrokerCmd {
     },
     /// Yahoo batch quote for ^IRX/^FVX/^TNX/^TYX treasury yield ladder.
     FetchTreasuryYields,
-    // ── Godel Parity Round 3 ──
+    // Financial statements, management, and COT research
     /// FMP full FA bundle (income + balance + cash flow × annual/quarterly).
     FetchFinancialStatements {
         symbol: String,
@@ -686,7 +686,7 @@ pub(crate) enum BrokerCmd {
     },
     /// CFTC Socrata — latest weekly Commitments of Traders (legacy futures).
     FetchCotReports,
-    // ── Godel Parity Round 4 ──
+    // Corporate action, analyst, ESG, ETF, and index research
     /// FMP historical stock split events for a symbol.
     FetchStockSplits {
         symbol: String,
@@ -717,7 +717,7 @@ pub(crate) enum BrokerCmd {
         index_code: String,
         fmp_key: String,
     },
-    // ── Godel Parity Round 5 ──
+    // Ownership, float, price-history, and earnings-surprise research
     /// FMP SEC Form-4 insider trades for a symbol.
     FetchInsiderTrades {
         symbol: String,
@@ -744,7 +744,7 @@ pub(crate) enum BrokerCmd {
         symbol: String,
         fmp_key: String,
     },
-    // ── Godel Parity Round 6 ──
+    // World index, market mover, sector, and WACC research
     /// Yahoo batch-quote the global equity indices dashboard (no key).
     FetchWorldIndices,
     /// FMP market movers — top gainers/losers/most-active (single bundle).
@@ -763,7 +763,7 @@ pub(crate) enum BrokerCmd {
         fmp_key: String,
         risk_free_pct: f64,
     },
-    // ── Godel Parity Round 7 ──
+    // FX, beta, valuation, and identifier research
     /// Yahoo batch-quote the FX majors universe (no key).
     FetchCurrencyRates,
     /// FMP historical price fetch for (symbol, SPY) + OLS beta regression. The
@@ -793,7 +793,7 @@ pub(crate) enum BrokerCmd {
     FetchFigiIdentifiers {
         symbol: String,
     },
-    // ── Godel Parity Round 8 ──
+    // Advanced valuation, options, and implied-volatility research
     /// Compute historical return / risk analysis for a symbol from cached bars.
     /// Broker handler reads cached HP rows via `get_historical_price` then calls
     /// `compute_hra_snapshot` — no network call.
@@ -839,7 +839,7 @@ pub(crate) enum BrokerCmd {
         current_atm_iv_pct: f64,
         history_json: String,
     },
-    // ── Godel Parity Round 9 ──
+    // Seasonality, correlation, total-return, technical, and vol-skew research
     /// SEAG — seasonality compute over cached HP bars (pure compute).
     ComputeSeasonalitySnapshot {
         symbol: String,
@@ -864,7 +864,7 @@ pub(crate) enum BrokerCmd {
     ComputeVolSkewSnapshot {
         symbol: String,
     },
-    // ── Godel Parity Round 10 ──
+    // Leverage, accruals, realized-volatility, cash-flow, and short-interest research
     /// LEV — debt leverage & coverage ratios from cached Financials + Fundamentals.
     /// `total_debt`/`cash` come from the main thread (Fundamentals) so the handler
     /// only needs to read research_financials + compute ratios.
@@ -900,7 +900,7 @@ pub(crate) enum BrokerCmd {
         short_ratio_reported: f64,
         bars_json: String,
     },
-    // ── Godel Parity Round 11 ──
+    // Solvency, quality, volatility-estimator, EPS-beat, and price-target research
     /// ALTZ — classic Altman Z-score; MVE comes from the main thread (Fundamentals).
     ComputeAltmanZSnapshot {
         symbol: String,
@@ -925,7 +925,7 @@ pub(crate) enum BrokerCmd {
         symbol: String,
         current_price: f64,
     },
-    // ── Godel Parity Round 12 ──
+    // Insider, dividend-growth, earnings-revision, sector-rotation, and upgrade/downgrade research
     /// MNGR — Insider activity bias over cached INS form-4 trades in a lookback window.
     ComputeInsiderActivitySnapshot {
         symbol: String,
@@ -948,7 +948,7 @@ pub(crate) enum BrokerCmd {
     ComputeUpdmSnapshot {
         symbol: String,
     },
-    // ── Godel Parity Round 13 ──
+    // Momentum, liquidity, breakout, cash-cycle, and credit research
     /// MOM — 12-1 month momentum score over cached HP bars.
     ComputeMomentumSnapshot {
         symbol: String,
@@ -5034,7 +5034,7 @@ pub struct TyphooNApp {
     pub(crate) tas_rows: VecDeque<(String, f64, f64, String, String)>,
     pub(crate) tas_paused: bool,
 
-    // ── Godel Parity Round 2 ──────────────────────────────────
+    // Dividend, earnings-estimate, rating, and treasury research
     /// DVD — per-symbol dividend history.
     pub(crate) show_dividend_history: bool,
     pub(crate) dividend_history_symbol: String,
@@ -5059,7 +5059,7 @@ pub struct TyphooNApp {
     pub(crate) treasury_yields_last_fetch: Option<std::time::Instant>,
     pub(crate) treasury_yields_loading: bool,
 
-    // ── Godel Parity Round 3 ──────────────────────────────────
+    // Financial statements, management, and COT research
     /// FA — full financial statements bundle (Income / Balance / Cash Flow).
     pub(crate) show_financials: bool,
     pub(crate) financials_symbol: String,
@@ -5081,7 +5081,7 @@ pub struct TyphooNApp {
     pub(crate) cot_last_fetch: Option<std::time::Instant>,
     pub(crate) cot_filter: String,
 
-    // ── Godel Parity Round 4 ──────────────────────────────────
+    // Corporate action, analyst, ESG, ETF, and index research
     /// SPLT — historical stock split events.
     pub(crate) show_splits: bool,
     pub(crate) splits_symbol: String,
@@ -5114,7 +5114,7 @@ pub struct TyphooNApp {
     pub(crate) memb_loading: bool,
     pub(crate) memb_filter: String,
 
-    // ── Godel Parity Round 5 ──────────────────────────────────
+    // Ownership, float, price-history, and earnings-surprise research
     /// INS — SEC Form-4 insider trades.
     pub(crate) show_insider_trades: bool,
     pub(crate) insider_symbol: String,
@@ -5146,7 +5146,7 @@ pub struct TyphooNApp {
     pub(crate) eps_surprises: Vec<typhoon_engine::core::research::EarningsSurprise>,
     pub(crate) eps_loading: bool,
 
-    // ── Godel Parity Round 6 ──────────────────────────────────
+    // World index, market mover, sector, and WACC research
     /// WEI — world equity indices dashboard (Yahoo index tickers, separate
     /// from the legacy ETF-based "World Indices" dashboard above).
     pub(crate) show_wei: bool,
@@ -5175,7 +5175,7 @@ pub struct TyphooNApp {
     pub(crate) wacc_snapshot: typhoon_engine::core::research::WaccSnapshot,
     pub(crate) wacc_loading: bool,
 
-    // ── Godel Parity Round 7 ──────────────────────────────────
+    // FX, beta, valuation, and identifier research
     /// WCR — world currency rates (FX majors + crosses + EM), Yahoo-sourced
     /// single-row snapshot. Separate state from the legacy FOREX_MATRIX
     /// dashboard which is broker-sourced.
@@ -5208,7 +5208,7 @@ pub struct TyphooNApp {
     pub(crate) figi_snapshot: typhoon_engine::core::research::FigiSnapshot,
     pub(crate) figi_loading: bool,
 
-    // ── Godel Parity Round 8 ──────────────────────────────────
+    // Advanced valuation, options, and implied-volatility research
     /// HRA — historical return / risk analysis (vol, Sharpe, Sortino, drawdowns).
     pub(crate) show_hra: bool,
     pub(crate) hra_symbol: String,
@@ -5242,7 +5242,7 @@ pub struct TyphooNApp {
     pub(crate) ivol_snapshot: typhoon_engine::core::research::IvolSnapshot,
     pub(crate) ivol_loading: bool,
 
-    // ── Godel Parity Round 9 ──────────────────────────────────
+    // Seasonality, correlation, total-return, technical, and vol-skew research
     /// SEAG — monthly + day-of-week seasonality over cached HP.
     pub(crate) show_seag: bool,
     pub(crate) seag_symbol: String,
@@ -5274,7 +5274,7 @@ pub struct TyphooNApp {
     pub(crate) skew_snapshot: typhoon_engine::core::research::VolatilitySkew,
     pub(crate) skew_loading: bool,
 
-    // ── Godel Parity Round 10 ──
+    // Leverage, accruals, realized-volatility, cash-flow, and short-interest research
     /// LEV — debt leverage & coverage ratios from cached Financials + Fundamentals.
     pub(crate) show_lev: bool,
     pub(crate) lev_symbol: String,
@@ -5305,7 +5305,7 @@ pub struct TyphooNApp {
     pub(crate) shrt_snapshot: typhoon_engine::core::research::ShortInterestSnapshot,
     pub(crate) shrt_loading: bool,
 
-    // ── Godel Parity Round 11 ──
+    // Solvency, quality, volatility-estimator, EPS-beat, and price-target research
     /// ALTZ — classic Altman Z-score from cached Financials + Fundamentals.
     pub(crate) show_altz: bool,
     pub(crate) altz_symbol: String,
@@ -5336,7 +5336,7 @@ pub struct TyphooNApp {
     pub(crate) ptd_snapshot: typhoon_engine::core::research::PriceTargetDispersion,
     pub(crate) ptd_loading: bool,
 
-    // ── Godel Parity Round 12 ──
+    // Insider, dividend-growth, earnings-revision, sector-rotation, and upgrade/downgrade research
     /// MNGR — Insider activity bias over cached INS form-4 trades in a lookback window.
     pub(crate) show_mngr: bool,
     pub(crate) mngr_symbol: String,
@@ -5368,7 +5368,7 @@ pub struct TyphooNApp {
     pub(crate) updm_snapshot: typhoon_engine::core::research::UpdmSnapshot,
     pub(crate) updm_loading: bool,
 
-    // ── Godel Parity Round 13 ──
+    // Momentum, liquidity, breakout, cash-cycle, and credit research
     /// MOM — 12-1 month momentum score from cached HP bars.
     pub(crate) show_mom: bool,
     pub(crate) mom_symbol: String,
@@ -5400,7 +5400,7 @@ pub struct TyphooNApp {
     pub(crate) credit_snapshot: typhoon_engine::core::research::CreditSnapshot,
     pub(crate) credit_loading: bool,
 
-    // ── Godel Parity Round 14 ──
+    // Growth, flow, regime, relative-volume, and margin research
     /// GROWM — GARP composite fusing cached MOM + EARM + DIVG.
     pub(crate) show_growm: bool,
     pub(crate) growm_symbol: String,
@@ -5432,7 +5432,7 @@ pub struct TyphooNApp {
     pub(crate) margins_snapshot: typhoon_engine::core::research::MarginsSnapshot,
     pub(crate) margins_loading: bool,
 
-    // ── Godel Parity Round 15 ─────────────────────────────────
+    // Value, quality, risk, insider-streak, and coverage research
     /// VAL — Value-factor composite vs sector peers.
     pub(crate) show_val: bool,
     pub(crate) val_symbol: String,
@@ -5464,7 +5464,7 @@ pub struct TyphooNApp {
     pub(crate) covg_snapshot: typhoon_engine::core::research::CoverageSnapshot,
     pub(crate) covg_loading: bool,
 
-    // ── Godel Parity Round 16 ─────────────────────────────────
+    // Relative rank and event-study research
     /// VRK — Value Rank vs sector peers.
     pub(crate) show_vrk: bool,
     pub(crate) vrk_symbol: String,
@@ -5495,7 +5495,7 @@ pub struct TyphooNApp {
     pub(crate) pead_snapshot: typhoon_engine::core::research::PeadSnapshot,
     pub(crate) pead_loading: bool,
 
-    // ── Godel Parity Round 17 ─────────────────────────────────
+    // Size, momentum, drift, operating-quality, and revenue-growth ranks
     /// SIZEF — Size factor rank vs sector peers.
     pub(crate) show_sizef: bool,
     pub(crate) sizef_symbol: String,
@@ -5526,7 +5526,7 @@ pub struct TyphooNApp {
     pub(crate) revrank_snapshot: typhoon_engine::core::research::RevenueGrowthRankSnapshot,
     pub(crate) revrank_loading: bool,
 
-    // ── Godel Parity Round 18 ─────────────────────────────────
+    // Financial growth, rank overlay, and surprise-streak research
     /// LEVRANK — Leverage rank vs sector peers (D/E percentile, inverted).
     pub(crate) show_levrank: bool,
     pub(crate) levrank_symbol: String,
@@ -6831,7 +6831,7 @@ pub struct TyphooNApp {
     pub(crate) mavp_win_symbol: String,
     pub(crate) mavp_win_snapshot: typhoon_engine::core::research::MavpSnapshot,
     pub(crate) mavp_win_loading: bool,
-    // ── Round 72 — CDL* candlestick patterns ──
+    // Candlestick pattern storage/helpers
     pub(crate) show_cdl_doji_win: bool,
     pub(crate) cdl_doji_win_symbol: String,
     pub(crate) cdl_doji_win_snapshot: typhoon_engine::core::research::CdlDojiSnapshot,

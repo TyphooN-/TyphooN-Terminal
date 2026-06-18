@@ -387,7 +387,7 @@ impl TyphooNApp {
 
                     self.write_symbol_talib_price_momentum_sections(p, &sym_upper);
 
-                    // ── Round 72 CDL* candlestick patterns ──
+                    // Candlestick pattern storage/helpers
                     if let Ok(Some(cd)) = rx::get_cdl_doji(&conn, &sym_upper) {
                         if cd.cdl_doji_label != "INSUFFICIENT_DATA" && !cd.cdl_doji_label.is_empty()
                         {

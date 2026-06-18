@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Godel Parity Round 2 windows ─────────────────────
+        // Dividend, earnings-estimate, rating, and treasury research
 
         // DVD — Dividend History
         if self.show_dividend_history {

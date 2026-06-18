@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Godel Parity Round 3 windows ─────────────────────
+        // Financial statements, management, and COT research
 
         // FA — Financial Statements (Income / Balance / Cash Flow × Annual / Quarterly)
         if self.show_financials {

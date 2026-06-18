@@ -167,7 +167,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 72 — CDL* candlestick patterns ──
+            // Candlestick pattern storage/helpers
             "CDLDOJI" | "CDLDOJIWIN" | "DOJI" | "DOJI_PATTERN" | "DOJI_CANDLE" => {
                 let sym = self
                     .charts

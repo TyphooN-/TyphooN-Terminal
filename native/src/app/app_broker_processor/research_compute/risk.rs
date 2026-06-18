@@ -6,7 +6,7 @@ pub(super) fn handle_risk_compute(
     shared_cache_broker: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
 ) {
     match cmd {
-        // ── Godel Parity Round 10 ──
+        // Leverage, accruals, realized-volatility, cash-flow, and short-interest research
         BrokerCmd::ComputeLeverageSnapshot {
             symbol,
             total_debt_fund,
@@ -123,7 +123,7 @@ pub(super) fn handle_risk_compute(
                 let _ = msg_tx.send(BrokerMsg::ShortInterestSnapshotMsg(symbol, snap));
             });
         }
-        // ── Godel Parity Round 11 ──
+        // Solvency, quality, volatility-estimator, EPS-beat, and price-target research
         BrokerCmd::ComputeAltmanZSnapshot {
             symbol,
             market_value_equity,

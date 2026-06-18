@@ -3,7 +3,7 @@ use super::*;
 impl TyphooNApp {
     pub(super) fn handle_research_snapshot_msg(&mut self, msg: BrokerMsg) {
         match msg {
-            // ── Godel Parity Round 10 ──
+            // Leverage, accruals, realized-volatility, cash-flow, and short-interest research
             BrokerMsg::LeverageSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.lev_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -71,7 +71,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Godel Parity Round 11 ──
+            // Solvency, quality, volatility-estimator, EPS-beat, and price-target research
             BrokerMsg::AltmanZSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.altz_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -138,7 +138,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Godel Parity Round 12 ──
+            // Insider, dividend-growth, earnings-revision, sector-rotation, and upgrade/downgrade research
             BrokerMsg::InsiderActivitySnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.mngr_symbol.eq_ignore_ascii_case(&sym_u) {

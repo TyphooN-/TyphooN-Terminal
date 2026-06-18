@@ -45,7 +45,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Godel Parity Round 7 ──
+            // FX, beta, valuation, and identifier research
             BrokerMsg::CurrencyRatesMsg(rows) => {
                 self.wcr_rates = rows.clone();
                 self.wcr_loading = false;

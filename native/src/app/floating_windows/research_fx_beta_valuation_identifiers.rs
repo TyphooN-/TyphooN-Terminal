@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Godel Parity Round 7 ──
+        // FX, beta, valuation, and identifier research
         // WCR — World Currency Rates (FX majors + crosses + EM via Yahoo /v7)
         if self.show_wcr {
             let mut open = self.show_wcr;

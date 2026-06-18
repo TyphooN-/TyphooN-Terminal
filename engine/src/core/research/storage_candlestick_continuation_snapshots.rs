@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 77 schema v81 (TA-Lib CDL) ─────────────────────────────
+// Candlestick pattern storage/helpers
 //    CDLBELTHOLD / CDLCLOSINGMARUBOZU / CDLHIGHWAVE / CDLLONGLINE /
 //    CDLSHORTLINE
 
@@ -234,7 +234,7 @@ pub fn get_cdl_short_line(
     }
 }
 
-// ── Round 78 schema v82 (TA-Lib CDL) ─────────────────────────────
+// Candlestick pattern storage/helpers
 //    CDLCOUNTERATTACK / CDLHOMINGPIGEON / CDLINNECK / CDLONNECK /
 //    CDLTHRUSTING
 

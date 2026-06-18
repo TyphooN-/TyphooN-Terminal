@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 76 schema v80 (TA-Lib CDL) ─────────────
+// Candlestick pattern storage/helpers
 //    CDLDOJISTAR / CDLMORNINGDOJISTAR / CDLEVENINGDOJISTAR /
 //    CDLABANDONEDBABY / CDL3INSIDE
 
@@ -245,7 +245,7 @@ pub fn get_cdl_three_inside(
     }
 }
 
-// ── Round 79 schema v83 (TA-Lib CDL) ─────────────────────────────
+// Candlestick pattern storage/helpers
 //    CDL2CROWS / CDL3LINESTRIKE / CDL3OUTSIDE / CDLMATCHINGLOW
 
 pub fn create_research_tables_v83(conn: &Connection) -> Result<(), String> {
@@ -440,7 +440,7 @@ pub fn get_cdl_matching_low(
     }
 }
 
-// ── Round 80 schema v84 (TA-Lib CDL) ─────────────────────────────
+// Candlestick pattern storage/helpers
 //    CDLSEPARATINGLINES / CDLSTICKSANDWICH / CDLRICKSHAWMAN / CDLTAKURI
 
 pub fn create_research_tables_v84(conn: &Connection) -> Result<(), String> {
@@ -635,7 +635,7 @@ pub fn get_cdl_takuri(
     }
 }
 
-// ── Round 81/82 schema v85 (TA-Lib CDL) ──────────────────────────
+// Candlestick pattern storage/helpers
 //    CDL3STARSINSOUTH / CDLIDENTICAL3CROWS / CDLKICKING /
 //    CDLKICKINGBYLENGTH / CDLLADDERBOTTOM / CDLUNIQUE3RIVER
 
@@ -932,7 +932,7 @@ pub fn get_cdl_unique_three_river(
     }
 }
 
-// ── Round 83/84 schema v86 (TA-Lib CDL) ──────────────────────────
+// Candlestick pattern storage/helpers
 //    CDLADVANCEBLOCK / CDLBREAKAWAY / CDLGAPSIDESIDEWHITE /
 //    CDLUPSIDEGAP2CROWS / CDLXSIDEGAP3METHODS / CDLCONCEALBABYSWALL
 
@@ -1229,7 +1229,7 @@ pub fn get_cdl_conceal_baby_swallow(
     }
 }
 
-// ── Round 85/86 schema v87 (TA-Lib CDL) ──────────────────────────
+// Candlestick pattern storage/helpers
 //    CDLHIKKAKE / CDLHIKKAKEMOD / CDLMATHOLD /
 //    CDLRISEFALL3METHODS
 
@@ -1420,7 +1420,7 @@ pub fn get_cdl_rise_fall_three_methods(
     }
 }
 
-// ── Round 87/88 schema v88 (TA-Lib CDL) ──────────────────────────
+// Candlestick pattern storage/helpers
 //    CDLSTALLEDPATTERN / CDLTASUKIGAP
 
 pub fn create_research_tables_v88(conn: &Connection) -> Result<(), String> {

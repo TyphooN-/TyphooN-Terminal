@@ -221,7 +221,7 @@ impl TyphooNApp {
                 self.tas_paused = false;
                 self.show_tas = true;
             }
-            // ── Godel Parity Round 2 ──
+            // Dividend, earnings-estimate, rating, and treasury research
             "DVD" | "DIV_HISTORY" | "DIVIDEND_HISTORY" => {
                 let sym = self
                     .charts
@@ -305,7 +305,7 @@ impl TyphooNApp {
                 self.treasury_yields_loading = true;
                 let _ = self.broker_tx.send(BrokerCmd::FetchTreasuryYields);
             }
-            // ── Godel Parity Round 3 ──
+            // Financial statements, management, and COT research
             "FA" | "FINANCIALS" | "INCOME" | "BALANCE" | "CASHFLOW" => {
                 let sym = self
                     .charts
@@ -1232,7 +1232,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Godel Parity Round 10 ──
+            // Leverage, accruals, realized-volatility, cash-flow, and short-interest research
             "LEV" | "LEVERAGE" | "DEBT_LEVERAGE" | "SOLVENCY" => {
                 let sym = self
                     .charts
@@ -1390,7 +1390,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Godel Parity Round 11 ──
+            // Solvency, quality, volatility-estimator, EPS-beat, and price-target research
             "ALTZ" | "ALTMAN" | "Z_SCORE" | "BANKRUPTCY_RISK" => {
                 let sym = self
                     .charts
@@ -1704,7 +1704,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Godel Parity Round 13 ──
+            // Momentum, liquidity, breakout, cash-cycle, and credit research
             "MOM" | "MOMENTUM" | "MOM_SCORE" | "MOMENTUM_12_1" => {
                 let sym = self
                     .charts

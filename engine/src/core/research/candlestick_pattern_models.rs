@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 72 CDL* candlestick patterns ─────────────────────────────
+// Candlestick pattern storage/helpers
 
 /// Candle metrics for a single bar: (body, range, upper_shadow,
 /// lower_shadow, body_pct_range, is_bullish). body = |close - open|;

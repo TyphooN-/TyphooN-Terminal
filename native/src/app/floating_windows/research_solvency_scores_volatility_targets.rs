@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Godel Parity Round 11 windows ─────────────────────────────
+        // Solvency, quality, volatility-estimator, EPS-beat, and price-target research
 
         // ALTZ — Altman Z-Score
         if self.show_altz {

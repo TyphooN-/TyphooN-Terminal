@@ -258,10 +258,10 @@ impl TyphooNApp {
         // ── Godel parity research windows (ADR-107) ───────────────────────
         self.render_research_adr107_windows(ctx);
 
-        // ── Research Godel Parity Round 2 windows ─────────────────────
+        // Dividend, earnings-estimate, rating, and treasury research
         self.render_research_dividends_earnings_upgrades_windows(ctx);
 
-        // ── Research Godel Parity Round 3 windows ─────────────────────
+        // Financial statements, management, and COT research
         self.render_research_financials_management_cot_windows(ctx);
 
         // ── Research Round 4 windows ──────────────────────────────────
@@ -273,7 +273,7 @@ impl TyphooNApp {
         // ── Research Round 6 windows ──────────────────────────────────
         self.render_research_global_market_cost_capital_windows(ctx);
 
-        // ── Research Godel Parity Round 7 ──
+        // FX, beta, valuation, and identifier research
         self.render_research_fx_beta_valuation_identifiers_windows(ctx);
 
         // ── Research Round 8 windows ──
@@ -282,10 +282,10 @@ impl TyphooNApp {
         // ── Research Round 9 windows ──
         self.render_research_seasonality_correlation_technicals_windows(ctx);
 
-        // ── Research Godel Parity Round 10 ──
+        // Leverage, accruals, realized-volatility, cash-flow, and short-interest research
         self.render_research_leverage_quality_volatility_shorts_windows(ctx);
 
-        // ── Research Godel Parity Round 11 windows ─────────────────────────────
+        // Solvency, quality, volatility-estimator, EPS-beat, and price-target research
         self.render_research_solvency_scores_volatility_targets_windows(ctx);
 
         // Research Round 12 windows

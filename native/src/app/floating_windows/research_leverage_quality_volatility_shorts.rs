@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Godel Parity Round 10 ──
+        // Leverage, accruals, realized-volatility, cash-flow, and short-interest research
         // LEV — Debt Leverage & Coverage
         if self.show_lev {
             if self.lev_symbol.is_empty() {
