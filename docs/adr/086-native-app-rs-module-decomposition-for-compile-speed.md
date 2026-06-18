@@ -115,11 +115,14 @@ isolation when they are the only thing changed.
   `app/broker_fetch.rs`, not `app.rs`. The next targets need *semantic* splits
   (extract cohesive `impl TyphooNApp` method groups or free-fn families into
   sibling files — a second `impl TyphooNApp` block in a new file is fine), not
-  renderer moves: `technical_analysis.rs` (~7.8k), `state.rs` (~7.3k),
-  `gpu_compute.rs` (~6.1k), `app_broker_processor/research_compute*` (~5.6–6.1k),
-  `chart.rs` (~5.7k), `app_runtime.rs` (~5.3k). For `state.rs`, keep the central
+  renderer moves: `technical_analysis.rs` (~8.0k), `state.rs` (~7.3k),
+  `chart.rs` (~6.4k), `gpu_compute.rs` (~6.1k),
+  `app_broker_processor/research_compute/technical_indicators.rs` (~5.9k),
+  and `app_broker_processor/research_compute/risk.rs` (~3.5k after semantic child splits). For `state.rs`, keep the central
   state struct in one place (per the consequence above) and split its *methods*,
   not the struct.
+
+- **Broker research dispatchers should keep shrinking by semantic command family.** Current `risk.rs` routes into child modules such as `fundamental_risk`, `solvency_quality`, `insider_dividend_momentum`, `market_liquidity_credit`, `growth_flow_regime`, `valuation_quality_risk`, `coverage_relative_event`, `factor_rank_core`, and `dividend_sentiment_ranks`. New compute arms should land in matching child modules, not in the dispatcher parent.
 - **Test modules live in their own files (ADR-118).** The `app/tests.rs` monolith
   (3.5k lines) was split into an `app/tests/` `include!` tree, and inline
   `#[cfg(test)] mod tests {}` blocks (`sync_workset`, `app_runtime_support`,

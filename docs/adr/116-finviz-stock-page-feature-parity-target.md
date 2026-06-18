@@ -2,11 +2,11 @@
 
 **Status:** Reference audit + gap-closure plan (not a committed implementation schedule)
 **Date:** 2026-06-12
-**Related:** ADR-034 (fundamentals engine), ADR-056 (screener framework), ADR-073 (SEC filing DB), ADR-078 (multi-source news ingest), ADR-079 (research packet — TA-Lib + Godel parity), ADR-092 (Xynth parity target), ADR-117 (StockTwits social-sentiment ingest)
+**Related:** ADR-034 (fundamentals engine), ADR-056 (screener framework), ADR-073 (SEC filing DB), ADR-078 (multi-source news ingest), ADR-079 (research packet — research and indicator parity), ADR-092 (Xynth parity target), ADR-117 (StockTwits social-sentiment ingest)
 
 ## Context
 
-Goal: present **100% of what a Finviz stock page shows** (reference: `https://finviz.com/stock?t=WOK&p=d`, captured 2026-06-12) inside the terminal / research packet, then exceed it with surfaces Finviz lacks (social sentiment via ADR-117, deep TA-Lib/Godel surfaces via ADR-079, native risk analytics).
+Goal: present **100% of what a Finviz stock page shows** (reference: `https://finviz.com/stock?t=WOK&p=d`, captured 2026-06-12) inside the terminal / research packet, then exceed it with surfaces Finviz lacks (social sentiment via ADR-117, deep research/indicator surfaces via ADR-079, native risk analytics).
 
 A Finviz stock page is four things: (1) a dense ~100-field fundamentals snapshot table, (2) a price chart with SMA overlays, (3) an insider-trading table, (4) an aggregated news/headlines list. Finviz site-wide additionally offers a 70+ filter **screener**, sector/industry **groups** (performance), and a heatmap **map**.
 
@@ -71,7 +71,7 @@ Legend: **Have** = present today · **Derive** = computable from data already he
 1. **Treat the finviz stock-page field set as a coverage checklist** for the research packet and a future "Snapshot" window. Track it as the matrix above.
 2. **Close the `Derive` gaps first** — they need no new provider, only computation + exposure from data already cached (perf-window returns, P/C, P/FCF, EV/Sales, ROIC, per-share book/cash, Y/Y & Q/Q growth, current/quick ratio where line items exist). These are the cheapest route to ">90% parity".
 3. **Close `Gap` items opportunistically** from sources already wired (employees + optionable/shortable from FMP/Yahoo profile + broker asset metadata; dividend ex-date/growth precision; absolute short interest).
-4. **Exceed finviz** with social sentiment (ADR-117), the deep TA-Lib/Godel research surfaces (ADR-079), and native risk analytics finviz does not offer.
+4. **Exceed finviz** with social sentiment (ADR-117), the deep TA-Lib/research surfaces (ADR-079), and native risk analytics finviz does not offer.
 5. **All derived fields obey ADR-098 O(1) hot-path discipline** — compute on snapshot/refresh into a cached struct, never per-frame.
 
 ## Gap-closure TODOs (future)

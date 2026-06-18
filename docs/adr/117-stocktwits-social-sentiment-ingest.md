@@ -6,7 +6,7 @@
 
 ## Context
 
-The research packet (ADR-079) carries fundamentals, ~375 TA-Lib/Godel surfaces, SEC filings, insider activity, and multi-source **news** (GDELT, Finnhub, Marketaux, Yahoo RSS, NewsAPI, Polygon — ADR-078). It has **no social-sentiment surface today** (`grep` for `stocktwits`/`social_sentiment` is greenfield).
+The research packet (ADR-079) carries fundamentals, ~375 research/indicator surfaces, SEC filings, insider activity, and multi-source **news** (GDELT, Finnhub, Marketaux, Yahoo RSS, NewsAPI, Polygon — ADR-078). It has **no social-sentiment surface today** (`grep` for `stocktwits`/`social_sentiment` is greenfield).
 
 Finviz itself does **not** show social sentiment, so this is an *exceeds-parity* addition (it complements ADR-116, it is not required by it). StockTwits is the most accessible retail-sentiment source and is the natural first social lane.
 

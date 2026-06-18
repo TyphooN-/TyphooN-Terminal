@@ -23,7 +23,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  │ - SEC Filing Scanner + Insider Trades       ││
 │  │ - Multi-source News & Research cache        ││
 │  │ - Fundamentals (21 data sources)             ││
-│  │ - Research packet (TA-Lib + Godel parity)   ││
+│  │ - Research packet (research + indicator parity)   ││
 │  │ - AI sessions (Claude / Gemini / Codex)     ││
 │  │ - Backtest engine + optimizer (GPU)         ││
 │  │ - MTF Grid (up to 16 chart viewports)       ││
@@ -36,7 +36,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  - SqliteCache (TTBR binary, zstd compression)  │
 │  - RiskEngine (VaR, TRIM, order sizing)         │
 │  - BacktestEngine (bar-by-bar, optimization)    │
-│  - Research (TA-Lib + Godel parity surfaces)    │
+│  - Research (research + indicator parity surfaces)    │
 │  - Notifications (Discord, Pushover, ntfy,      │
 │    Matrix)                                      │
 └─────────────────────────────────────────────────┘
@@ -94,7 +94,7 @@ The `SYM` / `SYMBOLS` command opens Symbol Explorer. It is the catalog-facing wa
 | Plots | egui_plot | Analytics charts (equity curves, histograms) |
 | Async | tokio | Shared with engine for broker WebSocket |
 | Cache | SQLite + zstd | TTBR binary format, ~3-5x compression |
-| Analytics | research.rs + screener.rs | TA-Lib + Godel parity surfaces, EV/signal scanning |
+| Analytics | research.rs + screener.rs | research + indicator parity surfaces, EV/signal scanning |
 | Risk | risk.rs + margin.rs + var.rs | Full port of TyphooN EA v1.420 |
 
 ## Project Structure
@@ -123,7 +123,7 @@ TyphooN-Terminal/
 │   │   ├── lib.rs          # Crate root
 │   │   ├── core/
 │   │   │   ├── cache.rs       # SQLite + zstd bar cache
-│   │   │   ├── research.rs    # TA-Lib + Godel parity surfaces
+│   │   │   ├── research.rs    # research + indicator parity surfaces
 │   │   │   ├── fundamentals.rs # 21 data-source fundamentals
 │   │   │   ├── risk.rs        # Lot sizing (4 order modes)
 │   │   │   ├── margin.rs      # TRIM, PROTECT, margin math
@@ -198,6 +198,6 @@ Right-aligned numeric columns (Last, Chg, Chg%, Vol) with painter-based renderin
 
 Four AI surfaces with persistent, resumable sessions (ADR-082): Claude Code (`claude --resume <uuid>`), Gemini CLI, Codex CLI, and a generic AI Chat (Claude / OpenAI / Gemini / Grok / Mistral / Perplexity / Local). Sessions auto-save to the SqliteCache `kv_cache` (zstd-compressed, level 3 on hot mutable KV writes) on every reply. Local AI response cache (ADR-083) deduplicates identical hosted-AI prompts so repeated prompts avoid duplicate hosted-model calls. Slash commands (`RESUMECLAUDE`, `RESUMEGEMINI`, `RESUMECODEX`, `RESUMEAI`) re-enter prior sessions; the AI Sessions browser window shows history with subject lines and last-touched timestamps. If a built-in AI reply includes an ADR-080 `===TYPHOON_INGEST===` Return Path block, ADR-096 queues the existing research-ingest broker path automatically.
 
-### Research Packet (TA-Lib + Godel Parity)
+### Research Packet (Research and indicator parity)
 
-The research packet is an AI-agent-readable markdown bundle emitted on demand via `RESEARCH_PACKET`. It carries every cached signal: ~375 TA-Lib primitives (indicators + candlestick patterns), Godel-Terminal-documented features (options chain, expirations calendar, earnings whispers, institutional ownership, insider transactions, etc.), and the user's open positions per symbol. Each surface flows through the same pipeline (snapshot struct → SQLite table → BrokerCmd/Msg → packet emitter → egui popup) — see ADR-079. Chart-drawing parity for these signals is deferred (ADR-079); the agent reads the markdown directly.
+The research packet is an AI-agent-readable markdown bundle emitted on demand via `RESEARCH_PACKET`. It carries every cached signal: ~375 indicator/candlestick primitives plus external-terminal-style research features (options chain, expirations calendar, earnings whispers, institutional ownership, insider transactions, etc.), and the user's open positions per symbol. Each surface flows through the same pipeline (snapshot struct → SQLite table → BrokerCmd/Msg → packet emitter → egui popup) — see ADR-079. Chart-drawing parity for these signals is deferred (ADR-079); the agent reads the markdown directly.

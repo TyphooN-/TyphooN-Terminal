@@ -208,7 +208,7 @@ augment this with a live web search in the system prompt.
 #### 2.9 Dividend history (DVD)
 
 Pulled from `research::get_dividends`. Capped at **6 rows**. Columns:
-Ex-Date / Pay Date / Amount / Label. Source: ADR-079 DVD Godel window.
+Ex-Date / Pay Date / Amount / Label. Source: ADR-079 DVD research window.
 
 #### 2.10 Forward earnings estimates (EEB)
 
@@ -6310,6 +6310,6 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-073 — SEC filing expansion
 - ADR-078 — Multi-source news ingest
-- ADR-079 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 / 142 / 143 / 144 / 145 / 146 / 147 — Godel parity research surfaces
+- ADR-079 / 109 / 110 / 111 / 112 / 113 / 114 / 115 / 116 / 117 / 118 / 119 / 120 / 121 / 122 / 123 / 124 / 125 / 126 / 127 / 128 / 129 / 131 / 132 / 133 / 134 / 135 / 136 / 137 / 138 / 139 / 140 / 141 / 142 / 143 / 144 / 145 / 146 / 147 — research parity surfaces
 - ADR-080 — Web-research ingest from AI agents + RESEARCH_PACKET viewer (tree-nav + scrollable text)
 - ADR-096 — AI Return Path auto-ingest for built-in AI replies

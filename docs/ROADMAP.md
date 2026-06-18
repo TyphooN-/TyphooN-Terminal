@@ -169,9 +169,9 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] Slash commands: RESUMECLAUDE / RESUMEGEMINI / RESUMECODEX / RESUMEAI
 - [x] Ask Codex reasoning effort control
 
-### Phase 18: TA-Lib + Godel Parity
+### Phase 18: Research and indicator parity
 - [x] ~375 TA-Lib primitives (indicators + candlestick patterns) across 75+ rounds
-- [x] Godel-Terminal-documented features (options chain, expirations calendar, earnings whispers, institutional ownership, insider transactions)
+- [x] external-terminal-style research features (options chain, expirations calendar, earnings whispers, institutional ownership, insider transactions)
 - [x] Research-packet pipeline as the AI-agent-readable surface (ADR-079)
 - [x] Chart-parity reopened for chartable oscillator/stat bundles (ADR-079)
 - Deferred: chart-overlay candlestick pattern marks remain intentionally research-packet-first per ADR-079.

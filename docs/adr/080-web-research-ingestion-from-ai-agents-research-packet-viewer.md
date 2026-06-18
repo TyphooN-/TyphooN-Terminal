@@ -8,7 +8,7 @@
 
 ## Context
 
-The Godel-parity arc (ADRs 108–129) built a dense set of per-symbol
+The research-parity arc (ADRs 108–129) built a dense set of per-symbol
 quantitative surfaces that get glued into the research packet shipped
 to AI agents (Claude, Gemini, ChatGPT) by ASKAI / ASKCLAUDE /
 ASKGEMINI. The packet is a one-way artifact: TyphooN sends numbers
@@ -377,7 +377,7 @@ populates the whole terminal farm.
    production markdown widget, swap the monospace TextEdit for it.
    Until then, the current view is fine.
 4. **Packet viewer: diff two packets** — Useful for quality
-   regression testing of the Godel-parity arc. Would need a second
+   regression testing of the research-parity arc. Would need a second
    `packet_viewer_text_b` field and a unified-diff renderer. Not
    in v1.
 5. **Ingest ACL per-agent** — A setting to whitelist/blacklist

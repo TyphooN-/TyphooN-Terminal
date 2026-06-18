@@ -32,7 +32,7 @@
 Implementation details now live in the current indicator docs and ADRs:
 [INDICATORS.md](../INDICATORS.md), [ADR-010](010-indicator-system-32-indicators.md),
 [ADR-019](019-ehlers-dsp-indicators.md), [ADR-041](041-gpu-cpu-indicator-audit-parity-verification.md),
-and [ADR-079](079-godel-ta-lib-parity-program.md).
+and [ADR-079](079-research-indicator-parity-program.md).
 
 ## Key Decisions
 

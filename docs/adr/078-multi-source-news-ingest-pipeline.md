@@ -9,7 +9,7 @@ The prior news flow bound the "News & Events" window to a single provider,
 Finnhub's `/stock/company-news` endpoint. Finnhub's free tier is sparse for any
 ticker outside the US large-cap universe and returns nothing at all for the
 Darwinex/MT5 symbols the terminal actually trades. The user's bar for this
-feature is "rival TradingView, which itself was inferior to Godel Terminal" —
+feature is "rival TradingView, which itself was inferior to external terminal" —
 a single-source, US-only pane does not clear it.
 
 The requirement is:

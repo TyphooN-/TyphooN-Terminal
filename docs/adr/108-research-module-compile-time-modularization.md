@@ -117,8 +117,8 @@ the root:
 
 | File | Lines | Notes |
 | --- | ---: | --- |
-| `research/types.rs` | ~9,354 | Public DTOs/constants. Leave put — downstream depends on the re-export surface; splitting churns every `use`. |
-| `research/return_risk_stats.rs` | ~8,071 | Return-distribution/risk-stat compute. Sub-splittable by stat family. |
+| `research/types.rs` | ~165 | Public DTO root/re-export surface after semantic type-family splits; no longer a hotspot. |
+| `research/return_risk_stats.rs` | ~6,850 | Return/risk-stat compute parent with helper exports and remaining stat families. Already split into `return_risk_stats/distribution_shape.rs`, `autocorr_regime.rs`, and `downside_efficiency.rs`. |
 | `research/candlestick_pattern_models.rs` | ~5,353 | CDL* compute models. |
 | `research/price_transform_indicator_models.rs` | ~4,466 | Price-transform indicator compute. |
 | `research/technical_indicator_models.rs` | ~3,806 | TA indicator compute. |
@@ -127,13 +127,9 @@ the root:
 
 ### Next targets (in order)
 
-1. **Sub-split the large `*_models.rs` compute files** by indicator/stat family
-   where cohesive (`return_risk_stats` by stat family; candlestick/price-transform
-   by pattern group), always preserving the `pub use` re-export surface.
-2. **Extract residual `mod.rs` storage** (v56/v89–v93 + trailing TA snapshot
-   upsert/get) into `storage_*` modules if `mod.rs` regrows.
-3. **Leave `types.rs`** for now — it is the public DTO surface; splitting it churns
-   every downstream `use` for little compile gain.
+1. **Continue sub-splitting the remaining compute files** by semantic family. `return_risk_stats` now has distribution-shape, autocorrelation/regime, and downside-efficiency children; continue with drawdown/liquidity/tail/fractal families. Then target candlestick, price-transform, technical-indicator, and moving-average/oscillator model files by pattern group while preserving the `pub use` re-export surface.
+2. **Extract residual `mod.rs` storage** into `storage_*` modules if `mod.rs` regrows.
+3. **Keep semantic type modules and re-exports stable.** `types.rs` is now a small root surface; future DTO additions should land in the matching semantic child module, not back in a monolith.
 
 Do not start a full `typhoon-research` crate split yet. The module is still entangled with `crate::core::{fundamentals, sec_filing, cache}`; crate extraction comes after the compute-model files are sub-split and the re-export surface is stable.
 
@@ -141,7 +137,7 @@ Do not start a full `typhoon-research` crate split yet. The module is still enta
 
 Positive:
 
-- Return-distribution/risk-statistical compute edits no longer require editing the root research file.
+- Return-distribution/risk-statistical compute edits no longer require editing the root research file, and the first return-risk families now compile as child modules.
 
 - Market-stat compute edits no longer require editing the root research file.
 - Fundamental leverage/accrual compute edits no longer require editing the root research file.
