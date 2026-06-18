@@ -46,6 +46,7 @@ mod app_broker_processor;
 mod app_runtime;
 mod app_runtime_alpaca_account;
 mod app_runtime_bottom;
+mod app_runtime_broker_messages;
 mod app_runtime_connections;
 mod app_runtime_drawing_sync;
 mod app_runtime_errors;
