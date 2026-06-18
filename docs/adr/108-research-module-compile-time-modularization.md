@@ -118,7 +118,7 @@ the root:
 | File | Lines | Notes |
 | --- | ---: | --- |
 | `research/types.rs` | ~165 | Public DTO root/re-export surface after semantic type-family splits; no longer a hotspot. |
-| `research/return_risk_stats.rs` | ~3,301 | Return/risk-stat compute parent with helper exports and remaining stat families. Already split into `return_risk_stats/distribution_shape.rs`, `autocorr_regime.rs`, `downside_efficiency.rs`, `drawdown_liquidity_normality.rs`, `drawup_gap_range.rs`, `seasonality_spread.rs`, `volatility_estimators.rs`, `performance_runs_tests.rs`, `significance_stationarity.rs`, `tail_risk_diagnostics.rs`, and `entropy_dependence.rs`. |
+| `research/return_risk_stats.rs` | ~2,584 | Return/risk-stat compute parent with helper exports and remaining stat families. Already split into `return_risk_stats/distribution_shape.rs`, `autocorr_regime.rs`, `downside_efficiency.rs`, `drawdown_liquidity_normality.rs`, `drawup_gap_range.rs`, `seasonality_spread.rs`, `volatility_estimators.rs`, `performance_runs_tests.rs`, `significance_stationarity.rs`, `tail_risk_diagnostics.rs`, `entropy_dependence.rs`, `upside_drawdown_risk.rs`, and `entropy_stationarity.rs`. |
 | `research/candlestick_pattern_models.rs` | ~5,353 | CDL* compute models. |
 | `research/price_transform_indicator_models.rs` | ~4,466 | Price-transform indicator compute. |
 | `research/technical_indicator_models.rs` | ~3,806 | TA indicator compute. |
@@ -127,7 +127,7 @@ the root:
 
 ### Next targets (in order)
 
-1. **Continue sub-splitting the remaining compute files** by semantic family. `return_risk_stats` now has distribution-shape, draw-up/gap/range, autocorrelation/regime, downside-efficiency, drawdown/liquidity/normality, seasonality/spread, volatility-estimator/day-effect, performance/runs-test, significance/stationarity, tail-risk diagnostics, and entropy/dependence children; continue with upside/leverage/drawdown-risk, entropy/stationarity, fractal/jump, and high-order quant families. Then target candlestick, price-transform, technical-indicator, and moving-average/oscillator model files by pattern group while preserving the `pub use` re-export surface.
+1. **Continue sub-splitting the remaining compute files** by semantic family. `return_risk_stats` now has distribution-shape, draw-up/gap/range, autocorrelation/regime, downside-efficiency, drawdown/liquidity/normality, seasonality/spread, volatility-estimator/day-effect, performance/runs-test, significance/stationarity, tail-risk diagnostics, entropy/dependence, upside/drawdown-risk, and entropy/stationarity children; continue with robust-volatility/quantile/EWMA, normality/liquidity-tail, fractal/jump, and high-order quant families. Then target candlestick, price-transform, technical-indicator, and moving-average/oscillator model files by pattern group while preserving the `pub use` re-export surface.
 2. **Extract residual `mod.rs` storage** into `storage_*` modules if `mod.rs` regrows.
 3. **Keep semantic type modules and re-exports stable.** `types.rs` is now a small root surface; future DTO additions should land in the matching semantic child module, not back in a monolith.
 
