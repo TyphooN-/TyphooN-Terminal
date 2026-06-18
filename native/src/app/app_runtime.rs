@@ -1,5 +1,4 @@
 use super::*;
-use crate::app::chart_ops::mtf_visible_chart_groups;
 
 use super::app_runtime_support::*;
 // egui 0.34: Panel::show(ctx) deprecated in favor of show_inside(ui).
@@ -178,8 +177,6 @@ impl eframe::App for TyphooNApp {
 
         let post_broker_setup_started = std::time::Instant::now();
         self.sync_cross_timeframe_drawings();
-
-        let pointer_over_floating = self.handle_runtime_input(ctx);
         perf_post_broker_setup_ms = post_broker_setup_started.elapsed().as_secs_f64() * 1000.0;
 
         let chrome_panels_started = std::time::Instant::now();
