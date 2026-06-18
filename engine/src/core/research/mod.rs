@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 mod types;
 pub use types::*;
 
+mod transcripts_sentiment;
+pub use transcripts_sentiment::{TranscriptMeta, Transcript, SocialSentimentRow, PressRelease};
+
 mod financials;
 pub use financials::{IncomeStatement, BalanceSheet, CashFlowStatement, FinancialStatements};
 mod technical;
