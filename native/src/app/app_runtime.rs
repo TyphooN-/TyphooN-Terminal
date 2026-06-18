@@ -165,24 +165,7 @@ impl eframe::App for TyphooNApp {
 
         self.tick_deferred_chart_loads(ctx, now_instant);
 
-        // ── recompute indicators when periods changed in UI ──────────────
-        if self.indicators_dirty {
-            self.indicators_dirty = false;
-            let mut gpu = self.gpu_indicators.take();
-            // MAX PERFORMANCE: During heavy sync, completely skip indicator computation
-            // for everything except the single active chart, and even then only if
-            // we are not in a forming bar update (which has its own O(1) path).
-            if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                if chart.bars.is_empty() {
-                    // O(1) skip
-                } else if !self.heavy_sync_in_progress {
-                    chart.compute_indicators_gpu(gpu.as_mut());
-                } else if chart.forming_bar_dirty {
-                    chart.compute_indicators_gpu(gpu.as_mut());
-                }
-            }
-            self.gpu_indicators = gpu;
-        }
+        self.tick_dirty_indicator_recompute();
 
         // ── receive MTF grid status from background thread (non-blocking) ──
         // Take the results out first so the immutable borrow of `mtf_grid_rx`

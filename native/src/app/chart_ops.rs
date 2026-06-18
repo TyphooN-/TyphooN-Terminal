@@ -113,6 +113,27 @@ fn symbol_matches_no_alloc(raw: &str, target_upper: &str) -> bool {
 }
 
 impl TyphooNApp {
+    pub(crate) fn tick_dirty_indicator_recompute(&mut self) {
+        // ── recompute indicators when periods changed in UI ──────────────
+        if self.indicators_dirty {
+            self.indicators_dirty = false;
+            let mut gpu = self.gpu_indicators.take();
+            // MAX PERFORMANCE: During heavy sync, completely skip indicator computation
+            // for everything except the single active chart, and even then only if
+            // we are not in a forming bar update (which has its own O(1) path).
+            if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                if chart.bars.is_empty() {
+                    // O(1) skip
+                } else if !self.heavy_sync_in_progress {
+                    chart.compute_indicators_gpu(gpu.as_mut());
+                } else if chart.forming_bar_dirty {
+                    chart.compute_indicators_gpu(gpu.as_mut());
+                }
+            }
+            self.gpu_indicators = gpu;
+        }
+    }
+
     pub(crate) fn tick_deferred_chart_loads(&mut self, ctx: &egui::Context, now_instant: std::time::Instant) {
         // ── deferred chart loading: non-blocking, paced attempts ──
         // Uses try_load() which returns false if cache Mutex is contended (compaction, broker sync).
