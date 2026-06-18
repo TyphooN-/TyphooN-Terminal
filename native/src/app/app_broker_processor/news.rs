@@ -820,3 +820,98 @@ pub(super) async fn handle_news_scrape_all_command(
         _ => unreachable!("non-news scrape-all command routed to news scrape-all handler"),
     }
 }
+
+pub(super) async fn handle_news_maintenance_command(
+    cmd: BrokerCmd,
+    broker_msg_tx_clone: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
+    shared_cache_broker: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
+) {
+    match cmd {
+        BrokerCmd::FetchFilingContent { url } => {
+            let msg_tx = broker_msg_tx_clone.clone();
+            let shared_cache_fetch = shared_cache_broker.clone();
+            // SEC EDGAR requires a descriptive User-Agent.
+            let client = reqwest::Client::builder()
+                .user_agent(sec_filing::SEC_EDGAR_USER_AGENT)
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .unwrap_or_default();
+            // Rate limit: SEC allows 10 req/sec, we do 1
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            match client
+                .get(&url)
+                .header("Accept", "text/html,application/xhtml+xml,application/xml")
+                .header("Accept-Encoding", "identity")
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if !status.is_success() {
+                        let _ = msg_tx.send(BrokerMsg::Error(format!(
+                            "Fetch filing failed: HTTP {status}"
+                        )));
+                        return;
+                    }
+                    if let Ok(html) = resp.text().await {
+                        let result = sec_filing::strip_html_to_text(&html);
+                        // Store content in DB for FTS indexing (growing database)
+                        // Extract accession from URL: .../data/{cik}/{accession_nodash}/...
+                        let accession = url.split('/').rev().nth(1).unwrap_or("").replace('-', "");
+                        if !accession.is_empty() {
+                            if let Some(cache) =
+                                shared_cache_fetch.read().ok().and_then(|g| g.clone())
+                            {
+                                if let Ok(conn) = cache.connection() {
+                                    // Look up filing metadata for FTS indexing
+                                    let like_pat = format!("%{}%", &accession);
+                                    let meta: Option<(String, String, String)> = conn.query_row(
+                                        "SELECT ticker, form_type, company_name FROM sec_filings WHERE accession_number LIKE ?1 LIMIT 1",
+                                        [&like_pat],
+                                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                                    ).ok();
+                                    if let Some((ticker, form_type, company)) = meta {
+                                        let _ = sec_filing::store_filing_content(
+                                            &conn, &accession, &ticker, &form_type, &company,
+                                            &result,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        let truncated = if result.len() > 80000 {
+                            format!("{}...\n\n[Truncated at 80KB]", &result[..80000])
+                        } else {
+                            result
+                        };
+                        let _ = msg_tx.send(BrokerMsg::FilingContent(truncated));
+                    }
+                }
+                Err(e) => {
+                    let _ = msg_tx.send(BrokerMsg::Error(format!("Fetch filing failed: {}", e)));
+                }
+            }
+        }
+        BrokerCmd::IgnoreNewsArticle { symbol, url_hash } => {
+            // Persist the removal: delete the row + remember the hash so the
+            // next GDELT/Finnhub fetch can't resurrect it. The UI removes the
+            // row optimistically; this makes it stick across reloads.
+            if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                match cache.connection() {
+                    Ok(conn) => {
+                        match typhoon_engine::core::news::delete_news(&conn, &url_hash, &symbol) {
+                            Ok(_) => {
+                                tracing::info!("News: deleted + ignored {} ({})", url_hash, symbol)
+                            }
+                            Err(e) => tracing::warn!("News: failed to delete {}: {}", url_hash, e),
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("News: no DB connection to delete {}: {}", url_hash, e)
+                    }
+                }
+            }
+        }
+        _ => unreachable!("non-news maintenance command routed to news maintenance handler"),
+    }
+}
