@@ -122,7 +122,7 @@ isolation when they are the only thing changed.
   state struct in one place (per the consequence above) and split its *methods*,
   not the struct.
 
-- **Broker research dispatchers should keep shrinking by semantic command family.** Current `risk.rs` routes into child modules such as `fundamental_risk`, `solvency_quality`, `insider_dividend_momentum`, `market_liquidity_credit`, `growth_flow_regime`, `valuation_quality_risk`, `coverage_relative_event`, `factor_rank_core`, `dividend_sentiment_ranks`, `price_rank_risk_overlays`, `return_distribution_stats`, and `volatility_stat_tests`. New compute arms should land in matching child modules, not in the dispatcher parent.
+- **Broker research dispatchers should keep shrinking by semantic command family.** Current `risk.rs` routes into child modules such as `fundamental_risk`, `solvency_quality`, `insider_dividend_momentum`, `market_liquidity_credit`, `growth_flow_regime`, `valuation_quality_risk`, `coverage_relative_event`, `factor_rank_core`, `dividend_sentiment_ranks`, `price_rank_risk_overlays`, `return_distribution_stats`, `volatility_stat_tests`, and `performance_runs_tests`. New compute arms should land in matching child modules, not in the dispatcher parent.
 - **Test modules live in their own files (ADR-118).** The `app/tests.rs` monolith
   (3.5k lines) was split into an `app/tests/` `include!` tree, and inline
   `#[cfg(test)] mod tests {}` blocks (`sync_workset`, `app_runtime_support`,
