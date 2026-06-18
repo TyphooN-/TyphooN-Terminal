@@ -70,6 +70,35 @@ pub(super) fn draw_indicator_legend(
     }
 }
 
+pub(super) fn draw_symbol_header_badge(
+    painter: &egui::Painter,
+    sym_rect: egui::Rect,
+    header_pad_x: f32,
+    sym_galley: std::sync::Arc<egui::Galley>,
+) {
+    // WebKit: .mtf-cell-label — #8cf, 11px bold, text-shadow.
+    // Every cell self-labels with the full "SYM [TF]" badge.
+    painter.rect_filled(
+        sym_rect,
+        3.0,
+        egui::Color32::from_rgba_premultiplied(8, 12, 18, 232),
+    );
+    painter.rect_stroke(
+        sym_rect,
+        3.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 150, 210)),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(
+        egui::pos2(
+            sym_rect.left() + header_pad_x,
+            sym_rect.center().y - sym_galley.rect.height() * 0.5,
+        ),
+        sym_galley,
+        egui::Color32::WHITE,
+    );
+}
+
 pub(super) fn draw_extended_hours_header_badge(
     painter: &egui::Painter,
     chart: &ChartState,

@@ -2848,31 +2848,8 @@ pub(super) fn draw_chart(
         }
     }
 
-    // ── symbol / tf label (WebKit: .mtf-cell-label — #8cf, 11px bold, text-shadow)
-    // Box the symbol first, then attach the extended-hours context to that same
-    // header row. The old standalone EXT badge sat underneath this symbol text;
-    // drawing one joined header makes ownership obvious and prevents overlap.
-    // Every cell self-labels with the full "SYM [TF]" badge — same as the
-    // single-chart view — so the MTF grid needs no separate symbol header.
-    painter.rect_filled(
-        sym_rect,
-        3.0,
-        egui::Color32::from_rgba_premultiplied(8, 12, 18, 232),
-    );
-    painter.rect_stroke(
-        sym_rect,
-        3.0,
-        egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 150, 210)),
-        egui::StrokeKind::Inside,
-    );
-    painter.galley(
-        egui::pos2(
-            sym_rect.left() + header_pad_x,
-            sym_rect.center().y - sym_galley.rect.height() * 0.5,
-        ),
-        sym_galley,
-        egui::Color32::WHITE,
-    );
+    // ── symbol / tf label ───────────────────────────────────────────────────
+    draw_symbol_header_badge(painter, sym_rect, header_pad_x, sym_galley);
 
     // Regulatory alerts extracted to chart_helpers for modularity.
     draw_regulatory_alerts_header(
