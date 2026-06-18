@@ -1,4 +1,7 @@
 use super::*;
+use crate::app::app_runtime_support::{
+    should_auto_start_background_scope_scrape, should_auto_start_kraken_fundamentals_scrape,
+};
 
 pub(super) fn install_image_loaders(cc: &eframe::CreationContext<'_>) {
     // Install the egui image loaders (PNG/JPEG/WEBP + HTTP/file URI
@@ -117,4 +120,312 @@ pub(super) fn spawn_async_cache_open(
         }
     });
     (shared_cache, cache_rx)
+}
+
+impl TyphooNApp {
+    pub(crate) fn tick_cache_startup(&mut self) {
+        // ── Receive async cache open result ──────────────────────────────
+        if self.cache.is_none() {
+            if let Some(ref rx) = self.cache_rx {
+                if let Ok(c) = rx.try_recv() {
+                    self.log.push_back(LogEntry::info("Cache opened"));
+                    self.cache = Some(c);
+                    self.cache_rx = None; // done, drop receiver
+                }
+            }
+        }
+        // Load charts once cache arrives
+        if !self.cache_loaded && self.cache.is_some() {
+            self.cache_loaded = true;
+            self.hydrate_loaded_charts();
+            self.sync_preferences_load();
+            self.alpaca_retry_load();
+            self.alpaca_no_data_load();
+            self.unresolvable_load();
+            self.alpaca_backfill_complete_load();
+            self.kraken_backfill_complete_load();
+            self.kraken_futures_backfill_complete_load();
+            if !self.alpaca_no_data_pairs.is_empty() {
+                self.log.push_back(LogEntry::info(format!(
+                    "Loaded {} Alpaca no-data mark(s) from cache",
+                    self.alpaca_no_data_pairs.len()
+                )));
+            }
+            if !self.alpaca_backfill_complete_pairs.is_empty() {
+                self.log.push_back(LogEntry::info(format!(
+                    "Loaded {} Alpaca backfill-complete mark(s) from cache",
+                    self.alpaca_backfill_complete_pairs.len()
+                )));
+            }
+            if !self.kraken_backfill_complete_pairs.is_empty()
+                || !self.kraken_futures_backfill_complete_pairs.is_empty()
+            {
+                self.log.push_back(LogEntry::info(format!(
+                    "Loaded {} Kraken spot / {} futures backfill-complete mark(s) from cache",
+                    self.kraken_backfill_complete_pairs.len(),
+                    self.kraken_futures_backfill_complete_pairs.len()
+                )));
+            }
+            // Load credentials FIRST (needed for broker auto-connect)
+            {
+                let mut keyring_ok = true;
+                let cache_ref = self.cache.clone();
+                let cred_keys = [
+                    (keyring::keys::ALPACA_API_KEY, "alpaca_api_key"),
+                    (keyring::keys::ALPACA_SECRET, "alpaca_secret"),
+                    (keyring::keys::FINNHUB_KEY, "finnhub_key"),
+                    (keyring::keys::FRED_KEY, "fred_key"),
+                    (keyring::keys::DISCORD_WEBHOOK, "discord_webhook"),
+                    (keyring::keys::PUSHOVER_TOKEN, "pushover_token"),
+                    (keyring::keys::PUSHOVER_USER, "pushover_user"),
+                    (keyring::keys::NTFY_TOPIC, "ntfy_topic"),
+                    (keyring::keys::ANTHROPIC_KEY, "anthropic_key"),
+                    (keyring::keys::OPENAI_KEY, "openai_key"),
+                    (keyring::keys::KRAKEN_API_KEY, "kraken_api_key"),
+                    (keyring::keys::KRAKEN_API_SECRET, "kraken_api_secret"),
+                    (keyring::keys::KRAKEN_WS_API_KEY, "kraken_ws_api_key"),
+                    (keyring::keys::KRAKEN_WS_API_SECRET, "kraken_ws_api_secret"),
+                    (keyring::keys::GEMINI_KEY, "gemini_key"),
+                    (keyring::keys::XAI_KEY, "xai_key"),
+                    (keyring::keys::MISTRAL_KEY, "mistral_key"),
+                    (keyring::keys::PERPLEXITY_KEY, "perplexity_key"),
+                    (keyring::keys::MATRIX_ACCESS_TOKEN, "matrix_access_token"),
+                    (keyring::keys::MATRIX_USER_ID, "matrix_user_id"),
+                    (keyring::keys::CRYPTOPANIC_KEY, "cryptopanic_key"),
+                ];
+                let mut loaded_values: Vec<(String, String)> = Vec::new();
+                for (kr_key, _label) in &cred_keys {
+                    match keyring::load(kr_key) {
+                        Ok(Some(v)) if !v.is_empty() => {
+                            loaded_values.push((kr_key.to_string(), v));
+                        }
+                        Ok(_) => {
+                            if let Some(ref cache) = cache_ref {
+                                if let Ok(Some(v)) = cache.get_kv(&format!("cred:{}", kr_key)) {
+                                    if !v.is_empty() {
+                                        loaded_values.push((kr_key.to_string(), v));
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            keyring_ok = false;
+                            self.log.push_back(LogEntry::warn(format!(
+                                "Keyring load '{}' failed: {}",
+                                kr_key, e
+                            )));
+                            if let Some(ref cache) = cache_ref {
+                                if let Ok(Some(v)) = cache.get_kv(&format!("cred:{}", kr_key)) {
+                                    if !v.is_empty() {
+                                        loaded_values.push((kr_key.to_string(), v));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                for (key, val) in &loaded_values {
+                    match key.as_str() {
+                        k if k == keyring::keys::ALPACA_API_KEY => {
+                            self.broker_api_key = val.clone()
+                        }
+                        k if k == keyring::keys::ALPACA_SECRET => self.broker_secret = val.clone(),
+                        k if k == keyring::keys::FINNHUB_KEY => self.finnhub_key = val.clone(),
+                        k if k == keyring::keys::FRED_KEY => self.fred_key = val.clone(),
+                        k if k == keyring::keys::DISCORD_WEBHOOK => {
+                            self.discord_webhook = val.clone()
+                        }
+                        k if k == keyring::keys::PUSHOVER_TOKEN => {
+                            self.pushover_token = val.clone()
+                        }
+                        k if k == keyring::keys::PUSHOVER_USER => self.pushover_user = val.clone(),
+                        k if k == keyring::keys::NTFY_TOPIC => self.ntfy_topic = val.clone(),
+                        k if k == keyring::keys::ANTHROPIC_KEY => self.anthropic_key = val.clone(),
+                        k if k == keyring::keys::OPENAI_KEY => self.openai_key = val.clone(),
+                        k if k == keyring::keys::KRAKEN_API_KEY => {
+                            self.kraken_api_key = val.clone()
+                        }
+                        k if k == keyring::keys::KRAKEN_API_SECRET => {
+                            self.kraken_api_secret = val.clone()
+                        }
+                        k if k == keyring::keys::KRAKEN_WS_API_KEY => {
+                            self.kraken_ws_api_key = val.clone()
+                        }
+                        k if k == keyring::keys::KRAKEN_WS_API_SECRET => {
+                            self.kraken_ws_api_secret = val.clone()
+                        }
+                        k if k == keyring::keys::GEMINI_KEY => self.gemini_key = val.clone(),
+                        k if k == keyring::keys::XAI_KEY => self.xai_key = val.clone(),
+                        k if k == keyring::keys::MISTRAL_KEY => self.mistral_key = val.clone(),
+                        k if k == keyring::keys::PERPLEXITY_KEY => {
+                            self.perplexity_key = val.clone()
+                        }
+                        k if k == keyring::keys::MATRIX_ACCESS_TOKEN => {
+                            self.matrix_access_token = val.clone()
+                        }
+                        k if k == keyring::keys::MATRIX_USER_ID => {
+                            self.matrix_user_id = val.clone()
+                        }
+                        k if k == keyring::keys::CRYPTOPANIC_KEY => {
+                            self.cryptopanic_key = val.clone()
+                        }
+                        _ => {}
+                    }
+                }
+                if !loaded_values.is_empty() {
+                    let src = if keyring_ok {
+                        "system keyring"
+                    } else {
+                        "SQLite fallback"
+                    };
+                    self.log.push_back(LogEntry::info(format!(
+                        "Credentials loaded from {} ({} keys)",
+                        src,
+                        loaded_values.len()
+                    )));
+                }
+            }
+            // Auto-connect Alpaca if credentials are available.
+            if self.alpaca_enabled
+                && !self.broker_api_key.is_empty()
+                && !self.broker_secret.is_empty()
+            {
+                let capacity = self.alpaca_sync_capacity();
+                let _ = self.broker_tx.send(BrokerCmd::Connect {
+                    api_key: self.broker_api_key.clone(),
+                    secret: self.broker_secret.clone(),
+                    paper: self.broker_paper,
+                    bar_requests_per_minute: self.alpaca_effective_historical_rpm(),
+                    fetch_permits: capacity.fetch_permits,
+                });
+                self.log.push_back(LogEntry::info(format!(
+                    "Alpaca auto-connecting ({}) — {} req/min startup budget, {} workers",
+                    if self.broker_paper { "Paper" } else { "Live" },
+                    self.alpaca_effective_historical_rpm(),
+                    capacity.fetch_permits
+                )));
+            }
+            // Auto-connect Kraken if credentials are available
+            if self.kraken_enabled
+                && !self.kraken_api_key.is_empty()
+                && !self.kraken_api_secret.is_empty()
+            {
+                let _ = self.broker_tx.send(BrokerCmd::KrakenConnect {
+                    api_key: self.kraken_api_key.clone(),
+                    api_secret: self.kraken_api_secret.clone(),
+                    ws_api_key: self.kraken_ws_api_key.clone(),
+                    ws_api_secret: self.kraken_ws_api_secret.clone(),
+                });
+                self.log
+                    .push_back(LogEntry::info("Kraken auto-connecting..."));
+            }
+
+            // Defer chart loading to subsequent frames — don't block the first frame
+            // Charts will load progressively (one per frame) via the deferred_chart_loads mechanism
+            self.deferred_chart_loads = if self.mtf_enabled {
+                self.charts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.bars.is_empty())
+                    .map(|(i, _)| i)
+                    .collect()
+            } else {
+                let idx = self.active_tab;
+                if self
+                    .charts
+                    .get(idx)
+                    .map(|c| c.bars.is_empty())
+                    .unwrap_or(false)
+                {
+                    VecDeque::from([idx])
+                } else {
+                    VecDeque::new()
+                }
+            };
+            self.deferred_chart_load_set = self.deferred_chart_loads.iter().copied().collect();
+            {
+                // ── Startup data fetching ─────────────────────────────────────
+                // Auto SEC scrape on startup. Scope-derived universes may still
+                // be empty while broker/universe startup tasks are loading; do
+                // not send a misleading 0-symbol scrape. The universe-loaded
+                // BrokerMsg handler retries this once symbols arrive.
+                {
+                    let symbols = self.sec_scrape_scope_symbols();
+                    let symbol_count = symbols.len();
+                    if should_auto_start_background_scope_scrape(self.broker_scope, symbol_count) {
+                        let db_path = cache_db_path();
+                        let _ = self
+                            .broker_tx
+                            .send(BrokerCmd::SecScrape { db_path, symbols });
+                        self.scrape_sec_running = true;
+                        self.scrape_sec_last_msg = format!(
+                            "scraping Scope {} ({} symbols)...",
+                            self.broker_scope_label(),
+                            symbol_count
+                        );
+                        self.log.push_back(LogEntry::info(format!(
+                            "SEC EDGAR scrape started for Scope {} ({} symbols)...",
+                            self.broker_scope_label(),
+                            symbol_count
+                        )));
+                    } else if symbol_count == 0 {
+                        self.auto_sec_scrape_deferred = true;
+                        self.log.push_back(LogEntry::info(format!(
+                            "SEC EDGAR auto-scrape deferred: Scope {} has no symbols yet",
+                            self.broker_scope_label()
+                        )));
+                    } else {
+                        self.auto_sec_scrape_deferred = false;
+                        self.log.push_back(LogEntry::info(format!(
+                                "SEC EDGAR auto-scrape skipped for broad Scope {} ({} symbols); use manual SEC scrape for full-universe backfill",
+                                self.broker_scope_label(),
+                                symbol_count
+                            )));
+                    }
+                }
+                // Auto EVSCRAPE on startup (fundamentals, skips if updated <24h).
+                // Kraken equities arrive asynchronously, so do not launch a
+                // misleading scrape when Kraken is selected but the
+                // xStocks universe has not landed yet.
+                {
+                    let needs_kraken_universe = self.fund_source_kraken
+                        && self.kraken_enabled
+                        && self.kraken_scrape_xstocks
+                        && self.kraken_equity_universe_symbols.is_empty();
+                    if needs_kraken_universe {
+                        self.auto_fundamentals_deferred = true;
+                        self.log.push_back(LogEntry::info(
+                                "Fundamentals auto-scrape deferred: waiting for Kraken equities universe",
+                            ));
+                    } else if self.fund_source_kraken
+                        && self.kraken_enabled
+                        && self.kraken_scrape_xstocks
+                        && !should_auto_start_kraken_fundamentals_scrape(
+                            self.kraken_equity_universe_symbols.len(),
+                        )
+                    {
+                        self.auto_fundamentals_deferred = false;
+                        self.auto_fundamentals_started = false;
+                        self.log.push_back(LogEntry::info(format!(
+                                "Fundamentals auto-scrape skipped for broad Kraken xStocks universe ({} symbols); use manual Fundamentals scrape for full-universe backfill",
+                                self.kraken_equity_universe_symbols.len()
+                            )));
+                    } else {
+                        let db_path = cache_db_path();
+                        let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape {
+                            db_path,
+                            use_alpaca: self.fund_source_alpaca,
+                            use_kraken: self.fund_source_kraken,
+                            kraken_equity_symbols: self.kraken_equity_universe_symbols.clone(),
+                            force: false,
+                        });
+                        self.auto_fundamentals_started = true;
+                        self.log.push_back(LogEntry::info(
+                            "Fundamentals scrape started for selected source universes...",
+                        ));
+                    }
+                }
+            }
+        }
+    }
 }
