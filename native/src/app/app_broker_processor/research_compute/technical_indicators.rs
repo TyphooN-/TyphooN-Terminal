@@ -7,6 +7,7 @@ mod oscillator_flow;
 mod participation_pressure;
 mod price_trend_transforms;
 mod trend_channels;
+mod trend_projection_overlays;
 mod trend_volume_momentum;
 mod volume_flow_oscillators;
 
@@ -148,119 +149,19 @@ pub(super) fn handle_technical_indicator_command(
             );
         }
 
-        BrokerCmd::ComputeElderRaySnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_elderray_snapshot(&symbol, &today, &bars);
-                if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                    if let Ok(conn) = cache.connection() {
-                        let _ = research::upsert_elderray(&conn, &symbol, &snap);
-                    }
-                }
-                let _ = msg_tx.send(BrokerMsg::ElderRaySnapshotMsg(symbol, snap));
-            });
-        }
-        BrokerCmd::ComputeTsfSnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_tsf_snapshot(&symbol, &today, &bars);
-                if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                    if let Ok(conn) = cache.connection() {
-                        let _ = research::upsert_tsf(&conn, &symbol, &snap);
-                    }
-                }
-                let _ = msg_tx.send(BrokerMsg::TsfSnapshotMsg(symbol, snap));
-            });
-        }
-        BrokerCmd::ComputeRviSnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_rvi_snapshot(&symbol, &today, &bars);
-                if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                    if let Ok(conn) = cache.connection() {
-                        let _ = research::upsert_rvi(&conn, &symbol, &snap);
-                    }
-                }
-                let _ = msg_tx.send(BrokerMsg::RviSnapshotMsg(symbol, snap));
-            });
+        cmd @ (BrokerCmd::ComputeElderRaySnapshot { .. }
+        | BrokerCmd::ComputeTsfSnapshot { .. }
+        | BrokerCmd::ComputeRviSnapshot { .. }
+        | BrokerCmd::ComputeSmiSnapshot { .. }
+        | BrokerCmd::ComputeElderImpSnapshot { .. }
+        | BrokerCmd::ComputeRmiSnapshot { .. }) => {
+            trend_projection_overlays::handle_trend_projection_overlay_compute(
+                cmd,
+                broker_msg_tx_clone.clone(),
+                shared_cache_broker.clone(),
+            );
         }
 
-        BrokerCmd::ComputeSmiSnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_smi_snapshot(&symbol, &today, &bars);
-                if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                    if let Ok(conn) = cache.connection() {
-                        let _ = research::upsert_smi(&conn, &symbol, &snap);
-                    }
-                }
-                let _ = msg_tx.send(BrokerMsg::SmiSnapshotMsg(symbol, snap));
-            });
-        }
         BrokerCmd::ComputePvtSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -373,62 +274,7 @@ pub(super) fn handle_technical_indicator_command(
                 let _ = msg_tx.send(BrokerMsg::BbwidthSnapshotMsg(symbol, snap));
             });
         }
-        BrokerCmd::ComputeElderImpSnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_elder_impulse_snapshot(&symbol, &today, &bars);
-                if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                    if let Ok(conn) = cache.connection() {
-                        let _ = research::upsert_elderimp(&conn, &symbol, &snap);
-                    }
-                }
-                let _ = msg_tx.send(BrokerMsg::ElderImpSnapshotMsg(symbol, snap));
-            });
-        }
-        BrokerCmd::ComputeRmiSnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_rmi_snapshot(&symbol, &today, &bars);
-                if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                    if let Ok(conn) = cache.connection() {
-                        let _ = research::upsert_rmi(&conn, &symbol, &snap);
-                    }
-                }
-                let _ = msg_tx.send(BrokerMsg::RmiSnapshotMsg(symbol, snap));
-            });
-        }
+
         BrokerCmd::ComputeSymbolExpirations { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
