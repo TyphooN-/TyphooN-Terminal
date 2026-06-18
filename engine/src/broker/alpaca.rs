@@ -255,16 +255,28 @@ impl RateLimiter {
     /// Called when a 429 response is received. Pauses all requests for 60 seconds.
     pub async fn trigger_cooldown(&self) {
         let mut cooldown = self.cooldown_until.lock().await;
+        let now = std::time::Instant::now();
         let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        *cooldown = Some(until);
+        let already_cooling_down = cooldown.is_some_and(|existing| existing > now);
+        *cooldown = Some(match *cooldown {
+            Some(existing) if existing > until => existing,
+            _ => until,
+        });
         // Double adaptive interval on 429 (capped at 5s)
         let base_interval_ms = *self.base_interval_ms.lock().await;
         let mut adaptive = self.adaptive_ms.lock().await;
         *adaptive = (*adaptive * 2).min(5000).max(base_interval_ms);
-        tracing::warn!(
-            "Rate limit hit — cooling down for 60s (adaptive interval: {}ms)",
-            *adaptive
-        );
+        if already_cooling_down {
+            tracing::debug!(
+                "Rate limit hit while cooldown already active — keeping cooldown (adaptive interval: {}ms)",
+                *adaptive
+            );
+        } else {
+            tracing::warn!(
+                "Rate limit hit — cooling down for 60s (adaptive interval: {}ms)",
+                *adaptive
+            );
+        }
     }
 
     /// Report how long a request took. If responses are slow, back off.

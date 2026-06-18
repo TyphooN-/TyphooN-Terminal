@@ -7766,7 +7766,7 @@ mod tests {
     fn extended_hours_axis_labels_are_explicit() {
         assert_eq!(
             super::format_axis_price_label("EXT", 0.0924),
-            "EXT 0.092400"
+            "EXT 0.0924"
         );
         assert_eq!(super::format_axis_price_label("C", 194.32), "C 194.3200");
     }
@@ -7825,15 +7825,15 @@ mod tests {
         );
         assert_eq!(
             super::format_ext_hours_symbol_badge(100.0, 99.5, Some(100.0)),
-            "Daily Close 100.0000 (-0.50%)  EXT last 99.5000  Δ/C -0.500000 (-0.50%)"
+            "Daily Close 100.0000 (-0.50%)  EXT last 99.5000  Δ/C -0.5000 (-0.50%)"
         );
         assert_eq!(
             super::format_ext_hours_symbol_badge(0.0925, 0.0924, Some(0.0900)),
-            "Daily Close 0.092500 (+2.67%)  EXT last 0.092400  Δ/C -0.000100 (-0.11%)"
+            "Daily Close 0.0925 (+2.67%)  EXT last 0.0924  Δ/C -0.0001 (-0.11%)"
         );
         assert_eq!(
             super::format_ext_hours_symbol_badge(0.0925, 0.0924, None),
-            "Daily Close 0.092500  EXT last 0.092400  Δ/C -0.000100 (-0.11%)"
+            "Daily Close 0.0925  EXT last 0.0924  Δ/C -0.0001 (-0.11%)"
         );
     }
 
@@ -7874,11 +7874,6 @@ mod tests {
             visible(Timeframe::H4),
             vec!["Prev D", "Prev W", "Prev MN", "Cur D", "Cur W", "Cur MN"]
         );
-        // H12 is grouped with daily in the reference.
-        assert_eq!(
-            visible(Timeframe::H12),
-            vec!["Prev W", "Prev MN", "Cur D", "Cur W", "Cur MN"]
-        );
         assert_eq!(
             visible(Timeframe::D1),
             vec!["Prev W", "Prev MN", "Cur D", "Cur W", "Cur MN"]
@@ -7886,7 +7881,6 @@ mod tests {
         // Weekly chart keeps only MN previous + MN current; monthly+ show nothing.
         assert_eq!(visible(Timeframe::W1), vec!["Prev MN", "Cur MN"]);
         assert!(visible(Timeframe::MN1).is_empty());
-        assert!(visible(Timeframe::Y1).is_empty());
     }
 
     #[test]

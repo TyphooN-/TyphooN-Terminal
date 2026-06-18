@@ -273,9 +273,13 @@ fn auto_background_scope_scrape_skips_large_all_universe_after_symbols_load() {
         EventSource::All,
         12_000
     ));
-    assert!(should_auto_start_background_scope_scrape(
+    assert!(!should_auto_start_background_scope_scrape(
         EventSource::Kraken,
         12_000
+    ));
+    assert!(should_auto_start_background_scope_scrape(
+        EventSource::Kraken,
+        512
     ));
     assert!(!should_auto_start_background_scope_scrape(
         EventSource::All,

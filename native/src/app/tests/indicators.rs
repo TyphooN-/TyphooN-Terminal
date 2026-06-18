@@ -920,7 +920,7 @@ fn chart_body_camera_vertical_pan_uses_zoomed_visible_price_span() {
 
 #[test]
 fn test_chart_state_reload_match_requires_source_for_loaded_chart() {
-    let mut chart = ChartState::new("BTC/USD", Timeframe::H2);
+    let mut chart = ChartState::new("BTC/USD", Timeframe::H1);
     chart.bars = make_bars(20);
     chart.primary_source = "kraken";
 

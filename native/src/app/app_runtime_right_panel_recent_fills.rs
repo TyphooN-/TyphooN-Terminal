@@ -17,35 +17,18 @@ impl TyphooNApp {
             });
             ui.separator();
 
-            for t in self.kraken_trades.iter().take(100) {
+            visible_recent_fills.extend(self.kraken_trades.iter().take(100).map(|t| {
                 let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(t.time as i64, 0)
                     .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
                     .unwrap_or_else(|| format!("{:.0}", t.time));
-
-                let base = Self::kraken_base_asset_for_pair(&t.pair);
-                let avg_entry = self.kraken_balance_avg_price(&base);
-
-                let pct = if t.side == "sell" {
-                    avg_entry.map(|entry| ((t.price - entry) / entry) * 100.0)
-                } else {
-                    None
-                };
-
-                let c = if t.side == "buy" { UP } else { DOWN };
-
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(format!("[Kraken] {}", base)).small().strong());
-                    ui.label(egui::RichText::new(&t.side).color(c).small());
-                    ui.label(egui::RichText::new(format!("{:.4} @ {}", t.vol, format_price(t.price))).small());
-
-                    if let Some(p) = pct {
-                        let pct_col = if p >= 0.0 { UP } else { DOWN };
-                        ui.label(egui::RichText::new(format!("{:+.2}%", p)).color(pct_col).small());
-                    }
-
-                    ui.label(egui::RichText::new(dt).color(AXIS_TEXT).small());
-                });
-            }
+                (
+                    format!("[Kraken] {}", Self::kraken_base_asset_for_pair(&t.pair)),
+                    t.side.clone(),
+                    t.vol,
+                    t.price,
+                    dt,
+                )
+            }));
         }
         let fills_count2 = visible_recent_fills.len();
         let recent_fills_section = egui::CollapsingHeader::new(

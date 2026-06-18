@@ -24,7 +24,11 @@ pub(super) const KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW: usize = 256;
 pub(super) const KRAKEN_SPOT_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2_048;
 pub(super) const KRAKEN_EQUITIES_FULL_TILT_QUEUE_WINDOW: usize = 512;
 pub(super) const KRAKEN_EQUITIES_FULL_TILT_BATCH_SIZE: usize = 192;
-pub(super) const KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 8192;
+// Full-tilt still rotates through the full xStocks catalog, but scanning 8k+
+// candidates on the egui thread every 1s showed up as recurring 180-650ms
+// `pre_broker_ms` stalls during startup catch-up. Keep each scheduler tick
+// bounded and let the cursor advance across ticks instead of stealing frames.
+pub(super) const KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2048;
 /// Concurrent in-flight iapi equity-history fetches. The engine-side
 /// `iapi_limiter` token bucket is the real rate governor; this only needs to be
 /// high enough that the bucket — not the semaphore — is the binding constraint.

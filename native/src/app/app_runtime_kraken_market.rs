@@ -354,6 +354,13 @@ impl TyphooNApp {
                     self.broker_scope_label(),
                     symbol_count
                 )));
+            } else if symbol_count > 0 {
+                self.auto_sec_scrape_deferred = false;
+                self.log.push_back(LogEntry::info(format!(
+                    "SEC EDGAR deferred auto-scrape skipped for broad Scope {} ({} symbols); use manual SEC scrape for full-universe backfill",
+                    self.broker_scope_label(),
+                    symbol_count
+                )));
             }
         }
 

@@ -7,7 +7,9 @@ impl TyphooNApp {
         egui::Panel::right("right_panel")
             .min_size(220.0)
             .max_size(500.0)
-            .default_size(320.0)
+            // Open at the widest supported navbar width. Users can still
+            // collapse manually; individual sections handle narrower layouts.
+            .default_size(500.0)
             .resizable(true)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()

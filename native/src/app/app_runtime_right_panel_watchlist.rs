@@ -243,10 +243,30 @@ impl TyphooNApp {
                 // last is visible; the value columns compress to keep Vol off the
                 // "+"/"x" buttons.
                 let show_ext = sorted_wl.iter().any(|r| r.ext_change_pct.abs() > 0.001);
+                // Extended-hours adds Close + Ext%, so a narrow panel used to
+                // crush the symbol/Reg SHO badge into Last. Drop absolute Chg
+                // first and keep Chg% when the user manually collapses.
+                let show_chg = !(show_ext && avail_w < 430.0);
                 let (col_last, col_chg, col_pct, col_close, col_ext, col_vol) = if show_ext {
-                    (
-                        avail_w * 0.19, avail_w * 0.31, avail_w * 0.43, avail_w * 0.57, avail_w * 0.71, avail_w * 0.83,
-                    )
+                    if show_chg {
+                        (
+                            avail_w * 0.24,
+                            avail_w * 0.38,
+                            avail_w * 0.50,
+                            avail_w * 0.63,
+                            avail_w * 0.76,
+                            avail_w * 0.86,
+                        )
+                    } else {
+                        (
+                            avail_w * 0.31,
+                            0.0,
+                            avail_w * 0.46,
+                            avail_w * 0.61,
+                            avail_w * 0.75,
+                            avail_w * 0.86,
+                        )
+                    }
                 } else {
                     // When panel is narrow, use more compact layout so symbol column stays usable
                     if avail_w < 260.0 {
@@ -293,13 +313,15 @@ impl TyphooNApp {
                     hdr_font.clone(),
                     hdr_col,
                 );
-                hp.text(
-                    egui::pos2(hdr_rect.left() + col_chg - 2.0, hy),
-                    egui::Align2::RIGHT_CENTER,
-                    &format!("Chg{}", sort_arrow(2)),
-                    hdr_font.clone(),
-                    hdr_col,
-                );
+                if show_chg {
+                    hp.text(
+                        egui::pos2(hdr_rect.left() + col_chg - 2.0, hy),
+                        egui::Align2::RIGHT_CENTER,
+                        &format!("Chg{}", sort_arrow(2)),
+                        hdr_font.clone(),
+                        hdr_col,
+                    );
+                }
                 hp.text(
                     egui::pos2(hdr_rect.left() + col_pct - 2.0, hy),
                     egui::Align2::RIGHT_CENTER,
@@ -336,10 +358,12 @@ impl TyphooNApp {
                         let rx = pos.x - hdr_rect.left();
                         let col = if rx < col_last * 0.5 {
                             0
-                        } else if rx < (col_last + col_chg) * 0.5 {
+                        } else if show_chg && rx < (col_last + col_chg) * 0.5 {
                             1
-                        } else if rx < (col_chg + col_pct) * 0.5 {
+                        } else if show_chg && rx < (col_chg + col_pct) * 0.5 {
                             2
+                        } else if !show_chg && rx < (col_last + col_pct) * 0.5 {
+                            1
                         } else if !show_ext {
                             // No Ext%/Close columns: Chg% | Vol split directly.
                             if rx < (col_pct + col_vol) * 0.5 { 3 } else { 4 }
@@ -460,13 +484,15 @@ impl TyphooNApp {
                     } else {
                         format!("-{}", format_price(disp_chg.abs()))
                     };
-                    rp.text(
-                        egui::pos2(rx + col_chg - 2.0, ry),
-                        egui::Align2::RIGHT_CENTER,
-                        &chg_str,
-                        font.clone(),
-                        disp_color,
-                    );
+                    if show_chg {
+                        rp.text(
+                            egui::pos2(rx + col_chg - 2.0, ry),
+                            egui::Align2::RIGHT_CENTER,
+                            &chg_str,
+                            font.clone(),
+                            disp_color,
+                        );
+                    }
 
                     rp.text(
                         egui::pos2(rx + col_pct - 2.0, ry),

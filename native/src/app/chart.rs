@@ -2108,7 +2108,6 @@ fn chart_log_merged_cache_load_start(
         "Merged cache load start ({context}): {symbol} [{timeframe}] rss={}",
         chart_rss_label(rss)
     );
-    tracing::info!("{msg}");
     log.push_back(LogEntry::info(msg));
     (std::time::Instant::now(), rss)
 }
@@ -2129,7 +2128,6 @@ fn chart_log_merged_cache_load_done(
         chart_rss_label(rss_before_mb),
         chart_rss_label(rss_after_mb)
     );
-    tracing::info!("{msg}");
     log.push_back(LogEntry::info(msg));
 }
 

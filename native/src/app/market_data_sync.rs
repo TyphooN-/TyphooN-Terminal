@@ -1086,7 +1086,6 @@ impl TyphooNApp {
             self.cached_kraken_equities_sync_state_rev = Some(self.bg_rev);
         }
         self.ensure_unresolvable_fetch_key_index();
-        let _focus_symbols = self.market_data_focus_symbols();
         let focus_symbols = self.market_data_focus_symbols();
 
         // Kraken high-TF (1Day/1Week/1Month) backfill aggressiveness fix:

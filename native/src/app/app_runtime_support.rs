@@ -155,15 +155,17 @@ fn format_json_scalar(value: &serde_json::Value) -> String {
 const HEAVY_SYNC_PENDING_FETCH_THRESHOLD: usize = 32;
 const HEAVY_SYNC_DEFERRED_CHART_THRESHOLD: usize = 4;
 pub(super) fn should_auto_start_background_scope_scrape(
-    scope: EventSource,
+    _scope: EventSource,
     symbol_count: usize,
 ) -> bool {
-    // Broad Scope ALL is valid when the user explicitly asks for it, but
+    // Broad scopes are valid when the user explicitly asks for them, but
     // auto-starting a 12k-symbol SEC sweep on startup turns chart interaction
     // into molasses: the scrape pounds SQLite/EDGAR while egui is trying to
-    // render and apply camera drags. Keep automatic startup scrapes bounded;
-    // manual ALL is separately gated during heavy market-data catch-up.
-    symbol_count > 0 && (!matches!(scope, EventSource::All) || symbol_count <= 512)
+    // render and apply camera drags. Keep automatic startup scrapes bounded
+    // for every scope, including Scope KRAKEN after the xStocks catalog lands.
+    // Manual ALL/KRAKEN remains a real full-universe scrape via the separate
+    // manual gate below.
+    symbol_count > 0 && symbol_count <= 512
 }
 
 pub(super) fn should_start_manual_background_scope_scrape(
