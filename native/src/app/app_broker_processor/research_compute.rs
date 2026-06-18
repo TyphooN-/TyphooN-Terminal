@@ -6,6 +6,7 @@ mod analytics;
 mod volatility;
 mod risk;
 mod squeeze;
+mod breakout;
 
 pub(super) fn handle_research_compute_command(
     cmd: BrokerCmd,
