@@ -163,52 +163,7 @@ impl eframe::App for TyphooNApp {
 
         self.tick_background_snapshot_drain();
 
-        // ── deferred chart loading: non-blocking, paced attempts ──
-        // Uses try_load() which returns false if cache Mutex is contended (compaction, broker sync).
-        // Failed loads stay queued. The actual load is still expensive — cache read + GPU
-        // indicators + MTF overlays — so pace restored MTF grids instead of burning
-        // consecutive UI frames while broad sync/news/SEC/fundamentals are active.
-        if !self.deferred_chart_loads.is_empty() {
-            let load_interval = if self.mtf_enabled {
-                // Much more aggressive loading for open MTF tabs
-                std::time::Duration::from_millis(80)
-            } else {
-                deferred_chart_load_interval(self.heavy_sync_in_progress, self.mtf_enabled)
-            };
-            if now_instant.duration_since(self.deferred_chart_last_load_at) >= load_interval {
-                let idx = self.deferred_chart_loads[0]; // VecDeque supports indexing
-                let _focused_chart = self.mtf_focused.unwrap_or(self.active_tab);
-                // All open chart tabs (including background MTF cells and non-active
-                // single-chart tabs) should load proactively so data+indicators are
-                // ready when user switches. No more "click to load" behavior.
-                if false {  // was: defer_inactive_mtf_cell during heavy sync
-                    if let Some(skipped_idx) = self.deferred_chart_loads.pop_front() {
-                        self.deferred_chart_loads.push_back(skipped_idx);
-                    }
-                    self.deferred_chart_last_load_at = now_instant;
-                    ctx.request_repaint_after(load_interval);
-                } else {
-                    let mut loaded = false;
-                    if let Some(cache) = self.cache.clone() {
-                        if let Some(chart) = self.charts.get_mut(idx) {
-                            let mut gpu = self.gpu_indicators.take();
-                            loaded = chart.try_load(&cache, &mut self.log, gpu.as_mut());
-                            self.gpu_indicators = gpu;
-                        } else {
-                            loaded = true; // invalid index, skip
-                        }
-                    }
-                    if loaded {
-                        self.deferred_chart_last_load_at = now_instant;
-                        if let Some(done_idx) = self.deferred_chart_loads.pop_front() {
-                            self.deferred_chart_load_set.remove(&done_idx);
-                        }
-                    }
-                    // If !loaded, leave in queue — will retry after the pacing interval
-                    // when the Mutex is free.
-                }
-            }
-        }
+        self.tick_deferred_chart_loads(ctx, now_instant);
 
         // ── recompute indicators when periods changed in UI ──────────────
         if self.indicators_dirty {
