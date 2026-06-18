@@ -1905,6 +1905,7 @@ pub(crate) fn cache_source_label(source: &str) -> &'static str {
         .unwrap_or("Source")
 }
 
+// Source / cache key helpers (O(1) dedup, candidate for chart_sources.rs submodule extraction)
 pub(crate) fn push_unique_symbol_variant(out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>, value: impl Into<String>) {
     let value = value.into();
     if value.trim().is_empty() {
