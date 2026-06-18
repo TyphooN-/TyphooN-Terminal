@@ -25,7 +25,7 @@ lines of instructions; the benefit to the user is a growing,
 cross-session, cross-terminal research corpus that populates itself
 every time anyone asks an AI to investigate a symbol.
 
-Round 21 also flagged the research packet's lack of a **human-facing
+Earlier packet-review work also flagged the research packet's lack of a **human-facing
 viewer**. Up to now the packet has been a behind-the-scenes artifact
 that ASKAI injects into an HTTP system prompt — users could read it
 only by scrolling the raw request bodies in the logs or by saving
@@ -34,8 +34,8 @@ section-level navigation makes the packet inspectable, auditable,
 and shareable without having to round-trip through an AI.
 
 Both features are small, independent, and complementary to the
-Round-22 wiring that just landed, so they are bundled into a single
-ADR-080 commit after the Round 22 commit.
+new research-packet ingestion wiring, so they are bundled into a single
+ADR-080 commit after that ingestion work.
 
 ## Decision
 
@@ -112,7 +112,7 @@ Ship two new features as a single bundle:
      symbol or URL are dropped without aborting the parse.
    - `parse_ingest_block_returns_empty_when_missing` — no ingest
      block → empty result.
-   - **Test suite: 876 (Round 22) → 883 passing (+7 = 2 storage +
+   - **Test suite: 876 → 883 passing (+7 = 2 storage +
      5 parser).**
 
 ## LAN sync changes (`engine/src/core/lan_sync.rs`)
@@ -192,7 +192,7 @@ populates the whole terminal farm.
     not written back to `packet_viewer_text`.
 
 ### Packet builder additions (`investigate_symbols()`)
-- **Per-symbol `INGESTED` block**: after the Round 22 DAYRANGE
+- **Per-symbol `INGESTED` block**: after the DAYRANGE
   packet block, read `research::get_ingested_articles` for the
   symbol and emit a `### Prior Ingested Web Research — INGESTED
   (N articles)` section listing the top 15 articles (title, source,
@@ -358,7 +358,7 @@ populates the whole terminal farm.
   warnings after deprecation fixes.
 - Engine test suite: 876 → 883 passing.
 - No native tests for the two new windows — they are UI glue, same
-  as every other Round N window. The underlying parser/store paths
+  as the other research-packet windows. The underlying parser/store paths
   are fully covered.
 
 ## Historical Follow-up Context

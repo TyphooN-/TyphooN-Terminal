@@ -64,7 +64,7 @@ Conventions:
 ## What was done (2026-06)
 
 - `research/mod.rs`: 21.8k-line inline `mod tests` → `research/tests.rs` → split into
-  11 per-round files under `research/tests/` via `include!`.
+  11 semantic files under `research/tests/` via `include!`.
 - `native/src/app/tests.rs`: 3.5k lines → 3 area files under `app/tests/` via
   `include!`.
 - Inline `mod tests` → dir-modules: `engine` `cache` / `news` / `sec_filing` /

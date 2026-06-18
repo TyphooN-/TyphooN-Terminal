@@ -4,7 +4,7 @@
 **Date:** 2026-04-13
 **Compacted:** 2026-05-27
 **Updated:** 2026-06-18
-**Supersedes:** obsolete parity-round notes
+**Supersedes:** obsolete parity implementation notes
 
 ## Context
 
@@ -20,7 +20,7 @@ This ADR is now the single human-readable record for the research/indicator expa
    - Library-compatible indicator primitives are indicator/research expansion, not evidence that an upstream product had that feature.
    - Research-packet and egui-window coverage are considered implemented when cached data, fetch commands, and a visible window/pane exist.
    - Chart overlays remain governed by the current chart/indicator architecture; do not create a new ADR per overlay unless it changes the architecture.
-3. New research/indicator work should update this ADR or a current feature ADR. Do not create another implementation-batch or "round N" ADR.
+3. New research/indicator work should update this ADR or a current feature ADR. Do not create another implementation-batch ADR.
 
 ## Current architecture
 

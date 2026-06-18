@@ -734,9 +734,9 @@ window.
 #### 2.57 GARP Composite (GROWM — ADR-079)
 
 Pulled from `research::get_growm`. Meta-composite that fuses the
-Round 13 MOM composite, the Round 12 EARM composite, and the Round
-12 DIVG snapshot into a single 0-100 score with weights **40 / 40 /
-20**. Header line gives the **garp_label** (GARP / GROWTH / VALUE /
+MOM composite, EARM composite, and DIVG snapshot into a single
+0-100 score with weights **40 / 40 / 20**. Header line gives the
+**garp_label** (GARP / GROWTH / VALUE /
 SPECULATIVE / NO_DATA), composite score, and inputs_available
 (0..3). A key-value block reports momentum regime + score, earnings
 trend label + score, and dividend 3y CAGR + trend. A component
@@ -760,9 +760,9 @@ single-side when only one. Source: ADR-079 FLOW window.
 #### 2.59 Market Regime (REGIME — ADR-079)
 
 Pulled from `research::get_regime`. Meta-composite that fuses the
-Round 8 VOLE realized-vol snapshot, the Round 7 TECH technicals
-ADX field, and the Round 7 HRA 1Y return + Sharpe into a single
-regime label (TRENDING / MEAN_REVERTING / VOLATILE / QUIET /
+VOLE realized-vol snapshot, TECH technicals ADX field, and HRA 1Y
+return + Sharpe into a single regime label (TRENDING /
+MEAN_REVERTING / VOLATILE / QUIET /
 INSUFFICIENT_DATA). Header line gives label, composite score,
 and inputs_available (0..3). Body block reports realized vol %
 (with source), ADX value + trend summary, 1Y return, Sharpe,
@@ -816,10 +816,10 @@ ADR-079 VAL window.
 
 #### 2.63 Quality-Factor Composite (QUAL — ADR-079)
 
-Pulled from `research::get_qual`. Meta-composite that fuses Round 10
-PTFS (Piotroski F-score), Round 14 MARGINS (operating margin trend),
-Round 10 ACRL (cash conversion / accruals trend), and Round 10 LEV
-(leverage summary) into a single 0-100 score with weights **30 / 25 /
+Pulled from `research::get_qual`. Meta-composite that fuses PTFS
+(Piotroski F-score), MARGINS (operating margin trend), ACRL (cash
+conversion / accruals trend), and LEV (leverage summary) into a
+single 0-100 score with weights **30 / 25 /
 25 / 20**. Header line gives the **quality_label** (HIGH_QUALITY /
 QUALITY / AVERAGE / POOR / WEAK / NO_DATA), composite score, and
 inputs_available (0..4). Body block reports Piotroski F + label,
@@ -829,9 +829,9 @@ each populated component. Source: ADR-079 QUAL window.
 
 #### 2.64 Risk-Factor Composite (RISK — ADR-079)
 
-Pulled from `research::get_risk`. Meta-composite that fuses Round 8
-VOLE (realized vol), BETA (beta_1y), Round 13 LIQ (liquidity tier),
-Round 10 SHRT (short % float + DTC), and Round 10 ALTZ (Altman Z)
+Pulled from `research::get_risk`. Meta-composite that fuses VOLE
+(realized vol), BETA (beta_1y), LIQ (liquidity tier), SHRT (short %
+float + DTC), and ALTZ (Altman Z)
 into a single 0-100 score with weights **25 / 20 / 15 / 15 / 25**.
 **Higher composite = RISKIER.** Header line gives the **risk_label**
 (LOW_RISK / MODERATE / ELEVATED / HIGH_RISK / DISTRESSED / NO_DATA),
@@ -862,9 +862,9 @@ Source: ADR-079 INSSTRK window.
 
 #### 2.66 Analyst Coverage (COVG — ADR-079)
 
-Pulled from `research::get_covg`. Fuses Round 7 PriceTarget (coverage
+Pulled from `research::get_covg`. Fuses PriceTarget (coverage
 size), AnalystRecommendations (5-bucket consensus distribution), and
-Round 12 UPDM (90d upgrades / downgrades) into three sub-scores plus
+UPDM (90d upgrades / downgrades) into three sub-scores plus
 a composite. Header line gives the **coverage_label** (EXPANDING /
 STABLE / CONTRACTING / THIN / NONE), composite score, num_analysts,
 and inputs_available (0..3). Composite weights: breadth 35 /
@@ -878,7 +878,7 @@ the composite down. Source: ADR-079 COVG window.
 
 #### 2.67 Value Rank (VRK — ADR-079)
 
-Pulled from `research::get_vrk`. Percentile rank of the Round 15 VAL
+Pulled from `research::get_vrk`. Percentile rank of the VAL
 composite_score within the symbol's sector cohort. Header line gives
 **rank_label** (TOP_DECILE / TOP_QUARTILE / ABOVE_MEDIAN / BELOW_MEDIAN
 / BOTTOM_QUARTILE / BOTTOM_DECILE / NO_DATA), percentile_rank,
@@ -891,7 +891,7 @@ BOTTOM_QUARTILE ≥10, BOTTOM_DECILE <10. Source: ADR-079 VRK window.
 
 #### 2.68 Quality Rank (QRK — ADR-079)
 
-Pulled from `research::get_qrk`. Percentile rank of the Round 15 QUAL
+Pulled from `research::get_qrk`. Percentile rank of the QUAL
 composite_score within the symbol's sector cohort. Same shape as VRK
 with the same label ladder. Because `QualitySnapshot` does not carry
 sector directly, the broker handler cross-joins with
@@ -901,7 +901,7 @@ scores, and peers_considered / with_data. Source: ADR-079 QRK window.
 
 #### 2.69 Risk Rank (RRK — ADR-079)
 
-Pulled from `research::get_rrk`. Percentile rank of the Round 15 RISK
+Pulled from `research::get_rrk`. Percentile rank of the RISK
 composite_score within the symbol's sector cohort. **Critical
 inversion:** RISK composite is higher = riskier, so this snapshot
 inverts the percentile such that higher `percentile_rank` here =
@@ -955,7 +955,7 @@ Source: ADR-079 SIZEF window.
 #### 2.73 Momentum Rank (MOMF — ADR-079)
 
 Pulled from `research::get_momf`. Sector-relative percentile rank
-of Round 10 `MomentumSnapshot.composite_score` within the same
+of `MomentumSnapshot.composite_score` within the same
 sector. Header line gives the **rank_label** (TOP_DECILE /
 TOP_QUARTILE / ABOVE_MEDIAN / BELOW_MEDIAN / BOTTOM_QUARTILE /
 BOTTOM_DECILE / NO_DATA), rank_position within the cohort, and
@@ -981,7 +981,7 @@ events_used >= 3`. Source: ADR-079 PEADRANK window.
 
 Pulled from `research::get_fqm`. A fused Piotroski + margins +
 accruals composite that deliberately excludes leverage (the
-differentiator from Round 15 QUAL). Weights: PTFS 40 / MARGINS 30
+differentiator from QUAL). Weights: PTFS 40 / MARGINS 30
 / ACRL 30. Header line gives the **operator_label** (ELITE_OPERATOR
 ≥85 / STRONG_OPERATOR ≥70 / AVERAGE_OPERATOR ≥50 / WEAK_OPERATOR
 ≥30 / BROKEN_OPERATOR <30 / NO_DATA) and composite score. Body
@@ -1007,7 +1007,7 @@ for symmetry with RELEPSGR). Source: ADR-079 REVRANK window.
 #### 2.77 Leverage Rank (LEVRANK — ADR-079)
 
 Pulled from `research::get_levrank`. Sector-relative percentile
-rank of **debt-to-equity** from the Round 15 LEV cache, computed
+rank of **debt-to-equity** from the LEV cache, computed
 with `higher_is_better=false` so a *lower* D/E earns a *higher*
 (safer) percentile. Header line gives the risk-inverted
 **rank_label** (SAFEST_DECILE / SAFE / ... / RISKIEST_DECILE /
@@ -1021,8 +1021,7 @@ Source: ADR-079 LEVRANK window.
 #### 2.78 Operating Quality Rank (OPERANK — ADR-079)
 
 Pulled from `research::get_operank`. Sector-relative percentile
-rank of **`MarginsSnapshot.latest_operating_margin_pct`** from the
-Round 14 MARGINS cache. Isolates the pricing-power signal from
+rank of **`MarginsSnapshot.latest_operating_margin_pct`** from the MARGINS cache. Isolates the pricing-power signal from
 the fused FQM/QUAL composites. Header line gives the standard
 **rank_label** (TOP_DECILE...BOTTOM_DECILE / NO_DATA /
 INSUFFICIENT_DATA), operating margin %, and margin trend label.
@@ -1035,10 +1034,10 @@ ADR-079 OPERANK window.
 
 Pulled from `research::get_fqmrank`. Sector-relative percentile
 rank of **`FundamentalQualityMeterSnapshot.composite_score`** from
-the Round 17 FQM cache. The natural rank overlay for the
-deliberately-leverage-free operator-quality composite added in
-Round 17. Header line gives `operator_label / rank_label` and the
-composite score. Body block reports subject composite, rank
+the FQM cache. The natural rank overlay for the deliberately
+leverage-free operator-quality composite. Header line gives
+`operator_label / rank_label` and the composite score. Body block
+reports subject composite, rank
 position, sector median / p25 / p75 composite, and
 peers_considered / peers_with_data. Both subject and peers are
 filtered by `operator_label != "NO_DATA" && composite_score > 0`.
@@ -1047,8 +1046,8 @@ Source: ADR-079 FQMRANK window.
 #### 2.80 Liquidity Rank (LIQRANK — ADR-079)
 
 Pulled from `research::get_liqrank`. Sector-relative percentile
-rank of **`LiquiditySnapshot.avg_daily_dollar_volume`** from the
-Round 13 LIQ cache. Higher ADV$ = deeper = higher rank. Header
+rank of **`LiquiditySnapshot.avg_daily_dollar_volume`** from the LIQ
+cache. Higher ADV$ = deeper = higher rank. Header
 line gives `tier_label / rank_label` so the reader can
 distinguish "deep for this sector" from "deep absolutely." Body
 block reports subject ADV$ in $M, rank position, sector median /
@@ -1074,8 +1073,8 @@ move out of INSUFFICIENT_DATA. Source: ADR-079 SURPSTK window.
 #### 2.82 Dividend Growth Rank (DVDRANK — ADR-079)
 
 Pulled from `research::get_dvdrank`. Sector-relative percentile
-rank of **`DivgSnapshot.cagr_3y_pct`** from the Round 12 DIVG
-cache. Higher CAGR = higher rank. Peers whose
+rank of **`DivgSnapshot.cagr_3y_pct`** from the DIVG cache. Higher
+CAGR = higher rank. Peers whose
 `trend_label = "NO_HISTORY"` are filtered so the cohort captures
 only names with enough history to compute a meaningful CAGR.
 Header line gives the standard **rank_label** (TOP_DECILE ... →
@@ -1088,8 +1087,8 @@ peers_with_data. Source: ADR-079 DVDRANK window.
 #### 2.83 Earnings Momentum Rank (EARMRANK — ADR-079)
 
 Pulled from `research::get_earmrank`. Sector-relative percentile
-rank of **`EarmSnapshot.composite_score`** from the Round 12 EARM
-cache. The natural rank overlay for the earnings-momentum composite
+rank of **`EarmSnapshot.composite_score`** from the EARM cache. The
+natural rank overlay for the earnings-momentum composite
 that fuses EPS surprise history + revision trend + growth slope.
 Header line gives the standard **rank_label** and the subject's
 `momentum_label` (ACCELERATING / STABLE / DECELERATING /
@@ -1102,7 +1101,7 @@ window.
 #### 2.84 Upgrade/Downgrade Rank (UPDGRANK — ADR-079)
 
 Pulled from `research::get_updgrank`. Sector-relative percentile
-rank of **`UpdmSnapshot.net_90d`** from the Round 12 UPDM cache —
+rank of **`UpdmSnapshot.net_90d`** from the UPDM cache —
 the net sell-side upgrade-minus-downgrade count over the trailing
 90 days. Higher net = more analyst conviction = higher rank. Header
 line gives the standard **rank_label** and the subject's
@@ -1229,8 +1228,7 @@ against conventional positive-beta peers.
 
 Pulled from `research::get_pegrank`. Value-inverted percentile
 rank of `Fundamentals.peg_ratio` — *lower* PEG (cheaper growth)
-earns a *higher* (better-value) rank. Fills the gap where VAL
-(Round 15) fuses P/E, Forward P/E, P/B, P/S, EV/EBITDA, FCF yield
+earns a *higher* (better-value) rank. Fills the gap where VAL fuses P/E, Forward P/E, P/B, P/S, EV/EBITDA, FCF yield
 but not PEG. Header line gives the **rank_label** (TOP_DECILE …
 BOTTOM_DECILE), subject PEG, sector median/p25/p75, and
 percentile. Body block reports subject PEG, sector median, p25,
@@ -1433,7 +1431,7 @@ INSUFFICIENT_DATA when the HP cache was populated without volume
 (some MT5 symbols have the volume field at 0) — the first broker
 to populate volume on an LAN peer backfills the whole network.
 Complements RSTATS / AUTOCOR / DAYRANGE (all price-only) with
-the one volume-derived HP surface in the Round 23 bundle.
+the one volume-derived HP surface in this feature family.
 Source: ADR-079 VOLRATIO window.
 
 #### 2.107 Rally History (DRAWUP — ADR-079)
@@ -1661,7 +1659,7 @@ demeaned log-returns, for each scale s split the profile into
 non-overlapping windows, linearly detrend each, RMS the residuals to
 get F(s), and OLS-regress log(F(s)) on log(s). The slope is α — a
 Hurst-exponent analogue that is **robust to non-stationarity** where
-R/S-based HURST (Round 22) is not. α ≈ 0.5 random walk; α > 0.5
+R/S-based HURST is not. α ≈ 0.5 random walk; α > 0.5
 persistent (trending); α < 0.5 anti-persistent (mean-reverting).
 Header gives **dfa_label** (ANTI_PERSISTENT <0.35 / MEAN_REVERTING
 <0.45 / RANDOM_WALK <0.55 / PERSISTENT <0.65 / STRONGLY_PERSISTENT
@@ -1715,7 +1713,7 @@ non-negative (trending dominates), the model fails identifiably — we
 report the `INVALID_POSITIVE_COV` label rather than a bogus spread,
 which is itself information (the ticker is in a regime where
 microstructure noise does not dominate daily returns). Microstructure
-companion to AMIHUD (Round 26): AMIHUD captures price impact per
+companion to AMIHUD: AMIHUD captures price impact per
 dollar traded, ROLLSPRD captures the implicit effective spread.
 Header gives **roll_label** (TIGHT <10 bps / NORMAL <30 / WIDE <75 /
 VERY_WIDE ≥75 / INVALID_POSITIVE_COV / INSUFFICIENT_DATA). Body
@@ -2483,7 +2481,7 @@ and θ = π²/4 + π − 5 standardises under the null. Header gives
 WEAK_JUMP >1.65 / NO_JUMP / INSUFFICIENT_DATA). Body reports
 bars_used, realized_variance, bipower_variance, jump_ratio
 (RV−BV)/RV, jump_z_stat, p_value (approx 1−Φ(|z|)). Formal
-hypothesis-test version of Round 30's raw BIPOWER surface. Source:
+hypothesis-test version of raw BIPOWER surface. Source:
 ADR-079 BNSJUMP window.
 
 #### 2.178 Phillips-Perron Unit-Root Test (PPROOT — ADR-079)
@@ -5400,7 +5398,7 @@ three-line chart-pattern system as displaced SMMAs of the median price
 (jaw = SMMA₁₃ shifted +8, teeth = SMMA₈ shifted +5, lips = SMMA₅ shifted
 +3), evaluated at their shifted-to-today index with EATING_UP /
 EATING_DOWN / AWAKENING / SLEEPING labels driven by line ordering and
-total spread — rounds out the Williams Chaos Theory trio alongside
+total spread — completes the Williams Chaos Theory trio alongside
 AO/AC; CRSI computes Larry Connors's composite oscillator
 `(RSI₃(close) + RSI₂(streak) + percent_rank(ROC₁, 100)) / 3` where
 streak is the signed count of consecutive up/down days — the one RSI
@@ -5671,7 +5669,7 @@ EMA₉(EMA₉(H-L))) with REVERSAL_BULGE (>27) / WATCH (>25) / NEUTRAL labels
 regardless of price direction; CHAIKOSC computes Chaikin's ~1982 Chaikin
 Oscillator as EMA(A/D,3) − EMA(A/D,10) where A/D = cumulative Σ(MFM·V)
 with STRONG_ACCUM / ACCUM / NEUTRAL / DIST / STRONG_DIST labels — the
-derivative of A/D (raw A/D from Round 40) showing slope changes even
+derivative of raw A/D showing slope changes even
 when cumulative flow trends slowly; KLINGER computes Klinger's 1997
 Volume Oscillator as EMA(VF,34) − EMA(VF,55) with 13-bar signal,
 trend-change detection on HLC pivots, STRONG_BULL / BULL / NEUTRAL /
@@ -5905,8 +5903,7 @@ labels driven by the MI(1)/H(X) ratio; prior five (ADR-079) remain
 unchanged;
 BNSJUMP computes the Barndorff-Nielsen-Shephard 2006 jump-test
 Z-statistic z = (RV − BV) / sqrt(θ · Σr⁴) with an approximate p-value,
-the first formal jump-detection hypothesis test (complementing Round
-30's raw BIPOWER two-statistic comparison) — STRONG_JUMP / MODERATE /
+the first formal jump-detection hypothesis test complementing the raw BIPOWER two-statistic comparison — STRONG_JUMP / MODERATE /
 WEAK / NO_JUMP labels driven by conventional normal critical values;
 PPROOT computes the Phillips-Perron 1988 nonparametric unit-root
 test via Newey-West corrections to OLS with Schwert-rule auto lag
@@ -6261,7 +6258,7 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_kappa3` | SQLite `research_kappa3` | ADR-079 KAPPA3 window (Kaplan-Knowles 2004 κ3 = (μ−MAR)/LPM3^(1/3) annualised with Sortino reference — first third-moment downside ratio) |
 | `research::get_lyapunov` | SQLite `research_lyapunov` | ADR-079 LYAPUNOV window (Rosenstein 1993 largest Lyapunov exponent λ₁ with m=3 embedding, Theiler=10 — first chaos/nonlinear-dynamics surface) |
 | `research::get_rankac` | SQLite `research_rankac` | ADR-079 RANKAC window (Spearman rank autocorrelation at lags 1/5/10 via average-rank tie handling — robust nonparametric counterpart to PACF) |
-| `research::get_bnsjump` | SQLite `research_bnsjump` | ADR-079 BNSJUMP window (Barndorff-Nielsen-Shephard 2006 jump-test Z-statistic with approximate p-value — formal hypothesis-test version of Round 30's raw BIPOWER surface) |
+| `research::get_bnsjump` | SQLite `research_bnsjump` | ADR-079 BNSJUMP window (Barndorff-Nielsen-Shephard 2006 jump-test Z-statistic with approximate p-value — formal hypothesis-test version of raw BIPOWER surface) |
 | `research::get_pproot` | SQLite `research_pproot` | ADR-079 PPROOT window (Phillips-Perron 1988 nonparametric unit-root test with Schwert-rule auto lag truncation — third stationarity axis alongside ADF and KPSS, robust to conditional heteroscedasticity) |
 | `research::get_mfdfa` | SQLite `research_mfdfa` | ADR-079 MFDFA window (Kantelhardt 2002 multifractal DFA at q ∈ {−2, 0, +2} over 7 scales with Δh spectrum width — first multifractal-spectrum surface) |
 | `research::get_hillks` | SQLite `research_hillks` | ADR-079 HILLKS window (KS goodness-of-fit for Hill-tail Pareto model with k=floor(n·0.10) tail size — catches misspecified tail assumptions that HILLTAIL alone cannot) |

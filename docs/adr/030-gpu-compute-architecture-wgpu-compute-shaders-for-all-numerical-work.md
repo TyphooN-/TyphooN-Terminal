@@ -155,7 +155,7 @@ This ensures the GPU path works for arbitrarily large DarwinIA datasets without 
 
 ## Consolidated execution-log ADRs (2026-06)
 
-GPU compute parity rounds fold into this architecture ADR; the following are now
+GPU compute parity work folds into this architecture ADR; the following are now
 stubs, with detail in git history:
 
 - **ADR-041** — GPU/CPU indicator audit & parity verification: audited every GPU
@@ -164,5 +164,5 @@ stubs, with detail in git history:
 - **ADR-071** — GPU parity for all indicators + analytics UX overhaul: extended the
   WGSL shader set toward full indicator coverage.
 
-The durable rule from these rounds: **every GPU shader must produce output
+The durable rule from these passes: **every GPU shader must produce output
 identical to its CPU implementation**, and the CPU path is the validation reference.

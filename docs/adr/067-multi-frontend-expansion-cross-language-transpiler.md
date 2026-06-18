@@ -361,5 +361,5 @@ ADR-066). Follow-up compiler frontend comb-overs have since raised
 
 ## Consolidated execution-log ADRs (2026-06)
 
-- **ADR-068** — Transpiler Phase 2 (full cross-language matrix): the phase-2 round
+- **ADR-068** — Transpiler Phase 2 (full cross-language matrix): the phase-2 pass
   that completed the frontend matrix begun here. Now a stub; detail in git history.

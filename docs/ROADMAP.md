@@ -170,7 +170,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] Ask Codex reasoning effort control
 
 ### Phase 18: Research and indicator parity
-- [x] ~375 TA-Lib primitives (indicators + candlestick patterns) across 75+ rounds
+- [x] ~375 TA-Lib primitives (indicators + candlestick patterns) across semantic feature families
 - [x] external-terminal-style research features (options chain, expirations calendar, earnings whispers, institutional ownership, insider transactions)
 - [x] Research-packet pipeline as the AI-agent-readable surface (ADR-079)
 - [x] Chart-parity reopened for chartable oscillator/stat bundles (ADR-079)

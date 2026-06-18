@@ -184,7 +184,7 @@ The right panel sections (Trade, Positions, Orders, Watchlist, Risk) are individ
 
 ### GPU Indicator Compute
 
-40+ indicators run on GPU (wgpu compute shaders) with CPU fallback for compatibility. GPU/CPU parity is mandatory — GPU shaders must produce identical output to CPU implementations. BetterVolume GPU uses the full Emini-Watch algorithm with OHLCV interleaved input (5 floats/bar). VWAP GPU uses per-day dispatch via anchored compute calls per trading day. Supply/Demand Zones: GPU does fractal detection (parallel), CPU does zone testing/merging/break detection. Recent chart-parity rounds (CMO, QStick, Disparity, BOP, StdDev — see ADR-079) follow the same GPU-first / CPU-fallback pattern.
+40+ indicators run on GPU (wgpu compute shaders) with CPU fallback for compatibility. GPU/CPU parity is mandatory — GPU shaders must produce identical output to CPU implementations. BetterVolume GPU uses the full Emini-Watch algorithm with OHLCV interleaved input (5 floats/bar). VWAP GPU uses per-day dispatch via anchored compute calls per trading day. Supply/Demand Zones: GPU does fractal detection (parallel), CPU does zone testing/merging/break detection. Recent chart-parity expansions (CMO, QStick, Disparity, BOP, StdDev — see ADR-079) follow the same GPU-first / CPU-fallback pattern.
 
 ### Broker Trade Overlay
 

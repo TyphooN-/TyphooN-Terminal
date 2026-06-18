@@ -56,7 +56,7 @@ Initial structure:
 - `engine/src/core/research/fundamental_stats.rs`
   - fundamental leverage and earnings-quality snapshot computations (`compute_leverage_snapshot`, `compute_accruals_snapshot`)
 - `engine/src/core/research/return_risk_stats.rs`
-  - dense return-distribution and risk-statistical snapshot computations from rounds 22-39 (`RETSKEW`, `RETKURT`, `TAILR`, drawdown/run-length/range/autocorrelation/fractal/normality/tail-risk surfaces, etc.)
+  - dense return-distribution and risk-statistical snapshot computations from the return-risk feature families (`RETSKEW`, `RETKURT`, `TAILR`, drawdown/run-length/range/autocorrelation/fractal/normality/tail-risk surfaces, etc.)
 
 Rules for future slices:
 
@@ -106,7 +106,7 @@ hotspot**. The final two cuts were:
 - **Candlestick-pattern storage** (v80/v83–v88 `create/upsert/get_cdl_*`) →
   `storage_candlestick_extended_snapshots.rs` (~1.5k lines).
 - **The ~21,793-line inline `#[cfg(test)] mod tests`** (93% of the file, 1,030
-  tests) was extracted to `tests.rs`, then split into a per-round `research/tests/`
+  tests) was extracted to `tests.rs`, then split into a semantic `research/tests/`
   tree via `include!` — see **ADR-118** for the convention and the
   shared-fixture rationale.
 

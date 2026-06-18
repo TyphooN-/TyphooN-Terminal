@@ -144,8 +144,8 @@ remove redundant work.
 ## Consolidated execution-log ADRs (2026-06)
 
 This ADR is the durable home for the terminal's performance & O(1) program. The
-following round/pass ADRs were execution logs and are now stubs pointing here;
-their durable outcomes are the discipline above, and round-by-round detail lives
+following execution-pass ADRs were logs and are now stubs pointing here;
+their durable outcomes are the discipline above, and pass-by-pass detail lives
 in git history:
 
 - **ADR-060** — Optimization Roadmap (2026-04-08): the initial 10-item audit (GPU
@@ -155,7 +155,7 @@ in git history:
 - **ADR-074** — Comprehensive performance / UX / memory pass (18-item audit).
 - **ADR-075** — Full O(1) algorithmic pass + UX polish: completed ADR-074's deferred items.
 - **ADR-076** — Table wiring + O(1) passes (the cleanup that itself noted seven
-  per-round records were execution journaling, not durable decisions).
+  execution records were journaling, not durable decisions).
 - **ADR-105** — Performance optimization plan & focus areas.
 
 > Note (2026-06): the overnight log still shows multi-second `chrome_panels_ms` /

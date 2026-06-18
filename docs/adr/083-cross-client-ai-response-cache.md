@@ -206,7 +206,7 @@ tokenizer dependency.
 
 ### Paid-API gap
 
-None introduced. Standing godel-parity directive preserved.
+None introduced. Standing research-parity directive preserved.
 
 ## Verification
 
