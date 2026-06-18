@@ -4140,7 +4140,9 @@ pub(super) fn draw_chart(
                 c.weight_sum += w;
                 c.deals += lbl.count;
                 for t in lbl.ticker.split(", ").filter(|t| !t.is_empty()) {
-                    if !c.tickers.iter().any(|x| x == t) {
+                    // O(1) dedup for tickers (was linear .any on small Vec)
+                    let mut set: std::collections::HashSet<String> = c.tickers.iter().cloned().collect();
+                    if set.insert(t.to_string()) {
                         c.tickers.push(t.to_string());
                     }
                 }
@@ -4149,9 +4151,13 @@ pub(super) fn draw_chart(
         }
         let w = lbl.volume.max(1e-6);
         let mut tickers: Vec<String> = Vec::new();
-        for t in lbl.ticker.split(", ").filter(|t| !t.is_empty()) {
-            if !tickers.iter().any(|x: &String| x == t) {
-                tickers.push(t.to_string());
+        {
+            // O(1) dedup for tickers (was linear .any on small Vec)
+            let mut set: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for t in lbl.ticker.split(", ").filter(|t| !t.is_empty()) {
+                if set.insert(t.to_string()) {
+                    tickers.push(t.to_string());
+                }
             }
         }
         clusters.push(LabelCluster {
