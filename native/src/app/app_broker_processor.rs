@@ -3,6 +3,7 @@ use super::*;
 mod ai_chat;
 mod alpaca_account_data;
 mod alpaca_order_ops;
+mod bar_fetch_commands;
 mod external_feeds;
 mod kraken_order_ops;
 mod market_data_commands;
@@ -1868,197 +1869,23 @@ pub(super) fn spawn_broker_message_processor(
                         shared_cache_broker.clone(),
                     );
                 }
-                BrokerCmd::AlpacaFetchBars { symbol, timeframe, db_path: _, backfill_complete } => {
-                    if let Some(ref b) = broker {
-                        let broker = b.clone();
-                        let msg_tx = broker_msg_tx_clone.clone();
-                        let shared_cache = shared_cache_broker.clone();
-                        let permits = alpaca_fetch_permits.clone();
-                        tokio::spawn(async move {
-                            let Ok(_permit) = permits.acquire_owned().await else {
-                                let _ = msg_tx.send(BrokerMsg::AlpacaFetchSettled {
-                                    symbol,
-                                    timeframe,
-                                    success: false,
-                                });
-                                return;
-                            };
-                            run_alpaca_fetch_task(
-                                broker,
-                                shared_cache,
-                                msg_tx,
-                                symbol,
-                                timeframe,
-                                backfill_complete,
-                            )
-                            .await;
-                        });
-                    } else {
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
-                            "Broker not connected — connect Alpaca first".into()
-                        ));
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::AlpacaFetchSettled {
-                            symbol,
-                            timeframe,
-                            success: false,
-                        });
-                    }
-                }
-                BrokerCmd::AlpacaFetchBarsBatch { symbols, timeframe } => {
-                    if let Some(ref b) = broker {
-                        let broker = b.clone();
-                        let msg_tx = broker_msg_tx_clone.clone();
-                        let shared_cache = shared_cache_broker.clone();
-                        let permits = alpaca_fetch_permits.clone();
-                        tokio::spawn(async move {
-                            let Ok(_permit) = permits.acquire_owned().await else {
-                                for symbol in symbols {
-                                    let _ = msg_tx.send(BrokerMsg::AlpacaFetchSettled {
-                                        symbol,
-                                        timeframe: timeframe.clone(),
-                                        success: false,
-                                    });
-                                }
-                                return;
-                            };
-                            run_alpaca_batch_fetch_task(
-                                broker,
-                                shared_cache,
-                                msg_tx,
-                                symbols,
-                                timeframe,
-                            )
-                            .await;
-                        });
-                    } else {
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
-                            "Broker not connected — connect Alpaca first".into(),
-                        ));
-                        for symbol in symbols {
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::AlpacaFetchSettled {
-                                symbol,
-                                timeframe: timeframe.clone(),
-                                success: false,
-                            });
-                        }
-                    }
-                }
-                BrokerCmd::FetchAllBars { symbol, timeframe } => {
-                    // Sequential (not spawned) — prevents flooding Alpaca's rate limiter
-                    if let Some(ref b) = broker {
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
-                            "BARDATA: fetching {} {}...", symbol, timeframe)));
-                        match b.get_all_bars(&symbol, &timeframe, None).await {
-                            Ok((bars, outcome)) => {
-                                let count = bars.len();
-                                if count > 0 {
-                                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                                        let bare = symbol.replace('/', "");
-                                        let key = format!("alpaca:{}:{}", bare, timeframe);
-                                        let json = serde_json::to_string(&bars).unwrap_or_default();
-                                        let _ = cache.put_bars(&key, &json);
-                                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
-                                            "BARDATA: {} {} — {} bars stored", symbol, timeframe, count)));
-                                        let _ = broker_msg_tx_clone.send(BrokerMsg::BarsSynced(count));
-                                    }
-                                }
-                                match outcome {
-                                    typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedPartial => {
-                                        let _ = broker_msg_tx_clone.send(BrokerMsg::AlpacaRetryEnqueue {
-                                            symbol: symbol.clone(), timeframe: timeframe.clone(),
-                                            reason: "rate_limited_partial".into(),
-                                        });
-                                    }
-                                    typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedEmpty => {
-                                        let _ = broker_msg_tx_clone.send(BrokerMsg::AlpacaRetryEnqueue {
-                                            symbol: symbol.clone(), timeframe: timeframe.clone(),
-                                            reason: "rate_limited_empty".into(),
-                                        });
-                                    }
-                                    typhoon_engine::broker::alpaca::FetchOutcome::Complete => {}
-                                }
-                            }
-                            Err(e) => {
-                                let is_rate = e.contains("429") || e.to_lowercase().contains("rate limit");
-                                let is_no_data = e.contains("No bar data for ");
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
-                                    "BARDATA: {} {} — {}", symbol, timeframe, e)));
-                                if is_no_data {
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::AlpacaNoData {
-                                        symbol: symbol.clone(),
-                                        timeframe: timeframe.clone(),
-                                        reason: e.clone(),
-                                    });
-                                } else if is_rate {
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::AlpacaRetryEnqueue {
-                                        symbol: symbol.clone(), timeframe: timeframe.clone(),
-                                        reason: format!("err:{}", e),
-                                    });
-                                }
-                            }
-                        }
-                    } else {
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error("Connect Alpaca first for BARDATA".into()));
-                    }
-                }
-                BrokerCmd::KrakenBackfill {
-                    symbol,
-                    timeframes,
-                    db_path: _,
-                    backfill_complete,
-                } => {
-                    let msg_tx = broker_msg_tx_clone.clone();
-                    let shared_cache = shared_cache_broker.clone();
-                    let permits = kraken_fetch_permits.clone();
-                    for timeframe in timeframes {
-                        let msg_tx = msg_tx.clone();
-                        let shared_cache = shared_cache.clone();
-                        let permits = permits.clone();
-                        let client = kraken_public_client.clone();
-                        let symbol = symbol.clone();
-                        tokio::spawn(async move {
-                            let Ok(_permit) = permits.acquire_owned().await else {
-                                let _ = msg_tx.send(BrokerMsg::KrakenFetchSettled { symbol, timeframe });
-                                return;
-                            };
-                            run_kraken_fetch_task(
-                                shared_cache,
-                                msg_tx,
-                                client,
-                                symbol,
-                                timeframe,
-                                backfill_complete,
-                            )
-                            .await;
-                        });
-                    }
-                }
-                BrokerCmd::KrakenFuturesBackfill { symbol, timeframes, db_path: _, backfill_complete } => {
-                    let msg_tx = broker_msg_tx_clone.clone();
-                    let shared_cache = shared_cache_broker.clone();
-                    let permits = kraken_fetch_permits.clone();
-                    for timeframe in timeframes {
-                        let msg_tx = msg_tx.clone();
-                        let shared_cache = shared_cache.clone();
-                        let permits = permits.clone();
-                        let client = kraken_public_client.clone();
-                        let symbol = symbol.clone();
-                        tokio::spawn(async move {
-                            let Ok(_permit) = permits.acquire_owned().await else {
-                                let _ = msg_tx.send(BrokerMsg::KrakenFuturesFetchSettled { symbol, timeframe });
-                                return;
-                            };
-                            run_kraken_futures_fetch_task(
-                                shared_cache,
-                                msg_tx,
-                                client,
-                                symbol,
-                                timeframe,
-                                backfill_complete,
-                            )
-                            .await;
-                        });
-                    }
+                cmd @ (
+                    BrokerCmd::AlpacaFetchBars { .. }
+                    | BrokerCmd::AlpacaFetchBarsBatch { .. }
+                    | BrokerCmd::FetchAllBars { .. }
+                    | BrokerCmd::KrakenBackfill { .. }
+                    | BrokerCmd::KrakenFuturesBackfill { .. }
+                ) => {
+                    bar_fetch_commands::handle_bar_fetch_command(
+                        cmd,
+                        broker.as_ref(),
+                        &broker_msg_tx_clone,
+                        shared_cache_broker.clone(),
+                        alpaca_fetch_permits.clone(),
+                        kraken_fetch_permits.clone(),
+                        kraken_public_client.clone(),
+                    )
+                    .await;
                 }
                 cmd @ (BrokerCmd::FetchFilingContent { .. }
                 | BrokerCmd::IgnoreNewsArticle { .. }) => {
