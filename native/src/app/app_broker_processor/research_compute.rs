@@ -5,6 +5,7 @@ mod valuation;
 mod analytics;
 mod volatility;
 mod risk;
+mod squeeze;
 
 pub(super) fn handle_research_compute_command(
     cmd: BrokerCmd,
