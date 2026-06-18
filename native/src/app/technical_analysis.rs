@@ -2933,67 +2933,7 @@ pub(super) fn draw_chart(
     }
 
     // ── indicator legend ─────────────────────────────────────────────────────
-    // Push legend down when EXT badge is present so it does not overlap
-    let ly = if chart.ext_active && chart.ext_close > 0.0 {
-        sym_rect.bottom() + 24.0
-    } else {
-        chart_rect.top() + 34.0
-    };
-    let mut lx = chart_rect.left() + 8.0;
-    let (ma_legend_label, kama_legend_label) =
-        nnfx_trend_legend_labels(!chart.mtf_sma.is_empty(), !chart.multi_kama.is_empty());
-    // MTF_MA / MultiKAMA legend labels are intentionally suppressed — the
-    // colored overlay lines speak for themselves and the text was clutter.
-    // Only the current-TF SMA200 / KAMA labels remain (drawn when no MTF data).
-    if flags.sma200 && chart.mtf_sma.is_empty() {
-        painter.text(
-            egui::pos2(lx, ly),
-            egui::Align2::LEFT_TOP,
-            ma_legend_label,
-            egui::FontId::monospace(10.0),
-            SMA200_COL,
-        );
-        lx += 57.0;
-    }
-    if flags.sma100 {
-        painter.text(
-            egui::pos2(lx, ly),
-            egui::Align2::LEFT_TOP,
-            "SMA100",
-            egui::FontId::monospace(10.0),
-            SMA100_COL,
-        );
-        lx += 57.0;
-    }
-    if flags.kama && chart.multi_kama.is_empty() {
-        painter.text(
-            egui::pos2(lx, ly),
-            egui::Align2::LEFT_TOP,
-            kama_legend_label,
-            egui::FontId::monospace(10.0),
-            KAMA_COL,
-        );
-        lx += 110.0;
-    }
-    if flags.ema21 {
-        painter.text(
-            egui::pos2(lx, ly),
-            egui::Align2::LEFT_TOP,
-            "EMA21",
-            egui::FontId::monospace(10.0),
-            EMA_COL,
-        );
-        lx += 50.0;
-    }
-    if flags.bollinger {
-        painter.text(
-            egui::pos2(lx, ly),
-            egui::Align2::LEFT_TOP,
-            "BB(20,2)",
-            egui::FontId::monospace(10.0),
-            BB_COL,
-        );
-    }
+    draw_indicator_legend(painter, chart, chart_rect, sym_rect, flags);
 
     // Chart overlay removed — info shown in crosshair tooltip + right panel instead
 
