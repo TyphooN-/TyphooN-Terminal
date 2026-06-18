@@ -91,36 +91,7 @@ impl eframe::App for TyphooNApp {
             self.log.pop_front();
         }
 
-        if self.cache_loaded
-            && self.kraken_enabled
-            && self.kraken_any_spot_scrape_enabled()
-            && self.kraken_pairs.is_empty()
-            && !self.kraken_pairs_requested
-        {
-            let _ = self.broker_tx.send(BrokerCmd::KrakenGetPairs);
-            self.kraken_pairs_requested = true;
-        }
-        let now_ts = chrono::Utc::now().timestamp();
-        if self.cache_loaded
-            && self.kraken_enabled
-            && self.kraken_scrape_xstocks
-            && self.kraken_equity_universe_symbols.is_empty()
-            && (!self.kraken_equity_universe_requested
-                || now_ts >= self.kraken_equity_universe_retry_after_ts)
-        {
-            let _ = self.broker_tx.send(BrokerCmd::KrakenFetchEquityUniverse);
-            self.kraken_equity_universe_requested = true;
-            self.kraken_equity_universe_retry_after_ts = now_ts + 120;
-        }
-        if self.cache_loaded
-            && self.kraken_enabled
-            && self.kraken_scrape_futures
-            && self.kraken_futures_symbols.is_empty()
-            && !self.kraken_futures_requested
-        {
-            let _ = self.broker_tx.send(BrokerCmd::KrakenFuturesGetInstruments);
-            self.kraken_futures_requested = true;
-        }
+        self.request_missing_kraken_catalogs();
 
         // Periodic crypto bar refresh (every ~60 seconds at 4fps = every 240 frames)
         // Periodic crypto bar refresh (~60s).

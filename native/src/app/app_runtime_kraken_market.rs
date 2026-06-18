@@ -23,6 +23,39 @@ fn kraken_positions_with_balance_equities(
 }
 
 impl TyphooNApp {
+    pub(super) fn request_missing_kraken_catalogs(&mut self) {
+        if self.cache_loaded
+            && self.kraken_enabled
+            && self.kraken_any_spot_scrape_enabled()
+            && self.kraken_pairs.is_empty()
+            && !self.kraken_pairs_requested
+        {
+            let _ = self.broker_tx.send(BrokerCmd::KrakenGetPairs);
+            self.kraken_pairs_requested = true;
+        }
+        let now_ts = chrono::Utc::now().timestamp();
+        if self.cache_loaded
+            && self.kraken_enabled
+            && self.kraken_scrape_xstocks
+            && self.kraken_equity_universe_symbols.is_empty()
+            && (!self.kraken_equity_universe_requested
+                || now_ts >= self.kraken_equity_universe_retry_after_ts)
+        {
+            let _ = self.broker_tx.send(BrokerCmd::KrakenFetchEquityUniverse);
+            self.kraken_equity_universe_requested = true;
+            self.kraken_equity_universe_retry_after_ts = now_ts + 120;
+        }
+        if self.cache_loaded
+            && self.kraken_enabled
+            && self.kraken_scrape_futures
+            && self.kraken_futures_symbols.is_empty()
+            && !self.kraken_futures_requested
+        {
+            let _ = self.broker_tx.send(BrokerCmd::KrakenFuturesGetInstruments);
+            self.kraken_futures_requested = true;
+        }
+    }
+
     pub(super) fn handle_kraken_equity_universe(
         &mut self,
         markets: Vec<KrakenEquityMarket>,
@@ -107,8 +140,11 @@ impl TyphooNApp {
                     .and_then(|rt| rt.block_on(typhoon_engine::core::regulatory_alerts::refresh_regsho_threshold_alerts(&wconn)));
 
                 // Rebuild the map from DB right now
-                if let Ok(alerts) = typhoon_engine::core::regulatory_alerts::get_regulatory_alerts(&wconn) {
-                    self.bg.regulatory_alerts_by_symbol = typhoon_engine::core::regulatory_alerts::regulatory_alert_map(&alerts);
+                if let Ok(alerts) =
+                    typhoon_engine::core::regulatory_alerts::get_regulatory_alerts(&wconn)
+                {
+                    self.bg.regulatory_alerts_by_symbol =
+                        typhoon_engine::core::regulatory_alerts::regulatory_alert_map(&alerts);
                 }
             }
         }
