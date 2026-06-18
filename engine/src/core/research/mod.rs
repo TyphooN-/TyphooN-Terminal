@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 mod types;
 pub use types::*;
 
+mod godel_round4;
+pub use godel_round4::{StockSplit, EtfHolding, AnalystRecommendation, PriceTarget, EsgScore, IndexMember};
+
 mod exec_cot;
 pub use exec_cot::{Executive, CotReport};
 
