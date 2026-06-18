@@ -161,39 +161,7 @@ impl eframe::App for TyphooNApp {
             ctx.set_global_style(style);
         }
 
-        // ── drain background data ────────────────────────────────────────
-        // Keep this bounded: a backend burst must not monopolize the render thread.
-        // The channel carries full snapshots, so newest wins; apply at most one per frame.
-        if let Ok(mut data) = self.bg_rx.try_recv() {
-            while let Ok(newer) = self.bg_rx.try_recv() {
-                let older = std::mem::replace(&mut data, newer);
-                self.drop_bg_snapshot_off_ui(older);
-            }
-            // Applying a BG snapshot can move hundreds of thousands of SEC rows
-            // into `self.bg` and drop the previous vector on the egui thread. During
-            // heavy sync/SEC/news sweeps that showed up as 250ms+ pre_broker stalls
-            // every refresh cycle, which makes chart drag feel like snap-back. If no
-            // window that needs the BG tables is visible, drop this refresh and let
-            // the next 3s BG cycle republish after the hot path cools down.
-            let bg_window_visible = self.show_sec
-                || self.show_fundamentals
-                || self.show_storage
-                || self.show_cache_stats
-                // Sync Status reads bg.detailed_stats/cache_stats; keep feeding it
-                // (instead of dropping the snapshot during heavy sync) now that it
-                // no longer has a synchronous render-thread refresh fallback.
-                || self.show_sync_status;
-            if !self.heavy_sync_in_progress || bg_window_visible {
-                self.replace_bg_snapshot_off_ui_drop(data);
-            } else {
-                tracing::debug!(
-                    "Deferred BG snapshot apply during heavy sync (sec_filings={}, details={})",
-                    data.sec_filings.len(),
-                    data.detailed_stats.len()
-                );
-                self.drop_bg_snapshot_off_ui(data);
-            }
-        }
+        self.tick_background_snapshot_drain();
 
         // ── deferred chart loading: non-blocking, paced attempts ──
         // Uses try_load() which returns false if cache Mutex is contended (compaction, broker sync).
