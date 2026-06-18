@@ -34,6 +34,10 @@ pub use godel_round5::{InsiderTrade, InstitutionalHolder, SharesFloat, Historica
 mod godel_round2;
 pub use godel_round2::{DividendRecord, EarningsEstimate, RatingChange, TreasuryYield, TREASURY_TENORS};
 
+mod godel_round7;
+pub use godel_round7::{CurrencyRate, BetaWindow, BetaSnapshot, DdmSnapshot, RvMetricRow, RelativeValuation, FigiIdentifier, FigiSnapshot, FX_MAJORS_UNIVERSE, COMMODITIES_UNIVERSE};
+
+
 mod transcripts_sentiment;
 pub use transcripts_sentiment::{TranscriptMeta, Transcript, SocialSentimentRow, PressRelease};
 
