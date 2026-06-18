@@ -276,17 +276,20 @@ impl eframe::App for TyphooNApp {
             };
             let palette_commands: Vec<&Command> =
                 if filter_empty && !self.recent_commands.is_empty() {
-                    // Show recent commands first, then all commands
-                    let mut cmds: Vec<&Command> = Vec::new();
+                    // Show recent commands first, then all commands. Track names in a set so
+                    // dedupe stays O(1) instead of rescanning the growing command list.
+                    let mut cmds: Vec<&Command> = Vec::with_capacity(COMMANDS.len());
+                    let mut seen_names: std::collections::HashSet<&'static str> =
+                        std::collections::HashSet::with_capacity(COMMANDS.len());
                     for name in &self.recent_commands {
                         if let Some(c) = COMMANDS.iter().find(|c| c.name == name.as_str()) {
-                            if !cmds.iter().any(|x: &&Command| x.name == c.name) {
+                            if seen_names.insert(c.name) {
                                 cmds.push(c);
                             }
                         }
                     }
                     for c in COMMANDS.iter() {
-                        if !cmds.iter().any(|x: &&Command| x.name == c.name) {
+                        if seen_names.insert(c.name) {
                             cmds.push(c);
                         }
                     }
