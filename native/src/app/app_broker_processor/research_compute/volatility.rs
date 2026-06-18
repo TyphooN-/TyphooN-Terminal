@@ -3,7 +3,7 @@ use super::*;
 pub(super) fn handle_volatility_compute(
     cmd: BrokerCmd,
     broker_msg_tx_clone: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
-    shared_cache_broker: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
+    _shared_cache_broker: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
 ) {
     match cmd {
         BrokerCmd::ComputeIvolSnapshot {
