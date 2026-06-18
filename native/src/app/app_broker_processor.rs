@@ -1,9 +1,12 @@
 use super::*;
 
 mod external_feeds;
+mod alpaca_account_data;
+mod alpaca_order_ops;
 mod news;
 mod research_compute;
 mod storage;
+mod watchlist_quotes;
 
 fn kraken_ws_v2_book_state_json(
     display_symbol: &str,
@@ -173,45 +176,21 @@ pub(super) fn spawn_broker_message_processor(
                         reason,
                     });
                 }
-                BrokerCmd::GetAccount => {
-                    if let Some(ref b) = broker {
-                        match b.get_account().await {
-                            Ok(acct) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Account(acct)); }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
+                cmd @ (BrokerCmd::GetAccount | BrokerCmd::GetPositions | BrokerCmd::GetOrders) => {
+                    alpaca_account_data::handle_alpaca_account_data_command(
+                        cmd,
+                        broker.as_ref(),
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
                 }
-                BrokerCmd::GetPositions => {
-                    if let Some(ref b) = broker {
-                        match b.get_positions().await {
-                            Ok(pos) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Positions(pos)); }
-                            Err(e) => { tracing::debug!("Positions request failed: {}", e); }
-                        }
-                    }
-                }
-                BrokerCmd::GetOrders => {
-                    if let Some(ref b) = broker {
-                        match b.get_orders("open", 100).await {
-                            Ok(orders) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Orders(orders)); }
-                            Err(e) => { tracing::debug!("Orders request failed: {}", e); }
-                        }
-                    }
-                }
-                BrokerCmd::CloseAll => {
-                    if let Some(ref b) = broker {
-                        match b.close_all_positions().await {
-                            Ok(_) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("All positions closed".into())); }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
-                }
-                BrokerCmd::ClosePosition { symbol, qty } => {
-                    if let Some(ref b) = broker {
-                        match b.close_position(&symbol, qty).await {
-                            Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Closed {}: {}", symbol, r.status))); }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
+                cmd @ (BrokerCmd::CloseAll | BrokerCmd::ClosePosition { .. }) => {
+                    alpaca_order_ops::handle_alpaca_order_command(
+                        cmd,
+                        broker.as_ref(),
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
                 }
                 BrokerCmd::SecScrape { db_path, symbols } => {
                     // Spawn as independent task — SEC scraping can take 10-60s and must not
@@ -278,219 +257,12 @@ pub(super) fn spawn_broker_message_processor(
                     }
                 }
                 BrokerCmd::GetWatchlistQuotes { symbols } => {
-                    // Run OFF the serial broker loop. This fetch makes up to one
-                    // broker snapshot per watchlist symbol (3s timeout each) plus a
-                    // Yahoo round-trip; on the shared loop its periodic refresh
-                    // starved trading-critical commands (GetPositions/GetOrders),
-                    // leaving positions "constantly stale". Spawning keeps it
-                    // concurrent — the same off-loop principle the equities sync
-                    // already follows (see kraken_equity_fetch_permits above).
-                    let broker = broker.clone();
-                    let broker_msg_tx_clone = broker_msg_tx_clone.clone();
-                    let shared_cache_broker = shared_cache_broker.clone();
-                    tokio::spawn(async move {
-                    let mut rows: Vec<WatchlistRow> = symbols
-                        .iter()
-                        .map(|sym| empty_watchlist_row(sym))
-                        .collect();
-
-                    let regular_session_open = if let Some(ref b) = broker {
-                        b.get_market_clock()
-                            .await
-                            .ok()
-                            .and_then(|v| v["is_open"].as_bool())
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    };
-
-                    if let Some(ref b) = broker {
-                        for row in &mut rows {
-                            let api_sym = {
-                                let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT","XMR","ZEC","DASH"];
-                                let su = row.symbol.to_uppercase();
-                                crypto_bases.iter().find_map(|base| {
-                                    if su.starts_with(base) && su.ends_with("USD") && su.len() == base.len() + 3 {
-                                        Some(format!("{}/USD", base))
-                                    } else { None }
-                                }).unwrap_or_else(|| row.symbol.clone())
-                            };
-                            // 3s timeout per symbol — don't let one stale symbol block the entire watchlist.
-                            // During weekends/off-hours this may fail or return stale/empty data; Yahoo/cache
-                            // enrichment below still keeps the watchlist usable.
-                            if let Ok(Ok(snap)) = tokio::time::timeout(
-                                std::time::Duration::from_secs(3),
-                                b.get_snapshot(&api_sym),
-                            ).await {
-                                let change = snap.last - snap.prev_close;
-                                let change_pct = if snap.prev_close > 0.0 { (snap.last / snap.prev_close - 1.0) * 100.0 } else { 0.0 };
-                                // Extended hours change: last trade vs regular session close
-                                // Reset ext_change_pct during regular hours to avoid carrying over
-                                // yesterday's extended hours change as the starting point.
-                                let ext_change_pct = if regular_session_open {
-                                    0.0
-                                } else if snap.regular_close > 0.0
-                                    && (snap.last - snap.regular_close).abs() > 1e-10
-                                {
-                                    (snap.last / snap.regular_close - 1.0) * 100.0
-                                } else {
-                                    0.0
-                                };
-                                *row = WatchlistRow {
-                                    symbol: row.symbol.clone(),
-                                    cache_key: row.symbol.clone(),
-                                    last: snap.last,
-                                    prev_close: snap.prev_close,
-                                    regular_close: snap.regular_close,
-                                    change,
-                                    change_pct,
-                                    volume: snap.daily_volume,
-                                    ext_change_pct,
-                                    live_bid: 0.0,
-                                    live_ask: 0.0,
-                                    live_quote_at: None,
-                                };
-                            }
-                        }
-                    }
-
-                    // Yahoo Finance enrichment for regular + extended-hours prices. This is deliberately
-                    // outside the Alpaca broker branch so the watchlist still refreshes on weekends,
-                    // holidays, and Kraken-only/offline-broker sessions.
-                    {
-                        // Batch all equity symbols into one Yahoo query
-                        let equity_syms: Vec<String> = rows.iter()
-                            .filter(|r| !r.symbol.contains('/') && !(r.symbol.ends_with("USD") && r.symbol.len() > 5))
-                            .map(|r| r.symbol.clone())
-                            .collect();
-                        if !equity_syms.is_empty() {
-                            // Fresh Yahoo session per refresh. This now runs in a
-                            // spawned task off the broker loop, so the auth round-trip
-                            // is not on any critical path.
-                            let yahoo_session = fundamentals::YahooSession::new().await.ok();
-                            if let Some(ref session) = yahoo_session {
-                                let sym_list = equity_syms.join(",");
-                                let crumb_param = if session.crumb().is_empty() { String::new() } else { format!("&crumb={}", session.crumb()) };
-                                let url = format!(
-                                    "https://query2.finance.yahoo.com/v7/finance/quote?symbols={}&fields=regularMarketPrice,regularMarketPreviousClose,regularMarketVolume,regularMarketTime,marketState,preMarketPrice,preMarketTime,preMarketChangePercent,postMarketPrice,postMarketTime,postMarketChangePercent{}",
-                                    sym_list, crumb_param
-                                );
-                                if let Ok(Ok(resp)) = tokio::time::timeout(
-                                    std::time::Duration::from_secs(5),
-                                    session.client().get(&url).header("Accept", "application/json").send(),
-                                ).await {
-                                    if let Ok(json) = resp.json::<serde_json::Value>().await {
-                                        if let Some(results) = json["quoteResponse"]["result"].as_array() {
-                                            for q in results {
-                                                let sym = q["symbol"].as_str().unwrap_or("");
-                                                if let Some(row) = rows.iter_mut().find(|r| r.symbol == sym) {
-                                                    let reg_price = q["regularMarketPrice"].as_f64().unwrap_or(0.0);
-                                                    let reg_prev = q["regularMarketPreviousClose"].as_f64().unwrap_or(0.0);
-
-                                                    let yah_vol = q["regularMarketVolume"].as_f64()
-                                                        .or_else(|| q["regularMarketVolume"].as_i64().map(|v| v as f64))
-                                                        .or_else(|| q["regularMarketVolume"]["raw"].as_f64())
-                                                        .unwrap_or(0.0);
-
-                                                    if row.prev_close <= 0.0 && reg_prev > 0.0 {
-                                                        row.prev_close = reg_prev;
-                                                    }
-                                                    // Yahoo's regular price is the authoritative current-day
-                                                    // close and is often fresher than Alpaca's snapshot, so the
-                                                    // ext "Daily Close" badge agrees across timeframes.
-                                                    if reg_price > 0.0 {
-                                                        row.regular_close = reg_price;
-                                                    }
-                                                    if yah_vol > 0.0 {
-                                                        row.volume = yah_vol;
-                                                    }
-
-                                                    // Yahoo keeps stale pre/post prices on the quote payload. Only trust
-                                                    // them when Yahoo says the symbol is in PRE/POST *and* the extended
-                                                    // quote timestamp is at least as fresh as the regular-market timestamp.
-                                                    // TNDM exposed the failure mode: marketState=POST, regular price was
-                                                    // current, but postMarketPrice was still yesterday's stale after-hours tick.
-                                                    let market_state = q["marketState"].as_str().unwrap_or("");
-                                                    let allow_ext_quote = yahoo_market_state_allows_extended_quote(market_state);
-                                                    let regular_time = q["regularMarketTime"].as_i64().unwrap_or(0);
-                                                    let pre_time = q["preMarketTime"].as_i64().unwrap_or(0);
-                                                    let post_time = q["postMarketTime"].as_i64().unwrap_or(0);
-                                                    let pre_price = if allow_ext_quote
-                                                        && yahoo_extended_quote_time_is_fresh(pre_time, regular_time)
-                                                    {
-                                                        q["preMarketPrice"].as_f64().unwrap_or(0.0)
-                                                    } else {
-                                                        0.0
-                                                    };
-                                                    let post_price = if allow_ext_quote
-                                                        && yahoo_extended_quote_time_is_fresh(post_time, regular_time)
-                                                    {
-                                                        q["postMarketPrice"].as_f64().unwrap_or(0.0)
-                                                    } else {
-                                                        0.0
-                                                    };
-
-                                                    // Use whichever extended price is available during active extended sessions.
-                                                    let ext_price = if pre_price > 0.0 { pre_price } else if post_price > 0.0 { post_price } else { 0.0 };
-
-                                                    if ext_price > 0.0 && row.prev_close > 0.0 {
-                                                        row.last = ext_price;
-                                                        row.change = ext_price - row.prev_close;
-                                                        row.change_pct = (ext_price / row.prev_close - 1.0) * 100.0;
-                                                        // Ext% = change from regular close to ext price
-                                                        if reg_price > 0.0 {
-                                                            row.ext_change_pct = (ext_price / reg_price - 1.0) * 100.0;
-                                                        } else {
-                                                            row.ext_change_pct = row.change_pct;
-                                                        }
-                                                    } else if reg_price > 0.0 && row.prev_close > 0.0 {
-                                                        // No ext hours — use Yahoo regular price (may be fresher than Alpaca)
-                                                        row.last = reg_price;
-                                                        row.change = reg_price - row.prev_close;
-                                                        row.change_pct = (reg_price / row.prev_close - 1.0) * 100.0;
-                                                    } else if row.last <= 0.0 && reg_price > 0.0 {
-                                                        row.last = reg_price;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        for row in &mut rows {
-                            if row.last > 0.0 && row.last.is_finite() {
-                                continue;
-                            }
-                            let mut filled = false;
-                            'cache_fallback: for tf in ["quote", "1Day", "4Hour", "1Hour", "30Min", "15Min"] {
-                                for source in watchlist_cache_fallback_sources(&row.symbol) {
-                                    for key in chart_source_cache_keys(source, &row.symbol, tf) {
-                                        let Ok(Some(raw)) = cache.get_bars_raw(&key) else {
-                                            continue;
-                                        };
-                                        if let Some(cached) =
-                                            watchlist_row_from_raw_bars(&row.symbol, &key, &raw)
-                                        {
-                                            *row = cached;
-                                            filled = true;
-                                            break 'cache_fallback;
-                                        }
-                                    }
-                                }
-                            }
-                            if !filled {
-                                tracing::debug!(
-                                    "watchlist: no broker/Yahoo/cache quote for {}",
-                                    row.symbol
-                                );
-                            }
-                        }
-                    }
-                    let _ = broker_msg_tx_clone.send(BrokerMsg::WatchlistQuotes(rows));
-                    });
+                    watchlist_quotes::spawn_watchlist_quotes_task(
+                        symbols,
+                        broker.clone(),
+                        broker_msg_tx_clone.clone(),
+                        shared_cache_broker.clone(),
+                    );
                 }
                 BrokerCmd::GetMarketClock => {
                     // US-equity/xStock session status is sourced from Alpaca's market clock.
@@ -523,55 +295,15 @@ pub(super) fn spawn_broker_message_processor(
                         }
                     }
                 }
-                BrokerCmd::GetActivities { limit } => {
-                    if let Some(ref b) = broker {
-                        match b.get_account_activities("FILL", limit).await {
-                            Ok(activities) => {
-                                let text = activities.iter().take(20).map(|a| {
-                                    format!("{} {} {} {} {}", a.date, a.side.as_deref().unwrap_or("—"), a.qty.as_deref().unwrap_or("—"), a.symbol.as_deref().unwrap_or("—"), a.net_amount.as_deref().unwrap_or("—"))
-                                }).collect::<Vec<_>>().join("\n");
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Account Activities".into(), text));
-                                // Also send structured fills for chart overlay
-                                let fills: Vec<(String, String, f64, f64, String)> = activities.iter()
-                                    .filter(|a| a.activity_type == "FILL")
-                                    .filter_map(|a| {
-                                        let sym = a.symbol.as_deref()?.to_string();
-                                        let side = a.side.as_deref()?.to_string();
-                                        let qty: f64 = a.qty.as_deref()?.parse().ok()?;
-                                        let price: f64 = a.price.as_deref()?.parse().ok()?;
-                                        Some((sym, side, qty, price, a.date.clone()))
-                                    }).collect();
-                                if !fills.is_empty() {
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::RecentFills(fills));
-                                }
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
-                }
-                BrokerCmd::GetTopMovers => {
-                    if let Some(ref b) = broker {
-                        match b.get_top_movers("stocks", 10).await {
-                            Ok(v) => {
-                                let text: String = serde_json::to_string_pretty(&v).unwrap_or_default();
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Top Movers".into(), text));
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
-                }
-                BrokerCmd::GetAllAssets => {
-                    if let Some(ref b) = broker {
-                        match b.get_all_assets().await {
-                            Ok(assets) => {
-                                let all: Vec<(String, String, String)> = assets.iter()
-                                    .map(|a| (a.symbol.clone(), a.name.clone(), a.asset_class.clone()))
-                                    .collect();
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::AllAssets(all));
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Asset fetch failed: {e}"))); }
-                        }
-                    }
+                cmd @ (BrokerCmd::GetActivities { .. }
+                | BrokerCmd::GetTopMovers
+                | BrokerCmd::GetAllAssets) => {
+                    alpaca_account_data::handle_alpaca_account_data_command(
+                        cmd,
+                        broker.as_ref(),
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
                 }
                 BrokerCmd::SearchSymbols { query } => {
                     let q = query.to_uppercase();
@@ -800,117 +532,20 @@ pub(super) fn spawn_broker_message_processor(
                         }
                     }
                 }
-                BrokerCmd::AlpacaMarketOrder { symbol, qty, side } => {
-                    if let Some(ref b) = broker {
-                        match b.market_order(&symbol, qty, &side).await {
-                            Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("{} {} {} @ market: {}", side, qty, symbol, r.status))); }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Order failed: {}", e))); }
-                        }
-                    }
-                }
-                BrokerCmd::AlpacaLimitOrder { symbol, qty, side, limit_price } => {
-                    if let Some(ref b) = broker {
-                        match b.limit_order(&symbol, qty, &side, limit_price, "gtc").await {
-                            Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("{} {} {} limit {}: {}", side, qty, symbol, limit_price, r.status))); }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Order failed: {}", e))); }
-                        }
-                    }
-                }
-                BrokerCmd::AlpacaStopOrder { symbol, qty, side, stop_price } => {
-                    if let Some(ref b) = broker {
-                        match b.stop_order(&symbol, qty, &side, stop_price, "gtc").await {
-                            Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("{} {} {} stop {}: {}", side, qty, symbol, stop_price, r.status))); }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Order failed: {}", e))); }
-                        }
-                    }
-                }
-                BrokerCmd::AlpacaBracketOrder { symbol, qty, side, stop_loss, take_profit } => {
-                    if let Some(ref b) = broker {
-                        match b.bracket_order(&symbol, qty, &side, take_profit, stop_loss).await {
-                            Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Bracket {} {} {}: {}", side, qty, symbol, r.status))); }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Bracket order failed: {}", e))); }
-                        }
-                    }
-                }
-                BrokerCmd::AlpacaCancelOrder { order_id } => {
-                    if let Some(ref b) = broker {
-                        match b.cancel_order(&order_id).await {
-                            Ok(_) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Order {} cancelled", order_id))); }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Cancel failed: {}", e))); }
-                        }
-                    }
-                }
-                BrokerCmd::AlpacaOcoOrder { symbol, qty, side, tp_price, sl_price } => {
-                    if let Some(ref b) = broker {
-                        match b.oco_order(&symbol, qty, &side, tp_price, sl_price, None).await {
-                            Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("OCO {} {} {} @ TP:{} SL:{}: {}", side, qty, symbol, tp_price, sl_price, r.status))); }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("OCO failed: {}", e))); }
-                        }
-                    }
-                }
-                BrokerCmd::AlpacaModifyOrder { order_id, qty, limit_price, stop_price } => {
-                    if let Some(ref b) = broker {
-                        match b.modify_order(&order_id, qty, limit_price, stop_price, None).await {
-                            Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Order {} modified: {}", order_id, r.status))); }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Modify failed: {}", e))); }
-                        }
-                    }
-                }
-                BrokerCmd::AlpacaSyncExits {
-                    symbol,
-                    sl_price,
-                    tp_price,
-                    wait_for_qty_at_most,
-                } => {
-                    if let Some(ref b) = broker {
-                        if let Some(max_qty) = wait_for_qty_at_most {
-                            let mut ready = false;
-                            for _ in 0..12 {
-                                match b.get_positions().await {
-                                    Ok(positions) => {
-                                        if positions.iter().any(|p| {
-                                            p.symbol.eq_ignore_ascii_case(&symbol)
-                                                && p.qty.abs() > 0.0
-                                                && p.qty.abs() <= max_qty + 1e-8
-                                        }) {
-                                            ready = true;
-                                            break;
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
-                                            format!(
-                                                "Alpaca exit sync {}: position poll failed: {}",
-                                                symbol, e
-                                            ),
-                                        ));
-                                        break;
-                                    }
-                                }
-                                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                            }
-                            if !ready {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                    "Alpaca exit sync {}: reduced position not visible yet",
-                                    symbol
-                                )));
-                                continue;
-                            }
-                        }
-                        match b.sync_position_exits(&symbol, sl_price, tp_price).await {
-                            Ok(summary) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
-                                    format!("Alpaca exits {}: {}", symbol, summary),
-                                ));
-                            }
-                            Err(e) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                    "Alpaca exit sync failed for {}: {}",
-                                    symbol, e
-                                )));
-                            }
-                        }
-                    }
+                cmd @ (BrokerCmd::AlpacaMarketOrder { .. }
+                | BrokerCmd::AlpacaLimitOrder { .. }
+                | BrokerCmd::AlpacaStopOrder { .. }
+                | BrokerCmd::AlpacaBracketOrder { .. }
+                | BrokerCmd::AlpacaCancelOrder { .. }
+                | BrokerCmd::AlpacaOcoOrder { .. }
+                | BrokerCmd::AlpacaModifyOrder { .. }
+                | BrokerCmd::AlpacaSyncExits { .. }) => {
+                    alpaca_order_ops::handle_alpaca_order_command(
+                        cmd,
+                        broker.as_ref(),
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
                 }
                 BrokerCmd::AiChat { provider, api_key, message, history, system, model } => {
                     let client = reqwest::Client::new();
