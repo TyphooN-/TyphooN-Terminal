@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 mod types;
 pub use types::*;
 
+mod godel_round5;
+pub use godel_round5::{InsiderTrade, InstitutionalHolder, SharesFloat, HistoricalPriceRow, EarningsSurprise};
+
 mod godel_round2;
 pub use godel_round2::{DividendRecord, EarningsEstimate, RatingChange, TreasuryYield, TREASURY_TENORS};
 
