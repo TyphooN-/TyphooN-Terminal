@@ -201,61 +201,12 @@ pub(super) fn spawn_broker_message_processor(
                     )
                     .await;
                 }
-                BrokerCmd::SecScrape { db_path, symbols } => {
-                    // Spawn as independent task — SEC scraping can take 10-60s and must not
-                    // block the broker command loop (would freeze trading, data fetch, etc.)
-                    let msg_tx = broker_msg_tx_clone.clone();
-                    tokio::spawn(async move {
-                        let _ = msg_tx.send(BrokerMsg::OrderResult("SEC scrape started...".into()));
-                        // Overall cap so a stalled batch (slow EDGAR pacing or SQLite
-                        // write-lock contention under heavy sync — the per-request
-                        // client timeout is only 15s, but the whole batch can still
-                        // grind) always reports back and clears the UI busy flag in
-                        // minutes rather than waiting out the 30-min stale watchdog.
-                        let scrape = sec_filing::scrape_all_portfolio_symbols(db_path, Some(symbols));
-                        match tokio::time::timeout(std::time::Duration::from_secs(600), scrape).await
-                        {
-                            Ok(Ok(stats)) => {
-                                let error_suffix = if stats.errors.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!(", {} errors (first: {})", stats.errors.len(), stats.errors[0])
-                                };
-                                let _ = msg_tx.send(BrokerMsg::SecScrapeResult(
-                                    format!("SEC scrape complete: {} tickers, {} filings, {} insider trades, {} alerts{}", stats.tickers_scanned, stats.new_filings, stats.new_insider_trades, stats.new_alerts, error_suffix)
-                                ));
-                            }
-                            Ok(Err(e)) => {
-                                let _ = msg_tx.send(BrokerMsg::SecScrapeResult(format!(
-                                    "SEC scrape error: {}",
-                                    e
-                                )));
-                            }
-                            Err(_) => {
-                                let _ = msg_tx.send(BrokerMsg::SecScrapeResult(
-                                    "SEC scrape timed out after 10m — busy flag cleared".into(),
-                                ));
-                            }
-                        }
-                    });
-                }
-                // scrape_filings_for_ticker is called internally by scrape_all_portfolio_symbols
-                BrokerCmd::FinnhubNews { symbol, api_key } => {
-                    // Finnhub has its own API + key — no dependency on Alpaca state, so don't
-                    // gate it on the Alpaca broker being connected. Users on Kraken-only setups
-                    // would otherwise see "Connect broker first" even with a valid Finnhub key.
-                    match typhoon_engine::broker::alpaca::AlpacaBroker::get_finnhub_news(&symbol, &api_key).await {
-                        Ok(articles) => {
-                            let results: Vec<(String, String, String)> = articles.iter().filter_map(|a| {
-                                let headline = a["headline"].as_str()?.to_string();
-                                let source = a["source"].as_str().unwrap_or("Unknown").to_string();
-                                let dt = a["datetime"].as_str().unwrap_or("").to_string();
-                                Some((headline, source, dt))
-                            }).collect();
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::FinnhubNewsResult(results));
-                        }
-                        Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Finnhub: {}", e))); }
-                    }
+                cmd @ (BrokerCmd::SecScrape { .. } | BrokerCmd::FinnhubNews { .. }) => {
+                    news::handle_news_command(
+                        cmd,
+                        broker_msg_tx_clone.clone(),
+                        shared_cache_broker.clone(),
+                    );
                 }
                 BrokerCmd::GetQuote { symbol } => {
                     if let Some(ref b) = broker {
