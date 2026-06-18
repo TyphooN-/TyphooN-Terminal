@@ -19,6 +19,9 @@ use serde::{Deserialize, Serialize};
 
 mod types;
 pub use types::*;
+
+mod financials;
+pub use financials::{IncomeStatement, BalanceSheet, CashFlowStatement, FinancialStatements};
 mod technical;
 pub use technical::compute_technical_indicators;
 mod providers;
