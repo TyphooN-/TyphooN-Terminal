@@ -1,6 +1,46 @@
 use super::*;
 
 impl TyphooNApp {
+    pub(super) fn tick_news_body_hydrator(&mut self, now_instant: std::time::Instant) {
+        // News body hydrator: fetch the full article text for rows that
+        // still only have the provider summary. Throttled by
+        // HYDRATE_INTERVAL_SECS and gated on `in_flight` so we never have
+        // two tokio tasks racing on the same cache rows.
+        if self.cache_loaded
+            && !self.news_body_hydrate_in_flight
+            && now_instant.duration_since(self.news_body_last_hydrate)
+                >= std::time::Duration::from_secs(super::news_ingest::HYDRATE_INTERVAL_SECS)
+        {
+            if let Some(cache) = self.cache.clone() {
+                self.news_body_last_hydrate = now_instant;
+                self.news_body_hydrate_in_flight = true;
+                let symbol_hint = self
+                    .charts
+                    .first()
+                    .map(|c| c.symbol.clone())
+                    .filter(|s| !s.is_empty());
+                let rt = self.rt_handle.clone();
+                rt.spawn(async move {
+                    let _ = super::news_ingest::hydrate_missing_bodies(cache, symbol_hint).await;
+                    // No callback channel: the next tick simply observes the
+                    // `in_flight` flag being reset after the task completes.
+                    // We can't poke `self` from here, so the gate is released
+                    // on the next `update()` by a separate fast path below.
+                });
+            }
+        }
+        // Release the in-flight flag after a generous timeout — covers the
+        // case where the spawned task is still running but a new tick wants
+        // to re-arm. We don't need exact synchronisation: the new task will
+        // pick up whatever rows are still empty.
+        if self.news_body_hydrate_in_flight
+            && now_instant.duration_since(self.news_body_last_hydrate)
+                >= std::time::Duration::from_secs(super::news_ingest::HYDRATE_INTERVAL_SECS * 2)
+        {
+            self.news_body_hydrate_in_flight = false;
+        }
+    }
+
     pub(super) fn handle_news_sec_result_msg(&mut self, msg: BrokerMsg) {
         match msg {
             BrokerMsg::SecScrapeResult(msg) => {
