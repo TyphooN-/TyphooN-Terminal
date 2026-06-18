@@ -63,6 +63,7 @@ mod app_runtime_menu;
 mod app_runtime_misc_msgs;
 mod app_runtime_news_results;
 mod app_runtime_order_results;
+mod app_runtime_regulatory_windows;
 mod app_runtime_research_core;
 mod app_runtime_research_macro_valuation;
 mod app_runtime_research_quant_snapshots;
