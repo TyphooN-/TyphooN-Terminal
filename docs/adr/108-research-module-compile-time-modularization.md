@@ -122,12 +122,12 @@ the root:
 | `research/candlestick_pattern_models.rs` | ~80 | Thin candlestick parent/helpers after extracting `basic_reversal.rs`, `multibar_reversal.rs`, `doji_shadow_star.rs`, `body_line_shapes.rs`, `neck_line_reversal.rs`, `crow_line_reversal.rs`, `separating_sandwich_doji.rs`, `rare_multibar_reversal.rs`, `gap_breakaway_reversal.rs`, and `continuation_gap_patterns.rs`. |
 | `research/price_transform_indicator_models.rs` | ~21 | Thin price-transform parent after extracting `adaptive_average_transforms.rs`, `price_average_variance.rs`, `directional_movement.rs`, `rate_correlation.rs`, `rolling_extrema.rs`, `bands_accumulation_regression.rs`, `aroon_macd_variable_average.rs`, `oscillator_squeeze_range.rs`, and `regression_hilbert_oscillators.rs`. |
 | `research/technical_indicator_models.rs` | ~12 | Thin technical-indicator parent after extracting `squeeze_trend_channels.rs`, `directional_flow_trend.rs`, `volume_momentum_oscillators.rs`, `momentum_volume_pressure.rs`, and `cycle_trend_value.rs`. |
-| `research/moving_average_oscillator_models.rs` | ~3,630 | MA/oscillator compute. |
+| `research/moving_average_oscillator_models.rs` | ~53 | Thin MA/oscillator parent with shared EMA/SMA helpers after extracting `regression_pivot_candles.rs`, `adaptive_forecast_vigor.rs`, `adaptive_volume_momentum.rs`, `acceleration_range_impulse.rs`, `momentum_envelope_volume.rs`, and `adaptive_cycle_volume.rs`. |
 | `research/mod.rs` | ~1,668 | Orchestration + residual storage. No longer the hotspot. |
 
 ### Next targets (in order)
 
-1. **Move to the next engine hotspot.** `return_risk_stats`, `candlestick_pattern_models`, `price_transform_indicator_models`, and `technical_indicator_models` are now thin parents; the next high-value engine file is `moving_average_oscillator_models.rs`. Split it by semantic average/oscillator family while preserving the `pub use` re-export surface.
+1. **Move to native hotspots.** The main engine compute-model files above are now thin parents; the next high-value compile-time wins are `native/src/app/technical_analysis.rs`, `native/src/app/chart.rs`, and `native/src/app/app_broker_processor/research_compute/technical_indicators.rs`.
 2. **Extract residual `mod.rs` storage** into `storage_*` modules if `mod.rs` regrows.
 3. **Keep semantic type modules and re-exports stable.** `types.rs` is now a small root surface; future DTO additions should land in the matching semantic child module, not back in a monolith.
 
