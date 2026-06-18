@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-// ── Godel Parity Round 5 ─────────────────────────────────────────
+// Ownership, float, historical price, and earnings-surprise research types
 
 /// INS — one insider trade filing (Form 4 row).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

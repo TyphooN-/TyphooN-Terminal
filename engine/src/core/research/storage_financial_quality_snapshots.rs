@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Godel Parity Round 11 schema + helpers ─────────────────────────
+// Fundamental quality, solvency, volatility, EPS-beat, and price-target storage
 
 pub fn create_research_tables_v11(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(

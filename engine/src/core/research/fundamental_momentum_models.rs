@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Godel Parity Round 12 compute fns ──────────────────────────────
+// Insider, dividend, earnings-revision, sector-rotation, and upgrade/downgrade compute functions
 
 pub(super) fn parse_yyyy_mm_dd_to_days(s: &str) -> Option<i64> {
     // Crude julian-ish day number. We don't need calendar correctness — just

@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Godel Parity Round 23 schema + helpers ────────────────────────
+// Autocorrelation, Hurst, hit-rate, asymmetry, and volatility-ratio storage
 
 pub fn create_research_tables_v24(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v23(conn);

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-// ── Godel Parity Round 2 types ─────────────────────────────────────
+// Dividend, earnings-estimate, rating-change, and treasury-yield research types
 
 /// DVD — single historical dividend payment.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

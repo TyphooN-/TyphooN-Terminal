@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Godel Parity Round 16 compute fns ──────────────────────────────
+// Relative rank and event-study compute functions
 
 /// Simple quartile at `q ∈ [0,1]` via linear interpolation on a sorted slice.
 /// Used by the Round 16 rank surfaces for p25 / p75 sector markers.

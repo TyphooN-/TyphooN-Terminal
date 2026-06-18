@@ -69,7 +69,7 @@ pub struct CommodityQuote {
 }
 
 
-// ── Godel Parity Round 4 types ─────────────────────────────────────
+// Additional corporate action and market reference types
 
 
 /// WEI — one global equity index quote row.

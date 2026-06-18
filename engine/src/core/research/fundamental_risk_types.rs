@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-// ── Godel Parity Round 10 ───────────────────────────────────────────
+// Leverage, accruals, realized-volatility, free-cash-flow, and short-interest research types
 
 /// LEV — one leverage / coverage ratio row.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

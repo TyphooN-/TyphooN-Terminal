@@ -67,4 +67,4 @@ pub struct IndexMember {
 }
 
 
-// ── Godel Parity Round 6 ─────────────────────────────────────────
+// World index, market mover, sector performance, and WACC research types

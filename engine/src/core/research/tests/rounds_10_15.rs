@@ -343,7 +343,7 @@ fn compute_short_interest_no_shorts_insufficient() {
     assert_eq!(snap.squeeze_risk_label, "INSUFFICIENT_DATA");
 }
 
-// ── Godel Parity Round 11 tests ─────────────────────────────
+// Fundamental quality and solvency tests
 
 fn open_mem_conn_v11() -> Connection {
     let c = Connection::open_in_memory().unwrap();
@@ -739,7 +739,7 @@ fn compute_price_target_dispersion_no_coverage() {
     assert!(!snap.note.is_empty());
 }
 
-// ── Godel Parity Round 12 tests ────────────────────────────────
+// Insider, dividend, earnings-revision, and sector-rotation tests
 
 fn open_mem_conn_v12() -> Connection {
     let c = Connection::open_in_memory().unwrap();
@@ -1180,7 +1180,7 @@ fn compute_updm_no_coverage() {
     assert_eq!(snap.bias_label, "NO_COVERAGE");
 }
 
-// ── Godel Parity Round 13 tests ────────────────────────────────
+// Market liquidity, momentum, breakout, cash-cycle, and credit tests
 
 fn open_mem_conn_v13() -> Connection {
     let c = Connection::open_in_memory().unwrap();

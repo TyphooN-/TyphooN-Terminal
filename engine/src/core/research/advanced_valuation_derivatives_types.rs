@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-// ── Godel Parity Round 8 ─────────────────────────────────────────
+// HRA, DCF, SVM, options-chain, and implied-volatility research types
 // HRA / DCF / SVM / OMON / IVOL surfaces.
 
 /// HRA — one rolling-period return row (e.g. 1M, 3M, 1Y, YTD).

@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Godel Parity Round 13 schema + helpers ─────────────────────────
+// Market liquidity and credit factor storage
 
 pub fn create_research_tables_v13(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -196,7 +196,7 @@ pub fn get_credit(conn: &Connection, symbol: &str) -> Result<Option<CreditSnapsh
     }
 }
 
-// ── Godel Parity Round 14 schema + helpers ─────────────────────────
+// Growth, flow, regime, relative-volume, and margin storage
 
 pub fn create_research_tables_v14(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -378,7 +378,7 @@ pub fn get_margins(conn: &Connection, symbol: &str) -> Result<Option<MarginsSnap
     }
 }
 
-// ── Godel Parity Round 15 schema + helpers ─────────────────────────
+// Value, quality, risk, insider-streak, and coverage storage
 
 pub fn create_research_tables_v15(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(

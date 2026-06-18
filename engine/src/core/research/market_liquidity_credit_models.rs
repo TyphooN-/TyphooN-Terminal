@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Godel Parity Round 13 compute fns ──────────────────────────────
+// Market liquidity, momentum, breakout, cash-cycle, and credit compute functions
 
 /// Pick the daily close closest to (and not after) `target_offset_back` bars
 /// from the most recent bar. `bars` is newest-first. Returns None if the

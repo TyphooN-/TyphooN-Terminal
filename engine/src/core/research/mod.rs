@@ -20,35 +20,29 @@ use serde::{Deserialize, Serialize};
 mod types;
 pub use types::*;
 
-mod godel_round4;
-pub use godel_round4::{StockSplit, EtfHolding, AnalystRecommendation, PriceTarget, EsgScore, IndexMember};
-
-
+mod corporate_actions_analyst_index_types;
+pub use corporate_actions_analyst_index_types::{StockSplit, EtfHolding, AnalystRecommendation, PriceTarget, EsgScore, IndexMember};
 
 mod exec_cot;
 pub use exec_cot::{Executive, CotReport};
 
-mod godel_round5;
-pub use godel_round5::{InsiderTrade, InstitutionalHolder, SharesFloat, HistoricalPriceRow, EarningsSurprise};
+mod ownership_price_history_types;
+pub use ownership_price_history_types::{InsiderTrade, InstitutionalHolder, SharesFloat, HistoricalPriceRow, EarningsSurprise};
 
-mod godel_round2;
-pub use godel_round2::{DividendRecord, EarningsEstimate, RatingChange, TreasuryYield, TREASURY_TENORS};
+mod dividends_ratings_treasury_types;
+pub use dividends_ratings_treasury_types::{DividendRecord, EarningsEstimate, RatingChange, TreasuryYield, TREASURY_TENORS};
 
-mod godel_round7;
-pub use godel_round7::{CurrencyRate, BetaWindow, BetaSnapshot, DdmSnapshot, RvMetricRow, RelativeValuation, FigiIdentifier, FigiSnapshot, FX_MAJORS_UNIVERSE, COMMODITIES_UNIVERSE};
+mod fx_beta_valuation_identifier_types;
+pub use fx_beta_valuation_identifier_types::{CurrencyRate, BetaWindow, BetaSnapshot, DdmSnapshot, RvMetricRow, RelativeValuation, FigiIdentifier, FigiSnapshot, FX_MAJORS_UNIVERSE, COMMODITIES_UNIVERSE};
 
-mod godel_round8;
-pub use godel_round8::{HraWindow, HraSnapshot, DcfYear, DcfSnapshot, SvmModelRow, SvmSnapshot, OptionContract, OptionExpiry, OptionsChainSnapshot, IvolObservation, IvolSnapshot};
+mod advanced_valuation_derivatives_types;
+pub use advanced_valuation_derivatives_types::{HraWindow, HraSnapshot, DcfYear, DcfSnapshot, SvmModelRow, SvmSnapshot, OptionContract, OptionExpiry, OptionsChainSnapshot, IvolObservation, IvolSnapshot};
 
-mod godel_round9;
-pub use godel_round9::{SeasonalityMonth, SeasonalityDow, SeasonalitySnapshot, CorrelationCell, CorrelationMatrix, TotalReturnWindow, TotalReturnSnapshot, TechnicalIndicator, TechnicalSnapshot, SkewPoint, SkewExpiry, VolatilitySkew};
+mod market_statistics_types;
+pub use market_statistics_types::{SeasonalityMonth, SeasonalityDow, SeasonalitySnapshot, CorrelationCell, CorrelationMatrix, TotalReturnWindow, TotalReturnSnapshot, TechnicalIndicator, TechnicalSnapshot, SkewPoint, SkewExpiry, VolatilitySkew};
 
-mod godel_round10;
-pub use godel_round10::{LeverageRatio, LeverageSnapshot, AccrualPeriod, AccrualsSnapshot, RealizedVolWindow, RealizedVolSnapshot, FcfYieldPeriod, FcfYieldSnapshot, ShortInterestSnapshot, ShortInterestHistoryPoint};
-
-
-
-
+mod fundamental_risk_types;
+pub use fundamental_risk_types::{LeverageRatio, LeverageSnapshot, AccrualPeriod, AccrualsSnapshot, RealizedVolWindow, RealizedVolSnapshot, FcfYieldPeriod, FcfYieldSnapshot, ShortInterestSnapshot, ShortInterestHistoryPoint};
 
 mod transcripts_sentiment;
 pub use transcripts_sentiment::{TranscriptMeta, Transcript, SocialSentimentRow, PressRelease};
@@ -1703,5 +1697,35 @@ pub fn get_stddev(conn: &Connection, symbol: &str) -> Result<Option<StddevSnapsh
 #[cfg(test)]
 mod tests;
 
-mod godel_round11;
-pub use godel_round11::*;
+mod fundamental_quality_types;
+pub use fundamental_quality_types::*;
+mod insider_dividend_momentum_types;
+pub use insider_dividend_momentum_types::*;
+mod market_liquidity_credit_types;
+pub use market_liquidity_credit_types::*;
+mod growth_flow_regime_types;
+pub use growth_flow_regime_types::*;
+mod factor_signal_types;
+pub use factor_signal_types::*;
+mod relative_rank_event_types;
+pub use relative_rank_event_types::*;
+mod rank_overlay_types;
+pub use rank_overlay_types::*;
+mod return_risk_distribution_types;
+pub use return_risk_distribution_types::*;
+mod autocorr_drawup_volatility_types;
+pub use autocorr_drawup_volatility_types::*;
+mod quant_risk_stat_types;
+pub use quant_risk_stat_types::*;
+mod fractal_jump_stationarity_types;
+pub use fractal_jump_stationarity_types::*;
+mod stat_indicator_types;
+pub use stat_indicator_types::*;
+mod oscillator_moving_average_types;
+pub use oscillator_moving_average_types::*;
+mod price_transform_indicator_types;
+pub use price_transform_indicator_types::*;
+mod candlestick_pattern_types;
+pub use candlestick_pattern_types::*;
+mod quant_stat_surface_types;
+pub use quant_stat_surface_types::*;

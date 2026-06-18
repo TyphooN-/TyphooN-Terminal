@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-// ── Godel Parity Round 9 ─────────────────────────────────────────
+// Seasonality, correlation, total-return, technical, and volatility-skew research types
 // SEAG / COR / TRA / TECH / SKEW surfaces — all pure compute over existing
 // HP / DVD / OMON caches, zero new API dependencies.
 

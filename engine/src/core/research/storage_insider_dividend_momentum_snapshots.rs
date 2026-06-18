@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Godel Parity Round 12 schema + helpers ─────────────────────────
+// Insider, dividend, earnings-revision, sector-rotation, and upgrade/downgrade storage
 
 pub fn create_research_tables_v12(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(

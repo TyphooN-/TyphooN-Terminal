@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Godel Parity Round 11 compute fns ──────────────────────────────
+// Fundamental quality, solvency, volatility, EPS-beat, and price-target compute functions
 
 /// ALTZ — classic Altman Z-score for public manufacturers.
 /// Z = 1.2(WC/TA) + 1.4(RE/TA) + 3.3(EBIT/TA) + 0.6(MVE/TL) + 1.0(Sales/TA)

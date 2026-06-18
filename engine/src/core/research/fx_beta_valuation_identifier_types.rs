@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-// ── Godel Parity Round 7 ─────────────────────────────────────────
+// FX, beta, dividend-discount, relative valuation, and identifier research types
 // WCR / BETA / DDM / RV / FIGI surfaces.
 
 /// WCR — single currency-cross row for the World Currency Rates dashboard.
