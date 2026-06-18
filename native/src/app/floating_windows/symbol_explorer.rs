@@ -590,8 +590,9 @@ impl TyphooNApp {
                     // Handle watchlist add
                     if let Some(sym) = add_wl {
                         let sym_upper = sym.to_uppercase();
-                        if !self.user_watchlist.contains(&sym_upper) {
+                        if !self.user_watchlist_set.contains(&sym_upper) {
                             self.user_watchlist.push(sym_upper.clone());
+                            self.user_watchlist_set.insert(sym_upper.clone());
                             self.watchlist_cache_tried = false;
                             if self.broker_connected {
                                 let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes {

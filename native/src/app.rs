@@ -443,6 +443,7 @@ impl TyphooNApp {
             positions_auto_refresh_at: None,
             orders_last_update_ts: 0,
             user_watchlist: Vec::new(),
+            user_watchlist_set: std::collections::HashSet::new(),
             watchlist_fallback_prices: std::collections::HashMap::new(),
             watchlist_input: String::new(),
             show_settings: false,

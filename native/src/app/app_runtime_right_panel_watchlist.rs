@@ -133,8 +133,9 @@ impl TyphooNApp {
                     && !self.watchlist_input.trim().is_empty()
                 {
                     let sym = self.watchlist_input.trim().to_uppercase();
-                    if !self.user_watchlist.contains(&sym) {
-                        self.user_watchlist.push(sym);
+                    if !self.user_watchlist_set.contains(&sym) {
+                        self.user_watchlist.push(sym.clone());
+                        self.user_watchlist_set.insert(sym);
                         self.watchlist_cache_tried = false; // retry cache lookup
                         // Trigger immediate refresh. The handler falls back to Yahoo/cache
                         // when broker snapshots are unavailable, so don't gate this on
@@ -689,6 +690,7 @@ impl TyphooNApp {
                 // Handle remove
                 if let Some(ref sym) = remove_sym {
                     self.user_watchlist.retain(|s| s != sym);
+                    self.user_watchlist_set.remove(sym);
                     self.watchlist_rows.retain(|r| &r.symbol != sym);
                 }
                 // Handle + button → open new chart tab

@@ -673,12 +673,10 @@ impl TyphooNApp {
                 self.queue_open_symbol_sync_all_timeframes(&sym);
             }
             SymbolAction::AddWatchlist(sym) => {
-                if !self
-                    .user_watchlist
-                    .iter()
-                    .any(|s| s.eq_ignore_ascii_case(&sym))
-                {
-                    self.user_watchlist.push(sym.clone());
+                let sym_u = sym.to_uppercase();
+                if !self.user_watchlist_set.contains(&sym_u) {
+                    self.user_watchlist.push(sym_u.clone());
+                    self.user_watchlist_set.insert(sym_u.clone());
                     // Force the cache-fallback re-scan and request a fresh quote so
                     // the newly added symbol fills in without waiting for the next
                     // rotation tick.
@@ -687,7 +685,7 @@ impl TyphooNApp {
                         symbols: self.user_watchlist.clone(),
                     });
                     self.log
-                        .push_back(LogEntry::info(format!("Added {} to watchlist", sym)));
+                        .push_back(LogEntry::info(format!("Added {} to watchlist", sym_u)));
                 }
             }
             SymbolAction::ShowFundamentals => self.show_fundamentals = true,

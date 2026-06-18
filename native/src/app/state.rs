@@ -4464,6 +4464,9 @@ pub struct TyphooNApp {
     pub(crate) orders_last_update_ts: i64,
     /// User-managed watchlist symbols (persisted in session).
     pub(crate) user_watchlist: Vec<String>,
+    /// PERF: O(1) membership for watchlist (watchlist display preserves Vec order).
+    /// Maintained in sync with user_watchlist. Replaces linear .contains on Vec.
+    pub(crate) user_watchlist_set: std::collections::HashSet<String>,
     /// Fallback prices from Yahoo (or other sources) when primary broker has no data.
     /// Key = symbol, Value = (price, source, timestamp)
     pub(crate) watchlist_fallback_prices:

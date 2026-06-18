@@ -2600,6 +2600,7 @@ impl TyphooNApp {
                         .iter()
                         .filter_map(|s| s.as_str().map(String::from))
                         .collect();
+                    self.user_watchlist_set = self.user_watchlist.iter().cloned().collect();
                 }
                 if let Some(obj) = v["workspaces"].as_object() {
                     self.workspaces = obj
