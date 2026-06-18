@@ -1905,37 +1905,41 @@ pub(crate) fn cache_source_label(source: &str) -> &'static str {
         .unwrap_or("Source")
 }
 
-pub(crate) fn push_unique_symbol_variant(out: &mut Vec<String>, value: impl Into<String>) {
+pub(crate) fn push_unique_symbol_variant(out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>, value: impl Into<String>) {
     let value = value.into();
     if value.trim().is_empty() {
         return;
     }
     let normalized = value.trim().to_uppercase();
-    if !out.iter().any(|s| s.eq_ignore_ascii_case(&normalized)) {
+    // O(1) dedup via HashSet (was linear .any on Vec)
+    if seen.insert(normalized.clone()) {
         out.push(normalized);
     }
 }
 
 pub(crate) fn chart_source_symbol_variants(symbol: &str) -> Vec<String> {
     let mut variants = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let raw = bare_symbol_from_key(symbol);
     let norm = normalize_market_data_symbol(&raw);
     let no_slash = norm.replace('/', "");
 
-    push_unique_symbol_variant(&mut variants, raw);
-    push_unique_symbol_variant(&mut variants, norm.clone());
-    push_unique_symbol_variant(&mut variants, no_slash.clone());
+    push_unique_symbol_variant(&mut variants, &mut seen, raw);
+    push_unique_symbol_variant(&mut variants, &mut seen, norm.clone());
+    push_unique_symbol_variant(&mut variants, &mut seen, no_slash.clone());
     push_unique_symbol_variant(
         &mut variants,
+        &mut seen,
         typhoon_engine::core::kraken::normalize_pair_symbol(&norm),
     );
     push_unique_symbol_variant(
         &mut variants,
+        &mut seen,
         typhoon_engine::core::kraken_futures::normalize_futures_symbol(&norm),
     );
 
     if !no_slash.contains('/') && no_slash.len() >= 2 && !no_slash.ends_with("USD") {
-        push_unique_symbol_variant(&mut variants, format!("{no_slash}USD"));
+        push_unique_symbol_variant(&mut variants, &mut seen, format!("{no_slash}USD"));
     }
 
     variants
