@@ -667,75 +667,11 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     )
                     .await;
                 }
-                BrokerCmd::FetchFearGreed => {
-                    let msg_tx = broker_msg_tx_clone.clone();
-                    tokio::spawn(async move {
-                        let client = reqwest::Client::new();
-                        match client.get("https://api.alternative.me/fng/?limit=1").send().await {
-                            Ok(resp) => {
-                                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                                    if let Some(data) = json["data"].as_array().and_then(|a| a.first()) {
-                                        let value = data["value"].as_str().and_then(|v| v.parse::<u32>().ok()).unwrap_or(50);
-                                        let label = data["value_classification"].as_str().unwrap_or("Neutral").to_string();
-                                        let _ = msg_tx.send(BrokerMsg::JsonResult("FearGreed".into(), format!("{}|{}", value, label)));
-                                    }
-                                }
-                            }
-                            Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Fear & Greed: {}", e))); }
-                        }
-                    });
-                }
-                BrokerCmd::FetchRedditWSB => {
-                    let msg_tx = broker_msg_tx_clone.clone();
-                    tokio::spawn(async move {
-                        let client = reqwest::Client::builder().user_agent("TyphooN-Terminal/1.0").build().unwrap_or_default();
-                        match client.get("https://www.reddit.com/r/wallstreetbets/hot.json?limit=25").send().await {
-                            Ok(resp) => {
-                                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                                    let mut posts = Vec::new();
-                                    if let Some(children) = json["data"]["children"].as_array() {
-                                        for child in children {
-                                            let d = &child["data"];
-                                            let title = d["title"].as_str().unwrap_or("").to_string();
-                                            let url = d["permalink"].as_str().map(|p| format!("https://reddit.com{}", p)).unwrap_or_default();
-                                            let score = d["score"].as_u64().unwrap_or(0);
-                                            let comments = d["num_comments"].as_u64().unwrap_or(0);
-                                            if !title.is_empty() { posts.push((title, url, score, comments)); }
-                                        }
-                                    }
-                                    let text = serde_json::to_string(&posts).unwrap_or_default();
-                                    let _ = msg_tx.send(BrokerMsg::JsonResult("RedditWSB".into(), text));
-                                }
-                            }
-                            Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Reddit: {}", e))); }
-                        }
-                    });
-                }
-                BrokerCmd::FetchCryptoTop50 => {
-                    let msg_tx = broker_msg_tx_clone.clone();
-                    tokio::spawn(async move {
-                        let client = reqwest::Client::new();
-                        match client.get("https://api.coingecko.com/api/v3/coins/markets")
-                            .query(&[("vs_currency", "usd"), ("order", "market_cap_desc"), ("per_page", "50"), ("page", "1")])
-                            .header("User-Agent", "TyphooN-Terminal/1.0")
-                            .send().await {
-                            Ok(resp) => {
-                                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                                    if let Some(arr) = json.as_array() {
-                                        let data: Vec<(String, f64, f64, f64)> = arr.iter().map(|c| {
-                                            let name = format!("{} ({})", c["name"].as_str().unwrap_or("?"), c["symbol"].as_str().unwrap_or("?").to_uppercase());
-                                            let price = c["current_price"].as_f64().unwrap_or(0.0);
-                                            let change = c["price_change_percentage_24h"].as_f64().unwrap_or(0.0);
-                                            let mcap = c["market_cap"].as_f64().unwrap_or(0.0);
-                                            (name, price, change, mcap)
-                                        }).collect();
-                                        let _ = msg_tx.send(BrokerMsg::CryptoTop50(data));
-                                    }
-                                }
-                            }
-                            Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("CoinGecko: {}", e))); }
-                        }
-                    });
+                cmd @ (BrokerCmd::FetchFearGreed
+                | BrokerCmd::FetchRedditWSB
+                | BrokerCmd::FetchCryptoTop50) => {
+                    external_feeds::handle_external_feed_command(cmd, broker_msg_tx_clone.clone())
+                        .await;
                 }
                 // ── Godel parity research handlers (ADR-107) ──
                 BrokerCmd::FetchCompanyProfile { symbol, finnhub_key } => {
