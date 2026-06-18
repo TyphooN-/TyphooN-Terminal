@@ -37,6 +37,10 @@ pub use godel_round2::{DividendRecord, EarningsEstimate, RatingChange, TreasuryY
 mod godel_round7;
 pub use godel_round7::{CurrencyRate, BetaWindow, BetaSnapshot, DdmSnapshot, RvMetricRow, RelativeValuation, FigiIdentifier, FigiSnapshot, FX_MAJORS_UNIVERSE, COMMODITIES_UNIVERSE};
 
+mod godel_round8;
+pub use godel_round8::{HraWindow, HraSnapshot, DcfYear, DcfSnapshot, SvmModelRow, SvmSnapshot, OptionContract, OptionExpiry, OptionsChainSnapshot, IvolObservation, IvolSnapshot};
+
+
 
 mod transcripts_sentiment;
 pub use transcripts_sentiment::{TranscriptMeta, Transcript, SocialSentimentRow, PressRelease};
