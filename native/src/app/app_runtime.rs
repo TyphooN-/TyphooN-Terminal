@@ -97,31 +97,7 @@ impl eframe::App for TyphooNApp {
 
         self.tick_watchlist_quote_refresh(now_instant);
 
-        // Positions/orders are trading-critical UI, not five-minute background
-        // metadata. Reconcile them periodically without tying the cadence to the
-        // broad cache refresh loop; the dispatch timestamp prevents per-frame spam
-        // if a broker response is slow.
-        let positions_due = self
-            .positions_auto_refresh_at
-            .map(|t| now_instant.duration_since(t) >= std::time::Duration::from_secs(30))
-            .unwrap_or(true);
-        if positions_due {
-            let mut requested = false;
-            if self.alpaca_enabled && self.broker_connected {
-                let _ = self.broker_tx.send(BrokerCmd::GetPositions);
-                let _ = self.broker_tx.send(BrokerCmd::GetOrders);
-                requested = true;
-            }
-            if self.kraken_enabled && self.kraken_connected {
-                let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
-                let _ = self.broker_tx.send(BrokerCmd::KrakenGetPositions);
-                let _ = self.broker_tx.send(BrokerCmd::KrakenFetchOpenOrders);
-                requested = true;
-            }
-            if requested {
-                self.positions_auto_refresh_at = Some(now_instant);
-            }
-        }
+        self.tick_positions_orders_refresh(now_instant);
 
         // Refresh the cached Sync Status coverage % so auto-full-tilt sees
         // current data even when the Sync Status window isn't open. The

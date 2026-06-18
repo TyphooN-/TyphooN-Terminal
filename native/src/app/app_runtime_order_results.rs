@@ -2,6 +2,34 @@ use super::*;
 use crate::app::app_runtime_support::is_routine_market_data_status;
 
 impl TyphooNApp {
+    pub(super) fn tick_positions_orders_refresh(&mut self, now_instant: std::time::Instant) {
+        // Positions/orders are trading-critical UI, not five-minute background
+        // metadata. Reconcile them periodically without tying the cadence to the
+        // broad cache refresh loop; the dispatch timestamp prevents per-frame spam
+        // if a broker response is slow.
+        let positions_due = self
+            .positions_auto_refresh_at
+            .map(|t| now_instant.duration_since(t) >= std::time::Duration::from_secs(30))
+            .unwrap_or(true);
+        if positions_due {
+            let mut requested = false;
+            if self.alpaca_enabled && self.broker_connected {
+                let _ = self.broker_tx.send(BrokerCmd::GetPositions);
+                let _ = self.broker_tx.send(BrokerCmd::GetOrders);
+                requested = true;
+            }
+            if self.kraken_enabled && self.kraken_connected {
+                let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
+                let _ = self.broker_tx.send(BrokerCmd::KrakenGetPositions);
+                let _ = self.broker_tx.send(BrokerCmd::KrakenFetchOpenOrders);
+                requested = true;
+            }
+            if requested {
+                self.positions_auto_refresh_at = Some(now_instant);
+            }
+        }
+    }
+
     pub(super) fn handle_order_result(&mut self, msg: String) {
         // Compact pass completion — manual or auto. Mark scheduler idle and
         // record the timestamp so the cadence gate counts this run.
