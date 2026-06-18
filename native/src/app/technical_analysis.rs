@@ -6,6 +6,7 @@ mod time_axis;
 
 use chart_helpers::*;
 pub use chart_helpers::chart_overlay_company_name;
+pub use chart_helpers::{parse_range, parse_range_f32};
 use time_axis::*;
 pub(in crate::app) use time_axis::{format_price, format_price_buf, format_ts, format_ts_buf};
 
@@ -7433,28 +7434,6 @@ pub(super) fn draw_chart(
     }
 }
 
-/// Draw an oscillator sub-pane (RSI, etc.) with optional overbought/oversold levels.
-pub(super) fn parse_range(s: &str, default_lo: usize, default_hi: usize) -> (usize, usize) {
-    let parts: Vec<&str> = s.split('-').collect();
-    if parts.len() == 2 {
-        let lo = parts[0].trim().parse().unwrap_or(default_lo);
-        let hi = parts[1].trim().parse().unwrap_or(default_hi);
-        (lo, hi)
-    } else {
-        (default_lo, default_hi)
-    }
-}
-
-pub(super) fn parse_range_f32(s: &str, default_lo: f64, default_hi: f64) -> (f64, f64) {
-    let parts: Vec<&str> = s.split('-').collect();
-    if parts.len() == 2 {
-        let lo = parts[0].trim().parse().unwrap_or(default_lo);
-        let hi = parts[1].trim().parse().unwrap_or(default_hi);
-        (lo, hi)
-    } else {
-        (default_lo, default_hi)
-    }
-}
 
 #[cfg(test)]
 mod tests {

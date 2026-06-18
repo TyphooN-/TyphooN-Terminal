@@ -884,7 +884,7 @@ pub fn chart_overlay_company_name(
     None
 }
 /// Parse helpers for oscillator range strings (e.g. "30-70" for overbought/oversold).
-pub(super) fn parse_range(s: &str, default_lo: usize, default_hi: usize) -> (usize, usize) {
+pub fn parse_range(s: &str, default_lo: usize, default_hi: usize) -> (usize, usize) {
     let parts: Vec<&str> = s.split('-').collect();
     if parts.len() == 2 {
         let lo = parts[0].trim().parse().unwrap_or(default_lo);
@@ -895,7 +895,7 @@ pub(super) fn parse_range(s: &str, default_lo: usize, default_hi: usize) -> (usi
     }
 }
 
-pub(super) fn parse_range_f32(s: &str, default_lo: f64, default_hi: f64) -> (f64, f64) {
+pub fn parse_range_f32(s: &str, default_lo: f64, default_hi: f64) -> (f64, f64) {
     let parts: Vec<&str> = s.split('-').collect();
     if parts.len() == 2 {
         let lo = parts[0].trim().parse().unwrap_or(default_lo);
