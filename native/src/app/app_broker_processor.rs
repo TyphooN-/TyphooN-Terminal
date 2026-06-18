@@ -1,6 +1,7 @@
 use super::*;
 
 mod external_feeds;
+mod market_data_commands;
 mod alpaca_account_data;
 mod alpaca_order_ops;
 mod news;
@@ -318,169 +319,26 @@ pub(super) fn spawn_broker_message_processor(
                     .await;
                 }
 
-                BrokerCmd::GetFundamentals { ticker } => {
-                    match AlpacaBroker::get_financial_analysis(&ticker).await {
-                        Ok(v) => {
-                            let text: String = serde_json::to_string_pretty(&v).unwrap_or_default();
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("Fundamentals: {}", ticker), text));
-                        }
-                        Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                    }
-                }
-                BrokerCmd::GetHolders { ticker } => {
-                    match AlpacaBroker::get_institutional_holders(&ticker).await {
-                        Ok(v) => {
-                            let text: String = serde_json::to_string_pretty(&v).unwrap_or_default();
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("Holders: {}", ticker), text));
-                        }
-                        Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                    }
-                }
-                BrokerCmd::GetAnalyst { symbol, finnhub_key } => {
-                    if let Some(ref b) = broker {
-                        match b.get_finnhub_recommendations(&symbol, &finnhub_key).await {
-                            Ok(v) => {
-                                let text: String = serde_json::to_string_pretty(&v).unwrap_or_default();
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("Analyst: {}", symbol), text));
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
-                }
-                BrokerCmd::GetOrderbook { symbol } => {
-                    let try_kraken =
-                        typhoon_engine::core::kraken::to_kraken_pair_lossy(&symbol).is_some();
-                    if try_kraken {
-                        let kraken_result = if let Some(ref kb) = kraken_broker {
-                            kb.get_orderbook_snapshot(&symbol, 100).await
-                        } else {
-                            let kb = typhoon_engine::broker::kraken::KrakenBroker::new(
-                                String::new(),
-                                String::new(),
-                            );
-                            kb.get_orderbook_snapshot(&symbol, 100).await
-                        };
-                        match kraken_result {
-                            Ok(v) => {
-                                let text: String = serde_json::to_string_pretty(&v).unwrap_or_default();
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("Orderbook: {}", symbol), text));
-                                continue;
-                            }
-                            Err(e) if broker.is_none() => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e));
-                                continue;
-                            }
-                            Err(_) => {}
-                        }
-                    }
-                    if let Some(ref b) = broker {
-                        match b.get_orderbook(&symbol).await {
-                            Ok(v) => {
-                                let text: String = serde_json::to_string_pretty(&v).unwrap_or_default();
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("Orderbook: {}", symbol), text));
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
-                }
-                BrokerCmd::GetMostActive => {
-                    if let Some(ref b) = broker {
-                        match b.get_most_active(20).await {
-                            Ok(v) => {
-                                let text = serde_json::to_string_pretty(&v).unwrap_or_default();
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Most Active".into(), text));
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
-                }
-                BrokerCmd::GetPortfolioHistory { period } => {
-                    if let Some(ref b) = broker {
-                        match b.get_portfolio_history(&period, "1D").await {
-                            Ok(v) => {
-                                let text = serde_json::to_string_pretty(&v).unwrap_or_default();
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Portfolio History".into(), text));
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
-                }
-                BrokerCmd::GetPriceTarget { symbol, finnhub_key } => {
-                    if let Some(ref b) = broker {
-                        match b.get_finnhub_price_target(&symbol, &finnhub_key).await {
-                            Ok(v) => {
-                                let text = serde_json::to_string_pretty(&v).unwrap_or_default();
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("PriceTarget: {}", symbol), text));
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
-                }
-                BrokerCmd::GetShortInterest { symbol, finnhub_key } => {
-                    if let Some(ref b) = broker {
-                        match b.get_finnhub_short_interest(&symbol, &finnhub_key).await {
-                            Ok(v) => {
-                                if let Some(cache) =
-                                    shared_cache_broker.read().ok().and_then(|g| g.clone())
-                                {
-                                    if let Ok(conn) = cache.connection() {
-                                        let rows = typhoon_engine::core::research::short_interest_history_points_from_json_rows(&v);
-                                        if !rows.is_empty() {
-                                            let _ = typhoon_engine::core::research::upsert_short_interest_history(
-                                                &conn,
-                                                &symbol,
-                                                &rows,
-                                            );
-                                        }
-                                    }
-                                }
-                                let text = serde_json::to_string_pretty(&v).unwrap_or_default();
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("ShortInterest: {}", symbol), text));
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
-                }
-                BrokerCmd::GetCorporateActions { symbol } => {
-                    if let Some(ref b) = broker {
-                        match b.get_corporate_actions(&symbol).await {
-                            Ok(v) => {
-                                let text = serde_json::to_string_pretty(&v).unwrap_or_default();
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("CorporateActions: {}", symbol), text));
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
-                }
-                BrokerCmd::GetWatchlists => {
-                    if let Some(ref b) = broker {
-                        match b.get_watchlists().await {
-                            Ok(v) => {
-                                let text = serde_json::to_string_pretty(&v).unwrap_or_default();
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Watchlists".into(), text));
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
-                }
-                BrokerCmd::CreateWatchlist { name, symbols } => {
-                    if let Some(ref b) = broker {
-                        match b.create_watchlist(&name, &symbols).await {
-                            Ok(_) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Watchlist '{}' created ({} symbols)", name, symbols.len()))); }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
-                }
-                BrokerCmd::GetOptionsChain { symbol, expiry } => {
-                    if let Some(ref b) = broker {
-                        match b.get_options_chain(&symbol, &expiry).await {
-                            Ok(contracts) => {
-                                let text = serde_json::to_string_pretty(&contracts).unwrap_or_default();
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("OptionsChain: {}", symbol), text));
-                            }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
+                cmd @ (BrokerCmd::GetFundamentals { .. }
+                | BrokerCmd::GetHolders { .. }
+                | BrokerCmd::GetAnalyst { .. }
+                | BrokerCmd::GetOrderbook { .. }
+                | BrokerCmd::GetMostActive
+                | BrokerCmd::GetPortfolioHistory { .. }
+                | BrokerCmd::GetPriceTarget { .. }
+                | BrokerCmd::GetShortInterest { .. }
+                | BrokerCmd::GetCorporateActions { .. }
+                | BrokerCmd::GetWatchlists
+                | BrokerCmd::CreateWatchlist { .. }
+                | BrokerCmd::GetOptionsChain { .. }) => {
+                    market_data_commands::handle_market_data_command(
+                        cmd,
+                        broker.as_ref(),
+                        kraken_broker.as_ref(),
+                        &shared_cache_broker,
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
                 }
                 cmd @ (BrokerCmd::AlpacaMarketOrder { .. }
                 | BrokerCmd::AlpacaLimitOrder { .. }
