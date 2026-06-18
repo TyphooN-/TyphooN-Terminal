@@ -67,8 +67,7 @@ where
     (last_match, days_since, last_val, prev_val)
 }
 
-// ── Round 78 compute fns — CDLCOUNTERATTACK / CDLHOMINGPIGEON /
-//    CDLINNECK / CDLONNECK / CDLTHRUSTING ──
+// Counterattack, homing-pigeon, neck-line, and thrusting candlestick patterns
 
 pub fn compute_cdl_counterattack_snapshot(
     symbol: &str,
@@ -496,8 +495,7 @@ pub fn compute_cdl_thrusting_snapshot(
     }
 }
 
-// ── Round 79 compute fns — CDL2CROWS / CDL3LINESTRIKE /
-//    CDL3OUTSIDE / CDLMATCHINGLOW ──
+// Crow, line-strike, outside, and matching-low candlestick patterns
 
 pub fn compute_cdl_two_crows_snapshot(
     symbol: &str,
@@ -857,8 +855,7 @@ pub fn compute_cdl_matching_low_snapshot(
     }
 }
 
-// ── Round 80 compute fns — CDLSEPARATINGLINES / CDLSTICKSANDWICH /
-//    CDLRICKSHAWMAN / CDLTAKURI ──
+// Separating-line, stick-sandwich, rickshaw-man, and takuri candlestick patterns
 
 pub fn compute_cdl_separating_lines_snapshot(
     symbol: &str,
@@ -1184,9 +1181,7 @@ pub fn compute_cdl_takuri_snapshot(
     }
 }
 
-// ── Round 81/82 compute fns — CDL3STARSINSOUTH /
-//    CDLIDENTICAL3CROWS / CDLKICKING / CDLKICKINGBYLENGTH /
-//    CDLLADDERBOTTOM / CDLUNIQUE3RIVER ──
+// Rare multi-bar reversal candlestick patterns
 
 pub fn compute_cdl_three_stars_in_south_snapshot(
     symbol: &str,
@@ -1778,9 +1773,7 @@ pub fn compute_cdl_unique_three_river_snapshot(
     }
 }
 
-// ── Round 83/84 compute fns — CDLADVANCEBLOCK /
-//    CDLBREAKAWAY / CDLGAPSIDESIDEWHITE / CDLUPSIDEGAP2CROWS /
-//    CDLXSIDEGAP3METHODS / CDLCONCEALBABYSWALL ──
+// Advance-block, breakaway, gap, and concealed-baby-swallow candlestick patterns
 
 pub fn compute_cdl_advance_block_snapshot(
     symbol: &str,
@@ -2401,8 +2394,7 @@ pub fn compute_cdl_conceal_baby_swallow_snapshot(
     }
 }
 
-// ── Round 85/86 compute fns — CDLHIKKAKE / CDLHIKKAKEMOD /
-//    CDLMATHOLD / CDLRISEFALL3METHODS ──
+// Hikkake, mat-hold, and rise/fall continuation candlestick patterns
 
 pub fn compute_cdl_hikkake_snapshot(
     symbol: &str,
@@ -2830,8 +2822,7 @@ pub fn compute_cdl_rise_fall_three_methods_snapshot(
     }
 }
 
-// ── Round 87/88 compute fns — CDLSTALLEDPATTERN /
-//    CDLTASUKIGAP ──
+// Stalled-pattern and tasuki-gap candlestick patterns
 
 pub fn compute_cdl_stalled_pattern_snapshot(
     symbol: &str,

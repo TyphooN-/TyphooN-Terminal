@@ -119,7 +119,7 @@ the root:
 | --- | ---: | --- |
 | `research/types.rs` | ~165 | Public DTO root/re-export surface after semantic type-family splits; no longer a hotspot. |
 | `research/return_risk_stats.rs` | ~55 | Thin re-export parent after the return-risk compute families were split into semantic children, including `distribution_shape.rs`, `autocorr_regime.rs`, `downside_efficiency.rs`, `drawdown_liquidity_normality.rs`, `drawup_gap_range.rs`, `seasonality_spread.rs`, `volatility_estimators.rs`, `performance_runs_tests.rs`, `significance_stationarity.rs`, `tail_risk_diagnostics.rs`, `entropy_dependence.rs`, `upside_drawdown_risk.rs`, `entropy_stationarity.rs`, `robust_quantile_volatility.rs`, `normality_liquidity_tail.rs`, `fractal_rank_dynamics.rs`, `jump_trend_diagnostics.rs`, and `spectral_nonlinear_diagnostics.rs`. |
-| `research/candlestick_pattern_models.rs` | ~5,353 | CDL* compute models. |
+| `research/candlestick_pattern_models.rs` | ~3,059 | Candlestick compute parent after extracting `basic_reversal.rs`, `multibar_reversal.rs`, `doji_shadow_star.rs`, and `body_line_shapes.rs`. Continue splitting remaining continuation/gap/rare-pattern families. |
 | `research/price_transform_indicator_models.rs` | ~4,466 | Price-transform indicator compute. |
 | `research/technical_indicator_models.rs` | ~3,806 | TA indicator compute. |
 | `research/moving_average_oscillator_models.rs` | ~3,630 | MA/oscillator compute. |
@@ -127,7 +127,7 @@ the root:
 
 ### Next targets (in order)
 
-1. **Move to the next engine hotspots.** `return_risk_stats` is now a thin parent; the next high-value engine files are candlestick, price-transform, technical-indicator, and moving-average/oscillator model files. Split those by semantic pattern group while preserving the `pub use` re-export surface.
+1. **Continue candlestick pattern extraction.** `candlestick_pattern_models.rs` is partially split; finish continuation/gap/rare-pattern families, then move to price-transform, technical-indicator, and moving-average/oscillator model files. Split each by semantic pattern group while preserving the `pub use` re-export surface.
 2. **Extract residual `mod.rs` storage** into `storage_*` modules if `mod.rs` regrows.
 3. **Keep semantic type modules and re-exports stable.** `types.rs` is now a small root surface; future DTO additions should land in the matching semantic child module, not back in a monolith.
 
