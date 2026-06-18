@@ -1,5 +1,74 @@
 use super::*;
 
+fn kraken_ws_v2_book_state_json(
+    display_symbol: &str,
+    state: &typhoon_engine::broker::kraken::KrakenWsBookState,
+    checksum: Option<u32>,
+    status: &str,
+) -> String {
+    let timestamp = state
+        .last_ts_ms
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default();
+    let bids: Vec<serde_json::Value> = state
+        .bids
+        .iter()
+        .map(|level| {
+            serde_json::json!({
+                "price": level.price,
+                "size": level.qty,
+                "price_text": level.price_text,
+                "size_text": level.qty_text,
+            })
+        })
+        .collect();
+    let asks: Vec<serde_json::Value> = state
+        .asks
+        .iter()
+        .map(|level| {
+            serde_json::json!({
+                "price": level.price,
+                "size": level.qty,
+                "price_text": level.price_text,
+                "size_text": level.qty_text,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "symbol": display_symbol,
+        "ws_symbol": state.symbol,
+        "timestamp": timestamp,
+        "depth": state.depth,
+        "checksum": checksum,
+        "server_checksum": state.last_checksum,
+        "checksum_status": status,
+        "bids": bids,
+        "asks": asks,
+    })
+    .to_string()
+}
+
+fn top_of_kraken_ws_v2_book(
+    state: &typhoon_engine::broker::kraken::KrakenWsBookState,
+) -> Option<(f64, f64)> {
+    let bid = state.bids.first()?.price;
+    let ask = state.asks.first()?.price;
+    (bid > 0.0 && ask > 0.0 && bid.is_finite() && ask.is_finite()).then_some((bid, ask))
+}
+
+fn resolve_kraken_chart_book_ws_symbol(symbol: &str) -> Option<String> {
+    let bare = symbol
+        .trim()
+        .trim_end_matches(".EQ")
+        .trim_end_matches(".eq")
+        .to_ascii_uppercase();
+    if bare.is_empty() || bare.contains('/') {
+        return None;
+    }
+    Some(format!("{bare}x/USD"))
+}
+
 pub(super) async fn handle_kraken_ws_command(
     cmd: BrokerCmd,
     kraken_broker: Option<&typhoon_engine::broker::kraken::KrakenBroker>,
