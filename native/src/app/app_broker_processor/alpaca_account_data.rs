@@ -34,6 +34,14 @@ pub(super) async fn handle_alpaca_account_data_command(
                 tracing::debug!("Orders request failed: {}", e);
             }
         },
+        BrokerCmd::GetOrderHistory { limit } => match b.get_orders("closed", limit).await {
+            Ok(orders) => {
+                let _ = broker_msg_tx.send(BrokerMsg::Orders(orders));
+            }
+            Err(e) => {
+                let _ = broker_msg_tx.send(BrokerMsg::Error(e));
+            }
+        },
         BrokerCmd::GetActivities { limit } => match b.get_account_activities("FILL", limit).await {
             Ok(activities) => {
                 let text = activities
