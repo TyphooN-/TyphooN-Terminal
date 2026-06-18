@@ -1948,6 +1948,7 @@ pub(crate) fn chart_source_symbol_variants(symbol: &str) -> Vec<String> {
 pub(crate) fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &str) -> Vec<String> {
     let variants = chart_source_symbol_variants(symbol);
     let mut keys = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for variant in variants {
         let source_variant = match source {
             "kraken" | "kraken-futures" => variant.replace('/', ""),
@@ -1960,7 +1961,9 @@ pub(crate) fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &st
             "alpaca-legacy-named" => format!("alpaca_paper_TyphooN:{source_variant}:{timeframe}"),
             _ => format!("{source}:{source_variant}:{timeframe}"),
         };
-        if !keys.iter().any(|k: &String| k.eq_ignore_ascii_case(&key)) {
+        // O(1) dedup (was linear .any + eq_ignore_ascii_case on small Vec)
+        let key_u = key.to_ascii_uppercase();
+        if seen.insert(key_u) {
             keys.push(key);
         }
     }
@@ -1968,7 +1971,8 @@ pub(crate) fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &st
     if source == "alpaca" {
         for legacy_source in ["alpaca-legacy-paper", "alpaca-legacy-named"] {
             for key in chart_source_cache_keys(legacy_source, symbol, timeframe) {
-                if !keys.iter().any(|k: &String| k.eq_ignore_ascii_case(&key)) {
+                let key_u = key.to_ascii_uppercase();
+                if seen.insert(key_u) {
                     keys.push(key);
                 }
             }
@@ -1980,7 +1984,8 @@ pub(crate) fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &st
         // can still render HRTX/GDC/TNDM-style holdings.
         for fallback_source in ["kraken-equities", "alpaca", "default"] {
             for key in chart_source_cache_keys(fallback_source, symbol, timeframe) {
-                if !keys.iter().any(|k: &String| k.eq_ignore_ascii_case(&key)) {
+                let key_u = key.to_ascii_uppercase();
+                if seen.insert(key_u) {
                     keys.push(key);
                 }
             }
