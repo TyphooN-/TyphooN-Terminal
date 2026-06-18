@@ -101,32 +101,12 @@ impl eframe::App for TyphooNApp {
 
         self.tick_bar_sync_status_refresh();
 
-        if now_instant.duration_since(self.kraken_universe_last_schedule)
-            >= self.market_data_sync_interval()
-            && self.cache_loaded
-            && self.kraken_enabled
-            && self.kraken_full_bar_sync_enabled
-            && (self.kraken_any_spot_scrape_enabled()
-                || (self.kraken_scrape_xstocks && !self.kraken_equity_universe_symbols.is_empty()))
-        {
-            self.kraken_universe_last_schedule = now_instant;
-            let _ = self.schedule_kraken_equities_universe();
-            let _ = self.schedule_kraken_universe_sectors();
-            let _ = self.maybe_schedule_kraken_ws_ohlc_snapshot_sweep();
-        }
+        self.tick_kraken_universe_schedulers(now_instant);
 
         self.tick_kraken_ws_scheduling(now_instant);
 
         self.tick_news_body_hydrator(now_instant);
 
-        if now_instant.duration_since(self.kraken_futures_universe_last_schedule)
-            >= self.market_data_sync_interval()
-            && self.cache_loaded
-            && self.kraken_enabled
-        {
-            self.kraken_futures_universe_last_schedule = now_instant;
-            let _ = self.schedule_kraken_futures_universe_sectors();
-        }
 
         // ── Screenshot: issue capture command ────────────────────────────
         if self.screenshot_requested {
