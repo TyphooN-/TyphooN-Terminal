@@ -43,6 +43,10 @@ pub use godel_round8::{HraWindow, HraSnapshot, DcfYear, DcfSnapshot, SvmModelRow
 mod godel_round9;
 pub use godel_round9::{SeasonalityMonth, SeasonalityDow, SeasonalitySnapshot, CorrelationCell, CorrelationMatrix, TotalReturnWindow, TotalReturnSnapshot, TechnicalIndicator, TechnicalSnapshot, SkewPoint, SkewExpiry, VolatilitySkew};
 
+mod godel_round10;
+pub use godel_round10::{LeverageRatio, LeverageSnapshot, AccrualPeriod, AccrualsSnapshot, RealizedVolWindow, RealizedVolSnapshot, FcfYieldPeriod, FcfYieldSnapshot, ShortInterestSnapshot, ShortInterestHistoryPoint};
+
+
 
 
 
