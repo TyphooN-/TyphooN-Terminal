@@ -4175,44 +4175,8 @@ pub(super) fn draw_chart(
         );
     }
 
-    // ── alert price lines ─────────────────────────────────────────────────────
-    if !alerts.is_empty() {
-        let alert_col = egui::Color32::from_rgb(255, 165, 0); // orange
-        let alert_bg = egui::Color32::from_rgba_premultiplied(255, 165, 0, 30);
-        for (price, label) in alerts {
-            let y = price_to_y(*price);
-            if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                // Dotted line across chart
-                let mut ax = chart_rect.left();
-                while ax < chart_rect.right() {
-                    let end = (ax + 4.0).min(chart_rect.right());
-                    painter.line_segment(
-                        [egui::pos2(ax, y), egui::pos2(end, y)],
-                        egui::Stroke::new(1.0, alert_col),
-                    );
-                    ax += 8.0;
-                }
-                // Label with bell icon
-                let lbl = if label.is_empty() {
-                    format!("\u{1F514} {}", format_price(*price))
-                } else {
-                    format!("\u{1F514} {} {}", label, format_price(*price))
-                };
-                let text_rect = egui::Rect::from_min_size(
-                    egui::pos2(chart_rect.left() + 2.0, y - 9.0),
-                    egui::vec2(lbl.len() as f32 * 6.5 + 6.0, 16.0),
-                );
-                painter.rect_filled(text_rect, 2.0, alert_bg);
-                painter.text(
-                    egui::pos2(chart_rect.left() + 5.0, y),
-                    egui::Align2::LEFT_CENTER,
-                    &lbl,
-                    egui::FontId::monospace(9.0),
-                    alert_col,
-                );
-            }
-        }
-    }
+    // ── alert price lines (extracted) ─────────────────────────────────────────
+    draw_price_alert_lines(painter, chart_rect, price_to_y, alerts, format_price);
 
     // ── drawing annotations ──────────────────────────────────────────────────
     // Helper: draw a line segment respecting the per-drawing LineStyle.

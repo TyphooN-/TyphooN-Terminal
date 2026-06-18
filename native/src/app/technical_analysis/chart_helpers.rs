@@ -956,3 +956,52 @@ pub(super) fn draw_regulatory_alerts_header(
     }
     header_right
 }
+
+/// Draw price alert lines (orange dotted + bell labels) on the chart.
+/// price_to_y and format_price passed from draw_chart.
+/// Extracted for modularity (part of technical_analysis.rs cleanup).
+pub(super) fn draw_price_alert_lines(
+    painter: &egui::Painter,
+    chart_rect: egui::Rect,
+    price_to_y: impl Fn(f64) -> f32,
+    alerts: &[(f64, String)],
+    format_price: impl Fn(f64) -> String,
+) {
+    if alerts.is_empty() {
+        return;
+    }
+    let alert_col = egui::Color32::from_rgb(255, 165, 0);
+    let alert_bg = egui::Color32::from_rgba_premultiplied(255, 165, 0, 30);
+    for (price, label) in alerts {
+        let y = price_to_y(*price);
+        if y >= chart_rect.top() && y <= chart_rect.bottom() {
+            let mut ax = chart_rect.left();
+            while ax < chart_rect.right() {
+                let end = (ax + 4.0).min(chart_rect.right());
+                painter.line_segment(
+                    [egui::pos2(ax, y), egui::pos2(end, y)],
+                    egui::Stroke::new(1.0, alert_col),
+                );
+                ax += 8.0;
+            }
+            let bell = "\u{1F514}";
+            let lbl = if label.is_empty() {
+                format!("{} {}", bell, format_price(*price))
+            } else {
+                format!("{} {} {}", bell, label, format_price(*price))
+            };
+            let text_rect = egui::Rect::from_min_size(
+                egui::pos2(chart_rect.left() + 2.0, y - 9.0),
+                egui::vec2(lbl.len() as f32 * 6.5 + 6.0, 16.0),
+            );
+            painter.rect_filled(text_rect, 2.0, alert_bg);
+            painter.text(
+                egui::pos2(chart_rect.left() + 5.0, y),
+                egui::Align2::LEFT_CENTER,
+                &lbl,
+                egui::FontId::monospace(9.0),
+                alert_col,
+            );
+        }
+    }
+}
