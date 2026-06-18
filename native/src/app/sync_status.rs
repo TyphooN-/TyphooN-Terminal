@@ -30,6 +30,18 @@ fn bar_sync_stats_refresh_interval_for_broad_symbol_count(
 }
 
 impl TyphooNApp {
+    pub(super) fn tick_bar_sync_status_refresh(&mut self) {
+        // Refresh the cached Sync Status coverage % so auto-full-tilt sees
+        // current data even when the Sync Status window isn't open. The
+        // full xStocks/Merged matrix scan runs on a blocking worker (never the
+        // render thread); poll applies any finished result, refresh dispatches
+        // a new snapshot compute when the cached rows go stale.
+        if self.cache_loaded {
+            self.poll_bar_sync_compute();
+            self.refresh_bar_sync_rows_if_stale();
+        }
+    }
+
     #[inline]
     pub(super) fn refresh_bar_sync_rows_if_stale(&mut self) {
         let now = std::time::Instant::now();
