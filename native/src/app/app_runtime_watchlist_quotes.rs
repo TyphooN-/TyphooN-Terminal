@@ -31,6 +31,40 @@ fn bare_chart_symbol(symbol: &str) -> String {
 }
 
 impl TyphooNApp {
+    pub(super) fn tick_watchlist_quote_refresh(&mut self, now_instant: std::time::Instant) {
+        // Watchlist quotes used to be fetched only when the user manually added a
+        // symbol, so a session-restored watchlist sat empty ("No cached data …
+        // never") until poked. Refresh once on startup (auto_refresh_at == None)
+        // and every 30s after. The GetWatchlistQuotes handler enriches from Yahoo
+        // even with no broker connected, so this also works offline / on weekends.
+        if self.cache_loaded && !self.user_watchlist.is_empty() {
+            // Intraday: refresh every 30s. While the xStocks market is closed for the
+            // weekend, watchlist quotes are static (no new prints), so stop re-polling
+            // Yahoo every 30s — refresh only on a slow safety heartbeat or when the
+            // watchlist set itself changes (symbol added/removed). Friday's last
+            // after-hours snapshot is retained for display in the meantime.
+            let interval = if super::app_runtime_support::kraken_xstocks_weekend_closed_now() {
+                std::time::Duration::from_secs(300)
+            } else {
+                std::time::Duration::from_secs(30)
+            };
+            let watchlist_changed =
+                self.watchlist_quotes_fetched_count != self.user_watchlist.len();
+            let due = watchlist_changed
+                || self
+                    .watchlist_auto_refresh_at
+                    .map(|t| now_instant.duration_since(t) >= interval)
+                    .unwrap_or(true);
+            if due {
+                self.watchlist_auto_refresh_at = Some(now_instant);
+                self.watchlist_quotes_fetched_count = self.user_watchlist.len();
+                let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes {
+                    symbols: self.user_watchlist.clone(),
+                });
+            }
+        }
+    }
+
     pub(super) fn handle_watchlist_quotes(&mut self, mut rows: Vec<WatchlistRow>) {
         // Weekend/off-hours quote providers can return empty/zero rows. Don't let a
         // failed refresh wipe useful cached rows already displayed in the watchlist.
