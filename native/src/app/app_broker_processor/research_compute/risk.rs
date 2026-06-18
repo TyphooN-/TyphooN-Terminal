@@ -17,6 +17,7 @@ mod tail_risk_diagnostics;
 mod entropy_dependence;
 mod upside_drawdown_risk;
 mod entropy_stationarity;
+mod robust_quantile_volatility;
 mod solvency_quality;
 
 pub(super) fn handle_risk_compute(
@@ -287,120 +288,16 @@ pub(super) fn handle_risk_compute(
             );
         }
         // Robust-volatility, Renyi-entropy, return-quantile, market-sentiment, and EWMA-volatility research
-        BrokerCmd::ComputeRobvolSnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_robvol_snapshot(&symbol, &today, &bars);
-                let _ = msg_tx.send(BrokerMsg::RobvolSnapshotMsg(symbol, snap));
-            });
-        }
-        BrokerCmd::ComputeRenyientSnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_renyient_snapshot(&symbol, &today, &bars);
-                let _ = msg_tx.send(BrokerMsg::RenyientSnapshotMsg(symbol, snap));
-            });
-        }
-        BrokerCmd::ComputeRetquantSnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_retquant_snapshot(&symbol, &today, &bars);
-                let _ = msg_tx.send(BrokerMsg::RetquantSnapshotMsg(symbol, snap));
-            });
-        }
-        BrokerCmd::ComputeMsentSnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_msent_snapshot(&symbol, &today, &bars);
-                let _ = msg_tx.send(BrokerMsg::MsentSnapshotMsg(symbol, snap));
-            });
-        }
-        BrokerCmd::ComputeEwmavolSnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_ewmavol_snapshot(&symbol, &today, &bars);
-                let _ = msg_tx.send(BrokerMsg::EwmavolSnapshotMsg(symbol, snap));
-            });
+        cmd @ (BrokerCmd::ComputeRobvolSnapshot { .. }
+            | BrokerCmd::ComputeRenyientSnapshot { .. }
+            | BrokerCmd::ComputeRetquantSnapshot { .. }
+            | BrokerCmd::ComputeMsentSnapshot { .. }
+            | BrokerCmd::ComputeEwmavolSnapshot { .. }) => {
+            robust_quantile_volatility::handle_robust_quantile_volatility_compute(
+                cmd,
+                broker_msg_tx_clone.clone(),
+                shared_cache_broker.clone(),
+            );
         }
         // KS-normality, Anderson-Darling, L-moment, Kyle-lambda, and peak-over-threshold research
         BrokerCmd::ComputeKsnormSnapshot { symbol } => {
