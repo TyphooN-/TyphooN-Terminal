@@ -113,6 +113,28 @@ fn symbol_matches_no_alloc(raw: &str, target_upper: &str) -> bool {
 }
 
 impl TyphooNApp {
+    pub(crate) fn tick_chart_background_results(&mut self) {
+        // ── receive MTF grid status from background thread (non-blocking) ──
+        // Take the results out first so the immutable borrow of `mtf_grid_rx`
+        // ends before the mutable upsert. Cache loads are non-authoritative:
+        // they fill missing cells without clobbering live open-chart values.
+        let mtf_grid_results = self.mtf_grid_rx.as_ref().and_then(|rx| rx.try_recv().ok());
+        if let Some(results) = mtf_grid_results {
+            self.mtf_grid_rx = None; // done
+            self.mtf_grid_status_upsert(results, false);
+        }
+
+        // ── receive Reg SHO cached prices from background thread (non-blocking) ──
+        if let Some(ref rx) = self.regulatory_prices_rx {
+            if let Ok(results) = rx.try_recv() {
+                for (sym, row) in results {
+                    self.regulatory_prices.insert(sym, row);
+                }
+                self.regulatory_prices_rx = None; // done
+            }
+        }
+    }
+
     pub(crate) fn tick_dirty_indicator_recompute(&mut self) {
         // ── recompute indicators when periods changed in UI ──────────────
         if self.indicators_dirty {

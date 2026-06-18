@@ -167,25 +167,7 @@ impl eframe::App for TyphooNApp {
 
         self.tick_dirty_indicator_recompute();
 
-        // ── receive MTF grid status from background thread (non-blocking) ──
-        // Take the results out first so the immutable borrow of `mtf_grid_rx`
-        // ends before the mutable upsert. Cache loads are non-authoritative:
-        // they fill missing cells without clobbering live open-chart values.
-        let mtf_grid_results = self.mtf_grid_rx.as_ref().and_then(|rx| rx.try_recv().ok());
-        if let Some(results) = mtf_grid_results {
-            self.mtf_grid_rx = None; // done
-            self.mtf_grid_status_upsert(results, false);
-        }
-
-        // ── receive Reg SHO cached prices from background thread (non-blocking) ──
-        if let Some(ref rx) = self.regulatory_prices_rx {
-            if let Ok(results) = rx.try_recv() {
-                for (sym, row) in results {
-                    self.regulatory_prices.insert(sym, row);
-                }
-                self.regulatory_prices_rx = None; // done
-            }
-        }
+        self.tick_chart_background_results();
 
         // ── poll async broker messages ───────────────────────────────────
         perf_pre_broker_ms = now_instant.elapsed().as_secs_f64() * 1000.0;
