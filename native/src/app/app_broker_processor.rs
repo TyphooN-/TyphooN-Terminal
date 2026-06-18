@@ -7,6 +7,7 @@ mod bar_fetch_commands;
 mod connection_commands;
 mod external_feeds;
 mod fundamentals_commands;
+mod misc_commands;
 mod kraken_market_commands;
 mod kraken_order_ops;
 mod kraken_ws_commands;
@@ -76,18 +77,13 @@ pub(super) fn spawn_broker_message_processor(
                     )
                     .await;
                 }
-                BrokerCmd::MarkUnresolvable {
-                    broker,
-                    symbol,
-                    timeframe,
-                    reason,
-                } => {
-                    let _ = broker_msg_tx_clone.send(BrokerMsg::Unresolvable {
-                        broker,
-                        symbol,
-                        timeframe,
-                        reason,
-                    });
+                cmd @ BrokerCmd::MarkUnresolvable { .. } => {
+                    misc_commands::handle_misc_command(
+                        cmd,
+                        broker.as_ref(),
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
                 }
                 cmd @ (BrokerCmd::GetAccount
                 | BrokerCmd::GetPositions
@@ -115,13 +111,13 @@ pub(super) fn spawn_broker_message_processor(
                         shared_cache_broker.clone(),
                     );
                 }
-                BrokerCmd::GetQuote { symbol } => {
-                    if let Some(ref b) = broker {
-                        match b.get_latest_quote(&symbol).await {
-                            Ok(q) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Quote(symbol, q.bid, q.ask, (q.bid + q.ask) / 2.0)); }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
-                        }
-                    }
+                cmd @ BrokerCmd::GetQuote { .. } => {
+                    misc_commands::handle_misc_command(
+                        cmd,
+                        broker.as_ref(),
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
                 }
                 BrokerCmd::GetWatchlistQuotes { symbols } => {
                     watchlist_quotes::spawn_watchlist_quotes_task(
@@ -131,36 +127,13 @@ pub(super) fn spawn_broker_message_processor(
                         shared_cache_broker.clone(),
                     );
                 }
-                BrokerCmd::GetMarketClock => {
-                    // US-equity/xStock session status is sourced from Alpaca's market clock.
-                    // Kraken crypto pairs are shown separately as 24/7 in the toolbar.
-                    if let Some(ref b) = broker {
-                        match b.get_market_clock().await {
-                            Ok(v) => {
-                                let is_open = v["is_open"].as_bool().unwrap_or(false);
-                                let next_open = v["next_open"].as_str().unwrap_or("—");
-                                let next_close = v["next_close"].as_str().unwrap_or("—");
-
-                                let next_open_utc = chrono::DateTime::parse_from_rfc3339(next_open)
-                                    .ok()
-                                    .map(|dt| dt.with_timezone(&chrono::Utc));
-                                let next_close_utc = chrono::DateTime::parse_from_rfc3339(next_close)
-                                    .ok()
-                                    .map(|dt| dt.with_timezone(&chrono::Utc));
-
-                                let msg = crate::app::app_runtime_support::us_equities_session_status_at(
-                                    chrono::Utc::now(),
-                                    is_open,
-                                    next_open_utc,
-                                    next_close_utc,
-                                );
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::MarketClock(msg));
-                            }
-                            Err(e) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e));
-                            }
-                        }
-                    }
+                cmd @ BrokerCmd::GetMarketClock => {
+                    misc_commands::handle_misc_command(
+                        cmd,
+                        broker.as_ref(),
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
                 }
                 cmd @ (BrokerCmd::GetActivities { .. }
                 | BrokerCmd::GetTopMovers
