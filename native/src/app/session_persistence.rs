@@ -1164,6 +1164,7 @@ impl TyphooNApp {
                 self.chart_templates.clear();
                 self.journal_entries.clear();
                 self.alerts.clear();
+                self.alerts_set.clear();
                 if let Some(sym) = v["symbol"].as_str() {
                     self.symbol_input = sym.to_string();
                 }
@@ -2464,7 +2465,11 @@ impl TyphooNApp {
                 if let Some(alerts) = v["alerts"].as_array() {
                     for a in alerts {
                         if let (Some(p), Some(l)) = (a["price"].as_f64(), a["label"].as_str()) {
-                            self.alerts.push((p, l.to_string()));
+                            let pair = (p, l.to_string());
+                            let key = format!("{:.8}|{}", p, l);
+                            if self.alerts_set.insert(key) {
+                                self.alerts.push(pair);
+                            }
                         }
                     }
                 }

@@ -275,16 +275,21 @@ impl TyphooNApp {
                                     .get(self.active_tab)
                                     .map(|c| c.timeframe.label().to_string())
                                     .unwrap_or("H4".into());
-                                self.indicator_alerts.push(IndicatorAlert {
-                                    symbol: self.alert_symbol.clone(),
-                                    timeframe: tf,
-                                    indicator: ALERT_INDICATORS[self.alert_indicator].to_string(),
-                                    condition: ALERT_CONDITIONS[self.alert_condition].to_string(),
-                                    threshold: thresh,
-                                    active: true,
-                                    triggered: false,
-                                    last_value: None,
-                                });
+                                let ind = ALERT_INDICATORS[self.alert_indicator].to_string();
+                                let cond = ALERT_CONDITIONS[self.alert_condition].to_string();
+                                let key = format!("{}:{}:{}:{}:{:.4}", self.alert_symbol, tf, ind, cond, thresh);
+                                if self.indicator_alerts_set.insert(key) {
+                                    self.indicator_alerts.push(IndicatorAlert {
+                                        symbol: self.alert_symbol.clone(),
+                                        timeframe: tf,
+                                        indicator: ind,
+                                        condition: cond,
+                                        threshold: thresh,
+                                        active: true,
+                                        triggered: false,
+                                        last_value: None,
+                                    });
+                                }
                                 self.log.push_back(LogEntry::info(format!(
                                     "Alert: {} {} {} {}",
                                     self.alert_symbol,
@@ -367,6 +372,11 @@ impl TyphooNApp {
                             }
                         });
                     if let Some(idx) = remove_idx {
+                        if idx < self.indicator_alerts.len() {
+                            let a = &self.indicator_alerts[idx];
+                            let key = format!("{}:{}:{}:{}:{:.4}", a.symbol, a.timeframe, a.indicator, a.condition, a.threshold);
+                            self.indicator_alerts_set.remove(&key);
+                        }
                         self.indicator_alerts.remove(idx);
                     }
                 });

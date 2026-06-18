@@ -30,7 +30,10 @@ impl TyphooNApp {
                             } else {
                                 self.alert_label_input.clone()
                             };
-                            self.alerts.push((price, label));
+                            let key = format!("{:.8}|{}", price, label);
+                            if self.alerts_set.insert(key) {
+                                self.alerts.push((price, label));
+                            }
                             self.alert_price_input.clear();
                             self.alert_label_input.clear();
                             self.log.push_back(LogEntry::info(format!(
@@ -58,10 +61,16 @@ impl TyphooNApp {
                             });
                         }
                         if let Some(idx) = remove_idx {
+                            if idx < self.alerts.len() {
+                                let (p, l) = &self.alerts[idx];
+                                let key = format!("{:.8}|{}", p, l);
+                                self.alerts_set.remove(&key);
+                            }
                             self.alerts.remove(idx);
                         }
                         if ui.button("Clear All Alerts").clicked() {
                             self.alerts.clear();
+                            self.alerts_set.clear();
                         }
                     }
 

@@ -4917,9 +4917,13 @@ pub struct TyphooNApp {
 
     /// Price alerts.
     pub(crate) alerts: Vec<(f64, String)>,
+    /// O(1) dedup/lookup for price alerts (key "price:8|label").
+    pub(crate) alerts_set: std::collections::HashSet<String>,
     pub(crate) alert_price_input: String,
     // Indicator-based alert engine
     pub(crate) indicator_alerts: Vec<IndicatorAlert>,
+    /// O(1) for indicator alerts (key "sym:tf:ind:cond:thresh").
+    pub(crate) indicator_alerts_set: std::collections::HashSet<String>,
     pub(crate) show_alert_builder: bool,
     pub(crate) alert_symbol: String,
     pub(crate) alert_indicator: usize, // index into ALERT_INDICATORS
