@@ -15,6 +15,7 @@ mod performance_runs_tests;
 mod significance_stationarity;
 mod tail_risk_diagnostics;
 mod entropy_dependence;
+mod upside_drawdown_risk;
 mod solvency_quality;
 
 pub(super) fn handle_risk_compute(
@@ -261,120 +262,16 @@ pub(super) fn handle_risk_compute(
             );
         }
         // Upside-potential, leverage-effect, drawdown-at-risk, VaR-half-life, and Gini research
-        BrokerCmd::ComputeUprSnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_upr_snapshot(&symbol, &today, &bars);
-                let _ = msg_tx.send(BrokerMsg::UprSnapshotMsg(symbol, snap));
-            });
-        }
-        BrokerCmd::ComputeLevereffSnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_levereff_snapshot(&symbol, &today, &bars);
-                let _ = msg_tx.send(BrokerMsg::LevereffSnapshotMsg(symbol, snap));
-            });
-        }
-        BrokerCmd::ComputeDrawdarSnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_drawdar_snapshot(&symbol, &today, &bars);
-                let _ = msg_tx.send(BrokerMsg::DrawdarSnapshotMsg(symbol, snap));
-            });
-        }
-        BrokerCmd::ComputeVarhalfSnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_varhalf_snapshot(&symbol, &today, &bars);
-                let _ = msg_tx.send(BrokerMsg::VarhalfSnapshotMsg(symbol, snap));
-            });
-        }
-        BrokerCmd::ComputeGiniSnapshot { symbol } => {
-            use typhoon_engine::core::research;
-            let msg_tx = broker_msg_tx_clone.clone();
-            let shared_cache_broker = shared_cache_broker.clone();
-            tokio::spawn(async move {
-                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let bars =
-                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                        if let Ok(conn) = cache.connection() {
-                            research::get_historical_price(&conn, &symbol)
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-                let snap = research::compute_gini_snapshot(&symbol, &today, &bars);
-                let _ = msg_tx.send(BrokerMsg::GiniSnapshotMsg(symbol, snap));
-            });
+        cmd @ (BrokerCmd::ComputeUprSnapshot { .. }
+            | BrokerCmd::ComputeLevereffSnapshot { .. }
+            | BrokerCmd::ComputeDrawdarSnapshot { .. }
+            | BrokerCmd::ComputeVarhalfSnapshot { .. }
+            | BrokerCmd::ComputeGiniSnapshot { .. }) => {
+            upside_drawdown_risk::handle_upside_drawdown_risk_compute(
+                cmd,
+                broker_msg_tx_clone.clone(),
+                shared_cache_broker.clone(),
+            );
         }
         // Sample-entropy, permutation-entropy, recurrence-factor, KPSS, and spectral-entropy research
         BrokerCmd::ComputeSampenSnapshot { symbol } => {
