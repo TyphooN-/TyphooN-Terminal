@@ -2,6 +2,9 @@
 
 use super::*;
 
+// Reexports from extracted chart_sources module (modular cut)
+pub(crate) use super::chart_sources::chart_source_cache_keys;
+
 // ─── Shared MTF higher-timeframe bar cache ───────────────────────────────────
 // MTF_MA / MultiKAMA overlays and the right-panel MTF Grid both need a symbol's
 // higher-timeframe (H1/H4/D1/W1/MN1) bars. Rather than each re-reading + parsing
@@ -1906,96 +1909,6 @@ pub(crate) fn cache_source_label(source: &str) -> &'static str {
 }
 
 // Source / cache key helpers (O(1) dedup, candidate for chart_sources.rs submodule extraction)
-pub(crate) fn push_unique_symbol_variant(out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>, value: impl Into<String>) {
-    let value = value.into();
-    if value.trim().is_empty() {
-        return;
-    }
-    let normalized = value.trim().to_uppercase();
-    // O(1) dedup via HashSet (was linear .any on Vec)
-    if seen.insert(normalized.clone()) {
-        out.push(normalized);
-    }
-}
-
-pub(crate) fn chart_source_symbol_variants(symbol: &str) -> Vec<String> {
-    let mut variants = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let raw = bare_symbol_from_key(symbol);
-    let norm = normalize_market_data_symbol(&raw);
-    let no_slash = norm.replace('/', "");
-
-    push_unique_symbol_variant(&mut variants, &mut seen, raw);
-    push_unique_symbol_variant(&mut variants, &mut seen, norm.clone());
-    push_unique_symbol_variant(&mut variants, &mut seen, no_slash.clone());
-    push_unique_symbol_variant(
-        &mut variants,
-        &mut seen,
-        typhoon_engine::core::kraken::normalize_pair_symbol(&norm),
-    );
-    push_unique_symbol_variant(
-        &mut variants,
-        &mut seen,
-        typhoon_engine::core::kraken_futures::normalize_futures_symbol(&norm),
-    );
-
-    if !no_slash.contains('/') && no_slash.len() >= 2 && !no_slash.ends_with("USD") {
-        push_unique_symbol_variant(&mut variants, &mut seen, format!("{no_slash}USD"));
-    }
-
-    variants
-}
-
-pub(crate) fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &str) -> Vec<String> {
-    let variants = chart_source_symbol_variants(symbol);
-    let mut keys = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for variant in variants {
-        let source_variant = match source {
-            "kraken" | "kraken-futures" => variant.replace('/', ""),
-            "kraken-equities" => variant.replace('/', "").trim_end_matches(".EQ").to_string(),
-            _ => variant,
-        };
-        let key = match source {
-            "default" => format!("default:{source_variant}:{timeframe}"),
-            "alpaca-legacy-paper" => format!("paper_TyphooN:{source_variant}:{timeframe}"),
-            "alpaca-legacy-named" => format!("alpaca_paper_TyphooN:{source_variant}:{timeframe}"),
-            _ => format!("{source}:{source_variant}:{timeframe}"),
-        };
-        // O(1) dedup (was linear .any + eq_ignore_ascii_case on small Vec)
-        let key_u = key.to_ascii_uppercase();
-        if seen.insert(key_u) {
-            keys.push(key);
-        }
-    }
-
-    if source == "alpaca" {
-        for legacy_source in ["alpaca-legacy-paper", "alpaca-legacy-named"] {
-            for key in chart_source_cache_keys(legacy_source, symbol, timeframe) {
-                let key_u = key.to_ascii_uppercase();
-                if seen.insert(key_u) {
-                    keys.push(key);
-                }
-            }
-        }
-    } else if source == "kraken" {
-        // Kraken account scope can include xStock/equity balances whose market data is
-        // not exposed through Kraken's public OHLC/AssetPairs API. Keep Kraken keys
-        // first, then allow underlying-equity caches so active Kraken-scope charts
-        // can still render HRTX/GDC/TNDM-style holdings.
-        for fallback_source in ["kraken-equities", "alpaca", "default"] {
-            for key in chart_source_cache_keys(fallback_source, symbol, timeframe) {
-                let key_u = key.to_ascii_uppercase();
-                if seen.insert(key_u) {
-                    keys.push(key);
-                }
-            }
-        }
-    }
-
-    keys
-}
-
 pub(crate) fn chart_merged_equity_cache_key(symbol: &str, timeframe: &str) -> String {
     let symbol = normalize_market_data_symbol(symbol)
         .replace('/', "")
