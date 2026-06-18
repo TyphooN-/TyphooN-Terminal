@@ -177,56 +177,7 @@ impl eframe::App for TyphooNApp {
             let _ = self.maybe_schedule_kraken_ws_ohlc_snapshot_sweep();
         }
 
-        // WS OHLC spawn is pair-discovery/settings driven. At startup the
-        // settings loop can run before Kraken AssetPairs have landed, in
-        // which case maybe_start_kraken_ws_ohlc defers without flipping
-        // `started=true`. Retry every 15s so the full-universe streamers come
-        // up once pair discovery completes, without forcing the user to toggle
-        // the setting. Cheap idempotent no-op once `started=true`.
-        if !self.kraken_ws_ohlc_started
-            && self.kraken_ws_ohlc_enabled
-            && self.kraken_enabled
-            && now_instant.duration_since(self.kraken_ws_ohlc_last_spawn_retry)
-                >= std::time::Duration::from_secs(15)
-        {
-            self.kraken_ws_ohlc_last_spawn_retry = now_instant;
-            self.maybe_start_kraken_ws_ohlc();
-        }
-
-        // Chart bid/ask should prefer Kraken's WS v2 L2 top-of-book when the
-        // active chart is a Kraken spot or xStock symbol. OHLC updates are bar
-        // cadence; ticker/iapi can lag or be delayed. The book stream is the
-        // freshest public best bid/ask feed we have and validates CRC32 before
-        // publishing top-of-book ticks back into ChartState.
-        if self.kraken_enabled
-            && now_instant.duration_since(self.kraken_chart_l2_last_start_attempt)
-                >= std::time::Duration::from_secs(5)
-            && let Some(chart) = self.charts.get(self.active_tab)
-        {
-            let source = cache_source_from_key(&chart.symbol);
-            let bare = bare_symbol_from_key(&chart.symbol)
-                .trim_end_matches(".EQ")
-                .to_ascii_uppercase();
-            let kraken_chart = matches!(source, "kraken" | "kraken-equities")
-                || chart.symbol.to_ascii_uppercase().contains("KRAKEN")
-                || chart.symbol.to_ascii_uppercase().contains(".EQ")
-                || self
-                    .kraken_equity_universe_symbols
-                    .iter()
-                    .any(|symbol| symbol.trim_end_matches(".EQ").eq_ignore_ascii_case(&bare));
-            if kraken_chart
-                && !bare.is_empty()
-                && !self.kraken_chart_l2_ws_symbol.eq_ignore_ascii_case(&bare)
-            {
-                self.kraken_chart_l2_last_start_attempt = now_instant;
-                self.kraken_chart_l2_ws_symbol = bare.clone();
-                let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
-                    symbol: bare,
-                    depth: 10,
-                    publish_dom: false,
-                });
-            }
-        }
+        self.tick_kraken_ws_scheduling(now_instant);
 
         // News body hydrator: fetch the full article text for rows that
         // still only have the provider summary. Throttled by
