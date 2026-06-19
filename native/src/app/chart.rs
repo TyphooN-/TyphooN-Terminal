@@ -585,6 +585,9 @@ pub(crate) struct ChartState {
     pub(crate) fibo_set: std::collections::HashSet<String>,
     /// O(1) for VLine dedup (bar_idx key) during sync.
     pub(crate) vline_set: std::collections::HashSet<String>,
+    /// O(1) for harmonics dedup (name + key points) for future cross-TF or add paths.
+    #[allow(dead_code)]
+    pub(crate) harmonic_set: std::collections::HashSet<String>,
     /// Per-drawing style: (line_width, line_style). Indexed parallel to `drawings`.
     pub(crate) drawing_styles: Vec<(f32, LineStyle)>,
     /// Undo stack for drawings (Ctrl+Z pops from drawings into here, Ctrl+Shift+Z restores)
@@ -2485,6 +2488,7 @@ impl ChartState {
             hline_set: std::collections::HashSet::new(),
             fibo_set: std::collections::HashSet::new(),
             vline_set: std::collections::HashSet::new(),
+            harmonic_set: std::collections::HashSet::new(),
             drawing_styles: Vec::new(),
             drawings_undo: Vec::new(),
             selected_drawing: None,
