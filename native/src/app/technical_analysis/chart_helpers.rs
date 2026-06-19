@@ -9,7 +9,7 @@ pub(super) use smart_money_zones::{
 mod fibonacci_and_patterns;
 pub(super) use fibonacci_and_patterns::{draw_auto_fib_levels, draw_harmonics};
 mod price_renderer;
-pub(super) use price_renderer::draw_price_bars;
+pub(super) use price_renderer::{draw_extended_hours_candle, draw_price_bars};
 
 pub(super) fn draw_indicator_legend(
     painter: &egui::Painter,

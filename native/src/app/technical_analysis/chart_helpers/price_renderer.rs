@@ -177,3 +177,58 @@ pub(crate) fn draw_price_bars(
         }
     }
 }
+/// Draw the projected extended-hours candle when real pre/post-market OHLC is present.
+pub(crate) fn draw_extended_hours_candle(
+    painter: &egui::Painter,
+    chart: &ChartState,
+    chart_rect: egui::Rect,
+    data_left: f32,
+    bar_w: f32,
+    candle_w: f32,
+    half_body: f32,
+    price_to_y: impl Fn(f64) -> f32,
+    bars_len: usize,
+) {
+    // ── Extended Hours Candle (magenta, TradingView-style) ─────────────
+    // Only render when real pre/post-market data is present (`ext_active`).
+    // During CORE/regular hours there is no extended-hours candle, so we draw
+    // nothing here. The previous grey "ghost" placeholder was a fabricated
+    // `last.close ± 0.3·range` candle: it carried no information, showed during
+    // CORE while the live bar was already forming, and also cluttered 24/7
+    // crypto charts — so it has been removed.
+    if chart.ext_active && chart.ext_high > 0.0 {
+        if let Some(next_x) =
+            adjacent_projection_candle_x(data_left, bars_len, bar_w, half_body, chart_rect)
+        {
+            // Real extended hours candle (magenta)
+            let ext_col = egui::Color32::from_rgb(200, 50, 200); // Magenta
+            let y_open = price_to_y(chart.ext_open);
+            let y_high = price_to_y(chart.ext_high);
+            let y_low = price_to_y(chart.ext_low);
+            let y_close = price_to_y(chart.ext_close);
+            // Wick
+            painter.line_segment(
+                [egui::pos2(next_x, y_high), egui::pos2(next_x, y_low)],
+                egui::Stroke::new(1.0, ext_col),
+            );
+            // Body
+            let body_top = y_open.min(y_close);
+            let body_h = (y_open - y_close).abs().max(1.0);
+            let body_rect = egui::Rect::from_min_size(
+                egui::pos2(next_x - half_body, body_top),
+                egui::vec2(candle_w, body_h),
+            );
+            if body_h > 2.0 {
+                painter.rect_filled(body_rect, 0.0, ext_col);
+            } else {
+                painter.line_segment(
+                    [
+                        egui::pos2(next_x - half_body, body_top),
+                        egui::pos2(next_x + half_body, body_top),
+                    ],
+                    egui::Stroke::new(1.0, ext_col),
+                );
+            }
+        }
+    }
+}
