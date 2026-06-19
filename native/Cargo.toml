@@ -12,8 +12,8 @@ path = "src/main.rs"
 # Engine (shared core library)
 typhoon-engine = { workspace = true }
 
-# MQL5/PineScript compiler (indicator compilation + execution)
-mql5-compiler = { workspace = true }
+# multi-language indicator transpiler (indicator compilation + execution)
+typhoon-transpiler = { workspace = true }
 
 # Native GPU UI — latest stable egui ecosystem (2026-03-27)
 eframe = { version = "0.34.3", default-features = false, features = ["default_fonts", "wayland", "wgpu_no_default_features", "x11"] }

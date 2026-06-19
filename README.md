@@ -239,7 +239,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [037](docs/adr/037-symbol-specs-tracking-and-radar-export.md) | Symbol Specs Tracking & Radar Export |
 | [038](docs/adr/038-gpu-strategy-optimizer-and-mql5-export-pipeline.md) | GPU Strategy Optimizer & MQL5 Export Pipeline |
 | [039](docs/adr/039-security-by-design-credential-and-data-protection.md) | Security by Design — Credential & Data Protection |
-| [040](docs/adr/040-mql5-compiler-pipeline-source-to-gpu-cpu-execution.md) | MQL5 Compiler Pipeline — Source to GPU/CPU Execution |
+| [040](docs/adr/040-typhoon-transpiler-pipeline-source-to-gpu-cpu-execution.md) | TyphooN Transpiler Pipeline — Source to GPU/CPU Execution |
 | [041](docs/adr/041-gpu-cpu-indicator-audit-parity-verification.md) | GPU/CPU Indicator Audit — Parity Verification _(→ merged into ADR-030)_ |
 | [043](docs/adr/043-bettervolume-full-mql5-port-emini-watch-algorithm.md) | BetterVolume — Full MQL5 Port (Emini-Watch Algorithm) |
 | [044](docs/adr/044-performance-and-security-audit.md) | Performance & Security Audit |
@@ -319,7 +319,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 |---------|-----------------|--------|-------|---------------|-------------|
 | **Native GPU Rendering** | Yes (wgpu) | No (Python) | No (Web) | No (Web) | No (Web) |
 | **Trading Execution** | 2 brokers | No | No | No | 1 broker |
-| **MQL5 Compiler** | Yes | No | No | No | PineScript |
+| **TyphooN Transpiler** | Yes | No | No | No | PineScript |
 | **FRED Economic Data** | Yes | Yes | No | No | No |
 | **SEC Filings** | Yes | Yes | Yes | No | No |
 | **Congressional Trades** | Yes | Yes | No | Yes | No |

@@ -97,7 +97,7 @@ Names deliberately NOT renamed:
 
 ## Tests
 
-All 619 tests pass (492 engine + 108 mql5-compiler + 14 web-protocol + 5 new cache tests from the prior commit). No new tests this pass — the changes are UI state and function renames, not new computation.
+All 619 tests pass (492 engine + 108 typhoon-transpiler + 14 web-protocol + 5 new cache tests from the prior commit). No new tests this pass — the changes are UI state and function renames, not new computation.
 
 ## Related
 

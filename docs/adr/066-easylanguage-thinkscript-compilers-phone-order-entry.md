@@ -1,6 +1,6 @@
 # ADR-066: EasyLanguage + thinkScript Compilers, Phone Order Entry
 
-> **⚠️ Partially superseded (2026-06).** The phone / WASM-web order-entry portion was removed with the web client; the EasyLanguage / thinkScript compiler work remains in the `mql5-compiler` transpiler.
+> **⚠️ Partially superseded (2026-06).** The phone / WASM-web order-entry portion was removed with the web client; the EasyLanguage / thinkScript compiler work remains in the `typhoon-transpiler` transpiler.
 
 **Status:** Implemented
 **Date:** 2026-04-09
@@ -17,7 +17,7 @@ This ADR lands all three. The rationale for finally tackling them is simple: the
 
 ## Decisions
 
-### 1. EasyLanguage frontend (`mql5-compiler/src/easylang.rs`)
+### 1. EasyLanguage frontend (`typhoon-transpiler/src/easylang.rs`)
 
 Line-based scanner modeled after `pine.rs`. Covers the ~90% of community EL indicators:
 
@@ -51,7 +51,7 @@ Line-based scanner modeled after `pine.rs`. Covers the ~90% of community EL indi
 
 **11 tests** cover: simple plot, multi-input, multi-plot, brace comments, line comments, case-insensitivity, binary ops, empty source, series shortcuts, `XAverage` → `ta_ema` mapping, nested-paren comma splitting.
 
-### 2. thinkScript frontend (`mql5-compiler/src/thinkscript.rs`)
+### 2. thinkScript frontend (`typhoon-transpiler/src/thinkscript.rs`)
 
 Parallel structure to EL, but case-sensitive per thinkScript convention.
 
@@ -144,7 +144,7 @@ Every dispatch replies via `web_msg_tx` with a `WebMsg::OrderResult { ok, messag
 - **8 new web-protocol tests**: order_side_validation, order_type_validation, order_qty_validation, place_order_serde_roundtrip, place_order_limit_roundtrip, cancel_order_serde_roundtrip, close_position_serde_roundtrip, order_result_msg_roundtrip
 
 **Total test count: 728** (up from 697)
-- 131 mql5-compiler (+23)
+- 131 typhoon-transpiler (+23)
 - 497 engine
 - 78 native
 - 22 web-protocol (+8)

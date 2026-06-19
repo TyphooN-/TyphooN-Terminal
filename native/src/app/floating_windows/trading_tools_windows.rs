@@ -587,17 +587,17 @@ impl TyphooNApp {
                         );
                         if compile_btn.clicked() && !self.compiler_source.is_empty() {
                             let result = match self.compiler_language {
-                                0 => mql5_compiler::compile_mql5(&self.compiler_source),
-                                1 => mql5_compiler::compile_mql4(&self.compiler_source),
-                                2 => mql5_compiler::compile_pine(&self.compiler_source),
-                                3 => mql5_compiler::compile_easylang(&self.compiler_source),
-                                4 => mql5_compiler::compile_thinkscript(&self.compiler_source),
-                                5 => mql5_compiler::compile_afl(&self.compiler_source),
-                                6 => mql5_compiler::compile_probuilder(&self.compiler_source),
-                                7 => mql5_compiler::compile_ninjascript(&self.compiler_source),
-                                8 => mql5_compiler::compile_calgo(&self.compiler_source),
-                                9 => mql5_compiler::compile_acsil(&self.compiler_source),
-                                _ => mql5_compiler::compile_mql5(&self.compiler_source),
+                                0 => typhoon_transpiler::compile_mql5(&self.compiler_source),
+                                1 => typhoon_transpiler::compile_mql4(&self.compiler_source),
+                                2 => typhoon_transpiler::compile_pine(&self.compiler_source),
+                                3 => typhoon_transpiler::compile_easylang(&self.compiler_source),
+                                4 => typhoon_transpiler::compile_thinkscript(&self.compiler_source),
+                                5 => typhoon_transpiler::compile_afl(&self.compiler_source),
+                                6 => typhoon_transpiler::compile_probuilder(&self.compiler_source),
+                                7 => typhoon_transpiler::compile_ninjascript(&self.compiler_source),
+                                8 => typhoon_transpiler::compile_calgo(&self.compiler_source),
+                                9 => typhoon_transpiler::compile_acsil(&self.compiler_source),
+                                _ => typhoon_transpiler::compile_mql5(&self.compiler_source),
                             };
                             self.compiler_diagnostics.clear();
                             for d in &result.diagnostics {
@@ -606,8 +606,8 @@ impl TyphooNApp {
                                     d.line,
                                     d.col,
                                     match d.level {
-                                        mql5_compiler::DiagLevel::Error => "ERROR",
-                                        mql5_compiler::DiagLevel::Warning => "WARN",
+                                        typhoon_transpiler::DiagLevel::Error => "ERROR",
+                                        typhoon_transpiler::DiagLevel::Warning => "WARN",
                                         _ => "INFO",
                                     },
                                     d.message
@@ -640,41 +640,41 @@ impl TyphooNApp {
                         ui.label(egui::RichText::new("Transpile to:").small());
                         const TRANSPILE_TARGETS: &[(
                             &str,
-                            mql5_compiler::transpile::TargetLanguage,
+                            typhoon_transpiler::transpile::TargetLanguage,
                         )] = &[
-                            ("MQL5", mql5_compiler::transpile::TargetLanguage::Mql5),
-                            ("MQL4", mql5_compiler::transpile::TargetLanguage::Mql4),
+                            ("MQL5", typhoon_transpiler::transpile::TargetLanguage::Mql5),
+                            ("MQL4", typhoon_transpiler::transpile::TargetLanguage::Mql4),
                             (
                                 "PineScript v5",
-                                mql5_compiler::transpile::TargetLanguage::PineScript,
+                                typhoon_transpiler::transpile::TargetLanguage::PineScript,
                             ),
                             (
                                 "EasyLanguage",
-                                mql5_compiler::transpile::TargetLanguage::EasyLanguage,
+                                typhoon_transpiler::transpile::TargetLanguage::EasyLanguage,
                             ),
                             (
                                 "thinkScript",
-                                mql5_compiler::transpile::TargetLanguage::ThinkScript,
+                                typhoon_transpiler::transpile::TargetLanguage::ThinkScript,
                             ),
                             (
                                 "AFL (AmiBroker)",
-                                mql5_compiler::transpile::TargetLanguage::Afl,
+                                typhoon_transpiler::transpile::TargetLanguage::Afl,
                             ),
                             (
                                 "ProBuilder",
-                                mql5_compiler::transpile::TargetLanguage::ProBuilder,
+                                typhoon_transpiler::transpile::TargetLanguage::ProBuilder,
                             ),
                             (
                                 "NinjaScript",
-                                mql5_compiler::transpile::TargetLanguage::NinjaScript,
+                                typhoon_transpiler::transpile::TargetLanguage::NinjaScript,
                             ),
                             (
                                 "cAlgo (cTrader)",
-                                mql5_compiler::transpile::TargetLanguage::Calgo,
+                                typhoon_transpiler::transpile::TargetLanguage::Calgo,
                             ),
                             (
                                 "ACSIL (Sierra Chart)",
-                                mql5_compiler::transpile::TargetLanguage::Acsil,
+                                typhoon_transpiler::transpile::TargetLanguage::Acsil,
                             ),
                         ];
                         egui::ComboBox::from_id_salt("compiler_transpile_target")
@@ -695,7 +695,7 @@ impl TyphooNApp {
                                 }
                             });
                         if ui.button("Transpile").clicked() && !self.compiler_source.is_empty() {
-                            use mql5_compiler::transpile::{SourceLanguage, transpile};
+                            use typhoon_transpiler::transpile::{SourceLanguage, transpile};
                             let from = match self.compiler_language {
                                 0 => SourceLanguage::Mql5,
                                 1 => SourceLanguage::Mql4,
@@ -712,7 +712,7 @@ impl TyphooNApp {
                             let to = TRANSPILE_TARGETS
                                 .get(self.compiler_transpile_target)
                                 .map(|(_, t)| *t)
-                                .unwrap_or(mql5_compiler::transpile::TargetLanguage::Mql5);
+                                .unwrap_or(typhoon_transpiler::transpile::TargetLanguage::Mql5);
                             match transpile(&self.compiler_source, from, to) {
                                 Ok(out) => {
                                     let line_count = out.lines().count();

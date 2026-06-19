@@ -17,7 +17,7 @@ Align all direct dependencies to their latest stable versions across the entire 
 |-------|--------|-------|-------|
 | wgpu | 24 | **29** | Match eframe 0.34 internal version — eliminates naga duplicate |
 | rfd | 0.15 | **0.17** | Native file dialog |
-| pest / pest_derive | 2.7 | **2.8** | Parser (mql5-compiler) |
+| pest / pest_derive | 2.7 | **2.8** | Parser (typhoon-transpiler) |
 | rusqlite (cli) | 0.34 | **0.39** | Match engine version — was 5 versions behind |
 | ratatui | 0.29 | **0.30** | TUI framework (cli) |
 | crossterm | 0.28 | **0.29** | Terminal backend (cli) |

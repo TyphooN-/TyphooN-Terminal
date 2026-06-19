@@ -4713,7 +4713,7 @@ pub struct TyphooNApp {
     pub(crate) compiler_transpile_target: usize, // target language index for transpile dropdown
     pub(crate) compiler_transpiled: Option<String>, // transpiled source output
     pub(crate) compiler_diagnostics: VecDeque<String>,
-    pub(crate) compiler_metadata: Option<mql5_compiler::CompileResult>,
+    pub(crate) compiler_metadata: Option<typhoon_transpiler::CompileResult>,
     pub(crate) show_journal: bool,
     pub(crate) show_object_list: bool,
     pub(crate) journal_entries: Vec<JournalEntry>,

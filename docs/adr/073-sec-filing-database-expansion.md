@@ -98,5 +98,5 @@ SEC filing database comparable to external terminal's functionality.
 
 ## Tests
 
-904 tests pass (216 mql5-compiler + 553 engine + 78 cli + 57 web-protocol). Zero warnings.
+904 tests pass (216 typhoon-transpiler + 553 engine + 78 cli + 57 web-protocol). Zero warnings.
 Zero production unwrap/expect violations (ADR-061 compliant).

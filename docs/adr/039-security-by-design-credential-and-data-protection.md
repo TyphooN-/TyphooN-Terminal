@@ -47,7 +47,7 @@ Stored credentials:
 - Integer overflow checks on binary data parsing (prevents malformed data from causing UB)
 - No credentials stored in SQLite
 
-### 5. MQL5 Compiler Security
+### 5. TyphooN Transpiler Security
 
 - Sandboxed WASM execution (no host filesystem access)
 - Indicators can only read bar data through imported functions

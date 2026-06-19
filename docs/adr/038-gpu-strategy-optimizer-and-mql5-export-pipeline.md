@@ -1,6 +1,6 @@
 # ADR-038: GPU Strategy Optimizer & MQL5 Export Pipeline
 
-> **⚠️ Partially superseded (2026-06).** The MQL5 *export* pipeline was removed (the `mql5-compiler` transpiler and GPU strategy optimizer remain). See [ADR-111](111-broker-scope-reduction-kraken-alpaca-only.md).
+> **⚠️ Partially superseded (2026-06).** The MQL5 *export* pipeline was removed (the `typhoon-transpiler` transpiler and GPU strategy optimizer remain). See [ADR-111](111-broker-scope-reduction-kraken-alpaca-only.md).
 
 **Status:** Implemented
 **Date:** 2026-03-26
@@ -13,7 +13,7 @@ TyphooN-Terminal already has:
 - All bar data in SQLite cache (ZSTD-compressed OHLCV)
 - GPU compute infrastructure (wgpu compute shaders, `gpu_compute.rs`)
 - 32+ indicator implementations in Rust
-- MQL5 compiler/parser (`mql5-compiler` crate)
+- MQL5 parser/frontend inside the `typhoon-transpiler` crate
 - DARWIN analytics proving GPU batch computation works at scale (50K series)
 
 ## Decision

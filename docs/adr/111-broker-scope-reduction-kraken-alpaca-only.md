@@ -38,7 +38,7 @@ We want to keep these integrations **recoverable** (they may return) without
    **not built, tested, or maintained** in the interim; they exist purely as
    restore points. Restore later via `git checkout deprecated/<x> -- <paths>` or
    cherry-pick.
-3. **KEEP the `mql5-compiler` crate** (the standalone MQL5/PineScript/MQL4/
+3. **KEEP the `typhoon-transpiler` crate** (the standalone MQL5/PineScript/MQL4/
    ThinkScript/… → WASM **transpiler**) and the indicator/strategy compiler that
    uses it. It is a **language tool, not the MT5 broker** — `mt5` (MetaTrader
    broker/EA) ≠ `mql5` (the language). Removing the MT5 broker integration must
@@ -58,7 +58,7 @@ We want to keep these integrations **recoverable** (they may return) without
   - `chore/rip-out-deprecated-brokers` branch deleted after merge (now redundant).
   - `deprecated/*` snapshot branches preserved as restore points only.
   - `cargo check --workspace` clean; no dead code paths remain in active tree.
-- **mql5-compiler** intentionally retained (language tool, not broker integration).
+- **typhoon-transpiler** intentionally retained (language tool, not broker integration).
 - **thirtyfour** vendored WebDriver (Darwinex scraper) removed in follow-up cleanup.
 
 ## Consequences
@@ -75,7 +75,7 @@ We want to keep these integrations **recoverable** (they may return) without
 - Do **not** reintroduce MT5/Darwinex/tastytrade broker code to `master` — if
   they return, it is via a deliberate restore from the `deprecated/*` branches,
   not incremental re-adds.
-- Do **not** remove or weaken `mql5-compiler` or the indicator/strategy compiler
+- Do **not** remove or weaken `typhoon-transpiler` or the indicator/strategy compiler
   when touching anything MT5-named.
 - The shared SQLite cache must remain fully functional for Kraken + Alpaca; never
   remove shared cache code in the name of "MT5 cleanup."
@@ -97,7 +97,7 @@ Supersedes / deprecates the broker-specific decisions for the removed surfaces
 - **023** Crypto Data-Source Hierarchy (CryptoCompare ⇆ Kraken) — the
   CryptoCompare tier is removed; crypto history comes from Kraken.
 
-Unaffected and explicitly retained: **040** MQL5 Compiler Pipeline and **066 /
+Unaffected and explicitly retained: **040** TyphooN Transpiler Pipeline and **066 /
 067 / 068** transpiler ADRs (language tooling, kept), and ADR-051 (Kraken full
 broker), ADR-087 (Alpaca sync autotuning), the Kraken iapi/WS ADRs (094/095/099/
 101/102), and ADR-105 (performance plan) which this decision serves.

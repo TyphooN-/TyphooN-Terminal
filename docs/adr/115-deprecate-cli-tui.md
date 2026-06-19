@@ -20,7 +20,7 @@ The active workspace remains focused on:
 
 - `typhoon-engine`
 - `typhoon-native`
-- `mql5-compiler`
+- `typhoon-transpiler`
 
 ## Consequences
 

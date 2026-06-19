@@ -3,7 +3,7 @@
 **Date:** 2026-04-25
 **Updated:** 2026-05-06
 **Status:** Implemented
-**Related:** `Cargo.toml`, `engine/Cargo.toml`, `cli/Cargo.toml`, `mql5-compiler/Cargo.toml`, `native/Cargo.toml`, `vendor/thirtyfour/Cargo.toml`, `Cargo.lock`, ADR-031 (dependency alignment), ADR-044 (performance security audit)
+**Related:** `Cargo.toml`, `engine/Cargo.toml`, `cli/Cargo.toml`, `typhoon-transpiler/Cargo.toml`, `native/Cargo.toml`, `vendor/thirtyfour/Cargo.toml`, `Cargo.lock`, ADR-031 (dependency alignment), ADR-044 (performance security audit)
 
 ## Context
 
@@ -70,7 +70,7 @@ Take the rest of the available majors:
 
 - **`rand 0.9 → 0.10`**: one call site (`rand::random()` in
   `engine/src/core/lan_sync.rs`); API survived the bump.
-- **`wasm-encoder 0.246 → 0.247`**: `mql5-compiler` only;
+- **`wasm-encoder 0.246 → 0.247`**: `typhoon-transpiler` only;
   no source edits.
 - **RustCrypto family**: `sha2 0.10 → 0.11`, `hmac 0.12 → 0.13`,
   `pbkdf2 0.12 → 0.13` (drop unused `simple` feature). One

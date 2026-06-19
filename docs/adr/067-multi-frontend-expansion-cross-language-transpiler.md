@@ -28,12 +28,12 @@ native dialect with a single click.
 
 | Language | Crate module | Approach | LoC | Tests |
 |---|---|---|---:|---:|
-| **MQL4** (MetaTrader 4) | `mql5-compiler/src/mql4.rs` | Textual rewrite → reuses MQL5 parser | 420 | 11 |
-| **AFL** (AmiBroker) | `mql5-compiler/src/afl.rs` | Line scanner → IR | 380 | 10 |
+| **MQL4** (MetaTrader 4) | `typhoon-transpiler/src/mql4.rs` | Textual rewrite → reuses MQL5 parser | 420 | 11 |
+| **AFL** (AmiBroker) | `typhoon-transpiler/src/afl.rs` | Line scanner → IR | 380 | 10 |
 | **Pine v4** (TradingView) | extension to `pine.rs` | Auto-detect header, normalise bareword calls | +90 | +2 |
-| **ProBuilder** (ProRealTime) | `mql5-compiler/src/probuilder.rs` | Line scanner → IR | 410 | 9 |
-| **NinjaScript** (NinjaTrader) | `mql5-compiler/src/ninjascript.rs` | C# attribute scanner → IR (indicator subset) | 480 | 10 |
-| **cAlgo** (cTrader) | `mql5-compiler/src/calgo.rs` | C# attribute scanner → IR (indicator subset) | 630 | 11 |
+| **ProBuilder** (ProRealTime) | `typhoon-transpiler/src/probuilder.rs` | Line scanner → IR | 410 | 9 |
+| **NinjaScript** (NinjaTrader) | `typhoon-transpiler/src/ninjascript.rs` | C# attribute scanner → IR (indicator subset) | 480 | 10 |
+| **cAlgo** (cTrader) | `typhoon-transpiler/src/calgo.rs` | C# attribute scanner → IR (indicator subset) | 630 | 11 |
 
 #### MQL4 — the biggest win
 MT4 still has the **largest pool of retail algorithmic code in existence**
@@ -156,7 +156,7 @@ NinjaScript / cAlgo. File extensions the Load File... dialog now accepts:
 | ProBuilder | `.itf` |
 | NinjaScript + cAlgo | `.cs` (disambiguated by content: `NinjaScriptProperty` keyword present → NinjaScript, else cAlgo) |
 
-### 3. Cross-language transpiler (`mql5-compiler/src/transpile.rs`)
+### 3. Cross-language transpiler (`typhoon-transpiler/src/transpile.rs`)
 
 **This is the exclusive headline feature.** Because every frontend lowers
 into the same `IrModule`, we can transpile source from any language to
@@ -259,9 +259,9 @@ transpile between the five line-scanner languages freely.
 
 **Historical baseline at ADR creation: 793 workspace tests** (up from 728 in
 ADR-066). Follow-up compiler frontend comb-overs have since raised
-`mql5-compiler` coverage to 229 unit tests.
+`typhoon-transpiler` coverage to 229 unit tests.
 
-- 196 mql5-compiler (+65)
+- 196 typhoon-transpiler (+65)
 - 497 engine
 - 78 native
 - 22 web-protocol

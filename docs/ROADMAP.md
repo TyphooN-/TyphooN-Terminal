@@ -7,7 +7,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - **Brokers/data:** MT5/Darwinex (DARWIN portfolio + BarCacheWriter bridge), tastytrade, CryptoCompare, and the Stooq fallback — see [ADR-111](adr/111-broker-scope-reduction-kraken-alpaca-only.md), [ADR-106](adr/106-remove-stooq-daily-fallback.md). Code preserved on `deprecated/*` branches.
 - **LAN sync + WASM/web phone client:** removed; native-desktop only.
 - **Live martingale trading:** deprecated — see [ADR-114](adr/114-deprecate-martingale-live-trading.md).
-- **MQL5 export pipeline:** removed (the `mql5-compiler` transpiler is retained).
+- **MQL5 export pipeline:** removed (the `typhoon-transpiler` language-tooling crate is retained).
 - **CLI/TUI:** removed from active `master`; preserved on `deprecated/cli-tui` for later revisit while GUI remains the main focus — see [ADR-115](adr/115-deprecate-cli-tui.md).
  - **Custom timeframes** (M2/M3/H2/H3/Y1 etc.): removed. Only native base timeframes + MN1 remain.
 
@@ -127,8 +127,8 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] Analyst ratings (Finnhub consensus: buy/hold/sell + price targets)
 - [x] FRED economic data (Fed Funds, CPI, GDP, Treasury yields, VIX, M2 Supply)
 
-### Phase 12: MQL5/PineScript Compiler
-- [x] MQL5 parser (pest grammar → AST, core MQL5 syntax, 229 mql5-compiler tests)
+### Phase 12: Multi-language Indicator Transpiler
+- [x] MQL5 parser frontend (pest grammar → AST, core MQL5 syntax, 229 typhoon-transpiler tests)
 - [x] WASM backend (CPU execution via wasmtime)
 - [x] WGSL backend (GPU execution via wgpu compute shaders)
 - [x] PineScript v5 parser (indicator, input.*, ta.*, plot, math.*)

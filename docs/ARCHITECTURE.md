@@ -139,7 +139,7 @@ TyphooN-Terminal/
 │   │       ├── alpaca.rs       # REST + WebSocket (ADR-087 autotune)
 │   │       └── kraken/         # Kraken Spot REST trading + WS (ADR-051)
 │   └── Cargo.toml
-├── mql5-compiler/          # MQL5 compiler plus full 10-language transpiler matrix
+├── typhoon-transpiler/          # Multi-language indicator transpiler + WASM/WGSL codegen
 └── docs/
     ├── adr/                # Architecture Decision Records (115)
     ├── API_KEYS.md

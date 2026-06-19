@@ -38,7 +38,7 @@ base64 = { workspace = true }
 # (article/main/.caas-body/.article-body/etc.) and drops nav/header/footer/aside
 # chrome before returning text. See news::extract_article_text.
 scraper = { version = "0.27", default-features = false }
-mql5-compiler = { workspace = true }
+typhoon-transpiler = { workspace = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }

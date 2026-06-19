@@ -2435,20 +2435,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mql5-compiler"
-version = "0.1.0"
-dependencies = [
- "pest",
- "pest_derive",
- "pretty_assertions",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tracing",
- "wasm-encoder 0.250.0",
-]
-
-[[package]]
 name = "naga"
 version = "29.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4896,7 +4882,6 @@ dependencies = [
  "futures-util",
  "hmac 0.13.0",
  "keyring-core",
- "mql5-compiler",
  "pbkdf2",
  "rand 0.10.1",
  "reqwest",
@@ -4911,6 +4896,7 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
+ "typhoon-transpiler",
  "zeroize",
  "zstd",
 ]
@@ -4930,7 +4916,6 @@ dependencies = [
  "futures-util",
  "image",
  "mimalloc",
- "mql5-compiler",
  "prometheus",
  "regex",
  "reqwest",
@@ -4942,8 +4927,23 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "typhoon-engine",
+ "typhoon-transpiler",
  "wgpu",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "typhoon-transpiler"
+version = "0.1.0"
+dependencies = [
+ "pest",
+ "pest_derive",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+ "wasm-encoder 0.250.0",
 ]
 
 [[package]]

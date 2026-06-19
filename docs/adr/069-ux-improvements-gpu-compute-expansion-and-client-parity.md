@@ -142,7 +142,7 @@ Replace per-primitive egui CPU draw calls with instanced GPU rendering:
 
 **Total workspace test count: 836** (up from 813 in ADR-068).
 
-- 216 mql5-compiler (unchanged)
+- 216 typhoon-transpiler (unchanged)
 - 497 engine (unchanged)
 - 78 native (unchanged)
 - 45 web-protocol (+23: push messages, alerts, news, indicators, subscribe,
@@ -155,8 +155,8 @@ Replace per-primitive egui CPU draw calls with instanced GPU rendering:
 
 | Crate | Production unwrap() | Production expect() | Notes |
 |---|---|---|---|
-| mql5-compiler/parser.rs | 0 | 0 | Rewritten: all `.next().unwrap()` → `next_or_err()` returning `CompileError::Internal` |
-| mql5-compiler/ir.rs | 0 | 0 | Rewritten: all `.expect()` → `.ok_or_else(\|\| CompileError::Internal(...))` |
+| typhoon-transpiler/parser.rs | 0 | 0 | Rewritten: all `.next().unwrap()` → `next_or_err()` returning `CompileError::Internal` |
+| typhoon-transpiler/ir.rs | 0 | 0 | Rewritten: all `.expect()` → `.ok_or_else(\|\| CompileError::Internal(...))` |
 | engine | 0 | 0 | Clean |
 | native | 0 | 0 | Clean |
 | web-server | 0 | 0 | Clean |

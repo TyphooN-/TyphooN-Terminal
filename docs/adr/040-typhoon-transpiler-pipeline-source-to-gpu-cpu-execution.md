@@ -1,10 +1,10 @@
-# ADR-040: MQL5 Compiler Pipeline — Source to GPU/CPU Execution
+# ADR-040: TyphooN Transpiler Pipeline — Source to GPU/CPU Execution
 
 **Status:** Phase 1 Implemented (WASM), Phase 2 Implemented (WGSL), Phase 3 Implemented (PineScript) | **Date:** 2026-03-27 | **Updated:** 2026-04-03
 
 ## Context
 
-TyphooN Terminal includes an MQL5 indicator compiler that can parse `.mq5`/`.mqh` files and compile them for execution. This enables users to run custom indicators without MetaTrader 5.
+TyphooN Terminal includes `typhoon-transpiler`, a multi-language indicator transpiler and execution pipeline. Its original frontend was MQL5 (`.mq5`/`.mqh`), but the crate now owns the broader source → AST/IR → WASM/WGSL/codegen flow for the full indicator language matrix. The MQL5 language frontend remains; the crate is no longer named after that one frontend.
 
 ## Architecture
 
@@ -56,7 +56,7 @@ The `emit_wgsl()` codegen (1100 lines) produces valid WGSL compute shaders:
 
 **Parser bug fix (postfix_op unwrapping):** `postfix_op` rule now correctly distinguishes between `++`/`--` operators (which ARE the operator) and wrapped `call_args`/`index_access`/`member_access` (which contain an inner child). Previously unwrapping `postfix_op` unconditionally caused panics on increment/decrement expressions.
 
-**Status:** Same MQL5 source compiles to both CPU (WASM) and GPU (WGSL). 75 compiler tests passing (parser + WASM codegen + WGSL codegen).
+**Status:** Same MQL5 source compiles to both CPU (WASM) and GPU (WGSL). 75 transpiler tests passing at this ADR stage (parser + WASM codegen + WGSL codegen).
 
 **Constraints:**
 - WGSL has no recursion, limited control flow
