@@ -1480,3 +1480,33 @@ pub(super) fn draw_supply_demand_zones(
         }
     }
 }
+
+/// Compute effective width and style for a drawing (with selection boost).
+pub(super) fn effective_drawing_width_and_style(
+    chart: &ChartState,
+    draw_idx: usize,
+) -> (f32, LineStyle) {
+    let (d_width, d_style) = chart
+        .drawing_styles
+        .get(draw_idx)
+        .copied()
+        .unwrap_or((1.5, LineStyle::Solid));
+    let is_selected = chart.selected_drawing == Some(draw_idx);
+    let sel_boost = if is_selected { 1.5 } else { 0.0 };
+    (d_width + sel_boost, d_style)
+}
+
+pub(super) fn is_drawing_selected(chart: &ChartState, draw_idx: usize) -> bool {
+    chart.selected_drawing == Some(draw_idx)
+}
+
+pub(super) fn tint_for_selection(c: egui::Color32, selected: bool) -> egui::Color32 {
+    if !selected {
+        return c;
+    }
+    egui::Color32::from_rgb(
+        c.r().saturating_add(30),
+        c.g().saturating_add(50),
+        c.b().saturating_add(80),
+    )
+}

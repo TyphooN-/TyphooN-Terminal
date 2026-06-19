@@ -3870,27 +3870,9 @@ pub(super) fn draw_chart(
 
     // ── drawing annotations (draw_line extracted to chart_helpers) ───
     for (draw_idx, drawing) in chart.drawings.iter().enumerate() {
-        // Per-drawing style: line width + style (with fallback defaults)
-        let (d_width, d_style) = chart
-            .drawing_styles
-            .get(draw_idx)
-            .copied()
-            .unwrap_or((1.5, LineStyle::Solid));
-        let is_selected = chart.selected_drawing == Some(draw_idx);
-        // Selection: boost width and tint color slightly cyan
-        let sel_boost = if is_selected { 1.5 } else { 0.0 };
-        let effective_width = d_width + sel_boost;
-        // Tint helper: if selected, blend color toward cyan for visibility
-        let sel_tint = |c: egui::Color32| -> egui::Color32 {
-            if !is_selected {
-                return c;
-            }
-            egui::Color32::from_rgb(
-                c.r().saturating_add(30),
-                c.g().saturating_add(50),
-                c.b().saturating_add(80),
-            )
-        };
+        let (effective_width, d_style) = effective_drawing_width_and_style(chart, draw_idx);
+        let is_selected = is_drawing_selected(chart, draw_idx);
+        let sel_tint = |c: egui::Color32| tint_for_selection(c, is_selected);
         match drawing {
             Drawing::HLine { price, color } => {
                 let y = price_to_y(*price);
