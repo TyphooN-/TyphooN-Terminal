@@ -24,7 +24,11 @@ impl TyphooNApp {
             let open_changed = self.mtf_grid_status_open_sig != self.mtf_open_chart_signature();
             let has_missing = self.mtf_grid_status.len() < MTF_GRID_TIMEFRAMES.len()
                 || self.mtf_grid_status.iter().any(|s| {
-                    s.1.is_none() && s.2.is_none() && s.3.is_none() && s.4.is_none() && s.5.is_none()
+                    s.1.is_none()
+                        && s.2.is_none()
+                        && s.3.is_none()
+                        && s.4.is_none()
+                        && s.5.is_none()
                 });
             let throttle_ok = self
                 .mtf_grid_status_at
@@ -65,6 +69,20 @@ impl TyphooNApp {
                 .color(AXIS_TEXT)
                 .small(),
             );
+            let cached_status_by_tf: std::collections::HashMap<
+                &'static str,
+                (
+                    Option<f64>,
+                    Option<f64>,
+                    Option<f64>,
+                    Option<f64>,
+                    Option<f64>,
+                ),
+            > = self
+                .mtf_grid_status
+                .iter()
+                .map(|&(tf, close, sma, kama, fisher, fsig)| (tf, (close, sma, kama, fisher, fsig)))
+                .collect();
             if mtf_groups.is_empty() {
                 egui::Grid::new("mtf_ma_grid")
                     .spacing(egui::vec2(4.0, 2.0))
@@ -77,32 +95,32 @@ impl TyphooNApp {
                         for ma in &ma_labels {
                             ui.label(egui::RichText::new(*ma).color(AXIS_TEXT).small());
                             for tf in &tf_labels {
-                                let status = self.mtf_grid_status.iter().find(|s| s.0 == *tf);
-                                let dot_color =
-                                    if let Some(&(_, close, sma, kama, fisher, fsig)) = status {
-                                        let bullish = match *ma {
-                                            "SMA200" => match (close, sma) {
-                                                (Some(c), Some(s)) => Some(c > s),
-                                                _ => None,
-                                            },
-                                            "KAMA" => match (close, kama) {
-                                                (Some(c), Some(k)) => Some(c > k),
-                                                _ => None,
-                                            },
-                                            "Fisher" => match (fisher, fsig) {
-                                                (Some(f), Some(s)) => Some(f > s),
-                                                _ => None,
-                                            },
+                                let dot_color = if let Some(&(close, sma, kama, fisher, fsig)) =
+                                    cached_status_by_tf.get(tf)
+                                {
+                                    let bullish = match *ma {
+                                        "SMA200" => match (close, sma) {
+                                            (Some(c), Some(s)) => Some(c > s),
                                             _ => None,
-                                        };
-                                        match bullish {
-                                            Some(true) => UP,
-                                            Some(false) => DOWN,
-                                            None => AXIS_TEXT,
-                                        }
-                                    } else {
-                                        egui::Color32::from_rgb(50, 50, 60)
+                                        },
+                                        "KAMA" => match (close, kama) {
+                                            (Some(c), Some(k)) => Some(c > k),
+                                            _ => None,
+                                        },
+                                        "Fisher" => match (fisher, fsig) {
+                                            (Some(f), Some(s)) => Some(f > s),
+                                            _ => None,
+                                        },
+                                        _ => None,
                                     };
+                                    match bullish {
+                                        Some(true) => UP,
+                                        Some(false) => DOWN,
+                                        None => AXIS_TEXT,
+                                    }
+                                } else {
+                                    egui::Color32::from_rgb(50, 50, 60)
+                                };
                                 ui.label(egui::RichText::new("\u{25CF}").color(dot_color).small());
                             }
                             ui.end_row();
@@ -120,6 +138,34 @@ impl TyphooNApp {
                             .small()
                             .strong(),
                     );
+                    let open_status_by_tf: std::collections::HashMap<
+                        &'static str,
+                        (
+                            Option<f64>,
+                            Option<f64>,
+                            Option<f64>,
+                            Option<f64>,
+                            Option<f64>,
+                        ),
+                    > = group
+                        .indices
+                        .iter()
+                        .filter_map(|idx| self.charts.get(*idx))
+                        .map(|chart| {
+                            (
+                                chart.timeframe.label(),
+                                (
+                                    chart
+                                        .fresh_live_quote_mid()
+                                        .or_else(|| chart.bars.last().map(|b| b.close)),
+                                    chart.sma200.last().and_then(|v| *v),
+                                    chart.kama.last().and_then(|v| *v),
+                                    chart.fisher.last().and_then(|v| *v),
+                                    chart.fisher_signal.last().and_then(|v| *v),
+                                ),
+                            )
+                        })
+                        .collect();
                     egui::Grid::new(format!("mtf_ma_grid_{}", group.symbol))
                         .spacing(egui::vec2(4.0, 2.0))
                         .show(ui, |ui| {
@@ -131,41 +177,18 @@ impl TyphooNApp {
                             for ma in &ma_labels {
                                 ui.label(egui::RichText::new(*ma).color(AXIS_TEXT).small());
                                 for tf in &tf_labels {
-                                    let tf_match =
-                                        |chart: &&ChartState| chart.timeframe.label() == *tf;
-                                    let status = group
-                                        .indices
-                                        .iter()
-                                        .filter_map(|idx| self.charts.get(*idx))
-                                        .find(tf_match)
-                                        .map(|chart| {
-                                            (
-                                                chart
-                                                    .fresh_live_quote_mid()
-                                                    .or_else(|| chart.bars.last().map(|b| b.close)),
-                                                chart.sma200.last().and_then(|v| *v),
-                                                chart.kama.last().and_then(|v| *v),
-                                                chart.fisher.last().and_then(|v| *v),
-                                                chart.fisher_signal.last().and_then(|v| *v),
-                                            )
-                                        })
-                                        .or_else(|| {
-                                            // No open chart for this timeframe — fall
-                                            // back to the cache-loaded status (active
-                                            // symbol only; it is the one we precompute).
-                                            if mtf_grid_symbol_key(&group.symbol)
-                                                .eq_ignore_ascii_case(&active_sym_key)
-                                            {
-                                                self.mtf_grid_status
-                                                    .iter()
-                                                    .find(|s| s.0 == *tf)
-                                                    .map(|&(_, c, sma, kama, fisher, fsig)| {
-                                                        (c, sma, kama, fisher, fsig)
-                                                    })
-                                            } else {
-                                                None
-                                            }
-                                        });
+                                    let status = open_status_by_tf.get(tf).copied().or_else(|| {
+                                        // No open chart for this timeframe — fall
+                                        // back to the cache-loaded status (active
+                                        // symbol only; it is the one we precompute).
+                                        if mtf_grid_symbol_key(&group.symbol)
+                                            .eq_ignore_ascii_case(&active_sym_key)
+                                        {
+                                            cached_status_by_tf.get(tf).copied()
+                                        } else {
+                                            None
+                                        }
+                                    });
                                     let dot_color =
                                         if let Some((close, sma, kama, fisher, fsig)) = status {
                                             let bullish = match *ma {
