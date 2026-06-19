@@ -16,6 +16,8 @@ mod post_zone_overlays;
 pub(super) use post_zone_overlays::draw_post_zone_trend_overlays;
 mod axis_labels;
 pub(super) use axis_labels::draw_right_axis_price_labels;
+mod header_crosshair;
+pub(super) use header_crosshair::draw_header_crosshair_and_legend;
 
 pub(super) fn draw_indicator_legend(
     painter: &egui::Painter,
