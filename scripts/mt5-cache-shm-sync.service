@@ -1,6 +1,0 @@
-[Unit]
-Description=Periodic flush of MT5 RAM cache to SSD
-
-[Service]
-Type=oneshot
-ExecStart=/home/typhoon/git/TyphooN-Terminal/scripts/mt5-cache-shm.sh sync

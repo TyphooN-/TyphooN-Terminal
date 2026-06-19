@@ -1,9 +1,0 @@
-[Unit]
-Description=Flush MT5 RAM cache to SSD every 10 minutes
-
-[Timer]
-OnCalendar=*:0/10
-Persistent=true
-
-[Install]
-WantedBy=timers.target
