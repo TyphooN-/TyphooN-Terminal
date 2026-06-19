@@ -14,6 +14,8 @@ mod volume_profile;
 pub(super) use volume_profile::draw_volume_profile_overlay;
 mod post_zone_overlays;
 pub(super) use post_zone_overlays::draw_post_zone_trend_overlays;
+mod axis_labels;
+pub(super) use axis_labels::draw_right_axis_price_labels;
 
 pub(super) fn draw_indicator_legend(
     painter: &egui::Painter,
