@@ -18,6 +18,8 @@ mod axis_labels;
 pub(super) use axis_labels::draw_right_axis_price_labels;
 mod header_crosshair;
 pub(super) use header_crosshair::draw_header_crosshair_and_legend;
+mod sub_panes;
+pub(super) use sub_panes::draw_enabled_sub_panes;
 
 pub(super) fn draw_indicator_legend(
     painter: &egui::Painter,
