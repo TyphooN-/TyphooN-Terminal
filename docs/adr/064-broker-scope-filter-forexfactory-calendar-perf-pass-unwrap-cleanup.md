@@ -46,7 +46,7 @@ This ADR captures the single pass that addressed all five.
 
 ### 2. ForexFactory economic calendar
 
-**New module:** `engine/src/core/econ_calendar.rs`
+**New module:** `typhoon-engine/src/core/econ_calendar.rs`
 
 Public ForexFactory XML feed (`nfs.faireconomy.media/ff_calendar_thisweek.xml`) — no authentication, no API key, free to poll. Contains:
 - Title, country (currency code), date, time
@@ -101,10 +101,10 @@ Both buffers have fixed size per context-lifecycle (`bar_count * 4` for output, 
 
 Critical production unwraps fixed:
 - `web-server/src/lib.rs:169,175` — `serde_json::to_string().unwrap()` on auth-result serialization → `unwrap_or_else` fallback JSON
-- `native/src/main.rs:57` — `.expect("tokio runtime")` at startup → match with `eprintln!` + `process::exit(1)`
+- `typhoon-native/src/main.rs:57` — `.expect("tokio runtime")` at startup → match with `eprintln!` + `process::exit(1)`
 - `cli/src/main.rs:289` — `chunk.last().expect("non-empty chunk")` → `let Some(last) = chunk.last() else { continue; }`
 - `web/src/lib.rs:16-32` — 4 × `.expect()` on browser DOM init → `let Some(...) else { console::error!; return }`
-- `native/src/metrics.rs:61-94` — 10 × `.unwrap()` on Prometheus registry init → `MetricsRegistry::new()` now returns `Result<Self, String>`; call site in `app.rs` handles the `Err` arm by logging a warning (metrics disabled, app continues)
+- `typhoon-native/src/metrics.rs:61-94` — 10 × `.unwrap()` on Prometheus registry init → `MetricsRegistry::new()` now returns `Result<Self, String>`; call site in `app.rs` handles the `Err` arm by logging a warning (metrics disabled, app continues)
 
 ### 7. UX — no-data chart placeholder
 
@@ -125,7 +125,7 @@ Critical production unwraps fixed:
 - Symbol autocomplete, live-panel staleness timestamps, and alert breach badge: closed by ADR-065.
 - Help-window registry drift, econ-filter persistence, ICS export, and OS attention cue: closed by ADR-047.
 - LAN `remote_queue` append-only encoding: implemented in `SqliteCache::append_to_queue` / `drain_queue`, with server polling using `drain_queue`.
-- Storage-manager pagination over `detailed_stats`: implemented in `native/src/app/storage.rs` (`storage_page`, 200-row pages) with `detailed_stats_with_size()` for the size column.
+- Storage-manager pagination over `detailed_stats`: implemented in `typhoon-native/src/app/storage.rs` (`storage_page`, 200-row pages) with `detailed_stats_with_size()` for the size column.
 - `Arc<str>` symbol/sector caching: partially implemented as the sector interner in ADR-075; full `Fundamentals` field migration remains intentionally rejected because the memory savings do not justify the cross-crate type churn.
 
 ## Related

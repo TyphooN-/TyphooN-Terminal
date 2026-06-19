@@ -11,8 +11,8 @@ The native app had an old Alpaca trade/quote streaming path:
 - `BrokerCmd::StartStream`
 - `AlpacaBroker::start_stream`
 - `BrokerMsg::StreamTick` / `BrokerMsg::StreamQuoteTick`
-- `engine/src/core/bar_builder.rs`
-- `native/src/app/app_runtime_stream_ticks.rs`
+- `typhoon-engine/src/core/bar_builder.rs`
+- `typhoon-native/src/app/app_runtime_stream_ticks.rs`
 
 That path was no longer reachable from the GUI after broker-command cleanup. It was also the wrong abstraction for the current product direction:
 

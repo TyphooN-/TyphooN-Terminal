@@ -42,7 +42,7 @@ impl TyphooNApp {
         } else {
             KRAKEN_SPOT_QUEUE_WINDOW
                 + KRAKEN_FUTURES_QUEUE_WINDOW
-                + 96 // Kraken Equities native/demand repair lane
+                + 96 // Kraken Equities native demand repair lane
                 + 64 // Alpaca assist/broad lane
                 + YAHOO_CHART_QUEUE_WINDOW
         };

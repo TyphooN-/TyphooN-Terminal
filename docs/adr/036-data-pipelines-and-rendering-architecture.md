@@ -46,7 +46,7 @@ Darwinex FTP Server → NAS (ZFS raidz2) → darwin_ftp.rs parser
 - **Components:** RETURN, TRADES, POSITIONS, EXPERIENCE, RISK_STABILITY, PERFORMANCE, etc. (23 files)
 - **Quotes:** `quotes/YYYY-MM/*.csv.gz` with `timestamp,quote` tick data
 - **Directory:** User-configurable (Settings → Darwinex FTP Dir)
-- **Parser:** `engine/src/core/darwin_ftp.rs`
+- **Parser:** `typhoon-engine/src/core/darwin_ftp.rs`
 - **Access pattern:** Direct path construction (`{ftp_dir}/{ticker}/RETURN`), no recursive find
 
 ### 4. SEC EDGAR (Filings & insider trades)

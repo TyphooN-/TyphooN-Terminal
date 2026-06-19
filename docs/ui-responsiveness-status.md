@@ -15,7 +15,7 @@ The native UI's "UI frame stall detail" logs were dominated by `session_save_ms`
 only ~6.6 KB, so serialization was never the cost. The time was the **write
 path** blocking on the cache's single write connection.
 
-`SqliteCache` (`engine/src/core/cache.rs`) has one `conn: Mutex<Connection>`
+`SqliteCache` (`typhoon-engine/src/core/cache.rs`) has one `conn: Mutex<Connection>`
 (WAL, `busy_timeout=5s`, `wal_autocheckpoint=2000`) shared by all Rust writers.
 The Rust write path is already lock-lean — `put_bars` / `put_bars_with_level` /
 `merge_bars` compress **outside** the lock and hold `conn` only for a single-row

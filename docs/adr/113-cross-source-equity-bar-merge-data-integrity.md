@@ -3,7 +3,7 @@
 **Status:** Accepted | **Date:** 2026-06-11
 
 Companion to **ADR-112** (which sources feed the merge) and **ADR-103** (provider
-lanes). Governs `chart_merge_equity_raw_bars` in `native/src/app/chart.rs`.
+lanes). Governs `chart_merge_equity_raw_bars` in `typhoon-native/src/app/chart.rs`.
 
 ## Context
 

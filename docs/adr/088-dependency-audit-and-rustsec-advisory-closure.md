@@ -3,7 +3,7 @@
 **Date:** 2026-04-25
 **Updated:** 2026-05-06
 **Status:** Implemented
-**Related:** `Cargo.toml`, `engine/Cargo.toml`, `cli/Cargo.toml`, `typhoon-transpiler/Cargo.toml`, `native/Cargo.toml`, `vendor/thirtyfour/Cargo.toml`, `Cargo.lock`, ADR-031 (dependency alignment), ADR-044 (performance security audit)
+**Related:** `Cargo.toml`, `typhoon-engine/Cargo.toml`, `cli/Cargo.toml`, `typhoon-transpiler/Cargo.toml`, `typhoon-native/Cargo.toml`, `vendor/thirtyfour/Cargo.toml`, `Cargo.lock`, ADR-031 (dependency alignment), ADR-044 (performance security audit)
 
 ## Context
 
@@ -69,19 +69,19 @@ time, transitively via `thirtyfour` and `image → ravif → rav1e`.
 Take the rest of the available majors:
 
 - **`rand 0.9 → 0.10`**: one call site (`rand::random()` in
-  `engine/src/core/lan_sync.rs`); API survived the bump.
+  `typhoon-engine/src/core/lan_sync.rs`); API survived the bump.
 - **`wasm-encoder 0.246 → 0.247`**: `typhoon-transpiler` only;
   no source edits.
 - **RustCrypto family**: `sha2 0.10 → 0.11`, `hmac 0.12 → 0.13`,
   `pbkdf2 0.12 → 0.13` (drop unused `simple` feature). One
   trait-import change: `new_from_slice` moved from `Mac` to
-  `KeyInit`, so `engine/src/broker/kraken_broker.rs` and
-  `engine/src/core/lan_sync.rs` add `KeyInit` to their `use hmac::`
+  `KeyInit`, so `typhoon-engine/src/broker/kraken_broker.rs` and
+  `typhoon-engine/src/core/lan_sync.rs` add `KeyInit` to their `use hmac::`
   lines.
 - **`tokio-tungstenite 0.28 → 0.29`**: call sites already used
   `Utf8Bytes` via `.into()` from prior work, so the bump was a
   Cargo.toml-only edit.
-- **`zip 7 → 8`**: `engine/src/core/darwin.rs` only; APIs
+- **`zip 7 → 8`**: `typhoon-engine/src/core/darwin.rs` only; APIs
   (`ZipArchive::new`, `ZipWriter::new`, `SimpleFileOptions`)
   survived.
 
@@ -90,7 +90,7 @@ Take the rest of the available majors:
 The 2026-05-06 follow-up closed the remaining dependency warning that
 was previously documented as out of scope:
 
-- `native` now depends on `image` with `default-features = false` and
+- `typhoon-native` now depends on `image` with `default-features = false` and
   `features = ["webp"]`, matching the actual screenshot-export need
   and dropping the unused AVIF/ravif/rav1e dependency chain.
 - The vendored `thirtyfour 0.36.1` manifest keeps the upstream crate

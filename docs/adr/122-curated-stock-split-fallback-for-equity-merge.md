@@ -4,7 +4,7 @@
 
 Companion to **ADR-113** (Cross-Source Equity Bar Merge & Data Integrity).
 Governs split input to `chart_back_adjust_bars_for_splits` /
-`chart_known_splits_from_cache` in `native/src/app/chart.rs`.
+`chart_known_splits_from_cache` in `typhoon-native/src/app/chart.rs`.
 
 ## Context
 

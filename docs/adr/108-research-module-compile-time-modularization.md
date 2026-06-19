@@ -5,14 +5,14 @@
 
 ## Context
 
-`typhoon-engine::core::research` had become the dominant engine compile-time and rust-analyzer hot spot. Before this ADR, `engine/src/core/research/mod.rs` contained roughly 90k lines, including public DTOs, constants, provider fetchers, SQLite helpers, and many compute surfaces.
+`typhoon-engine::core::research` had become the dominant engine compile-time and rust-analyzer hot spot. Before this ADR, `typhoon-engine/src/core/research/mod.rs` contained roughly 90k lines, including public DTOs, constants, provider fetchers, SQLite helpers, and many compute surfaces.
 
 Measured before the first split:
 
 - Warm `cargo check -p typhoon-engine`: about 9.4s.
 - Touching a small engine helper previously cost about 11.5s.
 - Touching the research monolith previously cost about 11.9s.
-- `engine/src/core/research/mod.rs`: 90,269 lines.
+- `typhoon-engine/src/core/research/mod.rs`: 90,269 lines.
 
 The terminal already uses `mold` and high parallelism, so the next useful compile-speed work is structural: reduce the blast radius of the research module and eventually isolate research from broker/storage edit loops.
 
@@ -22,40 +22,40 @@ Split research in verified increments while preserving the public API through ro
 
 Initial structure:
 
-- `engine/src/core/research/mod.rs`
+- `typhoon-engine/src/core/research/mod.rs`
   - orchestration, existing fetch/cache/compute code not yet extracted
   - `pub use` re-exports for extracted modules
-- `engine/src/core/research/types.rs`
+- `typhoon-engine/src/core/research/types.rs`
   - public research DTOs and constants formerly at the top of `mod.rs`
-- `engine/src/core/research/technical.rs`
+- `typhoon-engine/src/core/research/technical.rs`
   - TECH compute surface (`compute_technical_indicators`) and direct dependencies
-- `engine/src/core/research/providers.rs`
+- `typhoon-engine/src/core/research/providers.rs`
   - small external provider fetchers for Finnhub, FMP transcript endpoints, and Yahoo quotes
-- `engine/src/core/research/storage_core.rs`
+- `typhoon-engine/src/core/research/storage_core.rs`
   - first-generation SQLite schema/helpers for profiles, peers, earnings, press, sentiment, transcripts, and IPO calendar
-- `engine/src/core/research/storage_market_data.rs`
+- `typhoon-engine/src/core/research/storage_market_data.rs`
   - v2-v5 SQLite market/fundamentals cache helpers for dividends, estimates, ratings, financials, executives, splits, holdings, recommendations, targets, ESG, index members, insider/institutional holders, shares float, historical prices, and earnings surprises
-- `engine/src/core/research/storage_macro_snapshots.rs`
+- `typhoon-engine/src/core/research/storage_macro_snapshots.rs`
   - v6 macro/snapshot storage helpers for world indices, market movers, sector performance, and WACC snapshots
-- `engine/src/core/research/storage_valuation_snapshots.rs`
+- `typhoon-engine/src/core/research/storage_valuation_snapshots.rs`
   - v7 storage helpers for currency rates, beta, DDM, relative valuation, and FIGI snapshots
-- `engine/src/core/research/storage_valuation_models.rs`
+- `typhoon-engine/src/core/research/storage_valuation_models.rs`
   - v8 storage helpers for HRA, DCF, SVM, options-chain, and implied-volatility snapshots
-- `engine/src/core/research/storage_market_stat_snapshots.rs`
+- `typhoon-engine/src/core/research/storage_market_stat_snapshots.rs`
   - v9 storage helpers for seasonality, correlation, total-return, technical, and volatility-skew snapshots
-- `engine/src/core/research/storage_fundamental_risk_snapshots.rs`
+- `typhoon-engine/src/core/research/storage_fundamental_risk_snapshots.rs`
   - v10 storage helpers for leverage, accruals, realized volatility, free-cash-flow yield, and short-interest snapshots
-- `engine/src/core/research/storage_financial_quality_snapshots.rs`
+- `typhoon-engine/src/core/research/storage_financial_quality_snapshots.rs`
   - v11 storage helpers for Altman Z, Piotroski, OHLC volatility, EPS beat, and price-target dispersion snapshots
-- `engine/src/core/research/storage_insider_dividend_momentum_snapshots.rs`
+- `typhoon-engine/src/core/research/storage_insider_dividend_momentum_snapshots.rs`
   - v12 storage helpers for insider activity, dividend growth, earnings momentum, sector rotation, and upside/downside momentum snapshots
-- `engine/src/core/research/valuation.rs`
+- `typhoon-engine/src/core/research/valuation.rs`
   - valuation and market-stat snapshot computations (`compute_wacc_snapshot`, beta/DDM/relative valuation/HRA/DCF/SVM) plus closely related option-expiry parsing helpers
-- `engine/src/core/research/market_stats.rs`
+- `typhoon-engine/src/core/research/market_stats.rs`
   - market/statistical snapshot computations for IV rank, seasonality, peer correlation matrices, total return, and option volatility skew
-- `engine/src/core/research/fundamental_stats.rs`
+- `typhoon-engine/src/core/research/fundamental_stats.rs`
   - fundamental leverage and earnings-quality snapshot computations (`compute_leverage_snapshot`, `compute_accruals_snapshot`)
-- `engine/src/core/research/return_risk_stats.rs`
+- `typhoon-engine/src/core/research/return_risk_stats.rs`
   - dense return-distribution and risk-statistical snapshot computations from the return-risk feature families (`RETSKEW`, `RETKURT`, `TAILR`, drawdown/run-length/range/autocorrelation/fractal/normality/tail-risk surfaces, etc.)
 
 Rules for future slices:
@@ -93,8 +93,8 @@ Next structural targets, in order:
    - `.cargo/config.toml` now sets `rustc-wrapper = "sccache"` under `[build]`.
    - Verification: normal incremental `cargo check -p typhoon-engine` completed in 10.18s but was non-cacheable because Cargo incremental compilation is enabled; `CARGO_INCREMENTAL=0 cargo check -p typhoon-engine` executed through sccache with 2 Rust cache misses and no cache errors. Do not disable incremental globally for local dev; use `CARGO_INCREMENTAL=0` for CI/clean multi-branch cache reuse.
 6. Keep `tokio-tungstenite` TLS cleanup gated behind LAN-sync verification, because LAN sync currently uses native-tls self-signed certificate handling.
-   - `tokio-tungstenite` is still pulled with `native-tls` through `engine/Cargo.toml`.
-   - `engine/src/core/lan_sync.rs` directly builds `native_tls::TlsAcceptor` / `TlsConnector`, wraps with `tokio_native_tls`, passes `Connector::NativeTls`, and reads peer certificates through `MaybeTlsStream::NativeTls`.
+   - `tokio-tungstenite` is still pulled with `native-tls` through `typhoon-engine/Cargo.toml`.
+   - `typhoon-engine/src/core/lan_sync.rs` directly builds `native_tls::TlsAcceptor` / `TlsConnector`, wraps with `tokio_native_tls`, passes `Connector::NativeTls`, and reads peer certificates through `MaybeTlsStream::NativeTls`.
    - That means TLS cleanup is real but not a safe quick flag flip; migrate LAN sync to rustls or isolate LAN sync behind a feature before removing native-tls.
 
 ## Current Extraction Ranking
@@ -127,7 +127,7 @@ the root:
 
 ### Next targets (in order)
 
-1. **Move to native hotspots.** The main engine compute-model files above are now thin parents; the next high-value compile-time wins are `native/src/app/technical_analysis.rs`, `native/src/app/chart.rs`, and `native/src/app/app_broker_processor/research_compute/technical_indicators.rs`.
+1. **Move to native hotspots.** The main engine compute-model files above are now thin parents; the next high-value compile-time wins are `typhoon-native/src/app/technical_analysis.rs`, `typhoon-native/src/app/chart.rs`, and `typhoon-native/src/app/app_broker_processor/research_compute/technical_indicators.rs`.
 2. **Extract residual `mod.rs` storage** into `storage_*` modules if `mod.rs` regrows.
 3. **Keep semantic type modules and re-exports stable.** `types.rs` is now a small root surface; future DTO additions should land in the matching semantic child module, not back in a monolith.
 

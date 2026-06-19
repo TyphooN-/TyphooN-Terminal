@@ -59,7 +59,7 @@ provenance:
 - Native source wins on overlapping timestamp buckets.
 - Older fallback bars may prepend deep history.
 - Newer fallback bars may front-fill if their latest timestamp beats the selected
-  native/source lane.
+  typhoon-native/source lane.
 - Fallback bars never overwrite native cache namespaces.
 - Indicators/research may use merged bars only when provenance is available.
 - Strategies/backtests must be able to reject fallback spans unless explicitly
@@ -308,7 +308,7 @@ Historical candle source and live quote/depth source are independent:
 
 For market orders, stale/delayed quote warnings matter more than candle freshness.
 A chart can be visually useful from Yahoo/Polygon/Alpaca bars while the order
-button still needs broker-native/current quote state.
+button still needs broker-typhoon-native/current quote state.
 
 ## Reopen criteria / provider-gated verification
 

@@ -1,12 +1,12 @@
-# ADR-086: native/app.rs Module Decomposition for Compile Speed
+# ADR-086: typhoon-native/app.rs Module Decomposition for Compile Speed
 
 **Date:** 2026-04-23
 **Status:** Accepted
-**Related:** `native/src/app.rs`, `native/src/app/`, ADR-001 (native GPU architecture)
+**Related:** `typhoon-native/src/app.rs`, `typhoon-native/src/app/`, ADR-001 (native GPU architecture)
 
 ## Context
 
-`native/src/app.rs` had grown past 158k lines as the home of `TyphooNApp`
+`typhoon-native/src/app.rs` had grown past 158k lines as the home of `TyphooNApp`
 plus every floating-window renderer, every command handler, every keyboard
 binding, and every popup body in the native UI. Even small UI tweaks
 recompiled the whole file because Rust's compilation unit is the crate, not
@@ -24,30 +24,30 @@ otherwise touched only its own state.
 
 ## Decision
 
-Decompose `native/src/app.rs` into a `native/src/app/` submodule tree,
+Decompose `typhoon-native/src/app.rs` into a `typhoon-native/src/app/` submodule tree,
 moving the largest self-contained renderers and leaving `TyphooNApp` plus
 the chart / palette / command-dispatch core in the parent file.
 
 **Final layout:**
 
 ```
-native/src/app.rs                  — TyphooNApp, chart, palette, dispatch
-native/src/app/ai.rs               — AI Chat, Claude Code, Gemini CLI,
+typhoon-native/src/app.rs                  — TyphooNApp, chart, palette, dispatch
+typhoon-native/src/app/ai.rs               — AI Chat, Claude Code, Gemini CLI,
                                      Codex CLI, AI Sessions, AI Response
                                      Cache (six related windows)
-native/src/app/alpaca_sync.rs      — broker sync capacities, TF filters,
+typhoon-native/src/app/alpaca_sync.rs      — broker sync capacities, TF filters,
                                      no-data/backfill-complete marks
-native/src/app/auto_compact.rs     — zstd-22 idle auto-compact gate
+typhoon-native/src/app/auto_compact.rs     — zstd-22 idle auto-compact gate
                                      and schedule helpers
-native/src/app/bar_sync.rs         — bar-sync health aggregates for
+typhoon-native/src/app/bar_sync.rs         — bar-sync health aggregates for
                                      Sync Status and Storage Manager
-native/src/app/broker_fetch.rs     — async broker bar-fetch workers and
+typhoon-native/src/app/broker_fetch.rs     — async broker bar-fetch workers and
                                      response normalization
-native/src/app/settings.rs         — Settings window
-native/src/app/storage.rs          — Storage Manager + filtered bulk delete
-native/src/app/sync_status.rs      — Sync Status (per-broker % healthy)
-native/src/app/tool_windows.rs     — Indicator + analytical tool windows
-native/src/app/strategy_windows.rs — Strategy / backtest / optimizer windows
+typhoon-native/src/app/settings.rs         — Settings window
+typhoon-native/src/app/storage.rs          — Storage Manager + filtered bulk delete
+typhoon-native/src/app/sync_status.rs      — Sync Status (per-broker % healthy)
+typhoon-native/src/app/tool_windows.rs     — Indicator + analytical tool windows
+typhoon-native/src/app/strategy_windows.rs — Strategy / backtest / optimizer windows
 ```
 
 The original 2026-04-23 split moved the six renderer bundles. Subsequent
@@ -78,7 +78,7 @@ The two-step split was deliberate:
   strategy windows.
 
 The original ~158k-line `app.rs` has since been decomposed far further: as of
-2026-06, `native/src/app.rs` is **~3,093 lines**, and the two seams this ADR
+2026-06, `typhoon-native/src/app.rs` is **~3,093 lines**, and the two seams this ADR
 flagged have themselves been split into directories — `app/floating_windows/` is
 now **81 files (~61k lines total)** and `command_palette.rs` is **~684 lines**.
 The renderer/window decomposition this ADR set in motion is essentially complete;
@@ -103,7 +103,7 @@ isolation when they are the only thing changed.
   place. The split is for renderer code, not for state.
 - **Future renderers should land in submodules from day one.** The
   precedent is set: a new "X Window" renderer goes into
-  `native/src/app/x_window.rs` (or a related bundle), not into `app.rs`.
+  `typhoon-native/src/app/x_window.rs` (or a related bundle), not into `app.rs`.
 - **Future broker/sync policy should land in sync modules from day one.**
   Scheduler budget constants and helper functions belong in
   `app/sync_config.rs`, selector logic in `app/alpaca_sync.rs` or a broker-
@@ -140,7 +140,7 @@ isolation when they are the only thing changed.
 
 - `cargo build --workspace` clean before and after each split commit.
 - `cargo test --workspace --lib` test counts unchanged across the split.
-- Spot-check: clean rebuild of `native` after touching only
+- Spot-check: clean rebuild of `typhoon-native` after touching only
   `app/storage.rs` should not rebuild any non-affected `app/*.rs`
   module's object file (verified by `cargo build -v` output showing
   one `rustc` invocation per touched module).

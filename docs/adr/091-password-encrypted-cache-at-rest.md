@@ -94,5 +94,5 @@ Before making live encryption default, benchmark:
 
 ## Verification
 
-- `cargo test --manifest-path engine/Cargo.toml encrypted_backup -- --nocapture`
+- `cargo test --manifest-path typhoon-engine/Cargo.toml encrypted_backup -- --nocapture`
 - `cargo check --manifest-path cli/Cargo.toml`

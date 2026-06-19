@@ -84,7 +84,7 @@ that slice. Valid reopen slices are:
 
 ## Consequences
 
-- **Pro:** Xynth parity is achievable without changing TyphooN's native/local-first architecture.
+- **Pro:** Xynth parity is achievable without changing TyphooN's native-first local architecture.
 - **Pro:** TyphooN can exceed Xynth where it already has broker execution, local cache ownership, LAN sync, risk tooling, and native charting.
 - **Con:** Full options-flow/GEX/dark-pool/borrow parity requires paid data feeds.
 - **Con:** Natural-language workflows need careful guardrails so AI plans remain repeatable, auditable, and source-grounded.

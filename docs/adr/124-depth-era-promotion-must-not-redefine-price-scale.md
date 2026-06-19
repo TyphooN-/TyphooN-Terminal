@@ -4,7 +4,7 @@
 
 Companion to **ADR-113** (Cross-Source Equity Bar Merge & Data Integrity) and
 **ADR-122** (Curated Stock-Split Fallback). Governs
-`chart_reconcile_depth_split_adjustment` in `native/src/app/chart.rs`.
+`chart_reconcile_depth_split_adjustment` in `typhoon-native/src/app/chart.rs`.
 
 ## Context
 

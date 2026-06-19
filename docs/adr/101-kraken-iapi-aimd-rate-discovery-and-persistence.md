@@ -69,7 +69,7 @@ inside an active Cloudflare backoff does not immediately hammer iapi again.
 
 ## Implementation Notes
 
-- Source: `engine/src/broker/kraken/iapi_limiter.rs`.
+- Source: `typhoon-engine/src/broker/kraken/iapi_limiter.rs`.
 - The persistence file is the configured Kraken iapi backoff state file, e.g.
   `kraken_iapi_backoff.json` under the app config directory.
 - `checkpoint_rate` is intentionally separate from `tuned_rate`; code and docs
@@ -151,4 +151,4 @@ non-iapi breadth lanes (Alpaca/Yahoo, ADR-102) instead.
   and legacy-file decoding.
 - `cargo test -p typhoon-engine iapi_limiter` exercises the limiter behavior.
 - `cargo check -p typhoon-engine` and `cargo check -p typhoon-native` verify the
-  engine/native integration compiles.
+  engine-to-native integration compiles.

@@ -9,29 +9,29 @@ TyphooN currently uses Kraken WebSocket v2, but not comprehensively.
 
 Source audit:
 
-- `engine/src/broker/kraken/ohlc_ws.rs`
+- `typhoon-engine/src/broker/kraken/ohlc_ws.rs`
   - uses `wss://ws.kraken.com/v2`
   - supports public `ohlc`
   - builds v2 subscribe/unsubscribe frames
   - parses snapshot/update OHLC frames
   - runs one reconnecting streamer per interval
-- `engine/src/broker/kraken/mod.rs`
+- `typhoon-engine/src/broker/kraken/mod.rs`
   - uses v2 `instrument` snapshot for Kraken tokenized equity/xStocks universe discovery
-- `engine/src/broker/kraken/public_book.rs`
+- `typhoon-engine/src/broker/kraken/public_book.rs`
   - still uses public WebSocket v1 endpoint `wss://ws.kraken.com`
   - subscribes to v1 `book` / `book-N`
   - parses v1 array frames with `as`/`bs` snapshot keys and `a`/`b` delta keys
-- `engine/src/broker/kraken/ws_v2.rs`
+- `typhoon-engine/src/broker/kraken/ws_v2.rs`
   - shared v2 endpoints, request ids, frame builders, ACK parsing, numeric/timestamp helpers
-- `engine/src/broker/kraken/ws_v2_ticker.rs`
+- `typhoon-engine/src/broker/kraken/ws_v2_ticker.rs`
   - v2 `ticker` parser, subscribe batching, reconnecting public streamer foundation
-- `engine/src/broker/kraken/ws_v2_book.rs`
+- `typhoon-engine/src/broker/kraken/ws_v2_book.rs`
   - v2 `book` parser/state helper, subscribe batching, reconnecting public streamer foundation
   - checksum validation/resync is still pending
-- `engine/src/broker/kraken/private_ws.rs`
+- `typhoon-engine/src/broker/kraken/private_ws.rs`
   - private account feed is v1 shape: `ownTrades` and `openOrders`
   - no v2 `executions` or `balances` channel parser yet
-- `native/src/app/kraken_ohlc_ws.rs`
+- `typhoon-native/src/app/kraken_ohlc_ws.rs`
   - app-level full-universe OHLC streamer/write path only; no L1/L2/L3 market-data dispatcher yet
 
 Kraken WebSocket v2 documentation exposes more than we currently consume:
@@ -71,7 +71,7 @@ Do not attempt one giant "support everything" patch. That would create a brittle
 
 ## Proposed module layout
 
-Under `engine/src/broker/kraken/`:
+Under `typhoon-engine/src/broker/kraken/`:
 
 - `ws_v2.rs`
   - shared constants/endpoints
@@ -106,11 +106,11 @@ Under `engine/src/broker/kraken/`:
 
 Native side:
 
-- `native/src/app/kraken_market_ws.rs`
+- `typhoon-native/src/app/kraken_market_ws.rs`
   - app-level supervisor for active/focused symbol L1/L2/trade streams
   - symbol subscription reconciliation when chart/watchlist/MTF focus changes
   - coalesced UI events so egui is not spammed per tick
-- `native/src/app/kraken_l3_ws.rs`
+- `typhoon-native/src/app/kraken_l3_ws.rs`
   - opt-in L3 supervisor
   - only for selected symbols/depth
   - clear status/errors/rate-budget display
@@ -136,9 +136,9 @@ Create fixture-driven parser tests using Kraken doc examples and saved live fram
 
 Actions:
 
-1. Add `engine/src/broker/kraken/ws_v2.rs`.
+1. Add `typhoon-engine/src/broker/kraken/ws_v2.rs`.
 2. Move shared v2 endpoint/request-id/ping/backoff pieces out of `ohlc_ws.rs` only if this does not churn the existing streamer.
-3. Add test fixtures under `engine/src/broker/kraken/fixtures/ws_v2/`:
+3. Add test fixtures under `typhoon-engine/src/broker/kraken/fixtures/ws_v2/`:
    - `ticker_snapshot.json`
    - `ticker_update.json`
    - `book_snapshot.json`

@@ -31,7 +31,7 @@ Three coupled changes shipped together:
 
 ### 1. DOM-aware article extractor (`scraper` crate)
 
-`engine/src/core/news.rs::extract_article_text` is rewritten on top of the `scraper` crate (built on `html5ever`). Two passes:
+`typhoon-engine/src/core/news.rs::extract_article_text` is rewritten on top of the `scraper` crate (built on `html5ever`). Two passes:
 
 - **First pass — known containers in priority order**:
   ```
@@ -76,7 +76,7 @@ Three coupled changes shipped together:
 
 Only absolute `http://` / `https://` URIs are returned (defensive against `javascript:` and relative paths).
 
-The body hydrator (`native/src/app/news_ingest.rs`) calls the new path and writes via `upsert_news_body_and_image`, which uses a conditional SQL update so a backfilled image never clobbers an image the source RSS already supplied:
+The body hydrator (`typhoon-native/src/app/news_ingest.rs`) calls the new path and writes via `upsert_news_body_and_image`, which uses a conditional SQL update so a backfilled image never clobbers an image the source RSS already supplied:
 
 ```sql
 image_url = CASE WHEN image_url = '' AND ?3 <> '' THEN ?3 ELSE image_url END
@@ -146,7 +146,7 @@ A real test of "what does HTML rendering buy us?" reveals: paragraph breaks, hyp
 - **Hero images appear at the top of every article view** when the source supplied one or the body fetcher could extract og:image. Yahoo articles, previously image-less, now have hero images for the first time.
 - **CommonMark bodies render with paragraph breaks and clickable links** instead of one wall of text.
 - **No remote JS executes** as part of news rendering. Image subresources are the only outbound requests, and they go through egui's loader on user-visible articles only.
-- **Six new unit tests** in `engine/src/core/news.rs` cover the extractor:
+- **Six new unit tests** in `typhoon-engine/src/core/news.rs` cover the extractor:
   - `extract_article_prefers_caas_body_over_page_chrome` — primary Yahoo case
   - `extract_article_picks_semantic_article_tag`
   - `extract_article_falls_back_to_body_when_no_container`

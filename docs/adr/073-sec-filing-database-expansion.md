@@ -5,7 +5,7 @@
 
 ## Context
 
-The original SEC filing scanner (ADR-034, engine/src/core/sec_filing.rs) tracked 30+ form
+The original SEC filing scanner (ADR-034, typhoon-engine/src/core/sec_filing.rs) tracked 30+ form
 types with metadata storage, Form 4 insider trade parsing, and importance-scored alerts.
 However it had a 100-filing display limit, 90-day insider trade window, no full-text search,
 no filing content storage, and no broker scope filtering. Users needed a growing, searchable

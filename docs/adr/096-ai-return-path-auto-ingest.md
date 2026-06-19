@@ -4,7 +4,7 @@
 **Date:** 2026-05-05
 **Related:** ADR-080 (web research ingestion + packet viewer), ADR-082
 (AI session persistence), ADR-083 (AI response cache),
-`native/src/app.rs`, `native/src/app/ai.rs`
+`typhoon-native/src/app.rs`, `typhoon-native/src/app/ai.rs`
 
 ## Context
 
@@ -36,11 +36,11 @@ Implemented as one shared app helper:
 
 Hook points:
 
-- Claude Code CLI response drain in `native/src/app/ai.rs`
-- Gemini CLI response drain in `native/src/app/ai.rs`
-- Codex CLI response drain in `native/src/app/ai.rs`
+- Claude Code CLI response drain in `typhoon-native/src/app/ai.rs`
+- Gemini CLI response drain in `typhoon-native/src/app/ai.rs`
+- Codex CLI response drain in `typhoon-native/src/app/ai.rs`
 - Hosted AI Chat `BrokerMsg::JsonResult("AiChat", ...)` receive arm in
-  `native/src/app.rs`
+  `typhoon-native/src/app.rs`
 
 `INGEST_RESEARCH` remains available for external web UIs, copied
 transcripts, and LAN remote ingest.
@@ -56,5 +56,5 @@ transcripts, and LAN remote ingest.
 
 ## Verification
 
-- `cargo test --manifest-path native/Cargo.toml parse_ask_args -- --nocapture`
-- `cargo check --manifest-path native/Cargo.toml`
+- `cargo test --manifest-path typhoon-native/Cargo.toml parse_ask_args -- --nocapture`
+- `cargo check --manifest-path typhoon-native/Cargo.toml`

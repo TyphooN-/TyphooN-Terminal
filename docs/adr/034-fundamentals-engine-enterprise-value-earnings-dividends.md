@@ -9,7 +9,7 @@ The terminal needs comprehensive fundamentals data for all Darwinex MT5 symbols 
 
 ## Decision
 
-Build `engine/src/core/fundamentals.rs` — a Rust module that replicates and extends the Python SECScrape/EVScrape functionality, storing all data in SQLite for offline access.
+Build `typhoon-engine/src/core/fundamentals.rs` — a Rust module that replicates and extends the Python SECScrape/EVScrape functionality, storing all data in SQLite for offline access.
 
 ### Data Sources
 

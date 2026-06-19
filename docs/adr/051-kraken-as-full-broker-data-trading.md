@@ -9,10 +9,10 @@
 Kraken is the terminal's crypto exchange integration. TyphooN uses it in two
 separate ways:
 
-- `engine/src/core/kraken.rs` fetches public Spot OHLCV bars.
-- `engine/src/core/kraken_futures.rs` fetches public Futures instruments and
+- `typhoon-engine/src/core/kraken.rs` fetches public Spot OHLCV bars.
+- `typhoon-engine/src/core/kraken_futures.rs` fetches public Futures instruments and
   chart candles.
-- `engine/src/broker/kraken_broker.rs` owns authenticated account and order
+- `typhoon-engine/src/broker/kraken_broker.rs` owns authenticated account and order
   REST calls.
 
 The official Spot REST surface includes market data, account data, trading,

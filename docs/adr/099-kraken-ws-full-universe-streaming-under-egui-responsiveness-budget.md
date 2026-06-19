@@ -7,7 +7,7 @@ subscription (which caused connection-reset churn and multi-second egui stalls,
 and backfilled no history when subscribed `snapshot=false`). The egui
 responsiveness analysis below remains valid; the streaming *scope* does not.
 **Date:** 2026-05-24
-**Related:** ADR-089 (zstd compression policy), ADR-032 (performance architecture), ADR-094 (Kraken async bar sync), ADR-098 (per-frame O(1) discipline), `native/src/app/kraken_ohlc_ws.rs`, `native/src/app/app_runtime.rs`, `native/src/app/app_runtime_kraken_ws.rs`, `engine/src/broker/kraken/ohlc_ws.rs`, `engine/src/core/cache.rs::merge_bars_fast`
+**Related:** ADR-089 (zstd compression policy), ADR-032 (performance architecture), ADR-094 (Kraken async bar sync), ADR-098 (per-frame O(1) discipline), `typhoon-native/src/app/kraken_ohlc_ws.rs`, `typhoon-native/src/app/app_runtime.rs`, `typhoon-native/src/app/app_runtime_kraken_ws.rs`, `typhoon-engine/src/broker/kraken/ohlc_ws.rs`, `typhoon-engine/src/core/cache.rs::merge_bars_fast`
 
 ## Context
 
@@ -45,7 +45,7 @@ thread**. Specifically:
 
 ### 1. Defer cache writes to bar close
 
-`native/src/app/kraken_ohlc_ws.rs::run_ws_bar_writer` buffers incoming
+`typhoon-native/src/app/kraken_ohlc_ws.rs::run_ws_bar_writer` buffers incoming
 bars by `(symbol, interval, interval_begin)` with last-write-wins. Only
 bars whose bucket has fully closed are flushed; open in-progress buckets
 stay buffered until the interval rolls over and the final close value
@@ -70,12 +70,12 @@ base bar zstd level such as 22 (encoder ~5–10 MB/s) that pegs cores for
 tens of seconds; the persisted base level is user-selectable now, but the
 WS hot path still needs a fixed low-latency carve-out.
 
-`engine/src/core/cache.rs::merge_bars_fast` is the WS-only variant that
+`typhoon-engine/src/core/cache.rs::merge_bars_fast` is the WS-only variant that
 calls `put_bars_with_level(.., 3)`. zstd-3 cuts encode time ~10–20× at
 the cost of ~15–20% larger blobs **until the next compaction pass**.
 
 The promotion is automatic: `compact_storage` at
-`engine/src/core/cache.rs:2390` filters `WHERE zstd_level < target`, so
+`typhoon-engine/src/core/cache.rs:2390` filters `WHERE zstd_level < target`, so
 the next scheduled `auto_compact` run (or the manual `Compact (zstd-22)`
 button in Storage Manager) picks the WS-written rows up and rewrites
 them at zstd-22. ADR-089 §5 captures the formal carve-out. Operators do
@@ -157,17 +157,17 @@ open-orders refresh) drifts back onto the egui frame.
 
 ## Implementation pointers
 
-- WS bar writer: `native/src/app/kraken_ohlc_ws.rs::run_ws_bar_writer`,
+- WS bar writer: `typhoon-native/src/app/kraken_ohlc_ws.rs::run_ws_bar_writer`,
   `partition_closed_bars`, `flush_ws_bars` (uses `merge_bars_fast`).
-- Hot-path merge: `engine/src/core/cache.rs::merge_bars_fast`,
+- Hot-path merge: `typhoon-engine/src/core/cache.rs::merge_bars_fast`,
   `put_bars_with_level`.
 - Spawn lifecycle: `maybe_start_kraken_ws_ohlc` +
   `kraken_ws_ohlc_last_spawn_retry` in `app_runtime.rs`; runtime status/freshness message handling lives in `app_runtime_kraken_ws.rs`.
 - User-interaction reset: top of `eframe::App::update` in
   `app_runtime.rs` (~line 40).
-- Auto-compact promotion: `engine/src/core/cache.rs::compact_storage`
+- Auto-compact promotion: `typhoon-engine/src/core/cache.rs::compact_storage`
   filter on `zstd_level < target`; weekly schedule in
-  `native/src/app/auto_compact.rs`.
+  `typhoon-native/src/app/auto_compact.rs`.
 
 ## Non-goals
 

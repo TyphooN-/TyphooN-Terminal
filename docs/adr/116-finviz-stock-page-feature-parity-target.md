@@ -10,7 +10,7 @@ Goal: present **100% of what a Finviz stock page shows** (reference: `https://fi
 
 A Finviz stock page is four things: (1) a dense ~100-field fundamentals snapshot table, (2) a price chart with SMA overlays, (3) an insider-trading table, (4) an aggregated news/headlines list. Finviz site-wide additionally offers a 70+ filter **screener**, sector/industry **groups** (performance), and a heatmap **map**.
 
-The finding below is that TyphooN already covers the large majority of the snapshot via `engine/src/core/fundamentals.rs` (ADR-034), the research packet (ADR-079), SEC/insider (ADR-073), analyst ratings (Finnhub), and bar-derived technicals. "100%" is therefore mostly a **derivation + presentation** exercise (compute the few missing ratios/return-windows from data we already hold) plus a short list of true provider gaps.
+The finding below is that TyphooN already covers the large majority of the snapshot via `typhoon-engine/src/core/fundamentals.rs` (ADR-034), the research packet (ADR-079), SEC/insider (ADR-073), analyst ratings (Finnhub), and bar-derived technicals. "100%" is therefore mostly a **derivation + presentation** exercise (compute the few missing ratios/return-windows from data we already hold) plus a short list of true provider gaps.
 
 ## Finviz stock-page field inventory (2026-06-12)
 

@@ -21,7 +21,7 @@ high-impact opportunities:
 
 ### Custom Allocator: mimalloc
 - Added `mimalloc = { version = "0.1", default-features = false }` to
-  native/Cargo.toml.
+  typhoon-native/Cargo.toml.
 - Wired as global allocator in main.rs:
   ```rust
   #[global_allocator]
@@ -85,5 +85,5 @@ unwrap/expect violations.
 ## Files Changed
 
 - `Cargo.toml` — release profile flags
-- `native/Cargo.toml` — mimalloc dependency
-- `native/src/main.rs` — global allocator declaration
+- `typhoon-native/Cargo.toml` — mimalloc dependency
+- `typhoon-native/src/main.rs` — global allocator declaration

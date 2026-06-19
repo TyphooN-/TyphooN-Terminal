@@ -183,7 +183,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] Display-symbol normalization to EA's symbol table
 
 ### Phase 20: Performance & Compile-Speed
-- [x] native/app.rs split into submodules: ai, settings, storage, sync_status, tool_windows, strategy_windows, alpaca_sync, bar_sync, auto_compact (ADR-086)
+- [x] typhoon-native/app.rs split into submodules: ai, settings, storage, sync_status, tool_windows, strategy_windows, alpaca_sync, bar_sync, auto_compact (ADR-086)
 - [x] Alpaca sync autotuning by data tier (ADR-087)
 - [x] Kraken public bar sync no longer blocked behind CryptoCompare deep-history work; cache merge/write moved off async workers (ADR-094)
 - [x] Documented Kraken Spot public/private rate-limit pacing, cache-depth-aware window sizing

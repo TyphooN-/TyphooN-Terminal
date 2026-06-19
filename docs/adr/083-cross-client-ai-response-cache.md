@@ -3,8 +3,8 @@
 **Status:** Accepted
 **Date:** 2026-04-17
 **Supersedes/extends:** ADR-082 (AI session persistence)
-**Related:** `engine/src/core/ai_response_cache.rs`,
-`engine/src/core/lan_sync.rs`, `native/src/app.rs`
+**Related:** `typhoon-engine/src/core/ai_response_cache.rs`,
+`typhoon-engine/src/core/lan_sync.rs`, `typhoon-native/src/app.rs`
 
 ## Context
 

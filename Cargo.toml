@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "engine",
-    "native",
+    "typhoon-engine",
+    "typhoon-native",
     "typhoon-transpiler",
 ]
 
@@ -23,7 +23,7 @@ hmac = "0.13"
 pbkdf2 = "0.13"
 base64 = "0.22"
 typhoon-transpiler = { path = "typhoon-transpiler" }
-typhoon-engine = { path = "engine" }
+typhoon-engine = { path = "typhoon-engine" }
 
 [profile.release]
 opt-level = 3

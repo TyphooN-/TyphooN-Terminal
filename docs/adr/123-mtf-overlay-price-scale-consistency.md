@@ -5,7 +5,7 @@
 Companion to **ADR-004** (Multi-Timeframe Indicator Support), **ADR-113**
 (Cross-Source Equity Bar Merge & Data Integrity) and **ADR-122** (Curated
 Stock-Split Fallback). Governs `compute_mtf_sma` / `compute_multi_kama` in
-`native/src/app/chart.rs`.
+`typhoon-native/src/app/chart.rs`.
 
 ## Context
 

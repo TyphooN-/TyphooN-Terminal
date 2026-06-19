@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-25
 **Status:** Accepted
-**Related:** `engine/src/broker/alpaca.rs`, `native/src/app.rs`, ADR-009 (multi-broker), ADR-059 (SSD write reduction)
+**Related:** `typhoon-engine/src/broker/alpaca.rs`, `typhoon-native/src/app.rs`, ADR-009 (multi-broker), ADR-059 (SSD write reduction)
 
 ## Context
 

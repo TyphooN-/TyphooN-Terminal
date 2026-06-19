@@ -26,7 +26,7 @@ The requirement is:
 
 ## Decision
 
-Introduce `engine/src/core/news.rs` as a standalone module analogous to
+Introduce `typhoon-engine/src/core/news.rs` as a standalone module analogous to
 `core/research.rs`: typed articles, pure async fetchers, sync SQLite upsert
 helpers, and a fetch orchestrator for bulk scraping.
 
@@ -130,7 +130,7 @@ bound entirely — the bulk `NewsScrapeAll` handler reuses that pattern.
 
 ### LAN Sync Whitelist
 
-`research_news` is added to `engine/src/core/lan_sync.rs::SYNCABLE_TABLES`
+`research_news` is added to `typhoon-engine/src/core/lan_sync.rs::SYNCABLE_TABLES`
 and gets a `CREATE TABLE` clause in `create_table_sql()` plus an entry in
 `table_timestamp_column()` (`updated_at`). The generic `RequestTableSync` path
 replicates it the same way it already replicates `sec_filings` and
@@ -301,4 +301,4 @@ Engine test suite now at **577 passing** (was 565).
 
 - ADR-073 — SEC filing expansion (pattern for in-terminal content viewer)
 - ADR-076-105 — Deeper wiring passes (LAN sync whitelist precedent)
-- `engine/src/core/research.rs` — Module layout template for this module
+- `typhoon-engine/src/core/research.rs` — Module layout template for this module

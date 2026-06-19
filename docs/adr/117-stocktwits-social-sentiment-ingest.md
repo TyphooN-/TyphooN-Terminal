@@ -24,21 +24,21 @@ Finviz itself does **not** show social sentiment, so this is an *exceeds-parity*
 
 Add a **StockTwits ingest lane** as a new research data source feeding the research packet, mirroring the existing news-ingest pattern (ADR-078) and the standard snapshot pipeline (ADR-079: snapshot struct → SQLite table → `BrokerCmd`/`BrokerMsg` → packet emitter).
 
-1. **Engine fetcher** in `engine/src/core/research/providers.rs` (or a new `research/social.rs`): pull the public symbol stream, parse messages, and reduce to a snapshot:
+1. **Engine fetcher** in `typhoon-engine/src/core/research/providers.rs` (or a new `research/social.rs`): pull the public symbol stream, parse messages, and reduce to a snapshot:
    - `StockTwitsSentimentSnapshot { bullish: u32, bearish: u32, neutral: u32, message_count: u32, bull_bear_ratio: f64, velocity_24h: f64, top_messages: Vec<StockTwitsMessage> }` (type in `research/types.rs`).
    - `velocity_24h` = messages in the trailing 24h (momentum of chatter), computed from `created_at`.
 2. **Storage** via a small storage helper module (`storage_social_sentiment_snapshots.rs`) under the established `mod` + `pub use ::*` convention; cache namespace `stocktwits:{SYMBOL}`, zstd KV, TTL-bounded (e.g. refresh ≤ 1×/15min/symbol).
-3. **Packet section** in `native/src/app/symbol_investigation_packet.rs`: `### Social Sentiment — StockTwits ({SYM}, as of {ts})` listing bull/bear/neutral counts, bull:bear ratio, 24h velocity, and a few representative recent messages **with provenance + timestamps** (never presented as the terminal's own view).
+3. **Packet section** in `typhoon-native/src/app/symbol_investigation_packet.rs`: `### Social Sentiment — StockTwits ({SYM}, as of {ts})` listing bull/bear/neutral counts, bull:bear ratio, 24h velocity, and a few representative recent messages **with provenance + timestamps** (never presented as the terminal's own view).
 4. **Scheduling** through the existing research/news ingest scheduler with the centralized rate limiter (ADR-008); **opt-in**, **cache-first**, off the render thread (ADR-098 — no per-frame fetch/parse).
 5. **Provider isolation**: put the HTTP/JSON behind a small provider trait so swapping the public stream for the sentiment-v2/partner endpoint later is a localized change.
 
 ## Integration points
 
-- `engine/src/core/research/types.rs` — snapshot + message structs.
-- `engine/src/core/research/providers.rs` (or `social.rs`) — fetch + parse + reduce.
-- `engine/src/core/research/storage_social_sentiment_snapshots.rs` — schema/upsert/get, re-exported from `research/mod.rs`.
-- `native/src/app/news_ingest.rs` / `app_broker_processor` — schedule + store handler.
-- `native/src/app/symbol_investigation_packet.rs` — packet section.
+- `typhoon-engine/src/core/research/types.rs` — snapshot + message structs.
+- `typhoon-engine/src/core/research/providers.rs` (or `social.rs`) — fetch + parse + reduce.
+- `typhoon-engine/src/core/research/storage_social_sentiment_snapshots.rs` — schema/upsert/get, re-exported from `research/mod.rs`.
+- `typhoon-native/src/app/news_ingest.rs` / `app_broker_processor` — schedule + store handler.
+- `typhoon-native/src/app/symbol_investigation_packet.rs` — packet section.
 
 ## Risks / constraints
 

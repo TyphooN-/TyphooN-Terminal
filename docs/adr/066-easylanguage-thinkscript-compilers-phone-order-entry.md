@@ -124,7 +124,7 @@ Each new command is pattern-matched in the dispatch loop and validated before be
 
 Invalid commands are dropped with a `tracing::warn!` and never reach the native app.
 
-**Native relay (`native/src/app.rs` web cmd drain):**
+**Native relay (`typhoon-native/src/app.rs` web cmd drain):**
 - `PlaceOrder` → translates to the appropriate `BrokerCmd::AlpacaMarketOrder` / `AlpacaLimitOrder` / `AlpacaStopOrder` / `TastytradeEquityOrder` / `KrakenPlaceOrderAdvanced` depending on broker + type
 - `CancelOrder` → `BrokerCmd::AlpacaCancelOrder` (Alpaca), `BrokerCmd::TastytradeCancelOrder` (tastytrade, wired in ADR-071), or `BrokerCmd::KrakenCancelOrder`
 - `ClosePosition` → `BrokerCmd::ClosePosition` (Alpaca), `BrokerCmd::TastytradeClosePosition` (Tasty, from ADR-047), or `BrokerCmd::KrakenClosePosition`

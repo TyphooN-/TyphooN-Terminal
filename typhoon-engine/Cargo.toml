@@ -9,7 +9,7 @@ license = "BUSL-1.1"
 name = "typhoon_engine"
 path = "src/lib.rs"
 
-# Library crate only — native app binary lives in ../native/
+# Library crate only — native app binary lives in ../typhoon-native/
 
 [dependencies]
 serde = { workspace = true }

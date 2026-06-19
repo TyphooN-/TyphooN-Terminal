@@ -11,7 +11,7 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **GUI Binary** | ~25MB native (egui + wgpu) |
 | **Memory Usage** | ~50-100MB (vs thinkorswim ~2GB+) |
 | **Startup Time** | < 2 seconds |
-| **Lines of Code** | 170K+ native GUI + 135K+ engine/research (pure Rust) |
+| **Lines of Code** | 170K+ native GUI + 135K+ typhoon-engine/research (pure Rust) |
 | **Indicators** | 46+ chart indicators plus ~375 TA-Lib/Godel research surfaces |
 | **Commands** | 260+ Quake-console style (~) |
 | **Drawing Tools** | 89 drawing and annotation types |
@@ -274,7 +274,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [082](docs/adr/082-ai-chat-session-persistence-resume-slash-commands.md) | AI chat session persistence + resume slash commands |
 | [083](docs/adr/083-cross-client-ai-response-cache.md) | Cross-Client AI Response Cache |
 | [084](docs/adr/084-options-expiration-calendar-tier-1-market-tier-2-per-symbol.md) | Options Expiration Calendar — Tier 1 Market + Tier 2 Per-Symbol |
-| [086](docs/adr/086-native-app-rs-module-decomposition-for-compile-speed.md) | native/app.rs Module Decomposition for Compile Speed |
+| [086](docs/adr/086-typhoon-native-app-rs-module-decomposition-for-compile-speed.md) | typhoon-native/app.rs Module Decomposition for Compile Speed |
 | [087](docs/adr/087-alpaca-sync-autotuning-by-data-tier.md) | Alpaca Sync Autotuning by Data Tier |
 | [088](docs/adr/088-dependency-audit-and-rustsec-advisory-closure.md) | Dependency Audit and RustSec Advisory Closure |
 | [089](docs/adr/089-zstd-compression-level-policy-and-auto-compaction.md) | ZSTD Compression Level Policy and Auto-Compaction |

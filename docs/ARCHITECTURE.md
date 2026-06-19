@@ -101,7 +101,7 @@ The `SYM` / `SYMBOLS` command opens Symbol Explorer. It is the catalog-facing wa
 
 ```
 TyphooN-Terminal/
-├── native/                 # Native GPU application
+├── typhoon-native/                 # Native GPU application
 │   ├── src/
 │   │   ├── main.rs         # eframe init, wgpu renderer selection
 │   │   ├── app.rs          # TyphooNApp, chart pane, palette, dispatch
@@ -118,7 +118,7 @@ TyphooN-Terminal/
 │   │   │   └── strategy_windows.rs # Strategy / backtest / optimizer
 │   │   └── gpu_compute.rs  # WGSL indicator shaders
 │   └── Cargo.toml
-├── engine/                 # Shared engine library
+├── typhoon-engine/                 # Shared engine library
 │   ├── src/
 │   │   ├── lib.rs          # Crate root
 │   │   ├── core/

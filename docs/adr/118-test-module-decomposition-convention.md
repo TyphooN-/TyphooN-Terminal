@@ -7,9 +7,9 @@
 ## Context
 
 Two of the repo's largest files were not production code but **inline unit-test
-modules** that had grown with their subject. `engine/src/core/research/mod.rs`
+modules** that had grown with their subject. `typhoon-engine/src/core/research/mod.rs`
 carried a **~21,793-line `#[cfg(test)] mod tests`** (93% of the file, 1,030 tests),
-and `native/src/app/tests.rs` was a **3,463-line** standalone test module (179
+and `typhoon-native/src/app/tests.rs` was a **3,463-line** standalone test module (179
 tests). Several production files (`cache.rs`, `news.rs`, `sec_filing.rs`,
 `alpaca.rs`, `sync_workset.rs`, `app_runtime_support.rs`, `kraken_ohlc_ws.rs`) also
 carried 350–1,100-line inline `mod tests` blocks.
@@ -65,10 +65,10 @@ Conventions:
 
 - `research/mod.rs`: 21.8k-line inline `mod tests` → `research/tests.rs` → split into
   11 semantic files under `research/tests/` via `include!`.
-- `native/src/app/tests.rs`: 3.5k lines → 3 area files under `app/tests/` via
+- `typhoon-native/src/app/tests.rs`: 3.5k lines → 3 area files under `app/tests/` via
   `include!`.
-- Inline `mod tests` → dir-modules: `engine` `cache` / `news` / `sec_filing` /
-  `alpaca`; `native` `sync_workset` / `app_runtime_support` / `kraken_ohlc_ws`.
+- Inline `mod tests` → dir-modules: `typhoon-engine` `cache` / `news` / `sec_filing` /
+  `alpaca`; `typhoon-native` `sync_workset` / `app_runtime_support` / `kraken_ohlc_ws`.
 - Verified every step with `cargo check --tests` plus the full suites:
   **engine 1,638 passed, native 347 passed, 0 failed**. All pure moves.
 
@@ -84,7 +84,7 @@ Conventions:
 
 ## TODOs / deferred
 
-- `native/src/app/technical_analysis.rs` still has a ~220-line **mid-file**
+- `typhoon-native/src/app/technical_analysis.rs` still has a ~220-line **mid-file**
   `#[cfg(test)] mod tests` (closes at L7542 of 7809). Extracting it barely dents the
   7.8k-line file, whose real weight is production rendering code — defer until that
   file gets its production split (ADR-086 next targets) and pull the tests then.

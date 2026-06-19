@@ -3,8 +3,8 @@
 **Status:** Accepted
 **Date:** 2026-04-15
 **Supersedes/extends:** ADR-079 through ADR-079
-**Related:** `engine/src/core/research.rs`, `engine/src/core/lan_sync.rs`,
-`native/src/app.rs`, `docs/RESEARCH_PACKET.md`
+**Related:** `typhoon-engine/src/core/research.rs`, `typhoon-engine/src/core/lan_sync.rs`,
+`typhoon-native/src/app.rs`, `docs/RESEARCH_PACKET.md`
 
 ## Context
 
@@ -67,7 +67,7 @@ Ship two new features as a single bundle:
    copied to clipboard or saved to a `.md` file via a native file
    dialog.
 
-## Engine changes (`engine/src/core/research.rs`)
+## Engine changes (`typhoon-engine/src/core/research.rs`)
 
 1. **Types**:
    - `WebArticle { title, url, source, published_at, summary,
@@ -115,7 +115,7 @@ Ship two new features as a single bundle:
    - **Test suite: 876 → 883 passing (+7 = 2 storage +
      5 parser).**
 
-## LAN sync changes (`engine/src/core/lan_sync.rs`)
+## LAN sync changes (`typhoon-engine/src/core/lan_sync.rs`)
 
 - Added `research_web_articles` to `SYNCABLE_TABLES` under the
   `// ── ADR-080 web article ingestion ──` divider.
@@ -129,7 +129,7 @@ ingested articles from each other on the next sync window —
 whoever happens to be the "ingestor" for a given piece of news
 populates the whole terminal farm.
 
-## Native changes (`native/src/app.rs`)
+## Native changes (`typhoon-native/src/app.rs`)
 
 ### Ingest pipeline
 - **1 new `BrokerCmd` variant**: `IngestResearchArticles { text,

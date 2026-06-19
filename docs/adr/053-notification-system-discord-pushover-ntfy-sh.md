@@ -8,7 +8,7 @@ Price alerts and trading events need to reach the user when away from the termin
 
 ## Decision
 
-Pluggable async notification providers in `engine/src/notifications/`:
+Pluggable async notification providers in `typhoon-engine/src/notifications/`:
 - **Discord** — webhook POST with embed formatting
 - **Pushover** — push notifications to mobile devices
 - **ntfy.sh** — self-hostable pub/sub notifications

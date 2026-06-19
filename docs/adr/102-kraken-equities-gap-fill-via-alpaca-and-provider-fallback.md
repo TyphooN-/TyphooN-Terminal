@@ -282,7 +282,7 @@ Required indicators:
   chart-usable coverage number: a symbol/timeframe is Healthy if any eligible
   source namespace has a healthy bar window (`kraken-equities`, Alpaca assist,
   Yahoo Chart, or Stooq daily). It is a derived coverage view, not a cache source,
-  and is excluded from the auto-full-tilt native/provider aggregate to avoid
+  and is excluded from the auto-full-tilt native provider aggregate to avoid
   double-counting.
 - The denominator is timeframe-specific and must stay explicit:
   - `1Day`, `1Week`, and `1Month` native Kraken rows use the full loaded
@@ -365,7 +365,7 @@ Gap-fill work via Alpaca and other providers is now also subject to the three-ti
 
 ## Implementation status / reopen criteria
 
-- The current implementation covers the native/full-catalog denominator, Sync
+- The current implementation covers the native full-catalog denominator, Sync
   Status separation, bounded-concurrent Yahoo Chart fetches, Alpaca multi-symbol
   stock batches for broad non-focused assist work, Yahoo/Stooq fallback fetchers,
   and assist-only controls. Reopen this ADR for code work when adding a new

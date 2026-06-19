@@ -8,7 +8,7 @@ With 800+ Darwinex symbols and 12K+ Alpaca symbols cached, users need screening 
 
 ## Decision
 
-Screener module (`engine/src/core/screener.rs`) provides:
+Screener module (`typhoon-engine/src/core/screener.rs`) provides:
 - **EV Scanner**: Ranks stocks by Enterprise Value composition (market cap, debt, cash) using Yahoo Finance + SEC EDGAR data stored in `fundamentals` table
 - **Unusual Volume**: Compares current volume against rolling average from cached bar data
 - **Fundamentals filters**: Query `fundamentals` table for dividend stocks, earnings dates, P/E ranges
