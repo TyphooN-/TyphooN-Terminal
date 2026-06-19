@@ -10,6 +10,8 @@ mod fibonacci_and_patterns;
 pub(super) use fibonacci_and_patterns::{draw_auto_fib_levels, draw_harmonics};
 mod price_renderer;
 pub(super) use price_renderer::{draw_extended_hours_candle, draw_price_bars};
+mod volume_profile;
+pub(super) use volume_profile::draw_volume_profile_overlay;
 
 pub(super) fn draw_indicator_legend(
     painter: &egui::Painter,
