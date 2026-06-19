@@ -122,11 +122,8 @@ pub(super) fn draw_extended_hours_header_badge(
     let prev_close = (chart.prev_daily_close > 0.0)
         .then_some(chart.prev_daily_close)
         .or_else(|| previous_daily_close_from_bars(&chart.bars));
-    let ext_text = super::time_axis::format_ext_hours_symbol_badge(
-        daily_close,
-        chart.ext_close,
-        prev_close,
-    );
+    let ext_text =
+        super::time_axis::format_ext_hours_symbol_badge(daily_close, chart.ext_close, prev_close);
     let ext_col = egui::Color32::from_rgb(200, 50, 200);
     let ext_galley = painter.layout_no_wrap(
         ext_text,
@@ -948,7 +945,11 @@ pub(super) fn previous_daily_close_from_bars(bars: &[Bar]) -> Option<f64> {
         .map(|bar| bar.close)
 }
 
-pub(super) fn close_reference_color(current_close: f64, fallback_open: f64, bars: &[Bar]) -> egui::Color32 {
+pub(super) fn close_reference_color(
+    current_close: f64,
+    fallback_open: f64,
+    bars: &[Bar],
+) -> egui::Color32 {
     let reference = previous_daily_close_from_bars(bars).unwrap_or(fallback_open);
     if current_close >= reference { UP } else { DOWN }
 }
@@ -1022,7 +1023,10 @@ pub fn chart_overlay_company_name(
     chart_symbol: &str,
 ) -> Option<String> {
     let stripped = chart_symbol.replace('/', "");
-    let bare = stripped.trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
+    let bare = stripped
+        .trim_end_matches(".EQ")
+        .trim_end_matches(".eq")
+        .to_ascii_uppercase();
 
     // 1. Full fundamentals (highest quality)
     if let Some(name) = fundamentals
@@ -1223,6 +1227,62 @@ pub(super) fn draw_styled_line(
                 );
                 t += dot + gap;
             }
+        }
+    }
+}
+
+/// Draw Auto Fibonacci levels (retrace + extensions) and the swing line.
+/// Extracted to chart_helpers.rs to shrink the main draw_chart.
+pub(super) fn draw_auto_fib_levels(
+    painter: &egui::Painter,
+    chart: &ChartState,
+    chart_rect: egui::Rect,
+    data_left: f32,
+    bar_w: f32,
+    price_to_y: impl Fn(f64) -> f32,
+    start_idx: usize,
+    end_idx: usize,
+    format_price: impl Fn(f64) -> String,
+) {
+    for (price, label, is_ext) in &chart.auto_fib_levels {
+        let y = price_to_y(*price);
+        if y >= chart_rect.top() && y <= chart_rect.bottom() {
+            let color = if *is_ext {
+                egui::Color32::from_rgb(30, 144, 255)
+            } else {
+                egui::Color32::from_rgb(255, 215, 0)
+            };
+            painter.line_segment(
+                [
+                    egui::pos2(chart_rect.left(), y),
+                    egui::pos2(chart_rect.right(), y),
+                ],
+                egui::Stroke::new(1.0, color),
+            );
+            let mut fib_label = String::with_capacity(label.len() + 24);
+            fib_label.push_str(label);
+            fib_label.push(' ');
+            fib_label.push_str(&format_price(*price));
+            painter.text(
+                egui::pos2(chart_rect.right() - 4.0, y - 1.0),
+                egui::Align2::RIGHT_BOTTOM,
+                fib_label,
+                egui::FontId::monospace(8.0),
+                color,
+            );
+        }
+    }
+    // Draw swing line
+    if let Some((_high, _low, hi_idx, lo_idx)) = chart.auto_fib_swing {
+        if hi_idx >= start_idx && hi_idx < end_idx && lo_idx >= start_idx && lo_idx < end_idx {
+            let x1 = data_left + ((hi_idx - start_idx) as f32 + 0.5) * bar_w;
+            let y1 = price_to_y(_high);
+            let x2 = data_left + ((lo_idx - start_idx) as f32 + 0.5) * bar_w;
+            let y2 = price_to_y(_low);
+            painter.line_segment(
+                [egui::pos2(x1, y1), egui::pos2(x2, y2)],
+                egui::Stroke::new(1.0, egui::Color32::WHITE),
+            );
         }
     }
 }

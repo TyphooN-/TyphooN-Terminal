@@ -4,8 +4,8 @@ use super::*;
 mod chart_helpers;
 mod time_axis;
 
-use chart_helpers::*;
 pub use chart_helpers::chart_overlay_company_name;
+use chart_helpers::*;
 pub use chart_helpers::{parse_range, parse_range_f32};
 use time_axis::*;
 pub(in crate::app) use time_axis::{format_price, format_price_buf, format_ts, format_ts_buf};
@@ -1285,7 +1285,9 @@ pub(super) fn draw_chart(
         // levels land on the identical price.
         let mut visible: Vec<(f64, &'static str, egui::Color32)> = Vec::new();
         for (price_opt, label, color, max_rank) in &level_pairs {
-            if chart_rank > *max_rank { continue; }
+            if chart_rank > *max_rank {
+                continue;
+            }
             if let Some(p) = price_opt {
                 let y = price_to_y(*p);
                 if y >= chart_rect.top() && y <= chart_rect.bottom() {
@@ -1313,14 +1315,21 @@ pub(super) fn draw_chart(
             // Draw the horizontal line once (use first colour)
             if let Some((_, first_col)) = group.first() {
                 painter.line_segment(
-                    [egui::pos2(chart_rect.left(), y), egui::pos2(chart_rect.right(), y)],
+                    [
+                        egui::pos2(chart_rect.left(), y),
+                        egui::pos2(chart_rect.right(), y),
+                    ],
                     egui::Stroke::new(0.5, *first_col),
                 );
             }
 
             // Place the label (de-conflict with other price bands)
             let center = place_level_label(
-                y - 8.0, 5.0, chart_rect.top(), chart_rect.bottom(), &mut label_bands,
+                y - 8.0,
+                5.0,
+                chart_rect.top(),
+                chart_rect.bottom(),
+                &mut label_bands,
             );
 
             // Render combined label with per-segment colour when >1 entry at same price
@@ -1331,7 +1340,11 @@ pub(super) fn draw_chart(
             for (idx, (lab, col)) in group.iter().enumerate() {
                 if idx > 0 {
                     // comma separator (neutral colour)
-                    let comma = painter.layout_no_wrap(", ".to_string(), font.clone(), egui::Color32::LIGHT_GRAY);
+                    let comma = painter.layout_no_wrap(
+                        ", ".to_string(),
+                        font.clone(),
+                        egui::Color32::LIGHT_GRAY,
+                    );
                     x -= comma.rect.width();
                     painter.galley(
                         egui::pos2(x, center - comma.rect.height() * 0.5),
@@ -1343,11 +1356,7 @@ pub(super) fn draw_chart(
 
                 let g = painter.layout_no_wrap(lab.to_string(), font.clone(), *col);
                 x -= g.rect.width();
-                painter.galley(
-                    egui::pos2(x, center - g.rect.height() * 0.5),
-                    g,
-                    *col,
-                );
+                painter.galley(egui::pos2(x, center - g.rect.height() * 0.5), g, *col);
             }
         }
     }
@@ -1875,53 +1884,18 @@ pub(super) fn draw_chart(
         }
     }
 
-    // ── Auto Fibonacci levels (matching AutoFibonacci.mqh) ─────────────────
     if flags.auto_fib && !chart.auto_fib_levels.is_empty() {
-        for (price, label, is_ext) in &chart.auto_fib_levels {
-            let y = price_to_y(*price);
-            if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                // One clipped line per level. Dotted Fib levels used to emit a
-                // per-pixel segment loop, which is bad for dense adaptive-sync
-                // repaint. Keep the exact level, drop the decorative primitive spam.
-                let color = if *is_ext {
-                    egui::Color32::from_rgb(30, 144, 255) // clrDodgerBlue
-                } else {
-                    egui::Color32::from_rgb(255, 215, 0) // clrGold
-                };
-                painter.line_segment(
-                    [
-                        egui::pos2(chart_rect.left(), y),
-                        egui::pos2(chart_rect.right(), y),
-                    ],
-                    egui::Stroke::new(1.0, color),
-                );
-                // Label on right
-                let mut fib_label = String::with_capacity(label.len() + 24);
-                fib_label.push_str(label);
-                fib_label.push(' ');
-                fib_label.push_str(&format_price(*price));
-                painter.text(
-                    egui::pos2(chart_rect.right() - 4.0, y - 1.0),
-                    egui::Align2::RIGHT_BOTTOM,
-                    fib_label,
-                    egui::FontId::monospace(8.0),
-                    color,
-                );
-            }
-        }
-        // Draw swing line
-        if let Some((_high, _low, hi_idx, lo_idx)) = chart.auto_fib_swing {
-            if hi_idx >= start_idx && hi_idx < end_idx && lo_idx >= start_idx && lo_idx < end_idx {
-                let x1 = data_left + ((hi_idx - start_idx) as f32 + 0.5) * bar_w;
-                let y1 = price_to_y(_high);
-                let x2 = data_left + ((lo_idx - start_idx) as f32 + 0.5) * bar_w;
-                let y2 = price_to_y(_low);
-                painter.line_segment(
-                    [egui::pos2(x1, y1), egui::pos2(x2, y2)],
-                    egui::Stroke::new(1.0, egui::Color32::WHITE),
-                );
-            }
-        }
+        draw_auto_fib_levels(
+            painter,
+            chart,
+            chart_rect,
+            data_left,
+            bar_w,
+            price_to_y,
+            start_idx,
+            end_idx,
+            format_price,
+        );
     }
 
     // ── price data (possibly Heikin-Ashi transformed) ──────────────────────
@@ -3976,7 +3950,8 @@ pub(super) fn draw_chart(
                 c.deals += lbl.count;
                 for t in lbl.ticker.split(", ").filter(|t| !t.is_empty()) {
                     // O(1) dedup for tickers (was linear .any on small Vec)
-                    let mut set: std::collections::HashSet<String> = c.tickers.iter().cloned().collect();
+                    let mut set: std::collections::HashSet<String> =
+                        c.tickers.iter().cloned().collect();
                     if set.insert(t.to_string()) {
                         c.tickers.push(t.to_string());
                     }
@@ -7173,7 +7148,6 @@ pub(super) fn draw_chart(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -7366,10 +7340,7 @@ mod tests {
 
     #[test]
     fn extended_hours_axis_labels_are_explicit() {
-        assert_eq!(
-            super::format_axis_price_label("EXT", 0.0924),
-            "EXT 0.0924"
-        );
+        assert_eq!(super::format_axis_price_label("EXT", 0.0924), "EXT 0.0924");
         assert_eq!(super::format_axis_price_label("C", 194.32), "C 194.3200");
     }
 
@@ -7465,7 +7436,9 @@ mod tests {
         // Sub-hour chart shows every previous + every current level.
         assert_eq!(
             visible(Timeframe::M15),
-            vec!["Prev H1", "Prev H4", "Prev D", "Prev W", "Prev MN", "Cur D", "Cur W", "Cur MN"]
+            vec![
+                "Prev H1", "Prev H4", "Prev D", "Prev W", "Prev MN", "Cur D", "Cur W", "Cur MN"
+            ]
         );
         // Hourly charts drop their own H1/H4 previous; keep daily+ and all current.
         assert_eq!(
@@ -7505,7 +7478,6 @@ mod tests {
         assert!(super::draw_current_kama_overlay(true, false));
     }
 }
-
 
 #[cfg(test)]
 mod company_name_overlay_tests {
@@ -7573,7 +7545,10 @@ mod company_name_overlay_tests {
     #[test]
     fn resolves_from_equity_names_catalog_when_no_fundamentals() {
         let mut names = HashMap::new();
-        names.insert("WOK".to_string(), "WORK Medical Technology Group".to_string());
+        names.insert(
+            "WOK".to_string(),
+            "WORK Medical Technology Group".to_string(),
+        );
         // No fundamentals row — the lightweight Kraken equity catalog resolves it.
         assert_eq!(
             chart_overlay_company_name(&[], &names, "WOK.EQ").as_deref(),

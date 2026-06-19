@@ -18,7 +18,11 @@ pub(super) fn format_axis_price_label(prefix: &str, price: f64) -> String {
     format!("{} {}", prefix, format_price(price))
 }
 
-pub(super) fn format_ext_hours_symbol_badge(close: f64, ext_last: f64, prev_close: Option<f64>) -> String {
+pub(super) fn format_ext_hours_symbol_badge(
+    close: f64,
+    ext_last: f64,
+    prev_close: Option<f64>,
+) -> String {
     let delta = ext_last - close;
     let pct = if close.abs() > f64::EPSILON {
         delta / close * 100.0
@@ -106,7 +110,12 @@ pub(super) fn chart_source_trades_weekends(primary_source: &str, symbol: &str) -
     matches!(primary_source, "kraken-futures") || chart_symbol_looks_crypto(symbol)
 }
 
-pub(super) fn nth_weekday_of_month_utc_day(year: i32, month: u32, weekday: chrono::Weekday, nth: u32) -> u32 {
+pub(super) fn nth_weekday_of_month_utc_day(
+    year: i32,
+    month: u32,
+    weekday: chrono::Weekday,
+    nth: u32,
+) -> u32 {
     use chrono::{Datelike, NaiveDate};
     let first = NaiveDate::from_ymd_opt(year, month, 1).expect("valid month");
     let first_idx = first.weekday().num_days_from_sunday() as i32;
@@ -162,11 +171,19 @@ pub(super) fn us_equity_weekend_closed_at_ms(now_ms: i64) -> bool {
     }
 }
 
-pub(super) fn chart_candle_countdown_allowed_at(primary_source: &str, symbol: &str, now_ms: i64) -> bool {
+pub(super) fn chart_candle_countdown_allowed_at(
+    primary_source: &str,
+    symbol: &str,
+    now_ms: i64,
+) -> bool {
     chart_source_trades_weekends(primary_source, symbol) || !us_equity_weekend_closed_at_ms(now_ms)
 }
 
-pub(super) fn next_candle_remaining_ms_at(last_bar_ts_ms: i64, tf: Timeframe, now_ms: i64) -> Option<i64> {
+pub(super) fn next_candle_remaining_ms_at(
+    last_bar_ts_ms: i64,
+    tf: Timeframe,
+    now_ms: i64,
+) -> Option<i64> {
     let interval_ms = i64::from(tf.minutes()).checked_mul(60_000)?;
     if interval_ms <= 0 || last_bar_ts_ms <= 0 || now_ms <= 0 {
         return None;
