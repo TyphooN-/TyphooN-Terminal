@@ -22,6 +22,8 @@ mod sub_panes;
 pub(super) use sub_panes::draw_enabled_sub_panes;
 mod planning_overlays;
 pub(super) use planning_overlays::draw_planning_and_compare_overlays;
+mod broker_trade_overlays;
+pub(super) use broker_trade_overlays::draw_broker_trade_overlays;
 
 pub(super) fn draw_indicator_legend(
     painter: &egui::Painter,
