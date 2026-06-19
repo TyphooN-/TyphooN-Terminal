@@ -31,9 +31,32 @@ pub(super) struct MtfChartGroup {
 }
 
 fn mtf_timeframe_rank(tf: Timeframe) -> Option<usize> {
-    MTF_GRID_TIMEFRAMES
-        .iter()
-        .position(|(_, candidate)| *candidate == tf)
+    match tf {
+        Timeframe::M1 => Some(0),
+        Timeframe::M5 => Some(1),
+        Timeframe::M15 => Some(2),
+        Timeframe::M30 => Some(3),
+        Timeframe::H1 => Some(4),
+        Timeframe::H4 => Some(5),
+        Timeframe::D1 => Some(6),
+        Timeframe::W1 => Some(7),
+        Timeframe::MN1 => Some(8),
+    }
+}
+
+fn mtf_label_rank(label: &str) -> usize {
+    match label {
+        "M1" => 0,
+        "M5" => 1,
+        "M15" => 2,
+        "M30" => 3,
+        "H1" => 4,
+        "H4" => 5,
+        "D1" => 6,
+        "W1" => 7,
+        "MN1" => 8,
+        _ => usize::MAX,
+    }
 }
 
 pub(super) fn mtf_grid_symbol_key(symbol: &str) -> String {
@@ -662,12 +685,7 @@ impl TyphooNApp {
                 None => self.mtf_grid_status.push(row),
             }
         }
-        self.mtf_grid_status.sort_by_key(|r| {
-            MTF_GRID_TIMEFRAMES
-                .iter()
-                .position(|(label, _)| *label == r.0)
-                .unwrap_or(usize::MAX)
-        });
+        self.mtf_grid_status.sort_by_key(|r| mtf_label_rank(r.0));
     }
 
     pub(super) fn compute_mtf_grid_status(&mut self) {
@@ -694,13 +712,20 @@ impl TyphooNApp {
         // Collect results from already-loaded charts (no thread needed)
         let mut preloaded: Vec<MtfStatusRow> = Vec::new();
         let mut need_load: Vec<(&'static str, Timeframe)> = Vec::new();
+        let open_chart_by_tf: std::collections::HashMap<Timeframe, &ChartState> = self
+            .charts
+            .iter()
+            .filter(|chart| {
+                !chart.bars.is_empty()
+                    && mtf_grid_symbol_key(&chart.symbol).eq_ignore_ascii_case(&sym_key)
+            })
+            .fold(std::collections::HashMap::new(), |mut acc, chart| {
+                acc.entry(chart.timeframe).or_insert(chart);
+                acc
+            });
 
         for &(label, tf) in all_tfs {
-            if let Some(c) = self.charts.iter().find(|c| {
-                c.timeframe == tf
-                    && !c.bars.is_empty()
-                    && mtf_grid_symbol_key(&c.symbol).eq_ignore_ascii_case(&sym_key)
-            }) {
+            if let Some(c) = open_chart_by_tf.get(&tf).copied() {
                 let close = c
                     .fresh_live_quote_mid()
                     .or_else(|| c.bars.last().map(|b| b.close));
@@ -831,11 +856,19 @@ impl TyphooNApp {
             .replace('/', "")
             .trim_end_matches(".EQ")
             .to_ascii_uppercase();
-        for &(label, tf) in &MTF_GRID_TIMEFRAMES {
-            let existing_idx = self.charts.iter().position(|chart| {
-                chart.timeframe == tf
-                    && mtf_grid_symbol_key(&chart.symbol).eq_ignore_ascii_case(&symbol_key)
+        let existing_chart_by_tf: std::collections::HashMap<Timeframe, usize> = self
+            .charts
+            .iter()
+            .enumerate()
+            .filter(|(_, chart)| {
+                mtf_grid_symbol_key(&chart.symbol).eq_ignore_ascii_case(&symbol_key)
+            })
+            .fold(std::collections::HashMap::new(), |mut acc, (idx, chart)| {
+                acc.entry(chart.timeframe).or_insert(idx);
+                acc
             });
+        for &(label, tf) in &MTF_GRID_TIMEFRAMES {
+            let existing_idx = existing_chart_by_tf.get(&tf).copied();
             let idx = if let Some(idx) = existing_idx {
                 idx
             } else {
