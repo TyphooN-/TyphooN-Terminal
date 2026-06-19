@@ -864,8 +864,6 @@ impl TyphooNApp {
                                 egui::Color32::from_rgb(255, 130, 60)
                             } else if key.starts_with("alpaca:") {
                                 egui::Color32::from_rgb(52, 152, 219)
-                            } else if key.starts_with("tastytrade:") {
-                                egui::Color32::from_rgb(170, 100, 220)
                             } else {
                                 egui::Color32::from_rgb(180, 180, 190)
                             };

@@ -6,7 +6,7 @@ impl TyphooNApp {
         if self.show_symbols {
             let mut show_symbols = self.show_symbols;
             // Fetch broker symbol universes on first open. Alpaca exposes full
-            // asset metadata; Kraken/tastytrade expose tradable symbol catalogs.
+            // asset metadata; Kraken exposes tradable symbol catalogs.
             if !self.all_broker_assets_fetched && self.broker_connected && self.alpaca_enabled {
                 let _ = self.broker_tx.send(BrokerCmd::GetAllAssets);
                 self.all_broker_assets_fetched = true;

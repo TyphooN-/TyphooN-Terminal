@@ -318,7 +318,6 @@ impl TyphooNApp {
                                 ui.horizontal(|ui| {
                                     let broker_label = |prefix: &str| match prefix {
                                         "alpaca" => "Alpaca",
-                                        "tastytrade" => "Tastytrade",
                                         _ => "Broker",
                                     };
                                     ui.label(
@@ -373,7 +372,7 @@ impl TyphooNApp {
                                             self.storage_purge_broker_confirm = None;
                                         }
                                     } else {
-                                        for prefix in ["alpaca", "tastytrade"] {
+                                        for prefix in ["alpaca"] {
                                             if ui
                                                 .button(
                                                     egui::RichText::new(broker_label(prefix))

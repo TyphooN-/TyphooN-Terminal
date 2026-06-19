@@ -3,7 +3,7 @@
 //! Houses the shared bar-sync workset selection logic that every broker
 //! integration plugs into: timeframe normalization, the candidate bucket
 //! (Missing / Stale / Backfill), focus-vs-background ordering, and the
-//! rotating high-TF-first ring used by Alpaca, Kraken, and Tastytrade
+//! rotating high-TF-first ring used by Alpaca and Kraken
 //! scheduling alike. Broker-specific knobs (target_bars, RPM presets,
 //! no-data persistence) live next door in the per-broker sync modules.
 //!

@@ -908,10 +908,8 @@ pub(crate) fn chart_gap_fill_bar_allowed(
     primary_min_snapped: Option<i64>,
     primary_max_snapped: Option<i64>,
 ) -> bool {
-    if !matches!(
-        primary_source,
-        "kraken-equities" | "tastytrade" | "alpaca" | "yahoo-chart"
-    ) || !matches!(gap_source, "alpaca" | "yahoo-chart")
+    if !matches!(primary_source, "kraken-equities" | "alpaca" | "yahoo-chart")
+        || !matches!(gap_source, "alpaca" | "yahoo-chart")
     {
         return true;
     }
@@ -971,7 +969,7 @@ pub(crate) fn chart_merge_bucket_ts(timeframe: &str, ts: i64) -> i64 {
 /// Merge equity/ETF bars from multiple providers into one continuous series.
 ///
 /// Sources split into two tiers by [`chart_equity_source_rank`]:
-/// * **Trusted** (rank ≤ 2 — `kraken-equities`, `tastytrade`, `alpaca`): live /
+/// * **Trusted** (rank ≤ 2 — `kraken-equities`, `alpaca`): live /
 ///   native feeds that define the authoritative, corporate-action-adjusted
 ///   price scale. Merged per-bucket by priority (best rank wins; latest tick
 ///   wins within a source).
@@ -1042,7 +1040,7 @@ fn chart_median_close(
     Some(v[v.len() / 2])
 }
 
-/// Back-adjust a RAW *trusted* source (Alpaca/Tastytrade, normally
+/// Back-adjust a RAW *trusted* source (Alpaca, normally
 /// `adjustment=all`) that nonetheless served UNADJUSTED bars across a fresh
 /// reverse split — the HUBC 1-for-20 case (2026-06): Alpaca carried a raw ~20×
 /// cliff, there was no kraken-equities source to anchor the dated back-adjust
@@ -1090,9 +1088,7 @@ fn chart_back_adjust_raw_trusted_source_for_splits(
         // Era-level confirmation around the known ex-date (handles volatile
         // split days where no single close ratio reaches MIN_STEP_RATIO).
         // Use ex-date itself as boundary when the step is masked by price action.
-        let use_ex_boundary = boundary
-            .as_ref()
-            .map_or(true, |(_, r)| *r < MIN_STEP_RATIO);
+        let use_ex_boundary = boundary.as_ref().map_or(true, |(_, r)| *r < MIN_STEP_RATIO);
         let boundary_ts = if use_ex_boundary {
             s.ex_ts_ms
         } else {
@@ -1237,7 +1233,7 @@ pub(crate) fn chart_merge_equity_raw_bars(
         if *source == "kraken-equities" {
             chart_back_adjust_bars_for_splits(&mut bucketed, splits);
         } else if rank <= TRUSTED_MAX_RANK {
-            // Alpaca/Tastytrade are normally split-adjusted, but serve RAW bars
+            // Alpaca is normally split-adjusted, but can serve RAW bars
             // across a fresh microcap reverse split (HUBC 1-for-20). Lift their
             // pre-split history only when the bars themselves show the split
             // step — already-adjusted bars are continuous and left untouched.
@@ -1526,7 +1522,8 @@ fn chart_reconcile_depth_split_adjustment(
         // (compact) D1/W1 views. The guard keeps depth promotion on the trusted
         // scale, so an exploded-scale depth source is refused and the series stays
         // compact and identical across timeframes.
-        if runs.len() >= 1 && chart_depth_promotion_keeps_trusted_scale(depth, &runs, window_start) {
+        if runs.len() >= 1 && chart_depth_promotion_keeps_trusted_scale(depth, &runs, window_start)
+        {
             for run in &runs {
                 chart_apply_depth_split_adjustment_run(merged, depth, run, consensus);
             }
@@ -1626,7 +1623,12 @@ fn chart_depth_promotion_keeps_trusted_scale(
         return false;
     };
     runs.iter().all(|run| {
-        match median(run.iter().filter_map(|(b, _)| depth.get(b)).map(|bar| bar.close).collect()) {
+        match median(
+            run.iter()
+                .filter_map(|(b, _)| depth.get(b))
+                .map(|bar| bar.close)
+                .collect(),
+        ) {
             Some(era) => (era / recent).max(recent / era) <= SCALE_CAP,
             None => true,
         }
@@ -1818,7 +1820,6 @@ fn chart_recent_overlap_scale(
 pub(crate) fn chart_equity_source_rank(source: &str) -> Option<u8> {
     match source {
         "kraken-equities" => Some(0),
-        "tastytrade" => Some(1),
         "alpaca" => Some(2),
         "yahoo-chart" => Some(3),
         "default" => Some(4),
@@ -1893,11 +1894,10 @@ pub(crate) fn extract_news_symbols_from_market_data_cache(
     Ok(symbols.into_iter().collect())
 }
 
-pub(crate) const CHART_SOURCE_ORDER: [(&str, &str); 7] = [
+pub(crate) const CHART_SOURCE_ORDER: [(&str, &str); 6] = [
     ("kraken", "Kraken"),
     ("kraken-equities", "Kraken Equities"),
     ("kraken-futures", "Kraken Futures"),
-    ("tastytrade", "tastytrade"),
     ("alpaca", "Alpaca"),
     ("yahoo-chart", "Yahoo Chart"),
     ("default", "Default"),
@@ -2101,13 +2101,7 @@ fn chart_build_merged_equity_bars_from_cache(
         // merged inputs. Alpaca/Yahoo low-TF rows are stale provider-assist
         // artifacts unless explicitly selected by source override.
         tf if chart_equity_low_timeframe_requires_native_source(tf) => &["kraken-equities"],
-        _ => &[
-            "yahoo-chart",
-            "alpaca",
-            "tastytrade",
-            "kraken-equities",
-            "default",
-        ],
+        _ => &["yahoo-chart", "alpaca", "kraken-equities", "default"],
     };
     for source in sources {
         for key in chart_source_cache_keys(source, symbol, timeframe) {
@@ -2341,22 +2335,34 @@ impl ChartState {
         // Live update "Cur" levels for Previous Candle Levels so they reflect
         // new highs/lows inside the forming higher-timeframe bar (D1/W1/MN1).
         if let Some(h) = self.current_daily_high {
-            if bar.high > h { self.current_daily_high = Some(bar.high); }
+            if bar.high > h {
+                self.current_daily_high = Some(bar.high);
+            }
         }
         if let Some(l) = self.current_daily_low {
-            if bar.low < l { self.current_daily_low = Some(bar.low); }
+            if bar.low < l {
+                self.current_daily_low = Some(bar.low);
+            }
         }
         if let Some(h) = self.current_weekly_high {
-            if bar.high > h { self.current_weekly_high = Some(bar.high); }
+            if bar.high > h {
+                self.current_weekly_high = Some(bar.high);
+            }
         }
         if let Some(l) = self.current_weekly_low {
-            if bar.low < l { self.current_weekly_low = Some(bar.low); }
+            if bar.low < l {
+                self.current_weekly_low = Some(bar.low);
+            }
         }
         if let Some(h) = self.current_monthly_high {
-            if bar.high > h { self.current_monthly_high = Some(bar.high); }
+            if bar.high > h {
+                self.current_monthly_high = Some(bar.high);
+            }
         }
         if let Some(l) = self.current_monthly_low {
-            if bar.low < l { self.current_monthly_low = Some(bar.low); }
+            if bar.low < l {
+                self.current_monthly_low = Some(bar.low);
+            }
         }
 
         self.forming_bar_dirty = true;
@@ -3210,7 +3216,6 @@ impl ChartState {
             format!("kraken:{}:{}", sym, tf),
             format!("kraken-equities:{}:{}", sym, tf),
             format!("kraken-futures:{}:{}", sym, tf),
-            format!("tastytrade:{}:{}", sym, tf),
             format!("alpaca:{}:{}", sym, tf),
             format!("yahoo-chart:{}:{}", sym, tf),
         ];
@@ -3219,7 +3224,6 @@ impl ChartState {
                 format!("kraken:{}:{}", sym_norm, tf),
                 format!("kraken-equities:{}:{}", sym_norm, tf),
                 format!("kraken-futures:{}:{}", sym_norm, tf),
-                format!("tastytrade:{}:{}", sym_norm, tf),
                 format!("alpaca:{}:{}", sym_norm, tf),
                 format!("yahoo-chart:{}:{}", sym_norm, tf),
             ]);
@@ -3281,7 +3285,6 @@ impl ChartState {
                 "kraken",
                 "kraken-equities",
                 "kraken-futures",
-                "tastytrade",
                 "alpaca",
                 "yahoo-chart",
                 "default",
@@ -3441,13 +3444,7 @@ impl ChartState {
                         })
                         .unwrap_or_default()
                 };
-                let gap_prefixes = [
-                    "kraken",
-                    "kraken-futures",
-                    "alpaca",
-                    "tastytrade",
-                    "yahoo-chart",
-                ];
+                let gap_prefixes = ["kraken", "kraken-futures", "alpaca", "yahoo-chart"];
                 for prefix in &gap_prefixes {
                     // Try both SOLUSD and SOL/USD key forms
                     let keys_to_try: Vec<String> = if sym_slash.is_empty() {
@@ -3589,7 +3586,6 @@ impl ChartState {
                 "kraken-futures:",
                 "kraken-equities:",
                 "kraken:",
-                "tastytrade:",
                 "alpaca:",
                 "yahoo-chart:",
                 "paper_TyphooN:",
@@ -3662,7 +3658,6 @@ impl ChartState {
                         "kraken",
                         "kraken-equities",
                         "kraken-futures",
-                        "tastytrade",
                         "alpaca",
                         "yahoo-chart",
                         "default",
@@ -5622,7 +5617,10 @@ impl ChartState {
         // ADR-123 #2: restrict to the candles' own source — canonical
         // "{source}:{sym}:{tf}" — and drop the line if that TF is absent there.
         if !self.primary_source.is_empty() {
-            return try_key(&format!("{}:{}:{}", self.primary_source, bare_sym, tf_suffix));
+            return try_key(&format!(
+                "{}:{}:{}",
+                self.primary_source, bare_sym, tf_suffix
+            ));
         }
 
         // Unknown source: legacy broad search.
@@ -5632,7 +5630,6 @@ impl ChartState {
             "kraken-equities:",
             "kraken:",
             "kraken-futures:",
-            "tastytrade:",
             "alpaca:",
             "yahoo-chart:",
             "paper_TyphooN:",
@@ -5780,7 +5777,6 @@ impl ChartState {
                 "kraken-futures:",
                 "kraken-equities:",
                 "kraken:",
-                "tastytrade:",
                 "alpaca:",
                 "yahoo-chart:",
                 "paper_TyphooN:",
@@ -5909,7 +5905,6 @@ impl ChartState {
                 "kraken-futures:",
                 "kraken-equities:",
                 "kraken:",
-                "tastytrade:",
                 "alpaca:",
                 "yahoo-chart:",
                 "paper_TyphooN:",
@@ -5978,7 +5973,14 @@ impl ChartState {
             let is_tf = matches!(
                 parts.last().copied(),
                 Some(
-                    "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week"
+                    "1Min"
+                        | "5Min"
+                        | "15Min"
+                        | "30Min"
+                        | "1Hour"
+                        | "4Hour"
+                        | "1Day"
+                        | "1Week"
                         | "1Month"
                 )
             );
@@ -5994,7 +5996,6 @@ impl ChartState {
                 "kraken-futures:",
                 "kraken-equities:",
                 "kraken:",
-                "tastytrade:",
                 "alpaca:",
                 "yahoo-chart:",
                 "paper_TyphooN:",

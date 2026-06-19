@@ -366,7 +366,7 @@ impl TyphooNApp {
                 });
         }
 
-        // Option Chain — tastytrade option expirations from KV cache
+        // Option Chain — option expirations from KV cache
         if self.show_option_chain {
             egui::Window::new("Option Chain")
                         .open(&mut self.show_option_chain)

@@ -1215,6 +1215,72 @@ impl SqliteCache {
         Ok(deleted > 0)
     }
 
+    /// Delete all bar-cache rows for one equity/xStock symbol across provider
+    /// and merged prefixes, plus matching bar-track rows.
+    ///
+    /// Corporate actions are not append-only data. After a split/reverse split,
+    /// providers often restate historical OHLC on a new adjusted scale; merging
+    /// only the recent post-split candles leaves old pre-split cache rows intact
+    /// forever. Use this when a new split is discovered so the next fetch/load is
+    /// forced through a clean provider rebuild instead of timestamp-preserving
+    /// incremental merge.
+    pub fn delete_equity_bar_cache_for_symbol(&self, symbol: &str) -> Result<u64, String> {
+        let trimmed = symbol.trim();
+        if trimmed.is_empty() {
+            return Ok(0);
+        }
+        let raw = trimmed.to_ascii_uppercase();
+        let bare = raw
+            .trim_end_matches(".EQ")
+            .replace('/', "")
+            .to_ascii_uppercase();
+        if bare.is_empty() {
+            return Ok(0);
+        }
+
+        let mut variants = Vec::new();
+        for candidate in [raw.as_str(), bare.as_str()] {
+            if !candidate.is_empty() && !variants.iter().any(|v: &String| v == candidate) {
+                variants.push(candidate.to_string());
+            }
+        }
+        let eq_variant = format!("{bare}.EQ");
+        if !variants.iter().any(|v| v == &eq_variant) {
+            variants.push(eq_variant);
+        }
+
+        let prefixes = [
+            "merged",
+            "kraken-equities",
+            "alpaca",
+            "yahoo-chart",
+            "default",
+            "paper_TyphooN",
+            "alpaca_paper_TyphooN",
+        ];
+
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut deleted = 0u64;
+        for prefix in prefixes {
+            for variant in &variants {
+                let pattern = format!("{prefix}:{variant}:%");
+                deleted = deleted.saturating_add(
+                    conn.execute(
+                        "DELETE FROM bar_cache WHERE key LIKE ?1 COLLATE NOCASE",
+                        params![pattern],
+                    )
+                    .map_err(|e| format!("delete bar_cache {pattern}: {e}"))?
+                        as u64,
+                );
+                let _ = conn.execute(
+                    "DELETE FROM bar_track WHERE key LIKE ?1 COLLATE NOCASE",
+                    params![pattern],
+                );
+            }
+        }
+        Ok(deleted)
+    }
+
     /// Delete a specific set of bar-cache keys in chunks, then reclaim freed pages.
     /// Intended for bulk filter deletes from the Storage Manager.
     pub fn delete_keys(&self, keys: &[String]) -> Result<u64, String> {
@@ -2335,7 +2401,6 @@ impl SqliteCache {
 
         Ok((processed, bytes_saved))
     }
-
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@
 //! way but with variable per-symbol depth, so a fixed target would cause
 //! short-listed equities to look permanently under-filled. Kraken Futures, by
 //! contrast, exposes deep history and can absorb the same "ask for everything"
-//! target used by Alpaca and Tastytrade.
+//! target used by Alpaca.
 
 use super::sync_workset::normalize_sync_timeframe_key;
 use super::{KRAKEN_SPOT_PROVIDER_WINDOW_BARS, kraken_spot_native_timeframe};

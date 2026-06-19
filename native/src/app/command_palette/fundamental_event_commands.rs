@@ -155,7 +155,7 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    // Fetch from both brokers — Alpaca equity options + tastytrade
+                    // Fetch Alpaca equity options
                     let expiry = chrono::Utc::now().format("%Y-%m-%d").to_string();
                     let _ = self.broker_tx.send(BrokerCmd::GetOptionsChain {
                         symbol: sym.clone(),

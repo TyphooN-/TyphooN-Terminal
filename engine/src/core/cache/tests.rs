@@ -34,6 +34,43 @@ fn live_bar_writes_use_fast_zstd_level_not_idle_compaction_level() {
     let _ = std::fs::remove_file(db_path);
 }
 
+#[test]
+fn delete_equity_bar_cache_for_symbol_clears_provider_and_merged_rows() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let bars = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10.0}]"#;
+
+    for key in [
+        "merged:WOK:1Day",
+        "kraken-equities:WOK:1Day",
+        "alpaca:WOK.EQ:1Day",
+        "yahoo-chart:wok:1Day",
+    ] {
+        cache.put_bars(key, bars).unwrap();
+    }
+    cache.put_bars("alpaca:AAPL:1Day", bars).unwrap();
+    cache.put_kv("alpaca:WOK:meta", "keep").unwrap();
+
+    let deleted = cache.delete_equity_bar_cache_for_symbol("WOK.EQ").unwrap();
+    assert_eq!(deleted, 4);
+    assert!(cache.get_bars("merged:WOK:1Day").unwrap().is_none());
+    assert!(
+        cache
+            .get_bars("kraken-equities:WOK:1Day")
+            .unwrap()
+            .is_none()
+    );
+    assert!(cache.get_bars("alpaca:WOK.EQ:1Day").unwrap().is_none());
+    assert!(cache.get_bars("yahoo-chart:wok:1Day").unwrap().is_none());
+    assert!(cache.get_bars("alpaca:AAPL:1Day").unwrap().is_some());
+    assert_eq!(
+        cache.get_kv("alpaca:WOK:meta").unwrap().as_deref(),
+        Some("keep")
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}
+
 /// Helper: build a valid TTBR binary blob with N bars.
 fn make_binary_bars(bars: &[(i64, f64, f64, f64, f64, f64)]) -> Vec<u8> {
     let count = bars.len() as u32;

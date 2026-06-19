@@ -292,7 +292,7 @@ pub(super) fn store_fallback_bars(
     if valid_count > 0
         && matches!(
             source,
-            "kraken-equities" | "alpaca" | "yahoo-chart" | "tastytrade" | "default"
+            "kraken-equities" | "alpaca" | "yahoo-chart" | "default"
         )
     {
         let _ = chart_materialize_merged_equity_cache(cache, &symbol, tf);
