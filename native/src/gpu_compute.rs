@@ -11,7 +11,10 @@
 use std::sync::Arc;
 use wgpu;
 
+mod pipeline_bootstrap;
 mod shaders;
+
+use pipeline_bootstrap::*;
 use shaders::*;
 
 /// Manages GPU compute pipelines and buffers for indicator computation.
@@ -273,241 +276,258 @@ impl GpuCompute {
 
 impl GpuCompute {
     pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
-        // Create bind group layout: input bars (read), output indicator (read_write), params (uniform)
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("indicator_bgl"),
-            entries: &[
-                // Binding 0: bar data (read-only storage)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Binding 1: output indicator values (read-write storage)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Binding 2: params uniform (period, bar_count)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let multi_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("multi_indicator_bgl"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 4,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 5,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 6,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("indicator_pipeline_layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
+        let device_ref = device.as_ref();
+        let bind_group_layout = create_indicator_bind_group_layout(device_ref);
+        let multi_bind_group_layout = create_multi_indicator_bind_group_layout(device_ref);
+        let pipeline_layout = create_indicator_pipeline_layout(device_ref, &bind_group_layout);
         let multi_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("multi_indicator_pipeline_layout"),
-                bind_group_layouts: &[Some(&multi_bind_group_layout)],
-                immediate_size: 0,
-            });
+            create_multi_indicator_pipeline_layout(device_ref, &multi_bind_group_layout);
 
-        // SMA compute shader
-        let sma_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("sma_shader"),
-            source: wgpu::ShaderSource::Wgsl(SMA_SHADER.into()),
-        });
-        let sma_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("sma_pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &sma_shader,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-
-        // EMA compute shader
-        let ema_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("ema_shader"),
-            source: wgpu::ShaderSource::Wgsl(EMA_SHADER.into()),
-        });
-        let ema_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("ema_pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &ema_shader,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-
-        // Create all indicator pipelines using same bind group layout
-        let make_pipeline = |label: &str, source: &str| -> wgpu::ComputePipeline {
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            });
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                module: &shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            })
-        };
-        let make_multi_pipeline = |label: &str, source: &str| -> wgpu::ComputePipeline {
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            });
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(label),
-                layout: Some(&multi_pipeline_layout),
-                module: &shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            })
-        };
-        let rsi_pipeline = make_pipeline("rsi_pipeline", RSI_SHADER);
-        let kama_pipeline = make_pipeline("kama_pipeline", KAMA_SHADER);
-        let atr_pipeline = make_pipeline("atr_pipeline", ATR_SHADER);
-        let bollinger_pipeline = make_pipeline("bollinger_pipeline", BOLLINGER_SHADER);
-        let macd_pipeline = make_pipeline("macd_pipeline", MACD_SHADER);
-        let fisher_pipeline = make_pipeline("fisher_pipeline", FISHER_SHADER);
-        let stochastic_pipeline = make_pipeline("stochastic_pipeline", STOCHASTIC_SHADER);
-        let adx_pipeline = make_pipeline("adx_pipeline", ADX_SHADER);
-        let wma_pipeline = make_pipeline("wma_pipeline", WMA_SHADER);
-        let cci_pipeline = make_pipeline("cci_pipeline", CCI_SHADER);
-        let williams_r_pipeline = make_pipeline("williams_r_pipeline", WILLIAMS_R_SHADER);
-        let obv_pipeline = make_multi_pipeline("obv_pipeline", OBV_SHADER);
-        let momentum_pipeline = make_pipeline("momentum_pipeline", MOMENTUM_SHADER);
-        let cmo_pipeline = make_pipeline("cmo_pipeline", CMO_SHADER);
-        let qstick_pipeline = make_multi_pipeline("qstick_pipeline", QSTICK_SHADER);
-        let disparity_pipeline = make_pipeline("disparity_pipeline", DISPARITY_SHADER);
-        let bop_pipeline = make_multi_pipeline("bop_pipeline", BOP_SHADER);
-        let stddev_pipeline = make_pipeline("stddev_pipeline", STDDEV_SHADER);
-        let mfi_pipeline = make_multi_pipeline("mfi_pipeline", MFI_SHADER);
-        let trix_pipeline = make_pipeline("trix_pipeline", TRIX_SHADER);
-        let ppo_pipeline = make_pipeline("ppo_pipeline", PPO_SHADER);
-        let ultosc_pipeline = make_multi_pipeline("ultosc_pipeline", ULTOSC_SHADER);
-        let stochrsi_pipeline = make_pipeline("stochrsi_pipeline", STOCHRSI_SHADER);
-        let var_osc_pipeline = make_pipeline("var_osc_pipeline", VAR_OSCILLATOR_SHADER);
-        let psar_pipeline = make_pipeline("psar_pipeline", PSAR_SHADER);
-        let ichimoku_pipeline = make_pipeline("ichimoku_pipeline", ICHIMOKU_SHADER);
-        let cci_ohlc_pipeline = make_pipeline("cci_ohlc_pipeline", CCI_GPU_SHADER);
-        let obv_gpu_pipeline = make_pipeline("obv_gpu_pipeline", OBV_GPU_SHADER);
-        let ehlers_ss_pipeline = make_pipeline("ehlers_ss_pipeline", EHLERS_SUPERSMOOTHER_SHADER);
-        let ehlers_dec_pipeline = make_pipeline("ehlers_dec_pipeline", EHLERS_DECYCLER_SHADER);
-        let fractals_pipeline = make_pipeline("fractals_pipeline", FRACTALS_SHADER);
-        let ehlers_itl_pipeline = make_pipeline("ehlers_itl_pipeline", EHLERS_ITL_SHADER);
-        let ehlers_cyber_pipeline = make_pipeline("ehlers_cyber_pipeline", EHLERS_CYBER_SHADER);
-        let ehlers_cg_pipeline = make_pipeline("ehlers_cg_pipeline", EHLERS_CG_SHADER);
-        let ehlers_roof_pipeline = make_pipeline("ehlers_roof_pipeline", EHLERS_ROOF_SHADER);
-        let ehlers_ebsw_pipeline = make_pipeline("ehlers_ebsw_pipeline", EHLERS_EBSW_SHADER);
-        let ehlers_mama_pipeline = make_pipeline("ehlers_mama_pipeline", EHLERS_MAMA_SHADER);
-        let hma_pipeline = make_pipeline("hma_pipeline", HMA_SHADER);
-        let sd_zones_pipeline = make_pipeline("sd_zones_pipeline", SUPPLY_DEMAND_SHADER);
-        let atr_proj_pipeline = make_multi_pipeline("atr_proj_pipeline", ATR_PROJECTION_SHADER);
-        let better_vol_pipeline = make_multi_pipeline("better_vol_pipeline", BETTER_VOLUME_SHADER);
-        let anchored_vwap_pipeline =
-            make_multi_pipeline("anchored_vwap_pipeline", ANCHORED_VWAP_SHADER);
+        let sma_pipeline =
+            make_indicator_pipeline(device_ref, &pipeline_layout, "sma_pipeline", SMA_SHADER);
+        let ema_pipeline =
+            make_indicator_pipeline(device_ref, &pipeline_layout, "ema_pipeline", EMA_SHADER);
+        let rsi_pipeline =
+            make_indicator_pipeline(device_ref, &pipeline_layout, "rsi_pipeline", RSI_SHADER);
+        let kama_pipeline =
+            make_indicator_pipeline(device_ref, &pipeline_layout, "kama_pipeline", KAMA_SHADER);
+        let atr_pipeline =
+            make_indicator_pipeline(device_ref, &pipeline_layout, "atr_pipeline", ATR_SHADER);
+        let bollinger_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "bollinger_pipeline",
+            BOLLINGER_SHADER,
+        );
+        let macd_pipeline =
+            make_indicator_pipeline(device_ref, &pipeline_layout, "macd_pipeline", MACD_SHADER);
+        let fisher_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "fisher_pipeline",
+            FISHER_SHADER,
+        );
+        let stochastic_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "stochastic_pipeline",
+            STOCHASTIC_SHADER,
+        );
+        let adx_pipeline =
+            make_indicator_pipeline(device_ref, &pipeline_layout, "adx_pipeline", ADX_SHADER);
+        let wma_pipeline =
+            make_indicator_pipeline(device_ref, &pipeline_layout, "wma_pipeline", WMA_SHADER);
+        let cci_pipeline =
+            make_indicator_pipeline(device_ref, &pipeline_layout, "cci_pipeline", CCI_SHADER);
+        let williams_r_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "williams_r_pipeline",
+            WILLIAMS_R_SHADER,
+        );
+        let obv_pipeline = make_multi_indicator_pipeline(
+            device_ref,
+            &multi_pipeline_layout,
+            "obv_pipeline",
+            OBV_SHADER,
+        );
+        let momentum_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "momentum_pipeline",
+            MOMENTUM_SHADER,
+        );
+        let cmo_pipeline =
+            make_indicator_pipeline(device_ref, &pipeline_layout, "cmo_pipeline", CMO_SHADER);
+        let qstick_pipeline = make_multi_indicator_pipeline(
+            device_ref,
+            &multi_pipeline_layout,
+            "qstick_pipeline",
+            QSTICK_SHADER,
+        );
+        let disparity_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "disparity_pipeline",
+            DISPARITY_SHADER,
+        );
+        let bop_pipeline = make_multi_indicator_pipeline(
+            device_ref,
+            &multi_pipeline_layout,
+            "bop_pipeline",
+            BOP_SHADER,
+        );
+        let stddev_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "stddev_pipeline",
+            STDDEV_SHADER,
+        );
+        let mfi_pipeline = make_multi_indicator_pipeline(
+            device_ref,
+            &multi_pipeline_layout,
+            "mfi_pipeline",
+            MFI_SHADER,
+        );
+        let trix_pipeline =
+            make_indicator_pipeline(device_ref, &pipeline_layout, "trix_pipeline", TRIX_SHADER);
+        let ppo_pipeline =
+            make_indicator_pipeline(device_ref, &pipeline_layout, "ppo_pipeline", PPO_SHADER);
+        let ultosc_pipeline = make_multi_indicator_pipeline(
+            device_ref,
+            &multi_pipeline_layout,
+            "ultosc_pipeline",
+            ULTOSC_SHADER,
+        );
+        let stochrsi_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "stochrsi_pipeline",
+            STOCHRSI_SHADER,
+        );
+        let var_osc_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "var_osc_pipeline",
+            VAR_OSCILLATOR_SHADER,
+        );
+        let psar_pipeline =
+            make_indicator_pipeline(device_ref, &pipeline_layout, "psar_pipeline", PSAR_SHADER);
+        let ichimoku_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "ichimoku_pipeline",
+            ICHIMOKU_SHADER,
+        );
+        let cci_ohlc_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "cci_ohlc_pipeline",
+            CCI_GPU_SHADER,
+        );
+        let obv_gpu_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "obv_gpu_pipeline",
+            OBV_GPU_SHADER,
+        );
+        let ehlers_ss_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "ehlers_ss_pipeline",
+            EHLERS_SUPERSMOOTHER_SHADER,
+        );
+        let ehlers_dec_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "ehlers_dec_pipeline",
+            EHLERS_DECYCLER_SHADER,
+        );
+        let fractals_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "fractals_pipeline",
+            FRACTALS_SHADER,
+        );
+        let ehlers_itl_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "ehlers_itl_pipeline",
+            EHLERS_ITL_SHADER,
+        );
+        let ehlers_cyber_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "ehlers_cyber_pipeline",
+            EHLERS_CYBER_SHADER,
+        );
+        let ehlers_cg_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "ehlers_cg_pipeline",
+            EHLERS_CG_SHADER,
+        );
+        let ehlers_roof_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "ehlers_roof_pipeline",
+            EHLERS_ROOF_SHADER,
+        );
+        let ehlers_ebsw_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "ehlers_ebsw_pipeline",
+            EHLERS_EBSW_SHADER,
+        );
+        let ehlers_mama_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "ehlers_mama_pipeline",
+            EHLERS_MAMA_SHADER,
+        );
+        let hma_pipeline =
+            make_indicator_pipeline(device_ref, &pipeline_layout, "hma_pipeline", HMA_SHADER);
+        let sd_zones_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "sd_zones_pipeline",
+            SUPPLY_DEMAND_SHADER,
+        );
+        let atr_proj_pipeline = make_multi_indicator_pipeline(
+            device_ref,
+            &multi_pipeline_layout,
+            "atr_proj_pipeline",
+            ATR_PROJECTION_SHADER,
+        );
+        let better_vol_pipeline = make_multi_indicator_pipeline(
+            device_ref,
+            &multi_pipeline_layout,
+            "better_vol_pipeline",
+            BETTER_VOLUME_SHADER,
+        );
+        let anchored_vwap_pipeline = make_multi_indicator_pipeline(
+            device_ref,
+            &multi_pipeline_layout,
+            "anchored_vwap_pipeline",
+            ANCHORED_VWAP_SHADER,
+        );
         // ADR-094: GPU parity shaders
-        let supertrend_pipeline = make_pipeline("supertrend_pipeline", SUPERTREND_SHADER);
-        let donchian_pipeline = make_pipeline("donchian_pipeline", DONCHIAN_SHADER);
-        let keltner_pipeline = make_pipeline("keltner_pipeline", KELTNER_SHADER);
-        let regression_pipeline = make_pipeline("regression_pipeline", REGRESSION_SHADER);
-        let squeeze_pipeline = make_pipeline("squeeze_pipeline", SQUEEZE_SHADER);
-        let prev_levels_pipeline = make_pipeline("prev_levels_pipeline", PREV_LEVELS_SHADER);
+        let supertrend_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "supertrend_pipeline",
+            SUPERTREND_SHADER,
+        );
+        let donchian_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "donchian_pipeline",
+            DONCHIAN_SHADER,
+        );
+        let keltner_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "keltner_pipeline",
+            KELTNER_SHADER,
+        );
+        let regression_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "regression_pipeline",
+            REGRESSION_SHADER,
+        );
+        let squeeze_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "squeeze_pipeline",
+            SQUEEZE_SHADER,
+        );
+        let prev_levels_pipeline = make_indicator_pipeline(
+            device_ref,
+            &pipeline_layout,
+            "prev_levels_pipeline",
+            PREV_LEVELS_SHADER,
+        );
 
         Self {
             device,
