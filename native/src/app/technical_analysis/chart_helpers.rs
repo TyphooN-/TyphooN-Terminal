@@ -1595,3 +1595,163 @@ pub(super) fn draw_fair_value_gaps(
         }
     }
 }
+/// Draw ICT/Smart Money Order Blocks.
+/// Keeps rolling ATR thresholding and the newest-first 20-zone cap local to the feature.
+pub(super) fn draw_order_blocks(
+    painter: &egui::Painter,
+    chart_rect: egui::Rect,
+    data_left: f32,
+    bar_w: f32,
+    price_to_y: impl Fn(f64) -> f32,
+    bars: &[Bar],
+) {
+    let ob_bull_fill = egui::Color32::from_rgba_premultiplied(0, 180, 160, 25);
+    let ob_bull_edge = egui::Color32::from_rgba_premultiplied(0, 180, 160, 100);
+    let ob_bear_fill = egui::Color32::from_rgba_premultiplied(220, 50, 50, 25);
+    let ob_bear_edge = egui::Color32::from_rgba_premultiplied(220, 50, 50, 100);
+    let ob_label_col = egui::Color32::from_rgba_premultiplied(200, 200, 200, 180);
+
+    // Compute rolling ATR(14) for impulsive move threshold. Keep the early-bar
+    // behavior unchanged, but avoid recomputing the 14-bar true-range window
+    // for every bar on provider-maximum histories.
+    let atr_period = 14usize;
+    let mut true_ranges: Vec<f64> = Vec::with_capacity(bars.len());
+    let mut local_atr: Vec<f64> = Vec::with_capacity(bars.len());
+    let mut rolling_sum = 0.0;
+    for i in 0..bars.len() {
+        let bar = &bars[i];
+        let tr = if i == 0 {
+            bar.high - bar.low
+        } else {
+            let prev_close = bars[i - 1].close;
+            let hl = bar.high - bar.low;
+            let hc = (bar.high - prev_close).abs();
+            let lc = (bar.low - prev_close).abs();
+            hl.max(hc).max(lc)
+        };
+        true_ranges.push(tr);
+        rolling_sum += tr;
+        if i >= atr_period {
+            rolling_sum -= true_ranges[i - atr_period];
+            local_atr.push(rolling_sum / atr_period as f64);
+        } else {
+            local_atr.push(bar.high - bar.low);
+        }
+    }
+
+    // Collect order blocks (limit to most recent 20)
+    struct OBZone {
+        high: f64,
+        low: f64,
+        bar_idx: usize,
+        is_bull: bool,
+        end_idx: usize,
+    }
+    let mut zones: Vec<OBZone> = Vec::with_capacity(20);
+
+    // Walk newest-to-oldest and stop once the render cap is full. The old path
+    // scanned every bar, built every historical OB, then drained the front just
+    // to keep the last 20. On provider-maximum histories that did wasted work
+    // proportional to the full cache depth on every chart render.
+    for i in (0..bars.len().saturating_sub(1)).rev() {
+        let cur = &bars[i];
+        let nxt = &bars[i + 1];
+        let atr = local_atr[i];
+        if atr <= 0.0 {
+            continue;
+        }
+
+        // Bullish OB: bearish candle, then next close breaks above current high by >= 1 ATR
+        if cur.close < cur.open && nxt.close > cur.high + atr {
+            let mut end = bars.len();
+            for j in (i + 2)..bars.len() {
+                if bars[j].low <= cur.high {
+                    end = j;
+                    break;
+                }
+            }
+            zones.push(OBZone {
+                high: cur.high,
+                low: cur.low,
+                bar_idx: i,
+                is_bull: true,
+                end_idx: end,
+            });
+        }
+
+        // Bearish OB: bullish candle, then next close breaks below current low by >= 1 ATR
+        if cur.close > cur.open && nxt.close < cur.low - atr {
+            let mut end = bars.len();
+            for j in (i + 2)..bars.len() {
+                if bars[j].high >= cur.low {
+                    end = j;
+                    break;
+                }
+            }
+            zones.push(OBZone {
+                high: cur.high,
+                low: cur.low,
+                bar_idx: i,
+                is_bull: false,
+                end_idx: end,
+            });
+        }
+
+        if zones.len() >= 20 {
+            break;
+        }
+    }
+    zones.reverse();
+
+    for ob in &zones {
+        let x_start = data_left + (ob.bar_idx as f32 + 0.5) * bar_w;
+        let x_end = if ob.end_idx >= bars.len() {
+            chart_rect.right()
+        } else {
+            data_left + (ob.end_idx as f32 + 0.5) * bar_w
+        };
+        if x_end < chart_rect.left() || x_start > chart_rect.right() {
+            continue;
+        }
+
+        let y_top = price_to_y(ob.high);
+        let y_bot = price_to_y(ob.low);
+        if y_top > chart_rect.bottom() || y_bot < chart_rect.top() {
+            continue;
+        }
+
+        let (fill, edge) = if ob.is_bull {
+            (ob_bull_fill, ob_bull_edge)
+        } else {
+            (ob_bear_fill, ob_bear_edge)
+        };
+        let ct = y_top.max(chart_rect.top());
+        let cb = y_bot.min(chart_rect.bottom());
+        let cl = x_start.max(chart_rect.left());
+        let cr = x_end.min(chart_rect.right());
+
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(cl, ct), egui::pos2(cr, cb)),
+            0.0,
+            fill,
+        );
+        painter.line_segment(
+            [egui::pos2(cl, ct), egui::pos2(cr, ct)],
+            egui::Stroke::new(0.7, edge),
+        );
+        painter.line_segment(
+            [egui::pos2(cl, cb), egui::pos2(cr, cb)],
+            egui::Stroke::new(0.7, edge),
+        );
+        // "OB" label
+        if cr - cl > 20.0 {
+            painter.text(
+                egui::pos2(cl + 3.0, ct + 1.0),
+                egui::Align2::LEFT_TOP,
+                if ob.is_bull { "OB+" } else { "OB-" },
+                egui::FontId::monospace(9.0),
+                ob_label_col,
+            );
+        }
+    }
+}
