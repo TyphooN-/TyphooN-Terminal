@@ -22,6 +22,24 @@ impl TyphooNApp {
             }
         }
 
+        let regulatory_quote_by_symbol: std::collections::HashMap<String, (f64, f64, f64, f64)> =
+            self.regulatory_prices
+                .iter()
+                .map(|(symbol, row)| {
+                    (
+                        symbol.clone(),
+                        (row.last, row.regular_close, row.prev_close, row.change_pct),
+                    )
+                })
+                .chain(self.watchlist_rows.iter().map(|row| {
+                    (
+                        row.symbol.clone(),
+                        (row.last, row.regular_close, row.prev_close, row.change_pct),
+                    )
+                }))
+                .collect();
+        let regulatory_quote = |symbol: &str| regulatory_quote_by_symbol.get(symbol).copied();
+
         if self.show_reg_sho_window {
             let mut open = true;
             // Button clicks are collected here and applied after the window
@@ -90,17 +108,15 @@ impl TyphooNApp {
                         rows.sort_by(|a, b| {
                             let (sym_a, _alerts_a) = a;
                             let (sym_b, _alerts_b) = b;
-                            let wa = self.watchlist_rows.iter().find(|r| &r.symbol == *sym_a)
-                                .or_else(|| self.regulatory_prices.get(sym_a.as_str()));
-                            let wb = self.watchlist_rows.iter().find(|r| &r.symbol == *sym_b)
-                                .or_else(|| self.regulatory_prices.get(sym_b.as_str()));
+                            let wa = regulatory_quote(sym_a.as_str());
+                            let wb = regulatory_quote(sym_b.as_str());
                             let cmp = match col {
                                 0 => sym_a.cmp(sym_b),
-                                1 => wa.map(|w| w.last).partial_cmp(&wb.map(|w| w.last)).unwrap_or(std::cmp::Ordering::Equal),
-                                2 => wa.map(|w| w.regular_close).partial_cmp(&wb.map(|w| w.regular_close)).unwrap_or(std::cmp::Ordering::Equal),
+                                1 => wa.map(|w| w.0).partial_cmp(&wb.map(|w| w.0)).unwrap_or(std::cmp::Ordering::Equal),
+                                2 => wa.map(|w| w.1).partial_cmp(&wb.map(|w| w.1)).unwrap_or(std::cmp::Ordering::Equal),
                                 3 => {
-                                    let ca = wa.map(|w| if w.prev_close > 0.0 { (w.last - w.prev_close) / w.prev_close * 100.0 } else { 0.0 });
-                                    let cb = wb.map(|w| if w.prev_close > 0.0 { (w.last - w.prev_close) / w.prev_close * 100.0 } else { 0.0 });
+                                    let ca = wa.map(|w| if w.2 > 0.0 { (w.0 - w.2) / w.2 * 100.0 } else { 0.0 });
+                                    let cb = wb.map(|w| if w.2 > 0.0 { (w.0 - w.2) / w.2 * 100.0 } else { 0.0 });
                                     ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
                                 }
                                 _ => sym_a.cmp(sym_b),
@@ -135,37 +151,30 @@ impl TyphooNApp {
                                 .unwrap_or(&alerts[0]);
                             // Live watchlist row first (has bid/ask); otherwise the
                             // cache-loaded snapshot so every symbol's columns fill.
-                            let wl = self
-                                .watchlist_rows
-                                .iter()
-                                .find(|r| &r.symbol == sym)
-                                .or_else(|| self.regulatory_prices.get(sym.as_str()));
+                            let quote = regulatory_quote(sym.as_str());
 
                             body.row(18.0, |mut row| {
                                 row.col(|ui| {
                                     ui.label(egui::RichText::new(sym).monospace());
                                 });
                                 row.col(|ui| {
-                                    ui.label(wl.map(|w| fmt_px(w.last)).unwrap_or_else(|| "—".into()));
+                                    ui.label(quote.map(|w| fmt_px(w.0)).unwrap_or_else(|| "—".into()));
                                 });
                                 row.col(|ui| {
-                                    ui.label(wl.map(|w| fmt_px(w.regular_close)).unwrap_or_else(|| "—".into()));
+                                    ui.label(quote.map(|w| fmt_px(w.1)).unwrap_or_else(|| "—".into()));
                                 });
                                 row.col(|ui| {
-                                    match wl {
-                                        Some(w) if w.last > 0.0 => {
-                                            let c = if w.change_pct >= 0.0 { egui::Color32::from_rgb(0,200,0) } else { egui::Color32::from_rgb(200,0,0) };
-                                            ui.colored_label(c, format!("{:.2}%", w.change_pct));
+                                    match quote {
+                                        Some((last, _regular_close, _prev_close, change_pct)) if last > 0.0 => {
+                                            let c = if change_pct >= 0.0 { egui::Color32::from_rgb(0,200,0) } else { egui::Color32::from_rgb(200,0,0) };
+                                            ui.colored_label(c, format!("{:.2}%", change_pct));
                                         }
                                         _ => { ui.label("—"); }
                                     }
                                 });
                                 row.col(|ui| {
                                     ui.spacing_mut().item_spacing.x = 3.0;
-                                    let already_watched = self
-                                        .user_watchlist
-                                        .iter()
-                                        .any(|s| s.eq_ignore_ascii_case(sym));
+                                    let already_watched = self.user_watchlist_set.contains(sym.as_str());
                                     if already_watched {
                                         ui.add_enabled(false, egui::Button::new(egui::RichText::new("✓WL").small()))
                                             .on_hover_text("Already in watchlist");
@@ -257,17 +266,15 @@ impl TyphooNApp {
                         rows.sort_by(|a, b| {
                             let (sym_a, _alerts_a) = a;
                             let (sym_b, _alerts_b) = b;
-                            let wa = self.watchlist_rows.iter().find(|r| &r.symbol == *sym_a)
-                                .or_else(|| self.regulatory_prices.get(sym_a.as_str()));
-                            let wb = self.watchlist_rows.iter().find(|r| &r.symbol == *sym_b)
-                                .or_else(|| self.regulatory_prices.get(sym_b.as_str()));
+                            let wa = regulatory_quote(sym_a.as_str());
+                            let wb = regulatory_quote(sym_b.as_str());
                             let cmp = match col {
                                 0 => sym_a.cmp(sym_b),
-                                1 => wa.map(|w| w.last).partial_cmp(&wb.map(|w| w.last)).unwrap_or(std::cmp::Ordering::Equal),
-                                2 => wa.map(|w| w.prev_close).partial_cmp(&wb.map(|w| w.prev_close)).unwrap_or(std::cmp::Ordering::Equal),
+                                1 => wa.map(|w| w.0).partial_cmp(&wb.map(|w| w.0)).unwrap_or(std::cmp::Ordering::Equal),
+                                2 => wa.map(|w| w.2).partial_cmp(&wb.map(|w| w.2)).unwrap_or(std::cmp::Ordering::Equal),
                                 3 => {
-                                    let ca = wa.map(|w| if w.prev_close > 0.0 { (w.last - w.prev_close) / w.prev_close * 100.0 } else { 0.0 });
-                                    let cb = wb.map(|w| if w.prev_close > 0.0 { (w.last - w.prev_close) / w.prev_close * 100.0 } else { 0.0 });
+                                    let ca = wa.map(|w| if w.2 > 0.0 { (w.0 - w.2) / w.2 * 100.0 } else { 0.0 });
+                                    let cb = wb.map(|w| if w.2 > 0.0 { (w.0 - w.2) / w.2 * 100.0 } else { 0.0 });
                                     ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
                                 }
                                 _ => sym_a.cmp(sym_b),
@@ -300,36 +307,29 @@ impl TyphooNApp {
                                 .iter()
                                 .find(|a| a.kind == "trade_halt")
                                 .unwrap_or(&alerts[0]);
-                            let wl = self
-                                .watchlist_rows
-                                .iter()
-                                .find(|r| &r.symbol == sym)
-                                .or_else(|| self.regulatory_prices.get(sym.as_str()));
+                            let quote = regulatory_quote(sym.as_str());
                             body.row(18.0, |mut row| {
                                 row.col(|ui| {
                                     ui.label(egui::RichText::new(sym).monospace().color(egui::Color32::from_rgb(255, 90, 90)));
                                 });
                                 row.col(|ui| {
-                                    ui.label(wl.map(|w| fmt_px(w.last)).unwrap_or_else(|| "—".into()));
+                                    ui.label(quote.map(|w| fmt_px(w.0)).unwrap_or_else(|| "—".into()));
                                 });
                                 row.col(|ui| {
-                                    ui.label(wl.map(|w| fmt_px(w.prev_close)).unwrap_or_else(|| "—".into()));
+                                    ui.label(quote.map(|w| fmt_px(w.2)).unwrap_or_else(|| "—".into()));
                                 });
                                 row.col(|ui| {
-                                    match wl {
-                                        Some(w) if w.last > 0.0 => {
-                                            let c = if w.change_pct >= 0.0 { egui::Color32::from_rgb(0,200,0) } else { egui::Color32::from_rgb(200,0,0) };
-                                            ui.colored_label(c, format!("{:.2}%", w.change_pct));
+                                    match quote {
+                                        Some((last, _regular_close, _prev_close, change_pct)) if last > 0.0 => {
+                                            let c = if change_pct >= 0.0 { egui::Color32::from_rgb(0,200,0) } else { egui::Color32::from_rgb(200,0,0) };
+                                            ui.colored_label(c, format!("{:.2}%", change_pct));
                                         }
                                         _ => { ui.label("—"); }
                                     }
                                 });
                                 row.col(|ui| {
                                     ui.spacing_mut().item_spacing.x = 3.0;
-                                    let already_watched = self
-                                        .user_watchlist
-                                        .iter()
-                                        .any(|s| s.eq_ignore_ascii_case(sym));
+                                    let already_watched = self.user_watchlist_set.contains(sym.as_str());
                                     if already_watched {
                                         ui.add_enabled(false, egui::Button::new(egui::RichText::new("✓WL").small()))
                                             .on_hover_text("Already in watchlist");
