@@ -156,7 +156,11 @@ impl TyphooNApp {
         }
     }
 
-    pub(crate) fn tick_deferred_chart_loads(&mut self, ctx: &egui::Context, now_instant: std::time::Instant) {
+    pub(crate) fn tick_deferred_chart_loads(
+        &mut self,
+        ctx: &egui::Context,
+        now_instant: std::time::Instant,
+    ) {
         // ── deferred chart loading: non-blocking, paced attempts ──
         // Uses try_load() which returns false if cache Mutex is contended (compaction, broker sync).
         // Failed loads stay queued. The actual load is still expensive — cache read + GPU
@@ -175,7 +179,8 @@ impl TyphooNApp {
                 // All open chart tabs (including background MTF cells and non-active
                 // single-chart tabs) should load proactively so data+indicators are
                 // ready when user switches. No more "click to load" behavior.
-                if false {  // was: defer_inactive_mtf_cell during heavy sync
+                if false {
+                    // was: defer_inactive_mtf_cell during heavy sync
                     if let Some(skipped_idx) = self.deferred_chart_loads.pop_front() {
                         self.deferred_chart_loads.push_back(skipped_idx);
                     }
@@ -339,8 +344,7 @@ impl TyphooNApp {
                     for source in ["alpaca", "kraken", "kraken-equities", "default"] {
                         for key in chart_source_cache_keys(source, &sym, tf) {
                             if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
-                                if let Some(mut row) =
-                                    watchlist_row_from_raw_bars(&sym, &key, &raw)
+                                if let Some(mut row) = watchlist_row_from_raw_bars(&sym, &key, &raw)
                                 {
                                     // For a daily bar the last close IS the daily
                                     // close — surface it so Dly Close fills too.
@@ -466,7 +470,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn reload_symbol_auto(&mut self, symbol: &str, tf: Timeframe) {
-        if let Some(ref cache) = self.cache {
+        if let Some(cache) = self.cache.clone() {
             let (chart_type, source_override) = self
                 .charts
                 .get(self.active_tab)
@@ -475,7 +479,7 @@ impl TyphooNApp {
             let mut chart = ChartState::new(symbol, tf);
             chart.chart_type = chart_type;
             chart.source_override = source_override;
-            let cache_ref = Arc::as_ref(cache);
+            let cache_ref = Arc::as_ref(&cache);
             let mut gpu = self.gpu_indicators.take();
             let load_succeeded = chart.try_load(cache_ref, &mut self.log, gpu.as_mut());
             self.gpu_indicators = gpu;
@@ -510,6 +514,34 @@ impl TyphooNApp {
                         symbol,
                         tf.label()
                     )));
+                }
+            }
+            let split_probe_symbol = normalize_market_data_symbol(symbol)
+                .replace('/', "")
+                .trim_end_matches(".EQ")
+                .to_ascii_uppercase();
+            let split_probe_is_equity = !split_probe_symbol.is_empty()
+                && split_probe_symbol.len() <= 6
+                && split_probe_symbol.chars().all(|c| c.is_ascii_alphabetic());
+            if split_probe_is_equity
+                && !(self.splits_loading
+                    && self.splits_symbol.eq_ignore_ascii_case(&split_probe_symbol))
+            {
+                let splits_cached = cache_ref
+                    .read_connection()
+                    .ok()
+                    .and_then(|conn| {
+                        typhoon_engine::core::research::get_stock_splits(&conn, &split_probe_symbol)
+                            .ok()
+                    })
+                    .is_some();
+                if !splits_cached {
+                    self.splits_loading = true;
+                    self.splits_symbol = split_probe_symbol.clone();
+                    let _ = self.broker_tx.send(BrokerCmd::FetchStockSplits {
+                        symbol: split_probe_symbol,
+                        fmp_key: self.fmp_key.clone(),
+                    });
                 }
             }
             if let Some(target) = self.charts.get_mut(self.active_tab) {

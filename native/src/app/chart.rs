@@ -988,7 +988,7 @@ pub(crate) fn chart_merge_bucket_ts(timeframe: &str, ts: i64) -> i64 {
 /// A known stock split / reverse split: bars strictly before `ex_ts_ms` are
 /// multiplied by `pre_split_factor` (= old shares / new shares = denominator /
 /// numerator) to lift raw, unadjusted pre-split history onto the post-split price
-/// scale. For a 1-for-100 reverse split (WOK, 2025-12-29) the factor is 100.
+/// scale. For a 1-for-100 reverse split the factor is 100.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ChartSplit {
     pub ex_ts_ms: i64,
@@ -1145,8 +1145,8 @@ fn chart_split_from_stock_split(
 /// absent) entirely — which starves the exact back-adjustment
 /// ([`chart_back_adjust_bars_for_splits`]) of the split it needs, so raw
 /// pre-split history (Kraken xStock bars) gets painted on the wrong scale. That
-/// is the WOK December reverse-split discontinuity vs TradingView: the merge code
-/// is correct and tested, it was simply never handed the split. These entries
+/// is the WOK reverse-split discontinuity vs TradingView: the merge code is
+/// correct and tested, it was simply never handed the split. These entries
 /// supplement [`chart_known_splits_from_cache`] so the back-adjust still fires
 /// offline / without an FMP key. See ADR-122.
 ///

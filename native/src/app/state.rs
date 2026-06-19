@@ -2,8 +2,9 @@
 
 mod watchlist;
 
-pub(crate) use watchlist::{WatchlistRow, watchlist_row_from_raw_bars, empty_watchlist_row, KrakenEquityQuoteMeta};
-
+pub(crate) use watchlist::{
+    KrakenEquityQuoteMeta, WatchlistRow, empty_watchlist_row, watchlist_row_from_raw_bars,
+};
 
 use super::*;
 
@@ -687,7 +688,7 @@ pub(crate) enum BrokerCmd {
     /// CFTC Socrata — latest weekly Commitments of Traders (legacy futures).
     FetchCotReports,
     // Corporate action, analyst, ESG, ETF, and index research
-    /// FMP historical stock split events for a symbol.
+    /// Historical stock split events for a symbol (FMP when keyed, Yahoo fallback).
     FetchStockSplits {
         symbol: String,
         fmp_key: String,
@@ -4648,8 +4649,7 @@ pub struct TyphooNApp {
     pub(crate) regulatory_prices: std::collections::HashMap<String, WatchlistRow>,
     /// Receiver for the async Reg SHO price load (off the render thread to avoid
     /// the SQLite-read stall when a bulk bar-sync writer holds the conn mutex).
-    pub(crate) regulatory_prices_rx:
-        Option<std::sync::mpsc::Receiver<Vec<(String, WatchlistRow)>>>,
+    pub(crate) regulatory_prices_rx: Option<std::sync::mpsc::Receiver<Vec<(String, WatchlistRow)>>>,
     /// Guards the one-time staleness-ordered fetch kick per window open (reset
     /// when both windows close). The cached-price *read* re-runs on a throttle
     /// (`regulatory_price_read_at`) so freshly fetched bars keep surfacing.

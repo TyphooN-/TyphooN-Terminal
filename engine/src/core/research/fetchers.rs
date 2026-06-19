@@ -588,6 +588,133 @@ pub async fn fetch_fmp_stock_splits(
     Ok(rows)
 }
 
+/// Yahoo chart split events — public fallback for stock splits/reverse splits.
+///
+/// FMP's free split feed misses some microcap actions; Yahoo's chart endpoint is
+/// the same public source used by its finance UI and often has the split event
+/// immediately. This path needs no API key and gives the chart merge enough
+/// corporate-action data to invalidate/rebuild stale adjusted bars.
+pub async fn fetch_yahoo_stock_splits(
+    client: &reqwest::Client,
+    symbol: &str,
+) -> Result<Vec<StockSplit>, String> {
+    let symbol = symbol.trim().trim_end_matches(".EQ").to_ascii_uppercase();
+    if symbol.is_empty() {
+        return Ok(Vec::new());
+    }
+    let resp = client
+        .get(format!(
+            "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+        ))
+        .query(&[
+            ("period1", "0"),
+            ("period2", "4102444800"),
+            ("interval", "1d"),
+            ("events", "split"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Yahoo splits failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Yahoo splits: HTTP {}", resp.status()));
+    }
+    let v: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Yahoo splits parse: {e}"))?;
+    parse_yahoo_stock_splits_value(&v)
+}
+
+/// Fetch stock splits from all available sources. FMP is used when a key exists;
+/// Yahoo is always tried as a no-key fallback/supplement, because fresh reverse
+/// splits can be missing from FMP but present in Yahoo chart events.
+pub async fn fetch_stock_splits(
+    client: &reqwest::Client,
+    symbol: &str,
+    fmp_key: &str,
+) -> Result<Vec<StockSplit>, String> {
+    let mut rows = Vec::new();
+    let mut errors = Vec::new();
+
+    if !fmp_key.is_empty() {
+        match fetch_fmp_stock_splits(client, symbol, fmp_key).await {
+            Ok(mut fmp_rows) => rows.append(&mut fmp_rows),
+            Err(e) => errors.push(e),
+        }
+    }
+
+    match fetch_yahoo_stock_splits(client, symbol).await {
+        Ok(yahoo_rows) => {
+            for split in yahoo_rows {
+                let exists = rows.iter().any(|old: &StockSplit| {
+                    old.date == split.date
+                        && (old.numerator - split.numerator).abs() < 1e-9
+                        && (old.denominator - split.denominator).abs() < 1e-9
+                });
+                if !exists {
+                    rows.push(split);
+                }
+            }
+        }
+        Err(e) => errors.push(e),
+    }
+
+    if rows.is_empty() && !errors.is_empty() {
+        return Err(errors.join("; "));
+    }
+    rows.sort_by(|a, b| b.date.cmp(&a.date));
+    Ok(rows)
+}
+
+pub(crate) fn parse_yahoo_stock_splits_value(
+    v: &serde_json::Value,
+) -> Result<Vec<StockSplit>, String> {
+    let Some(result) = v["chart"]["result"].as_array().and_then(|arr| arr.first()) else {
+        return Ok(Vec::new());
+    };
+    let Some(splits) = result["events"]["splits"].as_object() else {
+        return Ok(Vec::new());
+    };
+    let mut rows = Vec::new();
+    for event in splits.values() {
+        let ts = event["date"].as_i64().unwrap_or(0);
+        let date = chrono::DateTime::from_timestamp(ts, 0)
+            .map(|dt| dt.date_naive().to_string())
+            .unwrap_or_default();
+        if date.is_empty() {
+            continue;
+        }
+        let (mut numerator, mut denominator) = (
+            event["numerator"].as_f64().unwrap_or(0.0),
+            event["denominator"].as_f64().unwrap_or(0.0),
+        );
+        if (numerator <= 0.0 || denominator <= 0.0)
+            && let Some((n, d)) = parse_split_ratio(event["splitRatio"].as_str().unwrap_or(""))
+        {
+            numerator = n;
+            denominator = d;
+        }
+        if numerator <= 0.0 || denominator <= 0.0 {
+            continue;
+        }
+        rows.push(StockSplit {
+            date,
+            label: format!("{}:{}", numerator, denominator),
+            numerator,
+            denominator,
+        });
+    }
+    rows.sort_by(|a, b| b.date.cmp(&a.date));
+    Ok(rows)
+}
+
+fn parse_split_ratio(raw: &str) -> Option<(f64, f64)> {
+    let (left, right) = raw.split_once(':').or_else(|| raw.split_once('/'))?;
+    let numerator = left.trim().parse::<f64>().ok()?;
+    let denominator = right.trim().parse::<f64>().ok()?;
+    (numerator > 0.0 && denominator > 0.0).then_some((numerator, denominator))
+}
+
 /// FMP /etf-holder/{symbol} — up to 1000 constituent holdings of an ETF.
 pub async fn fetch_fmp_etf_holdings(
     client: &reqwest::Client,
@@ -1291,4 +1418,68 @@ pub async fn fetch_yahoo_options_chain(
         expirations,
         note: notes.join("; "),
     })
+}
+
+#[cfg(test)]
+mod stock_split_fetch_tests {
+    use super::*;
+
+    fn unix_date(date: &str) -> i64 {
+        chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp()
+    }
+
+    #[test]
+    fn yahoo_split_parser_reads_reverse_split_events() {
+        let payload = serde_json::json!({
+            "chart": {
+                "result": [{
+                    "events": {
+                        "splits": {
+                            "wok_20260618": {
+                                "date": unix_date("2026-06-18"),
+                                "numerator": 1.0,
+                                "denominator": 100.0,
+                                "splitRatio": "1:100"
+                            }
+                        }
+                    }
+                }]
+            }
+        });
+
+        let rows = parse_yahoo_stock_splits_value(&payload).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].date, "2026-06-18");
+        assert_eq!(rows[0].numerator, 1.0);
+        assert_eq!(rows[0].denominator, 100.0);
+    }
+
+    #[test]
+    fn yahoo_split_parser_falls_back_to_split_ratio_text() {
+        let payload = serde_json::json!({
+            "chart": {
+                "result": [{
+                    "events": {
+                        "splits": {
+                            "ratio_only": {
+                                "date": unix_date("2026-06-18"),
+                                "splitRatio": "1:100"
+                            }
+                        }
+                    }
+                }]
+            }
+        });
+
+        let rows = parse_yahoo_stock_splits_value(&payload).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].date, "2026-06-18");
+        assert_eq!(rows[0].numerator, 1.0);
+        assert_eq!(rows[0].denominator, 100.0);
+    }
 }

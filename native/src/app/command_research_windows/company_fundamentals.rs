@@ -387,7 +387,7 @@ impl TyphooNApp {
                     self.splits_symbol = sym.clone();
                 }
                 self.show_splits = true;
-                if !self.fmp_key.is_empty() && !self.splits_symbol.is_empty() {
+                if !self.splits_symbol.is_empty() {
                     self.splits_loading = true;
                     let _ = self.broker_tx.send(BrokerCmd::FetchStockSplits {
                         symbol: self.splits_symbol.to_uppercase(),

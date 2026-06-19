@@ -57,9 +57,11 @@ impl TyphooNApp {
                                 }
                             }
                         }
-                        let have_key = !self.fmp_key.is_empty();
                         if ui
-                            .add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG))
+                            .add_enabled(
+                                !self.splits_symbol.trim().is_empty(),
+                                egui::Button::new("Fetch").fill(BTN_MG),
+                            )
                             .clicked()
                         {
                             let sym = self.splits_symbol.to_uppercase();
@@ -72,9 +74,11 @@ impl TyphooNApp {
                         }
                         if self.fmp_key.is_empty() {
                             ui.label(
-                                egui::RichText::new("(add FMP key in Settings)")
-                                    .color(AXIS_TEXT)
-                                    .small(),
+                                egui::RichText::new(
+                                    "(Yahoo fallback; add FMP key for second source)",
+                                )
+                                .color(AXIS_TEXT)
+                                .small(),
                             );
                         }
                         if self.splits_loading {

@@ -223,9 +223,23 @@ impl TyphooNApp {
                     }
                     if stock_splits_need_bar_cache_invalidation(&existing, &rows) {
                         match cache.delete_equity_bar_cache_for_symbol(&sym_u) {
-                            Ok(deleted) if deleted > 0 => self.log.push_back(LogEntry::warn(format!(
-                                "Corporate action cache reset: deleted {deleted} stale bar cache row(s) for {sym_u}; refetch full adjusted bars before trusting the chart"
-                            ))),
+                            Ok(deleted) if deleted > 0 => {
+                                self.log.push_back(LogEntry::warn(format!(
+                                    "Corporate action cache reset: deleted {deleted} stale bar cache row(s) for {sym_u}; reloading charts from adjusted split data"
+                                )));
+                                let reload_indices: Vec<usize> = self
+                                    .charts
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(idx, chart)| {
+                                        (stock_split_chart_symbol_matches(&chart.symbol, &sym_u))
+                                            .then_some(idx)
+                                    })
+                                    .collect();
+                                for idx in reload_indices {
+                                    self.queue_chart_reload(idx);
+                                }
+                            }
                             Ok(_) => {}
                             Err(e) => self.log.push_back(LogEntry::err(format!(
                                 "Corporate action cache reset failed for {sym_u}: {e}"
@@ -391,9 +405,22 @@ fn stock_splits_need_bar_cache_invalidation(
     })
 }
 
+fn stock_split_chart_symbol_matches(chart_symbol: &str, split_symbol: &str) -> bool {
+    let chart = normalize_market_data_symbol(chart_symbol)
+        .replace('/', "")
+        .trim_end_matches(".EQ")
+        .to_ascii_uppercase();
+    let split = split_symbol
+        .trim()
+        .replace('/', "")
+        .trim_end_matches(".EQ")
+        .to_ascii_uppercase();
+    !chart.is_empty() && chart == split
+}
+
 #[cfg(test)]
 mod tests {
-    use super::stock_splits_need_bar_cache_invalidation;
+    use super::{stock_split_chart_symbol_matches, stock_splits_need_bar_cache_invalidation};
     use typhoon_engine::core::research::StockSplit;
 
     fn split(date: &str, numerator: f64, denominator: f64) -> StockSplit {
@@ -424,5 +451,12 @@ mod tests {
             &[],
             &[split("2026-06-19", 2.0, 1.0)]
         ));
+    }
+
+    #[test]
+    fn split_symbol_match_normalizes_equity_suffixes() {
+        assert!(stock_split_chart_symbol_matches("WOK.EQ", "WOK"));
+        assert!(stock_split_chart_symbol_matches("WOK", "WOK.EQ"));
+        assert!(!stock_split_chart_symbol_matches("BTC/USD", "WOK"));
     }
 }

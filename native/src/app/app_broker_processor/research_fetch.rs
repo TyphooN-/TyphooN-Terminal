@@ -382,7 +382,7 @@ pub(super) fn handle_research_fetch_command(
                     .timeout(std::time::Duration::from_secs(15))
                     .build()
                     .unwrap_or_default();
-                match research::fetch_fmp_stock_splits(&client, &symbol, &fmp_key).await {
+                match research::fetch_stock_splits(&client, &symbol, &fmp_key).await {
                     Ok(rows) => {
                         let _ = msg_tx.send(BrokerMsg::StockSplitsMsg(symbol, rows));
                     }
