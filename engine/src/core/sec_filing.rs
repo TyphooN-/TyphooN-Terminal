@@ -8,8 +8,13 @@
 //! HTTP fetches happen on the async runtime between DB calls.
 
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+mod types;
+use types::PendingFiling;
+pub use types::{
+    DiffChunk, FilingAlert, FilingSection, FilingSummary, InsiderTrade, ScrapeStats, SecFiling,
+};
 
 /// SEC EDGAR blocks generic/anonymous user agents with 403s. Keep this
 /// descriptive and email-shaped; callers outside this module should reuse this
@@ -39,76 +44,6 @@ const RELEVANT_FORMS: &[&str] = &[
 ];
 
 // ── Data Types ──────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SecFiling {
-    pub id: i64,
-    pub ticker: String,
-    pub form_type: String,
-    pub accession_number: String,
-    pub filing_date: String,
-    pub url: String,
-    pub company_name: String,
-    pub importance_score: i32,
-    pub category: String,
-    pub summary: String,
-    pub insider_flag: bool,
-    pub created_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InsiderTrade {
-    pub id: i64,
-    pub ticker: String,
-    pub accession_number: String,
-    pub insider_name: String,
-    pub insider_title: String,
-    pub transaction_date: String,
-    pub transaction_type: String,
-    pub shares: f64,
-    pub price: f64,
-    pub aggregate_value: f64,
-    pub is_officer: bool,
-    pub is_director: bool,
-    pub created_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilingAlert {
-    pub id: i64,
-    pub ticker: String,
-    pub alert_type: String,
-    pub message: String,
-    pub filing_accession: String,
-    pub importance: i32,
-    pub created_at: i64,
-    pub dismissed: bool,
-    pub dismissed_reason: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScrapeStats {
-    pub tickers_scanned: usize,
-    pub new_filings: usize,
-    pub new_insider_trades: usize,
-    pub new_alerts: usize,
-    pub errors: Vec<String>,
-}
-
-/// A filing parsed from the SEC JSON but not yet inserted.
-#[derive(Debug, Clone)]
-struct PendingFiling {
-    ticker: String,
-    form_type: String,
-    accession_number: String,
-    filing_date: String,
-    url: String,
-    company_name: String,
-    importance_score: i32,
-    category: String,
-    insider_flag: bool,
-    is_late: bool,
-}
 
 // ── Helper: open a WAL connection ───────────────────────────────────
 
@@ -1809,14 +1744,6 @@ pub fn check_keywords(conn: &Connection, content: &str) -> Vec<String> {
 // ── Filing Diff Comparison ───────────────────────────────────────────────────
 
 /// A chunk of diff output.
-#[derive(Debug, Clone)]
-pub enum DiffChunk {
-    Same(String),
-    Added(String),
-    Removed(String),
-}
-
-/// Compare two filings by paragraph. Returns a list of diff chunks.
 pub fn diff_filing_content(old: &str, new: &str) -> Vec<DiffChunk> {
     let old_paras: Vec<&str> = old
         .split("\n\n")
@@ -1906,23 +1833,6 @@ pub fn find_previous_filing(
 // Pure-text, deterministic, no LLM. Parses plain-text produced by
 // `strip_html_to_text` and extracts type-specific structured highlights.
 
-#[derive(Debug, Clone, Default)]
-pub struct FilingSection {
-    pub title: String,
-    pub body: String,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct FilingSummary {
-    /// Short one-line headline (e.g., "8-K — Item 2.02 Results of Operations").
-    pub headline: String,
-    /// Key bullets (2-8 entries), already trimmed for display.
-    pub bullets: Vec<String>,
-    /// Section extracts (title → body paragraph). Rendered collapsible in GUI.
-    pub sections: Vec<FilingSection>,
-}
-
-/// Normalize form_type to a canonical uppercase key. "10-K/A" → "10-K", "8-K" → "8-K".
 fn canonical_form(form_type: &str) -> String {
     let up = form_type.trim().to_uppercase();
     // Strip amendment suffix (e.g., "10-K/A" → "10-K").
