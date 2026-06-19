@@ -29,7 +29,7 @@ impl TyphooNApp {
                     if chart_sym != src_sym {
                         continue;
                     }
-                    // Sync HLines (price-only drawings are TF-independent)
+                    // Sync HLines (price-only drawings are TF-independent) + O(1) for Fibo/VLine beyond HLine
                     for (di, d) in src_drawings.iter().enumerate() {
                         if let Drawing::HLine { price, color } = d {
                             let key = format!("{:.10}", price);
@@ -38,6 +38,40 @@ impl TyphooNApp {
                                 chart.hline_set.insert(key);
                                 chart.drawings.push(Drawing::HLine {
                                     price: *price,
+                                    color: *color,
+                                });
+                                if di < src_styles.len() {
+                                    chart.drawing_styles.push(src_styles[di]);
+                                }
+                            }
+                        } else if let Drawing::FiboRetrace {
+                            high,
+                            low,
+                            bar_start,
+                            bar_end,
+                        } = d
+                        {
+                            let key = format!("{:.2}-{:.2}-{}-{}", high, low, bar_start, bar_end);
+                            let already = chart.fibo_set.contains(&key);
+                            if !already {
+                                chart.fibo_set.insert(key);
+                                chart.drawings.push(Drawing::FiboRetrace {
+                                    high: *high,
+                                    low: *low,
+                                    bar_start: *bar_start,
+                                    bar_end: *bar_end,
+                                });
+                                if di < src_styles.len() {
+                                    chart.drawing_styles.push(src_styles[di]);
+                                }
+                            }
+                        } else if let Drawing::VLine { bar_idx, color } = d {
+                            let key = bar_idx.to_string();
+                            let already = chart.vline_set.contains(&key);
+                            if !already {
+                                chart.vline_set.insert(key);
+                                chart.drawings.push(Drawing::VLine {
+                                    bar_idx: *bar_idx,
                                     color: *color,
                                 });
                                 if di < src_styles.len() {
