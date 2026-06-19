@@ -1510,3 +1510,88 @@ pub(super) fn tint_for_selection(c: egui::Color32, selected: bool) -> egui::Colo
         c.b().saturating_add(80),
     )
 }
+/// Draw Fair Value Gaps (3-bar imbalance zones).
+/// Keeps the suffix-array O(1) filled-gap lookup local to the feature.
+pub(super) fn draw_fair_value_gaps(
+    painter: &egui::Painter,
+    chart_rect: egui::Rect,
+    data_left: f32,
+    bar_w: f32,
+    price_to_y: impl Fn(f64) -> f32,
+    bars: &[Bar],
+) {
+    let fvg_bull = egui::Color32::from_rgba_premultiplied(0, 180, 80, 30);
+    let fvg_bear = egui::Color32::from_rgba_premultiplied(220, 50, 50, 30);
+    let fvg_bull_edge = egui::Color32::from_rgba_premultiplied(0, 180, 80, 80);
+    let fvg_bear_edge = egui::Color32::from_rgba_premultiplied(220, 50, 50, 80);
+    // Suffix arrays make the "has this gap been filled?" lookup O(1).
+    // future_min_low[k] = min(bars[k..].low); future_max_high[k] = max(bars[k..].high).
+    // The previous code scanned bars[i+2..] for each FVG candidate (O(n²) per frame
+    // — pricey on dense charts and unnecessary when only the suffix extremes matter).
+    let n = bars.len();
+    let mut future_min_low: Vec<f64> = vec![f64::INFINITY; n + 1];
+    let mut future_max_high: Vec<f64> = vec![f64::NEG_INFINITY; n + 1];
+    for k in (0..n).rev() {
+        future_min_low[k] = future_min_low[k + 1].min(bars[k].low);
+        future_max_high[k] = future_max_high[k + 1].max(bars[k].high);
+    }
+    for i in 1..n.saturating_sub(1) {
+        let prev = &bars[i - 1];
+        let next = &bars[i + 1];
+        let x_start = data_left + ((i + 1) as f32 + 0.5) * bar_w;
+        let x_end = chart_rect.right();
+        let scan_start = (i + 2).min(n);
+        // Bullish FVG: bar[i+1].low > bar[i-1].high (gap up)
+        if next.low > prev.high {
+            let gap_top = price_to_y(next.low);
+            let gap_bot = price_to_y(prev.high);
+            if gap_top <= chart_rect.bottom() && gap_bot >= chart_rect.top() {
+                let filled = future_min_low[scan_start] <= prev.high;
+                if !filled {
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(
+                            egui::pos2(x_start, gap_top.max(chart_rect.top())),
+                            egui::pos2(x_end, gap_bot.min(chart_rect.bottom())),
+                        ),
+                        0.0,
+                        fvg_bull,
+                    );
+                    painter.line_segment(
+                        [egui::pos2(x_start, gap_top), egui::pos2(x_end, gap_top)],
+                        egui::Stroke::new(0.5, fvg_bull_edge),
+                    );
+                    painter.line_segment(
+                        [egui::pos2(x_start, gap_bot), egui::pos2(x_end, gap_bot)],
+                        egui::Stroke::new(0.5, fvg_bull_edge),
+                    );
+                }
+            }
+        }
+        // Bearish FVG: bar[i+1].high < bar[i-1].low (gap down)
+        if next.high < prev.low {
+            let gap_top = price_to_y(prev.low);
+            let gap_bot = price_to_y(next.high);
+            if gap_top <= chart_rect.bottom() && gap_bot >= chart_rect.top() {
+                let filled = future_max_high[scan_start] >= prev.low;
+                if !filled {
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(
+                            egui::pos2(x_start, gap_top.max(chart_rect.top())),
+                            egui::pos2(x_end, gap_bot.min(chart_rect.bottom())),
+                        ),
+                        0.0,
+                        fvg_bear,
+                    );
+                    painter.line_segment(
+                        [egui::pos2(x_start, gap_top), egui::pos2(x_end, gap_top)],
+                        egui::Stroke::new(0.5, fvg_bear_edge),
+                    );
+                    painter.line_segment(
+                        [egui::pos2(x_start, gap_bot), egui::pos2(x_end, gap_bot)],
+                        egui::Stroke::new(0.5, fvg_bear_edge),
+                    );
+                }
+            }
+        }
+    }
+}
