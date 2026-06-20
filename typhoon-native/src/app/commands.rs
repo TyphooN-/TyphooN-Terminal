@@ -118,10 +118,6 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     // Tools
     Command {
-        name: "OVERLAP",
-        desc: "Symbol overlap / correlation",
-    },
-    Command {
         name: "BACKTEST",
         desc: "Run backtest on current symbol",
     },

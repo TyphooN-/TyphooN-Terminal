@@ -238,11 +238,6 @@ impl TyphooNApp {
                                 ui.close();
                             }
                             ui.separator();
-                            if ui.button("Symbol Overlap").clicked() {
-                                self.show_symbol_overlap = true;
-                                ui.close();
-                            }
-                            ui.separator();
                             if ui.button("Backtest").clicked() {
                                 self.show_backtest = true;
                                 ui.close();
@@ -307,7 +302,7 @@ impl TyphooNApp {
                         });
                         ui.menu_button("Analysis", |ui| {
                             if ui.button("Correlation Matrix").clicked() {
-                                self.show_correlation = true;
+                                self.show_cor = true;
                                 ui.close();
                             }
                             if ui.button("Seasonals").clicked() {

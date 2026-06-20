@@ -171,7 +171,7 @@ impl TyphooNApp {
             }
             "HOLDERS" => self.show_holders = true,
             "COMPILE" => self.show_indicator_compiler = true,
-            "CORRELATION" => self.show_correlation = true,
+            "CORRELATION" => self.show_cor = true,
             "SEASONALS" => self.show_seasonals = true,
             "MONTECARLO" => self.show_montecarlo = true,
             "STRESS_TEST" => self.show_stress_test = true,

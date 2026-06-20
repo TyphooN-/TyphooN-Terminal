@@ -63,8 +63,7 @@ impl TyphooNApp {
         self.show_analyst = false;
         self.show_holders = false;
         self.show_orderbook_window = false;
-        self.show_symbol_overlap = false;
-        self.show_correlation = false;
+        self.show_cor = false;
         self.show_seasonals = false;
         self.show_montecarlo = false;
         self.show_stress_test = false;

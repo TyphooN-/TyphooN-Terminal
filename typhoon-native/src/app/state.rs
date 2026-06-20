@@ -633,8 +633,6 @@ pub struct TyphooNApp {
     pub(crate) kraken_chart_l2_ws_symbol: String,
     pub(crate) kraken_chart_l2_last_start_attempt: std::time::Instant,
     pub(crate) market_clock_status: String,
-    pub(crate) show_symbol_overlap: bool,
-    pub(crate) show_correlation: bool,
     pub(crate) show_seasonals: bool,
     pub(crate) show_montecarlo: bool,
     pub(crate) show_stress_test: bool,

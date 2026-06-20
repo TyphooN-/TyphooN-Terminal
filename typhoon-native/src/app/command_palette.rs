@@ -109,7 +109,6 @@ impl TyphooNApp {
             }
             "SETTINGS" => self.show_settings = true,
             "INDICATORS" => self.show_indicators_panel = !self.show_indicators_panel,
-            "OVERLAP" => self.show_symbol_overlap = true,
             "BACKTEST" => self.show_backtest = true,
             "SCREENER" => self.show_screener = true,
             "SYMBOLS" | "SYM" => self.show_symbols = true,
