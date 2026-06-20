@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 44 windows ──
+        // ── Research section ──
         if self.show_adx_win {
             if self.adx_win_symbol.is_empty() {
                 self.adx_win_symbol = chart_sym_research.clone();

@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 10 — RVOL compute (realized volatility cone) ──────────────
+// ── RVOL compute (realized volatility cone) ──────────────
 
 /// Compute a `RealizedVolSnapshot` from oldest-first daily bars. Produces
 /// rolling 20d / 60d / 120d / 252d realized volatility (annualized stdev of
@@ -119,7 +119,7 @@ pub fn compute_realized_vol_snapshot(
     }
 }
 
-// ── Round 10 — FCFY compute (FCF yield + dividend coverage) ─────────
+// ── FCFY compute (FCF yield + dividend coverage) ─────────
 
 /// Compute an `FcfYieldSnapshot` from cached financial statements + market cap.
 /// Builds per-annual FCF yield / dividend coverage rows, rolls TTM from the last
@@ -252,7 +252,7 @@ pub fn compute_fcf_yield_snapshot(
     }
 }
 
-// ── Round 10 — SHRT compute (short interest + days-to-cover) ────────
+// ── SHRT compute (short interest + days-to-cover) ────────
 
 /// Compute a `ShortInterestSnapshot` from the Fundamentals short fields plus
 /// daily HP bars. Days-to-cover comes from `short_shares / avg_daily_volume_20d`.

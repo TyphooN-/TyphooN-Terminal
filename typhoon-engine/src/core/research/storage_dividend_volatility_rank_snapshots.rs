@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 20 schema + wrappers ────────────────────────────────────
+// ── + wrappers ──
 
 pub fn create_research_tables_v20(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v19(conn);
@@ -213,7 +213,7 @@ pub fn get_priceperf(
     }
 }
 
-// ── Round 21 schema v21 + wrappers ──
+// ── v21 + wrappers ──
 
 pub fn create_research_tables_v21(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v20(conn);

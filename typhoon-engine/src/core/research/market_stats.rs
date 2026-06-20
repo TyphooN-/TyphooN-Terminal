@@ -2,7 +2,7 @@
 
 use super::*;
 
-// ── Round 8 — IVOL compute (IV Rank / IV Percentile) ─────────────
+// ── IVOL compute (IV Rank / IV Percentile) ─────────────
 
 /// Compute an `IvolSnapshot` from a 52-week history of ATM IV observations
 /// plus a current ATM IV reading. The caller is responsible for extracting
@@ -69,7 +69,7 @@ pub fn compute_ivol_snapshot(
     }
 }
 
-// ── Round 9 — SEAG compute (seasonality) ─────────────────────────
+// ── SEAG compute (seasonality) ─────────────────────────
 
 /// Compute a `SeasonalitySnapshot` from a chronologically-ordered slice of
 /// bars. Builds monthly buckets (Jan..Dec) of year-over-year per-month returns
@@ -288,7 +288,7 @@ pub fn compute_seasonality_snapshot(
     }
 }
 
-// ── Round 9 — COR compute (correlation matrix vs peers) ──────────
+// ── COR compute (correlation matrix vs peers) ──────────
 
 /// Compute a pairwise correlation matrix for a subject symbol against a set
 /// of peer bar series over a rolling window of `window_days`. Uses Pearson
@@ -415,7 +415,7 @@ pub fn compute_correlation_matrix(
     }
 }
 
-// ── Round 9 — TRA compute (total return = price + dividends) ────
+// ── TRA compute (total return = price + dividends) ────
 
 /// Compute a `TotalReturnSnapshot` by combining HP price returns with the
 /// sum of cash dividends paid over the same window. Pure compute; inputs are
@@ -557,7 +557,7 @@ pub fn compute_total_return_snapshot(
     }
 }
 
-// ── Round 9 — SKEW compute (volatility smile/skew) ───────────────
+// ── SKEW compute (volatility smile/skew) ───────────────
 
 /// Compute a `VolatilitySkew` snapshot from a cached options chain. For each
 /// expiry, walk the strike ladder and emit a `SkewPoint` combining call & put

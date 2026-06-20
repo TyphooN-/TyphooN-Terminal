@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 66 schema (v68) ──────────────────────────────────────────
+// ── Research section ──
 pub fn create_research_tables_v68(conn: &Connection) -> Result<(), String> {
     create_research_tables_v67(conn)?;
     conn.execute_batch(
@@ -208,7 +208,7 @@ pub fn get_variance(conn: &Connection, symbol: &str) -> Result<Option<VarianceSn
     }
 }
 
-// ── Round 67 schema (v69) ──────────────────────────────────────────
+// ── Research section ──
 pub fn create_research_tables_v69(conn: &Connection) -> Result<(), String> {
     create_research_tables_v68(conn)?;
     conn.execute_batch(
@@ -411,7 +411,7 @@ pub fn get_dx(conn: &Connection, symbol: &str) -> Result<Option<DxSnapshot>, Str
     }
 }
 
-// ── Round 68 — schema v70 + upsert/get helpers ─────────────────────
+// ── schema v70 + upsert/get helpers ─────────────────────
 
 pub fn create_research_tables_v70(conn: &Connection) -> Result<(), String> {
     create_research_tables_v69(conn)?;
@@ -603,7 +603,7 @@ pub fn get_correl(conn: &Connection, symbol: &str) -> Result<Option<CorrelSnapsh
     }
 }
 
-// ── Round 69 — schema v71 + upsert/get helpers ─────────────────────
+// ── schema v71 + upsert/get helpers ─────────────────────
 
 pub fn create_research_tables_v71(conn: &Connection) -> Result<(), String> {
     create_research_tables_v70(conn)?;
@@ -798,7 +798,7 @@ pub fn get_maxindex(conn: &Connection, symbol: &str) -> Result<Option<MaxIndexSn
     }
 }
 
-// ── Round 70 v72 schema: BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT ──
+// ── v72 schema: BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT ──
 
 pub fn create_research_tables_v72(conn: &Connection) -> Result<(), String> {
     create_research_tables_v71(conn)?;
@@ -994,7 +994,7 @@ pub fn get_linreg_intercept(
     }
 }
 
-// ── Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP ──
+// ── AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP ──
 
 pub fn create_research_tables_v73(conn: &Connection) -> Result<(), String> {
     create_research_tables_v72(conn)?;

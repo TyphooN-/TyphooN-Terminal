@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 27 windows ──
+        // ── Research section ──
         if self.show_omega {
             if self.omega_symbol.is_empty() {
                 self.omega_symbol = chart_sym_research.clone();

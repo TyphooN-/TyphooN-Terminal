@@ -3,7 +3,7 @@ use super::*;
 // Relative rank and event-study compute functions
 
 /// Simple quartile at `q ∈ [0,1]` via linear interpolation on a sorted slice.
-/// Used by the Round 16 rank surfaces for p25 / p75 sector markers.
+/// Used by the rank surfaces for p25 / p75 sector markers.
 pub(super) fn quantile_f64(sorted: &[f64], q: f64) -> f64 {
     if sorted.is_empty() {
         return 0.0;
@@ -622,7 +622,7 @@ pub fn compute_pead_snapshot(
     }
 }
 
-// ── Round 17 — rank surfaces + FQM + revenue growth ────────────────
+// ── rank surfaces + FQM + revenue growth ────────────────
 
 /// Market-cap tier classifier (absolute dollar thresholds).
 fn size_tier_label(market_cap: f64) -> &'static str {

@@ -11,7 +11,7 @@ impl TyphooNApp {
             if let Some(conn) = cache.try_connection() {
                 use typhoon_engine::core::research as rx;
 
-                // ── Round 55: SMMA / ALLIGATOR / CRSI / SEB / IMI ──
+                // ── SMMA / ALLIGATOR / CRSI / SEB / IMI ──
                 if let Ok(Some(sm)) = rx::get_smma(&conn, &sym_upper) {
                     if sm.smma_label != "INSUFFICIENT_DATA" && !sm.smma_label.is_empty() {
                         let _ = writeln!(
@@ -140,7 +140,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 56: GMMA / MAENV / ADL / VHF / VROC ──
+                // ── GMMA / MAENV / ADL / VHF / VROC ──
                 if let Ok(Some(gm)) = rx::get_gmma(&conn, &sym_upper) {
                     if gm.gmma_label != "INSUFFICIENT_DATA" && !gm.gmma_label.is_empty() {
                         let _ = writeln!(
@@ -274,7 +274,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 57: KDJ / QQE / PMO / CFO / TMF ──
+                // ── KDJ / QQE / PMO / CFO / TMF ──
                 if let Ok(Some(kj)) = rx::get_kdj(&conn, &sym_upper) {
                     if kj.kdj_label != "INSUFFICIENT_DATA" && !kj.kdj_label.is_empty() {
                         let _ = writeln!(
@@ -541,7 +541,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 59: DEMARKER / GATOR / BW_MFI / VWMA / STDDEV ──
+                // ── DEMARKER / GATOR / BW_MFI / VWMA / STDDEV ──
                 if let Ok(Some(dm)) = rx::get_demarker(&conn, &sym_upper) {
                     if dm.demarker_label != "INSUFFICIENT_DATA" && !dm.demarker_label.is_empty() {
                         let _ = writeln!(

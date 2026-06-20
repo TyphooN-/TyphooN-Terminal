@@ -1,4 +1,4 @@
-// ── Round 60 tests ───────────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn wma_roundtrip() {
@@ -374,7 +374,7 @@ fn midpoint_compute_oscillating() {
     }
 }
 
-// ── Round 62 tests ──
+// ── Research section ──
 
 #[test]
 fn mass_index_roundtrip() {
@@ -565,7 +565,7 @@ fn trange_compute_oscillating() {
     }
 }
 
-// ── Round 63 tests ──
+// ── Research section ──
 
 #[test]
 fn linearreg_slope_roundtrip() {
@@ -744,7 +744,7 @@ fn stochf_compute_oscillating() {
     }
 }
 
-// ── Round 64 tests ──
+// ── Research section ──
 #[test]
 fn linearreg_roundtrip() {
     let conn = Connection::open_in_memory().unwrap();
@@ -1121,7 +1121,7 @@ fn adxr_compute_oscillating() {
     }
 }
 
-// ── Round 66 ──
+// ── Research section ──
 #[test]
 fn avgprice_roundtrip() {
     let conn = Connection::open_in_memory().unwrap();
@@ -1303,7 +1303,7 @@ fn variance_compute_oscillating() {
     }
 }
 
-// ── Round 67 ──
+// ── Research section ──
 #[test]
 fn plus_di_roundtrip() {
     let conn = Connection::open_in_memory().unwrap();
@@ -1490,7 +1490,7 @@ fn dx_compute_oscillating() {
     }
 }
 
-// ── Round 68 ──
+// ── Research section ──
 #[test]
 fn roc_roundtrip() {
     let conn = Connection::open_in_memory().unwrap();
@@ -1679,7 +1679,7 @@ fn correl_compute_oscillating() {
     }
 }
 
-// ── Round 69 ──
+// ── Research section ──
 #[test]
 fn min_roundtrip() {
     let conn = Connection::open_in_memory().unwrap();
@@ -1858,7 +1858,7 @@ fn maxindex_compute_oscillating() {
     }
 }
 
-// ── Round 70 tests — BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT ──
+// ── — BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT ──
 
 #[test]
 fn bbands_roundtrip() {
@@ -2050,7 +2050,7 @@ fn linreg_intercept_compute_oscillating() {
     }
 }
 
-// ── Round 71 tests ──────────────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn aroonosc_roundtrip() {
@@ -2260,4 +2260,3 @@ fn mavp_compute_oscillating() {
         assert!(snap.mavp > 0.0);
     }
 }
-

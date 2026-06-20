@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 // GARP growth, flow, market-regime, relative-volume, and margin research types
 
 /// GROWM — Growth-at-Reasonable-Price (GARP) composite.
-/// Fuses cached MOM + EARM + DIVG snapshots from Rounds 12/13.
+/// Fuses cached MOM + EARM + DIVG snapshots from .
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GarpComponent {
     pub name: String,

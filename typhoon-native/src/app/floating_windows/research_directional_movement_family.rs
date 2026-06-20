@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 67: PLUS_DI / MINUS_DI / PLUS_DM / MINUS_DM / DX ──
+        // ── Research PLUS_DI / MINUS_DI / PLUS_DM / MINUS_DM / DX ──
         if self.show_plus_di_win {
             if self.plus_di_win_symbol.is_empty() {
                 self.plus_di_win_symbol = chart_sym_research.clone();

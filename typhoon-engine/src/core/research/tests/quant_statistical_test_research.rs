@@ -1,4 +1,4 @@
-// ── Round 76 (Quant Stats) tests ──
+// ── (Quant Stats) tests ──
 
 #[test]
 fn modsharpe_roundtrip() {
@@ -225,7 +225,7 @@ fn hlvclust_compute_oscillating() {
     }
 }
 
-// ── Round 77 (Quant Stats) tests ──
+// ── (Quant Stats) tests ──
 
 #[test]
 fn yangzhang_roundtrip() {

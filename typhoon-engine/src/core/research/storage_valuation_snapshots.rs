@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 7 SQLite schema + helpers ───────────────────────────────
+// ── Research section ──
 
 pub fn create_research_tables_v7(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(

@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 30: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──
+// ── PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──
 
 pub fn create_research_tables_v31(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v30(conn);
@@ -211,7 +211,7 @@ pub fn get_dddur(
     }
 }
 
-// ── Round 31: HILLTAIL / ARCHLM / PAINRATIO / CUSUM / CFVAR ──
+// ── HILLTAIL / ARCHLM / PAINRATIO / CUSUM / CFVAR ──
 
 pub fn create_research_tables_v32(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v31(conn);
@@ -406,7 +406,7 @@ pub fn get_cfvar(conn: &Connection, symbol: &str) -> Result<Option<CornishFisher
     }
 }
 
-// ── Round 32 schema v33 + upsert/get ─────────────────────────────
+// ── v33 + upsert/get ──
 
 pub fn create_research_tables_v33(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v32(conn);
@@ -589,7 +589,7 @@ pub fn get_apen(conn: &Connection, symbol: &str) -> Result<Option<ApenSnapshot>,
     }
 }
 
-// ── Round 33 schema v34 + upsert/get ─────────────────────────────
+// ── v34 + upsert/get ──
 
 pub fn create_research_tables_v34(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v33(conn);
@@ -780,7 +780,7 @@ pub fn get_gini(conn: &Connection, symbol: &str) -> Result<Option<GiniSnapshot>,
     }
 }
 
-// ── Round 34 schema v35 ──
+// ── v35 ──
 
 pub fn create_research_tables_v35(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v34(conn);
@@ -967,7 +967,7 @@ pub fn get_specent(conn: &Connection, symbol: &str) -> Result<Option<SpecentSnap
     }
 }
 
-// ── Round 35 schema v36 ──
+// ── v36 ──
 
 pub fn create_research_tables_v36(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v35(conn);
@@ -1158,7 +1158,7 @@ pub fn get_ewmavol(conn: &Connection, symbol: &str) -> Result<Option<EwmaVolSnap
     }
 }
 
-// ── Round 36 schema v37 ──
+// ── v37 ──
 
 pub fn create_research_tables_v37(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v36(conn);

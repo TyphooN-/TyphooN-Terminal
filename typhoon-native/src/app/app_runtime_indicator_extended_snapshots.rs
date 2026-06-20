@@ -3,7 +3,7 @@ use super::*;
 impl TyphooNApp {
     pub(super) fn handle_extended_indicator_snapshot_msg(&mut self, msg: BrokerMsg) {
         match msg {
-            // ── Round 51 result handlers ──
+            // ── Research section ──
             BrokerMsg::DemaSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.dema_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -44,7 +44,7 @@ impl TyphooNApp {
                 }
                 let _ = snap;
             }
-            // ── Round 52 result handlers ──
+            // ── Research section ──
             BrokerMsg::AlmaSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.alma_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -173,7 +173,7 @@ impl TyphooNApp {
                 }
                 let _ = snap;
             }
-            // ── Round 55 receive arms ──
+            // ── Research section ──
             BrokerMsg::SmmaSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.smma_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -454,7 +454,7 @@ impl TyphooNApp {
                 }
                 let _ = snap;
             }
-            // ── Round 62 match arms ──
+            // ── Research section ──
             BrokerMsg::MassIndexSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.mass_index_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -495,7 +495,7 @@ impl TyphooNApp {
                 }
                 let _ = snap;
             }
-            // ── Round 63 match arms ──
+            // ── Research section ──
             BrokerMsg::LinearregSlopeSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.linearreg_slope_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -536,7 +536,7 @@ impl TyphooNApp {
                 }
                 let _ = snap;
             }
-            // ── Round 64 match arms ──
+            // ── Research section ──
             BrokerMsg::LinearregSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.linearreg_win_symbol.eq_ignore_ascii_case(&sym_u) {

@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 23 windows ──
+        // ── Research section ──
 
         // AUTOCOR — Autocorrelation at multiple lags
         if self.show_autocor {

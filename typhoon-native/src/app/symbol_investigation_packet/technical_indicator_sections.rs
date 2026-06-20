@@ -11,7 +11,7 @@ impl TyphooNApp {
             if let Some(conn) = cache.try_connection() {
                 use typhoon_engine::core::research as rx;
 
-                // ── Round 42 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(sq)) = rx::get_squeeze(&conn, &sym_upper) {
                     if sq.squeeze_label != "INSUFFICIENT_DATA" && !sq.squeeze_label.is_empty() {
                         let _ = writeln!(
@@ -146,7 +146,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 43 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(ik)) = rx::get_ichimoku(&conn, &sym_upper) {
                     if ik.ichimoku_label != "INSUFFICIENT_DATA" && !ik.ichimoku_label.is_empty() {
                         let _ = writeln!(
@@ -296,7 +296,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 44 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(ax)) = rx::get_adx(&conn, &sym_upper) {
                     if ax.adx_label != "INSUFFICIENT_DATA" && !ax.adx_label.is_empty() {
                         let _ = writeln!(
@@ -426,7 +426,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 45 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(vx)) = rx::get_vortex(&conn, &sym_upper) {
                     if vx.vortex_label != "INSUFFICIENT_DATA" && !vx.vortex_label.is_empty() {
                         let _ = writeln!(
@@ -558,7 +558,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 46 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(pp)) = rx::get_ppo(&conn, &sym_upper) {
                     if pp.ppo_label != "INSUFFICIENT_DATA" && !pp.ppo_label.is_empty() {
                         let _ = writeln!(
@@ -690,7 +690,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 47 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(ms)) = rx::get_mass(&conn, &sym_upper) {
                     if ms.mass_label != "INSUFFICIENT_DATA" && !ms.mass_label.is_empty() {
                         let _ = writeln!(
@@ -827,7 +827,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 48 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(ef)) = rx::get_efi(&conn, &sym_upper) {
                     if ef.efi_label != "INSUFFICIENT_DATA" && !ef.efi_label.is_empty() {
                         let _ = writeln!(

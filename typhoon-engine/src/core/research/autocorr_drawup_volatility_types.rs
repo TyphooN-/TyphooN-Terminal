@@ -123,7 +123,7 @@ pub struct VolumeRatioSnapshot {
     pub note: String,
 }
 
-// ── Round 24 — HP drawup/gap/vol-cluster/close-placement/AR(1) stats ──
+// ── HP drawup/gap/vol-cluster/close-placement/AR(1) stats ──
 
 /// DRAWUP — Rally history (mirror of DDHIST).
 /// Pure symbol-local HP stat over the trailing 253-session window.
@@ -234,7 +234,7 @@ pub struct MeanReversionHalfLifeSnapshot {
     pub note: String,
 }
 
-// ── Round 25 — HP downside-vol / Sharpe / efficiency / wick / vol-of-vol ──
+// ── HP downside-vol / Sharpe / efficiency / wick / vol-of-vol ──
 //
 // Five more pure symbol-local HP surfaces computed from the trailing 253-
 // session window. DOWNVOL and SHARPR are classical return-distribution risk

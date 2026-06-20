@@ -368,7 +368,7 @@ impl TyphooNApp {
                 self.cot_loading = true;
                 let _ = self.broker_tx.send(BrokerCmd::FetchCotReports);
             }
-            // ── Round 4 palette entries ──
+            // ── palette entries ──
             "SPLT" | "SPLIT" | "SPLITS" | "STOCK_SPLIT" => {
                 let sym = self
                     .charts
@@ -501,7 +501,7 @@ impl TyphooNApp {
                     });
                 }
             }
-            // ── Round 5 palette entries ──
+            // ── palette entries ──
             "INS" | "INSIDER_TRADES" | "FORM4" => {
                 let sym = self
                     .charts
@@ -633,7 +633,7 @@ impl TyphooNApp {
                     });
                 }
             }
-            // ── Round 6 palette entries ──
+            // ── palette entries ──
             // (intentionally omits "INDICES" to preserve the legacy ETF dashboard below)
             "WEI" | "GLOBAL_INDICES" => {
                 self.show_wei = true;
@@ -763,7 +763,7 @@ impl TyphooNApp {
                     });
                 }
             }
-            // ── Round 7 palette entries ──
+            // ── palette entries ──
             "WCR" | "CURRENCY" | "CURRENCIES" | "FX_RATES" => {
                 self.show_wcr = true;
                 if self.wcr_rates.is_empty() {
@@ -916,7 +916,7 @@ impl TyphooNApp {
                     });
                 }
             }
-            // ── Round 8 palette entries ──
+            // ── palette entries ──
             "HRA" | "HISTORICAL_RETURNS" | "RETURN_ANALYSIS" | "RISK_ANALYSIS" => {
                 let sym = self
                     .charts

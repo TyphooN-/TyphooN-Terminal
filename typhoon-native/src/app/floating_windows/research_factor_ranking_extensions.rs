@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 17 ──
+        // ── Research section ──
         // SIZEF — Size Factor Rank vs Sector Peers
         if self.show_sizef {
             if self.sizef_symbol.is_empty() {

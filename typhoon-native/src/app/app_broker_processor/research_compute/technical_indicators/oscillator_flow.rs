@@ -62,7 +62,7 @@ pub(super) fn handle_oscillator_flow_compute(
                 let _ = msg_tx.send(BrokerMsg::AroonSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 44 handlers ──
+        // ── handlers ──
         BrokerCmd::ComputeAdxSnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();

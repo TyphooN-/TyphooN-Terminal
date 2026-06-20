@@ -1,13 +1,13 @@
 use super::super::*;
 
 impl TyphooNApp {
-    pub(super) fn handle_distribution_entropy_round_35_command(
+    pub(super) fn handle_residual_cycle_memory_commands_command(
         &mut self,
         cmd_upper: &String,
     ) -> bool {
         match cmd_upper.as_str() {
-            // ── Round 35 palette aliases ──
-            "ROBVOL" | "ROBUST_VOL" | "ROBUSTVOL" => {
+            // ── Residual, cycle, memory, and rank-dependence palette aliases ──
+            "DURBINWATSON" | "DURBIN_WATSON" | "DW" | "DWSTAT" | "DWTEST" | "RESIDAC" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -22,24 +22,26 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.robvol_symbol = sym;
+                    self.durbinwatson_symbol = sym;
                 }
-                self.show_robvol = true;
-                if self.robvol_snapshot.symbol.is_empty() && !self.robvol_symbol.is_empty() {
+                self.show_durbinwatson = true;
+                if self.durbinwatson_snapshot.symbol.is_empty()
+                    && !self.durbinwatson_symbol.is_empty()
+                {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_robvol(
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_durbinwatson(
                                 &conn,
-                                &self.robvol_symbol,
+                                &self.durbinwatson_symbol,
                             ) {
-                                self.robvol_snapshot = snap;
+                                self.durbinwatson_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "RENYIENT" | "RENYI_ENTROPY" | "RENYIENTROPY" => {
+            "BDSTEST" | "BDS_TEST" | "BDS" | "BROCK_DECHERT" | "BROCKDECHERT" | "IIDTEST" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -54,24 +56,24 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.renyient_symbol = sym;
+                    self.bdstest_symbol = sym;
                 }
-                self.show_renyient = true;
-                if self.renyient_snapshot.symbol.is_empty() && !self.renyient_symbol.is_empty() {
+                self.show_bdstest = true;
+                if self.bdstest_snapshot.symbol.is_empty() && !self.bdstest_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_renyient(
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_bdstest(
                                 &conn,
-                                &self.renyient_symbol,
+                                &self.bdstest_symbol,
                             ) {
-                                self.renyient_snapshot = snap;
+                                self.bdstest_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "RETQUANT" | "RETURN_QUANTILES" | "RETURNQUANTILES" => {
+            "BREUSCHPAGAN" | "BREUSCH_PAGAN" | "BP" | "BPTEST" | "HETEROTEST" | "HETEROLMTEST" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -86,24 +88,26 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.retquant_symbol = sym;
+                    self.breuschpagan_symbol = sym;
                 }
-                self.show_retquant = true;
-                if self.retquant_snapshot.symbol.is_empty() && !self.retquant_symbol.is_empty() {
+                self.show_breuschpagan = true;
+                if self.breuschpagan_snapshot.symbol.is_empty()
+                    && !self.breuschpagan_symbol.is_empty()
+                {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_retquant(
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_breuschpagan(
                                 &conn,
-                                &self.retquant_symbol,
+                                &self.breuschpagan_symbol,
                             ) {
-                                self.retquant_snapshot = snap;
+                                self.breuschpagan_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "MSENT" | "MULTISCALE_ENTROPY" | "MULTISCALEENTROPY" => {
+            "TURNPTS" | "TURN_PTS" | "TURNINGPOINTS" | "BARTELS" | "TURNINGTEST" | "TURNINGPTS" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -118,23 +122,123 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.msent_symbol = sym;
+                    self.turnpts_symbol = sym;
                 }
-                self.show_msent = true;
-                if self.msent_snapshot.symbol.is_empty() && !self.msent_symbol.is_empty() {
+                self.show_turnpts = true;
+                if self.turnpts_snapshot.symbol.is_empty() && !self.turnpts_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_turnpts(
+                                &conn,
+                                &self.turnpts_symbol,
+                            ) {
+                                self.turnpts_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+                true
+            }
+            "PERIODOGRAM" | "PERGRAM" | "DFTSPEC" | "SPECDENSITY" | "DOMINANTCYCLE"
+            | "CYCLEFINDER" => {
+                let sym = self
+                    .charts
+                    .get(self.active_tab)
+                    .map(|c| {
+                        c.symbol
+                            .split(':')
+                            .rev()
+                            .nth(1)
+                            .or_else(|| c.symbol.split(':').last())
+                            .unwrap_or("")
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                if !sym.is_empty() {
+                    self.periodogram_symbol = sym;
+                }
+                self.show_periodogram = true;
+                if self.periodogram_snapshot.symbol.is_empty()
+                    && !self.periodogram_symbol.is_empty()
+                {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_periodogram(
+                                &conn,
+                                &self.periodogram_symbol,
+                            ) {
+                                self.periodogram_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+                true
+            }
+            "MCLEODLI" | "MCLEOD" | "MLTEST" | "SQRETURNS" | "ARCHPORTMANTEAU" => {
+                let sym = self
+                    .charts
+                    .get(self.active_tab)
+                    .map(|c| {
+                        c.symbol
+                            .split(':')
+                            .rev()
+                            .nth(1)
+                            .or_else(|| c.symbol.split(':').last())
+                            .unwrap_or("")
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                if !sym.is_empty() {
+                    self.mcleodli_symbol = sym;
+                }
+                self.show_mcleodli = true;
+                if self.mcleodli_snapshot.symbol.is_empty() && !self.mcleodli_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_mcleodli(
+                                &conn,
+                                &self.mcleodli_symbol,
+                            ) {
+                                self.mcleodli_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+                true
+            }
+            "OUFIT" | "ORNSTEIN" | "OU" | "OUPROCESS" | "OU_FIT" | "MEANREVERTFIT" => {
+                let sym = self
+                    .charts
+                    .get(self.active_tab)
+                    .map(|c| {
+                        c.symbol
+                            .split(':')
+                            .rev()
+                            .nth(1)
+                            .or_else(|| c.symbol.split(':').last())
+                            .unwrap_or("")
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                if !sym.is_empty() {
+                    self.oufit_symbol = sym;
+                }
+                self.show_oufit = true;
+                if self.oufit_snapshot.symbol.is_empty() && !self.oufit_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             if let Ok(Some(snap)) =
-                                typhoon_engine::core::research::get_msent(&conn, &self.msent_symbol)
+                                typhoon_engine::core::research::get_oufit(&conn, &self.oufit_symbol)
                             {
-                                self.msent_snapshot = snap;
+                                self.oufit_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "EWMAVOL" | "EWMA_VOL" | "EWMAVOLATILITY" => {
+            "GPH" | "GEWEKE" | "GEWEKEPORTERHUDAK" | "LONGMEMORY" | "FRACTIONAL_D"
+            | "LOGPERIODOGRAM" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -149,119 +253,23 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.ewmavol_symbol = sym;
+                    self.gph_symbol = sym;
                 }
-                self.show_ewmavol = true;
-                if self.ewmavol_snapshot.symbol.is_empty() && !self.ewmavol_symbol.is_empty() {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_ewmavol(
-                                &conn,
-                                &self.ewmavol_symbol,
-                            ) {
-                                self.ewmavol_snapshot = snap;
-                            }
-                        }
-                    }
-                }
-                true
-            }
-            "KSNORM" | "KS_NORM" | "KS_TEST" | "KSTEST" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    self.ksnorm_symbol = sym;
-                }
-                self.show_ksnorm = true;
-                if self.ksnorm_snapshot.symbol.is_empty() && !self.ksnorm_symbol.is_empty() {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_ksnorm(
-                                &conn,
-                                &self.ksnorm_symbol,
-                            ) {
-                                self.ksnorm_snapshot = snap;
-                            }
-                        }
-                    }
-                }
-                true
-            }
-            "ADTEST" | "AD_TEST" | "ANDERSON_DARLING" | "ANDERSONDARLING" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    self.adtest_symbol = sym;
-                }
-                self.show_adtest = true;
-                if self.adtest_snapshot.symbol.is_empty() && !self.adtest_symbol.is_empty() {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_adtest(
-                                &conn,
-                                &self.adtest_symbol,
-                            ) {
-                                self.adtest_snapshot = snap;
-                            }
-                        }
-                    }
-                }
-                true
-            }
-            "LMOM" | "L_MOMENTS" | "LMOMENTS" | "HOSKING" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    self.lmom_symbol = sym;
-                }
-                self.show_lmom = true;
-                if self.lmom_snapshot.symbol.is_empty() && !self.lmom_symbol.is_empty() {
+                self.show_gph = true;
+                if self.gph_snapshot.symbol.is_empty() && !self.gph_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             if let Ok(Some(snap)) =
-                                typhoon_engine::core::research::get_lmom(&conn, &self.lmom_symbol)
+                                typhoon_engine::core::research::get_gph(&conn, &self.gph_symbol)
                             {
-                                self.lmom_snapshot = snap;
+                                self.gph_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "KYLELAM" | "KYLE_LAMBDA" | "KYLELAMBDA" | "PRICE_IMPACT" | "PRICEIMPACT" => {
+            "BURGSPEC" | "BURG" | "MAXENTROPY" | "ARSPECTRUM" | "MESPEC" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -276,24 +284,24 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.kylelam_symbol = sym;
+                    self.burgspec_symbol = sym;
                 }
-                self.show_kylelam = true;
-                if self.kylelam_snapshot.symbol.is_empty() && !self.kylelam_symbol.is_empty() {
+                self.show_burgspec = true;
+                if self.burgspec_snapshot.symbol.is_empty() && !self.burgspec_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_kylelam(
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_burgspec(
                                 &conn,
-                                &self.kylelam_symbol,
+                                &self.burgspec_symbol,
                             ) {
-                                self.kylelam_snapshot = snap;
+                                self.burgspec_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "PEAKOVER" | "PEAKS_OVER_THRESHOLD" | "POT" | "EVT_POT" | "EXCEEDANCES" => {
+            "KENDALLTAU" | "KTAU" | "RANKAUTOCORR" | "TAULAG1" | "KENDALLLAG" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -308,17 +316,18 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.peakover_symbol = sym;
+                    self.kendalltau_symbol = sym;
                 }
-                self.show_peakover = true;
-                if self.peakover_snapshot.symbol.is_empty() && !self.peakover_symbol.is_empty() {
+                self.show_kendalltau = true;
+                if self.kendalltau_snapshot.symbol.is_empty() && !self.kendalltau_symbol.is_empty()
+                {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_peakover(
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_kendalltau(
                                 &conn,
-                                &self.peakover_symbol,
+                                &self.kendalltau_symbol,
                             ) {
-                                self.peakover_snapshot = snap;
+                                self.kendalltau_snapshot = snap;
                             }
                         }
                     }

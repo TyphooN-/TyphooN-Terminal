@@ -11,7 +11,7 @@ impl TyphooNApp {
             if let Some(conn) = cache.try_connection() {
                 use typhoon_engine::core::research as rx;
 
-                // Round 5 — insider flow / holders / float / HP / EPS
+                // insider flow / holders / float / HP / EPS
 
                 // INS — insider Form-4 flow (last ~10 filings + net summary)
                 if let Ok(Some(ins)) = rx::get_insider_trades(&conn, &sym_upper) {

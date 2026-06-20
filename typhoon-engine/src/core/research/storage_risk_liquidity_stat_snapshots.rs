@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 26 schema + upsert/get ──
+// ── + upsert/get ──
 
 pub fn create_research_tables_v27(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v26(conn);
@@ -202,7 +202,7 @@ pub fn get_jbnorm(conn: &Connection, symbol: &str) -> Result<Option<JarqueBeraSn
     }
 }
 
-// ── Round 27 schema + upsert/get ──
+// ── + upsert/get ──
 
 pub fn create_research_tables_v28(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v27(conn);
@@ -407,7 +407,7 @@ pub fn get_rollsprd(conn: &Connection, symbol: &str) -> Result<Option<RollSpread
     }
 }
 
-// ── Round 28 schema v29 ──
+// ── v29 ──
 
 pub fn create_research_tables_v29(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v28(conn);
@@ -613,7 +613,7 @@ pub fn get_doweffect(
     }
 }
 
-// ── Round 29: STERLING / KELLYF / LJUNGB / RUNSTEST / ZERORET ──
+// ── STERLING / KELLYF / LJUNGB / RUNSTEST / ZERORET ──
 
 pub fn create_research_tables_v30(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v29(conn);

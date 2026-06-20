@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 5 windows ──────────────────────────────────
+        // ── Research section ──
 
         // INS — Insider Trades (SEC Form-4)
         if self.show_insider_trades {

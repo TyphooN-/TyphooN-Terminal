@@ -79,7 +79,7 @@ pub struct KendallTauSnapshot {
     pub note: String,
 }
 
-// ── Round 42 surfaces ─────────────────────────────────────────────
+// ── surfaces ──
 
 /// SQUEEZE — composite short-squeeze outlier score per symbol.
 /// Fuses five orthogonal axes: short-float %, days-to-cover, 20d momentum,

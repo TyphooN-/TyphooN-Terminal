@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 9 windows ──
+        // ── Research section ──
 
         // SEAG — Seasonality (monthly + day-of-week)
         if self.show_seag {

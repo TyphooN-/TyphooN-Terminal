@@ -11,7 +11,7 @@ impl TyphooNApp {
             if let Some(conn) = cache.try_connection() {
                 use typhoon_engine::core::research as rx;
 
-                // ── Round 60: WMA / RAINBOW / MESA_SINE / FRAMA / IBS ──
+                // ── WMA / RAINBOW / MESA_SINE / FRAMA / IBS ──
                 if let Ok(Some(wm)) = rx::get_wma(&conn, &sym_upper) {
                     if wm.wma_label != "INSUFFICIENT_DATA" && !wm.wma_label.is_empty() {
                         let _ = writeln!(
@@ -275,7 +275,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 62: MASSINDEX / NATR / TTM_SQUEEZE / FORCE_INDEX / TRANGE ──
+                // ── MASSINDEX / NATR / TTM_SQUEEZE / FORCE_INDEX / TRANGE ──
                 if let Ok(Some(mi)) = rx::get_mass_index(&conn, &sym_upper) {
                     if mi.mass_label != "INSUFFICIENT_DATA" && !mi.mass_label.is_empty() {
                         let _ = writeln!(
@@ -407,7 +407,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 63 packet emitters ──
+                // ── Research section ──
                 if let Ok(Some(ls)) = rx::get_linearreg_slope(&conn, &sym_upper) {
                     if ls.slope_label != "INSUFFICIENT_DATA" && !ls.slope_label.is_empty() {
                         let _ = writeln!(
@@ -532,7 +532,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 64 packet emitters ──
+                // ── Research section ──
                 if let Ok(Some(lr)) = rx::get_linearreg(&conn, &sym_upper) {
                     if lr.linearreg_label != "INSUFFICIENT_DATA" && !lr.linearreg_label.is_empty() {
                         let _ = writeln!(

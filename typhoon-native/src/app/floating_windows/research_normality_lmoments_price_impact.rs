@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 36 windows ──
+        // ── Research section ──
         if self.show_ksnorm {
             if self.ksnorm_symbol.is_empty() {
                 self.ksnorm_symbol = chart_sym_research.clone();

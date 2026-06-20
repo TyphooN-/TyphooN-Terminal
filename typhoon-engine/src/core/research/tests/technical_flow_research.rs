@@ -1,4 +1,4 @@
-// ── Round 41 tests ──
+// ── Research section ──
 
 #[test]
 fn mcleodli_roundtrip() {
@@ -211,7 +211,7 @@ fn kendalltau_compute_oscillating() {
     }
 }
 
-// ── Round 42 tests ──
+// ── Research section ──
 
 #[test]
 fn squeeze_roundtrip() {
@@ -462,7 +462,7 @@ fn kama_compute_oscillating() {
     }
 }
 
-// ── Round 43 tests ──
+// ── Research section ──
 #[test]
 fn ichimoku_roundtrip() {
     let conn = Connection::open_in_memory().unwrap();
@@ -679,7 +679,7 @@ fn aroon_compute_oscillating() {
     }
 }
 
-// ── Round 44 tests ──────────────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn adx_roundtrip() {
@@ -879,7 +879,7 @@ fn psar_compute_oscillating() {
     }
 }
 
-// ── Round 45 tests ──────────────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn vortex_roundtrip() {
@@ -1079,7 +1079,7 @@ fn hma_compute_oscillating() {
     }
 }
 
-// ── Round 46 tests ──────────────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn ppo_roundtrip() {
@@ -1281,7 +1281,7 @@ fn willr_compute_oscillating() {
     }
 }
 
-// ── Round 47 tests ──────────────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn mass_roundtrip() {
@@ -1489,7 +1489,7 @@ fn awesome_compute_oscillating() {
     }
 }
 
-// ── Round 48 tests ──────────────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn efi_roundtrip() {
@@ -1855,7 +1855,7 @@ fn schaff_compute_oscillating() {
     }
 }
 
-// ── Round 50 tests ──
+// ── Research section ──
 
 #[test]
 fn stoch_roundtrip() {
@@ -2038,4 +2038,3 @@ fn rwi_compute_oscillating() {
         assert_eq!(snap.length, 14);
     }
 }
-

@@ -1846,7 +1846,7 @@ pub struct TyphooNApp {
     pub(crate) dayrange_snapshot: typhoon_engine::core::research::DailyRangeSnapshot,
     pub(crate) dayrange_loading: bool,
 
-    // ── Round 23 ──
+    // ── Research section ──
     /// AUTOCOR — Autocorrelation at multiple lags.
     pub(crate) show_autocor: bool,
     pub(crate) autocor_symbol: String,
@@ -1877,7 +1877,7 @@ pub struct TyphooNApp {
     pub(crate) volratio_snapshot: typhoon_engine::core::research::VolumeRatioSnapshot,
     pub(crate) volratio_loading: bool,
 
-    // ── Round 24 ──
+    // ── Research section ──
     /// DRAWUP — Upside rally history (mirror of DDHIST).
     pub(crate) show_drawup: bool,
     pub(crate) drawup_symbol: String,
@@ -1908,7 +1908,7 @@ pub struct TyphooNApp {
     pub(crate) mrhl_snapshot: typhoon_engine::core::research::MeanReversionHalfLifeSnapshot,
     pub(crate) mrhl_loading: bool,
 
-    // ── Round 25 ──
+    // ── Research section ──
     /// DOWNVOL — Downside deviation + Sortino ratio.
     pub(crate) show_downvol: bool,
     pub(crate) downvol_symbol: String,
@@ -1939,7 +1939,7 @@ pub struct TyphooNApp {
     pub(crate) volofvol_snapshot: typhoon_engine::core::research::VolOfVolSnapshot,
     pub(crate) volofvol_loading: bool,
 
-    // ── Round 26 ──
+    // ── Research section ──
     pub(crate) show_calmar: bool,
     pub(crate) calmar_symbol: String,
     pub(crate) calmar_snapshot: typhoon_engine::core::research::CalmarRatioSnapshot,
@@ -1961,7 +1961,7 @@ pub struct TyphooNApp {
     pub(crate) jbnorm_snapshot: typhoon_engine::core::research::JarqueBeraSnapshot,
     pub(crate) jbnorm_loading: bool,
 
-    // ── Round 27 ──
+    // ── Research section ──
     pub(crate) show_omega: bool,
     pub(crate) omega_symbol: String,
     pub(crate) omega_snapshot: typhoon_engine::core::research::OmegaRatioSnapshot,
@@ -1983,7 +1983,7 @@ pub struct TyphooNApp {
     pub(crate) rollsprd_snapshot: typhoon_engine::core::research::RollSpreadSnapshot,
     pub(crate) rollsprd_loading: bool,
 
-    // ── Round 28 ──
+    // ── Research section ──
     pub(crate) show_parkinson: bool,
     pub(crate) parkinson_symbol: String,
     pub(crate) parkinson_snapshot: typhoon_engine::core::research::ParkinsonVolSnapshot,
@@ -2005,7 +2005,7 @@ pub struct TyphooNApp {
     pub(crate) doweffect_snapshot: typhoon_engine::core::research::DayOfWeekEffectSnapshot,
     pub(crate) doweffect_loading: bool,
 
-    // ── Round 29 ──
+    // ── Research section ──
     pub(crate) show_sterling: bool,
     pub(crate) sterling_symbol: String,
     pub(crate) sterling_snapshot: typhoon_engine::core::research::SterlingRatioSnapshot,
@@ -2027,7 +2027,7 @@ pub struct TyphooNApp {
     pub(crate) zeroret_snapshot: typhoon_engine::core::research::ZeroReturnSnapshot,
     pub(crate) zeroret_loading: bool,
 
-    // ── Round 30 ──
+    // ── Research section ──
     pub(crate) show_psr: bool,
     pub(crate) psr_symbol: String,
     pub(crate) psr_snapshot: typhoon_engine::core::research::ProbabilisticSharpeSnapshot,
@@ -2049,7 +2049,7 @@ pub struct TyphooNApp {
     pub(crate) dddur_snapshot: typhoon_engine::core::research::DrawdownDurationSnapshot,
     pub(crate) dddur_loading: bool,
 
-    // ── Round 31 ──
+    // ── Research section ──
     pub(crate) show_hilltail: bool,
     pub(crate) hilltail_symbol: String,
     pub(crate) hilltail_snapshot: typhoon_engine::core::research::HillTailSnapshot,
@@ -2071,7 +2071,7 @@ pub struct TyphooNApp {
     pub(crate) cfvar_snapshot: typhoon_engine::core::research::CornishFisherSnapshot,
     pub(crate) cfvar_loading: bool,
 
-    // ── Round 32 ──
+    // ── Research section ──
     pub(crate) show_entropy: bool,
     pub(crate) entropy_symbol: String,
     pub(crate) entropy_snapshot: typhoon_engine::core::research::EntropySnapshot,
@@ -2093,7 +2093,7 @@ pub struct TyphooNApp {
     pub(crate) apen_snapshot: typhoon_engine::core::research::ApenSnapshot,
     pub(crate) apen_loading: bool,
 
-    // ── Round 33 ──
+    // ── Research section ──
     pub(crate) show_upr: bool,
     pub(crate) upr_symbol: String,
     pub(crate) upr_snapshot: typhoon_engine::core::research::UprSnapshot,
@@ -2114,7 +2114,7 @@ pub struct TyphooNApp {
     pub(crate) gini_symbol: String,
     pub(crate) gini_snapshot: typhoon_engine::core::research::GiniSnapshot,
     pub(crate) gini_loading: bool,
-    // ── Round 34 ──
+    // ── Research section ──
     pub(crate) show_sampen: bool,
     pub(crate) sampen_symbol: String,
     pub(crate) sampen_snapshot: typhoon_engine::core::research::SampenSnapshot,
@@ -2135,7 +2135,7 @@ pub struct TyphooNApp {
     pub(crate) specent_symbol: String,
     pub(crate) specent_snapshot: typhoon_engine::core::research::SpecentSnapshot,
     pub(crate) specent_loading: bool,
-    // ── Round 35 ──
+    // ── Research section ──
     pub(crate) show_robvol: bool,
     pub(crate) robvol_symbol: String,
     pub(crate) robvol_snapshot: typhoon_engine::core::research::RobVolSnapshot,
@@ -2156,7 +2156,7 @@ pub struct TyphooNApp {
     pub(crate) ewmavol_symbol: String,
     pub(crate) ewmavol_snapshot: typhoon_engine::core::research::EwmaVolSnapshot,
     pub(crate) ewmavol_loading: bool,
-    // ── Round 36 ──
+    // ── Research section ──
     pub(crate) show_ksnorm: bool,
     pub(crate) ksnorm_symbol: String,
     pub(crate) ksnorm_snapshot: typhoon_engine::core::research::KsnormSnapshot,
@@ -2177,7 +2177,7 @@ pub struct TyphooNApp {
     pub(crate) peakover_symbol: String,
     pub(crate) peakover_snapshot: typhoon_engine::core::research::PeakoverSnapshot,
     pub(crate) peakover_loading: bool,
-    // ── Round 37 ──
+    // ── Research section ──
     pub(crate) show_higuchi: bool,
     pub(crate) higuchi_symbol: String,
     pub(crate) higuchi_snapshot: typhoon_engine::core::research::HiguchiSnapshot,
@@ -2198,7 +2198,7 @@ pub struct TyphooNApp {
     pub(crate) rankac_symbol: String,
     pub(crate) rankac_snapshot: typhoon_engine::core::research::RankacSnapshot,
     pub(crate) rankac_loading: bool,
-    // ── Round 38 ──
+    // ── Research section ──
     pub(crate) show_bnsjump: bool,
     pub(crate) bnsjump_symbol: String,
     pub(crate) bnsjump_snapshot: typhoon_engine::core::research::BnsjumpSnapshot,
@@ -2219,7 +2219,7 @@ pub struct TyphooNApp {
     pub(crate) tsi_symbol: String,
     pub(crate) tsi_snapshot: typhoon_engine::core::research::TsiSnapshot,
     pub(crate) tsi_loading: bool,
-    // ── Round 39 ──
+    // ── Research section ──
     pub(crate) show_garch11: bool,
     pub(crate) garch11_symbol: String,
     pub(crate) garch11_snapshot: typhoon_engine::core::research::Garch11Snapshot,
@@ -2240,7 +2240,7 @@ pub struct TyphooNApp {
     pub(crate) automi_symbol: String,
     pub(crate) automi_snapshot: typhoon_engine::core::research::AutomiSnapshot,
     pub(crate) automi_loading: bool,
-    // ── Round 40 ──
+    // ── Research section ──
     pub(crate) show_durbinwatson: bool,
     pub(crate) durbinwatson_symbol: String,
     pub(crate) durbinwatson_snapshot: typhoon_engine::core::research::DurbinWatsonSnapshot,
@@ -2261,7 +2261,7 @@ pub struct TyphooNApp {
     pub(crate) periodogram_symbol: String,
     pub(crate) periodogram_snapshot: typhoon_engine::core::research::PeriodogramSnapshot,
     pub(crate) periodogram_loading: bool,
-    // ── Round 41 ──
+    // ── Research section ──
     pub(crate) show_mcleodli: bool,
     pub(crate) mcleodli_symbol: String,
     pub(crate) mcleodli_snapshot: typhoon_engine::core::research::McLeodLiSnapshot,
@@ -2283,7 +2283,7 @@ pub struct TyphooNApp {
     pub(crate) kendalltau_snapshot: typhoon_engine::core::research::KendallTauSnapshot,
     pub(crate) kendalltau_loading: bool,
 
-    // ── Round 42 ──
+    // ── Research section ──
     pub(crate) show_squeeze_win: bool,
     pub(crate) squeeze_win_symbol: String,
     pub(crate) squeeze_win_snapshot: typhoon_engine::core::research::SqueezeSnapshot,
@@ -2307,7 +2307,7 @@ pub struct TyphooNApp {
     pub(crate) kama_win_symbol: String,
     pub(crate) kama_win_snapshot: typhoon_engine::core::research::KamaSnapshot,
     pub(crate) kama_win_loading: bool,
-    // ── Round 43 ──
+    // ── Research section ──
     pub(crate) show_ichimoku_win: bool,
     pub(crate) ichimoku_win_symbol: String,
     pub(crate) ichimoku_win_snapshot: typhoon_engine::core::research::IchimokuSnapshot,
@@ -2328,7 +2328,7 @@ pub struct TyphooNApp {
     pub(crate) aroon_win_symbol: String,
     pub(crate) aroon_win_snapshot: typhoon_engine::core::research::AroonSnapshot,
     pub(crate) aroon_win_loading: bool,
-    // ── Round 44 ──
+    // ── Research section ──
     pub(crate) show_adx_win: bool,
     pub(crate) adx_win_symbol: String,
     pub(crate) adx_win_snapshot: typhoon_engine::core::research::AdxSnapshot,
@@ -2349,7 +2349,7 @@ pub struct TyphooNApp {
     pub(crate) psar_win_symbol: String,
     pub(crate) psar_win_snapshot: typhoon_engine::core::research::PsarSnapshot,
     pub(crate) psar_win_loading: bool,
-    // ── Round 45 ──
+    // ── Research section ──
     pub(crate) show_vortex_win: bool,
     pub(crate) vortex_win_symbol: String,
     pub(crate) vortex_win_snapshot: typhoon_engine::core::research::VortexSnapshot,
@@ -2370,7 +2370,7 @@ pub struct TyphooNApp {
     pub(crate) hma_win_symbol: String,
     pub(crate) hma_win_snapshot: typhoon_engine::core::research::HmaSnapshot,
     pub(crate) hma_win_loading: bool,
-    // ── Round 46 ──
+    // ── Research section ──
     pub(crate) show_ppo_win: bool,
     pub(crate) ppo_win_symbol: String,
     pub(crate) ppo_win_snapshot: typhoon_engine::core::research::PpoSnapshot,
@@ -2391,7 +2391,7 @@ pub struct TyphooNApp {
     pub(crate) willr_win_symbol: String,
     pub(crate) willr_win_snapshot: typhoon_engine::core::research::WillrSnapshot,
     pub(crate) willr_win_loading: bool,
-    // ── Round 47 ──
+    // ── Research section ──
     pub(crate) show_mass_win: bool,
     pub(crate) mass_win_symbol: String,
     pub(crate) mass_win_snapshot: typhoon_engine::core::research::MassSnapshot,
@@ -2412,7 +2412,7 @@ pub struct TyphooNApp {
     pub(crate) awesome_win_symbol: String,
     pub(crate) awesome_win_snapshot: typhoon_engine::core::research::AwesomeSnapshot,
     pub(crate) awesome_win_loading: bool,
-    // ── Round 48 windows ──
+    // ── Research section ──
     pub(crate) show_efi_win: bool,
     pub(crate) efi_win_symbol: String,
     pub(crate) efi_win_snapshot: typhoon_engine::core::research::EfiSnapshot,
@@ -2433,7 +2433,7 @@ pub struct TyphooNApp {
     pub(crate) coppock_win_symbol: String,
     pub(crate) coppock_win_snapshot: typhoon_engine::core::research::CoppockSnapshot,
     pub(crate) coppock_win_loading: bool,
-    // ── Round 49 windows ──
+    // ── Research section ──
     pub(crate) show_cmo_win: bool,
     pub(crate) cmo_win_symbol: String,
     pub(crate) cmo_win_snapshot: typhoon_engine::core::research::CmoSnapshot,
@@ -2454,7 +2454,7 @@ pub struct TyphooNApp {
     pub(crate) schaff_win_symbol: String,
     pub(crate) schaff_win_snapshot: typhoon_engine::core::research::SchaffSnapshot,
     pub(crate) schaff_win_loading: bool,
-    // ── Round 50 windows ──
+    // ── Research section ──
     pub(crate) show_stoch_win: bool,
     pub(crate) stoch_win_symbol: String,
     pub(crate) stoch_win_snapshot: typhoon_engine::core::research::StochSnapshot,
@@ -2475,7 +2475,7 @@ pub struct TyphooNApp {
     pub(crate) rwi_win_symbol: String,
     pub(crate) rwi_win_snapshot: typhoon_engine::core::research::RwiSnapshot,
     pub(crate) rwi_win_loading: bool,
-    // ── Round 51 windows ──
+    // ── Research section ──
     pub(crate) show_dema_win: bool,
     pub(crate) dema_win_symbol: String,
     pub(crate) dema_win_snapshot: typhoon_engine::core::research::DemaSnapshot,
@@ -2496,7 +2496,7 @@ pub struct TyphooNApp {
     pub(crate) heikin_win_symbol: String,
     pub(crate) heikin_win_snapshot: typhoon_engine::core::research::HeikinSnapshot,
     pub(crate) heikin_win_loading: bool,
-    // ── Round 52 windows ──
+    // ── Research section ──
     pub(crate) show_alma_win: bool,
     pub(crate) alma_win_symbol: String,
     pub(crate) alma_win_snapshot: typhoon_engine::core::research::AlmaSnapshot,
@@ -2517,7 +2517,7 @@ pub struct TyphooNApp {
     pub(crate) rvi_win_symbol: String,
     pub(crate) rvi_win_snapshot: typhoon_engine::core::research::RviSnapshot,
     pub(crate) rvi_win_loading: bool,
-    // ── Round 53 windows ──
+    // ── Research section ──
     pub(crate) show_trima_win: bool,
     pub(crate) trima_win_symbol: String,
     pub(crate) trima_win_snapshot: typhoon_engine::core::research::TrimaSnapshot,
@@ -2538,7 +2538,7 @@ pub struct TyphooNApp {
     pub(crate) pvt_win_symbol: String,
     pub(crate) pvt_win_snapshot: typhoon_engine::core::research::PvtSnapshot,
     pub(crate) pvt_win_loading: bool,
-    // ── Round 54 windows ──
+    // ── Research section ──
     pub(crate) show_ac_win: bool,
     pub(crate) ac_win_symbol: String,
     pub(crate) ac_win_snapshot: typhoon_engine::core::research::AcSnapshot,
@@ -2569,7 +2569,7 @@ pub struct TyphooNApp {
     pub(crate) expcal_win_horizon_days: u32,
     pub(crate) expcal_win_calendar: Vec<typhoon_engine::core::research::CalendarExpiry>,
 
-    // ── Round 55: SMMA / ALLIGATOR / CRSI / SEB / IMI ──
+    // ── SMMA / ALLIGATOR / CRSI / SEB / IMI ──
     pub(crate) show_smma_win: bool,
     pub(crate) smma_win_symbol: String,
     pub(crate) smma_win_snapshot: typhoon_engine::core::research::SmmaSnapshot,
@@ -2591,7 +2591,7 @@ pub struct TyphooNApp {
     pub(crate) imi_win_snapshot: typhoon_engine::core::research::ImiSnapshot,
     pub(crate) imi_win_loading: bool,
 
-    // ── Round 56: GMMA / MAENV / ADL / VHF / VROC ──
+    // ── GMMA / MAENV / ADL / VHF / VROC ──
     pub(crate) show_gmma_win: bool,
     pub(crate) gmma_win_symbol: String,
     pub(crate) gmma_win_snapshot: typhoon_engine::core::research::GmmaSnapshot,
@@ -2613,7 +2613,7 @@ pub struct TyphooNApp {
     pub(crate) vroc_win_snapshot: typhoon_engine::core::research::VrocSnapshot,
     pub(crate) vroc_win_loading: bool,
 
-    // ── Round 57: KDJ / QQE / PMO / CFO / TMF ──
+    // ── KDJ / QQE / PMO / CFO / TMF ──
     pub(crate) show_kdj_win: bool,
     pub(crate) kdj_win_symbol: String,
     pub(crate) kdj_win_snapshot: typhoon_engine::core::research::KdjSnapshot,
@@ -2635,7 +2635,7 @@ pub struct TyphooNApp {
     pub(crate) tmf_win_snapshot: typhoon_engine::core::research::TmfSnapshot,
     pub(crate) tmf_win_loading: bool,
 
-    // ── Round 58: FRACTALS / IFT_RSI / MAMA / COG / DIDI ──
+    // ── FRACTALS / IFT_RSI / MAMA / COG / DIDI ──
     pub(crate) show_fractals_win: bool,
     pub(crate) fractals_win_symbol: String,
     pub(crate) fractals_win_snapshot: typhoon_engine::core::research::FractalsSnapshot,
@@ -2657,7 +2657,7 @@ pub struct TyphooNApp {
     pub(crate) didi_win_snapshot: typhoon_engine::core::research::DidiSnapshot,
     pub(crate) didi_win_loading: bool,
 
-    // ── Round 59: DEMARKER / GATOR / BW_MFI / VWMA / STDDEV ──
+    // ── DEMARKER / GATOR / BW_MFI / VWMA / STDDEV ──
     pub(crate) show_demarker_win: bool,
     pub(crate) demarker_win_symbol: String,
     pub(crate) demarker_win_snapshot: typhoon_engine::core::research::DemarkerSnapshot,
@@ -2679,7 +2679,7 @@ pub struct TyphooNApp {
     pub(crate) stddev_win_snapshot: typhoon_engine::core::research::StddevSnapshot,
     pub(crate) stddev_win_loading: bool,
 
-    // ── Round 60: WMA / RAINBOW / MESA_SINE / FRAMA / IBS ──
+    // ── WMA / RAINBOW / MESA_SINE / FRAMA / IBS ──
     pub(crate) show_wma_win: bool,
     pub(crate) wma_win_symbol: String,
     pub(crate) wma_win_snapshot: typhoon_engine::core::research::WmaSnapshot,
@@ -2701,7 +2701,7 @@ pub struct TyphooNApp {
     pub(crate) ibs_win_snapshot: typhoon_engine::core::research::IbsSnapshot,
     pub(crate) ibs_win_loading: bool,
 
-    // ── Round 61: LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT ──
+    // ── LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT ──
     pub(crate) show_laguerre_rsi_win: bool,
     pub(crate) laguerre_rsi_win_symbol: String,
     pub(crate) laguerre_rsi_win_snapshot: typhoon_engine::core::research::LaguerreRsiSnapshot,
@@ -2723,7 +2723,7 @@ pub struct TyphooNApp {
     pub(crate) midpoint_win_snapshot: typhoon_engine::core::research::MidpointSnapshot,
     pub(crate) midpoint_win_loading: bool,
 
-    // ── Round 62: MASSINDEX / NATR / TTM_SQUEEZE / FORCE_INDEX / TRANGE ──
+    // ── MASSINDEX / NATR / TTM_SQUEEZE / FORCE_INDEX / TRANGE ──
     pub(crate) show_mass_index_win: bool,
     pub(crate) mass_index_win_symbol: String,
     pub(crate) mass_index_win_snapshot: typhoon_engine::core::research::MassIndexSnapshot,
@@ -2745,7 +2745,7 @@ pub struct TyphooNApp {
     pub(crate) trange_win_snapshot: typhoon_engine::core::research::TrangeSnapshot,
     pub(crate) trange_win_loading: bool,
 
-    // ── Round 63: LINEARREG_SLOPE / HT_DCPERIOD / HT_TRENDMODE / ACCBANDS / STOCHF ──
+    // ── LINEARREG_SLOPE / HT_DCPERIOD / HT_TRENDMODE / ACCBANDS / STOCHF ──
     pub(crate) show_linearreg_slope_win: bool,
     pub(crate) linearreg_slope_win_symbol: String,
     pub(crate) linearreg_slope_win_snapshot: typhoon_engine::core::research::LinearregSlopeSnapshot,
@@ -2767,7 +2767,7 @@ pub struct TyphooNApp {
     pub(crate) stochf_win_snapshot: typhoon_engine::core::research::StochfSnapshot,
     pub(crate) stochf_win_loading: bool,
 
-    // ── Round 64: LINEARREG / LINEARREG_ANGLE / HT_DCPHASE / HT_SINE / HT_PHASOR ──
+    // ── LINEARREG / LINEARREG_ANGLE / HT_DCPHASE / HT_SINE / HT_PHASOR ──
     pub(crate) show_linearreg_win: bool,
     pub(crate) linearreg_win_symbol: String,
     pub(crate) linearreg_win_snapshot: typhoon_engine::core::research::LinearregSnapshot,
@@ -2789,7 +2789,7 @@ pub struct TyphooNApp {
     pub(crate) ht_phasor_win_snapshot: typhoon_engine::core::research::HtPhasorSnapshot,
     pub(crate) ht_phasor_win_loading: bool,
 
-    // ── Round 65: MIDPRICE / APO / MOM / SAREXT / ADXR ──
+    // ── MIDPRICE / APO / MOM / SAREXT / ADXR ──
     pub(crate) show_midprice_win: bool,
     pub(crate) midprice_win_symbol: String,
     pub(crate) midprice_win_snapshot: typhoon_engine::core::research::MidpriceSnapshot,
@@ -2811,7 +2811,7 @@ pub struct TyphooNApp {
     pub(crate) adxr_win_snapshot: typhoon_engine::core::research::AdxrSnapshot,
     pub(crate) adxr_win_loading: bool,
 
-    // ── Round 66: AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE ──
+    // ── AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE ──
     pub(crate) show_avgprice_win: bool,
     pub(crate) avgprice_win_symbol: String,
     pub(crate) avgprice_win_snapshot: typhoon_engine::core::research::AvgpriceSnapshot,
@@ -2832,7 +2832,7 @@ pub struct TyphooNApp {
     pub(crate) variance_win_symbol: String,
     pub(crate) variance_win_snapshot: typhoon_engine::core::research::VarianceSnapshot,
     pub(crate) variance_win_loading: bool,
-    // ── Round 67 ──
+    // ── Research section ──
     pub(crate) show_plus_di_win: bool,
     pub(crate) plus_di_win_symbol: String,
     pub(crate) plus_di_win_snapshot: typhoon_engine::core::research::PlusDiSnapshot,
@@ -2853,7 +2853,7 @@ pub struct TyphooNApp {
     pub(crate) dx_win_symbol: String,
     pub(crate) dx_win_snapshot: typhoon_engine::core::research::DxSnapshot,
     pub(crate) dx_win_loading: bool,
-    // ── Round 68 ──
+    // ── Research section ──
     pub(crate) show_roc_win: bool,
     pub(crate) roc_win_symbol: String,
     pub(crate) roc_win_snapshot: typhoon_engine::core::research::RocSnapshot,
@@ -2874,7 +2874,7 @@ pub struct TyphooNApp {
     pub(crate) correl_win_symbol: String,
     pub(crate) correl_win_snapshot: typhoon_engine::core::research::CorrelSnapshot,
     pub(crate) correl_win_loading: bool,
-    // ── Round 69 ──
+    // ── Research section ──
     pub(crate) show_min_win: bool,
     pub(crate) min_win_symbol: String,
     pub(crate) min_win_snapshot: typhoon_engine::core::research::MinSnapshot,
@@ -2895,7 +2895,7 @@ pub struct TyphooNApp {
     pub(crate) maxindex_win_symbol: String,
     pub(crate) maxindex_win_snapshot: typhoon_engine::core::research::MaxIndexSnapshot,
     pub(crate) maxindex_win_loading: bool,
-    // ── Round 70 ──
+    // ── Research section ──
     pub(crate) show_bbands_win: bool,
     pub(crate) bbands_win_symbol: String,
     pub(crate) bbands_win_snapshot: typhoon_engine::core::research::BbandsSnapshot,
@@ -2917,7 +2917,7 @@ pub struct TyphooNApp {
     pub(crate) linreg_intercept_win_snapshot:
         typhoon_engine::core::research::LinearRegInterceptSnapshot,
     pub(crate) linreg_intercept_win_loading: bool,
-    // ── Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP ──
+    // ── AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP ──
     pub(crate) show_aroonosc_win: bool,
     pub(crate) aroonosc_win_symbol: String,
     pub(crate) aroonosc_win_snapshot: typhoon_engine::core::research::AroonoscSnapshot,
@@ -2960,7 +2960,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_harami_win_symbol: String,
     pub(crate) cdl_harami_win_snapshot: typhoon_engine::core::research::CdlHaramiSnapshot,
     pub(crate) cdl_harami_win_loading: bool,
-    // ── Round 73 — CDL* 3-bar / 2-bar patterns ──
+    // ── CDL* 3-bar / 2-bar patterns ──
     pub(crate) show_cdl_morning_star_win: bool,
     pub(crate) cdl_morning_star_win_symbol: String,
     pub(crate) cdl_morning_star_win_snapshot:
@@ -2986,7 +2986,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_dark_cloud_cover_win_snapshot:
         typhoon_engine::core::research::CdlDarkCloudCoverSnapshot,
     pub(crate) cdl_dark_cloud_cover_win_loading: bool,
-    // ── Round 74 — CDL* piercing / doji variants / hammer mirrors ──
+    // ── CDL* piercing / doji variants / hammer mirrors ──
     pub(crate) show_cdl_piercing_win: bool,
     pub(crate) cdl_piercing_win_symbol: String,
     pub(crate) cdl_piercing_win_snapshot: typhoon_engine::core::research::CdlPiercingSnapshot,
@@ -3010,7 +3010,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_inverted_hammer_win_snapshot:
         typhoon_engine::core::research::CdlInvertedHammerSnapshot,
     pub(crate) cdl_inverted_hammer_win_loading: bool,
-    // ── Round 75 — CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
+    // ── CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
     pub(crate) show_cdl_harami_cross_win: bool,
     pub(crate) cdl_harami_cross_win_symbol: String,
     pub(crate) cdl_harami_cross_win_snapshot:
@@ -3034,7 +3034,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_tristar_win_symbol: String,
     pub(crate) cdl_tristar_win_snapshot: typhoon_engine::core::research::CdlTristarSnapshot,
     pub(crate) cdl_tristar_win_loading: bool,
-    // ── Round 76 — CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
+    // ── CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
     pub(crate) show_cdl_doji_star_win: bool,
     pub(crate) cdl_doji_star_win_symbol: String,
     pub(crate) cdl_doji_star_win_snapshot: typhoon_engine::core::research::CdlDojiStarSnapshot,
@@ -3059,7 +3059,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_three_inside_win_snapshot:
         typhoon_engine::core::research::CdlThreeInsideSnapshot,
     pub(crate) cdl_three_inside_win_loading: bool,
-    // ── Round 77 — CDL* belt hold / closing marubozu / high wave / long line / short line ──
+    // ── CDL* belt hold / closing marubozu / high wave / long line / short line ──
     pub(crate) show_cdl_belt_hold_win: bool,
     pub(crate) cdl_belt_hold_win_symbol: String,
     pub(crate) cdl_belt_hold_win_snapshot: typhoon_engine::core::research::CdlBeltHoldSnapshot,
@@ -3081,7 +3081,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_short_line_win_symbol: String,
     pub(crate) cdl_short_line_win_snapshot: typhoon_engine::core::research::CdlShortLineSnapshot,
     pub(crate) cdl_short_line_win_loading: bool,
-    // ── Round 78 — CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
+    // ── CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
     pub(crate) show_cdl_counterattack_win: bool,
     pub(crate) cdl_counterattack_win_symbol: String,
     pub(crate) cdl_counterattack_win_snapshot:
@@ -3104,7 +3104,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_thrusting_win_symbol: String,
     pub(crate) cdl_thrusting_win_snapshot: typhoon_engine::core::research::CdlThrustingSnapshot,
     pub(crate) cdl_thrusting_win_loading: bool,
-    // ── Round 79/80 — additional CDL* parity windows ──
+    // ── additional CDL* parity windows ──
     pub(crate) show_cdl_two_crows_win: bool,
     pub(crate) cdl_two_crows_win_symbol: String,
     pub(crate) cdl_two_crows_win_snapshot: typhoon_engine::core::research::CdlTwoCrowsSnapshot,
@@ -3143,7 +3143,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_takuri_win_symbol: String,
     pub(crate) cdl_takuri_win_snapshot: typhoon_engine::core::research::CdlTakuriSnapshot,
     pub(crate) cdl_takuri_win_loading: bool,
-    // ── Round 81/82 — harder CDL* parity windows ──
+    // ── harder CDL* parity windows ──
     pub(crate) show_cdl_three_stars_in_south_win: bool,
     pub(crate) cdl_three_stars_in_south_win_symbol: String,
     pub(crate) cdl_three_stars_in_south_win_snapshot:
@@ -3173,7 +3173,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_unique_three_river_win_snapshot:
         typhoon_engine::core::research::CdlUniqueThreeRiverSnapshot,
     pub(crate) cdl_unique_three_river_win_loading: bool,
-    // ── Round 83/84 — additional multi-bar CDL* parity windows ──
+    // ── additional multi-bar CDL* parity windows ──
     pub(crate) show_cdl_advance_block_win: bool,
     pub(crate) cdl_advance_block_win_symbol: String,
     pub(crate) cdl_advance_block_win_snapshot:
@@ -3203,7 +3203,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_conceal_baby_swallow_win_snapshot:
         typhoon_engine::core::research::CdlConcealBabySwallowSnapshot,
     pub(crate) cdl_conceal_baby_swallow_win_loading: bool,
-    // ── Round 85/86 — stateful CDL* parity windows ──
+    // ── stateful CDL* parity windows ──
     pub(crate) show_cdl_hikkake_win: bool,
     pub(crate) cdl_hikkake_win_symbol: String,
     pub(crate) cdl_hikkake_win_snapshot: typhoon_engine::core::research::CdlHikkakeSnapshot,
@@ -3221,7 +3221,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_rise_fall_three_methods_win_snapshot:
         typhoon_engine::core::research::CdlRiseFallThreeMethodsSnapshot,
     pub(crate) cdl_rise_fall_three_methods_win_loading: bool,
-    // ── Round 87/88 — final CDL* parity windows ──
+    // ── final CDL* parity windows ──
     pub(crate) show_cdl_stalled_pattern_win: bool,
     pub(crate) cdl_stalled_pattern_win_symbol: String,
     pub(crate) cdl_stalled_pattern_win_snapshot:
@@ -3231,7 +3231,7 @@ pub struct TyphooNApp {
     pub(crate) cdl_tasuki_gap_win_symbol: String,
     pub(crate) cdl_tasuki_gap_win_snapshot: typhoon_engine::core::research::CdlTasukiGapSnapshot,
     pub(crate) cdl_tasuki_gap_win_loading: bool,
-    // ── Round 76 — Quant Stats (modsharpe / hsieh / chow / driftburst / hlvclust) ──
+    // ── Quant Stats (modsharpe / hsieh / chow / driftburst / hlvclust) ──
     pub(crate) show_modsharpe_win: bool,
     pub(crate) modsharpe_win_symbol: String,
     pub(crate) modsharpe_win_snapshot: typhoon_engine::core::research::ModSharpeSnapshot,
@@ -3252,7 +3252,7 @@ pub struct TyphooNApp {
     pub(crate) hlvclust_win_symbol: String,
     pub(crate) hlvclust_win_snapshot: typhoon_engine::core::research::HlvClustSnapshot,
     pub(crate) hlvclust_win_loading: bool,
-    // ── Round 77 — Quant Stats (yangzhang / kuiper / dagostino / baiperron / kupiecpof) ──
+    // ── Quant Stats (yangzhang / kuiper / dagostino / baiperron / kupiecpof) ──
     pub(crate) show_yangzhang_win: bool,
     pub(crate) yangzhang_win_symbol: String,
     pub(crate) yangzhang_win_snapshot: typhoon_engine::core::research::YangZhangVolSnapshot,

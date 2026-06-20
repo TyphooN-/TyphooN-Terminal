@@ -7,7 +7,7 @@ impl TyphooNApp {
             if let Some(conn) = cache.try_connection() {
                 use typhoon_engine::core::research as rx;
 
-                // Round 9 — SEAG seasonality (monthly + day-of-week)
+                // SEAG seasonality (monthly + day-of-week)
                 if let Ok(Some(sg)) = rx::get_seasonality(&conn, &sym_upper) {
                     if !sg.months.is_empty() || !sg.dow.is_empty() {
                         let _ = writeln!(p, "### Seasonality (as of {})", sg.as_of);
@@ -55,7 +55,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 9 — COR correlation matrix vs peers
+                // COR correlation matrix vs peers
                 if let Ok(Some(cm)) = rx::get_correlation(&conn, &sym_upper) {
                     if !cm.cells.is_empty() {
                         let _ = writeln!(
@@ -84,7 +84,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 9 — TRA total return (price + dividends)
+                // TRA total return (price + dividends)
                 if let Ok(Some(tr)) = rx::get_total_return(&conn, &sym_upper) {
                     if !tr.windows.is_empty() {
                         let _ = writeln!(p, "### Total Return Analysis (as of {})", tr.as_of);
@@ -117,7 +117,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 9 — TECH technical indicators (RSI/MACD/BB/ATR/ADX/Stoch)
+                // TECH technical indicators (RSI/MACD/BB/ATR/ADX/Stoch)
                 if let Ok(Some(ti)) = rx::get_technicals(&conn, &sym_upper) {
                     if !ti.indicators.is_empty() {
                         let _ = writeln!(p, "### Technical Indicators (as of {})", ti.as_of);
@@ -146,7 +146,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 9 — SKEW volatility skew / smile
+                // SKEW volatility skew / smile
                 if let Ok(Some(sk)) = rx::get_vol_skew(&conn, &sym_upper) {
                     if !sk.expiries.is_empty() {
                         let _ = writeln!(p, "### Volatility Skew (as of {})", sk.as_of);

@@ -1,4 +1,4 @@
-// ── Round 72 CDL* tests ────────────────────────────────────────
+// ── CDL* tests ──
 
 fn synthetic_cdl_doji_bar() -> HistoricalPriceRow {
     // Final bar has open ≈ close (tiny body) with long shadows — a doji.
@@ -336,7 +336,7 @@ fn cdl_harami_compute_detects_bullish() {
     assert!(snap.body_size_ratio < 1.0);
 }
 
-// ── Round 73 CDL* tests ────────────────────────────────────────
+// ── CDL* tests ──
 
 fn boring_green_bars(count: usize, start_date_month: u32) -> Vec<HistoricalPriceRow> {
     (0..count)
@@ -695,7 +695,7 @@ fn cdl_dark_cloud_cover_compute_detects() {
     assert!(snap.penetration_pct > 0.0);
 }
 
-// ── Round 74 tests — CDLPIERCING / CDLDRAGONFLYDOJI /
+// ── — CDLPIERCING / CDLDRAGONFLYDOJI / ──
 //    CDLGRAVESTONEDOJI / CDLHANGINGMAN / CDLINVERTEDHAMMER ──
 
 #[test]
@@ -938,7 +938,7 @@ fn cdl_inverted_hammer_compute_detects() {
     assert!(snap.upper_shadow_pct > snap.lower_shadow_pct);
 }
 
-// ── Round 75 tests — CDLHARAMICROSS / CDLLONGLEGGEDDOJI / CDLMARUBOZU /
+// ── — CDLHARAMICROSS / CDLLONGLEGGEDDOJI / CDLMARUBOZU / ──
 //    CDLSPINNINGTOP / CDLTRISTAR ──
 
 #[test]
@@ -1207,7 +1207,7 @@ fn cdl_tristar_compute_detects() {
     assert!(snap.avg_body_pct_range <= 5.0);
 }
 
-// ── Round 76 tests — CDLDOJISTAR / CDLMORNINGDOJISTAR /
+// ── — CDLDOJISTAR / CDLMORNINGDOJISTAR / ──
 //    CDLEVENINGDOJISTAR / CDLABANDONEDBABY / CDL3INSIDE ──
 
 #[test]
@@ -1550,7 +1550,7 @@ fn cdl_three_inside_compute_detects() {
     assert!(snap.bar3_close_vs_bar1_open_pct > 0.0);
 }
 
-// ── Round 77 tests — CDLBELTHOLD / CDLCLOSINGMARUBOZU / CDLHIGHWAVE /
+// ── — CDLBELTHOLD / CDLCLOSINGMARUBOZU / CDLHIGHWAVE / ──
 //    CDLLONGLINE / CDLSHORTLINE ──
 
 #[test]
@@ -1780,7 +1780,7 @@ fn cdl_short_line_compute_detects() {
     assert!(snap.upper_shadow_pct <= 40.0 && snap.lower_shadow_pct <= 40.0);
 }
 
-// ── Round 78 tests — CDLCOUNTERATTACK / CDLHOMINGPIGEON / CDLINNECK /
+// ── — CDLCOUNTERATTACK / CDLHOMINGPIGEON / CDLINNECK / ──
 //    CDLONNECK / CDLTHRUSTING ──
 
 #[test]
@@ -2072,4 +2072,3 @@ fn cdl_thrusting_compute_detects() {
     assert!(snap.gap_open_pct > 0.0);
     assert!(snap.penetration_pct > 25.0 && snap.penetration_pct < 50.0);
 }
-

@@ -1,4 +1,4 @@
-// ── Round 79/80 tests — CDL2CROWS / CDL3LINESTRIKE /
+// ── — CDL2CROWS / CDL3LINESTRIKE / ──
 //    CDL3OUTSIDE / CDLMATCHINGLOW / CDLSEPARATINGLINES /
 //    CDLSTICKSANDWICH / CDLRICKSHAWMAN / CDLTAKURI ──
 
@@ -486,7 +486,7 @@ fn cdl_takuri_compute_detects() {
     assert!(snap.lower_shadow_pct >= 70.0);
 }
 
-// ── Round 81/82 tests — CDL3STARSINSOUTH /
+// ── — CDL3STARSINSOUTH / ──
 //    CDLIDENTICAL3CROWS / CDLKICKING / CDLKICKINGBYLENGTH /
 //    CDLLADDERBOTTOM / CDLUNIQUE3RIVER ──
 
@@ -912,7 +912,7 @@ fn cdl_unique_three_river_compute_detects() {
     assert!(snap.third_close_vs_second_close_pct < 0.0);
 }
 
-// ── Round 83/84 tests — CDLADVANCEBLOCK / CDLBREAKAWAY /
+// ── — CDLADVANCEBLOCK / CDLBREAKAWAY / ──
 //    CDLGAPSIDESIDEWHITE / CDLUPSIDEGAP2CROWS /
 //    CDLXSIDEGAP3METHODS / CDLCONCEALBABYSWALL ──
 
@@ -1371,7 +1371,7 @@ fn cdl_conceal_baby_swallow_compute_detects() {
     assert!(snap.fourth_range_engulf_pct > 0.0);
 }
 
-// ── Round 85/86 tests — CDLHIKKAKE / CDLHIKKAKEMOD /
+// ── — CDLHIKKAKE / CDLHIKKAKEMOD / ──
 //    CDLMATHOLD / CDLRISEFALL3METHODS ──
 
 #[test]
@@ -1708,7 +1708,7 @@ fn cdl_rise_fall_three_methods_compute_detects() {
     assert!(snap.middle_avg_body_pct_range <= 35.0);
 }
 
-// ── Round 87/88 tests — CDLSTALLEDPATTERN /
+// ── — CDLSTALLEDPATTERN / ──
 //    CDLTASUKIGAP ──
 
 #[test]
@@ -1850,4 +1850,3 @@ fn cdl_tasuki_gap_compute_detects() {
     assert_eq!(snap.pattern_value, 100);
     assert!(snap.gap_fill_pct > 0.0 && snap.gap_fill_pct < 100.0);
 }
-

@@ -3,7 +3,7 @@ use super::*;
 impl TyphooNApp {
     pub(super) fn handle_research_rank_snapshot_msg(&mut self, msg: BrokerMsg) {
         match msg {
-            // ── Round 17 ──
+            // ── Research section ──
             BrokerMsg::SizefSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.sizef_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -66,7 +66,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 18 ──
+            // ── Research section ──
             BrokerMsg::LevrankSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.levrank_symbol.eq_ignore_ascii_case(&sym_u) {

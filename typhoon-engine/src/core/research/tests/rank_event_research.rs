@@ -1,4 +1,4 @@
-// ── Round 15 tests ─────────────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn val_snapshot_roundtrip() {
@@ -326,7 +326,7 @@ fn compute_covg_none() {
     assert_eq!(snap.coverage_label, "NONE");
 }
 
-// ── Round 16 tests ─────────────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn vrk_snapshot_roundtrip() {
@@ -632,7 +632,7 @@ fn compute_pead_no_events() {
     assert_eq!(snap.drift_direction_label, "INSUFFICIENT_DATA");
 }
 
-// ── Round 17 tests ────────────────────────────────────────────
+// ── Research section ──
 
 fn mk_mom(sym: &str, composite: f64) -> MomentumSnapshot {
     MomentumSnapshot {
@@ -922,7 +922,7 @@ fn compute_revrank_insufficient_subject() {
     assert_eq!(snap.relative_label, "NO_DATA");
 }
 
-// ── Round 18 tests ────────────────────────────────────────────
+// ── Research section ──
 
 fn mk_lev(sym: &str, debt: f64, equity: f64) -> LeverageSnapshot {
     LeverageSnapshot {
@@ -1241,7 +1241,7 @@ fn compute_surpstk_insufficient_data() {
     assert_eq!(snap.streak_label, "INSUFFICIENT_DATA");
 }
 
-// ── Round 19 tests ────────────────────────────────────────────
+// ── Research section ──
 
 fn mk_divg(sym: &str, cagr3: f64, trend: &str) -> DivgSnapshot {
     DivgSnapshot {
@@ -1529,7 +1529,7 @@ fn compute_des_insufficient() {
     assert_eq!(snap.streak_label, "INSUFFICIENT_DATA");
 }
 
-// ── Round 20 tests ────────────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn dvdyieldrank_snapshot_roundtrip() {
@@ -1836,7 +1836,7 @@ fn compute_priceperf_insufficient() {
     assert_eq!(snap.trend_label, "INSUFFICIENT_DATA");
 }
 
-// ── Round 21 tests ──
+// ── Research section ──
 
 #[test]
 fn betarank_snapshot_roundtrip() {
@@ -2172,4 +2172,3 @@ fn compute_calpb_insufficient() {
     let snap = compute_calpb_snapshot("AAA", "2026-04-15", &bars);
     assert_eq!(snap.momentum_label, "INSUFFICIENT_DATA");
 }
-

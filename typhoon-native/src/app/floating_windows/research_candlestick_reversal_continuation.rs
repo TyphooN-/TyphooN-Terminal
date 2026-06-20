@@ -25,7 +25,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 78 popup windows ──
+        // ── popup windows ──
         self.render_cdl_reversal_early_windows(ctx, &chart_sym_research);
 
         self.render_cdl_reversal_classic_windows(ctx, &chart_sym_research);

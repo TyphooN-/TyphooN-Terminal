@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 30 windows ──
+        // ── Research section ──
         if self.show_psr {
             if self.psr_symbol.is_empty() {
                 self.psr_symbol = chart_sym_research.clone();

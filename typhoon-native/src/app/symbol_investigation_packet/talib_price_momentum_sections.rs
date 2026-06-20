@@ -11,7 +11,7 @@ impl TyphooNApp {
             if let Some(conn) = cache.try_connection() {
                 use typhoon_engine::core::research as rx;
 
-                // ── Round 66 packet emitters ──
+                // ── Research section ──
                 if let Ok(Some(ap)) = rx::get_avgprice(&conn, &sym_upper) {
                     if ap.avgprice_label != "INSUFFICIENT_DATA" && !ap.avgprice_label.is_empty() {
                         let _ = writeln!(
@@ -139,7 +139,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 67 packet emitters (DMI family) ──
+                // ── (DMI family) ──
                 if let Ok(Some(pd)) = rx::get_plus_di(&conn, &sym_upper) {
                     if pd.plus_di_label != "INSUFFICIENT_DATA" && !pd.plus_di_label.is_empty() {
                         let _ = writeln!(
@@ -267,7 +267,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 68 ──
+                // ── Research section ──
                 if let Ok(Some(rc)) = rx::get_roc(&conn, &sym_upper) {
                     if rc.roc_label != "INSUFFICIENT_DATA" && !rc.roc_label.is_empty() {
                         let _ = writeln!(
@@ -646,7 +646,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 71 emitters ──
+                // ── emitters ──
                 if let Ok(Some(ao)) = rx::get_aroonosc(&conn, &sym_upper) {
                     if ao.aroonosc_label != "INSUFFICIENT_DATA" && !ao.aroonosc_label.is_empty() {
                         let _ = writeln!(

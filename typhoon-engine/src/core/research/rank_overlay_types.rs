@@ -66,7 +66,7 @@ pub struct PeadRankSnapshot {
 }
 
 /// FQM — Fundamental Quality Meter snapshot.
-/// One-layer composite over raw Round 10 caches (PTFS, MARGINS, ACRL),
+/// One-layer composite over raw cached research surfaces (PTFS, MARGINS, ACRL),
 /// intentionally **excluding** leverage so the signal measures
 /// operational cash-machine health rather than balance-sheet strength.
 /// Distinct from QUAL which weighs LEV at 20 %.
@@ -108,7 +108,7 @@ pub struct RevenueGrowthRankSnapshot {
     pub note: String,
 }
 
-// ── Round 18 — rank overlays + surprise streak ────────────────────
+// ── rank overlays + surprise streak ────────────────────
 
 /// LEVRANK — Leverage Rank vs Sector Peers.
 /// Percentile rank of debt-to-equity (`total_debt / total_equity`) from the
@@ -222,7 +222,7 @@ pub struct EarningsSurpriseStreakSnapshot {
     pub note: String,
 }
 
-// ── Round 19 — dividend/earnings/rating rank overlays + gap/streak ─
+// ── dividend/earnings/rating rank overlays + gap/streak ─
 
 /// DVDRANK — Dividend Growth Rank vs Sector Peers.
 /// Percentile rank of `DivgSnapshot.cagr_3y_pct` within the same sector.

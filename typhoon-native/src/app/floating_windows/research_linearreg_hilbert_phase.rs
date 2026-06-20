@@ -16,7 +16,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 64 egui windows ──
+        // ── egui windows ──
         if self.show_linearreg_win {
             if self.linearreg_win_symbol.is_empty() {
                 self.linearreg_win_symbol = chart_sym_research.clone();

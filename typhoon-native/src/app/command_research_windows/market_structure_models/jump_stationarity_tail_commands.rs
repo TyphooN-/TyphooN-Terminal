@@ -1,16 +1,13 @@
 use super::super::*;
 
 impl TyphooNApp {
-    pub(super) fn handle_squeeze_channel_adaptive_round_42_command(
+    pub(super) fn handle_jump_stationarity_tail_commands_command(
         &mut self,
         cmd_upper: &String,
     ) -> bool {
         match cmd_upper.as_str() {
-            // ── Round 42 palette aliases ──
-            // NOTE: bare "SQUEEZE"/"DONCHIAN"/"KAMA"/"KAUFMAN" are already
-            // bound to chart-overlay toggles — Round 42 research windows use
-            // disambiguated aliases only.
-            "SHORTSQUEEZE" | "SHORT_SQUEEZE" | "SQZCOMP" | "SQUEEZESCORE" | "SQZSCORE" => {
+            // ── Jump, stationarity, and tail palette aliases ──
+            "BNSJUMP" | "BNS_JUMP" | "JUMPTEST" | "JUMP_TEST" | "BARNDORFF" | "BIPOWERJUMP" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -25,26 +22,25 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.squeeze_win_symbol = sym;
+                    self.bnsjump_symbol = sym;
                 }
-                self.show_squeeze_win = true;
-                if self.squeeze_win_snapshot.symbol.is_empty()
-                    && !self.squeeze_win_symbol.is_empty()
-                {
+                self.show_bnsjump = true;
+                if self.bnsjump_snapshot.symbol.is_empty() && !self.bnsjump_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_squeeze(
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_bnsjump(
                                 &conn,
-                                &self.squeeze_win_symbol,
+                                &self.bnsjump_symbol,
                             ) {
-                                self.squeeze_win_snapshot = snap;
+                                self.bnsjump_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "SQUEEZERANK" | "SQZRANK" | "SQUEEZE_RANK" | "SQRANK" | "SHORTSQUEEZERANK" => {
+            "PPROOT" | "PHILLIPS_PERRON" | "PHILLIPSPERRON" | "PP_TEST" | "PPTEST"
+            | "UNITROOTPP" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -59,34 +55,24 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.squeezerank_symbol = sym;
+                    self.pproot_symbol = sym;
                 }
-                self.show_squeezerank = true;
-                if self.squeezerank_snapshot.symbol.is_empty()
-                    && !self.squeezerank_symbol.is_empty()
-                {
+                self.show_pproot = true;
+                if self.pproot_snapshot.symbol.is_empty() && !self.pproot_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_squeezerank(
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_pproot(
                                 &conn,
-                                &self.squeezerank_symbol,
+                                &self.pproot_symbol,
                             ) {
-                                self.squeezerank_snapshot = snap;
+                                self.pproot_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "SQUEEZEWATCHLIST"
-            | "SQZWATCH"
-            | "SHORT_SQUEEZE_WATCH"
-            | "SQUEEZE_WATCH"
-            | "SQUEEZELIST" => {
-                self.show_squeeze_watchlist = true;
-                true
-            }
-            "BBSQUEEZE" | "BB_SQUEEZE" | "BOLLINGERSQUEEZE" | "BBANDS_SQUEEZE" | "BBWIDTH" => {
+            "MFDFA" | "MF_DFA" | "MULTIFRACTAL" | "MULTIFRACTALDFA" | "MFSPECTRUM" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -101,24 +87,23 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.bbsqueeze_symbol = sym;
+                    self.mfdfa_symbol = sym;
                 }
-                self.show_bbsqueeze = true;
-                if self.bbsqueeze_snapshot.symbol.is_empty() && !self.bbsqueeze_symbol.is_empty() {
+                self.show_mfdfa = true;
+                if self.mfdfa_snapshot.symbol.is_empty() && !self.mfdfa_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_bbsqueeze(
-                                &conn,
-                                &self.bbsqueeze_symbol,
-                            ) {
-                                self.bbsqueeze_snapshot = snap;
+                            if let Ok(Some(snap)) =
+                                typhoon_engine::core::research::get_mfdfa(&conn, &self.mfdfa_symbol)
+                            {
+                                self.mfdfa_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "DONCHIANBREAK" | "DONCHIANCHANNEL" | "DONCHIAN_CHANNEL" | "DONBREAK" | "DCCHAN" => {
+            "HILLKS" | "HILL_KS" | "PARETO_KS" | "TAILFIT" | "HILLTAILFIT" | "HILLGOF" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -133,26 +118,25 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.donchian_win_symbol = sym;
+                    self.hillks_symbol = sym;
                 }
-                self.show_donchian_win = true;
-                if self.donchian_win_snapshot.symbol.is_empty()
-                    && !self.donchian_win_symbol.is_empty()
-                {
+                self.show_hillks = true;
+                if self.hillks_snapshot.symbol.is_empty() && !self.hillks_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_donchian(
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_hillks(
                                 &conn,
-                                &self.donchian_win_symbol,
+                                &self.hillks_symbol,
                             ) {
-                                self.donchian_win_snapshot = snap;
+                                self.hillks_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "KAMAFIT" | "KAMA_ER" | "KAMA_ADAPTIVE" | "ADAPTIVEMA" | "KAUFMAN_AMA" => {
+            "TSI" | "TRUE_STRENGTH" | "TRUESTRENGTHINDEX" | "BLAU_TSI" | "BLAUINDEX"
+            | "MOMENTUMTSI" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -167,17 +151,16 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.kama_win_symbol = sym;
+                    self.tsi_symbol = sym;
                 }
-                self.show_kama_win = true;
-                if self.kama_win_snapshot.symbol.is_empty() && !self.kama_win_symbol.is_empty() {
+                self.show_tsi = true;
+                if self.tsi_snapshot.symbol.is_empty() && !self.tsi_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_kama(
-                                &conn,
-                                &self.kama_win_symbol,
-                            ) {
-                                self.kama_win_snapshot = snap;
+                            if let Ok(Some(snap)) =
+                                typhoon_engine::core::research::get_tsi(&conn, &self.tsi_symbol)
+                            {
+                                self.tsi_snapshot = snap;
                             }
                         }
                     }

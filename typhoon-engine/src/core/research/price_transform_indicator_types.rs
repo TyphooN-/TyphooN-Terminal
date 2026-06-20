@@ -88,12 +88,12 @@ pub struct VarianceSnapshot {
     pub note: String,
 }
 
-// ── Round 67 ──────────────────────────────────────────────────────
+// ── Research section ──
 /// TA-Lib PLUS_DI — Wilder's Positive Directional Indicator.
 /// `+DI = 100 × (Wilder-smoothed +DM) / ATR` over 14-bar default.
 /// Measures upward directional movement strength: paired with −DI it
 /// forms the crossover signal under Wilder's Directional Movement System
-/// and feeds DX / ADX / ADXR (Rounds 31, 65).
+/// and feeds DX / ADX / ADXR.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct PlusDiSnapshot {
     pub symbol: String,
@@ -170,7 +170,7 @@ pub struct MinusDmSnapshot {
 
 /// TA-Lib DX — Wilder's Directional Movement Index.
 /// `DX = 100 × |+DI − −DI| / (+DI + −DI)` — the unsmoothed directional
-/// dispersion that feeds ADX (Round 31) and ADXR (Round 65) via a
+/// dispersion that feeds ADX and ADXR via a
 /// further Wilder smoothing. DX alone is a raw directional-purity
 /// indicator: high when +DI and −DI diverge, regardless of sign.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -188,7 +188,7 @@ pub struct DxSnapshot {
     pub note: String,
 }
 
-// ── Round 68 ──────────────────────────────────────────────────────
+// ── Research section ──
 /// TA-Lib ROC — raw Rate of Change `close_t − close_{t−n}` (period 10).
 /// Raw price delta; distinct from ROCP (percentage) and ROCR (ratio).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -371,7 +371,7 @@ pub struct MaxIndexSnapshot {
     pub note: String,
 }
 
-// ── Round 70 — BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT ──
+// ── BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT ──
 
 /// TA-Lib BBANDS — Bollinger Bands around a 20-bar SMA ± 2·σ.
 /// Classic volatility-band oscillator. Position within the bands
@@ -482,7 +482,7 @@ pub struct LinearRegInterceptSnapshot {
     pub note: String,
 }
 
-// ── Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP ──
+// ── AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP ──
 
 /// TA-Lib AROONOSC — Aroon Oscillator = AROON_UP − AROON_DOWN over a
 /// 14-bar window. Complements the already-shipped AROON primitive by
@@ -508,7 +508,7 @@ pub struct AroonoscSnapshot {
 /// one snapshot plus `age_diff` (bars between the two extrema) and
 /// `extrema_order` (HIGH_FIRST / LOW_FIRST / SAME_BAR) which together
 /// describe the window's directional signature. Completes the
-/// Round 69 rolling-extrema family.
+/// rolling-extrema family.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct MinMaxIndexSnapshot {
     pub symbol: String,
@@ -528,7 +528,7 @@ pub struct MinMaxIndexSnapshot {
 /// and signal. This snapshot pins all three to SMA (the classic "simple
 /// MACD" textbook form) to give agents a deterministic alternative to
 /// the default EMA-based MACD. Complements the existing MACD snapshot
-/// (Round 7 era) without replacing it.
+/// without replacing it.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct MacdextSnapshot {
     pub symbol: String,
@@ -552,7 +552,7 @@ pub struct MacdextSnapshot {
 /// TA-Lib MACDFIX — MACD with *hardcoded* 12/26 fast/slow (fix = fixed)
 /// and configurable signal (9 default). Historically the most-widely
 /// used MACD form — this snapshot surfaces the canonical 12/26/9
-/// EMA-based MACD. Distinct from the existing Round 7 MACD snapshot in
+/// EMA-based MACD. Distinct from the existing MACD snapshot in
 /// that it exposes the hardcoded-fast/slow as an explicit constraint,
 /// useful for agents wanting to verify textbook parameters.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]

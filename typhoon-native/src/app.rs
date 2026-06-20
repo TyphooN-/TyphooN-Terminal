@@ -883,7 +883,7 @@ impl TyphooNApp {
             eps_symbol: String::new(),
             eps_surprises: Vec::new(),
             eps_loading: false,
-            // ── Round 6 defaults ──
+            // ── Research section ──
             show_wei: false,
             wei_indices: Vec::new(),
             wei_loading: false,
@@ -900,7 +900,7 @@ impl TyphooNApp {
             wacc_symbol: String::new(),
             wacc_snapshot: typhoon_engine::core::research::WaccSnapshot::default(),
             wacc_loading: false,
-            // ── Round 7 defaults ──
+            // ── Research section ──
             show_wcr: false,
             wcr_rates: Vec::new(),
             wcr_loading: false,
@@ -921,7 +921,7 @@ impl TyphooNApp {
             figi_symbol: String::new(),
             figi_snapshot: typhoon_engine::core::research::FigiSnapshot::default(),
             figi_loading: false,
-            // ── Round 8 defaults ──
+            // ── Research section ──
             show_hra: false,
             hra_symbol: String::new(),
             hra_snapshot: typhoon_engine::core::research::HraSnapshot::default(),
@@ -945,7 +945,7 @@ impl TyphooNApp {
             ivol_symbol: String::new(),
             ivol_snapshot: typhoon_engine::core::research::IvolSnapshot::default(),
             ivol_loading: false,
-            // ── Round 9 defaults ──
+            // ── Research section ──
             show_seag: false,
             seag_symbol: String::new(),
             seag_snapshot: typhoon_engine::core::research::SeasonalitySnapshot::default(),
@@ -987,7 +987,7 @@ impl TyphooNApp {
             shrt_symbol: String::new(),
             shrt_snapshot: typhoon_engine::core::research::ShortInterestSnapshot::default(),
             shrt_loading: false,
-            // ── Round 11 defaults ──
+            // ── Research section ──
             show_altz: false,
             altz_symbol: String::new(),
             altz_snapshot: typhoon_engine::core::research::AltmanZSnapshot::default(),
@@ -1008,7 +1008,7 @@ impl TyphooNApp {
             ptd_symbol: String::new(),
             ptd_snapshot: typhoon_engine::core::research::PriceTargetDispersion::default(),
             ptd_loading: false,
-            // ── Round 12 defaults ──
+            // ── Research section ──
             show_mngr: false,
             mngr_symbol: String::new(),
             mngr_window_days: 90,
@@ -1030,7 +1030,7 @@ impl TyphooNApp {
             updm_symbol: String::new(),
             updm_snapshot: typhoon_engine::core::research::UpdmSnapshot::default(),
             updm_loading: false,
-            // ── Round 13 defaults ──
+            // ── Research section ──
             show_mom: false,
             mom_symbol: String::new(),
             mom_snapshot: typhoon_engine::core::research::MomentumSnapshot::default(),
@@ -1052,7 +1052,7 @@ impl TyphooNApp {
             credit_symbol: String::new(),
             credit_snapshot: typhoon_engine::core::research::CreditSnapshot::default(),
             credit_loading: false,
-            // ── Round 14 defaults ──
+            // ── Research section ──
             show_growm: false,
             growm_symbol: String::new(),
             growm_snapshot: typhoon_engine::core::research::GrowmSnapshot::default(),
@@ -1074,7 +1074,7 @@ impl TyphooNApp {
             margins_symbol: String::new(),
             margins_snapshot: typhoon_engine::core::research::MarginsSnapshot::default(),
             margins_loading: false,
-            // ── Round 15 defaults ──
+            // ── Research section ──
             show_val: false,
             val_symbol: String::new(),
             val_snapshot: typhoon_engine::core::research::ValueSnapshot::default(),
@@ -1096,7 +1096,7 @@ impl TyphooNApp {
             covg_symbol: String::new(),
             covg_snapshot: typhoon_engine::core::research::CoverageSnapshot::default(),
             covg_loading: false,
-            // ── Round 16 defaults ──
+            // ── Research section ──
             show_vrk: false,
             vrk_symbol: String::new(),
             vrk_snapshot: typhoon_engine::core::research::ValueRankSnapshot::default(),
@@ -1117,7 +1117,7 @@ impl TyphooNApp {
             pead_symbol: String::new(),
             pead_snapshot: typhoon_engine::core::research::PeadSnapshot::default(),
             pead_loading: false,
-            // ── Round 17 defaults ──
+            // ── Research section ──
             show_sizef: false,
             sizef_symbol: String::new(),
             sizef_snapshot: typhoon_engine::core::research::SizeFactorSnapshot::default(),
@@ -1139,7 +1139,7 @@ impl TyphooNApp {
             revrank_symbol: String::new(),
             revrank_snapshot: typhoon_engine::core::research::RevenueGrowthRankSnapshot::default(),
             revrank_loading: false,
-            // ── Round 18 defaults ──
+            // ── Research section ──
             show_levrank: false,
             levrank_symbol: String::new(),
             levrank_snapshot: typhoon_engine::core::research::LeverageRankSnapshot::default(),
@@ -1184,7 +1184,7 @@ impl TyphooNApp {
             des_symbol: String::new(),
             des_snapshot: typhoon_engine::core::research::DailyEventStreakSnapshot::default(),
             des_loading: false,
-            // ── Round 20 defaults ──
+            // ── Research section ──
             show_dvdyieldrank: false,
             dvdyieldrank_symbol: String::new(),
             dvdyieldrank_snapshot:
@@ -1221,7 +1221,7 @@ impl TyphooNApp {
             momrank_multi_snapshot:
                 typhoon_engine::core::research::MomentumRankMultiSnapshot::default(),
             momrank_multi_loading: false,
-            // ── Round 21 defaults ──
+            // ── Research section ──
             show_betarank: false,
             betarank_symbol: String::new(),
             betarank_snapshot: typhoon_engine::core::research::BetaRankSnapshot::default(),
@@ -1275,7 +1275,7 @@ impl TyphooNApp {
             vrp_symbol: String::new(),
             vrp_snapshot: typhoon_engine::core::research::VolRiskPremiumSnapshot::default(),
             vrp_loading: false,
-            // ── Round 22 defaults ──
+            // ── Research section ──
             show_retskew: false,
             retskew_symbol: String::new(),
             retskew_snapshot: typhoon_engine::core::research::ReturnSkewnessSnapshot::default(),
@@ -1296,7 +1296,7 @@ impl TyphooNApp {
             dayrange_symbol: String::new(),
             dayrange_snapshot: typhoon_engine::core::research::DailyRangeSnapshot::default(),
             dayrange_loading: false,
-            // ── Round 23 defaults ──
+            // ── Research section ──
             show_autocor: false,
             autocor_symbol: String::new(),
             autocor_snapshot: typhoon_engine::core::research::AutocorrelationSnapshot::default(),
@@ -1317,7 +1317,7 @@ impl TyphooNApp {
             volratio_symbol: String::new(),
             volratio_snapshot: typhoon_engine::core::research::VolumeRatioSnapshot::default(),
             volratio_loading: false,
-            // ── Round 24 defaults ──
+            // ── Research section ──
             show_drawup: false,
             drawup_symbol: String::new(),
             drawup_snapshot: typhoon_engine::core::research::DrawupHistorySnapshot::default(),
@@ -1338,7 +1338,7 @@ impl TyphooNApp {
             mrhl_symbol: String::new(),
             mrhl_snapshot: typhoon_engine::core::research::MeanReversionHalfLifeSnapshot::default(),
             mrhl_loading: false,
-            // ── Round 25 defaults ──
+            // ── Research section ──
             show_downvol: false,
             downvol_symbol: String::new(),
             downvol_snapshot: typhoon_engine::core::research::DownsideVolSnapshot::default(),
@@ -1359,7 +1359,7 @@ impl TyphooNApp {
             volofvol_symbol: String::new(),
             volofvol_snapshot: typhoon_engine::core::research::VolOfVolSnapshot::default(),
             volofvol_loading: false,
-            // ── Round 26 defaults ──
+            // ── Research section ──
             show_calmar: false,
             calmar_symbol: String::new(),
             calmar_snapshot: typhoon_engine::core::research::CalmarRatioSnapshot::default(),
@@ -1380,7 +1380,7 @@ impl TyphooNApp {
             jbnorm_symbol: String::new(),
             jbnorm_snapshot: typhoon_engine::core::research::JarqueBeraSnapshot::default(),
             jbnorm_loading: false,
-            // ── Round 27 defaults ──
+            // ── Research section ──
             show_omega: false,
             omega_symbol: String::new(),
             omega_snapshot: typhoon_engine::core::research::OmegaRatioSnapshot::default(),
@@ -1402,7 +1402,7 @@ impl TyphooNApp {
             rollsprd_symbol: String::new(),
             rollsprd_snapshot: typhoon_engine::core::research::RollSpreadSnapshot::default(),
             rollsprd_loading: false,
-            // ── Round 28 defaults ──
+            // ── Research section ──
             show_parkinson: false,
             parkinson_symbol: String::new(),
             parkinson_snapshot: typhoon_engine::core::research::ParkinsonVolSnapshot::default(),
@@ -1423,7 +1423,7 @@ impl TyphooNApp {
             doweffect_symbol: String::new(),
             doweffect_snapshot: typhoon_engine::core::research::DayOfWeekEffectSnapshot::default(),
             doweffect_loading: false,
-            // ── Round 29 defaults ──
+            // ── Research section ──
             show_sterling: false,
             sterling_symbol: String::new(),
             sterling_snapshot: typhoon_engine::core::research::SterlingRatioSnapshot::default(),
@@ -1444,7 +1444,7 @@ impl TyphooNApp {
             zeroret_symbol: String::new(),
             zeroret_snapshot: typhoon_engine::core::research::ZeroReturnSnapshot::default(),
             zeroret_loading: false,
-            // ── Round 30 defaults ──
+            // ── Research section ──
             show_psr: false,
             psr_symbol: String::new(),
             psr_snapshot: typhoon_engine::core::research::ProbabilisticSharpeSnapshot::default(),
@@ -1465,7 +1465,7 @@ impl TyphooNApp {
             dddur_symbol: String::new(),
             dddur_snapshot: typhoon_engine::core::research::DrawdownDurationSnapshot::default(),
             dddur_loading: false,
-            // ── Round 31 defaults ──
+            // ── Research section ──
             show_hilltail: false,
             hilltail_symbol: String::new(),
             hilltail_snapshot: typhoon_engine::core::research::HillTailSnapshot::default(),
@@ -1486,7 +1486,7 @@ impl TyphooNApp {
             cfvar_symbol: String::new(),
             cfvar_snapshot: typhoon_engine::core::research::CornishFisherSnapshot::default(),
             cfvar_loading: false,
-            // ── Round 32 defaults ──
+            // ── Research section ──
             show_entropy: false,
             entropy_symbol: String::new(),
             entropy_snapshot: typhoon_engine::core::research::EntropySnapshot::default(),
@@ -1507,7 +1507,7 @@ impl TyphooNApp {
             apen_symbol: String::new(),
             apen_snapshot: typhoon_engine::core::research::ApenSnapshot::default(),
             apen_loading: false,
-            // ── Round 33 defaults ──
+            // ── Research section ──
             show_upr: false,
             upr_symbol: String::new(),
             upr_snapshot: typhoon_engine::core::research::UprSnapshot::default(),
@@ -1528,7 +1528,7 @@ impl TyphooNApp {
             gini_symbol: String::new(),
             gini_snapshot: typhoon_engine::core::research::GiniSnapshot::default(),
             gini_loading: false,
-            // ── Round 34 defaults ──
+            // ── Research section ──
             show_sampen: false,
             sampen_symbol: String::new(),
             sampen_snapshot: typhoon_engine::core::research::SampenSnapshot::default(),
@@ -1549,7 +1549,7 @@ impl TyphooNApp {
             specent_symbol: String::new(),
             specent_snapshot: typhoon_engine::core::research::SpecentSnapshot::default(),
             specent_loading: false,
-            // ── Round 35 defaults ──
+            // ── Research section ──
             show_robvol: false,
             robvol_symbol: String::new(),
             robvol_snapshot: typhoon_engine::core::research::RobVolSnapshot::default(),
@@ -1570,7 +1570,7 @@ impl TyphooNApp {
             ewmavol_symbol: String::new(),
             ewmavol_snapshot: typhoon_engine::core::research::EwmaVolSnapshot::default(),
             ewmavol_loading: false,
-            // ── Round 36 defaults ──
+            // ── Research section ──
             show_ksnorm: false,
             ksnorm_symbol: String::new(),
             ksnorm_snapshot: typhoon_engine::core::research::KsnormSnapshot::default(),
@@ -1591,7 +1591,7 @@ impl TyphooNApp {
             peakover_symbol: String::new(),
             peakover_snapshot: typhoon_engine::core::research::PeakoverSnapshot::default(),
             peakover_loading: false,
-            // ── Round 37 defaults ──
+            // ── Research section ──
             show_higuchi: false,
             higuchi_symbol: String::new(),
             higuchi_snapshot: typhoon_engine::core::research::HiguchiSnapshot::default(),
@@ -1612,7 +1612,7 @@ impl TyphooNApp {
             rankac_symbol: String::new(),
             rankac_snapshot: typhoon_engine::core::research::RankacSnapshot::default(),
             rankac_loading: false,
-            // ── Round 38 defaults ──
+            // ── Research section ──
             show_bnsjump: false,
             bnsjump_symbol: String::new(),
             bnsjump_snapshot: typhoon_engine::core::research::BnsjumpSnapshot::default(),
@@ -1633,7 +1633,7 @@ impl TyphooNApp {
             tsi_symbol: String::new(),
             tsi_snapshot: typhoon_engine::core::research::TsiSnapshot::default(),
             tsi_loading: false,
-            // ── Round 39 defaults ──
+            // ── Research section ──
             show_garch11: false,
             garch11_symbol: String::new(),
             garch11_snapshot: typhoon_engine::core::research::Garch11Snapshot::default(),
@@ -1654,7 +1654,7 @@ impl TyphooNApp {
             automi_symbol: String::new(),
             automi_snapshot: typhoon_engine::core::research::AutomiSnapshot::default(),
             automi_loading: false,
-            // ── Round 40 defaults ──
+            // ── Research section ──
             show_durbinwatson: false,
             durbinwatson_symbol: String::new(),
             durbinwatson_snapshot: typhoon_engine::core::research::DurbinWatsonSnapshot::default(),
@@ -1675,7 +1675,7 @@ impl TyphooNApp {
             periodogram_symbol: String::new(),
             periodogram_snapshot: typhoon_engine::core::research::PeriodogramSnapshot::default(),
             periodogram_loading: false,
-            // ── Round 41 defaults ──
+            // ── Research section ──
             show_mcleodli: false,
             mcleodli_symbol: String::new(),
             mcleodli_snapshot: typhoon_engine::core::research::McLeodLiSnapshot::default(),
@@ -1696,7 +1696,7 @@ impl TyphooNApp {
             kendalltau_symbol: String::new(),
             kendalltau_snapshot: typhoon_engine::core::research::KendallTauSnapshot::default(),
             kendalltau_loading: false,
-            // ── Round 42 defaults ──
+            // ── Research section ──
             show_squeeze_win: false,
             squeeze_win_symbol: String::new(),
             squeeze_win_snapshot: typhoon_engine::core::research::SqueezeSnapshot::default(),
@@ -1720,7 +1720,7 @@ impl TyphooNApp {
             kama_win_symbol: String::new(),
             kama_win_snapshot: typhoon_engine::core::research::KamaSnapshot::default(),
             kama_win_loading: false,
-            // ── Round 43 defaults ──
+            // ── Research section ──
             show_ichimoku_win: false,
             ichimoku_win_symbol: String::new(),
             ichimoku_win_snapshot: typhoon_engine::core::research::IchimokuSnapshot::default(),
@@ -1741,7 +1741,7 @@ impl TyphooNApp {
             aroon_win_symbol: String::new(),
             aroon_win_snapshot: typhoon_engine::core::research::AroonSnapshot::default(),
             aroon_win_loading: false,
-            // ── Round 44 defaults ──
+            // ── Research section ──
             show_adx_win: false,
             adx_win_symbol: String::new(),
             adx_win_snapshot: typhoon_engine::core::research::AdxSnapshot::default(),
@@ -1762,7 +1762,7 @@ impl TyphooNApp {
             psar_win_symbol: String::new(),
             psar_win_snapshot: typhoon_engine::core::research::PsarSnapshot::default(),
             psar_win_loading: false,
-            // ── Round 45 defaults ──
+            // ── Research section ──
             show_vortex_win: false,
             vortex_win_symbol: String::new(),
             vortex_win_snapshot: typhoon_engine::core::research::VortexSnapshot::default(),
@@ -1783,7 +1783,7 @@ impl TyphooNApp {
             hma_win_symbol: String::new(),
             hma_win_snapshot: typhoon_engine::core::research::HmaSnapshot::default(),
             hma_win_loading: false,
-            // ── Round 46 defaults ──
+            // ── Research section ──
             show_ppo_win: false,
             ppo_win_symbol: String::new(),
             ppo_win_snapshot: typhoon_engine::core::research::PpoSnapshot::default(),
@@ -1804,7 +1804,7 @@ impl TyphooNApp {
             willr_win_symbol: String::new(),
             willr_win_snapshot: typhoon_engine::core::research::WillrSnapshot::default(),
             willr_win_loading: false,
-            // ── Round 47 defaults ──
+            // ── Research section ──
             show_mass_win: false,
             mass_win_symbol: String::new(),
             mass_win_snapshot: typhoon_engine::core::research::MassSnapshot::default(),
@@ -1825,7 +1825,7 @@ impl TyphooNApp {
             awesome_win_symbol: String::new(),
             awesome_win_snapshot: typhoon_engine::core::research::AwesomeSnapshot::default(),
             awesome_win_loading: false,
-            // ── Round 48 defaults ──
+            // ── Research section ──
             show_efi_win: false,
             efi_win_symbol: String::new(),
             efi_win_snapshot: typhoon_engine::core::research::EfiSnapshot::default(),
@@ -1906,7 +1906,7 @@ impl TyphooNApp {
             heikin_win_symbol: String::new(),
             heikin_win_snapshot: typhoon_engine::core::research::HeikinSnapshot::default(),
             heikin_win_loading: false,
-            // ── Round 52 defaults ──
+            // ── Research section ──
             show_alma_win: false,
             alma_win_symbol: String::new(),
             alma_win_snapshot: typhoon_engine::core::research::AlmaSnapshot::default(),
@@ -1927,7 +1927,7 @@ impl TyphooNApp {
             rvi_win_symbol: String::new(),
             rvi_win_snapshot: typhoon_engine::core::research::RviSnapshot::default(),
             rvi_win_loading: false,
-            // ── Round 53 defaults ──
+            // ── Research section ──
             show_trima_win: false,
             trima_win_symbol: String::new(),
             trima_win_snapshot: typhoon_engine::core::research::TrimaSnapshot::default(),
@@ -1948,7 +1948,7 @@ impl TyphooNApp {
             pvt_win_symbol: String::new(),
             pvt_win_snapshot: typhoon_engine::core::research::PvtSnapshot::default(),
             pvt_win_loading: false,
-            // ── Round 54 defaults ──
+            // ── Research section ──
             show_ac_win: false,
             ac_win_symbol: String::new(),
             ac_win_snapshot: typhoon_engine::core::research::AcSnapshot::default(),
@@ -1978,7 +1978,7 @@ impl TyphooNApp {
             expcal_win_tab: 0,
             expcal_win_horizon_days: 90,
             expcal_win_calendar: Vec::new(),
-            // ── Round 55 defaults ──
+            // ── Research section ──
             show_smma_win: false,
             smma_win_symbol: String::new(),
             smma_win_snapshot: typhoon_engine::core::research::SmmaSnapshot::default(),
@@ -1999,7 +1999,7 @@ impl TyphooNApp {
             imi_win_symbol: String::new(),
             imi_win_snapshot: typhoon_engine::core::research::ImiSnapshot::default(),
             imi_win_loading: false,
-            // ── Round 56 defaults ──
+            // ── Research section ──
             show_gmma_win: false,
             gmma_win_symbol: String::new(),
             gmma_win_snapshot: typhoon_engine::core::research::GmmaSnapshot::default(),
@@ -2020,7 +2020,7 @@ impl TyphooNApp {
             vroc_win_symbol: String::new(),
             vroc_win_snapshot: typhoon_engine::core::research::VrocSnapshot::default(),
             vroc_win_loading: false,
-            // ── Round 57 defaults ──
+            // ── Research section ──
             show_kdj_win: false,
             kdj_win_symbol: String::new(),
             kdj_win_snapshot: typhoon_engine::core::research::KdjSnapshot::default(),
@@ -2041,7 +2041,7 @@ impl TyphooNApp {
             tmf_win_symbol: String::new(),
             tmf_win_snapshot: typhoon_engine::core::research::TmfSnapshot::default(),
             tmf_win_loading: false,
-            // ── Round 58 defaults ──
+            // ── Research section ──
             show_fractals_win: false,
             fractals_win_symbol: String::new(),
             fractals_win_snapshot: typhoon_engine::core::research::FractalsSnapshot::default(),
@@ -2062,7 +2062,7 @@ impl TyphooNApp {
             didi_win_symbol: String::new(),
             didi_win_snapshot: typhoon_engine::core::research::DidiSnapshot::default(),
             didi_win_loading: false,
-            // ── Round 59 defaults ──
+            // ── Research section ──
             show_demarker_win: false,
             demarker_win_symbol: String::new(),
             demarker_win_snapshot: typhoon_engine::core::research::DemarkerSnapshot::default(),
@@ -2083,7 +2083,7 @@ impl TyphooNApp {
             stddev_win_symbol: String::new(),
             stddev_win_snapshot: typhoon_engine::core::research::StddevSnapshot::default(),
             stddev_win_loading: false,
-            // ── Round 60 defaults ──
+            // ── Research section ──
             show_wma_win: false,
             wma_win_symbol: String::new(),
             wma_win_snapshot: typhoon_engine::core::research::WmaSnapshot::default(),
@@ -2104,7 +2104,7 @@ impl TyphooNApp {
             ibs_win_symbol: String::new(),
             ibs_win_snapshot: typhoon_engine::core::research::IbsSnapshot::default(),
             ibs_win_loading: false,
-            // ── Round 61 defaults ──
+            // ── Research section ──
             show_laguerre_rsi_win: false,
             laguerre_rsi_win_symbol: String::new(),
             laguerre_rsi_win_snapshot: typhoon_engine::core::research::LaguerreRsiSnapshot::default(
@@ -2127,7 +2127,7 @@ impl TyphooNApp {
             midpoint_win_symbol: String::new(),
             midpoint_win_snapshot: typhoon_engine::core::research::MidpointSnapshot::default(),
             midpoint_win_loading: false,
-            // ── Round 62 defaults ──
+            // ── Research section ──
             show_mass_index_win: false,
             mass_index_win_symbol: String::new(),
             mass_index_win_snapshot: typhoon_engine::core::research::MassIndexSnapshot::default(),
@@ -2148,7 +2148,7 @@ impl TyphooNApp {
             trange_win_symbol: String::new(),
             trange_win_snapshot: typhoon_engine::core::research::TrangeSnapshot::default(),
             trange_win_loading: false,
-            // ── Round 63 defaults ──
+            // ── Research section ──
             show_linearreg_slope_win: false,
             linearreg_slope_win_symbol: String::new(),
             linearreg_slope_win_snapshot:
@@ -2171,7 +2171,7 @@ impl TyphooNApp {
             stochf_win_symbol: String::new(),
             stochf_win_snapshot: typhoon_engine::core::research::StochfSnapshot::default(),
             stochf_win_loading: false,
-            // ── Round 64 defaults ──
+            // ── Research section ──
             show_linearreg_win: false,
             linearreg_win_symbol: String::new(),
             linearreg_win_snapshot: typhoon_engine::core::research::LinearregSnapshot::default(),
@@ -2193,7 +2193,7 @@ impl TyphooNApp {
             ht_phasor_win_symbol: String::new(),
             ht_phasor_win_snapshot: typhoon_engine::core::research::HtPhasorSnapshot::default(),
             ht_phasor_win_loading: false,
-            // ── Round 65 defaults ──
+            // ── Research section ──
             show_midprice_win: false,
             midprice_win_symbol: String::new(),
             midprice_win_snapshot: typhoon_engine::core::research::MidpriceSnapshot::default(),
@@ -2234,7 +2234,7 @@ impl TyphooNApp {
             variance_win_symbol: String::new(),
             variance_win_snapshot: typhoon_engine::core::research::VarianceSnapshot::default(),
             variance_win_loading: false,
-            // ── Round 67 defaults ──
+            // ── Research section ──
             show_plus_di_win: false,
             plus_di_win_symbol: String::new(),
             plus_di_win_snapshot: typhoon_engine::core::research::PlusDiSnapshot::default(),
@@ -2255,7 +2255,7 @@ impl TyphooNApp {
             dx_win_symbol: String::new(),
             dx_win_snapshot: typhoon_engine::core::research::DxSnapshot::default(),
             dx_win_loading: false,
-            // ── Round 68 defaults ──
+            // ── Research section ──
             show_roc_win: false,
             roc_win_symbol: String::new(),
             roc_win_snapshot: typhoon_engine::core::research::RocSnapshot::default(),
@@ -2276,7 +2276,7 @@ impl TyphooNApp {
             correl_win_symbol: String::new(),
             correl_win_snapshot: typhoon_engine::core::research::CorrelSnapshot::default(),
             correl_win_loading: false,
-            // ── Round 69 defaults ──
+            // ── Research section ──
             show_min_win: false,
             min_win_symbol: String::new(),
             min_win_snapshot: typhoon_engine::core::research::MinSnapshot::default(),
@@ -2297,7 +2297,7 @@ impl TyphooNApp {
             maxindex_win_symbol: String::new(),
             maxindex_win_snapshot: typhoon_engine::core::research::MaxIndexSnapshot::default(),
             maxindex_win_loading: false,
-            // ── Round 70 defaults ──
+            // ── Research section ──
             show_bbands_win: false,
             bbands_win_symbol: String::new(),
             bbands_win_snapshot: typhoon_engine::core::research::BbandsSnapshot::default(),
@@ -2319,7 +2319,7 @@ impl TyphooNApp {
             linreg_intercept_win_snapshot:
                 typhoon_engine::core::research::LinearRegInterceptSnapshot::default(),
             linreg_intercept_win_loading: false,
-            // ── Round 71 defaults ──
+            // ── Research section ──
             show_aroonosc_win: false,
             aroonosc_win_symbol: String::new(),
             aroonosc_win_snapshot: typhoon_engine::core::research::AroonoscSnapshot::default(),
@@ -2341,7 +2341,7 @@ impl TyphooNApp {
             mavp_win_symbol: String::new(),
             mavp_win_snapshot: typhoon_engine::core::research::MavpSnapshot::default(),
             mavp_win_loading: false,
-            // ── Round 72 defaults ──
+            // ── Research section ──
             show_cdl_doji_win: false,
             cdl_doji_win_symbol: String::new(),
             cdl_doji_win_snapshot: typhoon_engine::core::research::CdlDojiSnapshot::default(),
@@ -2364,7 +2364,7 @@ impl TyphooNApp {
             cdl_harami_win_symbol: String::new(),
             cdl_harami_win_snapshot: typhoon_engine::core::research::CdlHaramiSnapshot::default(),
             cdl_harami_win_loading: false,
-            // ── Round 73 defaults — CDL* 3-bar / 2-bar patterns ──
+            // ── — CDL* 3-bar / 2-bar patterns ──
             show_cdl_morning_star_win: false,
             cdl_morning_star_win_symbol: String::new(),
             cdl_morning_star_win_snapshot:
@@ -2390,7 +2390,7 @@ impl TyphooNApp {
             cdl_dark_cloud_cover_win_snapshot:
                 typhoon_engine::core::research::CdlDarkCloudCoverSnapshot::default(),
             cdl_dark_cloud_cover_win_loading: false,
-            // ── Round 74 defaults — CDL* piercing / doji variants / hammer mirrors ──
+            // ── — CDL* piercing / doji variants / hammer mirrors ──
             show_cdl_piercing_win: false,
             cdl_piercing_win_symbol: String::new(),
             cdl_piercing_win_snapshot: typhoon_engine::core::research::CdlPiercingSnapshot::default(
@@ -2416,7 +2416,7 @@ impl TyphooNApp {
             cdl_inverted_hammer_win_snapshot:
                 typhoon_engine::core::research::CdlInvertedHammerSnapshot::default(),
             cdl_inverted_hammer_win_loading: false,
-            // ── Round 75 defaults — CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
+            // ── — CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
             show_cdl_harami_cross_win: false,
             cdl_harami_cross_win_symbol: String::new(),
             cdl_harami_cross_win_snapshot:
@@ -2441,7 +2441,7 @@ impl TyphooNApp {
             cdl_tristar_win_symbol: String::new(),
             cdl_tristar_win_snapshot: typhoon_engine::core::research::CdlTristarSnapshot::default(),
             cdl_tristar_win_loading: false,
-            // ── Round 76 defaults — CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
+            // ── — CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
             show_cdl_doji_star_win: false,
             cdl_doji_star_win_symbol: String::new(),
             cdl_doji_star_win_snapshot:
@@ -2467,7 +2467,7 @@ impl TyphooNApp {
             cdl_three_inside_win_snapshot:
                 typhoon_engine::core::research::CdlThreeInsideSnapshot::default(),
             cdl_three_inside_win_loading: false,
-            // ── Round 77 defaults — CDL* belt hold / closing marubozu / high wave / long line / short line ──
+            // ── — CDL* belt hold / closing marubozu / high wave / long line / short line ──
             show_cdl_belt_hold_win: false,
             cdl_belt_hold_win_symbol: String::new(),
             cdl_belt_hold_win_snapshot:
@@ -2493,7 +2493,7 @@ impl TyphooNApp {
             cdl_short_line_win_snapshot:
                 typhoon_engine::core::research::CdlShortLineSnapshot::default(),
             cdl_short_line_win_loading: false,
-            // ── Round 78 defaults — CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
+            // ── — CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
             show_cdl_counterattack_win: false,
             cdl_counterattack_win_symbol: String::new(),
             cdl_counterattack_win_snapshot:
@@ -2644,7 +2644,7 @@ impl TyphooNApp {
             cdl_tasuki_gap_win_snapshot:
                 typhoon_engine::core::research::CdlTasukiGapSnapshot::default(),
             cdl_tasuki_gap_win_loading: false,
-            // ── Round 76 defaults ──
+            // ── Research section ──
             show_modsharpe_win: false,
             modsharpe_win_symbol: String::new(),
             modsharpe_win_snapshot: typhoon_engine::core::research::ModSharpeSnapshot::default(),
@@ -2665,7 +2665,7 @@ impl TyphooNApp {
             hlvclust_win_symbol: String::new(),
             hlvclust_win_snapshot: typhoon_engine::core::research::HlvClustSnapshot::default(),
             hlvclust_win_loading: false,
-            // ── Round 77 defaults ──
+            // ── Research section ──
             show_yangzhang_win: false,
             yangzhang_win_symbol: String::new(),
             yangzhang_win_snapshot: typhoon_engine::core::research::YangZhangVolSnapshot::default(),

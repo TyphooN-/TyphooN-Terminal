@@ -109,7 +109,7 @@ pub struct CreditComponent {
 }
 
 /// CREDIT — Unified credit score snapshot for a symbol.
-/// Fuses cached ALTZ + PTFS + LEV + ACRL snapshots from Rounds 10/11.
+/// Fuses cached ALTZ + PTFS + LEV + ACRL snapshots from .
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CreditSnapshot {
     pub symbol: String,

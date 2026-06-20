@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 51 windows ──
+        // ── Research section ──
         if self.show_dema_win {
             if self.dema_win_symbol.is_empty() {
                 self.dema_win_symbol = chart_sym_research.clone();

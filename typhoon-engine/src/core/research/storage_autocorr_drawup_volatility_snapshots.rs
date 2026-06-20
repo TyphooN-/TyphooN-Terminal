@@ -204,7 +204,7 @@ pub fn get_volratio(
     }
 }
 
-// ── Round 24 schema + upsert/get ──
+// ── + upsert/get ──
 
 pub fn create_research_tables_v25(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v24(conn);
@@ -414,7 +414,7 @@ pub fn get_mrhl(
     }
 }
 
-// ── Round 25 schema + upsert/get ──
+// ── + upsert/get ──
 
 pub fn create_research_tables_v26(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v25(conn);

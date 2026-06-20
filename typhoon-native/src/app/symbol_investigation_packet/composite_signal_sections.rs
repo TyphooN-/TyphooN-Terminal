@@ -7,7 +7,7 @@ impl TyphooNApp {
             if let Some(conn) = cache.try_connection() {
                 use typhoon_engine::core::research as rx;
 
-                // Round 12 — MNGR insider activity bias
+                // MNGR insider activity bias
                 if let Ok(Some(ia)) = rx::get_insider_activity(&conn, &sym_upper) {
                     if ia.total_trades > 0 {
                         let _ = writeln!(
@@ -45,7 +45,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 12 — DIVG dividend growth
+                // DIVG dividend growth
                 if let Ok(Some(dg)) = rx::get_divg(&conn, &sym_upper) {
                     if dg.total_payments > 0 {
                         let _ = writeln!(p, "### Dividend Growth (as of {})", dg.as_of);
@@ -89,7 +89,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 12 — EARM earnings momentum trend
+                // EARM earnings momentum trend
                 if let Ok(Some(em)) = rx::get_earm(&conn, &sym_upper) {
                     if em.quarters_used >= 5 {
                         let _ = writeln!(p, "### Earnings Momentum (as of {})", em.as_of);
@@ -134,7 +134,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 12 — SECTR sector rotation strength
+                // SECTR sector rotation strength
                 if let Ok(Some(sr)) = rx::get_sector_rotation(&conn, &sym_upper) {
                     if sr.sectors_total > 0 {
                         let _ = writeln!(p, "### Sector Rotation Strength (as of {})", sr.as_of);
@@ -167,7 +167,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 12 — UPDM upgrade/downgrade momentum
+                // UPDM upgrade/downgrade momentum
                 if let Ok(Some(um)) = rx::get_updm(&conn, &sym_upper) {
                     if um.total_actions > 0 {
                         let _ = writeln!(p, "### Upgrade/Downgrade Momentum (as of {})", um.as_of);
@@ -211,7 +211,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 13 — MOM 12-1 month momentum score
+                // MOM 12-1 month momentum score
                 if let Ok(Some(mom)) = rx::get_momentum(&conn, &sym_upper) {
                     if mom.bars_used > 0 {
                         let _ = writeln!(p, "### Momentum 12-1 (as of {})", mom.as_of);
@@ -241,7 +241,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 13 — LIQ liquidity profile
+                // LIQ liquidity profile
                 if let Ok(Some(lq)) = rx::get_liquidity(&conn, &sym_upper) {
                     if lq.window_days > 0 {
                         let _ = writeln!(
@@ -273,7 +273,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 13 — BREAK breakout proximity
+                // BREAK breakout proximity
                 if let Ok(Some(bk)) = rx::get_breakout(&conn, &sym_upper) {
                     if bk.current_price > 0.0 {
                         let _ = writeln!(p, "### Breakout Proximity (as of {})", bk.as_of);
@@ -307,7 +307,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 13 — CCRL cash conversion cycle
+                // CCRL cash conversion cycle
                 if let Ok(Some(cc)) = rx::get_cash_cycle(&conn, &sym_upper) {
                     if cc.periods_used > 0 {
                         let _ = writeln!(
@@ -351,7 +351,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 13 — CREDIT unified credit score
+                // CREDIT unified credit score
                 if let Ok(Some(cr)) = rx::get_credit(&conn, &sym_upper) {
                     if cr.inputs_available > 0 {
                         let _ = writeln!(p, "### Credit Score (as of {})", cr.as_of);
@@ -395,7 +395,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 14 blocks ────────────────────────────
+                // ── blocks ──
                 if let Ok(Some(gw)) = rx::get_growm(&conn, &sym_upper) {
                     if gw.inputs_available > 0 {
                         let _ = writeln!(p, "### GARP Composite — GROWM (as of {})", gw.as_of);
@@ -589,7 +589,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 15 ────────────────────────────
+                // ── Research section ──
                 if let Ok(Some(v)) = rx::get_val(&conn, &sym_upper) {
                     if v.value_label != "NO_DATA" && !v.value_label.is_empty() {
                         let _ = writeln!(

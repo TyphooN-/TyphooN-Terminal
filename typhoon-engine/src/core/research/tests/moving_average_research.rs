@@ -1,4 +1,4 @@
-// ── Round 51: DEMA/TEMA/LINREG/PIVOTS/HEIKIN ──────────────────────────
+// ── DEMA/TEMA/LINREG/PIVOTS/HEIKIN ──────────────────────────
 
 #[test]
 fn dema_roundtrip() {
@@ -209,7 +209,7 @@ fn heikin_compute_oscillating() {
     }
 }
 
-// ── Round 52: ALMA / ZLEMA / ELDERRAY / TSF / RVI ──────────────
+// ── ALMA / ZLEMA / ELDERRAY / TSF / RVI ──────────────
 
 #[test]
 fn alma_roundtrip() {
@@ -401,7 +401,7 @@ fn rvi_compute_oscillating() {
     }
 }
 
-// ── Round 53 tests ────────────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn trima_roundtrip() {
@@ -1824,4 +1824,3 @@ fn stddev_compute_oscillating() {
         assert!(snap.stddev_long >= 0.0);
     }
 }
-

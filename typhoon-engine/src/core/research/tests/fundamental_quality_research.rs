@@ -1,4 +1,4 @@
-// ── Round 10 tests ──────────────────────────────────────────
+// ── Research section ──
 
 fn open_mem_conn_v10() -> Connection {
     let c = Connection::open_in_memory().unwrap();
@@ -1541,7 +1541,7 @@ fn compute_credit_no_inputs() {
     assert_eq!(snap.inputs_available, 0);
 }
 
-// ── Round 14 tests ─────────────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn growm_snapshot_roundtrip() {
@@ -1829,4 +1829,3 @@ fn compute_margins_insufficient() {
     let snap = compute_margins_snapshot("EEE", "2026-04-14", &statements);
     assert_eq!(snap.overall_trend_label, "INSUFFICIENT_DATA");
 }
-

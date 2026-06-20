@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 20 compute fns ──────────────────────────────────────────
+// ── compute fns ──
 
 /// DVDYIELDRANK compute: sector percentile rank of the subject's dividend
 /// yield. Non-payers (None or 0.0) are filtered so the cohort is
@@ -470,7 +470,7 @@ pub fn compute_priceperf_snapshot(
     }
 }
 
-// ── Round 21 compute fns ──
+// ── compute fns ──
 
 /// BETARANK compute: sector percentile rank of Fundamentals.beta,
 /// risk-inverted so a *lower* beta earns a *higher* (safer) rank.

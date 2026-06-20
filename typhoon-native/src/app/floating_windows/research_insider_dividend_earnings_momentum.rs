@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // MNGR — Insider Activity Bias (Round 12)
+        // MNGR — Insider Activity Bias
         if self.show_mngr {
             if self.mngr_symbol.is_empty() {
                 self.mngr_symbol = chart_sym_research.clone();
@@ -188,7 +188,7 @@ impl TyphooNApp {
             self.show_mngr = open;
         }
 
-        // DIVG — Dividend Growth Analysis (Round 12)
+        // DIVG — Dividend Growth Analysis
         if self.show_divg {
             if self.divg_symbol.is_empty() {
                 self.divg_symbol = chart_sym_research.clone();
@@ -393,7 +393,7 @@ impl TyphooNApp {
             self.show_divg = open;
         }
 
-        // EARM — Earnings Momentum Trend (Round 12)
+        // EARM — Earnings Momentum Trend
         if self.show_earm {
             if self.earm_symbol.is_empty() {
                 self.earm_symbol = chart_sym_research.clone();
@@ -642,7 +642,7 @@ impl TyphooNApp {
             self.show_earm = open;
         }
 
-        // SECTR — Sector Rotation Strength (Round 12)
+        // SECTR — Sector Rotation Strength
         if self.show_sectr {
             if self.sectr_symbol.is_empty() {
                 self.sectr_symbol = chart_sym_research.clone();
@@ -737,7 +737,7 @@ impl TyphooNApp {
             self.show_sectr = open;
         }
 
-        // UPDM — Upgrade/Downgrade Momentum (Round 12)
+        // UPDM — Upgrade/Downgrade Momentum
         if self.show_updm {
             if self.updm_symbol.is_empty() {
                 self.updm_symbol = chart_sym_research.clone();

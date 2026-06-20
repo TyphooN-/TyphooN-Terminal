@@ -22,7 +22,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 55: SMMA / ALLIGATOR / CRSI / SEB / IMI ──
+        // ── Research SMMA / ALLIGATOR / CRSI / SEB / IMI ──
         self.render_smma_alligator_crsi_windows(ctx, &chart_sym_research);
 
         self.render_bands_intraday_guppy_windows(ctx, &chart_sym_research);

@@ -7,7 +7,7 @@ impl TyphooNApp {
             if let Some(conn) = cache.try_connection() {
                 use typhoon_engine::core::research as rx;
 
-                // ── Round 22 — HP return-distribution + behavior stats ──
+                // ── HP return-distribution + behavior stats ──
                 if let Ok(Some(rsk)) = rx::get_retskew(&conn, &sym_upper) {
                     if rsk.skew_label != "INSUFFICIENT_DATA" && !rsk.skew_label.is_empty() {
                         let _ = writeln!(
@@ -145,7 +145,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 23 HP-local research surfaces ──
+                // ── HP-local research surfaces ──
                 if let Ok(Some(ac)) = rx::get_autocor(&conn, &sym_upper) {
                     if ac.regime_label != "INSUFFICIENT_DATA" && !ac.regime_label.is_empty() {
                         let _ = writeln!(
@@ -280,7 +280,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 24 HP-local research surfaces ──
+                // ── HP-local research surfaces ──
                 if let Ok(Some(du)) = rx::get_drawup(&conn, &sym_upper) {
                     if du.rally_label != "INSUFFICIENT_DATA" && !du.rally_label.is_empty() {
                         let _ = writeln!(
@@ -413,7 +413,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 25 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(dv)) = rx::get_downvol(&conn, &sym_upper) {
                     if dv.sortino_label != "INSUFFICIENT_DATA" && !dv.sortino_label.is_empty() {
                         let _ = writeln!(
@@ -545,7 +545,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 26 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(cm)) = rx::get_calmar(&conn, &sym_upper) {
                     if cm.calmar_label != "INSUFFICIENT_DATA" && !cm.calmar_label.is_empty() {
                         let _ = writeln!(
@@ -659,7 +659,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 27 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(om)) = rx::get_omega(&conn, &sym_upper) {
                     if om.omega_label != "INSUFFICIENT_DATA" && !om.omega_label.is_empty() {
                         let omega_disp = if om.omega_ratio.is_finite() {
@@ -810,7 +810,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 28 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(pk)) = rx::get_parkinson(&conn, &sym_upper) {
                     if pk.vol_label != "INSUFFICIENT_DATA" && !pk.vol_label.is_empty() {
                         let _ = writeln!(
@@ -946,7 +946,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 29 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(st)) = rx::get_sterling(&conn, &sym_upper) {
                     if st.sterling_label != "INSUFFICIENT_DATA" && !st.sterling_label.is_empty() {
                         let _ = writeln!(
@@ -1075,7 +1075,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 30 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(ps)) = rx::get_psr(&conn, &sym_upper) {
                     if ps.psr_label != "INSUFFICIENT_DATA" && !ps.psr_label.is_empty() {
                         let _ = writeln!(
@@ -1207,7 +1207,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 31 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(ht)) = rx::get_hilltail(&conn, &sym_upper) {
                     if ht.tail_label != "INSUFFICIENT_DATA" && !ht.tail_label.is_empty() {
                         let _ = writeln!(

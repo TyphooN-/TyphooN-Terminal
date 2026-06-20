@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 9 schema: SEAG / COR / TRA / TECH / SKEW ───────────────
+// ── : SEAG / COR / TRA / TECH / SKEW ──
 
 pub fn create_research_tables_v9(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(

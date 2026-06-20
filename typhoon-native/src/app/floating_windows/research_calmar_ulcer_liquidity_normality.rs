@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 26 windows ──
+        // ── Research section ──
         if self.show_calmar {
             if self.calmar_symbol.is_empty() {
                 self.calmar_symbol = chart_sym_research.clone();

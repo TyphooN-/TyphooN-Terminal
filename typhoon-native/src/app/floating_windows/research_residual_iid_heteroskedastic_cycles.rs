@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 40 windows ──
+        // ── Research section ──
         if self.show_durbinwatson {
             if self.durbinwatson_symbol.is_empty() {
                 self.durbinwatson_symbol = chart_sym_research.clone();

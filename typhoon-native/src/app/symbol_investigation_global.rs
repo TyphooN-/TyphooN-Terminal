@@ -3,7 +3,7 @@ use super::*;
 impl TyphooNApp {
     pub(super) fn write_symbol_investigation_global_context(&self, p: &mut String) {
         use std::fmt::Write as _;
-        // ── Round 6 — global market context (not per-symbol) ─────────
+        // ── global market context (not per-symbol) ─────────
         // WEI / MOV / INDU give the model a snapshot of risk-on/off regime,
         // leadership/laggards, and sector rotation at packet-generation time.
         if let Some(ref cache) = self.cache {
@@ -87,7 +87,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 7 — WCR world currency rates (FX regime)
+                // WCR world currency rates (FX regime)
                 if let Ok(Some(rates)) = rx::get_currency_rates(&conn) {
                     if !rates.is_empty() {
                         let up = rates.iter().filter(|r| r.change_pct > 0.0).count();

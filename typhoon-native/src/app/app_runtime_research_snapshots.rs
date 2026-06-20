@@ -389,7 +389,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 16 ─────────────────────────────────────────
+            // ── Research section ──
             BrokerMsg::VrkSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.vrk_symbol.eq_ignore_ascii_case(&sym_u) {

@@ -7,7 +7,7 @@ impl TyphooNApp {
             if let Some(conn) = cache.try_connection() {
                 use typhoon_engine::core::research as rx;
 
-                // Round 10 — LEV debt leverage & coverage
+                // LEV debt leverage & coverage
                 if let Ok(Some(lv)) = rx::get_leverage(&conn, &sym_upper) {
                     if !lv.ratios.is_empty() {
                         let _ = writeln!(p, "### Leverage & Coverage (as of {})", lv.as_of);
@@ -41,7 +41,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 10 — ACRL earnings quality (NI vs FCF)
+                // ACRL earnings quality (NI vs FCF)
                 if let Ok(Some(ac)) = rx::get_accruals(&conn, &sym_upper) {
                     if !ac.periods.is_empty() {
                         let _ = writeln!(p, "### Earnings Quality / Accruals (as of {})", ac.as_of);
@@ -78,7 +78,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 10 — RVOL realized volatility cone
+                // RVOL realized volatility cone
                 if let Ok(Some(rv)) = rx::get_realized_vol(&conn, &sym_upper) {
                     if !rv.windows.is_empty() {
                         let _ = writeln!(p, "### Realized Volatility Cone (as of {})", rv.as_of);
@@ -111,7 +111,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 10 — FCFY FCF yield & dividend sustainability
+                // FCFY FCF yield & dividend sustainability
                 if let Ok(Some(fy)) = rx::get_fcf_yield(&conn, &sym_upper) {
                     if fy.ttm_free_cash_flow != 0.0 || !fy.periods.is_empty() {
                         let _ = writeln!(
@@ -155,7 +155,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 10 — SHRT short interest & days-to-cover
+                // SHRT short interest & days-to-cover
                 if let Ok(Some(si)) = rx::get_short_interest(&conn, &sym_upper) {
                     if si.shares_float > 0.0 || si.short_percent_of_float > 0.0 {
                         let _ =
@@ -187,7 +187,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 11 — ALTZ Altman Z-score
+                // ALTZ Altman Z-score
                 if let Ok(Some(az)) = rx::get_altman_z(&conn, &sym_upper) {
                     if !az.components.is_empty() {
                         let _ = writeln!(p, "### Altman Z-Score (as of {})", az.as_of);
@@ -219,7 +219,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 11 — PTFS Piotroski F-score
+                // PTFS Piotroski F-score
                 if let Ok(Some(pf)) = rx::get_piotroski(&conn, &sym_upper) {
                     if !pf.checks.is_empty() {
                         let _ = writeln!(p, "### Piotroski F-Score (as of {})", pf.as_of);
@@ -250,7 +250,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 11 — VOLE OHLC volatility estimators
+                // VOLE OHLC volatility estimators
                 if let Ok(Some(ov)) = rx::get_ohlc_vol(&conn, &sym_upper) {
                     if !ov.estimators.is_empty() {
                         let _ = writeln!(p, "### OHLC Volatility Estimators (as of {})", ov.as_of);
@@ -275,7 +275,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 11 — EPSB EPS beat streak & surprise
+                // EPSB EPS beat streak & surprise
                 if let Ok(Some(eb)) = rx::get_eps_beat(&conn, &sym_upper) {
                     if eb.total_reports > 0 {
                         let _ = writeln!(p, "### EPS Beat Streak & Surprise (as of {})", eb.as_of);
@@ -313,7 +313,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 11 — PTD price target dispersion & implied return
+                // PTD price target dispersion & implied return
                 if let Ok(Some(pd)) = rx::get_price_target_dispersion(&conn, &sym_upper) {
                     if pd.num_analysts > 0 {
                         let _ = writeln!(p, "### Price Target Dispersion (as of {})", pd.as_of);

@@ -1,4 +1,4 @@
-// ── Round 30 tests: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──
+// ── : PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──
 
 #[test]
 fn psr_snapshot_roundtrip() {
@@ -206,7 +206,7 @@ fn dddur_compute_monotone_dry() {
     assert_eq!(snap.dddur_label, "MOSTLY_DRY");
 }
 
-// ── Round 31 tests ──
+// ── Research section ──
 
 #[test]
 fn hilltail_snapshot_roundtrip() {
@@ -411,7 +411,7 @@ fn cfvar_compute_oscillating() {
     assert!(snap.gauss_var_5pct_pct <= snap.mean_ret_pct);
 }
 
-// ── Round 32 tests ────────────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn entropy_snapshot_roundtrip() {
@@ -610,7 +610,7 @@ fn apen_compute_oscillating() {
     assert_eq!(snap.apen_label, "REGULAR");
 }
 
-// ── Round 33 tests ────────────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn upr_snapshot_roundtrip() {
@@ -796,7 +796,7 @@ fn gini_compute_oscillating() {
     assert_eq!(snap.gini_label, "LOW_CONCENTRATION");
 }
 
-// ── Round 34 tests ──
+// ── Research section ──
 
 #[test]
 fn sampen_snapshot_roundtrip() {
@@ -961,7 +961,7 @@ fn specent_compute_oscillating() {
     assert!(snap.specent_label == "PERIODIC" || snap.specent_label == "MODERATE_PERIODICITY");
 }
 
-// ── Round 35 tests ──
+// ── Research section ──
 
 #[test]
 fn robvol_snapshot_roundtrip() {
@@ -1132,7 +1132,7 @@ fn ewmavol_compute_oscillating() {
     assert!((snap.lambda - 0.94).abs() < 1e-9);
 }
 
-// ── Round 36 tests ────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn ksnorm_roundtrip() {
@@ -1465,7 +1465,7 @@ fn rankac_compute_oscillating() {
     assert!(snap.max_abs_rho >= snap.mean_abs_rho);
 }
 
-// ── Round 38 ─────────────────────────────────────────────────
+// ── Research section ──
 
 #[test]
 fn bnsjump_roundtrip() {
@@ -1845,7 +1845,7 @@ fn automi_compute_oscillating() {
     }
 }
 
-// ── Round 40 tests ──
+// ── Research section ──
 
 #[test]
 fn durbinwatson_roundtrip() {
@@ -2033,4 +2033,3 @@ fn periodogram_compute_oscillating() {
         assert!(snap.dominant_power_ratio >= 0.0 && snap.dominant_power_ratio <= 1.0);
     }
 }
-

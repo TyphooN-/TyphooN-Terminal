@@ -893,7 +893,7 @@ pub fn get_pvt(conn: &Connection, symbol: &str) -> Result<Option<PvtSnapshot>, S
     }
 }
 
-/// Round 54 schema: AC / CHVOL / BBWIDTH / ELDERIMP / RMI
+/// schema: AC / CHVOL / BBWIDTH / ELDERIMP / RMI
 pub fn create_research_tables_v55(conn: &Connection) -> Result<(), String> {
     create_research_tables_v54(conn)?;
     conn.execute_batch(

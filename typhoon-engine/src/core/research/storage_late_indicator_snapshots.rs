@@ -380,7 +380,7 @@ pub fn get_stochf(conn: &Connection, symbol: &str) -> Result<Option<StochfSnapsh
     }
 }
 
-// ── Round 64 v66 schema + helpers ──────────────────────────────────
+// ── v66 schema + helpers ──
 
 pub fn create_research_tables_v66(conn: &Connection) -> Result<(), String> {
     create_research_tables_v65(conn)?;
@@ -597,7 +597,7 @@ pub fn get_ht_phasor(conn: &Connection, symbol: &str) -> Result<Option<HtPhasorS
     }
 }
 
-// ── Round 65 schema (v67) ──────────────────────────────────────────
+// ── Research section ──
 pub fn create_research_tables_v67(conn: &Connection) -> Result<(), String> {
     create_research_tables_v66(conn)?;
     conn.execute_batch(
@@ -781,7 +781,7 @@ pub fn get_adxr(conn: &Connection, symbol: &str) -> Result<Option<AdxrSnapshot>,
         let j: String = r.get(0).map_err(|e| format!("get adxr: {e}"))?;
         let snap: AdxrSnapshot = serde_json::from_str(&j).map_err(|e| {
             format!(
-                "// ── Round 66-71 storage helpers moved to price_momentum_indicator_storage.rs ──
+                "// ── 71 storage helpers moved to price_momentum_indicator_storage.rs ──
 
 parse mavp: {e}"
             )

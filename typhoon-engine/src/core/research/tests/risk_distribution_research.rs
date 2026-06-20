@@ -1,4 +1,4 @@
-// ── Round 22 tests ──
+// ── Research section ──
 
 #[test]
 fn retskew_snapshot_roundtrip() {
@@ -494,7 +494,7 @@ fn web_article_backward_compatible_json_without_body() {
     assert_eq!(snap.articles[0].title, "Old article");
 }
 
-// ── Round 23 tests ──
+// ── Research section ──
 
 fn synthetic_up_trend_bars() -> Vec<HistoricalPriceRow> {
     // 60 bars, each slightly higher than the previous (deterministic
@@ -734,7 +734,7 @@ fn volratio_compute_with_volume() {
     assert!(snap.up_days > 0 && snap.down_days > 0);
 }
 
-// ── Round 24 tests ──
+// ── Research section ──
 
 fn synthetic_gappy_bars() -> Vec<HistoricalPriceRow> {
     // 40 bars with intentional overnight gaps (open ≠ prior close).
@@ -937,7 +937,7 @@ fn mrhl_compute_with_bars() {
     assert!(snap.beta.is_finite());
 }
 
-// ── Round 25 tests ──
+// ── Research section ──
 
 #[test]
 fn downvol_snapshot_roundtrip() {
@@ -1128,7 +1128,7 @@ fn volofvol_compute_insufficient() {
     assert_eq!(snap.cv_label, "INSUFFICIENT_DATA");
 }
 
-// ── Round 26 tests ──
+// ── Research section ──
 
 #[test]
 fn calmar_roundtrip() {
@@ -1317,7 +1317,7 @@ fn jbnorm_pvalue_chi2() {
     );
 }
 
-// ── Round 27 tests ──
+// ── Research section ──
 
 #[test]
 fn omega_roundtrip() {
@@ -1589,11 +1589,11 @@ fn rollsprd_compute_bouncing_valid() {
     assert!(snap.implicit_spread_bps > 0.0);
 }
 
-// ── Round 28 tests ──
+// ── Research section ──
 
 fn synthetic_ohlc_bars_150() -> Vec<HistoricalPriceRow> {
     // 150 dated bars with non-trivial intraday ranges and a mild
-    // drift — enough for all Round 28 vol estimators (>=30) and
+    // drift — enough for all vol estimators (>=30) and
     // CVAR (>=100).
     (0..150)
         .map(|i| {
@@ -1857,7 +1857,7 @@ fn doweffect_compute_dated_series() {
     assert!(snap.dow_sample_count.iter().all(|c| *c >= 10));
 }
 
-// ── Round 29 tests ──
+// ── Research section ──
 
 fn synthetic_oscillating_bars_150() -> Vec<HistoricalPriceRow> {
     // 150 bars alternating up/down ~0.5% so we have both positive and
@@ -2114,4 +2114,3 @@ fn zeroret_compute_liquid_series() {
     assert_eq!(snap.zero_label, "HIGHLY_LIQUID");
     assert!((snap.epsilon - 1e-6).abs() < 1e-15);
 }
-

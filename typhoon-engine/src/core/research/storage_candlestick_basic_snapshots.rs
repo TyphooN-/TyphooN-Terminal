@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 72 CDL* SQLite schema + helpers ──────────────────────────
+// ── CDL* SQLite schema + helpers ──
 
 pub fn create_research_tables_v74(conn: &Connection) -> Result<(), String> {
     create_research_tables_v73(conn)?;
@@ -225,7 +225,7 @@ pub fn get_cdl_harami(
     }
 }
 
-// ── Round 73 CDL* 3-bar/2-bar SQLite schema + helpers ─────────────
+// ── CDL* 3-bar/2-bar SQLite schema + helpers ──
 
 pub fn create_research_tables_v75(conn: &Connection) -> Result<(), String> {
     create_research_tables_v74(conn)?;
@@ -454,7 +454,7 @@ pub fn get_cdl_dark_cloud_cover(
     }
 }
 
-// ── Round 74 schema v76 + upsert/get fns — CDLPIERCING /
+// ── v76 + upsert/get fns — CDLPIERCING / ──
 //    CDLDRAGONFLYDOJI / CDLGRAVESTONEDOJI / CDLHANGINGMAN /
 //    CDLINVERTEDHAMMER ──
 
@@ -688,7 +688,7 @@ pub fn get_cdl_inverted_hammer(
     }
 }
 
-// ── Round 75 schema v77 + upsert/get fns — CDLHARAMICROSS /
+// ── v77 + upsert/get fns — CDLHARAMICROSS / ──
 //    CDLLONGLEGGEDDOJI / CDLMARUBOZU / CDLSPINNINGTOP / CDLTRISTAR ──
 
 pub fn create_research_tables_v77(conn: &Connection) -> Result<(), String> {

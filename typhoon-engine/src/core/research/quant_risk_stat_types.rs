@@ -98,7 +98,7 @@ pub struct JarqueBeraSnapshot {
     pub note: String,
 }
 
-// ── Round 27 — HP omega / DFA / Burke / monthly-seas / Roll-spread ──
+// ── HP omega / DFA / Burke / monthly-seas / Roll-spread ──
 
 /// OMEGA — Omega ratio at threshold 0.
 /// Pure symbol-local HP stat over the trailing 253-session window.
@@ -206,7 +206,7 @@ pub struct RollSpreadSnapshot {
     pub note: String,
 }
 
-// ── Round 28 — HP range-vol / Garman-Klass / Rogers-Satchell / CVaR / dow-effect ──
+// ── HP range-vol / Garman-Klass / Rogers-Satchell / CVaR / dow-effect ──
 
 /// PARKINSON — Parkinson (1980) high-low range-based volatility estimator.
 /// Pure symbol-local HP stat over the trailing 253-session window.
@@ -309,7 +309,7 @@ pub struct DayOfWeekEffectSnapshot {
     pub note: String,
 }
 
-// ── Round 29 — HP Sterling / Kelly / Ljung-Box / runs test / zero-return ──
+// ── HP Sterling / Kelly / Ljung-Box / runs test / zero-return ──
 
 /// STERLING — Sterling ratio: annualized return / average of N worst drawdowns.
 /// Pure symbol-local HP stat over the trailing 253-session window.
@@ -421,7 +421,7 @@ pub struct ZeroReturnSnapshot {
     pub note: String,
 }
 
-// ── Round 30: PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──────────────
+// ── PSR / ADF / MNKENDALL / BIPOWER / DDDUR ──────────────
 
 /// PSR — Probabilistic Sharpe Ratio (Lopez de Prado 2012).
 /// Pure symbol-local HP stat over the trailing 253-session window.
@@ -689,7 +689,7 @@ pub struct CornishFisherSnapshot {
     pub note: String,
 }
 
-// ── Round 32 structs ──────────────────────────────────────────────
+// ── structs ──
 
 /// ENTROPY — Shannon entropy of the return distribution.
 /// H = −Σ pᵢ log₂(pᵢ) over a histogram of daily log-returns
@@ -786,7 +786,7 @@ pub struct ApenSnapshot {
     pub note: String,
 }
 
-// ── Round 33 structs ──────────────────────────────────────────────
+// ── structs ──
 
 /// UPR — Upside Potential Ratio (Sortino & van der Meer 1991).
 /// UPR = E[max(r−MAR,0)] / √E[min(r−MAR,0)²] where MAR=0.
@@ -867,7 +867,7 @@ pub struct GiniSnapshot {
     pub note: String,
 }
 
-// ── Round 34 structs ──
+// ── structs ──
 
 /// SAMPEN — Sample Entropy (Richman & Moorman 2000).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]

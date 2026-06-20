@@ -95,7 +95,7 @@ pub struct RviSnapshot {
     pub note: String,
 }
 
-// ── Round 53: TRIMA / T3 / VIDYA / SMI / PVT ───────────────────────
+// ── TRIMA / T3 / VIDYA / SMI / PVT ───────────────────────
 
 /// TRIMA — Triangular Moving Average. SMA-of-SMA with a (N+1)/2 sub-window
 /// produces a triangular-weighted central MA. Distinct from SMA (flat),
@@ -200,7 +200,7 @@ pub struct PvtSnapshot {
     pub note: String,
 }
 
-// ── Round 54: AC / CHVOL / BBWIDTH / ELDERIMP / RMI ───────────────
+// ── AC / CHVOL / BBWIDTH / ELDERIMP / RMI ───────────────
 
 /// Bill Williams's Accelerator Oscillator — a second-derivative momentum
 /// indicator built as `AC = AO − SMA₅(AO)` where
@@ -911,7 +911,7 @@ pub struct StddevSnapshot {
     pub note: String,
 }
 
-// ── Round 60 — WMA / RAINBOW / MESA_SINE / FRAMA / IBS ─────────────
+// ── WMA / RAINBOW / MESA_SINE / FRAMA / IBS ─────────────
 
 /// Weighted Moving Average (WMA) — a linearly-weighted moving
 /// average where weights increase from 1 (oldest) to N (newest):
@@ -1047,7 +1047,7 @@ pub struct IbsSnapshot {
     pub note: String,
 }
 
-// ── Round 61 — LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT ──
+// ── LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT ──
 
 /// Ehlers Laguerre RSI — a bounded [0, 1] oscillator built from
 /// Ehlers's 4-stage Laguerre filter (γ=0.5). The 4-stage filter

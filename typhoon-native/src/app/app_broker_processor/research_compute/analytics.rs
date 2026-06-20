@@ -6,7 +6,7 @@ pub(super) fn handle_analytics_compute(
     shared_cache_broker: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
 ) {
     match cmd {
-        // ── Round 9 handlers ──
+        // ── handlers ──
         BrokerCmd::ComputeSeasonalitySnapshot { symbol } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();

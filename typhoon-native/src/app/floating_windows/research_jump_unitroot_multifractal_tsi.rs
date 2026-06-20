@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 38 windows ──
+        // ── Research section ──
         if self.show_bnsjump {
             if self.bnsjump_symbol.is_empty() {
                 self.bnsjump_symbol = chart_sym_research.clone();

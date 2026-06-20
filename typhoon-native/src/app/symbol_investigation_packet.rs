@@ -966,7 +966,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── Round 76 packet blocks ──
+                    // ── Research section ──
                     if let Ok(Some(cds)) = rx::get_cdl_doji_star(&conn, &sym_upper) {
                         if cds.cdl_doji_star_label != "INSUFFICIENT_DATA"
                             && !cds.cdl_doji_star_label.is_empty()
@@ -1113,7 +1113,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── Round 77 packet blocks ──
+                    // ── Research section ──
                     if let Ok(Some(cbh)) = rx::get_cdl_belt_hold(&conn, &sym_upper) {
                         if cbh.cdl_belt_hold_label != "INSUFFICIENT_DATA"
                             && !cbh.cdl_belt_hold_label.is_empty()
@@ -1259,7 +1259,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── Round 78 packet blocks ──
+                    // ── Research section ──
                     if let Ok(Some(cca)) = rx::get_cdl_counterattack(&conn, &sym_upper) {
                         if cca.cdl_counterattack_label != "INSUFFICIENT_DATA"
                             && !cca.cdl_counterattack_label.is_empty()
@@ -2197,7 +2197,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    // ── Round 76 packet blocks ──
+                    // ── Research section ──
                     if let Ok(Some(ms)) = rx::get_modsharpe(&conn, &sym_upper) {
                         if ms.modsharpe_label != "INSUFFICIENT_DATA"
                             && !ms.modsharpe_label.is_empty()

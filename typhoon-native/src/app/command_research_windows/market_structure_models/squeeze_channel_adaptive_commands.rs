@@ -1,13 +1,16 @@
 use super::super::*;
 
 impl TyphooNApp {
-    pub(super) fn handle_volatility_bubble_nonlinearity_round_39_command(
+    pub(super) fn handle_squeeze_channel_adaptive_commands_command(
         &mut self,
         cmd_upper: &String,
     ) -> bool {
         match cmd_upper.as_str() {
-            // ── Round 39 palette aliases ──
-            "GARCH11" | "GARCH" | "GARCH_11" | "BOLLERSLEV" | "CONDVOL" | "CONDITIONAL_VOL" => {
+            // ── Squeeze, channel, and adaptive-average palette aliases ──
+            // NOTE: bare "SQUEEZE"/"DONCHIAN"/"KAMA"/"KAUFMAN" are already
+            // bound to chart-overlay toggles — these research windows use
+            // disambiguated aliases only.
+            "SHORTSQUEEZE" | "SHORT_SQUEEZE" | "SQZCOMP" | "SQUEEZESCORE" | "SQZSCORE" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -22,25 +25,26 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.garch11_symbol = sym;
+                    self.squeeze_win_symbol = sym;
                 }
-                self.show_garch11 = true;
-                if self.garch11_snapshot.symbol.is_empty() && !self.garch11_symbol.is_empty() {
+                self.show_squeeze_win = true;
+                if self.squeeze_win_snapshot.symbol.is_empty()
+                    && !self.squeeze_win_symbol.is_empty()
+                {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_garch11(
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_squeeze(
                                 &conn,
-                                &self.garch11_symbol,
+                                &self.squeeze_win_symbol,
                             ) {
-                                self.garch11_snapshot = snap;
+                                self.squeeze_win_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "SADF" | "SUP_ADF" | "SUPADF" | "BUBBLETEST" | "BUBBLE_TEST" | "PWY"
-            | "PHILLIPS_WU_YU" => {
+            "SQUEEZERANK" | "SQZRANK" | "SQUEEZE_RANK" | "SQRANK" | "SHORTSQUEEZERANK" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -55,23 +59,34 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.sadf_symbol = sym;
+                    self.squeezerank_symbol = sym;
                 }
-                self.show_sadf = true;
-                if self.sadf_snapshot.symbol.is_empty() && !self.sadf_symbol.is_empty() {
+                self.show_squeezerank = true;
+                if self.squeezerank_snapshot.symbol.is_empty()
+                    && !self.squeezerank_symbol.is_empty()
+                {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) =
-                                typhoon_engine::core::research::get_sadf(&conn, &self.sadf_symbol)
-                            {
-                                self.sadf_snapshot = snap;
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_squeezerank(
+                                &conn,
+                                &self.squeezerank_symbol,
+                            ) {
+                                self.squeezerank_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "CORDIM" | "CORR_DIM" | "CORRDIM" | "D2" | "GRASSBERGER" | "GRASSBERGER_PROCACCIA" => {
+            "SQUEEZEWATCHLIST"
+            | "SQZWATCH"
+            | "SHORT_SQUEEZE_WATCH"
+            | "SQUEEZE_WATCH"
+            | "SQUEEZELIST" => {
+                self.show_squeeze_watchlist = true;
+                true
+            }
+            "BBSQUEEZE" | "BB_SQUEEZE" | "BOLLINGERSQUEEZE" | "BBANDS_SQUEEZE" | "BBWIDTH" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -86,25 +101,24 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.cordim_symbol = sym;
+                    self.bbsqueeze_symbol = sym;
                 }
-                self.show_cordim = true;
-                if self.cordim_snapshot.symbol.is_empty() && !self.cordim_symbol.is_empty() {
+                self.show_bbsqueeze = true;
+                if self.bbsqueeze_snapshot.symbol.is_empty() && !self.bbsqueeze_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_cordim(
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_bbsqueeze(
                                 &conn,
-                                &self.cordim_symbol,
+                                &self.bbsqueeze_symbol,
                             ) {
-                                self.cordim_snapshot = snap;
+                                self.bbsqueeze_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "SKSPEC" | "SKEW_SPEC" | "ROLLING_SKEW" | "SKEWSPECTRUM" | "SKEWSTAB"
-            | "SKEWSTABILITY" => {
+            "DONCHIANBREAK" | "DONCHIANCHANNEL" | "DONCHIAN_CHANNEL" | "DONBREAK" | "DCCHAN" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -119,25 +133,26 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.skspec_symbol = sym;
+                    self.donchian_win_symbol = sym;
                 }
-                self.show_skspec = true;
-                if self.skspec_snapshot.symbol.is_empty() && !self.skspec_symbol.is_empty() {
+                self.show_donchian_win = true;
+                if self.donchian_win_snapshot.symbol.is_empty()
+                    && !self.donchian_win_symbol.is_empty()
+                {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_skspec(
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_donchian(
                                 &conn,
-                                &self.skspec_symbol,
+                                &self.donchian_win_symbol,
                             ) {
-                                self.skspec_snapshot = snap;
+                                self.donchian_win_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "AUTOMI" | "AUTO_MI" | "MUTUALINFO" | "MUTUAL_INFORMATION" | "MI_ACF"
-            | "INFOTHEOACF" => {
+            "KAMAFIT" | "KAMA_ER" | "KAMA_ADAPTIVE" | "ADAPTIVEMA" | "KAUFMAN_AMA" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -152,17 +167,17 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.automi_symbol = sym;
+                    self.kama_win_symbol = sym;
                 }
-                self.show_automi = true;
-                if self.automi_snapshot.symbol.is_empty() && !self.automi_symbol.is_empty() {
+                self.show_kama_win = true;
+                if self.kama_win_snapshot.symbol.is_empty() && !self.kama_win_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_automi(
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_kama(
                                 &conn,
-                                &self.automi_symbol,
+                                &self.kama_win_symbol,
                             ) {
-                                self.automi_snapshot = snap;
+                                self.kama_win_snapshot = snap;
                             }
                         }
                     }

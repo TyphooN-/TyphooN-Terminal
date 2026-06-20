@@ -597,7 +597,7 @@ pub(super) fn handle_research_fetch_command(
                 }
             });
         }
-        // ── Round 6 handlers ──
+        // ── handlers ──
         BrokerCmd::FetchWorldIndices => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();
@@ -747,7 +747,7 @@ pub(super) fn handle_research_fetch_command(
                 let _ = msg_tx.send(BrokerMsg::WaccSnapshotMsg(symbol, snap));
             });
         }
-        // ── Round 7 handlers ──
+        // ── handlers ──
         BrokerCmd::FetchCurrencyRates => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();

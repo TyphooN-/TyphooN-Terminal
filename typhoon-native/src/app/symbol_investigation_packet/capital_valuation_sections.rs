@@ -8,7 +8,7 @@ impl TyphooNApp {
                 use typhoon_engine::core::research as rx;
                 let fmt_money = typhoon_engine::core::fundamentals::format_large_number;
 
-                // Round 6 — WACC snapshot (CAPM-derived cost of capital)
+                // WACC snapshot (CAPM-derived cost of capital)
                 if let Ok(Some(w)) = rx::get_wacc(&conn, &sym_upper) {
                     if w.wacc_pct > 0.0 {
                         let _ = writeln!(p, "### WACC Snapshot (CAPM, as of {})", w.as_of);
@@ -34,7 +34,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 7 — BETA rolling history (1Y / 3Y / 5Y vs SPY)
+                // BETA rolling history (1Y / 3Y / 5Y vs SPY)
                 if let Ok(Some(b)) = rx::get_beta(&conn, &sym_upper) {
                     if !b.windows.is_empty() {
                         let _ = writeln!(
@@ -63,7 +63,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 7 — DDM Gordon Growth fair value
+                // DDM Gordon Growth fair value
                 if let Ok(Some(d)) = rx::get_ddm(&conn, &sym_upper) {
                     if d.annual_dividend > 0.0 || d.implied_price > 0.0 {
                         let _ = writeln!(p, "### Gordon Growth DDM (as of {})", d.as_of);
@@ -89,7 +89,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 7 — RV relative-valuation matrix (peer Z-scores)
+                // RV relative-valuation matrix (peer Z-scores)
                 if let Ok(Some(rv)) = rx::get_relative_valuation(&conn, &sym_upper) {
                     if !rv.rows.is_empty() {
                         let _ = writeln!(
@@ -110,7 +110,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 7 — FIGI instrument identifiers
+                // FIGI instrument identifiers
                 if let Ok(Some(f)) = rx::get_figi(&conn, &sym_upper) {
                     if !f.identifiers.is_empty() {
                         let _ = writeln!(
@@ -149,7 +149,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 8 — HRA historical return / risk snapshot
+                // HRA historical return / risk snapshot
                 if let Ok(Some(h)) = rx::get_hra(&conn, &sym_upper) {
                     if !h.windows.is_empty() {
                         let _ = writeln!(p, "### Historical Return / Risk (as of {})", h.as_of);
@@ -188,7 +188,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 8 — DCF fair value (FCFF model)
+                // DCF fair value (FCFF model)
                 if let Ok(Some(d)) = rx::get_dcf(&conn, &sym_upper) {
                     if d.implied_price > 0.0 || !d.note.is_empty() {
                         let _ = writeln!(p, "### DCF (FCFF) Fair Value (as of {})", d.as_of);
@@ -249,7 +249,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 8 — SVM multi-model fair value triangulation
+                // SVM multi-model fair value triangulation
                 if let Ok(Some(s)) = rx::get_svm(&conn, &sym_upper) {
                     if !s.rows.is_empty() {
                         let _ = writeln!(p, "### Stock Valuation Model (as of {})", s.as_of);
@@ -274,7 +274,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 8 — OMON options chain summary (nearest expiry)
+                // OMON options chain summary (nearest expiry)
                 if let Ok(Some(o)) = rx::get_options_chain(&conn, &sym_upper) {
                     if !o.expirations.is_empty() {
                         let _ = writeln!(p, "### Options Chain (OMON, as of {})", o.as_of);
@@ -407,7 +407,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // Round 8 — IVOL implied-vol rank / percentile
+                // IVOL implied-vol rank / percentile
                 if let Ok(Some(iv)) = rx::get_ivol(&conn, &sym_upper) {
                     if iv.current_atm_iv_pct > 0.0 || iv.observation_count > 0 {
                         let _ = writeln!(p, "### Implied Vol Rank (as of {})", iv.as_of);

@@ -51,7 +51,7 @@ pub fn compute_wacc_snapshot(
     }
 }
 
-// ── Round 7 — WCR fetcher ─────────────────────────────────────────
+// ── WCR fetcher ─────────────────────────────────────────
 
 /// Fetch the hardcoded FX-majors universe through Yahoo and return the rows
 /// in the order declared by `FX_MAJORS_UNIVERSE`.
@@ -85,7 +85,7 @@ pub async fn fetch_currency_rates(client: &reqwest::Client) -> Result<Vec<Curren
     Ok(out)
 }
 
-// ── Round 7 — BETA compute ────────────────────────────────────────
+// ── BETA compute ────────────────────────────────────────
 
 /// Compute an OLS regression of symbol log-returns on market log-returns.
 /// Returns (beta, alpha_per_period, r_squared, correlation, n).
@@ -327,7 +327,7 @@ pub(crate) fn rolling_corr_stats(
     (corr, beta, r_squared, used)
 }
 
-// ── Round 7 — DDM compute ─────────────────────────────────────────
+// ── DDM compute ─────────────────────────────────────────
 
 /// Compute a Gordon Growth dividend-discount-model snapshot from cached
 /// dividend history and a required return (typically WACC or cost of equity).
@@ -445,7 +445,7 @@ pub fn compute_ddm_snapshot(
     }
 }
 
-// ── Round 7 — RV compute (relative valuation peer matrix) ─────────
+// ── RV compute (relative valuation peer matrix) ─────────
 
 /// One input row for the relative-valuation calculator: a metric name plus
 /// the subject's value and a list of peer values. Caller builds this from
@@ -520,7 +520,7 @@ pub fn compute_relative_valuation(
     }
 }
 
-// ── Round 7 — FIGI (OpenFIGI) fetcher ─────────────────────────────
+// ── FIGI (OpenFIGI) fetcher ─────────────────────────────
 
 /// Fetch OpenFIGI identifiers for a symbol. OpenFIGI is a free service run by
 /// Bloomberg — no API key required for reasonable volumes. We POST the
@@ -576,7 +576,7 @@ pub async fn fetch_openfigi_identifiers(
     Ok(out)
 }
 
-// ── Round 8 — HRA compute (historical return + risk) ──────────────
+// ── HRA compute (historical return + risk) ──────────────
 
 /// Compute an `HraSnapshot` from a chronologically-ordered slice of bars
 /// (oldest → newest). Returns periods are simple-return (close₀→closeₙ),
@@ -774,7 +774,7 @@ pub fn compute_hra_snapshot(
     }
 }
 
-// ── Round 8 — DCF compute (Discounted Cash Flow, FCFF basis) ─────
+// ── DCF compute (Discounted Cash Flow, FCFF basis) ─────
 
 /// Compute a multi-year DCF fair-value snapshot on a free cash flow to firm
 /// (FCFF) basis. All inputs are already-cached values — this is pure compute.
@@ -907,7 +907,7 @@ pub fn compute_dcf_snapshot(
     }
 }
 
-// ── Round 8 — SVM compute (Stock Valuation Model triangulation) ──
+// ── SVM compute (Stock Valuation Model triangulation) ──
 
 /// Build a multi-model fair-value triangulation from the caller's cached
 /// WACC / DDM / DCF / RV snapshots plus any peer-median multiples the
@@ -1049,7 +1049,7 @@ pub fn compute_svm_snapshot(
     }
 }
 
-// ── Round 8 — OMON fetch (Yahoo options chain) ───────────────────
+// ── OMON fetch (Yahoo options chain) ───────────────────
 
 fn parse_yahoo_option_contract(
     c: &serde_json::Value,

@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 6 windows ──────────────────────────────────
+        // ── Research section ──
 
         // WEI — Global Equity Indices
         if self.show_wei {

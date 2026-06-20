@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 76 schema v78 (Quant Stats) ─────────────────────────────
+// ── v78 (Quant Stats) ──
 
 pub fn create_research_tables_v78(conn: &Connection) -> Result<(), String> {
     create_research_tables_v77(conn)?;
@@ -211,7 +211,7 @@ pub fn get_hlvclust(conn: &Connection, symbol: &str) -> Result<Option<HlvClustSn
     }
 }
 
-// ── Round 77 schema v79 (Quant Stats) ─────────────────────────────
+// ── v79 (Quant Stats) ──
 
 pub fn create_research_tables_v79(conn: &Connection) -> Result<(), String> {
     create_research_tables_v78(conn)?;

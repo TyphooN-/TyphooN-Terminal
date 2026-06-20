@@ -1,6 +1,6 @@
 use super::*;
 
-/// Round 37 schema v38: adds `research_higuchi`, `research_pickands`,
+/// adds `research_higuchi`, `research_pickands`,
 /// `research_kappa3`, `research_lyapunov`, `research_rankac`. Additive over v37.
 pub fn create_research_tables_v38(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v37(conn);
@@ -191,7 +191,7 @@ pub fn get_rankac(conn: &Connection, symbol: &str) -> Result<Option<RankacSnapsh
     }
 }
 
-/// Round 38 schema v39: adds `research_bnsjump`, `research_pproot`,
+/// adds `research_bnsjump`, `research_pproot`,
 /// `research_mfdfa`, `research_hillks`, `research_tsi`. Additive over v38.
 pub fn create_research_tables_v39(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v38(conn);
@@ -374,7 +374,7 @@ pub fn get_tsi(conn: &Connection, symbol: &str) -> Result<Option<TsiSnapshot>, S
     }
 }
 
-/// Round 39 schema v40: adds `research_garch11`, `research_sadf`,
+/// adds `research_garch11`, `research_sadf`,
 /// `research_cordim`, `research_skspec`, `research_automi`. Additive over v39.
 pub fn create_research_tables_v40(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v39(conn);

@@ -3,7 +3,7 @@ use super::*;
 impl TyphooNApp {
     pub(super) fn handle_valuation_risk_model_command(&mut self, cmd_upper: &String) -> bool {
         match cmd_upper.as_str() {
-            // ── Round 17 ──
+            // ── Research section ──
             "SIZEF" | "SIZE_FACTOR" | "SIZE_RANK" => {
                 let sym = self
                     .charts
@@ -156,7 +156,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 18 ──
+            // ── Research section ──
             "LEVRANK" | "LEV_RANK" | "LEVERAGE_RANK" => {
                 let sym = self
                     .charts
@@ -1099,7 +1099,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 22 palette entries ──
+            // ── palette entries ──
             "RETSKEW" | "RET_SKEW" | "SKEWNESS" => {
                 let sym = self
                     .charts
@@ -1254,7 +1254,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 23 ──
+            // ── Research section ──
             "AUTOCOR" | "AUTO_COR" | "ACF" => {
                 let sym = self
                     .charts
@@ -1409,7 +1409,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 24 palette ──
+            // ── palette ──
             "DRAWUP" | "DRAW_UP" | "RALLYHIST" | "RALLY_HISTORY" => {
                 let sym = self
                     .charts
@@ -1565,7 +1565,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 25 palette ──
+            // ── palette ──
             "DOWNVOL" | "DOWN_VOL" | "SEMIDEV" | "SORTINO" => {
                 let sym = self
                     .charts
@@ -1721,7 +1721,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 26 palette ──
+            // ── palette ──
             "CALMAR" | "CALMAR_RATIO" | "CALMARRATIO" => {
                 let sym = self
                     .charts
@@ -1876,7 +1876,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 27 palette ──
+            // ── palette ──
             "OMEGA" | "OMEGA_RATIO" | "OMEGARATIO" => {
                 let sym = self
                     .charts
@@ -2029,7 +2029,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 28 palette ──
+            // ── palette ──
             "PARKINSON" | "PARKINSON_VOL" | "PARKVOL" | "HL_VOL" | "RANGE_VOL" => {
                 let sym = self
                     .charts
@@ -2183,7 +2183,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 29 palette ──
+            // ── palette ──
             "STERLING" | "STERLING_RATIO" | "STERLINGRATIO" => {
                 let sym = self
                     .charts
@@ -2339,7 +2339,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 30 palette ──
+            // ── palette ──
             "PSR"
             | "PROB_SHARPE"
             | "PROBSHARPE"
@@ -2499,7 +2499,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 31 palette ──
+            // ── palette ──
             "HILLTAIL" | "HILL" | "HILL_TAIL" | "TAIL_INDEX" | "TAILINDEX" | "HILLESTIMATOR"
             | "POWER_LAW_TAIL" => {
                 let sym = self
@@ -2657,7 +2657,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 32 palette ──
+            // ── palette ──
             "ENTROPY" | "SHANNON" | "SHANNON_ENTROPY" | "SHANNONENTROPY" | "RETURN_ENTROPY"
             | "RETURNENTROPY" => {
                 let sym = self
@@ -2827,7 +2827,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 33 palette ──
+            // ── palette ──
             "UPR" | "UPSIDE_POTENTIAL" | "UPSIDEPOTENTIAL" | "UPSIDE_RATIO" | "UPSIDERATIO" => {
                 let sym = self
                     .charts
@@ -2988,7 +2988,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 34 palette ──
+            // ── palette ──
             "SAMPEN" | "SAMPLE_ENTROPY" | "SAMPLEENTROPY" => {
                 let sym = self
                     .charts

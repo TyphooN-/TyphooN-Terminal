@@ -3,7 +3,7 @@ use super::*;
 impl TyphooNApp {
     pub(super) fn handle_research_macro_valuation_msg(&mut self, msg: BrokerMsg) {
         match msg {
-            // ── Round 6 receive arms ──
+            // ── Research section ──
             BrokerMsg::WorldIndicesMsg(rows) => {
                 self.wei_indices = rows.clone();
                 self.wei_loading = false;
@@ -107,7 +107,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 8 receive arms ──
+            // ── Research section ──
             BrokerMsg::HraSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.hra_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -170,7 +170,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 9 receive arms ──
+            // ── Research section ──
             BrokerMsg::SeasonalitySnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.seag_symbol.eq_ignore_ascii_case(&sym_u) {

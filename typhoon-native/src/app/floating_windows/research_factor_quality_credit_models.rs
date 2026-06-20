@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // MOM — 12-1 Month Momentum Score (Round 13)
+        // MOM — 12-1 Month Momentum Score
         if self.show_mom {
             if self.mom_symbol.is_empty() {
                 self.mom_symbol = chart_sym_research.clone();
@@ -102,7 +102,7 @@ impl TyphooNApp {
             self.show_mom = open;
         }
 
-        // LIQ — Liquidity Profile (Round 13)
+        // LIQ — Liquidity Profile
         if self.show_liq {
             if self.liq_symbol.is_empty() {
                 self.liq_symbol = chart_sym_research.clone();
@@ -207,7 +207,7 @@ impl TyphooNApp {
             self.show_liq = open;
         }
 
-        // BREAK — Breakout Proximity (Round 13)
+        // BREAK — Breakout Proximity
         if self.show_break {
             if self.break_symbol.is_empty() {
                 self.break_symbol = chart_sym_research.clone();
@@ -305,7 +305,7 @@ impl TyphooNApp {
             self.show_break = open;
         }
 
-        // CCRL — Cash Conversion Cycle (Round 13)
+        // CCRL — Cash Conversion Cycle
         if self.show_ccrl {
             if self.ccrl_symbol.is_empty() {
                 self.ccrl_symbol = chart_sym_research.clone();
@@ -512,7 +512,7 @@ impl TyphooNApp {
             self.show_ccrl = open;
         }
 
-        // CREDIT — Unified Credit Score (Round 13)
+        // CREDIT — Unified Credit Score
         if self.show_credit {
             if self.credit_symbol.is_empty() {
                 self.credit_symbol = chart_sym_research.clone();

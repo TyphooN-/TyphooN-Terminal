@@ -264,22 +264,22 @@ impl TyphooNApp {
         // Financial statements, management, and COT research
         self.render_research_financials_management_cot_windows(ctx);
 
-        // ── Research Round 4 windows ──────────────────────────────────
+        // ── Research section ──
         self.render_research_corporate_actions_analyst_esg_windows(ctx);
 
-        // ── Research Round 5 windows ──────────────────────────────────
+        // ── Research section ──
         self.render_research_ownership_float_price_earnings_windows(ctx);
 
-        // ── Research Round 6 windows ──────────────────────────────────
+        // ── Research section ──
         self.render_research_global_market_cost_capital_windows(ctx);
 
         // FX, beta, valuation, and identifier research
         self.render_research_fx_beta_valuation_identifiers_windows(ctx);
 
-        // ── Research Round 8 windows ──
+        // ── Research section ──
         self.render_research_return_risk_dcf_options_windows(ctx);
 
-        // ── Research Round 9 windows ──
+        // ── Research section ──
         self.render_research_seasonality_correlation_technicals_windows(ctx);
 
         // Leverage, accruals, realized-volatility, cash-flow, and short-interest research
@@ -288,145 +288,145 @@ impl TyphooNApp {
         // Solvency, quality, volatility-estimator, EPS-beat, and price-target research
         self.render_research_solvency_scores_volatility_targets_windows(ctx);
 
-        // Research Round 12 windows
+        // Research windows
         self.render_research_insider_dividend_earnings_momentum_windows(ctx);
 
-        // Research Rounds 13-15 windows
+        // Research 15 windows
         self.render_research_factor_quality_credit_models_windows(ctx);
 
-        // ── Research Round 16 ────────────────────────────────────────────────
+        // ── Research section ──
         self.render_research_sector_factor_drift_ranks_windows(ctx);
 
-        // ── Research Round 17 ──
+        // ── Research section ──
         self.render_research_factor_ranking_extensions_windows(ctx);
 
-        // Research Rounds 18-20 windows
+        // Research 20 windows
         self.render_research_momentum_gap_atr_drawdown_windows(ctx);
 
-        // Research Rounds 21-22 windows
+        // Research 22 windows
         self.render_research_behavior_distribution_stats_windows(ctx);
 
-        // ── Research Round 23 windows ──
+        // ── Research section ──
         self.render_research_autocorrelation_hurst_volume_windows(ctx);
 
-        // ── Research Round 24 windows ──
+        // ── Research section ──
         self.render_research_gap_volatility_mean_reversion_windows(ctx);
 
-        // ── Research Round 25 windows ──
+        // ── Research section ──
         self.render_research_downside_efficiency_wick_volatility_windows(ctx);
 
-        // ── Research Round 26 windows ──
+        // ── Research section ──
         self.render_research_calmar_ulcer_liquidity_normality_windows(ctx);
 
-        // ── Research Round 27 windows ──
+        // ── Research section ──
         self.render_research_omega_fractal_burke_seasonality_windows(ctx);
 
-        // ── Research Round 28 windows ──
+        // ── Research section ──
         self.render_research_ohlc_volatility_cvar_calendar_windows(ctx);
 
-        // ── Research Round 29 windows ──
+        // ── Research section ──
         self.render_research_sterling_kelly_stat_tests_windows(ctx);
 
-        // ── Research Round 30 windows ──
+        // ── Research section ──
         self.render_research_sharpe_stationarity_jump_drawdown_windows(ctx);
 
-        // ── Research Round 31 windows ──
+        // ── Research section ──
         self.render_research_tail_arch_pain_structural_var_windows(ctx);
 
-        // ── Research Round 32 windows ──
+        // ── Research section ──
         self.render_research_entropy_tail_autocorrelation_windows(ctx);
 
-        // ── Research Round 33 windows ──
+        // ── Research section ──
         self.render_research_upside_leverage_drawdown_var_windows(ctx);
 
-        // ── Research Round 34 windows ──
+        // ── Research section ──
         self.render_research_entropy_stationarity_recovery_windows(ctx);
 
-        // ── Research Round 35 windows ──
+        // ── Research section ──
         self.render_research_robust_entropy_quantile_volatility_windows(ctx);
 
-        // ── Research Round 36 windows ──
+        // ── Research section ──
         self.render_research_normality_lmoments_price_impact_windows(ctx);
 
-        // ── Research Round 37 windows ──
+        // ── Research section ──
         self.render_research_fractal_tail_nonlinear_rank_windows(ctx);
 
-        // ── Research Round 38 windows ──
+        // ── Research section ──
         self.render_research_jump_unitroot_multifractal_tsi_windows(ctx);
 
-        // ── Research Round 39 windows ──
+        // ── Research section ──
         self.render_research_garch_bubble_dimension_information_windows(ctx);
 
-        // ── Research Round 40 windows ──
+        // ── Research section ──
         self.render_research_residual_iid_heteroskedastic_cycles_windows(ctx);
 
-        // ── Research Round 41 windows ──
+        // ── Research section ──
         self.render_research_portmanteau_ou_long_memory_spectrum_windows(ctx);
 
-        // ── Research Round 42 windows ──
+        // ── Research section ──
         self.render_research_squeeze_breakout_channels_windows(ctx);
 
-        // ── Research Round 43 windows ──
+        // ── Research section ──
         self.render_research_ichimoku_supertrend_channels_windows(ctx);
 
-        // ── Research Round 44 windows ──
+        // ── Research section ──
         self.render_research_directional_moneyflow_sar_windows(ctx);
 
-        // ── Research Round 46 windows ──
+        // ── Research section ──
         self.render_research_oscillator_price_momentum_windows(ctx);
 
-        // ── Research Round 47 windows ──
+        // ── Research section ──
         self.render_research_volume_momentum_oscillators_windows(ctx);
 
-        // ── Research Round 48 windows ──
+        // ── Research section ──
         self.render_research_volume_flow_trend_oscillators_windows(ctx);
 
-        // ── Research Round 51 windows ──
+        // ── Research section ──
         self.render_research_moving_average_regression_pivots_windows(ctx);
 
-        // ── Research Round 52 windows ──
+        // ── Research section ──
         self.render_research_zero_lag_elder_forecast_balance_windows(ctx);
 
-        // ── Research Round 55: SMMA / ALLIGATOR / CRSI / SEB / IMI ──
+        // ── Research SMMA / ALLIGATOR / CRSI / SEB / IMI ──
         self.render_research_advanced_moving_averages_windows(ctx);
 
-        // ── Research Round 60: WMA / RAINBOW / MESA_SINE / FRAMA / IBS windows ──
+        // ── Research WMA / RAINBOW / MESA_SINE / FRAMA / IBS windows ──
         self.render_research_ehlers_adaptive_ma_oscillators_windows(ctx);
 
-        // ── Research Round 61: LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT windows ──
+        // ── Research LAGUERRE_RSI / ZIGZAG / PGO / HT_TRENDLINE / MIDPOINT windows ──
         self.render_research_laguerre_pivot_midpoint_models_windows(ctx);
 
-        // ── Research Round 62 windows ──
+        // ── Research section ──
         self.render_research_massindex_atr_squeeze_force_windows(ctx);
 
-        // ── Research Round 63 egui windows ──
+        // ── egui windows ──
         self.render_research_linearreg_hilbert_stochastic_windows(ctx);
 
-        // ── Research Round 64 egui windows ──
+        // ── egui windows ──
         self.render_research_linearreg_hilbert_phase_windows(ctx);
 
-        // ── Research Round 66 windows: AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE ──
+        // ── : AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE ──
         self.render_research_ohlc_price_transforms_windows(ctx);
 
-        // ── Research Round 67: PLUS_DI / MINUS_DI / PLUS_DM / MINUS_DM / DX ──
+        // ── Research PLUS_DI / MINUS_DI / PLUS_DM / MINUS_DM / DX ──
         self.render_research_directional_movement_family_windows(ctx);
 
-        // ── Research Round 68 windows ──
+        // ── Research section ──
         self.render_research_rate_of_change_correlation_windows(ctx);
 
-        // ── Research Round 71 windows ──
+        // ── Research section ──
         self.render_research_aroon_macd_variable_ma_windows(ctx);
 
-        // ── Research Round 72 CDL* windows ─────────────────────────────────
+        // ── CDL* windows ──
         self.render_research_candlestick_core_patterns_windows(ctx);
 
-        // ── Research Round 77 popup windows ──
+        // ── popup windows ──
         self.render_research_candlestick_marubozu_line_patterns_windows(ctx);
 
-        // ── Research Round 78 popup windows ──
+        // ── popup windows ──
         self.render_research_candlestick_reversal_continuation_windows(ctx);
 
-        // ── Research Round 76 (Quant Stats) popup windows ──
+        // ── (Quant Stats) popup windows ──
         self.render_research_quant_risk_nonlinearity_windows(ctx);
 
         // Research ingest and packet viewer

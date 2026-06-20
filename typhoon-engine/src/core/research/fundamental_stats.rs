@@ -2,7 +2,7 @@
 
 use super::*;
 
-// ── Round 10 — LEV compute (leverage & coverage ratios) ─────────────
+// ── LEV compute (leverage & coverage ratios) ─────────────
 
 /// Compute a `LeverageSnapshot` from cached financial statements and the
 /// Fundamentals row. Pulls trailing-12-month EBITDA + interest expense from
@@ -196,7 +196,7 @@ pub fn compute_leverage_snapshot(
     }
 }
 
-// ── Round 10 — ACRL compute (earnings quality / accruals) ───────────
+// ── ACRL compute (earnings quality / accruals) ───────────
 
 /// Compute an `AccrualsSnapshot` from cached financial statements. Walks the
 /// last 4 quarterly income + cash-flow pairs, producing an FCF/NI ratio per

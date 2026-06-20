@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 77 popup windows ──
+        // ── popup windows ──
         if self.show_cdl_belt_hold_win {
             if self.cdl_belt_hold_win_symbol.is_empty() {
                 self.cdl_belt_hold_win_symbol = chart_sym_research.clone();

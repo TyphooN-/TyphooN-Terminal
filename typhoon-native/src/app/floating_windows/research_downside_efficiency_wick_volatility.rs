@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 25 windows ──
+        // ── Research section ──
         if self.show_downvol {
             if self.downvol_symbol.is_empty() {
                 self.downvol_symbol = chart_sym_research.clone();

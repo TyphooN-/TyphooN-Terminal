@@ -1,18 +1,18 @@
-//! Research unit tests, split from a former ~21.8k-line single file by
-//! development round for readability (ADR-108). Sliced via `include!` to
+//! Research unit tests, split from a former ~21.8k-line single file into
+//! cohesive domain shards for readability (ADR-108). Sliced via `include!` to
 //! preserve ONE test-module scope, because fixtures (synth_bars,
-//! open_mem_conn*, mk_* builders) are shared across rounds.
+//! open_mem_conn*, mk_* builders) are shared across shards.
 
 use super::*;
 
-include!("setup_rounds_01_09.rs");
-include!("rounds_10_15.rs");
-include!("rounds_16_21.rs");
-include!("rounds_22_29.rs");
-include!("rounds_30_40.rs");
-include!("rounds_41_50.rs");
-include!("rounds_51_53.rs");
-include!("rounds_60_71.rs");
-include!("candlestick_72_78.rs");
-include!("candlestick_79_88.rs");
-include!("quant_stats_76_77.rs");
+include!("setup_foundational_research.rs");
+include!("fundamental_quality_research.rs");
+include!("rank_event_research.rs");
+include!("risk_distribution_research.rs");
+include!("statistical_diagnostics_research.rs");
+include!("technical_flow_research.rs");
+include!("moving_average_research.rs");
+include!("price_momentum_research.rs");
+include!("candlestick_core_research.rs");
+include!("candlestick_extended_research.rs");
+include!("quant_statistical_test_research.rs");

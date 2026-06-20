@@ -1,13 +1,13 @@
 use super::super::*;
 
 impl TyphooNApp {
-    pub(super) fn handle_jump_stationarity_tail_round_38_command(
+    pub(super) fn handle_fractal_tail_dependence_commands_command(
         &mut self,
         cmd_upper: &String,
     ) -> bool {
         match cmd_upper.as_str() {
-            // ── Round 38 palette aliases ──
-            "BNSJUMP" | "BNS_JUMP" | "JUMPTEST" | "JUMP_TEST" | "BARNDORFF" | "BIPOWERJUMP" => {
+            // ── Fractal and tail-dependence palette aliases ──
+            "HIGUCHI" | "HIGUCHI_FD" | "FRACTAL_DIM" | "FRACTALDIM" | "HFD" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -22,25 +22,24 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.bnsjump_symbol = sym;
+                    self.higuchi_symbol = sym;
                 }
-                self.show_bnsjump = true;
-                if self.bnsjump_snapshot.symbol.is_empty() && !self.bnsjump_symbol.is_empty() {
+                self.show_higuchi = true;
+                if self.higuchi_snapshot.symbol.is_empty() && !self.higuchi_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_bnsjump(
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_higuchi(
                                 &conn,
-                                &self.bnsjump_symbol,
+                                &self.higuchi_symbol,
                             ) {
-                                self.bnsjump_snapshot = snap;
+                                self.higuchi_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "PPROOT" | "PHILLIPS_PERRON" | "PHILLIPSPERRON" | "PP_TEST" | "PPTEST"
-            | "UNITROOTPP" => {
+            "PICKANDS" | "PICKANDS_TAIL" | "TAIL_INDEX_P" | "PICKANDSTAIL" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -55,24 +54,24 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.pproot_symbol = sym;
+                    self.pickands_symbol = sym;
                 }
-                self.show_pproot = true;
-                if self.pproot_snapshot.symbol.is_empty() && !self.pproot_symbol.is_empty() {
+                self.show_pickands = true;
+                if self.pickands_snapshot.symbol.is_empty() && !self.pickands_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_pproot(
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_pickands(
                                 &conn,
-                                &self.pproot_symbol,
+                                &self.pickands_symbol,
                             ) {
-                                self.pproot_snapshot = snap;
+                                self.pickands_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "MFDFA" | "MF_DFA" | "MULTIFRACTAL" | "MULTIFRACTALDFA" | "MFSPECTRUM" => {
+            "KAPPA3" | "KAPPA_3" | "KAPPA3RATIO" | "KAPPA3_RATIO" | "KAPLAN_KNOWLES" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -87,56 +86,24 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.mfdfa_symbol = sym;
+                    self.kappa3_symbol = sym;
                 }
-                self.show_mfdfa = true;
-                if self.mfdfa_snapshot.symbol.is_empty() && !self.mfdfa_symbol.is_empty() {
+                self.show_kappa3 = true;
+                if self.kappa3_snapshot.symbol.is_empty() && !self.kappa3_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) =
-                                typhoon_engine::core::research::get_mfdfa(&conn, &self.mfdfa_symbol)
-                            {
-                                self.mfdfa_snapshot = snap;
-                            }
-                        }
-                    }
-                }
-                true
-            }
-            "HILLKS" | "HILL_KS" | "PARETO_KS" | "TAILFIT" | "HILLTAILFIT" | "HILLGOF" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    self.hillks_symbol = sym;
-                }
-                self.show_hillks = true;
-                if self.hillks_snapshot.symbol.is_empty() && !self.hillks_symbol.is_empty() {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_hillks(
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_kappa3(
                                 &conn,
-                                &self.hillks_symbol,
+                                &self.kappa3_symbol,
                             ) {
-                                self.hillks_snapshot = snap;
+                                self.kappa3_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "TSI" | "TRUE_STRENGTH" | "TRUESTRENGTHINDEX" | "BLAU_TSI" | "BLAUINDEX"
-            | "MOMENTUMTSI" => {
+            "LYAPUNOV" | "LYAPUNOV_EXP" | "LAMBDA_MAX" | "LYAPUNOVEXPONENT" | "ROSENSTEIN" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -151,16 +118,49 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.tsi_symbol = sym;
+                    self.lyapunov_symbol = sym;
                 }
-                self.show_tsi = true;
-                if self.tsi_snapshot.symbol.is_empty() && !self.tsi_symbol.is_empty() {
+                self.show_lyapunov = true;
+                if self.lyapunov_snapshot.symbol.is_empty() && !self.lyapunov_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) =
-                                typhoon_engine::core::research::get_tsi(&conn, &self.tsi_symbol)
-                            {
-                                self.tsi_snapshot = snap;
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_lyapunov(
+                                &conn,
+                                &self.lyapunov_symbol,
+                            ) {
+                                self.lyapunov_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+                true
+            }
+            "RANKAC" | "RANK_AUTOCORR" | "SPEARMAN_AC" | "RANKAUTOCORRELATION" | "SPEARMANLAGS" => {
+                let sym = self
+                    .charts
+                    .get(self.active_tab)
+                    .map(|c| {
+                        c.symbol
+                            .split(':')
+                            .rev()
+                            .nth(1)
+                            .or_else(|| c.symbol.split(':').last())
+                            .unwrap_or("")
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                if !sym.is_empty() {
+                    self.rankac_symbol = sym;
+                }
+                self.show_rankac = true;
+                if self.rankac_snapshot.symbol.is_empty() && !self.rankac_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_rankac(
+                                &conn,
+                                &self.rankac_symbol,
+                            ) {
+                                self.rankac_snapshot = snap;
                             }
                         }
                     }

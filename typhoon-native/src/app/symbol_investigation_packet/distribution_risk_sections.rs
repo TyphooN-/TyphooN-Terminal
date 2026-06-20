@@ -7,7 +7,7 @@ impl TyphooNApp {
             if let Some(conn) = cache.try_connection() {
                 use typhoon_engine::core::research as rx;
 
-                // ── Round 32 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(en)) = rx::get_entropy(&conn, &sym_upper) {
                     if en.entropy_label != "INSUFFICIENT_DATA" && !en.entropy_label.is_empty() {
                         let _ = writeln!(
@@ -129,7 +129,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 33 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(up)) = rx::get_upr(&conn, &sym_upper) {
                     if up.upr_label != "INSUFFICIENT_DATA" && !up.upr_label.is_empty() {
                         let _ = writeln!(
@@ -242,7 +242,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 34 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(se)) = rx::get_sampen(&conn, &sym_upper) {
                     if se.sampen_label != "INSUFFICIENT_DATA"
                         && se.sampen_label != "UNDEFINED"
@@ -493,7 +493,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 36 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(ks)) = rx::get_ksnorm(&conn, &sym_upper) {
                     if ks.ksnorm_label != "INSUFFICIENT_DATA" && !ks.ksnorm_label.is_empty() {
                         let _ = writeln!(

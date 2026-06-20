@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 35 windows ──
+        // ── Research section ──
         if self.show_robvol {
             if self.robvol_symbol.is_empty() {
                 self.robvol_symbol = chart_sym_research.clone();

@@ -16,7 +16,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 66 windows: AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE ──
+        // ── : AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE ──
         if self.show_avgprice_win {
             if self.avgprice_win_symbol.is_empty() {
                 self.avgprice_win_symbol = chart_sym_research.clone();

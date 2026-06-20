@@ -534,7 +534,7 @@ fn index_member_roundtrip() {
     assert_eq!(got[1].sector, "Information Technology");
 }
 
-// ── Round 5 ─────────────────────────────────────────────────
+// ── Research section ──
 
 fn open_mem_conn_v5() -> Connection {
     let c = Connection::open_in_memory().unwrap();
@@ -735,7 +735,7 @@ fn earnings_surprise_upsert_replaces() {
     assert!(got[0].surprise > 0.0);
 }
 
-// ── Round 6 ─────────────────────────────────────────────────
+// ── Research section ──
 
 fn open_mem_conn_v6() -> Connection {
     let c = Connection::open_in_memory().unwrap();
@@ -965,7 +965,7 @@ fn fmp_mover_parses_string_percentage() {
     assert!((m.volume - 45_000_000.0).abs() < 1.0);
 }
 
-// ── Round 7 ─────────────────────────────────────────────────
+// ── Research section ──
 
 fn open_mem_conn_v7() -> Connection {
     let c = Connection::open_in_memory().unwrap();
@@ -1303,7 +1303,7 @@ fn figi_roundtrip() {
     assert_eq!(got.identifiers[0].figi, "BBG000B9XRY4");
 }
 
-// ── Round 8 tests ──────────────────────────────────────────
+// ── Research section ──
 
 fn open_mem_conn_v8() -> Connection {
     let c = Connection::open_in_memory().unwrap();
@@ -1721,7 +1721,7 @@ fn compute_ivol_with_no_history_uses_placeholder() {
     assert!((snap.iv_52w_high_pct - 25.0).abs() < 1e-6);
 }
 
-// ── Round 9 tests ──────────────────────────────────────────
+// ── Research section ──
 
 fn open_mem_conn_v9() -> Connection {
     let c = Connection::open_in_memory().unwrap();
@@ -2099,4 +2099,3 @@ fn compute_volatility_skew_empty_chain_returns_note() {
     let snap = compute_volatility_skew("X", "2026-04-14", &chain);
     assert!(!snap.note.is_empty());
 }
-

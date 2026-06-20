@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 60: WMA / RAINBOW / MESA_SINE / FRAMA / IBS windows ──
+        // ── Research WMA / RAINBOW / MESA_SINE / FRAMA / IBS windows ──
 
         if self.show_wma_win {
             if self.wma_win_symbol.is_empty() {

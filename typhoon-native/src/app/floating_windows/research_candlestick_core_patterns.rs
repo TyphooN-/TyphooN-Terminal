@@ -27,7 +27,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 72 CDL* windows ─────────────────────────────────
+        // ── CDL* windows ──
         self.render_cdl_basic_shadow_windows(ctx, &chart_sym_research);
 
         self.render_cdl_engulfing_harami_windows(ctx, &chart_sym_research);

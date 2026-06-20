@@ -3,7 +3,7 @@ use super::*;
 impl TyphooNApp {
     pub(super) fn handle_indicator_snapshot_msg(&mut self, msg: BrokerMsg) {
         match msg {
-            // ── Round 40 receive ──
+            // ── Research section ──
             BrokerMsg::DurbinWatsonSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.durbinwatson_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -135,7 +135,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 42 receive arms ──
+            // ── Research section ──
             BrokerMsg::SqueezeSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.squeeze_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -221,7 +221,7 @@ impl TyphooNApp {
                 }
                 let _ = snap;
             }
-            // ── Round 44 receive arms ──
+            // ── Research section ──
             BrokerMsg::AdxSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.adx_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -262,7 +262,7 @@ impl TyphooNApp {
                 }
                 let _ = snap;
             }
-            // ── Round 45 receive arms ──
+            // ── Research section ──
             BrokerMsg::VortexSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.vortex_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -303,7 +303,7 @@ impl TyphooNApp {
                 }
                 let _ = snap;
             }
-            // ── Round 46 receive arms ──
+            // ── Research section ──
             BrokerMsg::PpoSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.ppo_win_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -344,7 +344,7 @@ impl TyphooNApp {
                 }
                 let _ = snap;
             }
-            // ── Round 47 receive arms ──
+            // ── Research section ──
             BrokerMsg::MassSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.mass_win_symbol.eq_ignore_ascii_case(&sym_u) {

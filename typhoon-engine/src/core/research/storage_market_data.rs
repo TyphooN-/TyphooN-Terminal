@@ -455,7 +455,7 @@ pub fn get_index_members(
     }
 }
 
-// ── Round 5 SQLite schema + helpers ────────────────────────────────
+// ── Research section ──
 
 pub fn create_research_tables_v5(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(

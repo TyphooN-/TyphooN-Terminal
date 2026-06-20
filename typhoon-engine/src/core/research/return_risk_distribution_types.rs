@@ -103,7 +103,7 @@ pub struct PricePerformanceSnapshot {
     pub note: String,
 }
 
-// ── Round 89/90 — deferred benchmark / peer-relative parity ──
+// ── deferred benchmark / peer-relative parity ──
 
 /// MOMRANK_MULTI — sector-relative percentile rank of cached PRICEPERF
 /// horizons. Higher recent returns vs peers earn a higher rank, with a
@@ -211,7 +211,7 @@ pub struct CorrelationRankSnapshot {
     pub note: String,
 }
 
-// ── Round 93/94 — remaining cache-backed Godel parity surfaces ──
+// ── remaining cache-backed Godel parity surfaces ──
 
 /// OPERANK_DELTA — operating margin trend rank vs sector peers.
 /// Percentile rank of `MarginsSnapshot.operating_margin_change_pct`
@@ -308,7 +308,7 @@ pub struct VolRiskPremiumSnapshot {
     pub note: String,
 }
 
-// ── Round 95 — short-interest history + trend rank ─────────────────
+// ── short-interest history + trend rank ─────────────────
 
 /// SHORTRANK_DELTA — short-interest trend rank vs sector peers.
 /// Uses the change in `short_percent_of_float` over the trailing 180-day
@@ -340,7 +340,7 @@ pub struct ShortInterestDeltaRankSnapshot {
     pub note: String,
 }
 
-// ── Round 96 — insider ownership concentration parity ─────────────
+// ── insider ownership concentration parity ─────────────
 
 /// INSIDERCONC — insider ownership concentration vs sector peers.
 /// Estimates insider-held % from the latest known `shares_owned_after` per
@@ -372,7 +372,7 @@ pub struct InsiderConcentrationSnapshot {
     pub note: String,
 }
 
-// ── Round 21 — beta/peg rank + HP 52wk/rvcone/calendar ──
+// ── beta/peg rank + HP 52wk/rvcone/calendar ──
 
 /// BETARANK — Sector percentile rank of Fundamentals.beta, risk-inverted.
 /// Lower beta earns a higher (safer) rank, mirroring SHRANK / LEVRANK /
@@ -483,7 +483,7 @@ pub struct CalendarPeriodBreakdownSnapshot {
     pub note: String,
 }
 
-// ── Round 22 — HP return-distribution + behavior stats ──
+// ── HP return-distribution + behavior stats ──
 
 /// RETSKEW — Return distribution skewness (third standardized moment).
 /// Pure symbol-local HP stat over the trailing 253-session window of log

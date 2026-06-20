@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 32 windows ──
+        // ── Research section ──
         if self.show_entropy {
             if self.entropy_symbol.is_empty() {
                 self.entropy_symbol = chart_sym_research.clone();

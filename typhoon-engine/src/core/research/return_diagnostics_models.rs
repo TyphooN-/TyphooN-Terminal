@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 40 compute functions ─────────────────────────────────────
+// ── compute functions ──
 
 /// DURBINWATSON compute: Durbin-Watson d statistic on log-returns.
 pub fn compute_durbinwatson_snapshot(
@@ -381,7 +381,7 @@ pub fn compute_periodogram_snapshot(
     }
 }
 
-// ── Round 41 computes ─────────────────────────────────────────────
+// ── computes ──
 
 /// MCLEODLI compute: McLeod-Li portmanteau on squared log-returns.
 /// Q = n(n+2) Σ_k=1..h ρ̂²(k) / (n-k), compared against χ²(h).

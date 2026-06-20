@@ -6,7 +6,7 @@ impl TyphooNApp {
         ctx: &egui::Context,
         chart_sym_research: &String,
     ) {
-        // ── Research Round 48 windows ──
+        // ── Research section ──
         if self.show_efi_win {
             if self.efi_win_symbol.is_empty() {
                 self.efi_win_symbol = chart_sym_research.clone();

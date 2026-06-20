@@ -718,7 +718,7 @@ window.
 #### 2.56 Unified Credit Score (CREDIT — ADR-079)
 
 Pulled from `research::get_credit`. Fuses the cached ALTZ / PTFS /
-LEV / ACRL snapshots from Rounds 10 / 11 into a single 0-100
+LEV / ACRL leverage and accrual snapshots into a single 0-100
 weighted score (weights **35 / 25 / 25 / 15**). Header line gives
 the **letter grade** (AAA ≥90 / AA ≥80 / A ≥70 / BBB ≥60 / BB ≥50 /
 B ≥35 / CCC / INSUFFICIENT_DATA), **credit label**

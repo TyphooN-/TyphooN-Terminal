@@ -11,7 +11,7 @@ impl TyphooNApp {
             if let Some(conn) = cache.try_connection() {
                 use typhoon_engine::core::research as rx;
 
-                // ── Round 37 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(hi)) = rx::get_higuchi(&conn, &sym_upper) {
                     if hi.higuchi_label != "INSUFFICIENT_DATA" && !hi.higuchi_label.is_empty() {
                         let _ = writeln!(
@@ -129,7 +129,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 38 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(bj)) = rx::get_bnsjump(&conn, &sym_upper) {
                     if bj.bnsjump_label != "INSUFFICIENT_DATA" && !bj.bnsjump_label.is_empty() {
                         let _ = writeln!(
@@ -244,7 +244,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 39 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(g11)) = rx::get_garch11(&conn, &sym_upper) {
                     if g11.garch11_label != "INSUFFICIENT_DATA" && !g11.garch11_label.is_empty() {
                         let _ = writeln!(
@@ -365,7 +365,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 40 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(dw)) = rx::get_durbinwatson(&conn, &sym_upper) {
                     if dw.dw_label != "INSUFFICIENT_DATA" && !dw.dw_label.is_empty() {
                         let _ = writeln!(
@@ -485,7 +485,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 41 packet blocks ──
+                // ── Research section ──
                 if let Ok(Some(ml)) = rx::get_mcleodli(&conn, &sym_upper) {
                     if ml.mcleodli_label != "INSUFFICIENT_DATA" && !ml.mcleodli_label.is_empty() {
                         let _ = writeln!(

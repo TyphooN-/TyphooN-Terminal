@@ -1,6 +1,6 @@
 use super::{HistoricalPriceRow, TechnicalIndicator, TechnicalSnapshot};
 
-// ── Round 9 — TECH compute (technical indicators) ────────────────
+// ── TECH compute (technical indicators) ────────────────
 
 /// Compute standard technical indicators (RSI, MACD, Bollinger, ATR, ADX,
 /// Stochastic) from a chronologically-ordered slice of bars. Pure compute.

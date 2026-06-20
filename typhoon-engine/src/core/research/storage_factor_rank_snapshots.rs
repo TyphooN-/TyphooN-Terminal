@@ -563,7 +563,7 @@ pub fn get_covg(conn: &Connection, symbol: &str) -> Result<Option<CoverageSnapsh
     }
 }
 
-// ── Round 16 schema + helpers ──────────────────────────────────────
+// ── + helpers ──
 
 pub fn create_research_tables_v16(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v15(conn);

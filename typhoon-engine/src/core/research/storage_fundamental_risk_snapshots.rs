@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 10 schema: LEV / ACRL / RVOL / FCFY / SHRT ──────────────
+// ── : LEV / ACRL / RVOL / FCFY / SHRT ──
 
 pub fn create_research_tables_v10(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(

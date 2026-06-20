@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 55 SQLite schema + helpers: SMMA/ALLIGATOR/CRSI/SEB/IMI ──────────
+// ── : SMMA/ALLIGATOR/CRSI/SEB/IMI ──
 
 pub fn create_research_tables_v57(conn: &Connection) -> Result<(), String> {
     create_research_tables_v56(conn)?;

@@ -52,7 +52,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 55 ──
+            // ── Research section ──
             "SMMA" | "SMMAFIT" | "SMMA_WIN" | "WILDER_MA" | "WILDER_SMMA" | "RMA"
             | "SMOOTHED_MA" => {
                 let sym = self
@@ -879,7 +879,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 60: WMA / RAINBOW / MESA_SINE / FRAMA / IBS ──
+            // ── WMA / RAINBOW / MESA_SINE / FRAMA / IBS ──
             "WMA" | "WEIGHTED_MA" | "WMA_WIN" | "LINEAR_WEIGHTED_MA" => {
                 let sym = self
                     .charts
@@ -1199,8 +1199,8 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 62 palette aliases ──
-            // Note: "MASS_INDEX"/"DORSEY_MASS" already claimed by Round 47 curvefit.
+            // ── palette aliases ──
+            // Note: "MASS_INDEX"/"DORSEY_MASS" already claimed by curvefit.
             "MASSINDEX" | "MI" | "MASS_INDEX_WIN" | "MINDEX" | "MASS_25" => {
                 let sym = self
                     .charts
@@ -1299,7 +1299,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // Note: "FORCE_INDEX"/"ELDER_FORCE" already claimed by Round 48 EFI curvefit.
+            // Note: "FORCE_INDEX"/"ELDER_FORCE" already claimed by EFI curvefit.
             "FORCEINDEX" | "FORCE" | "FI" | "FORCE_INDEX_WIN" | "FORCE13" => {
                 let sym = self
                     .charts
@@ -1365,7 +1365,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 63 palette aliases ──
+            // ── palette aliases ──
             "LINEARREG_SLOPE" | "LINREG_SLOPE" | "LINREGSLOPE" | "LRSLOPE" | "SLOPE" => {
                 let sym = self
                     .charts
@@ -1533,7 +1533,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 64 palette aliases ──
+            // ── palette aliases ──
             "LINEARREG" | "LINEARREG_FIT" | "LINEAR_REG" | "LINEARREG_WIN" | "LINREG_FITTED" => {
                 let sym = self
                     .charts
@@ -1701,7 +1701,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 65 palette aliases ──
+            // ── palette aliases ──
             "MIDPRICE" | "MID_PRICE" | "MIDBAR" | "MIDBARPRICE" | "HLMIDPRICE" => {
                 let sym = self
                     .charts
@@ -2023,7 +2023,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 67: DMI family ──
+            // ── DMI family ──
             "PLUS_DI" | "PDI" | "DI_PLUS" | "DIPOS" | "WILDER_PDI" => {
                 let sym = self
                     .charts
@@ -2186,7 +2186,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 68 ──
+            // ── Research section ──
             "ROC" | "ROC_WILDER" | "ROCWIN" | "ROCRATE" | "RATE_OF_CHANGE" => {
                 let sym = self
                     .charts

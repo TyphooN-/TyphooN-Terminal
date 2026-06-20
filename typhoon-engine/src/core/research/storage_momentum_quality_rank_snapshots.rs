@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 17 schema + wrappers ────────────────────────────────────
+// ── + wrappers ──
 
 pub fn create_research_tables_v17(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v16(conn);
@@ -235,7 +235,7 @@ pub fn get_all_pead(conn: &Connection) -> Result<Vec<PeadSnapshot>, String> {
     Ok(rows)
 }
 
-// ── Round 18 schema + wrappers ────────────────────────────────────
+// ── + wrappers ──
 
 pub fn create_research_tables_v18(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v17(conn);
@@ -506,7 +506,7 @@ pub fn get_all_liquidity(conn: &Connection) -> Result<Vec<LiquiditySnapshot>, St
     Ok(rows)
 }
 
-// ── Round 19 schema + wrappers ────────────────────────────────────
+// ── + wrappers ──
 
 pub fn create_research_tables_v19(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v18(conn);

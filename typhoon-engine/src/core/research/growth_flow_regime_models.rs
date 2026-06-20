@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 14 compute fns ───────────────────────────────────────────
+// ── compute fns ──
 
 /// GROWM — Growth-at-Reasonable-Price fusion of MOM + EARM + DIVG.
 pub fn compute_growm_snapshot(

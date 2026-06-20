@@ -343,7 +343,7 @@ pub struct CdlThreeInsideSnapshot {
     pub note: String,
 }
 
-// ── Round 77 — CDLBELTHOLD / CDLCLOSINGMARUBOZU / CDLHIGHWAVE /
+// ── CDLBELTHOLD / CDLCLOSINGMARUBOZU / CDLHIGHWAVE /
 //    CDLLONGLINE / CDLSHORTLINE ──
 
 /// candlestick patternBELTHOLD — Belt-hold line. Long real body with virtually
@@ -449,7 +449,7 @@ pub struct CdlShortLineSnapshot {
     pub note: String,
 }
 
-// ── Round 78 — CDLCOUNTERATTACK / CDLHOMINGPIGEON / CDLINNECK /
+// ── CDLCOUNTERATTACK / CDLHOMINGPIGEON / CDLINNECK /
 //    CDLONNECK / CDLTHRUSTING ──
 
 /// candlestick patternCOUNTERATTACK — Counterattack lines. Two opposite-colour
@@ -559,7 +559,7 @@ pub struct CdlThrustingSnapshot {
     pub note: String,
 }
 
-// ── Round 79 — CDL2CROWS / CDL3LINESTRIKE / CDL3OUTSIDE /
+// ── CDL2CROWS / CDL3LINESTRIKE / CDL3OUTSIDE /
 //    CDLMATCHINGLOW ──
 
 /// candlestick pattern2CROWS — Two Crows. Long green body, then a gap-up red
@@ -641,7 +641,7 @@ pub struct CdlMatchingLowSnapshot {
     pub note: String,
 }
 
-// ── Round 80 — CDLSEPARATINGLINES / CDLSTICKSANDWICH /
+// ── CDLSEPARATINGLINES / CDLSTICKSANDWICH /
 //    CDLRICKSHAWMAN / CDLTAKURI ──
 
 /// candlestick patternSEPARATINGLINES — Separating Lines. Opposite-colour

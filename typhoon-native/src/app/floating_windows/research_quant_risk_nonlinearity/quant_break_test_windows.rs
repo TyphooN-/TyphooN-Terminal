@@ -6,7 +6,7 @@ impl TyphooNApp {
         ctx: &egui::Context,
         chart_sym_research: &String,
     ) {
-        // ── Research Round 76 (Quant Stats) popup windows ──
+        // ── (Quant Stats) popup windows ──
         if self.show_modsharpe_win {
             if self.modsharpe_win_symbol.is_empty() {
                 self.modsharpe_win_symbol = chart_sym_research.clone();

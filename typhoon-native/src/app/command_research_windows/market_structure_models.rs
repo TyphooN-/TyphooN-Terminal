@@ -1,24 +1,24 @@
 use super::*;
 
-mod distribution_entropy_round_35;
-mod fractal_tail_dependence_round_37;
-mod jump_stationarity_tail_round_38;
-mod residual_cycle_memory_round_40;
-mod squeeze_channel_adaptive_round_42;
-mod trend_channel_transform_round_43;
-mod volatility_bubble_nonlinearity_round_39;
+mod distribution_entropy_commands;
+mod fractal_tail_dependence_commands;
+mod jump_stationarity_tail_commands;
+mod residual_cycle_memory_commands;
+mod squeeze_channel_adaptive_commands;
+mod trend_channel_transform_commands;
+mod volatility_bubble_nonlinearity_commands;
 
 impl TyphooNApp {
     pub(super) fn handle_market_structure_model_command(&mut self, cmd_upper: &String) -> bool {
         match cmd_upper.as_str() {
-            _ if self.handle_distribution_entropy_round_35_command(cmd_upper) => {}
-            _ if self.handle_fractal_tail_dependence_round_37_command(cmd_upper) => {}
-            _ if self.handle_jump_stationarity_tail_round_38_command(cmd_upper) => {}
-            _ if self.handle_volatility_bubble_nonlinearity_round_39_command(cmd_upper) => {}
-            _ if self.handle_residual_cycle_memory_round_40_command(cmd_upper) => {}
-            _ if self.handle_squeeze_channel_adaptive_round_42_command(cmd_upper) => {}
-            _ if self.handle_trend_channel_transform_round_43_command(cmd_upper) => {}
-            // ── Round 44 palette aliases ──
+            _ if self.handle_distribution_entropy_commands_command(cmd_upper) => {}
+            _ if self.handle_fractal_tail_dependence_commands_command(cmd_upper) => {}
+            _ if self.handle_jump_stationarity_tail_commands_command(cmd_upper) => {}
+            _ if self.handle_volatility_bubble_nonlinearity_commands_command(cmd_upper) => {}
+            _ if self.handle_residual_cycle_memory_commands_command(cmd_upper) => {}
+            _ if self.handle_squeeze_channel_adaptive_commands_command(cmd_upper) => {}
+            _ if self.handle_trend_channel_transform_commands_command(cmd_upper) => {}
+            // ── Directional, money-flow, and SAR palette aliases ──
             // Bare ADX / CCI / PSAR are already bound to chart-overlay toggles upstream;
             // only disambiguated forms are used for ADX/CCI/PSAR research windows.
             // Bare CMF and MFI are unbound and kept as aliases.
@@ -173,7 +173,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 45 palette aliases ──
+            // ── Volume, choppiness, and moving-average palette aliases ──
             // Bare OBV and HMA collide with chart-overlay toggles upstream;
             // only disambiguated forms are used for OBV/HMA research windows.
             // Bare VORTEX, CHOP, TRIX are unbound and kept as aliases.
@@ -331,7 +331,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 46 palette aliases ──
+            // ── Momentum oscillator palette aliases ──
             // Bare PPO / DPO / KST / ULTOSC / WILLR are unbound upstream (verified) and kept as aliases.
             "PPO" | "PPOFIT" | "PPO_WIN" | "PCT_PRICE_OSC" | "PERCENT_PRICE_OSC" => {
                 let sym = self
@@ -491,7 +491,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 47 palette aliases ──
+            // ── Price-transform extrema palette aliases ──
             // Bare MASS / CHAIKOSC / KLINGER / STOCHRSI / AWESOME are unbound upstream (verified) and kept as aliases.
             "MASS" | "MASSFIT" | "MASS_WIN" | "MASS_INDEX" | "DORSEY_MASS" => {
                 let sym = self
@@ -659,7 +659,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 48 palette aliases ──
+            // ── Linear regression and Hilbert-transform palette aliases ──
             // Bare EFI / EMV / NVI / PVI / COPPOCK are unbound upstream (verified) and kept as aliases.
             "EFI" | "EFIFIT" | "EFI_WIN" | "FORCE_INDEX" | "ELDER_FORCE" => {
                 let sym = self
@@ -971,7 +971,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 50 ──
+            // ── Research moving-average palette aliases ──
             "STOCH" | "STOCHFIT" | "STOCH_WIN" | "STOCHASTIC" | "LANE_STOCH" => {
                 let sym = self
                     .charts
@@ -1126,7 +1126,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 51 palette aliases ──
+            // ── Moving-average research palette aliases ──
             "DEMA" | "DEMAFIT" | "DEMA_WIN" | "DOUBLE_EMA" | "DOUBLE_EXPONENTIAL" => {
                 let sym = self
                     .charts
@@ -1290,7 +1290,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 52 palette aliases ──
+            // ── Momentum and volatility research palette aliases ──
             "ALMA" | "ALMAFIT" | "ALMA_WIN" | "ARNAUD_LEGOUX" | "GAUSSIAN_MA" => {
                 let sym = self
                     .charts

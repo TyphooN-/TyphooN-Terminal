@@ -11,7 +11,7 @@ impl TyphooNApp {
             if let Some(conn) = cache.try_connection() {
                 use typhoon_engine::core::research as rx;
 
-                // ── Round 51 research emitters ──
+                // ── research emitters ──
                 if let Ok(Some(dm)) = rx::get_dema(&conn, &sym_upper) {
                     if dm.dema_label != "INSUFFICIENT_DATA" && !dm.dema_label.is_empty() {
                         let _ = writeln!(
@@ -133,7 +133,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 52 research emitters ──
+                // ── research emitters ──
                 if let Ok(Some(al)) = rx::get_alma(&conn, &sym_upper) {
                     if al.alma_label != "INSUFFICIENT_DATA" && !al.alma_label.is_empty() {
                         let _ = writeln!(

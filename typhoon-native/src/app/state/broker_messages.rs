@@ -774,7 +774,7 @@ pub(crate) enum BrokerCmd {
     ComputePeadSnapshot {
         symbol: String,
     },
-    // ── Round 17 ──
+    // ── Research section ──
     /// SIZEF — Size factor rank vs sector (log market cap percentile).
     ComputeSizefSnapshot {
         symbol: String,
@@ -795,7 +795,7 @@ pub(crate) enum BrokerCmd {
     ComputeRevrankSnapshot {
         symbol: String,
     },
-    // ── Round 18 ──
+    // ── Research section ──
     /// LEVRANK — Leverage rank vs sector peers (D/E percentile, inverted).
     ComputeLevrankSnapshot {
         symbol: String,
@@ -816,7 +816,7 @@ pub(crate) enum BrokerCmd {
     ComputeSurpstkSnapshot {
         symbol: String,
     },
-    // ── Round 19 ──
+    // ── Research section ──
     /// DVDRANK — Dividend growth rank vs sector peers (3y CAGR percentile).
     ComputeDvdrankSnapshot {
         symbol: String,
@@ -837,7 +837,7 @@ pub(crate) enum BrokerCmd {
     ComputeDesSnapshot {
         symbol: String,
     },
-    // ── Round 20 ──
+    // ── Research section ──
     /// DVDYIELDRANK — Dividend yield rank vs sector peers (non-payers filtered).
     ComputeDvdyieldrankSnapshot {
         symbol: String,
@@ -870,7 +870,7 @@ pub(crate) enum BrokerCmd {
     ComputeMomrankMultiSnapshot {
         symbol: String,
     },
-    // ── Round 21 ──
+    // ── Research section ──
     /// BETARANK — Beta rank vs sector peers (risk-inverted: lower beta = safer).
     ComputeBetarankSnapshot {
         symbol: String,
@@ -921,7 +921,7 @@ pub(crate) enum BrokerCmd {
     ComputeVrpSnapshot {
         symbol: String,
     },
-    // ── Round 22 ──
+    // ── Research section ──
     /// RETSKEW — Return distribution skewness (third standardized moment).
     ComputeRetskewSnapshot {
         symbol: String,
@@ -942,7 +942,7 @@ pub(crate) enum BrokerCmd {
     ComputeDayrangeSnapshot {
         symbol: String,
     },
-    // ── Round 23 ──
+    // ── Research section ──
     /// AUTOCOR — Autocorrelation of log returns at lags 1/5/10/20.
     ComputeAutocorSnapshot {
         symbol: String,
@@ -963,7 +963,7 @@ pub(crate) enum BrokerCmd {
     ComputeVolratioSnapshot {
         symbol: String,
     },
-    // ── Round 24 ──
+    // ── Research section ──
     /// DRAWUP — Upside rally history (mirror of DDHIST).
     ComputeDrawupSnapshot {
         symbol: String,
@@ -984,7 +984,7 @@ pub(crate) enum BrokerCmd {
     ComputeMrhlSnapshot {
         symbol: String,
     },
-    // ── Round 25 ──
+    // ── Research section ──
     /// DOWNVOL — Downside deviation + Sortino ratio.
     ComputeDownvolSnapshot {
         symbol: String,
@@ -1005,7 +1005,7 @@ pub(crate) enum BrokerCmd {
     ComputeVolofvolSnapshot {
         symbol: String,
     },
-    // ── Round 26 ──
+    // ── Research section ──
     /// CALMAR — Calmar ratio (annualized return / max drawdown).
     ComputeCalmarSnapshot {
         symbol: String,
@@ -1026,7 +1026,7 @@ pub(crate) enum BrokerCmd {
     ComputeJbnormSnapshot {
         symbol: String,
     },
-    // ── Round 27 ──
+    // ── Research section ──
     /// OMEGA — Omega ratio at threshold 0.
     ComputeOmegaSnapshot {
         symbol: String,
@@ -1047,7 +1047,7 @@ pub(crate) enum BrokerCmd {
     ComputeRollsprdSnapshot {
         symbol: String,
     },
-    // ── Round 28 ──
+    // ── Research section ──
     /// PARKINSON — Parkinson (1980) H-L range-based vol.
     ComputeParkinsonSnapshot {
         symbol: String,
@@ -1068,7 +1068,7 @@ pub(crate) enum BrokerCmd {
     ComputeDoweffectSnapshot {
         symbol: String,
     },
-    // ── Round 29 ──
+    // ── Research section ──
     /// STERLING — Sterling ratio (mean of N worst drawdowns).
     ComputeSterlingSnapshot {
         symbol: String,
@@ -1089,7 +1089,7 @@ pub(crate) enum BrokerCmd {
     ComputeZeroretSnapshot {
         symbol: String,
     },
-    // ── Round 30 ──
+    // ── Research section ──
     /// PSR — Probabilistic Sharpe Ratio (Lopez de Prado 2012).
     ComputePsrSnapshot {
         symbol: String,
@@ -1110,7 +1110,7 @@ pub(crate) enum BrokerCmd {
     ComputeDddurSnapshot {
         symbol: String,
     },
-    // ── Round 31 ──
+    // ── Research section ──
     /// HILLTAIL — Hill tail-index estimator.
     ComputeHilltailSnapshot {
         symbol: String,
@@ -1131,7 +1131,7 @@ pub(crate) enum BrokerCmd {
     ComputeCfvarSnapshot {
         symbol: String,
     },
-    // ── Round 32 ──
+    // ── Research section ──
     /// ENTROPY — Shannon entropy of return distribution.
     ComputeEntropySnapshot {
         symbol: String,
@@ -1152,7 +1152,7 @@ pub(crate) enum BrokerCmd {
     ComputeApenSnapshot {
         symbol: String,
     },
-    // ── Round 33 ──
+    // ── Research section ──
     /// UPR — Upside Potential Ratio.
     ComputeUprSnapshot {
         symbol: String,
@@ -1173,7 +1173,7 @@ pub(crate) enum BrokerCmd {
     ComputeGiniSnapshot {
         symbol: String,
     },
-    // ── Round 34 ──
+    // ── Research section ──
     /// SAMPEN — Sample Entropy.
     ComputeSampenSnapshot {
         symbol: String,
@@ -1194,7 +1194,7 @@ pub(crate) enum BrokerCmd {
     ComputeSpecentSnapshot {
         symbol: String,
     },
-    // ── Round 35 ──
+    // ── Research section ──
     /// ROBVOL — Robust Volatility (MAD+IQR).
     ComputeRobvolSnapshot {
         symbol: String,
@@ -1215,7 +1215,7 @@ pub(crate) enum BrokerCmd {
     ComputeEwmavolSnapshot {
         symbol: String,
     },
-    // ── Round 36 ──
+    // ── Research section ──
     /// KSNORM — Kolmogorov-Smirnov normality test.
     ComputeKsnormSnapshot {
         symbol: String,
@@ -1236,7 +1236,7 @@ pub(crate) enum BrokerCmd {
     ComputePeakoverSnapshot {
         symbol: String,
     },
-    // ── Round 37 ──
+    // ── Research section ──
     /// HIGUCHI — Higuchi fractal dimension.
     ComputeHiguchiSnapshot {
         symbol: String,
@@ -1257,7 +1257,7 @@ pub(crate) enum BrokerCmd {
     ComputeRankacSnapshot {
         symbol: String,
     },
-    // ── Round 38 ──
+    // ── Research section ──
     /// BNSJUMP — Barndorff-Nielsen-Shephard 2006 jump-test Z-statistic.
     ComputeBnsjumpSnapshot {
         symbol: String,
@@ -1278,7 +1278,7 @@ pub(crate) enum BrokerCmd {
     ComputeTsiSnapshot {
         symbol: String,
     },
-    // ── Round 39 ──
+    // ── Research section ──
     /// GARCH11 — Bollerslev 1986 GARCH(1,1) fit.
     ComputeGarch11Snapshot {
         symbol: String,
@@ -1299,7 +1299,7 @@ pub(crate) enum BrokerCmd {
     ComputeAutomiSnapshot {
         symbol: String,
     },
-    // ── Round 40 ──
+    // ── Research section ──
     /// DURBINWATSON — d-statistic for first-order residual autocorrelation.
     ComputeDurbinWatsonSnapshot {
         symbol: String,
@@ -1320,7 +1320,7 @@ pub(crate) enum BrokerCmd {
     ComputePeriodogramSnapshot {
         symbol: String,
     },
-    // ── Round 41 ──
+    // ── Research section ──
     /// MCLEODLI — McLeod-Li portmanteau on squared returns (ARCH detection).
     ComputeMcLeodLiSnapshot {
         symbol: String,
@@ -1341,7 +1341,7 @@ pub(crate) enum BrokerCmd {
     ComputeKendallTauSnapshot {
         symbol: String,
     },
-    // ── Round 42 ──
+    // ── Research section ──
     /// SQUEEZE — composite short-squeeze outlier score per symbol.
     ComputeSqueezeSnapshot {
         symbol: String,
@@ -1365,7 +1365,7 @@ pub(crate) enum BrokerCmd {
     ComputeKamaSnapshot {
         symbol: String,
     },
-    // ── Round 43 ──
+    // ── Research section ──
     /// ICHIMOKU — Ichimoku Kinko Hyo five-line cloud system.
     ComputeIchimokuSnapshot {
         symbol: String,
@@ -1386,7 +1386,7 @@ pub(crate) enum BrokerCmd {
     ComputeAroonSnapshot {
         symbol: String,
     },
-    // ── Round 44 ──
+    // ── Research section ──
     /// ADX — Wilder's Average Directional Index.
     ComputeAdxSnapshot {
         symbol: String,
@@ -1407,7 +1407,7 @@ pub(crate) enum BrokerCmd {
     ComputePsarSnapshot {
         symbol: String,
     },
-    // ── Round 45 ──
+    // ── Research section ──
     /// VORTEX — Botes & Siepman directional-movement alternative.
     ComputeVortexSnapshot {
         symbol: String,
@@ -1428,7 +1428,7 @@ pub(crate) enum BrokerCmd {
     ComputeHmaSnapshot {
         symbol: String,
     },
-    // ── Round 46 ──
+    // ── Research section ──
     /// PPO — Percentage Price Oscillator (12/26/9).
     ComputePpoSnapshot {
         symbol: String,
@@ -1449,7 +1449,7 @@ pub(crate) enum BrokerCmd {
     ComputeWillrSnapshot {
         symbol: String,
     },
-    // ── Round 47 ──
+    // ── Research section ──
     /// MASS — Donald Dorsey Mass Index (EMA9 H-L ratio, 25-bar sum).
     ComputeMassSnapshot {
         symbol: String,
@@ -1470,7 +1470,7 @@ pub(crate) enum BrokerCmd {
     ComputeAwesomeSnapshot {
         symbol: String,
     },
-    // ── Round 48 ──
+    // ── Research section ──
     /// EFI — Alexander Elder Force Index (EMA13 of volume × close change).
     ComputeEfiSnapshot {
         symbol: String,
@@ -1491,7 +1491,7 @@ pub(crate) enum BrokerCmd {
     ComputeCoppockSnapshot {
         symbol: String,
     },
-    // ── Round 49 ──
+    // ── Research section ──
     /// CMO — Tushar Chande Momentum Oscillator (raw gain/loss spread on [-100, +100]).
     ComputeCmoSnapshot {
         symbol: String,
@@ -1512,7 +1512,7 @@ pub(crate) enum BrokerCmd {
     ComputeSchaffSnapshot {
         symbol: String,
     },
-    // ── Round 50 ──
+    // ── Research moving-average palette aliases ──
     /// STOCH — George Lane Stochastic Oscillator (%K fast + %D smooth, 14/3/3).
     ComputeStochSnapshot {
         symbol: String,
@@ -1533,7 +1533,7 @@ pub(crate) enum BrokerCmd {
     ComputeRwiSnapshot {
         symbol: String,
     },
-    // ── Round 51 ──
+    // ── Research section ──
     /// DEMA — Patrick Mulloy Double Exponential MA (length 20).
     ComputeDemaSnapshot {
         symbol: String,
@@ -1554,7 +1554,7 @@ pub(crate) enum BrokerCmd {
     ComputeHeikinSnapshot {
         symbol: String,
     },
-    // ── Round 52 ──
+    // ── Research section ──
     /// ALMA — Arnaud Legoux Moving Average with Gaussian kernel (length 20).
     ComputeAlmaSnapshot {
         symbol: String,
@@ -1595,7 +1595,7 @@ pub(crate) enum BrokerCmd {
     ComputePvtSnapshot {
         symbol: String,
     },
-    // ── Round 54 ──
+    // ── Research section ──
     /// AC — Bill Williams Accelerator Oscillator (AO − SMA5(AO)).
     ComputeAcSnapshot {
         symbol: String,
@@ -1621,7 +1621,7 @@ pub(crate) enum BrokerCmd {
     ComputeSymbolExpirations {
         symbol: String,
     },
-    // ── Round 55 ──
+    // ── Research section ──
     /// SMMA — Wilder's Smoothed MA (α=1/N) with close-vs-SMMA deviation label.
     ComputeSmmaSnapshot {
         symbol: String,
@@ -1642,7 +1642,7 @@ pub(crate) enum BrokerCmd {
     ComputeImiSnapshot {
         symbol: String,
     },
-    // ── Round 56 ──
+    // ── Research section ──
     /// GMMA — Guppy Multiple MA: 6 short + 6 long EMA groups with compression/gap labels.
     ComputeGmmaSnapshot {
         symbol: String,
@@ -1663,7 +1663,7 @@ pub(crate) enum BrokerCmd {
     ComputeVrocSnapshot {
         symbol: String,
     },
-    // ── Round 57 ──
+    // ── Research section ──
     /// KDJ — Chinese Stochastic variant (%K, %D, J=3K−2D on 9/3 settings).
     ComputeKdjSnapshot {
         symbol: String,
@@ -1684,7 +1684,7 @@ pub(crate) enum BrokerCmd {
     ComputeTmfSnapshot {
         symbol: String,
     },
-    // ── Round 58 ──
+    // ── Research section ──
     /// FRACTALS — Bill Williams 5-bar peak/trough structural pivot markers.
     ComputeFractalsSnapshot {
         symbol: String,
@@ -1705,7 +1705,7 @@ pub(crate) enum BrokerCmd {
     ComputeDidiSnapshot {
         symbol: String,
     },
-    // ── Round 59 ──
+    // ── Research section ──
     /// DEMARKER — Tom DeMark's DeMarker (bounded [0,1] high/low-range oscillator).
     ComputeDemarkerSnapshot {
         symbol: String,
@@ -1726,7 +1726,7 @@ pub(crate) enum BrokerCmd {
     ComputeStddevSnapshot {
         symbol: String,
     },
-    // ── Round 60 ──
+    // ── Research section ──
     /// WMA — Weighted Moving Average (linearly-weighted SMA variant).
     ComputeWmaSnapshot {
         symbol: String,
@@ -1747,7 +1747,7 @@ pub(crate) enum BrokerCmd {
     ComputeIbsSnapshot {
         symbol: String,
     },
-    // ── Round 61 ──
+    // ── Research section ──
     /// LAGUERRE_RSI — Ehlers 4-stage Laguerre filter bounded oscillator.
     ComputeLaguerreRsiSnapshot {
         symbol: String,
@@ -1768,7 +1768,7 @@ pub(crate) enum BrokerCmd {
     ComputeMidpointSnapshot {
         symbol: String,
     },
-    // ── Round 62 ──
+    // ── Research section ──
     /// MASSINDEX — Dorsey Mass Index: Σ(EMA(H-L,9) / EMA(EMA(H-L,9),9)) over 25 bars.
     ComputeMassIndexSnapshot {
         symbol: String,
@@ -1789,7 +1789,7 @@ pub(crate) enum BrokerCmd {
     ComputeTrangeSnapshot {
         symbol: String,
     },
-    // ── Round 63 ──
+    // ── Research section ──
     /// LINEARREG_SLOPE — least-squares slope of N-bar linreg on close (TA-Lib).
     ComputeLinearregSlopeSnapshot {
         symbol: String,
@@ -1810,7 +1810,7 @@ pub(crate) enum BrokerCmd {
     ComputeStochfSnapshot {
         symbol: String,
     },
-    // ── Round 64 ──
+    // ── Research section ──
     /// LINEARREG — TA-Lib Linear Regression fitted endpoint (14-bar LS).
     ComputeLinearregSnapshot {
         symbol: String,
@@ -1831,7 +1831,7 @@ pub(crate) enum BrokerCmd {
     ComputeHtPhasorSnapshot {
         symbol: String,
     },
-    // ── Round 65 ──
+    // ── Research section ──
     /// MIDPRICE — (HHV(H, 14) + LLV(L, 14)) / 2 range midpoint.
     ComputeMidpriceSnapshot {
         symbol: String,
@@ -1852,7 +1852,7 @@ pub(crate) enum BrokerCmd {
     ComputeAdxrSnapshot {
         symbol: String,
     },
-    // ── Round 66 ──
+    // ── Research section ──
     /// AVGPRICE — (open + high + low + close) / 4.
     ComputeAvgpriceSnapshot {
         symbol: String,
@@ -1873,7 +1873,7 @@ pub(crate) enum BrokerCmd {
     ComputeVarianceSnapshot {
         symbol: String,
     },
-    // ── Round 67 ──
+    // ── Research section ──
     /// PLUS_DI — Wilder's Positive Directional Indicator (period 14).
     ComputePlusDiSnapshot {
         symbol: String,
@@ -1894,7 +1894,7 @@ pub(crate) enum BrokerCmd {
     ComputeDxSnapshot {
         symbol: String,
     },
-    // ── Round 68 ──
+    // ── Research section ──
     /// ROC — raw Rate of Change `close_t − close_{t−n}` (period 10).
     ComputeRocSnapshot {
         symbol: String,
@@ -1915,7 +1915,7 @@ pub(crate) enum BrokerCmd {
     ComputeCorrelSnapshot {
         symbol: String,
     },
-    // ── Round 69 ──
+    // ── Research section ──
     /// MIN — rolling-window minimum of close (period 30).
     ComputeMinSnapshot {
         symbol: String,
@@ -1936,7 +1936,7 @@ pub(crate) enum BrokerCmd {
     ComputeMaxIndexSnapshot {
         symbol: String,
     },
-    // ── Round 70 — BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT ──
+    // ── BBANDS / AD / ADOSC / SUM / LINEARREG_INTERCEPT ──
     /// BBANDS — Bollinger Bands (period 20, 2σ).
     ComputeBbandsSnapshot {
         symbol: String,
@@ -1957,7 +1957,7 @@ pub(crate) enum BrokerCmd {
     ComputeLinearRegInterceptSnapshot {
         symbol: String,
     },
-    // ── Round 71 — AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP ──
+    // ── AROONOSC / MINMAXINDEX / MACDEXT / MACDFIX / MAVP ──
     /// AROONOSC — Aroon Oscillator (period 14, = aroon_up - aroon_down).
     ComputeAroonoscSnapshot {
         symbol: String,
@@ -1978,7 +1978,7 @@ pub(crate) enum BrokerCmd {
     ComputeMavpSnapshot {
         symbol: String,
     },
-    // ── Round 72 — CDLDOJI / CDLHAMMER / CDLSHOOTINGSTAR / CDLENGULFING / CDLHARAMI ──
+    // ── CDLDOJI / CDLHAMMER / CDLSHOOTINGSTAR / CDLENGULFING / CDLHARAMI ──
     /// CDLDOJI — single-bar doji pattern (body ≤ 5% range).
     ComputeCdlDojiSnapshot {
         symbol: String,
@@ -1999,7 +1999,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlHaramiSnapshot {
         symbol: String,
     },
-    // ── Round 73 — CDLMORNINGSTAR / CDLEVENINGSTAR / CDL3BLACKCROWS / CDL3WHITESOLDIERS / CDLDARKCLOUDCOVER ──
+    // ── CDLMORNINGSTAR / CDLEVENINGSTAR / CDL3BLACKCROWS / CDL3WHITESOLDIERS / CDLDARKCLOUDCOVER ──
     /// CDLMORNINGSTAR — 3-bar bullish reversal (big red, star, big green).
     ComputeCdlMorningStarSnapshot {
         symbol: String,
@@ -2020,7 +2020,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlDarkCloudCoverSnapshot {
         symbol: String,
     },
-    // ── Round 74 — CDLPIERCING / CDLDRAGONFLYDOJI / CDLGRAVESTONEDOJI / CDLHANGINGMAN / CDLINVERTEDHAMMER ──
+    // ── CDLPIERCING / CDLDRAGONFLYDOJI / CDLGRAVESTONEDOJI / CDLHANGINGMAN / CDLINVERTEDHAMMER ──
     /// CDLPIERCING — 2-bar bullish reversal (mirror of DarkCloudCover).
     ComputeCdlPiercingSnapshot {
         symbol: String,
@@ -2041,7 +2041,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlInvertedHammerSnapshot {
         symbol: String,
     },
-    // ── Round 75 — CDLHARAMICROSS / CDLLONGLEGGEDDOJI / CDLMARUBOZU / CDLSPINNINGTOP / CDLTRISTAR ──
+    // ── CDLHARAMICROSS / CDLLONGLEGGEDDOJI / CDLMARUBOZU / CDLSPINNINGTOP / CDLTRISTAR ──
     /// CDLHARAMICROSS — 2-bar harami where inside bar is a doji (stricter reversal).
     ComputeCdlHaramiCrossSnapshot {
         symbol: String,
@@ -2062,7 +2062,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlTristarSnapshot {
         symbol: String,
     },
-    // ── Round 76 — CDLDOJISTAR / CDLMORNINGDOJISTAR / CDLEVENINGDOJISTAR / CDLABANDONEDBABY / CDL3INSIDE ──
+    // ── CDLDOJISTAR / CDLMORNINGDOJISTAR / CDLEVENINGDOJISTAR / CDLABANDONEDBABY / CDL3INSIDE ──
     /// CDLDOJISTAR — 2-bar reversal precursor: prior body + doji that gaps away from prior close.
     ComputeCdlDojiStarSnapshot {
         symbol: String,
@@ -2083,7 +2083,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlThreeInsideSnapshot {
         symbol: String,
     },
-    // ── Round 77 — CDLBELTHOLD / CDLCLOSINGMARUBOZU / CDLHIGHWAVE / CDLLONGLINE / CDLSHORTLINE ──
+    // ── CDLBELTHOLD / CDLCLOSINGMARUBOZU / CDLHIGHWAVE / CDLLONGLINE / CDLSHORTLINE ──
     /// CDLBELTHOLD — single-bar long body with virtually no opening shadow.
     ComputeCdlBeltHoldSnapshot {
         symbol: String,
@@ -2104,7 +2104,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlShortLineSnapshot {
         symbol: String,
     },
-    // ── Round 78 — CDLCOUNTERATTACK / CDLHOMINGPIGEON / CDLINNECK / CDLONNECK / CDLTHRUSTING ──
+    // ── CDLCOUNTERATTACK / CDLHOMINGPIGEON / CDLINNECK / CDLONNECK / CDLTHRUSTING ──
     /// CDLCOUNTERATTACK — opposite-colour long bodies with a directional gap and a close back near the prior close.
     ComputeCdlCounterattackSnapshot {
         symbol: String,
@@ -2125,7 +2125,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlThrustingSnapshot {
         symbol: String,
     },
-    // ── Round 79 — CDL2CROWS / CDL3LINESTRIKE / CDL3OUTSIDE / CDLMATCHINGLOW ──
+    // ── CDL2CROWS / CDL3LINESTRIKE / CDL3OUTSIDE / CDLMATCHINGLOW ──
     /// CDL2CROWS — long green candle, gap-up red candle, then a second red candle that closes back inside the first body.
     ComputeCdlTwoCrowsSnapshot {
         symbol: String,
@@ -2142,7 +2142,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlMatchingLowSnapshot {
         symbol: String,
     },
-    // ── Round 80 — CDLSEPARATINGLINES / CDLSTICKSANDWICH / CDLRICKSHAWMAN / CDLTAKURI ──
+    // ── CDLSEPARATINGLINES / CDLSTICKSANDWICH / CDLRICKSHAWMAN / CDLTAKURI ──
     /// CDLSEPARATINGLINES — opposite-colour candles sharing the same open, with the second resuming trend.
     ComputeCdlSeparatingLinesSnapshot {
         symbol: String,
@@ -2159,7 +2159,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlTakuriSnapshot {
         symbol: String,
     },
-    // ── Round 81/82 — harder CDL* parity pack ──
+    // ── harder CDL* parity pack ──
     /// CDL3STARSINSOUTH — three descending red candles with progressively contracting downside pressure.
     ComputeCdlThreeStarsInSouthSnapshot {
         symbol: String,
@@ -2184,7 +2184,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlUniqueThreeRiverSnapshot {
         symbol: String,
     },
-    // ── Round 83/84 — additional multi-bar CDL* parity pack ──
+    // ── additional multi-bar CDL* parity pack ──
     /// CDLADVANCEBLOCK — three rising green candles with shrinking progress and longer upper shadows.
     ComputeCdlAdvanceBlockSnapshot {
         symbol: String,
@@ -2209,7 +2209,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlConcealBabySwallowSnapshot {
         symbol: String,
     },
-    // ── Round 85/86 — stateful CDL* parity pack ──
+    // ── stateful CDL* parity pack ──
     /// CDLHIKKAKE — inside-bar trap with a false break to one side.
     ComputeCdlHikkakeSnapshot {
         symbol: String,
@@ -2226,7 +2226,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlRiseFallThreeMethodsSnapshot {
         symbol: String,
     },
-    // ── Round 87/88 — final CDL* parity pack ──
+    // ── final CDL* parity pack ──
     /// CDLSTALLEDPATTERN — three advancing green candles where the third stalls with a small body and upper shadow.
     ComputeCdlStalledPatternSnapshot {
         symbol: String,
@@ -2235,7 +2235,7 @@ pub(crate) enum BrokerCmd {
     ComputeCdlTasukiGapSnapshot {
         symbol: String,
     },
-    // ── Round 76 (Quant Stats) ──
+    // ── (Quant Stats) ──
     /// MODSHARPE — Pezier-White Adjusted Sharpe Ratio (skew/kurt adjusted).
     ComputeModSharpeSnapshot {
         symbol: String,
@@ -2256,7 +2256,7 @@ pub(crate) enum BrokerCmd {
     ComputeHlvClustSnapshot {
         symbol: String,
     },
-    // ── Round 77 — YANGZHANG / KUIPER / DAGOSTINO / BAIPERRON / KUPIECPOF ──
+    // ── YANGZHANG / KUIPER / DAGOSTINO / BAIPERRON / KUPIECPOF ──
     /// YANGZHANG — Yang-Zhang three-component range volatility estimator.
     ComputeYangZhangSnapshot {
         symbol: String,
@@ -3016,7 +3016,7 @@ pub(crate) enum BrokerMsg {
     WickbiasSnapshotMsg(String, typhoon_engine::core::research::WickBiasSnapshot),
     /// VOLOFVOL — Vol of rolling 20d realized vol snapshot for a symbol.
     VolofvolSnapshotMsg(String, typhoon_engine::core::research::VolOfVolSnapshot),
-    // ── Round 26 ──
+    // ── Research section ──
     CalmarSnapshotMsg(String, typhoon_engine::core::research::CalmarRatioSnapshot),
     UlcerSnapshotMsg(String, typhoon_engine::core::research::UlcerIndexSnapshot),
     VarratioSnapshotMsg(
@@ -3025,7 +3025,7 @@ pub(crate) enum BrokerMsg {
     ),
     AmihudSnapshotMsg(String, typhoon_engine::core::research::AmihudIlliqSnapshot),
     JbnormSnapshotMsg(String, typhoon_engine::core::research::JarqueBeraSnapshot),
-    // ── Round 27 ──
+    // ── Research section ──
     OmegaSnapshotMsg(String, typhoon_engine::core::research::OmegaRatioSnapshot),
     DfaSnapshotMsg(
         String,
@@ -3037,7 +3037,7 @@ pub(crate) enum BrokerMsg {
         typhoon_engine::core::research::MonthlySeasonalitySnapshot,
     ),
     RollsprdSnapshotMsg(String, typhoon_engine::core::research::RollSpreadSnapshot),
-    // ── Round 28 ──
+    // ── Research section ──
     ParkinsonSnapshotMsg(String, typhoon_engine::core::research::ParkinsonVolSnapshot),
     GkvolSnapshotMsg(
         String,
@@ -3052,7 +3052,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::DayOfWeekEffectSnapshot,
     ),
-    // ── Round 29 ──
+    // ── Research section ──
     SterlingSnapshotMsg(
         String,
         typhoon_engine::core::research::SterlingRatioSnapshot,
@@ -3064,7 +3064,7 @@ pub(crate) enum BrokerMsg {
     LjungbSnapshotMsg(String, typhoon_engine::core::research::LjungBoxSnapshot),
     RunstestSnapshotMsg(String, typhoon_engine::core::research::RunsTestSnapshot),
     ZeroretSnapshotMsg(String, typhoon_engine::core::research::ZeroReturnSnapshot),
-    // ── Round 30 ──
+    // ── Research section ──
     PsrSnapshotMsg(
         String,
         typhoon_engine::core::research::ProbabilisticSharpeSnapshot,
@@ -3079,7 +3079,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::DrawdownDurationSnapshot,
     ),
-    // ── Round 31 ──
+    // ── Research section ──
     HilltailSnapshotMsg(String, typhoon_engine::core::research::HillTailSnapshot),
     ArchlmSnapshotMsg(String, typhoon_engine::core::research::ArchLmSnapshot),
     PainratioSnapshotMsg(String, typhoon_engine::core::research::PainRatioSnapshot),
@@ -3088,140 +3088,140 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::CornishFisherSnapshot,
     ),
-    // ── Round 32 ──
+    // ── Research section ──
     EntropySnapshotMsg(String, typhoon_engine::core::research::EntropySnapshot),
     RachevSnapshotMsg(String, typhoon_engine::core::research::RachevSnapshot),
     GprSnapshotMsg(String, typhoon_engine::core::research::GprSnapshot),
     PacfSnapshotMsg(String, typhoon_engine::core::research::PacfSnapshot),
     ApenSnapshotMsg(String, typhoon_engine::core::research::ApenSnapshot),
-    // ── Round 33 ──
+    // ── Research section ──
     UprSnapshotMsg(String, typhoon_engine::core::research::UprSnapshot),
     LevereffSnapshotMsg(String, typhoon_engine::core::research::LeverEffSnapshot),
     DrawdarSnapshotMsg(String, typhoon_engine::core::research::DrawDaRSnapshot),
     VarhalfSnapshotMsg(String, typhoon_engine::core::research::VarHalfSnapshot),
     GiniSnapshotMsg(String, typhoon_engine::core::research::GiniSnapshot),
-    // ── Round 34 ──
+    // ── Research section ──
     SampenSnapshotMsg(String, typhoon_engine::core::research::SampenSnapshot),
     PermenSnapshotMsg(String, typhoon_engine::core::research::PermenSnapshot),
     RecfactSnapshotMsg(String, typhoon_engine::core::research::RecfactSnapshot),
     KpssSnapshotMsg(String, typhoon_engine::core::research::KpssSnapshot),
     SpecentSnapshotMsg(String, typhoon_engine::core::research::SpecentSnapshot),
-    // ── Round 35 ──
+    // ── Research section ──
     RobvolSnapshotMsg(String, typhoon_engine::core::research::RobVolSnapshot),
     RenyientSnapshotMsg(String, typhoon_engine::core::research::RenyientSnapshot),
     RetquantSnapshotMsg(String, typhoon_engine::core::research::RetquantSnapshot),
     MsentSnapshotMsg(String, typhoon_engine::core::research::MsentSnapshot),
     EwmavolSnapshotMsg(String, typhoon_engine::core::research::EwmaVolSnapshot),
-    // ── Round 36 ──
+    // ── Research section ──
     KsnormSnapshotMsg(String, typhoon_engine::core::research::KsnormSnapshot),
     AdtestSnapshotMsg(String, typhoon_engine::core::research::AdtestSnapshot),
     LmomSnapshotMsg(String, typhoon_engine::core::research::LmomSnapshot),
     KylelamSnapshotMsg(String, typhoon_engine::core::research::KylelamSnapshot),
     PeakoverSnapshotMsg(String, typhoon_engine::core::research::PeakoverSnapshot),
-    // ── Round 37 ──
+    // ── Research section ──
     HiguchiSnapshotMsg(String, typhoon_engine::core::research::HiguchiSnapshot),
     PickandsSnapshotMsg(String, typhoon_engine::core::research::PickandsSnapshot),
     Kappa3SnapshotMsg(String, typhoon_engine::core::research::Kappa3Snapshot),
     LyapunovSnapshotMsg(String, typhoon_engine::core::research::LyapunovSnapshot),
     RankacSnapshotMsg(String, typhoon_engine::core::research::RankacSnapshot),
-    // ── Round 38 ──
+    // ── Research section ──
     BnsjumpSnapshotMsg(String, typhoon_engine::core::research::BnsjumpSnapshot),
     PprootSnapshotMsg(String, typhoon_engine::core::research::PprootSnapshot),
     MfdfaSnapshotMsg(String, typhoon_engine::core::research::MfdfaSnapshot),
     HillksSnapshotMsg(String, typhoon_engine::core::research::HillksSnapshot),
     TsiSnapshotMsg(String, typhoon_engine::core::research::TsiSnapshot),
-    // ── Round 39 ──
+    // ── Research section ──
     Garch11SnapshotMsg(String, typhoon_engine::core::research::Garch11Snapshot),
     SadfSnapshotMsg(String, typhoon_engine::core::research::SadfSnapshot),
     CordimSnapshotMsg(String, typhoon_engine::core::research::CordimSnapshot),
     SkspecSnapshotMsg(String, typhoon_engine::core::research::SkspecSnapshot),
     AutomiSnapshotMsg(String, typhoon_engine::core::research::AutomiSnapshot),
-    // ── Round 40 ──
+    // ── Research section ──
     DurbinWatsonSnapshotMsg(String, typhoon_engine::core::research::DurbinWatsonSnapshot),
     BdsTestSnapshotMsg(String, typhoon_engine::core::research::BdsTestSnapshot),
     BreuschPaganSnapshotMsg(String, typhoon_engine::core::research::BreuschPaganSnapshot),
     TurnPtsSnapshotMsg(String, typhoon_engine::core::research::TurnPtsSnapshot),
     PeriodogramSnapshotMsg(String, typhoon_engine::core::research::PeriodogramSnapshot),
-    // ── Round 41 ──
+    // ── Research section ──
     McLeodLiSnapshotMsg(String, typhoon_engine::core::research::McLeodLiSnapshot),
     OuFitSnapshotMsg(String, typhoon_engine::core::research::OuFitSnapshot),
     GphSnapshotMsg(String, typhoon_engine::core::research::GphSnapshot),
     BurgSpecSnapshotMsg(String, typhoon_engine::core::research::BurgSpecSnapshot),
     KendallTauSnapshotMsg(String, typhoon_engine::core::research::KendallTauSnapshot),
-    // ── Round 42 ──
+    // ── Research section ──
     SqueezeSnapshotMsg(String, typhoon_engine::core::research::SqueezeSnapshot),
     SqueezeRankSnapshotMsg(String, typhoon_engine::core::research::SqueezeRankSnapshot),
     SqueezeWatchlistLoaded(Vec<typhoon_engine::core::research::SqueezeSnapshot>),
     BbsqueezeSnapshotMsg(String, typhoon_engine::core::research::BbsqueezeSnapshot),
     DonchianSnapshotMsg(String, typhoon_engine::core::research::DonchianSnapshot),
     KamaSnapshotMsg(String, typhoon_engine::core::research::KamaSnapshot),
-    // ── Round 43 ──
+    // ── Research section ──
     IchimokuSnapshotMsg(String, typhoon_engine::core::research::IchimokuSnapshot),
     SupertrendSnapshotMsg(String, typhoon_engine::core::research::SupertrendSnapshot),
     KeltnerSnapshotMsg(String, typhoon_engine::core::research::KeltnerSnapshot),
     FisherSnapshotMsg(String, typhoon_engine::core::research::FisherSnapshot),
     AroonSnapshotMsg(String, typhoon_engine::core::research::AroonSnapshot),
-    // ── Round 44 ──
+    // ── Research section ──
     AdxSnapshotMsg(String, typhoon_engine::core::research::AdxSnapshot),
     CciSnapshotMsg(String, typhoon_engine::core::research::CciSnapshot),
     CmfSnapshotMsg(String, typhoon_engine::core::research::CmfSnapshot),
     MfiSnapshotMsg(String, typhoon_engine::core::research::MfiSnapshot),
     PsarSnapshotMsg(String, typhoon_engine::core::research::PsarSnapshot),
-    // ── Round 45 ──
+    // ── Research section ──
     VortexSnapshotMsg(String, typhoon_engine::core::research::VortexSnapshot),
     ChopSnapshotMsg(String, typhoon_engine::core::research::ChopSnapshot),
     ObvSnapshotMsg(String, typhoon_engine::core::research::ObvSnapshot),
     TrixSnapshotMsg(String, typhoon_engine::core::research::TrixSnapshot),
     HmaSnapshotMsg(String, typhoon_engine::core::research::HmaSnapshot),
-    // ── Round 46 ──
+    // ── Research section ──
     PpoSnapshotMsg(String, typhoon_engine::core::research::PpoSnapshot),
     DpoSnapshotMsg(String, typhoon_engine::core::research::DpoSnapshot),
     KstSnapshotMsg(String, typhoon_engine::core::research::KstSnapshot),
     UltoscSnapshotMsg(String, typhoon_engine::core::research::UltoscSnapshot),
     WillrSnapshotMsg(String, typhoon_engine::core::research::WillrSnapshot),
-    // ── Round 47 ──
+    // ── Research section ──
     MassSnapshotMsg(String, typhoon_engine::core::research::MassSnapshot),
     ChaikoscSnapshotMsg(String, typhoon_engine::core::research::ChaikoscSnapshot),
     KlingerSnapshotMsg(String, typhoon_engine::core::research::KlingerSnapshot),
     StochRsiSnapshotMsg(String, typhoon_engine::core::research::StochRsiSnapshot),
     AwesomeSnapshotMsg(String, typhoon_engine::core::research::AwesomeSnapshot),
-    // ── Round 48 ──
+    // ── Research section ──
     EfiSnapshotMsg(String, typhoon_engine::core::research::EfiSnapshot),
     EmvSnapshotMsg(String, typhoon_engine::core::research::EmvSnapshot),
     NviSnapshotMsg(String, typhoon_engine::core::research::NviSnapshot),
     PviSnapshotMsg(String, typhoon_engine::core::research::PviSnapshot),
     CoppockSnapshotMsg(String, typhoon_engine::core::research::CoppockSnapshot),
-    // ── Round 49 ──
+    // ── Research section ──
     CmoSnapshotMsg(String, typhoon_engine::core::research::CmoSnapshot),
     QstickSnapshotMsg(String, typhoon_engine::core::research::QstickSnapshot),
     DisparitySnapshotMsg(String, typhoon_engine::core::research::DisparitySnapshot),
     BopSnapshotMsg(String, typhoon_engine::core::research::BopSnapshot),
     SchaffSnapshotMsg(String, typhoon_engine::core::research::SchaffSnapshot),
-    // ── Round 50 ──
+    // ── Research moving-average palette aliases ──
     StochSnapshotMsg(String, typhoon_engine::core::research::StochSnapshot),
     MacdSnapshotMsg(String, typhoon_engine::core::research::MacdSnapshot),
     VwapSnapshotMsg(String, typhoon_engine::core::research::VwapSnapshot),
     McgdSnapshotMsg(String, typhoon_engine::core::research::McgdSnapshot),
     RwiSnapshotMsg(String, typhoon_engine::core::research::RwiSnapshot),
-    // ── Round 51 ──
+    // ── Research section ──
     DemaSnapshotMsg(String, typhoon_engine::core::research::DemaSnapshot),
     TemaSnapshotMsg(String, typhoon_engine::core::research::TemaSnapshot),
     LinregSnapshotMsg(String, typhoon_engine::core::research::LinregSnapshot),
     PivotsSnapshotMsg(String, typhoon_engine::core::research::PivotsSnapshot),
     HeikinSnapshotMsg(String, typhoon_engine::core::research::HeikinSnapshot),
-    // ── Round 52 ──
+    // ── Research section ──
     AlmaSnapshotMsg(String, typhoon_engine::core::research::AlmaSnapshot),
     ZlemaSnapshotMsg(String, typhoon_engine::core::research::ZlemaSnapshot),
     ElderRaySnapshotMsg(String, typhoon_engine::core::research::ElderRaySnapshot),
     TsfSnapshotMsg(String, typhoon_engine::core::research::TsfSnapshot),
     RviSnapshotMsg(String, typhoon_engine::core::research::RviSnapshot),
-    // ── Round 53 ──
+    // ── Research section ──
     TrimaSnapshotMsg(String, typhoon_engine::core::research::TrimaSnapshot),
     T3SnapshotMsg(String, typhoon_engine::core::research::T3Snapshot),
     VidyaSnapshotMsg(String, typhoon_engine::core::research::VidyaSnapshot),
     SmiSnapshotMsg(String, typhoon_engine::core::research::SmiSnapshot),
     PvtSnapshotMsg(String, typhoon_engine::core::research::PvtSnapshot),
-    // ── Round 54 ──
+    // ── Research section ──
     AcSnapshotMsg(String, typhoon_engine::core::research::AcSnapshot),
     ChvolSnapshotMsg(String, typhoon_engine::core::research::ChvolSnapshot),
     BbwidthSnapshotMsg(String, typhoon_engine::core::research::BbwidthSnapshot),
@@ -3232,55 +3232,55 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::SymbolExpirationsSnapshot,
     ),
-    // ── Round 55 ──
+    // ── Research section ──
     SmmaSnapshotMsg(String, typhoon_engine::core::research::SmmaSnapshot),
     AlligatorSnapshotMsg(String, typhoon_engine::core::research::AlligatorSnapshot),
     CrsiSnapshotMsg(String, typhoon_engine::core::research::CrsiSnapshot),
     SebSnapshotMsg(String, typhoon_engine::core::research::SebSnapshot),
     ImiSnapshotMsg(String, typhoon_engine::core::research::ImiSnapshot),
-    // ── Round 56 ──
+    // ── Research section ──
     GmmaSnapshotMsg(String, typhoon_engine::core::research::GmmaSnapshot),
     MaenvSnapshotMsg(String, typhoon_engine::core::research::MaenvSnapshot),
     AdlSnapshotMsg(String, typhoon_engine::core::research::AdlSnapshot),
     VhfSnapshotMsg(String, typhoon_engine::core::research::VhfSnapshot),
     VrocSnapshotMsg(String, typhoon_engine::core::research::VrocSnapshot),
-    // ── Round 57 ──
+    // ── Research section ──
     KdjSnapshotMsg(String, typhoon_engine::core::research::KdjSnapshot),
     QqeSnapshotMsg(String, typhoon_engine::core::research::QqeSnapshot),
     PmoSnapshotMsg(String, typhoon_engine::core::research::PmoSnapshot),
     CfoSnapshotMsg(String, typhoon_engine::core::research::CfoSnapshot),
     TmfSnapshotMsg(String, typhoon_engine::core::research::TmfSnapshot),
-    // ── Round 58 ──
+    // ── Research section ──
     FractalsSnapshotMsg(String, typhoon_engine::core::research::FractalsSnapshot),
     IftRsiSnapshotMsg(String, typhoon_engine::core::research::IftRsiSnapshot),
     MamaSnapshotMsg(String, typhoon_engine::core::research::MamaSnapshot),
     CogSnapshotMsg(String, typhoon_engine::core::research::CogSnapshot),
     DidiSnapshotMsg(String, typhoon_engine::core::research::DidiSnapshot),
-    // ── Round 59 ──
+    // ── Research section ──
     DemarkerSnapshotMsg(String, typhoon_engine::core::research::DemarkerSnapshot),
     GatorSnapshotMsg(String, typhoon_engine::core::research::GatorSnapshot),
     BwMfiSnapshotMsg(String, typhoon_engine::core::research::BwMfiSnapshot),
     VwmaSnapshotMsg(String, typhoon_engine::core::research::VwmaSnapshot),
     StddevSnapshotMsg(String, typhoon_engine::core::research::StddevSnapshot),
-    // ── Round 60 ──
+    // ── Research section ──
     WmaSnapshotMsg(String, typhoon_engine::core::research::WmaSnapshot),
     RainbowSnapshotMsg(String, typhoon_engine::core::research::RainbowSnapshot),
     MesaSineSnapshotMsg(String, typhoon_engine::core::research::MesaSineSnapshot),
     FramaSnapshotMsg(String, typhoon_engine::core::research::FramaSnapshot),
     IbsSnapshotMsg(String, typhoon_engine::core::research::IbsSnapshot),
-    // ── Round 61 ──
+    // ── Research section ──
     LaguerreRsiSnapshotMsg(String, typhoon_engine::core::research::LaguerreRsiSnapshot),
     ZigzagSnapshotMsg(String, typhoon_engine::core::research::ZigzagSnapshot),
     PgoSnapshotMsg(String, typhoon_engine::core::research::PgoSnapshot),
     HtTrendlineSnapshotMsg(String, typhoon_engine::core::research::HtTrendlineSnapshot),
     MidpointSnapshotMsg(String, typhoon_engine::core::research::MidpointSnapshot),
-    // ── Round 62 ──
+    // ── Research section ──
     MassIndexSnapshotMsg(String, typhoon_engine::core::research::MassIndexSnapshot),
     NatrSnapshotMsg(String, typhoon_engine::core::research::NatrSnapshot),
     TtmSqueezeSnapshotMsg(String, typhoon_engine::core::research::TtmSqueezeSnapshot),
     ForceIndexSnapshotMsg(String, typhoon_engine::core::research::ForceIndexSnapshot),
     TrangeSnapshotMsg(String, typhoon_engine::core::research::TrangeSnapshot),
-    // ── Round 63 ──
+    // ── Research section ──
     LinearregSlopeSnapshotMsg(
         String,
         typhoon_engine::core::research::LinearregSlopeSnapshot,
@@ -3289,7 +3289,7 @@ pub(crate) enum BrokerMsg {
     HtTrendmodeSnapshotMsg(String, typhoon_engine::core::research::HtTrendmodeSnapshot),
     AccbandsSnapshotMsg(String, typhoon_engine::core::research::AccbandsSnapshot),
     StochfSnapshotMsg(String, typhoon_engine::core::research::StochfSnapshot),
-    // ── Round 64 ──
+    // ── Research section ──
     LinearregSnapshotMsg(String, typhoon_engine::core::research::LinearregSnapshot),
     LinearregAngleSnapshotMsg(
         String,
@@ -3298,37 +3298,37 @@ pub(crate) enum BrokerMsg {
     HtDcphaseSnapshotMsg(String, typhoon_engine::core::research::HtDcphaseSnapshot),
     HtSineSnapshotMsg(String, typhoon_engine::core::research::HtSineSnapshot),
     HtPhasorSnapshotMsg(String, typhoon_engine::core::research::HtPhasorSnapshot),
-    // ── Round 65 ──
+    // ── Research section ──
     MidpriceSnapshotMsg(String, typhoon_engine::core::research::MidpriceSnapshot),
     ApoSnapshotMsg(String, typhoon_engine::core::research::ApoSnapshot),
     MomSnapshotMsg(String, typhoon_engine::core::research::MomSnapshot),
     SarextSnapshotMsg(String, typhoon_engine::core::research::SarextSnapshot),
     AdxrSnapshotMsg(String, typhoon_engine::core::research::AdxrSnapshot),
-    // ── Round 66 ──
+    // ── Research section ──
     AvgpriceSnapshotMsg(String, typhoon_engine::core::research::AvgpriceSnapshot),
     MedpriceSnapshotMsg(String, typhoon_engine::core::research::MedpriceSnapshot),
     TypPriceSnapshotMsg(String, typhoon_engine::core::research::TypPriceSnapshot),
     WclPriceSnapshotMsg(String, typhoon_engine::core::research::WclPriceSnapshot),
     VarianceSnapshotMsg(String, typhoon_engine::core::research::VarianceSnapshot),
-    // ── Round 67 ──
+    // ── Research section ──
     PlusDiSnapshotMsg(String, typhoon_engine::core::research::PlusDiSnapshot),
     MinusDiSnapshotMsg(String, typhoon_engine::core::research::MinusDiSnapshot),
     PlusDmSnapshotMsg(String, typhoon_engine::core::research::PlusDmSnapshot),
     MinusDmSnapshotMsg(String, typhoon_engine::core::research::MinusDmSnapshot),
     DxSnapshotMsg(String, typhoon_engine::core::research::DxSnapshot),
-    // ── Round 68 ──
+    // ── Research section ──
     RocSnapshotMsg(String, typhoon_engine::core::research::RocSnapshot),
     RocpSnapshotMsg(String, typhoon_engine::core::research::RocpSnapshot),
     RocrSnapshotMsg(String, typhoon_engine::core::research::RocrSnapshot),
     Rocr100SnapshotMsg(String, typhoon_engine::core::research::Rocr100Snapshot),
     CorrelSnapshotMsg(String, typhoon_engine::core::research::CorrelSnapshot),
-    // ── Round 69 ──
+    // ── Research section ──
     MinSnapshotMsg(String, typhoon_engine::core::research::MinSnapshot),
     MaxSnapshotMsg(String, typhoon_engine::core::research::MaxSnapshot),
     MinMaxSnapshotMsg(String, typhoon_engine::core::research::MinMaxSnapshot),
     MinIndexSnapshotMsg(String, typhoon_engine::core::research::MinIndexSnapshot),
     MaxIndexSnapshotMsg(String, typhoon_engine::core::research::MaxIndexSnapshot),
-    // ── Round 70 ──
+    // ── Research section ──
     BbandsSnapshotMsg(String, typhoon_engine::core::research::BbandsSnapshot),
     AdSnapshotMsg(String, typhoon_engine::core::research::AdSnapshot),
     AdoscSnapshotMsg(String, typhoon_engine::core::research::AdoscSnapshot),
@@ -3337,13 +3337,13 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::LinearRegInterceptSnapshot,
     ),
-    // ── Round 71 ──
+    // ── Research section ──
     AroonoscSnapshotMsg(String, typhoon_engine::core::research::AroonoscSnapshot),
     MinMaxIndexSnapshotMsg(String, typhoon_engine::core::research::MinMaxIndexSnapshot),
     MacdextSnapshotMsg(String, typhoon_engine::core::research::MacdextSnapshot),
     MacdfixSnapshotMsg(String, typhoon_engine::core::research::MacdfixSnapshot),
     MavpSnapshotMsg(String, typhoon_engine::core::research::MavpSnapshot),
-    // ── Round 72 ──
+    // ── Research section ──
     CdlDojiSnapshotMsg(String, typhoon_engine::core::research::CdlDojiSnapshot),
     CdlHammerSnapshotMsg(String, typhoon_engine::core::research::CdlHammerSnapshot),
     CdlShootingStarSnapshotMsg(
@@ -3352,7 +3352,7 @@ pub(crate) enum BrokerMsg {
     ),
     CdlEngulfingSnapshotMsg(String, typhoon_engine::core::research::CdlEngulfingSnapshot),
     CdlHaramiSnapshotMsg(String, typhoon_engine::core::research::CdlHaramiSnapshot),
-    // ── Round 73 ──
+    // ── Research section ──
     CdlMorningStarSnapshotMsg(
         String,
         typhoon_engine::core::research::CdlMorningStarSnapshot,
@@ -3373,7 +3373,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::CdlDarkCloudCoverSnapshot,
     ),
-    // ── Round 74 ──
+    // ── Research section ──
     CdlPiercingSnapshotMsg(String, typhoon_engine::core::research::CdlPiercingSnapshot),
     CdlDragonflyDojiSnapshotMsg(
         String,
@@ -3391,7 +3391,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::CdlInvertedHammerSnapshot,
     ),
-    // ── Round 75 ──
+    // ── Research section ──
     CdlHaramiCrossSnapshotMsg(
         String,
         typhoon_engine::core::research::CdlHaramiCrossSnapshot,
@@ -3406,7 +3406,7 @@ pub(crate) enum BrokerMsg {
         typhoon_engine::core::research::CdlSpinningTopSnapshot,
     ),
     CdlTristarSnapshotMsg(String, typhoon_engine::core::research::CdlTristarSnapshot),
-    // ── Round 76 ──
+    // ── Research section ──
     CdlDojiStarSnapshotMsg(String, typhoon_engine::core::research::CdlDojiStarSnapshot),
     CdlMorningDojiStarSnapshotMsg(
         String,
@@ -3424,7 +3424,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::CdlThreeInsideSnapshot,
     ),
-    // ── Round 77 ──
+    // ── Research section ──
     CdlBeltHoldSnapshotMsg(String, typhoon_engine::core::research::CdlBeltHoldSnapshot),
     CdlClosingMarubozuSnapshotMsg(
         String,
@@ -3433,7 +3433,7 @@ pub(crate) enum BrokerMsg {
     CdlHighWaveSnapshotMsg(String, typhoon_engine::core::research::CdlHighWaveSnapshot),
     CdlLongLineSnapshotMsg(String, typhoon_engine::core::research::CdlLongLineSnapshot),
     CdlShortLineSnapshotMsg(String, typhoon_engine::core::research::CdlShortLineSnapshot),
-    // ── Round 78 ──
+    // ── Research section ──
     CdlCounterattackSnapshotMsg(
         String,
         typhoon_engine::core::research::CdlCounterattackSnapshot,
@@ -3445,7 +3445,7 @@ pub(crate) enum BrokerMsg {
     CdlInNeckSnapshotMsg(String, typhoon_engine::core::research::CdlInNeckSnapshot),
     CdlOnNeckSnapshotMsg(String, typhoon_engine::core::research::CdlOnNeckSnapshot),
     CdlThrustingSnapshotMsg(String, typhoon_engine::core::research::CdlThrustingSnapshot),
-    // ── Round 79/80 ──
+    // ── Research section ──
     CdlTwoCrowsSnapshotMsg(String, typhoon_engine::core::research::CdlTwoCrowsSnapshot),
     CdlThreeLineStrikeSnapshotMsg(
         String,
@@ -3472,7 +3472,7 @@ pub(crate) enum BrokerMsg {
         typhoon_engine::core::research::CdlRickshawManSnapshot,
     ),
     CdlTakuriSnapshotMsg(String, typhoon_engine::core::research::CdlTakuriSnapshot),
-    // ── Round 81/82 ──
+    // ── Research section ──
     CdlThreeStarsInSouthSnapshotMsg(
         String,
         typhoon_engine::core::research::CdlThreeStarsInSouthSnapshot,
@@ -3494,7 +3494,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::CdlUniqueThreeRiverSnapshot,
     ),
-    // ── Round 83/84 ──
+    // ── Research section ──
     CdlAdvanceBlockSnapshotMsg(
         String,
         typhoon_engine::core::research::CdlAdvanceBlockSnapshot,
@@ -3516,7 +3516,7 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::CdlConcealBabySwallowSnapshot,
     ),
-    // ── Round 85/86 ──
+    // ── Research section ──
     CdlHikkakeSnapshotMsg(String, typhoon_engine::core::research::CdlHikkakeSnapshot),
     CdlHikkakeModSnapshotMsg(
         String,
@@ -3527,19 +3527,19 @@ pub(crate) enum BrokerMsg {
         String,
         typhoon_engine::core::research::CdlRiseFallThreeMethodsSnapshot,
     ),
-    // ── Round 87/88 ──
+    // ── Research section ──
     CdlStalledPatternSnapshotMsg(
         String,
         typhoon_engine::core::research::CdlStalledPatternSnapshot,
     ),
     CdlTasukiGapSnapshotMsg(String, typhoon_engine::core::research::CdlTasukiGapSnapshot),
-    // ── Round 76 (Quant Stats) ──
+    // ── (Quant Stats) ──
     ModSharpeSnapshotMsg(String, typhoon_engine::core::research::ModSharpeSnapshot),
     HsiehTestSnapshotMsg(String, typhoon_engine::core::research::HsiehTestSnapshot),
     ChowBreakSnapshotMsg(String, typhoon_engine::core::research::ChowBreakSnapshot),
     DriftBurstSnapshotMsg(String, typhoon_engine::core::research::DriftBurstSnapshot),
     HlvClustSnapshotMsg(String, typhoon_engine::core::research::HlvClustSnapshot),
-    // ── Round 77 (Quant Stats) ──
+    // ── (Quant Stats) ──
     YangZhangSnapshotMsg(String, typhoon_engine::core::research::YangZhangVolSnapshot),
     KuiperSnapshotMsg(String, typhoon_engine::core::research::KuiperSnapshot),
     DagostinoSnapshotMsg(String, typhoon_engine::core::research::DagostinoSnapshot),

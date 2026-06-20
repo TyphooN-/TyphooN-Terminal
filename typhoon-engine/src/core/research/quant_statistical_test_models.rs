@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 76 (Quant Stats) compute fns ────────────────────────────
+// ── (Quant Stats) compute fns ──
 
 /// MODSHARPE compute: Pezier-White Adjusted Sharpe Ratio.
 /// ASR = SR · [1 + (S/6)·SR − ((K−3)/24)·SR²] where S, K are the skewness
@@ -459,7 +459,7 @@ pub fn compute_hlvclust_snapshot(
     }
 }
 
-// ── Round 77: YANGZHANG / KUIPER / DAGOSTINO / BAIPERRON / KUPIECPOF ──
+// ── YANGZHANG / KUIPER / DAGOSTINO / BAIPERRON / KUPIECPOF ──
 
 pub fn compute_yangzhang_snapshot(
     symbol: &str,

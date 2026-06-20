@@ -7,7 +7,7 @@ impl TyphooNApp {
             if let Some(conn) = cache.try_connection() {
                 use typhoon_engine::core::research as rx;
 
-                // ── Round 16 — rank & drift surfaces ──────────────
+                // ── rank & drift surfaces ──────────────
                 if let Ok(Some(vr)) = rx::get_vrk(&conn, &sym_upper) {
                     if vr.rank_label != "NO_DATA" && !vr.rank_label.is_empty() {
                         let _ = writeln!(
@@ -168,7 +168,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 17 ──
+                // ── Research section ──
                 if let Ok(Some(sf)) = rx::get_sizef(&conn, &sym_upper) {
                     if sf.rank_label != "NO_DATA"
                         && sf.rank_label != "INSUFFICIENT_DATA"
@@ -326,7 +326,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 18 ──
+                // ── Research section ──
                 if let Ok(Some(lv)) = rx::get_levrank(&conn, &sym_upper) {
                     if lv.rank_label != "NO_DATA"
                         && lv.rank_label != "INSUFFICIENT_DATA"
@@ -541,7 +541,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 19 ──
+                // ── Research section ──
                 if let Ok(Some(dr)) = rx::get_dvdrank(&conn, &sym_upper) {
                     if dr.rank_label != "NO_DATA"
                         && dr.rank_label != "INSUFFICIENT_DATA"
@@ -717,7 +717,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 20 ──
+                // ── Research section ──
                 if let Ok(Some(dyr)) = rx::get_dvdyieldrank(&conn, &sym_upper) {
                     if dyr.rank_label != "NO_DATA"
                         && dyr.rank_label != "INSUFFICIENT_DATA"
@@ -985,7 +985,7 @@ impl TyphooNApp {
                     }
                 }
 
-                // ── Round 21 ──
+                // ── Research section ──
                 if let Ok(Some(br)) = rx::get_betarank(&conn, &sym_upper) {
                     if br.rank_label != "NO_DATA"
                         && br.rank_label != "INSUFFICIENT_DATA"

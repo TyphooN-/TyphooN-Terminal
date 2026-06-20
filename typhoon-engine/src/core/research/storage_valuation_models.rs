@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 8 schema: HRA / DCF / SVM / OMON / IVOL ────────────────
+// ── : HRA / DCF / SVM / OMON / IVOL ──
 
 pub fn create_research_tables_v8(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(

@@ -147,7 +147,7 @@ pub(super) fn handle_technical_indicator_command(
                 shared_cache_broker.clone(),
             );
         }
-        // ── Round 52 compute handlers ──
+        // ── compute handlers ──
         cmd @ (BrokerCmd::ComputeAlmaSnapshot { .. }
         | BrokerCmd::ComputeZlemaSnapshot { .. }
         | BrokerCmd::ComputeTrimaSnapshot { .. }
@@ -286,7 +286,7 @@ pub(super) fn handle_technical_indicator_command(
                 shared_cache_broker.clone(),
             );
         }
-        // ── Round 62 handlers ──
+        // ── handlers ──
         cmd @ (BrokerCmd::ComputeMassIndexSnapshot { .. }
         | BrokerCmd::ComputeNatrSnapshot { .. }
         | BrokerCmd::ComputeTtmSqueezeSnapshot { .. }
@@ -298,7 +298,7 @@ pub(super) fn handle_technical_indicator_command(
                 shared_cache_broker.clone(),
             );
         }
-        // ── Round 63 handlers ──
+        // ── handlers ──
         cmd @ (BrokerCmd::ComputeLinearregSlopeSnapshot { .. }
         | BrokerCmd::ComputeLinearregSnapshot { .. }
         | BrokerCmd::ComputeLinearregAngleSnapshot { .. }
@@ -329,8 +329,8 @@ pub(super) fn handle_technical_indicator_command(
                 shared_cache_broker.clone(),
             );
         }
-        // ── Round 64 handlers ──
-        // ── Round 65 handlers ──
+        // ── handlers ──
+        // ── handlers ──
         cmd @ (BrokerCmd::ComputeSarextSnapshot { .. }
         | BrokerCmd::ComputeAdxrSnapshot { .. }
         | BrokerCmd::ComputePlusDiSnapshot { .. }
@@ -344,9 +344,9 @@ pub(super) fn handle_technical_indicator_command(
                 shared_cache_broker.clone(),
             );
         }
-        // ── Round 66: AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE ──
-        // ── Round 67: PLUS_DI / MINUS_DI / PLUS_DM / MINUS_DM / DX ──
-        // ── Round 68 handlers ──
+        // ── AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE ──
+        // ── PLUS_DI / MINUS_DI / PLUS_DM / MINUS_DM / DX ──
+        // ── handlers ──
         cmd @ (BrokerCmd::ComputeRocSnapshot { .. }
         | BrokerCmd::ComputeRocpSnapshot { .. }
         | BrokerCmd::ComputeRocrSnapshot { .. }
@@ -371,9 +371,9 @@ pub(super) fn handle_technical_indicator_command(
                 shared_cache_broker.clone(),
             );
         }
-        // ── Round 69 handlers ──
-        // ── Round 70 broker handlers ──
-        // ── Round 71 handlers ──
+        // ── handlers ──
+        // ── broker handlers ──
+        // ── handlers ──
         cmd @ (BrokerCmd::ComputeMacdextSnapshot { .. }
         | BrokerCmd::ComputeMacdfixSnapshot { .. }) => {
             macd_variants::handle_macd_variant_compute(
@@ -389,7 +389,7 @@ pub(super) fn handle_technical_indicator_command(
                 shared_cache_broker.clone(),
             );
         }
-        // ── Round 72 CDL* handlers ──
+        // ── CDL* handlers ──
         cmd @ (BrokerCmd::ComputeCdlDojiSnapshot { .. }
         | BrokerCmd::ComputeCdlHammerSnapshot { .. }
         | BrokerCmd::ComputeCdlShootingStarSnapshot { .. }
@@ -457,18 +457,18 @@ pub(super) fn handle_technical_indicator_command(
                 shared_cache_broker.clone(),
             );
         }
-        // ── Round 73 handlers — CDL* 3-bar / 2-bar patterns ──
-        // ── Round 74 handlers — CDL* piercing / doji variants / hammer mirrors ──
-        // ── Round 75 handlers — CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
-        // ── Round 76 handlers — CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
-        // ── Round 77 handlers — CDL* belt hold / closing marubozu / high wave / long line / short line ──
-        // ── Round 78 handlers — CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
-        // ── Round 79/80 handlers — additional CDL* parity windows ──
-        // ── Round 81/82 handlers — harder CDL* parity windows ──
-        // ── Round 83/84 handlers — additional multi-bar CDL* parity windows ──
-        // ── Round 85/86 handlers — stateful CDL* parity windows ──
-        // ── Round 87/88 handlers — final CDL* parity windows ──
-        // ── Round 76 (Quant Stats) handlers ──
+        // ── handlers — CDL* 3-bar / 2-bar patterns ──
+        // ── handlers — CDL* piercing / doji variants / hammer mirrors ──
+        // ── handlers — CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
+        // ── handlers — CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
+        // ── handlers — CDL* belt hold / closing marubozu / high wave / long line / short line ──
+        // ── handlers — CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
+        // ── handlers — additional CDL* parity windows ──
+        // ── handlers — harder CDL* parity windows ──
+        // ── handlers — additional multi-bar CDL* parity windows ──
+        // ── handlers — stateful CDL* parity windows ──
+        // ── handlers — final CDL* parity windows ──
+        // ── (Quant Stats) handlers ──
         _ => unreachable!("non-technical-indicator command routed to technical indicator handler"),
     }
 }

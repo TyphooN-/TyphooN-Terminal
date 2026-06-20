@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 4 windows ──────────────────────────────────
+        // ── Research section ──
 
         // SPLT — Stock Split History
         if self.show_splits {

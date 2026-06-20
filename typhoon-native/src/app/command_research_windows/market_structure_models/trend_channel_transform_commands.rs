@@ -1,12 +1,12 @@
 use super::super::*;
 
 impl TyphooNApp {
-    pub(super) fn handle_trend_channel_transform_round_43_command(
+    pub(super) fn handle_trend_channel_transform_commands_command(
         &mut self,
         cmd_upper: &String,
     ) -> bool {
         match cmd_upper.as_str() {
-            // ── Round 43 palette aliases ──
+            // ── Trend, channel, and transform palette aliases ──
             // Bare ICHIMOKU / SUPERTREND / KELTNER / FISHER are already bound to
             // chart-overlay toggles upstream; only disambiguated forms are used here.
             "ICHIMOKUFIT" | "ICHIMOKU_WIN" | "IKH" | "KUMO" | "TENKAN_KIJUN" => {

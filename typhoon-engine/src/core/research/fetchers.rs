@@ -914,7 +914,7 @@ pub async fn fetch_fmp_index_members(
     Ok(rows)
 }
 
-// ── Round 5 fetchers ───────────────────────────────────────────────
+// ── fetchers ──
 
 /// FMP /v4/insider-trading — SEC Form 4 insider trade rows (default page=0, up to 100 rows).
 pub async fn fetch_fmp_insider_trades(
@@ -1154,7 +1154,7 @@ pub async fn fetch_fmp_earnings_surprises(
     Ok(rows)
 }
 
-// ── Round 6 fetchers ───────────────────────────────────────────────
+// ── fetchers ──
 
 /// Yahoo batch-quote the WORLD_INDICES_UNIVERSE tickers for the WEI dashboard.
 /// Returns rows in the universe's declared order so the UI grouping stays stable.

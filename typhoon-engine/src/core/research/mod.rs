@@ -500,7 +500,7 @@ pub fn get_symbol_expirations(
     }
 }
 
-// ── Round 89/90 schema v89 (deferred Godel parity surfaces) ─────
+// ── v89 (deferred Godel parity surfaces) ──
 //    MOMRANK_MULTI / CORRSTK
 
 pub fn create_research_tables_v89(conn: &Connection) -> Result<(), String> {
@@ -607,7 +607,7 @@ pub fn get_all_corrstk(conn: &Connection) -> Result<Vec<CorrStkSnapshot>, String
     Ok(rows)
 }
 
-// ── Round 91/92 schema v90 (deferred peer-rank follow-through) ──
+// ── v90 (deferred peer-rank follow-through) ──
 //    TLRANK / CORRRANK
 
 pub fn create_research_tables_v90(conn: &Connection) -> Result<(), String> {
@@ -705,7 +705,7 @@ pub fn get_corrrank(
     }
 }
 
-// ── Round 93/94 schema v91 (remaining cache-backed parity) ──────
+// ── v91 (remaining cache-backed parity) ──
 //    OPERANK_DELTA / DIVACC / EPSACC / VRP
 
 pub fn create_research_tables_v91(conn: &Connection) -> Result<(), String> {
@@ -888,7 +888,7 @@ pub fn get_vrp(conn: &Connection, symbol: &str) -> Result<Option<VolRiskPremiumS
     }
 }
 
-// ── Round 95 schema v92 (short-interest history + trend rank) ────
+// ── v92 (short-interest history + trend rank) ──
 //    SHORT_INTEREST_HISTORY / SHORTRANK_DELTA
 
 pub fn create_research_tables_v92(conn: &Connection) -> Result<(), String> {
@@ -1018,7 +1018,7 @@ pub fn get_shortrank_delta(
     }
 }
 
-// ── Round 96 schema v93 (insider ownership concentration) ────────
+// ── v93 (insider ownership concentration) ──
 //    INSIDERCONC
 
 pub fn create_research_tables_v93(conn: &Connection) -> Result<(), String> {

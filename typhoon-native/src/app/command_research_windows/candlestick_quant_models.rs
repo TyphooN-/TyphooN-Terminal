@@ -3,7 +3,7 @@ use super::*;
 impl TyphooNApp {
     pub(super) fn handle_candlestick_quant_model_command(&mut self, cmd_upper: &String) -> bool {
         match cmd_upper.as_str() {
-            // ── Round 71 palette aliases ──
+            // ── palette aliases ──
             "AROONOSC" | "AROONOSCWIN" | "AROON_OSC" | "AROONOSCILLATOR" | "AROON_DIFF" => {
                 let sym = self
                     .charts
@@ -342,7 +342,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 73 — CDL* 3-bar / 2-bar patterns ──
+            // ── CDL* 3-bar / 2-bar patterns ──
             "CDLMORNINGSTAR"
             | "MORNINGSTAR"
             | "MORNING_STAR"
@@ -538,7 +538,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 74 — CDL* piercing / doji variants / hammer mirrors ──
+            // ── CDL* piercing / doji variants / hammer mirrors ──
             "CDLPIERCING" | "PIERCING" | "PIERCING_LINE" | "PIERCINGLINE" | "CDLPIERCINGWIN" => {
                 let sym = self
                     .charts
@@ -724,7 +724,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 75 — CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
+            // ── CDL* harami cross / long-legged doji / marubozu / spinning top / tristar ──
             "CDLHARAMICROSS"
             | "HARAMICROSS"
             | "HARAMI_CROSS"
@@ -909,7 +909,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 76 — CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
+            // ── CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
             "CDLDOJISTAR" | "DOJISTAR" | "DOJI_STAR" | "CDLDOJISTARWIN" | "DOJISTAR_PATTERN" => {
                 let sym = self
                     .charts
@@ -1101,7 +1101,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 77 — CDL* belt hold / closing marubozu / high wave / long line / short line ──
+            // ── CDL* belt hold / closing marubozu / high wave / long line / short line ──
             "CDLBELTHOLD" | "BELTHOLD" | "BELT_HOLD" | "CDLBELTHOLDWIN" | "BELT_HOLD_PATTERN" => {
                 let sym = self
                     .charts
@@ -1282,7 +1282,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 78 — CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
+            // ── CDL* counterattack / homing pigeon / in-neck / on-neck / thrusting ──
             "CDLCOUNTERATTACK"
             | "COUNTERATTACK"
             | "COUNTER_ATTACK"
@@ -2422,7 +2422,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 76 Quant Stats aliases ──
+            // ── Quant Stats aliases ──
             "MODSHARPE" | "ADJSHARPE" | "ADJUSTED_SHARPE" | "PEZIER_WHITE" | "MODSHARPEWIN" => {
                 let sym = self
                     .charts
@@ -2588,7 +2588,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 77 palette aliases (Quant Stats) ──
+            // ── palette aliases (Quant Stats) ──
             "YANGZHANG" | "YZ_VOL" | "YZVOL" | "YZ_RANGEVOL" | "YANGZHANGWIN" => {
                 let sym = self
                     .charts

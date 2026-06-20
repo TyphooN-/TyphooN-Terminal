@@ -3,7 +3,7 @@ use super::*;
 impl TyphooNApp {
     pub(super) fn handle_research_quant_snapshot_msg(&mut self, msg: BrokerMsg) {
         match msg {
-            // ── Round 26 receive ──
+            // ── Research section ──
             BrokerMsg::CalmarSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.calmar_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -65,7 +65,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 27 receive ──
+            // ── Research section ──
             BrokerMsg::OmegaSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.omega_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -128,7 +128,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 28 receive ──
+            // ── Research section ──
             BrokerMsg::ParkinsonSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.parkinson_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -191,7 +191,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 29 receive ──
+            // ── Research section ──
             BrokerMsg::SterlingSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.sterling_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -255,7 +255,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 30 receive ──
+            // ── Research section ──
             BrokerMsg::PsrSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.psr_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -318,7 +318,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 31 receive ──
+            // ── Research section ──
             BrokerMsg::HilltailSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.hilltail_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -381,7 +381,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 32 receive ──
+            // ── Research section ──
             BrokerMsg::EntropySnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.entropy_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -443,7 +443,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 33 receive ──
+            // ── Research section ──
             BrokerMsg::UprSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.upr_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -507,7 +507,7 @@ impl TyphooNApp {
                     }
                 }
             }
-            // ── Round 34 receive ──
+            // ── Research section ──
             BrokerMsg::SampenSnapshotMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.sampen_symbol.eq_ignore_ascii_case(&sym_u) {

@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 22 schema v22 + wrappers ──
+// ── v22 + wrappers ──
 
 pub fn create_research_tables_v22(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v21(conn);

@@ -1,6 +1,6 @@
 use super::*;
 
-// ── Round 6+ SQLite storage helpers (macro snapshots) ─────────────────
+// ── + SQLite storage helpers (macro snapshots) ──
 
 pub fn create_research_tables_v6(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(

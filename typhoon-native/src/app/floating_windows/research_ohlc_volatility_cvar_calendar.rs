@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 28 windows ──
+        // ── Research section ──
         if self.show_parkinson {
             if self.parkinson_symbol.is_empty() {
                 self.parkinson_symbol = chart_sym_research.clone();

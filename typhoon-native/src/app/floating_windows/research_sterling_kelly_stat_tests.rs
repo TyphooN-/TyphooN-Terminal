@@ -19,7 +19,7 @@ impl TyphooNApp {
             })
             .unwrap_or_else(|| "AAPL".to_string());
 
-        // ── Research Round 29 windows ──
+        // ── Research section ──
 
         if self.show_sterling {
             if self.sterling_symbol.is_empty() {

@@ -1,6 +1,6 @@
 use super::*;
 
-/// Round 40 schema v41: adds `research_durbinwatson`,
+/// adds `research_durbinwatson`,
 /// `research_bdstest`, `research_breuschpagan`, `research_turnpts`,
 /// `research_periodogram`. Additive over v40.
 pub fn create_research_tables_v41(conn: &Connection) -> Result<(), String> {
@@ -208,7 +208,7 @@ pub fn get_periodogram(
     }
 }
 
-/// Round 41 schema v42: adds `research_mcleodli`, `research_oufit`,
+/// adds `research_mcleodli`, `research_oufit`,
 /// `research_gph`, `research_burgspec`, `research_kendalltau`. Additive over v41.
 pub fn create_research_tables_v42(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v41(conn);
@@ -401,7 +401,7 @@ pub fn get_kendalltau(
     }
 }
 
-// ── Round 42 schema ────────────────────────────────────────────────
+// ── Research section ──
 
 pub fn create_research_tables_v43(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v42(conn);
@@ -613,7 +613,7 @@ pub fn get_kama(conn: &Connection, symbol: &str) -> Result<Option<KamaSnapshot>,
     }
 }
 
-// ── Round 43 schema ────────────────────────────────────────────────
+// ── Research section ──
 
 pub fn create_research_tables_v44(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v43(conn);
@@ -1530,7 +1530,7 @@ pub fn get_awesome(conn: &Connection, symbol: &str) -> Result<Option<AwesomeSnap
     }
 }
 
-/// Round 48 tables: EFI, EMV, NVI, PVI, COPPOCK.
+/// tables: EFI, EMV, NVI, PVI, COPPOCK.
 pub fn create_research_tables_v49(conn: &Connection) -> Result<(), String> {
     let _ = create_research_tables_v48(conn);
     conn.execute_batch(

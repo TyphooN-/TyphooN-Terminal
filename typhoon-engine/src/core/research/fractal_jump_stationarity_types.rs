@@ -86,7 +86,7 @@ pub struct EwmaVolSnapshot {
     pub note: String,
 }
 
-// ── Round 36 ──────────────────────────────────────────────────────
+// ── Research section ──
 
 /// KSNORM — Kolmogorov-Smirnov normality test (standardised returns vs N(0,1)).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -175,7 +175,7 @@ pub struct PeakoverSnapshot {
     pub note: String,
 }
 
-// ── Round 37 ──────────────────────────────────────────────────────
+// ── Research section ──
 
 /// HIGUCHI — Higuchi fractal dimension (Higuchi 1988).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
