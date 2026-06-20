@@ -310,6 +310,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [122](docs/adr/122-curated-stock-split-fallback-for-equity-merge.md) | Curated Stock-Split Fallback for Equity-Merge Back-Adjustment |
 | [123](docs/adr/123-mtf-overlay-price-scale-consistency.md) | MTF Overlay Price-Scale Consistency (MTF_MA / MultiKAMA) |
 | [124](docs/adr/124-depth-era-promotion-must-not-redefine-price-scale.md) | Depth-Era Promotion Must Not Redefine the Price Scale |
+| [125](docs/adr/125-native-crate-boundary-plan.md) | Native Crate Boundary Plan |
 
 ---
 

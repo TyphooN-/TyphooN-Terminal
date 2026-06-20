@@ -18,7 +18,7 @@ Thematic groups for onboarding:
 - **Chart/rendering UX:** ADR-001, 002, 004, 005, 007, 016, 017, 027, 030, 048, 098, 119.
 - **Broker/data sync:** ADR-003, 008, 009, 029, 036, 050, 051, 087, 094, 095, 099, 101, 102, 103, 107, 109, 110, 111, 112, 113.
 - **Research/news/fundamentals:** ADR-011, 020, 034, 056, 057, 062, 063, 073, 078, 080, 096, 100, 116, 117, 120.
-- **Performance/security/maintenance:** ADR-006, 031, 032, 033, 039, 044, 059, 061, 077, 088, 089, 091, 098, 108, 118.
+- **Performance/security/maintenance:** ADR-006, 031, 032, 033, 039, 044, 059, 061, 077, 088, 089, 091, 098, 108, 118, 125.
 - **Trading/workflow/AI:** ADR-013, 014, 015, 053, 082, 083, 084, 114, 115.
 
 See the root README ADR Index for the numbered list.
