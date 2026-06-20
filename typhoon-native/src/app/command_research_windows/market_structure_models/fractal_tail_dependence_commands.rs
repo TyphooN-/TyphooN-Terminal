@@ -1,10 +1,7 @@
 use super::super::*;
 
 impl TyphooNApp {
-    pub(super) fn handle_fractal_tail_dependence_commands_command(
-        &mut self,
-        cmd_upper: &String,
-    ) -> bool {
+    pub(super) fn handle_fractal_tail_dependence_command(&mut self, cmd_upper: &String) -> bool {
         match cmd_upper.as_str() {
             // ── Fractal and tail-dependence palette aliases ──
             "HIGUCHI" | "HIGUCHI_FD" | "FRACTAL_DIM" | "FRACTALDIM" | "HFD" => {

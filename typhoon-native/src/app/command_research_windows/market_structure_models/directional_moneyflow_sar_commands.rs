@@ -1,10 +1,13 @@
 use super::super::*;
 
 impl TyphooNApp {
-    pub(super) fn handle_jump_stationarity_tail_command(&mut self, cmd_upper: &String) -> bool {
+    pub(super) fn handle_directional_moneyflow_sar_command(&mut self, cmd_upper: &String) -> bool {
         match cmd_upper.as_str() {
-            // ── Jump, stationarity, and tail palette aliases ──
-            "BNSJUMP" | "BNS_JUMP" | "JUMPTEST" | "JUMP_TEST" | "BARNDORFF" | "BIPOWERJUMP" => {
+            // ── Directional, money-flow, and SAR palette aliases ──
+            // Bare ADX / CCI / PSAR are already bound to chart-overlay toggles upstream;
+            // only disambiguated forms are used for ADX/CCI/PSAR research windows.
+            // Bare CMF and MFI are unbound and kept as aliases.
+            "ADXFIT" | "ADX_WIN" | "ADXREG" | "DIRECTIONAL_INDEX" | "WILDERADX" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -19,88 +22,23 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.bnsjump_symbol = sym;
+                    self.adx_win_symbol = sym;
                 }
-                self.show_bnsjump = true;
-                if self.bnsjump_snapshot.symbol.is_empty() && !self.bnsjump_symbol.is_empty() {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_bnsjump(
-                                &conn,
-                                &self.bnsjump_symbol,
-                            ) {
-                                self.bnsjump_snapshot = snap;
-                            }
-                        }
-                    }
-                }
-                true
-            }
-            "PPROOT" | "PHILLIPS_PERRON" | "PHILLIPSPERRON" | "PP_TEST" | "PPTEST"
-            | "UNITROOTPP" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    self.pproot_symbol = sym;
-                }
-                self.show_pproot = true;
-                if self.pproot_snapshot.symbol.is_empty() && !self.pproot_symbol.is_empty() {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_pproot(
-                                &conn,
-                                &self.pproot_symbol,
-                            ) {
-                                self.pproot_snapshot = snap;
-                            }
-                        }
-                    }
-                }
-                true
-            }
-            "MFDFA" | "MF_DFA" | "MULTIFRACTAL" | "MULTIFRACTALDFA" | "MFSPECTRUM" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    self.mfdfa_symbol = sym;
-                }
-                self.show_mfdfa = true;
-                if self.mfdfa_snapshot.symbol.is_empty() && !self.mfdfa_symbol.is_empty() {
+                self.show_adx_win = true;
+                if self.adx_win_snapshot.symbol.is_empty() && !self.adx_win_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             if let Ok(Some(snap)) =
-                                typhoon_engine::core::research::get_mfdfa(&conn, &self.mfdfa_symbol)
+                                typhoon_engine::core::research::get_adx(&conn, &self.adx_win_symbol)
                             {
-                                self.mfdfa_snapshot = snap;
+                                self.adx_win_snapshot = snap;
                             }
                         }
                     }
                 }
                 true
             }
-            "HILLKS" | "HILL_KS" | "PARETO_KS" | "TAILFIT" | "HILLTAILFIT" | "HILLGOF" => {
+            "CCIFIT" | "CCI_WIN" | "CCIREG" | "COMMODITY_CHANNEL" | "LAMBERTCCI" => {
                 let sym = self
                     .charts
                     .get(self.active_tab)
@@ -115,49 +53,110 @@ impl TyphooNApp {
                     })
                     .unwrap_or_default();
                 if !sym.is_empty() {
-                    self.hillks_symbol = sym;
+                    self.cci_win_symbol = sym;
                 }
-                self.show_hillks = true;
-                if self.hillks_snapshot.symbol.is_empty() && !self.hillks_symbol.is_empty() {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_hillks(
-                                &conn,
-                                &self.hillks_symbol,
-                            ) {
-                                self.hillks_snapshot = snap;
-                            }
-                        }
-                    }
-                }
-                true
-            }
-            "TSI" | "TRUE_STRENGTH" | "TRUESTRENGTHINDEX" | "BLAU_TSI" | "BLAUINDEX"
-            | "MOMENTUMTSI" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    self.tsi_symbol = sym;
-                }
-                self.show_tsi = true;
-                if self.tsi_snapshot.symbol.is_empty() && !self.tsi_symbol.is_empty() {
+                self.show_cci_win = true;
+                if self.cci_win_snapshot.symbol.is_empty() && !self.cci_win_symbol.is_empty() {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             if let Ok(Some(snap)) =
-                                typhoon_engine::core::research::get_tsi(&conn, &self.tsi_symbol)
+                                typhoon_engine::core::research::get_cci(&conn, &self.cci_win_symbol)
                             {
-                                self.tsi_snapshot = snap;
+                                self.cci_win_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+                true
+            }
+            "CMF" | "CMFFIT" | "CHAIKIN_MF" | "CHAIKIN_MONEY_FLOW" | "MONEYFLOW_CMF" => {
+                let sym = self
+                    .charts
+                    .get(self.active_tab)
+                    .map(|c| {
+                        c.symbol
+                            .split(':')
+                            .rev()
+                            .nth(1)
+                            .or_else(|| c.symbol.split(':').last())
+                            .unwrap_or("")
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                if !sym.is_empty() {
+                    self.cmf_win_symbol = sym;
+                }
+                self.show_cmf_win = true;
+                if self.cmf_win_snapshot.symbol.is_empty() && !self.cmf_win_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) =
+                                typhoon_engine::core::research::get_cmf(&conn, &self.cmf_win_symbol)
+                            {
+                                self.cmf_win_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+                true
+            }
+            "MFI" | "MFIFIT" | "MONEY_FLOW_INDEX" | "MFIREG" | "MFI_14" => {
+                let sym = self
+                    .charts
+                    .get(self.active_tab)
+                    .map(|c| {
+                        c.symbol
+                            .split(':')
+                            .rev()
+                            .nth(1)
+                            .or_else(|| c.symbol.split(':').last())
+                            .unwrap_or("")
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                if !sym.is_empty() {
+                    self.mfi_win_symbol = sym;
+                }
+                self.show_mfi_win = true;
+                if self.mfi_win_snapshot.symbol.is_empty() && !self.mfi_win_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) =
+                                typhoon_engine::core::research::get_mfi(&conn, &self.mfi_win_symbol)
+                            {
+                                self.mfi_win_snapshot = snap;
+                            }
+                        }
+                    }
+                }
+                true
+            }
+            "PSARFIT" | "PSAR_WIN" | "PARABOLIC_SAR" | "WILDER_SAR" | "SARFIT" => {
+                let sym = self
+                    .charts
+                    .get(self.active_tab)
+                    .map(|c| {
+                        c.symbol
+                            .split(':')
+                            .rev()
+                            .nth(1)
+                            .or_else(|| c.symbol.split(':').last())
+                            .unwrap_or("")
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                if !sym.is_empty() {
+                    self.psar_win_symbol = sym;
+                }
+                self.show_psar_win = true;
+                if self.psar_win_snapshot.symbol.is_empty() && !self.psar_win_symbol.is_empty() {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_psar(
+                                &conn,
+                                &self.psar_win_symbol,
+                            ) {
+                                self.psar_win_snapshot = snap;
                             }
                         }
                     }

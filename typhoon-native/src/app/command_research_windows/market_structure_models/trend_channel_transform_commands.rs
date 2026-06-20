@@ -1,10 +1,7 @@
 use super::super::*;
 
 impl TyphooNApp {
-    pub(super) fn handle_trend_channel_transform_commands_command(
-        &mut self,
-        cmd_upper: &String,
-    ) -> bool {
+    pub(super) fn handle_trend_channel_transform_command(&mut self, cmd_upper: &String) -> bool {
         match cmd_upper.as_str() {
             // ── Trend, channel, and transform palette aliases ──
             // Bare ICHIMOKU / SUPERTREND / KELTNER / FISHER are already bound to

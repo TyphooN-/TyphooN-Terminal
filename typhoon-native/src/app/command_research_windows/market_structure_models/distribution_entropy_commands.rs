@@ -1,10 +1,7 @@
 use super::super::*;
 
 impl TyphooNApp {
-    pub(super) fn handle_distribution_entropy_commands_command(
-        &mut self,
-        cmd_upper: &String,
-    ) -> bool {
+    pub(super) fn handle_distribution_entropy_command(&mut self, cmd_upper: &String) -> bool {
         match cmd_upper.as_str() {
             // ── Distribution and entropy palette aliases ──
             "ROBVOL" | "ROBUST_VOL" | "ROBUSTVOL" => {

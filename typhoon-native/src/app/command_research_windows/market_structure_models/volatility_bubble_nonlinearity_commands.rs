@@ -1,7 +1,7 @@
 use super::super::*;
 
 impl TyphooNApp {
-    pub(super) fn handle_volatility_bubble_nonlinearity_commands_command(
+    pub(super) fn handle_volatility_bubble_nonlinearity_command(
         &mut self,
         cmd_upper: &String,
     ) -> bool {

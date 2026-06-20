@@ -1,5 +1,6 @@
 use super::*;
 
+mod directional_moneyflow_sar_commands;
 mod distribution_entropy_commands;
 mod fractal_tail_dependence_commands;
 mod jump_stationarity_tail_commands;
@@ -11,168 +12,14 @@ mod volatility_bubble_nonlinearity_commands;
 impl TyphooNApp {
     pub(super) fn handle_market_structure_model_command(&mut self, cmd_upper: &String) -> bool {
         match cmd_upper.as_str() {
-            _ if self.handle_distribution_entropy_commands_command(cmd_upper) => {}
-            _ if self.handle_fractal_tail_dependence_commands_command(cmd_upper) => {}
-            _ if self.handle_jump_stationarity_tail_commands_command(cmd_upper) => {}
-            _ if self.handle_volatility_bubble_nonlinearity_commands_command(cmd_upper) => {}
-            _ if self.handle_residual_cycle_memory_commands_command(cmd_upper) => {}
-            _ if self.handle_squeeze_channel_adaptive_commands_command(cmd_upper) => {}
-            _ if self.handle_trend_channel_transform_commands_command(cmd_upper) => {}
-            // ── Directional, money-flow, and SAR palette aliases ──
-            // Bare ADX / CCI / PSAR are already bound to chart-overlay toggles upstream;
-            // only disambiguated forms are used for ADX/CCI/PSAR research windows.
-            // Bare CMF and MFI are unbound and kept as aliases.
-            "ADXFIT" | "ADX_WIN" | "ADXREG" | "DIRECTIONAL_INDEX" | "WILDERADX" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    self.adx_win_symbol = sym;
-                }
-                self.show_adx_win = true;
-                if self.adx_win_snapshot.symbol.is_empty() && !self.adx_win_symbol.is_empty() {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) =
-                                typhoon_engine::core::research::get_adx(&conn, &self.adx_win_symbol)
-                            {
-                                self.adx_win_snapshot = snap;
-                            }
-                        }
-                    }
-                }
-            }
-            "CCIFIT" | "CCI_WIN" | "CCIREG" | "COMMODITY_CHANNEL" | "LAMBERTCCI" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    self.cci_win_symbol = sym;
-                }
-                self.show_cci_win = true;
-                if self.cci_win_snapshot.symbol.is_empty() && !self.cci_win_symbol.is_empty() {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) =
-                                typhoon_engine::core::research::get_cci(&conn, &self.cci_win_symbol)
-                            {
-                                self.cci_win_snapshot = snap;
-                            }
-                        }
-                    }
-                }
-            }
-            "CMF" | "CMFFIT" | "CHAIKIN_MF" | "CHAIKIN_MONEY_FLOW" | "MONEYFLOW_CMF" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    self.cmf_win_symbol = sym;
-                }
-                self.show_cmf_win = true;
-                if self.cmf_win_snapshot.symbol.is_empty() && !self.cmf_win_symbol.is_empty() {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) =
-                                typhoon_engine::core::research::get_cmf(&conn, &self.cmf_win_symbol)
-                            {
-                                self.cmf_win_snapshot = snap;
-                            }
-                        }
-                    }
-                }
-            }
-            "MFI" | "MFIFIT" | "MONEY_FLOW_INDEX" | "MFIREG" | "MFI_14" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    self.mfi_win_symbol = sym;
-                }
-                self.show_mfi_win = true;
-                if self.mfi_win_snapshot.symbol.is_empty() && !self.mfi_win_symbol.is_empty() {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) =
-                                typhoon_engine::core::research::get_mfi(&conn, &self.mfi_win_symbol)
-                            {
-                                self.mfi_win_snapshot = snap;
-                            }
-                        }
-                    }
-                }
-            }
-            "PSARFIT" | "PSAR_WIN" | "PARABOLIC_SAR" | "WILDER_SAR" | "SARFIT" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    self.psar_win_symbol = sym;
-                }
-                self.show_psar_win = true;
-                if self.psar_win_snapshot.symbol.is_empty() && !self.psar_win_symbol.is_empty() {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) = typhoon_engine::core::research::get_psar(
-                                &conn,
-                                &self.psar_win_symbol,
-                            ) {
-                                self.psar_win_snapshot = snap;
-                            }
-                        }
-                    }
-                }
-            }
+            _ if self.handle_distribution_entropy_command(cmd_upper) => {}
+            _ if self.handle_fractal_tail_dependence_command(cmd_upper) => {}
+            _ if self.handle_jump_stationarity_tail_command(cmd_upper) => {}
+            _ if self.handle_volatility_bubble_nonlinearity_command(cmd_upper) => {}
+            _ if self.handle_residual_cycle_memory_command(cmd_upper) => {}
+            _ if self.handle_squeeze_channel_adaptive_command(cmd_upper) => {}
+            _ if self.handle_trend_channel_transform_command(cmd_upper) => {}
+            _ if self.handle_directional_moneyflow_sar_command(cmd_upper) => {}
             // ── Volume, choppiness, and moving-average palette aliases ──
             // Bare OBV and HMA collide with chart-overlay toggles upstream;
             // only disambiguated forms are used for OBV/HMA research windows.

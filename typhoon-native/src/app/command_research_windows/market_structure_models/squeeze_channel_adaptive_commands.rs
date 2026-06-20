@@ -1,10 +1,7 @@
 use super::super::*;
 
 impl TyphooNApp {
-    pub(super) fn handle_squeeze_channel_adaptive_commands_command(
-        &mut self,
-        cmd_upper: &String,
-    ) -> bool {
+    pub(super) fn handle_squeeze_channel_adaptive_command(&mut self, cmd_upper: &String) -> bool {
         match cmd_upper.as_str() {
             // ── Squeeze, channel, and adaptive-average palette aliases ──
             // NOTE: bare "SQUEEZE"/"DONCHIAN"/"KAMA"/"KAUFMAN" are already

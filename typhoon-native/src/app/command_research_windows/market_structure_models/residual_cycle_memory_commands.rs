@@ -1,10 +1,7 @@
 use super::super::*;
 
 impl TyphooNApp {
-    pub(super) fn handle_residual_cycle_memory_commands_command(
-        &mut self,
-        cmd_upper: &String,
-    ) -> bool {
+    pub(super) fn handle_residual_cycle_memory_command(&mut self, cmd_upper: &String) -> bool {
         match cmd_upper.as_str() {
             // ── Residual, cycle, memory, and rank-dependence palette aliases ──
             "DURBINWATSON" | "DURBIN_WATSON" | "DW" | "DWSTAT" | "DWTEST" | "RESIDAC" => {
