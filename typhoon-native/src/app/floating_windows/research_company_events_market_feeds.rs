@@ -1,8 +1,11 @@
 use super::*;
 
 impl TyphooNApp {
-    pub(super) fn render_research_adr107_windows(&mut self, ctx: &egui::Context) {
-        // ── Godel parity research windows (ADR-107) ───────────────────────
+    pub(super) fn render_research_company_events_market_feeds_windows(
+        &mut self,
+        ctx: &egui::Context,
+    ) {
+        // Company events, sentiment, transcripts, commodities, and tape research
         let chart_sym_research: String = self
             .charts
             .get(self.active_tab)

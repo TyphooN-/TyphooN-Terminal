@@ -193,7 +193,7 @@ pub(crate) enum BrokerCmd {
         ticker: String,
         db_path: PathBuf,
     },
-    /// Bulk research scrape — profile/peers/earnings/press/sentiment/transcripts (ADR-107).
+    /// Bulk research scrape — profile/peers/earnings/press/sentiment/transcripts.
     ResearchScrape {
         use_alpaca: bool,
         finnhub_key: String,
@@ -350,7 +350,7 @@ pub(crate) enum BrokerCmd {
     FetchRedditWSB,
     /// Fetch CoinGecko top 50 cryptocurrencies by market cap (free, no auth).
     FetchCryptoTop50,
-    // ── Godel parity: research commands (ADR-107) ──
+    // Company events, sentiment, transcripts, commodities, and tape research commands
     /// Fetch Finnhub company profile (name, exchange, industry, logo, website, IPO, shares, mcap).
     FetchCompanyProfile {
         symbol: String,
@@ -2581,7 +2581,7 @@ pub(crate) enum BrokerMsg {
     KrakenPairs(Vec<(String, String)>),
     /// Kraken Futures tradeable instrument symbols.
     KrakenFuturesInstruments(Vec<String>),
-    // ── Godel parity: research results (ADR-107) ──
+    // Company events, sentiment, transcripts, commodities, and tape research results
     /// Finnhub company profile (symbol + profile).
     CompanyProfile(typhoon_engine::core::research::CompanyProfile),
     /// Finnhub peer list for a symbol.

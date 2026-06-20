@@ -761,7 +761,7 @@ impl TyphooNApp {
             crypto_top50: Vec::new(),
             show_forex_matrix: false,
             forex_pairs_data: Vec::new(),
-            // ── ADR-107 Godel parity ───────────────────────────────
+            // Company events, sentiment, transcripts, commodities, and tape research
             show_company_desc: false,
             desc_symbol: String::new(),
             desc_profile: None,

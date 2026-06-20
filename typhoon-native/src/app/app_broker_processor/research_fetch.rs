@@ -5,7 +5,7 @@ pub(super) fn handle_research_fetch_command(
     broker_msg_tx_clone: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
 ) {
     match cmd {
-        // ── Godel parity research handlers (ADR-107) ──
+        // Company events, sentiment, transcripts, commodities, and tape research handlers
         BrokerCmd::FetchCompanyProfile {
             symbol,
             finnhub_key,

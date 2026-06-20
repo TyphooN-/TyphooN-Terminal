@@ -3,7 +3,7 @@ use super::*;
 impl TyphooNApp {
     pub(super) fn handle_research_core_msg(&mut self, msg: BrokerMsg) {
         match msg {
-            // ── Godel parity results (ADR-107) ──
+            // Company events, sentiment, transcripts, commodities, and tape research results
             BrokerMsg::CompanyProfile(profile) => {
                 self.desc_loading = false;
                 let sym_u = profile.symbol.to_uppercase();

@@ -1072,7 +1072,7 @@ pub struct TyphooNApp {
     pub(crate) show_forex_matrix: bool,
     pub(crate) forex_pairs_data: Vec<WatchlistRow>,
 
-    // ── Godel parity research windows (ADR-107) ─────────────────────────
+    // Company events, sentiment, transcripts, commodities, and tape research
     /// DES command — comprehensive company overview.
     pub(crate) show_company_desc: bool,
     pub(crate) desc_symbol: String,

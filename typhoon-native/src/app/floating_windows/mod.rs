@@ -12,7 +12,6 @@ mod market_analytics_windows;
 mod matrix_chat;
 mod news;
 mod reddit;
-mod research_adr107;
 mod research_advanced_moving_averages;
 mod research_aroon_macd_variable_ma;
 mod research_autocorrelation_hurst_volume;
@@ -21,6 +20,7 @@ mod research_calmar_ulcer_liquidity_normality;
 mod research_candlestick_core_patterns;
 mod research_candlestick_marubozu_line_patterns;
 mod research_candlestick_reversal_continuation;
+mod research_company_events_market_feeds;
 mod research_corporate_actions_analyst_esg;
 mod research_directional_moneyflow_sar;
 mod research_directional_movement_family;
@@ -255,8 +255,8 @@ impl TyphooNApp {
         // News
         timed_window!("news", self.render_news_window(ctx));
 
-        // ── Godel parity research windows (ADR-107) ───────────────────────
-        self.render_research_adr107_windows(ctx);
+        // Company events, sentiment, transcripts, commodities, and tape research
+        self.render_research_company_events_market_feeds_windows(ctx);
 
         // Dividend, earnings-estimate, rating, and treasury research
         self.render_research_dividends_earnings_upgrades_windows(ctx);

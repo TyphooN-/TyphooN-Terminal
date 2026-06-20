@@ -3,7 +3,7 @@ use super::*;
 impl TyphooNApp {
     pub(super) fn handle_company_fundamentals_command(&mut self, cmd_upper: &String) -> bool {
         match cmd_upper.as_str() {
-            // ── Godel parity research windows (ADR-107) ──
+            // Company events, sentiment, transcripts, commodities, and tape research
             "DES" | "DESCRIPTION" => {
                 let sym = self
                     .charts
