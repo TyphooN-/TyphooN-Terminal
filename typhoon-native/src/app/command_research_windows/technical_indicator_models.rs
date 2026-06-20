@@ -6,7 +6,7 @@ mod momentum_flow_commands;
 impl TyphooNApp {
     pub(super) fn handle_technical_indicator_model_command(&mut self, cmd_upper: &String) -> bool {
         match cmd_upper.as_str() {
-            // ── Options Expiration Calendar ──
+            // (delegated early groups)
             _ if self.handle_adaptive_momentum_commands(cmd_upper) => {}
             _ if self.handle_momentum_flow_commands(cmd_upper) => {}
             // ── WMA / RAINBOW / MESA_SINE / FRAMA / IBS ──
