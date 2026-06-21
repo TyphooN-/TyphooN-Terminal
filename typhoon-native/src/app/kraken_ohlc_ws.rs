@@ -101,6 +101,14 @@ impl TyphooNApp {
         {
             return false;
         }
+        // Honor the post-failure cooldown: a WS-connect 429 means Kraken is
+        // rate-limiting new connections, so don't refire the sweep every cadence
+        // slot (that just feeds the limiter and livelocks on the low TFs).
+        if let Some(until) = self.kraken_ws_ohlc_snapshot_sweep_backoff_until {
+            if now < until {
+                return false;
+            }
+        }
         // Spend this cadence slot now, whether or not there is work, so an
         // all-fresh catalog doesn't re-scan every frame.
         self.kraken_ws_ohlc_snapshot_sweep_last_schedule = now;

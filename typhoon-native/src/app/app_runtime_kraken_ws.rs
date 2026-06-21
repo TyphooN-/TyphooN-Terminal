@@ -121,10 +121,28 @@ impl TyphooNApp {
         let tf = typhoon_engine::broker::kraken::kraken_ws_interval_to_tf_label(interval_min)
             .unwrap_or("?");
         if let Some(error) = error {
-            self.log.push_back(LogEntry::warn(format!(
-                "Kraken WS OHLC snapshot sweep {tf} failed after {pair_count} pairs — {error}"
-            )));
+            // Escalating cooldown so a rate-limited sweep stops refiring every
+            // cadence slot. Connect failures (notably WS-connect 429) mean we are
+            // connection-rate limited; backing the whole sweep off lets the limit
+            // recover instead of livelocking the low timeframes.
+            let failures = self
+                .kraken_ws_ohlc_snapshot_sweep_consecutive_failures
+                .saturating_add(1);
+            self.kraken_ws_ohlc_snapshot_sweep_consecutive_failures = failures;
+            // 30s, 60s, 120s, 240s, 480s, then capped at 600s.
+            let backoff_secs =
+                30u64.saturating_mul(1u64 << failures.saturating_sub(1).min(6)).min(600);
+            self.kraken_ws_ohlc_snapshot_sweep_backoff_until =
+                Some(std::time::Instant::now() + std::time::Duration::from_secs(backoff_secs));
+            // Throttle: a sustained 429 wall must not fill the log.
+            if failures <= 3 || failures % 10 == 0 {
+                self.log.push_back(LogEntry::warn(format!(
+                    "Kraken WS OHLC snapshot sweep {tf} failed after {pair_count} pairs — {error} (backoff {backoff_secs}s, attempt {failures})"
+                )));
+            }
         } else {
+            self.kraken_ws_ohlc_snapshot_sweep_consecutive_failures = 0;
+            self.kraken_ws_ohlc_snapshot_sweep_backoff_until = None;
             self.log.push_back(LogEntry::info(format!(
                 "Kraken WS OHLC snapshot sweep {tf}: completed {pair_count} pairs"
             )));

@@ -331,6 +331,12 @@ pub struct TyphooNApp {
     pub(crate) kraken_ws_ohlc_streamed_pairs: std::collections::HashSet<String>,
     pub(crate) kraken_ws_ohlc_snapshot_sweep_last_schedule: std::time::Instant,
     pub(crate) kraken_ws_ohlc_snapshot_sweep_in_flight: bool,
+    /// Suppress new snapshot-sweep dispatches until this instant after a connect
+    /// failure (esp. WS-connect 429). Escalates per consecutive failure so the
+    /// sweep stops refiring every cadence slot and self-feeding the Kraken
+    /// WS-connect rate limiter.
+    pub(crate) kraken_ws_ohlc_snapshot_sweep_backoff_until: Option<std::time::Instant>,
+    pub(crate) kraken_ws_ohlc_snapshot_sweep_consecutive_failures: u32,
     pub(crate) crypto_fiat_quote_usd: bool,
     pub(crate) crypto_fiat_quote_usdt: bool,
     pub(crate) crypto_fiat_quote_usdc: bool,

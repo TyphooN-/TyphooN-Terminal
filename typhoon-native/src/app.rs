@@ -2752,6 +2752,8 @@ impl TyphooNApp {
             kraken_ws_ohlc_snapshot_sweep_last_schedule: std::time::Instant::now()
                 - std::time::Duration::from_secs(60),
             kraken_ws_ohlc_snapshot_sweep_in_flight: false,
+            kraken_ws_ohlc_snapshot_sweep_backoff_until: None,
+            kraken_ws_ohlc_snapshot_sweep_consecutive_failures: 0,
             crypto_fiat_quote_usd: true,
             crypto_fiat_quote_usdt: true,
             crypto_fiat_quote_usdc: true,
