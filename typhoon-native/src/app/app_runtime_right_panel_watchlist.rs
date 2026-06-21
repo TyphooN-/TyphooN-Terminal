@@ -33,6 +33,12 @@ impl TyphooNApp {
                     }
                     let mut rows: Vec<WatchlistRow> = self.watchlist_rows.clone();
                     let mut updated_from_cache = false;
+                    // Lazily-built lowercased detailed_stats keys (parallel to
+                    // self.bg.detailed_stats by index) so the fuzzy fallback below
+                    // lowercases the ~tens-of-thousands of keys at most once per
+                    // populate instead of once per (missing symbol × timeframe) —
+                    // the cold-start chrome_panels stall (ADR-098).
+                    let mut lowered_stats: Option<Vec<String>> = None;
                     for sym in &missing {
                         let mut found = false;
                         'tf_search: for tf in &tfs {
@@ -55,19 +61,32 @@ impl TyphooNApp {
                             }
                         }
                         if !found {
+                            let lowered_keys = lowered_stats.get_or_insert_with(|| {
+                                // Cache metadata keys (`<prefix>:__NAME__:…`) never hold
+                                // bar blobs; mark them empty so the contains-match can't
+                                // hit them for a symbol like "HEART" or a TF that equals
+                                // an account tag.
+                                self.bg
+                                    .detailed_stats
+                                    .iter()
+                                    .map(|(k, _, _)| {
+                                        if k.contains(":__") {
+                                            String::new()
+                                        } else {
+                                            k.to_lowercase()
+                                        }
+                                    })
+                                    .collect()
+                            });
                             let stats = &self.bg.detailed_stats;
                             let sym_lower = sym.to_lowercase();
                             for tf in &tfs {
                                 let tf_lower = tf.to_lowercase();
-                                for (k, _, _) in stats {
-                                    // Cache metadata keys (`<prefix>:__NAME__:…`) never
-                                    // hold bar blobs — the contains-match below
-                                    // could otherwise hit them for a symbol like
-                                    // "HEART" or a TF equal to an account tag.
-                                    if k.contains(":__") {
+                                for (idx, (k, _, _)) in stats.iter().enumerate() {
+                                    let kl = &lowered_keys[idx];
+                                    if kl.is_empty() {
                                         continue;
                                     }
-                                    let kl = k.to_lowercase();
                                     if kl.contains(&sym_lower) && kl.ends_with(&tf_lower) {
                                         if let Ok(Some(raw)) = cache.get_bars_raw(k) {
                                             if let Some(row) =
