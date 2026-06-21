@@ -39,6 +39,7 @@ mod technical_indicator_sections;
 mod technical_indicator_squeeze_breakouts;
 mod technical_indicator_cloud_trend;
 mod technical_indicator_oscillators;
+mod technical_indicator_volume_trend;
 
 impl TyphooNApp {
     pub(super) fn write_symbol_investigation_sections(&self, p: &mut String, syms: &[String]) {
