@@ -1,10 +1,12 @@
 use super::*;
+use self::context::SymbolResearchContext;
 mod cached_research;
 mod capital_valuation_sections;
 mod composite_signal_sections;
 mod composite_signal_early;
 mod composite_signal_blocks;
 mod composite_signal_factors;
+mod context;
 mod distribution_risk_sections;
 mod format;
 mod fractal_tail_stationarity_sections;
@@ -343,10 +345,18 @@ impl TyphooNApp {
             if let Some(ref cache) = self.cache {
                 if let Ok(conn) = cache.open_bg_read_connection() {
                     use typhoon_engine::core::research as rx;
+                    // Step 3: thread the already-acquired connection (+ fundamentals)
+                    // to sections via a read-only context so they stop re-acquiring
+                    // read_conn (ADR-125). Converted sections take `&ctx`; the rest
+                    // still re-acquire (read_conn is free — the holder uses an
+                    // independent connection) until they are converted in turn.
+                    let ctx = SymbolResearchContext { conn: &conn };
 
                     self.write_symbol_ownership_price_history_sections(p, &sym_upper);
 
-                    self.write_symbol_capital_valuation_sections(p, &sym_upper);
+                    capital_valuation_sections::write_symbol_capital_valuation_sections(
+                        &ctx, p, &sym_upper,
+                    );
 
                     self.write_symbol_market_behavior_sections(p, &sym_upper);
 

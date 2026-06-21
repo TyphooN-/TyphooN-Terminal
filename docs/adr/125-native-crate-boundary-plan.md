@@ -2,8 +2,9 @@
 
 **Status:** Accepted as migration plan | **Date:** 2026-06-20 | **Last updated:**
 2026-06-21 (Phase 0 inventory; Phase 1 step 1 — floating-windows research boundary;
-Phase 1 step 2 — `symbol_investigation_packet` section formatters extracted to ~25 free
-functions (overview, capital-valuation, peer/behavior/signal/rank) — see
+Phase 1 step 2 — `symbol_investigation_packet` section formatters → ~25 free functions;
+Phase 1 step 3 started — context threading (`SymbolResearchContext`, capital-valuation
+converted) + a `read_conn` nesting bug fix — see
 [Implementation Progress](#implementation-progress))
 
 **Related:** ADR-086 (`typhoon-native` module decomposition), ADR-108
@@ -383,15 +384,28 @@ nesting structurally *and* completes the decoupling. The 4-holder fix restores
 correctness now; the context threading is the remaining decoupling work, on a working
 base.
 
+### Phase 1, step 3 (started) — context threading (2026-06-21)
+
+`SymbolResearchContext { conn: &Connection }` introduced (`context.rs`); the dispatcher
+builds it once from its (independent) connection and passes `&ctx` to converted
+sections. `capital_valuation_sections` is the first converted: a free function over
+`&SymbolResearchContext` that uses `ctx.conn` instead of re-acquiring `read_conn` — no
+`TyphooNApp`. `Connection` is re-exported from `typhoon_engine::core::cache` so native
+can name it without a direct `rusqlite` dependency. The context is intentionally a
+one-field seed that grows as more sections convert (the fundamentals-driven sections
+add `all_fundamentals`; visible flags / command input later). Behavior-preserving:
+same `rx::get_*` calls and formatters, just sourcing the connection from the context.
+
 ### Next slice
 
-Step 3 proper: introduce `SymbolResearchContext` (the held `&Connection` +
-`&[Fundamentals]`) and thread it from the dispatcher down through the section
-aggregators/leaves, replacing each `cache.try_connection()` re-acquire with
-`ctx.conn`. That converts the sections to free functions over the context (no
-`TyphooNApp`), removes the independent-connection workaround, and is the real gate for
-the Phase 2 `typhoon-research-ui` crate. Phase 1 step 2 (formatter extraction) also
-continues mechanically for the remaining packet sections.
+Convert the remaining DB-driven sections to take `&SymbolResearchContext` — the
+leaf-style dispatcher-direct ones first (ownership, market-behavior, fundamental-risk,
+distribution-risk, fractal-tail, moving-average, momentum-volume), then the nesting
+families (price-behavior / rank-drift / technical-indicator), whose holders then stop
+re-acquiring too. Each conversion drops a `try_connection` re-acquire and a
+`TyphooNApp` dependency. Once every section under the connection block takes the
+context, the dispatcher's independent-connection workaround can be removed. That fully
+decoupled state is the Phase 2 `typhoon-research-ui` gate.
 
 ## Verification Standard for Future Implementation
 

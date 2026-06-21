@@ -8,7 +8,8 @@
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use chrono::Datelike;
-use rusqlite::{Connection, OpenFlags, params};
+pub use rusqlite::Connection;
+use rusqlite::{OpenFlags, params};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, Ordering};
