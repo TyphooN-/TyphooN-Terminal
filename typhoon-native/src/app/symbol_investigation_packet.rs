@@ -2,6 +2,7 @@ use super::*;
 mod cached_research;
 mod capital_valuation_sections;
 mod composite_signal_sections;
+mod composite_signal_early;
 mod distribution_risk_sections;
 mod fractal_tail_stationarity_sections;
 mod fundamental_risk_sections;
