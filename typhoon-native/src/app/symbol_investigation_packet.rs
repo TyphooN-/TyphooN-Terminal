@@ -42,6 +42,7 @@ mod rank_drift_growth_drift;
 mod rank_drift_sections;
 mod recent_news;
 mod talib_price_momentum_sections;
+mod talib_price_ohlc_stats;
 mod technical_indicator_sections;
 mod technical_indicator_squeeze_breakouts;
 mod technical_indicator_cloud_trend;
