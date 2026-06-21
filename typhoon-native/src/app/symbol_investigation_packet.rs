@@ -23,6 +23,7 @@ mod price_behavior_stat_tests;
 mod price_behavior_distribution;
 mod price_transform_indicator_sections;
 mod rank_drift_sections;
+mod rank_drift_core_ranks;
 mod recent_news;
 mod talib_price_momentum_sections;
 mod technical_indicator_sections;
