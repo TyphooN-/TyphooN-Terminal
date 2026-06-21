@@ -15,6 +15,7 @@ mod price_behavior_sections;
 mod price_behavior_local;
 mod price_behavior_ratios;
 mod price_behavior_risk_metrics;
+mod price_behavior_illiquidity_norm;
 mod price_behavior_distribution;
 mod price_transform_indicator_sections;
 mod rank_drift_sections;
