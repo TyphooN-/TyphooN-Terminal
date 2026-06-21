@@ -361,16 +361,37 @@ mechanical `rx::get_*` → format shape and migrate the same way.
 Verified: `cargo check -p typhoon-native` (clean), `cargo check --workspace` (clean),
 `cargo test -p typhoon-native` (395 passed), `git diff --check` (clean).
 
+### Phase 1, step 3 — investigation surfaced a connection bug (2026-06-21)
+
+Scoping the read-only context for the packet sections surfaced a latent correctness
+bug, fixed separately (commit `e76c1c99`): the dispatcher held the shared `read_conn`
+mutex (`SqliteCache::try_connection` = `read_conn.try_lock`) across its whole
+per-symbol block, and the section aggregators it called each re-acquired
+`try_connection` — the re-entrant `try_lock` returns `None`, so ~14 analytical section
+groups (ownership, capital-valuation, market-behavior, fundamental-risk,
+composite-signal, rank-drift, price-behavior, distribution-risk, fractal-tail,
+technical-indicator, moving-average, momentum-volume, price-transform, talib) silently
+emitted nothing. Only 4 files actually nest (the dispatcher +
+`price_behavior_sections` / `rank_drift_sections` / `technical_indicator_sections`);
+they now open an *independent* read connection (`open_bg_read_connection`) so
+`read_conn` stays free for descendants.
+
+This reframes step 3: the connection the sections need is *already* acquired up the
+call stack. The clean end state is to thread that one connection (inside the read-only
+context) down to the sections so they stop re-acquiring at all — which removes the
+nesting structurally *and* completes the decoupling. The 4-holder fix restores
+correctness now; the context threading is the remaining decoupling work, on a working
+base.
+
 ### Next slice
 
-Phase 1 step 2 is now proven across six section files (overview, capital-valuation,
-peer-comparison, and the price-behavior / composite-signal / rank-drift blocks). The
-remaining packet sections are the same mechanical extraction; the higher-value next
-work is **steps 3–4** — introduce read-only context struct(s) for the data the section
-methods gather (cached snapshots keyed by symbol, the `all_fundamentals` lookup), so
-the *gathering* — not just the formatting — also stops touching `TyphooNApp`. That full
-decoupling, not another file move, is the real gate for the Phase 2
-`typhoon-research-ui` crate promotion.
+Step 3 proper: introduce `SymbolResearchContext` (the held `&Connection` +
+`&[Fundamentals]`) and thread it from the dispatcher down through the section
+aggregators/leaves, replacing each `cache.try_connection()` re-acquire with
+`ctx.conn`. That converts the sections to free functions over the context (no
+`TyphooNApp`), removes the independent-connection workaround, and is the real gate for
+the Phase 2 `typhoon-research-ui` crate. Phase 1 step 2 (formatter extraction) also
+continues mechanically for the remaining packet sections.
 
 ## Verification Standard for Future Implementation
 
