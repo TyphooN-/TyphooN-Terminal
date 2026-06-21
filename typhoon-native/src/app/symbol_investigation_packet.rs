@@ -12,6 +12,7 @@ mod overview;
 mod ownership_price_history;
 mod peer_comparison;
 mod price_behavior_sections;
+mod price_behavior_local;
 mod price_behavior_distribution;
 mod price_transform_indicator_sections;
 mod rank_drift_sections;
