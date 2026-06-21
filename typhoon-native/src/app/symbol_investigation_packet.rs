@@ -19,6 +19,7 @@ mod price_behavior_illiquidity_norm;
 mod price_behavior_seasonality_vol;
 mod price_behavior_vol_estimators;
 mod price_behavior_tests_ratios;
+mod price_behavior_stat_tests;
 mod price_behavior_distribution;
 mod price_transform_indicator_sections;
 mod rank_drift_sections;
