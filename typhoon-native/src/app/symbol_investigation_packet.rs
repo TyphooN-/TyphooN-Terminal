@@ -28,6 +28,7 @@ mod price_transform_indicator_sections;
 mod price_transform_adaptive_osc;
 mod price_transform_volatility_force;
 mod price_transform_linear_hilbert;
+mod price_transform_regression_phase;
 mod rank_drift_core_ranks;
 mod rank_drift_fund_quality;
 mod rank_drift_research_ranks;
