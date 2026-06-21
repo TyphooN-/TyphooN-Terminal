@@ -1,8 +1,9 @@
 # ADR-125: Native Crate Boundary Plan
 
 **Status:** Accepted as migration plan | **Date:** 2026-06-20 | **Last updated:**
-2026-06-21 (Phase 0 inventory recorded; Phase 1 step 1 landed for the
-floating-windows research tree — see [Implementation Progress](#implementation-progress))
+2026-06-21 (Phase 0 inventory; Phase 1 step 1 — floating-windows research boundary;
+Phase 1 step 2 — first `symbol_investigation_packet` section formatter extracted to a
+free function — see [Implementation Progress](#implementation-progress))
 
 **Related:** ADR-086 (`typhoon-native` module decomposition), ADR-108
 (research module compile-time modularization), ADR-118 (test module
@@ -315,12 +316,41 @@ one `floating_windows/research/` parent module that exposes a single entry point
 Verified: `cargo check -p typhoon-native` (clean), `cargo check --workspace`
 (clean), `cargo test -p typhoon-native` (392 passed), `git diff --check` (clean).
 
+### Phase 1, step 2 — Section formatters as free functions (2026-06-21)
+
+First decoupling slice, on the `symbol_investigation_packet` tree. Unlike the egui
+floating windows, the packet is already `&self` text-building
+(`write_*_sections(&self, p: &mut String, …)`); the coupling that blocks a crate
+move is that each section both *reads* app state and *formats* it in one method.
+
+- New `symbol_investigation_packet/format.rs`: free functions over engine DTOs with
+  no `TyphooNApp` access — the seed of the formatter layer the crate will own. It
+  uses explicit `typhoon_engine` imports rather than the parent `use super::*` glob,
+  so it carries no native-app dependency.
+- `write_fundamentals_overview(p, &Fundamentals)` extracted from `overview.rs`. The
+  section method now only gathers data (the user-position section, the
+  `bg.all_fundamentals` lookup) and hands the resolved engine DTO to the pure
+  formatter. Behavior-preserving — the formatter reproduces the markdown verbatim;
+  two unit tests pin the header + valuation-table output.
+- Pattern established: **method gathers from app state → pure free function formats a
+  DTO.** This is the repeatable shape for the rest of the packet.
+
+Identified next extractions (same pattern, same `format.rs` home):
+`capital_valuation_sections` (the WACC/Beta/DDM/RelVal/FIGI/HRA/DCF/SVM/Options/IVOL
+snapshot formatters — ten `rx::get_*` → format blocks), `peer_comparison`, and the
+other Fundamentals-table sites (`price_behavior_ratios`, `composite_signal_blocks`,
+`rank_drift_growth_drift`).
+
+Verified: `cargo check -p typhoon-native` (clean), `cargo test -p typhoon-native`
+(394 passed — +2 formatter tests), `git diff --check` (clean).
+
 ### Next slice
 
-Phase 1 steps 2–4 for the research trees: lift pure formatters/table builders to
-free functions, then introduce the read-only context struct(s) and action
-enum(s) that shrink `&mut self` coupling. That decoupling — not another file
-move — is the real gate for the Phase 2 `typhoon-research-ui` crate promotion.
+Continue Phase 1 step 2 across the packet (the capital-valuation snapshot formatters
+next), then steps 3–4: introduce read-only context struct(s) for the data the
+section methods gather, so the *gathering* — not just the formatting — also stops
+touching `TyphooNApp` directly. That full decoupling — not another file move — is
+the real gate for the Phase 2 `typhoon-research-ui` crate promotion.
 
 ## Verification Standard for Future Implementation
 

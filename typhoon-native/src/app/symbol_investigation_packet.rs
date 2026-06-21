@@ -6,6 +6,7 @@ mod composite_signal_early;
 mod composite_signal_blocks;
 mod composite_signal_factors;
 mod distribution_risk_sections;
+mod format;
 mod fractal_tail_stationarity_sections;
 mod fundamental_risk_sections;
 mod market_behavior_sections;
