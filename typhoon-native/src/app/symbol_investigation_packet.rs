@@ -352,15 +352,15 @@ impl TyphooNApp {
                     // independent connection) until they are converted in turn.
                     let ctx = SymbolResearchContext { conn: &conn };
 
-                    self.write_symbol_ownership_price_history_sections(p, &sym_upper);
+                    ownership_price_history::write_symbol_ownership_price_history_sections(&ctx, p, &sym_upper);
 
                     capital_valuation_sections::write_symbol_capital_valuation_sections(
                         &ctx, p, &sym_upper,
                     );
 
-                    self.write_symbol_market_behavior_sections(p, &sym_upper);
+                    market_behavior_sections::write_symbol_market_behavior_sections(&ctx, p, &sym_upper);
 
-                    self.write_symbol_fundamental_risk_sections(p, &sym_upper);
+                    fundamental_risk_sections::write_symbol_fundamental_risk_sections(&ctx, p, &sym_upper);
 
                     self.write_symbol_composite_signal_sections(p, &sym_upper);
 
@@ -368,13 +368,13 @@ impl TyphooNApp {
 
                     self.write_symbol_price_behavior_sections(p, &sym_upper);
 
-                    self.write_symbol_distribution_risk_sections(p, &sym_upper);
+                    distribution_risk_sections::write_symbol_distribution_risk_sections(&ctx, p, &sym_upper);
 
-                    self.write_symbol_fractal_tail_stationarity_sections(p, &sym_upper);
+                    fractal_tail_stationarity_sections::write_symbol_fractal_tail_stationarity_sections(&ctx, p, &sym_upper);
 
                     self.write_symbol_technical_indicator_sections(p, &sym_upper);
 
-                    self.write_symbol_moving_average_research_sections(p, &sym_upper);
+                    moving_average_research_sections::write_symbol_moving_average_research_sections(&ctx, p, &sym_upper);
 
                     if let Ok(Some(se)) = rx::get_symbol_expirations(&conn, &sym_upper) {
                         if !se.expirations.is_empty() {
@@ -422,7 +422,7 @@ impl TyphooNApp {
                         }
                     }
 
-                    self.write_symbol_momentum_volume_indicator_sections(p, &sym_upper);
+                    momentum_volume_indicator_sections::write_symbol_momentum_volume_indicator_sections(&ctx, p, &sym_upper);
 
                     self.write_symbol_price_transform_indicator_sections(p, &sym_upper);
 

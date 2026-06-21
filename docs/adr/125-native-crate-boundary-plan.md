@@ -396,16 +396,25 @@ one-field seed that grows as more sections convert (the fundamentals-driven sect
 add `all_fundamentals`; visible flags / command input later). Behavior-preserving:
 same `rx::get_*` calls and formatters, just sourcing the connection from the context.
 
+Then the 7 leaf-style dispatcher-direct sections followed (one batch): ownership,
+market-behavior, fundamental-risk, distribution-risk, fractal-tail, moving-average,
+momentum-volume. Each used only `self.cache`, so each is now a free function over
+`&SymbolResearchContext` that uses `ctx.conn`, with `use super::*` dropped — no
+`TyphooNApp` dependency and no `read_conn` re-acquire. The dispatcher passes `&ctx` to
+all 8 converted sections. Behavior-preserving: every markdown literal is byte-identical
+to the pre-conversion files (the large line delta is body dedent + rustfmt).
+
 ### Next slice
 
-Convert the remaining DB-driven sections to take `&SymbolResearchContext` — the
-leaf-style dispatcher-direct ones first (ownership, market-behavior, fundamental-risk,
-distribution-risk, fractal-tail, moving-average, momentum-volume), then the nesting
-families (price-behavior / rank-drift / technical-indicator), whose holders then stop
-re-acquiring too. Each conversion drops a `try_connection` re-acquire and a
-`TyphooNApp` dependency. Once every section under the connection block takes the
-context, the dispatcher's independent-connection workaround can be removed. That fully
-decoupled state is the Phase 2 `typhoon-research-ui` gate.
+Two shapes remain under the connection block: the pass-through aggregators
+(`composite_signal_sections`, `price_transform_indicator_sections` — no own
+`try_connection`, they just call leaves) and the 3 nesting families
+(`price_behavior` / `rank_drift` / `technical_indicator`, whose holders open an
+independent connection today). Converting these threads `ctx` through each aggregator
+to its leaves; once every section under the block takes the context, the dispatcher's
+independent-connection workaround comes out. The fundamentals-driven sections
+(overview, peer) extend the context with `all_fundamentals`. That fully decoupled state
+is the Phase 2 `typhoon-research-ui` gate.
 
 ## Verification Standard for Future Implementation
 
