@@ -237,16 +237,13 @@ impl TyphooNApp {
                             .get(self.active_tab)
                             .map(|c| c.timeframe)
                             .unwrap_or(Timeframe::H4);
-                        let mut new_chart = ChartState::new(&self.symbol_input, tf);
-                        if let Some(ref cache) = self.cache.clone() {
-                            {
-                                let mut gpu = self.gpu_indicators.take();
-                                new_chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut());
-                                self.gpu_indicators = gpu;
-                            }
-                        }
+                        let new_chart = ChartState::new(&self.symbol_input, tf);
                         self.charts.push(new_chart);
                         self.active_tab = self.charts.len() - 1;
+                        // Defer the expensive load (cache read + GPU indicators + MTF
+                        // overlays) to the paced loader so opening a tab never blocks the
+                        // render thread on a heavy symbol (multi-second stalls — ADR-098).
+                        self.queue_chart_reload(self.active_tab);
                         let sym = self.symbol_input.clone();
                         self.queue_open_symbol_sync_all_timeframes(&sym);
                     }
@@ -292,19 +289,16 @@ impl TyphooNApp {
                         if let Some(chart) = self.charts.get(idx) {
                             self.symbol_input = chart.symbol.clone();
                         }
-                        // Lazy-load chart bars on first tab switch
-                        if let Some(chart) = self.charts.get_mut(idx) {
-                            if chart.bars.is_empty() {
-                                if let Some(ref cache) = self.cache {
-                                    {
-                                        let mut gpu = self.gpu_indicators.take();
-                                        if !chart.try_load(cache, &mut self.log, gpu.as_mut()) {
-                                            self.queue_chart_reload(0);
-                                        }
-                                        self.gpu_indicators = gpu;
-                                    }
-                                }
-                            }
+                        // Defer chart bar loading on tab switch to the paced loader so
+                        // switching to a heavy symbol never blocks the render thread
+                        // (multi-second stalls — ADR-098). Also fixes the prior fallback
+                        // that re-queued chart 0 instead of the switched-to tab.
+                        let needs_load = self
+                            .charts
+                            .get(idx)
+                            .is_some_and(|chart| chart.bars.is_empty());
+                        if needs_load {
+                            self.queue_chart_reload(idx);
                         }
                     }
                     if let Some(idx) = close_tab {

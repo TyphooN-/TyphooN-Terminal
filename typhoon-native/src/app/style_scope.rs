@@ -620,14 +620,12 @@ impl TyphooNApp {
                         .get(self.active_tab)
                         .map(|c| c.timeframe)
                         .unwrap_or(Timeframe::D1);
-                    let mut chart = ChartState::new(&sym, tf);
-                    if let Some(ref cache) = self.cache.clone() {
-                        let mut gpu = self.gpu_indicators.take();
-                        chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut());
-                        self.gpu_indicators = gpu;
-                    }
+                    let chart = ChartState::new(&sym, tf);
                     self.charts.push(chart);
                     self.active_tab = self.charts.len() - 1;
+                    // Defer load to the paced loader (ADR-098): opening a chart must not
+                    // block the render thread on a heavy symbol's full-history load.
+                    self.queue_chart_reload(self.active_tab);
                 }
                 // Immediate catch-up for crypto — Kraken fills gaps after outages/account loss.
                 // Rotation would get to this symbol eventually, but opening a chart
@@ -660,14 +658,12 @@ impl TyphooNApp {
                 {
                     self.active_tab = idx;
                 } else {
-                    let mut chart = ChartState::new(&sym, tf);
-                    if let Some(ref cache) = self.cache.clone() {
-                        let mut gpu = self.gpu_indicators.take();
-                        chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut());
-                        self.gpu_indicators = gpu;
-                    }
+                    let chart = ChartState::new(&sym, tf);
                     self.charts.push(chart);
                     self.active_tab = self.charts.len() - 1;
+                    // Defer load to the paced loader (ADR-098): opening a chart must not
+                    // block the render thread on a heavy symbol's full-history load.
+                    self.queue_chart_reload(self.active_tab);
                 }
                 // Fill bars if the cache was cold for this symbol/TF.
                 self.queue_open_symbol_sync_all_timeframes(&sym);

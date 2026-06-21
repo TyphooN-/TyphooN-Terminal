@@ -114,16 +114,12 @@ impl TyphooNApp {
                     .get(self.active_tab)
                     .map(|c| c.timeframe)
                     .unwrap_or(Timeframe::H4);
-                let mut new_chart = ChartState::new(&self.symbol_input, tf);
-                if let Some(ref cache) = self.cache.clone() {
-                    {
-                        let mut gpu = self.gpu_indicators.take();
-                        new_chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut());
-                        self.gpu_indicators = gpu;
-                    }
-                }
+                let new_chart = ChartState::new(&self.symbol_input, tf);
                 self.charts.push(new_chart);
                 self.active_tab = self.charts.len() - 1;
+                // Defer the expensive load to the paced loader so opening a tab never
+                // blocks the render thread on a heavy symbol (ADR-098).
+                self.queue_chart_reload(self.active_tab);
                 let sym = self.symbol_input.clone();
                 self.queue_open_symbol_sync_all_timeframes(&sym);
             }
@@ -288,14 +284,13 @@ impl TyphooNApp {
                     }
                 });
                 if let Some(tf) = alt_tf {
-                    if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                    let active = self.active_tab;
+                    if let Some(chart) = self.charts.get_mut(active) {
                         chart.timeframe = tf;
-                        if let Some(ref cache) = self.cache {
-                            let mut gpu = self.gpu_indicators.take();
-                            chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut());
-                            self.gpu_indicators = gpu;
-                        }
                     }
+                    // Defer the reload (cache read + GPU indicators + MTF overlays) so a
+                    // timeframe hotkey never blocks the render thread (ADR-098).
+                    self.queue_chart_reload(active);
                 }
             }
 
