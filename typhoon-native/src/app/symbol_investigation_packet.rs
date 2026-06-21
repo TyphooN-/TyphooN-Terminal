@@ -25,6 +25,7 @@ mod price_transform_indicator_sections;
 mod rank_drift_sections;
 mod rank_drift_core_ranks;
 mod rank_drift_growth_drift;
+mod rank_drift_fund_quality;
 mod recent_news;
 mod talib_price_momentum_sections;
 mod technical_indicator_sections;
