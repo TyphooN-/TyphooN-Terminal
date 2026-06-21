@@ -44,6 +44,7 @@ mod recent_news;
 mod talib_price_momentum_sections;
 mod talib_price_ohlc_stats;
 mod talib_dmi_movement;
+mod talib_momentum_range;
 mod technical_indicator_sections;
 mod technical_indicator_squeeze_breakouts;
 mod technical_indicator_cloud_trend;
