@@ -11,21 +11,21 @@ mod moving_average_research_sections;
 mod overview;
 mod ownership_price_history;
 mod peer_comparison;
-mod price_behavior_sections;
+mod price_behavior_distribution;
+mod price_behavior_illiquidity_norm;
 mod price_behavior_local;
 mod price_behavior_ratios;
 mod price_behavior_risk_metrics;
-mod price_behavior_illiquidity_norm;
 mod price_behavior_seasonality_vol;
-mod price_behavior_vol_estimators;
-mod price_behavior_tests_ratios;
+mod price_behavior_sections;
 mod price_behavior_stat_tests;
-mod price_behavior_distribution;
+mod price_behavior_tests_ratios;
+mod price_behavior_vol_estimators;
 mod price_transform_indicator_sections;
-mod rank_drift_sections;
 mod rank_drift_core_ranks;
-mod rank_drift_growth_drift;
 mod rank_drift_fund_quality;
+mod rank_drift_growth_drift;
+mod rank_drift_sections;
 mod recent_news;
 mod talib_price_momentum_sections;
 mod technical_indicator_sections;
@@ -150,30 +150,25 @@ impl TyphooNApp {
             // Insider trade summary (aggregates from bg cache)
             if let Some(trades) = self.bg.insider_trades.get(&sym_upper) {
                 if !trades.is_empty() {
-                    let n_buys = trades
-                        .iter()
-                        .filter(|t| {
-                            t.transaction_type.eq_ignore_ascii_case("P")
-                                || t.transaction_type.to_lowercase().contains("buy")
-                        })
-                        .count();
-                    let n_sells = trades
-                        .iter()
-                        .filter(|t| {
-                            t.transaction_type.eq_ignore_ascii_case("S")
-                                || t.transaction_type.to_lowercase().contains("sell")
-                        })
-                        .count();
-                    let buy_value: f64 = trades
-                        .iter()
-                        .filter(|t| t.transaction_type.eq_ignore_ascii_case("P"))
-                        .map(|t| t.aggregate_value)
-                        .sum();
-                    let sell_value: f64 = trades
-                        .iter()
-                        .filter(|t| t.transaction_type.eq_ignore_ascii_case("S"))
-                        .map(|t| t.aggregate_value)
-                        .sum();
+                    let mut n_buys = 0usize;
+                    let mut n_sells = 0usize;
+                    let mut buy_value = 0.0f64;
+                    let mut sell_value = 0.0f64;
+                    for t in trades.iter() {
+                        let typ = t.transaction_type.as_str();
+                        let is_buy =
+                            typ.eq_ignore_ascii_case("P") || typ.to_lowercase().contains("buy");
+                        let is_sell =
+                            typ.eq_ignore_ascii_case("S") || typ.to_lowercase().contains("sell");
+                        if is_buy {
+                            n_buys += 1;
+                            buy_value += t.aggregate_value;
+                        }
+                        if is_sell {
+                            n_sells += 1;
+                            sell_value += t.aggregate_value;
+                        }
+                    }
                     let net = buy_value - sell_value;
                     let _ = writeln!(p, "### Insider Activity");
                     let fmt_money = typhoon_engine::core::fundamentals::format_large_number;
