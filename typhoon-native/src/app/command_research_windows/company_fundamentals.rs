@@ -1,6 +1,7 @@
 use super::*;
 
 mod company_events_commands;
+mod dividend_estimates_ratings_commands;
 mod earnings_peers_commands;
 mod sentiment_transcripts_tape_commands;
 
@@ -10,90 +11,7 @@ impl TyphooNApp {
             // Company events, sentiment, transcripts, commodities, and tape research
             _ if self.handle_company_events_commands(cmd_upper) => {}
             _ if self.handle_sentiment_transcripts_tape_commands(cmd_upper) => {}
-            // Dividend, earnings-estimate, rating, and treasury research
-            "DVD" | "DIV_HISTORY" | "DIVIDEND_HISTORY" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    self.dividend_history_symbol = sym.clone();
-                }
-                self.show_dividend_history = true;
-                if !self.fmp_key.is_empty() && !self.dividend_history_symbol.is_empty() {
-                    self.dividend_history_loading = true;
-                    let _ = self.broker_tx.send(BrokerCmd::FetchDividendHistory {
-                        symbol: self.dividend_history_symbol.to_uppercase(),
-                        fmp_key: self.fmp_key.clone(),
-                    });
-                }
-            }
-            "EEB" | "ESTIMATES" | "FORWARD_EARNINGS" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    self.earnings_estimates_symbol = sym.clone();
-                }
-                self.show_earnings_estimates = true;
-                if !self.fmp_key.is_empty() && !self.earnings_estimates_symbol.is_empty() {
-                    self.earnings_estimates_loading = true;
-                    let _ = self.broker_tx.send(BrokerCmd::FetchEarningsEstimates {
-                        symbol: self.earnings_estimates_symbol.to_uppercase(),
-                        fmp_key: self.fmp_key.clone(),
-                    });
-                }
-            }
-            "UPDG" | "UPGRADES" | "DOWNGRADES" | "RATING_CHANGES" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !sym.is_empty() {
-                    self.rating_changes_symbol = sym.clone();
-                }
-                self.show_rating_changes = true;
-                if !self.fmp_key.is_empty() && !self.rating_changes_symbol.is_empty() {
-                    self.rating_changes_loading = true;
-                    let _ = self.broker_tx.send(BrokerCmd::FetchRatingChanges {
-                        symbol: self.rating_changes_symbol.to_uppercase(),
-                        fmp_key: self.fmp_key.clone(),
-                    });
-                }
-            }
-            "GY" | "TREASURY" | "YIELD_CURVE" | "YIELDS" => {
-                self.show_treasury_curve = true;
-                self.treasury_yields_loading = true;
-                let _ = self.broker_tx.send(BrokerCmd::FetchTreasuryYields);
-            }
+            _ if self.handle_dividend_estimates_ratings_commands(cmd_upper) => {}
             // Financial statements, management, and COT research
             "FA" | "FINANCIALS" | "INCOME" | "BALANCE" | "CASHFLOW" => {
                 let sym = self
