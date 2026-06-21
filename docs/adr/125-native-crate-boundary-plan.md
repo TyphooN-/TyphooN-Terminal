@@ -1,6 +1,8 @@
 # ADR-125: Native Crate Boundary Plan
 
-**Status:** Accepted as migration plan | **Date:** 2026-06-20
+**Status:** Accepted as migration plan | **Date:** 2026-06-20 | **Last updated:**
+2026-06-21 (Phase 0 inventory recorded; Phase 1 step 1 landed for the
+floating-windows research tree — see [Implementation Progress](#implementation-progress))
 
 **Related:** ADR-086 (`typhoon-native` module decomposition), ADR-108
 (research module compile-time modularization), ADR-118 (test module
@@ -27,6 +29,10 @@ The native package now has clear internal seams:
 - Remaining native hotspots include `state.rs` (~3.4k lines),
   `technical_analysis.rs` (~2.1k lines), and several chart/runtime integration
   files.
+
+> The per-tree counts above are the 2026-06-20 baseline. Continued semantic and
+> test-module splitting (ADR-118) has since grown several of these trees; current
+> measured values are recorded under [Implementation Progress](#implementation-progress).
 
 ADR-108 explicitly deferred a full `typhoon-research` crate split because the
 engine research module still had dependency entanglement with engine internals.
@@ -254,6 +260,67 @@ Tradeoffs:
   clean-build overhead and API maintenance cost.
 - The plan delays broker extraction because its state/runtime coupling is more
   likely to create accidental cycles.
+
+## Implementation Progress
+
+A living log of completed migration slices. Each entry met the verification
+standard below.
+
+### Phase 0 — Measure and inventory (2026-06-21)
+
+Research-UI candidate region, as currently measured:
+
+| Tree | Files | Lines | Parent boundary today |
+| --- | ---: | ---: | --- |
+| `floating_windows/research/` | 96 | ~50.2k | `render_research_ui_windows` (Phase 1, step 1) |
+| `command_research_windows/` | 57 + parent | ~14.9k | `command_research_windows.rs` |
+| `symbol_investigation_packet/` | 53 + ~2.6k-line parent | ~13.5k | `symbol_investigation_packet.rs` |
+
+Coupling findings for the research floating-window tree (the slice transformed
+in Phase 1, step 1), measured before the move:
+
+- All 59 research floating-window renderers were a single `impl TyphooNApp`
+  block exposing one `pub(super) fn render_research_*_windows(&mut self, ctx)`.
+  They are presentation-shaped (`egui::Window` popups) but every one is an
+  `&mut self` method over full app state — not yet a clean cross-crate API.
+- They were dispatched from exactly one site (`draw_floating_windows`), nothing
+  outside `floating_windows` referenced them by path, and they carried zero
+  non-glob `super::` path coupling (only `use super::*`). The other two trees
+  share this shape: each is already a single-parent module of `&mut self`
+  renderers.
+- Conclusion: the boundary is presentation-only in shape but state-coupled in
+  fact. Promotion to a `typhoon-research-ui` crate (Phase 2) stays blocked until
+  Phase 1 steps 3–4 replace `&mut self` / `self.<field>` access with explicit
+  read-only context structs and returned action enums.
+
+### Phase 1, step 1 — Parent boundary for the research floating-window tree (2026-06-21)
+
+The 59 loose `research_*` modules (plus their 8 nested sub-trees) lived directly
+under `floating_windows`, interleaved with unrelated windows. They now live under
+one `floating_windows/research/` parent module that exposes a single entry point,
+`TyphooNApp::render_research_ui_windows`, called once from `draw_floating_windows`.
+
+- Visibility was *tightened*, not widened: each `render_research_*_windows`
+  method went from `floating_windows`-scoped `pub(super)` to research-module-
+  scoped `pub(super)`. They are now private to the research subtree and reachable
+  only through the aggregator — the module's sole public surface.
+- Pure module move: the 59 files and 8 sub-trees moved untouched (`git mv`). Only
+  `floating_windows/mod.rs` (59 `mod` decls → `mod research;`; the 59 inline
+  dispatch calls → one aggregator call) and the new `research/mod.rs` changed. No
+  renderer body, behavior, command name, or call order changed.
+- `command_research_windows` and `symbol_investigation_packet` already each sit
+  behind a single parent-module file, so they were left untouched this slice —
+  one boundary per commit, per the guardrails.
+
+Verified: `cargo check -p typhoon-native` (clean), `cargo check --workspace`
+(clean), `cargo test -p typhoon-native` (392 passed), `git diff --check` (clean).
+
+### Next slice
+
+Phase 1 steps 2–4 for the research trees: lift pure formatters/table builders to
+free functions, then introduce the read-only context struct(s) and action
+enum(s) that shrink `&mut self` coupling. That decoupling — not another file
+move — is the real gate for the Phase 2 `typhoon-research-ui` crate promotion.
 
 ## Verification Standard for Future Implementation
 
