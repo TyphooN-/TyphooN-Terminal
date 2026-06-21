@@ -1,5 +1,13 @@
 use super::*;
 
+/// Stop the WS v2 book resubscribe loop after this many *consecutive* checksum
+/// mismatches. A deterministically-failing book (e.g. the xStock fixed-precision
+/// checksum bug) would otherwise reconnect a fresh websocket forever; bounding it
+/// frees the connection and stops feeding the Kraken WS-connect rate limit.
+const KRAKEN_WS_BOOK_MAX_RESUBSCRIBE_ATTEMPTS: u32 = 10;
+/// Upper bound (seconds) for the exponential resubscribe backoff.
+const KRAKEN_WS_BOOK_RESUBSCRIBE_BACKOFF_CAP_S: u64 = 60;
+
 fn kraken_ws_v2_book_state_json(
     display_symbol: &str,
     state: &typhoon_engine::broker::kraken::KrakenWsBookState,
@@ -370,6 +378,9 @@ pub(super) async fn handle_kraken_ws_command(
                                 let Some(delta) = maybe_delta else { break; };
                                 match state.apply_delta_with_checksum(&delta) {
                                     Ok(checksum) => {
+                                        // Healthy snapshot — clear the consecutive-mismatch
+                                        // counter so only *sustained* failures trip the cap.
+                                        resubscribe_count = 0;
                                         if let Some((bid, ask)) = top_of_kraken_ws_v2_book(&state) {
                                             let _ = update_msg_tx.send(BrokerMsg::KrakenBookQuoteTick {
                                                 symbol: display_symbol.clone(),
@@ -398,19 +409,26 @@ pub(super) async fn handle_kraken_ws_command(
                                             let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
                                         }
                                         resubscribe_count = resubscribe_count.saturating_add(1);
-                                        if publish_dom {
-                                            let _ = update_msg_tx.send(BrokerMsg::Error(format!(
-                                                "Kraken WS v2 book checksum mismatch for {}: expected {}, actual {}; resubscribing snapshot attempt {}",
-                                                err.symbol, err.expected, err.actual, resubscribe_count
-                                            )));
-                                        } else {
-                                            tracing::warn!(
-                                                "Kraken WS v2 book checksum mismatch for {}: expected {}, actual {}; resubscribing snapshot attempt {}",
-                                                err.symbol,
-                                                err.expected,
-                                                err.actual,
-                                                resubscribe_count
-                                            );
+                                        // Throttle: the first few attempts are useful signal;
+                                        // beyond that a persistently-failing book would spam a
+                                        // line every backoff tick.
+                                        let should_log = resubscribe_count <= 3
+                                            || resubscribe_count % 20 == 0;
+                                        if should_log {
+                                            if publish_dom {
+                                                let _ = update_msg_tx.send(BrokerMsg::Error(format!(
+                                                    "Kraken WS v2 book checksum mismatch for {}: expected {}, actual {}; resubscribing snapshot attempt {}",
+                                                    err.symbol, err.expected, err.actual, resubscribe_count
+                                                )));
+                                            } else {
+                                                tracing::warn!(
+                                                    "Kraken WS v2 book checksum mismatch for {}: expected {}, actual {}; resubscribing snapshot attempt {}",
+                                                    err.symbol,
+                                                    err.expected,
+                                                    err.actual,
+                                                    resubscribe_count
+                                                );
+                                            }
                                         }
                                         retry_after_mismatch = true;
                                         break;
@@ -445,7 +463,26 @@ pub(super) async fn handle_kraken_ws_command(
                     if !retry_after_mismatch {
                         break;
                     }
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    // Persistent checksum failure (e.g. the xStock fixed-precision bug):
+                    // stop churning a fresh websocket every couple seconds forever. Give
+                    // up after a bounded number of consecutive attempts so the connection
+                    // is freed and the Kraken WS-connect limiter isn't fed needlessly.
+                    if resubscribe_count >= KRAKEN_WS_BOOK_MAX_RESUBSCRIBE_ATTEMPTS {
+                        let msg = format!(
+                            "Kraken WS v2 book {state_symbol}: persistent checksum mismatch after {resubscribe_count} attempts — giving up resubscribe (quote stale until chart reopens)"
+                        );
+                        if publish_dom {
+                            let _ = update_msg_tx.send(BrokerMsg::Error(msg));
+                        } else {
+                            tracing::warn!("{msg}");
+                        }
+                        break;
+                    }
+                    // Exponential backoff, capped: 2s, 4s, 8s, 16s, 32s, then 60s.
+                    let backoff_s = 2u64
+                        .pow(resubscribe_count.min(6))
+                        .min(KRAKEN_WS_BOOK_RESUBSCRIBE_BACKOFF_CAP_S);
+                    tokio::time::sleep(std::time::Duration::from_secs(backoff_s)).await;
                     if publish_dom {
                         let _ = update_msg_tx.send(BrokerMsg::OrderResult(format!(
                             "Kraken WS v2 book resubscribing: {state_symbol} depth {depth}"

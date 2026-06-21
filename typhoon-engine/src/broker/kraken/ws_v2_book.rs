@@ -1,5 +1,7 @@
 //! Kraken WebSocket v2 book (Level 2) parser, state helpers, and stream driver.
 
+use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 
 use super::ws_v2::{
@@ -16,6 +18,35 @@ const KRAKEN_WS_BOOK_SUBSCRIBE_BATCH: usize = 250;
 const KRAKEN_WS_BOOK_SUBSCRIBE_FRAME_DELAY: Duration = Duration::from_millis(20);
 const KRAKEN_WS_BOOK_SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(120);
 const KRAKEN_WS_BOOK_PING_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Per-pair `(price_decimals, qty_decimals)` precision (Kraken AssetPairs
+/// `pair_decimals` / `lot_decimals`), keyed by the exact WS v2 pair name
+/// (e.g. `AAPLx/USD`). The v2 book checksum must format each level to the pair's
+/// *fixed* precision before stripping the decimal point and leading zeros; the
+/// raw wire text drops trailing zeros for round-numbered levels (notably the
+/// tokenized xStocks), producing a deterministic checksum mismatch and an endless
+/// resubscribe loop. Pairs absent here fall back to the wire-text formatting
+/// (unchanged behavior — zero regression for pairs whose wire text is padded).
+fn pair_book_precision_registry() -> &'static RwLock<HashMap<String, (u8, u8)>> {
+    static REG: OnceLock<RwLock<HashMap<String, (u8, u8)>>> = OnceLock::new();
+    REG.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Register a pair's `(price_decimals, qty_decimals)` for WS v2 book checksum
+/// formatting, keyed by the WS pair name. Idempotent; call after loading the
+/// Kraken AssetPairs metadata.
+pub fn register_kraken_pair_book_precision(ws_pair: &str, price_decimals: u8, qty_decimals: u8) {
+    if let Ok(mut reg) = pair_book_precision_registry().write() {
+        reg.insert(ws_pair.to_string(), (price_decimals, qty_decimals));
+    }
+}
+
+fn lookup_pair_book_precision(ws_pair: &str) -> Option<(u8, u8)> {
+    pair_book_precision_registry()
+        .read()
+        .ok()
+        .and_then(|reg| reg.get(ws_pair).copied())
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct KrakenWsBookLevel {
@@ -126,7 +157,17 @@ impl KrakenWsBookState {
     }
 
     pub fn compute_checksum(&self) -> u32 {
-        compute_book_checksum(&self.bids, &self.asks)
+        // Prefer the Kraken-correct fixed-precision encoding when this pair's
+        // decimals are known; otherwise fall back to the raw wire-text encoding.
+        match lookup_pair_book_precision(&self.symbol) {
+            Some((price_decimals, qty_decimals)) => compute_book_checksum_with_precision(
+                &self.bids,
+                &self.asks,
+                price_decimals,
+                qty_decimals,
+            ),
+            None => compute_book_checksum(&self.bids, &self.asks),
+        }
     }
 }
 
@@ -372,6 +413,43 @@ pub fn compute_book_checksum(bids: &[KrakenWsBookLevel], asks: &[KrakenWsBookLev
     crc32fast::hash(payload.as_bytes())
 }
 
+/// Checksum variant that formats each level to the pair's fixed price/qty
+/// precision — the Kraken-correct algorithm — used when the precision is known.
+/// Reconstructs the trailing zeros the wire text omits, so round-numbered
+/// tokenized-xStock books match Kraken's CRC instead of looping on a mismatch.
+pub fn compute_book_checksum_with_precision(
+    bids: &[KrakenWsBookLevel],
+    asks: &[KrakenWsBookLevel],
+    price_decimals: u8,
+    qty_decimals: u8,
+) -> u32 {
+    let mut payload = String::new();
+    for level in asks.iter().take(10) {
+        payload.push_str(&checksum_fixed_precision_component(level.price, price_decimals));
+        payload.push_str(&checksum_fixed_precision_component(level.qty, qty_decimals));
+    }
+    for level in bids.iter().take(10) {
+        payload.push_str(&checksum_fixed_precision_component(level.price, price_decimals));
+        payload.push_str(&checksum_fixed_precision_component(level.qty, qty_decimals));
+    }
+    crc32fast::hash(payload.as_bytes())
+}
+
+/// Format a price/qty to a fixed number of decimals, then drop the decimal point
+/// and leading zeros — the Kraken v2 book checksum digit encoding.
+fn checksum_fixed_precision_component(value: f64, decimals: u8) -> String {
+    let formatted = format!("{:.*}", decimals as usize, value);
+    let mut compact = formatted.replace('.', "");
+    while compact.starts_with('0') && compact.len() > 1 {
+        compact.remove(0);
+    }
+    if compact.is_empty() {
+        "0".to_string()
+    } else {
+        compact
+    }
+}
+
 fn push_checksum_level(payload: &mut String, level: &KrakenWsBookLevel) {
     payload.push_str(&checksum_decimal_component(&level.price_text));
     payload.push_str(&checksum_decimal_component(&level.qty_text));
@@ -532,6 +610,79 @@ mod tests {
         assert_eq!(checksum_decimal_component("0.05000000"), "5000000");
         assert_eq!(checksum_decimal_component("67100.0"), "671000");
         assert_eq!(checksum_decimal_component("+001.2300"), "12300");
+    }
+
+    #[test]
+    fn fixed_precision_component_reconstructs_trimmed_zeros() {
+        // Round-numbered tokenized-xStock levels: the wire trims trailing zeros,
+        // but the checksum must use the pair's fixed precision.
+        assert_eq!(checksum_fixed_precision_component(190.0, 2), "19000");
+        assert_eq!(checksum_fixed_precision_component(5.0, 8), "500000000");
+        assert_eq!(checksum_fixed_precision_component(0.05, 8), "5000000");
+        assert_eq!(checksum_fixed_precision_component(67100.0, 1), "671000");
+        assert_eq!(checksum_fixed_precision_component(100.5, 4), "1005000");
+    }
+
+    #[test]
+    fn fixed_precision_checksum_matches_wire_text_when_full_precision() {
+        // When the wire already carries full precision, the precision-based
+        // encoding reproduces the wire-text encoding exactly — so pairs whose wire
+        // text is already padded (e.g. major crypto) are unaffected.
+        let asks = vec![KrakenWsBookLevel::from_wire(
+            100.5,
+            0.05,
+            "100.50".into(),
+            "0.05000000".into(),
+        )];
+        let bids = vec![KrakenWsBookLevel::from_wire(
+            100.0,
+            2.5,
+            "100.00".into(),
+            "2.50000000".into(),
+        )];
+        assert_eq!(
+            compute_book_checksum_with_precision(&bids, &asks, 2, 8),
+            compute_book_checksum(&bids, &asks)
+        );
+    }
+
+    #[test]
+    fn registered_precision_fixes_trimmed_xstock_checksum() {
+        // Tokenized xStock: the wire delivered trimmed text ("190" / "5"), so the
+        // raw wire-text checksum diverges from Kraken's CRC. With the pair's
+        // precision registered, the state recomputes against the fixed-precision
+        // encoding — which is what stops the deterministic resubscribe loop.
+        register_kraken_pair_book_precision("TESTx/USD", 2, 8);
+        let state = KrakenWsBookState::new("TESTx/USD", 10);
+        let delta = KrakenWsBookDelta {
+            symbol: "TESTx/USD".into(),
+            bids: vec![KrakenWsBookLevel::from_wire(189.0, 3.0, "189".into(), "3".into())],
+            asks: vec![KrakenWsBookLevel::from_wire(190.0, 5.0, "190".into(), "5".into())],
+            checksum: None,
+            ts_ms: None,
+            is_snapshot: true,
+        };
+        let mut applied = state.clone();
+        applied.apply_delta_unchecked(&delta);
+        let precision_checksum =
+            compute_book_checksum_with_precision(&applied.bids, &applied.asks, 2, 8);
+        let wire_checksum = compute_book_checksum(&applied.bids, &applied.asks);
+        // The fix changes behavior for trimmed books, and the state's checksum now
+        // uses the fixed-precision encoding (via the registry).
+        assert_ne!(precision_checksum, wire_checksum);
+        assert_eq!(applied.compute_checksum(), precision_checksum);
+
+        // A delta carrying Kraken's (correct) checksum now validates instead of
+        // looping forever on a mismatch.
+        let mut good = state.clone();
+        let mut accepted = good.clone();
+        accepted.apply_delta_unchecked(&delta);
+        let mut good_delta = delta.clone();
+        good_delta.checksum = Some(u64::from(accepted.compute_checksum()));
+        assert_eq!(
+            good.apply_delta_with_checksum(&good_delta),
+            Ok(Some(precision_checksum))
+        );
     }
 
     #[test]
