@@ -4,7 +4,7 @@ impl TyphooNApp {
     pub(super) fn write_symbol_rank_drift_sections(&self, p: &mut String, sym_upper: &str) {
         use std::fmt::Write as _;
         if let Some(ref cache) = self.cache {
-            if let Some(conn) = cache.try_connection() {
+            if let Ok(conn) = cache.open_bg_read_connection() {
                 use typhoon_engine::core::research as rx;
 
                 self.write_rank_drift_core_ranks(p, sym_upper);

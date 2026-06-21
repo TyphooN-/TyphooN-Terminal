@@ -341,7 +341,7 @@ impl TyphooNApp {
             self.write_symbol_cached_research_surfaces(p, &sym_upper);
 
             if let Some(ref cache) = self.cache {
-                if let Some(conn) = cache.try_connection() {
+                if let Ok(conn) = cache.open_bg_read_connection() {
                     use typhoon_engine::core::research as rx;
 
                     self.write_symbol_ownership_price_history_sections(p, &sym_upper);

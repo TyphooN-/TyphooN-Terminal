@@ -4,7 +4,7 @@ impl TyphooNApp {
     pub(super) fn write_symbol_price_behavior_sections(&self, p: &mut String, sym_upper: &str) {
         use std::fmt::Write as _;
         if let Some(ref cache) = self.cache {
-            if let Some(conn) = cache.try_connection() {
+            if let Ok(conn) = cache.open_bg_read_connection() {
                 use typhoon_engine::core::research as rx;
 
                 self.write_price_behavior_distribution(p, sym_upper);

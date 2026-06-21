@@ -8,7 +8,7 @@ impl TyphooNApp {
     ) {
         use std::fmt::Write as _;
         if let Some(ref cache) = self.cache {
-            if let Some(conn) = cache.try_connection() {
+            if let Ok(conn) = cache.open_bg_read_connection() {
                 use typhoon_engine::core::research as rx;
 
                 self.write_technical_indicator_squeeze_breakouts(p, sym_upper);
