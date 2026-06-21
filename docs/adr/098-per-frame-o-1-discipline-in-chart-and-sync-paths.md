@@ -162,3 +162,27 @@ in git history:
 > `render_after_broker_ms` stalls during full-universe Kraken WS snapshot sweeps —
 > this program is **not closed**; the render-thread cost of large sweeps is an open
 > item (see the sync-performance investigation tracking this).
+
+### Update (2026-06-21): three render-thread stall sources closed
+
+A fresh log review (multi-second `update_ms` spikes plus a chronic ~300ms-every-60s
+tick) traced to three distinct render-thread costs, now fixed:
+
+- **Chart symbol-switch (the 4–5s `render_residual_ms` freezes).** Tab switch,
+  new-tab creation, Alt+timeframe hotkeys, and OpenChart/OpenChartTf loaded full
+  multi-source history + recomputed every MTF overlay synchronously. They now route
+  through the existing paced deferred loader (`queue_chart_reload`) like the MTF grid
+  already did. (commit `00194cbb`)
+- **Watchlist cold-start (`chrome_panels_ms` ~500ms, pattern A).** The cache-populate
+  fallback re-lowercased the whole `detailed_stats` key set (~tens of thousands) per
+  missing symbol × timeframe; now lowercased once, lazily. (commit `20855888`)
+- **60s scheduler tick (~300ms at idle, pattern B).** `kraken_equity_catalog_symbols`
+  (12k normalize+sort) and `alpaca_equity_rotation_symbols` (11k uppercase+dedup+sort)
+  were re-materialized every minute; now length-signature-memoized. (commit `182d5cd6`)
+
+Still open on the render thread: the `build_bar_sync_inputs` snapshot
+(`detailed_stats.clone()`, O(rows)) at the sync-status cadence — dominated by the
+clone, would need Arc-sharing to remove — and the mandatory 60s session-JSON
+serialize + `sync_preferences_save` `put_kv` (small at idle, can spike under SQLite
+write contention). The full-universe WS snapshot-sweep cost noted above is now also
+mitigated separately by the sweep failure-backoff.
