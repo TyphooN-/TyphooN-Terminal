@@ -29,6 +29,7 @@ mod rank_drift_liquidity_streaks;
 mod rank_drift_div_earn_streaks;
 mod rank_drift_yield_short_conc;
 mod rank_drift_vol_perf;
+mod rank_drift_cone_corrs;
 mod rank_drift_growth_drift;
 mod rank_drift_sections;
 mod recent_news;
