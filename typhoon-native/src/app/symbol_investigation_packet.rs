@@ -26,6 +26,7 @@ mod price_behavior_tests_ratios;
 mod price_behavior_vol_estimators;
 mod price_transform_indicator_sections;
 mod price_transform_adaptive_osc;
+mod price_transform_volatility_force;
 mod rank_drift_core_ranks;
 mod rank_drift_fund_quality;
 mod rank_drift_research_ranks;
