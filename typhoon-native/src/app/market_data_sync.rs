@@ -926,6 +926,20 @@ impl TyphooNApp {
         normalize_kraken_equity_symbol_list(self.kraken_equity_universe_symbols.iter())
     }
 
+    /// Memoized [`Self::kraken_equity_catalog_symbols`]. Normalizing+sorting the
+    /// ~12k xStock universe is pure and was re-run on the render thread every 60s
+    /// scheduler tick; cache it and rebuild only when the universe list length
+    /// changes (it is replaced wholesale on reload). Used by the hot scheduler path.
+    pub(super) fn kraken_equity_catalog_symbols_cached(&mut self) -> Vec<String> {
+        let sig = self.kraken_equity_universe_symbols.len();
+        if self.cached_kraken_equity_catalog_sig != Some(sig) {
+            let rebuilt = self.kraken_equity_catalog_symbols();
+            self.cached_kraken_equity_catalog = rebuilt;
+            self.cached_kraken_equity_catalog_sig = Some(sig);
+        }
+        self.cached_kraken_equity_catalog.clone()
+    }
+
     /// The WS-subscribable subset (tokenized `{SYM}x/USD` xStocks). Used to scope
     /// the WS OHLC snapshot sweep to pairs Kraken actually serves on WS v2, rather
     /// than the full ~12k iapi catalog (which is ~99% non-WS Securities). Returns
@@ -1020,7 +1034,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn schedule_kraken_equities_universe(&mut self) -> usize {
-        let catalog_symbols = self.kraken_equity_catalog_symbols();
+        let catalog_symbols = self.kraken_equity_catalog_symbols_cached();
         let demand_symbols = self.kraken_equity_demand_symbols();
         let native_symbols =
             kraken_equity_native_history_symbols(&catalog_symbols, &demand_symbols);
@@ -2108,6 +2122,25 @@ impl TyphooNApp {
         }
         equity_syms.sort();
         equity_syms
+    }
+
+    /// Memoized [`Self::alpaca_equity_rotation_symbols`]. Uppercasing+dedup+sort over
+    /// Alpaca's ~11k us_equity universe is pure and was re-run on the render thread
+    /// every 60s rotation tick; cache it and rebuild only when the input lengths
+    /// change. The chart/watchlist floor is a backup (those symbols also sync via
+    /// their demand paths), so a same-length swap costing one cycle is harmless.
+    pub(super) fn alpaca_equity_rotation_symbols_cached(&mut self) -> Vec<String> {
+        let sig = (
+            self.all_broker_assets.len(),
+            self.charts.len(),
+            self.user_watchlist.len(),
+        );
+        if self.cached_alpaca_equity_rotation_sig != Some(sig) {
+            let rebuilt = self.alpaca_equity_rotation_symbols();
+            self.cached_alpaca_equity_rotation = rebuilt;
+            self.cached_alpaca_equity_rotation_sig = Some(sig);
+        }
+        self.cached_alpaca_equity_rotation.clone()
     }
 }
 

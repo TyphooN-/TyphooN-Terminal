@@ -643,7 +643,7 @@ impl eframe::App for TyphooNApp {
                 if self.alpaca_enabled {
                     self.maybe_request_alpaca_asset_universe();
                     self.push_alpaca_sync_runtime_config();
-                    let equity_syms = self.alpaca_equity_rotation_symbols();
+                    let equity_syms = self.alpaca_equity_rotation_symbols_cached();
                     self.schedule_alpaca_pairs(&equity_syms);
                 }
             }

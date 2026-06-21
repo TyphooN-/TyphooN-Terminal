@@ -691,6 +691,19 @@ pub struct TyphooNApp {
     pub(super) cached_kraken_sync_state:
         std::collections::HashMap<(String, String), SyncCacheState>,
     pub(crate) cached_kraken_sync_state_rev: Option<u64>,
+    /// Memoized normalized Kraken equity catalog (the ~12k xStock universe), so the
+    /// 60s scheduler doesn't re-normalize+sort the whole list every tick. Signature
+    /// is `kraken_equity_universe_symbols.len()` — the list is replaced wholesale on
+    /// reload, and a same-length replacement normalizes to the same result anyway.
+    pub(super) cached_kraken_equity_catalog: Vec<String>,
+    pub(crate) cached_kraken_equity_catalog_sig: Option<usize>,
+    /// Memoized Alpaca equity rotation list (~11k us_equity assets + a chart/
+    /// watchlist floor), so the 60s rotation doesn't uppercase+dedup+sort the whole
+    /// universe every tick. Signature is the three input lengths; the chart/watchlist
+    /// floor is a backup (those symbols also sync via demand), so one cycle of
+    /// staleness on a rare same-length swap is harmless.
+    pub(super) cached_alpaca_equity_rotation: Vec<String>,
+    pub(crate) cached_alpaca_equity_rotation_sig: Option<(usize, usize, usize)>,
     /// Cached Kraken Futures bar-state map keyed by normalized `(symbol, timeframe)`.
     pub(super) cached_kraken_futures_sync_state:
         std::collections::HashMap<(String, String), SyncCacheState>,
