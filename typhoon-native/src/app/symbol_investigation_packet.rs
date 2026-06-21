@@ -36,6 +36,7 @@ mod rank_drift_sections;
 mod recent_news;
 mod talib_price_momentum_sections;
 mod technical_indicator_sections;
+mod technical_indicator_squeeze_breakouts;
 
 impl TyphooNApp {
     pub(super) fn write_symbol_investigation_sections(&self, p: &mut String, syms: &[String]) {
