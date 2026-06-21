@@ -12,8 +12,11 @@
 use std::fmt::Write as _;
 use typhoon_engine::core::fundamentals::{Fundamentals, format_large_number};
 use typhoon_engine::core::research::{
-    BetaSnapshot, DcfSnapshot, DdmSnapshot, FigiSnapshot, HraSnapshot, IvolSnapshot,
-    OptionsChainSnapshot, RelativeValuation, SvmSnapshot, WaccSnapshot,
+    BetaSnapshot, DcfSnapshot, DdmSnapshot, EfficiencyRatioSnapshot, FigiSnapshot,
+    FlowSnapshot, GrowmSnapshot, HraSnapshot, IvolSnapshot, MarginsSnapshot,
+    MomentumRankSnapshot, OptionsChainSnapshot, PeadSnapshot, RegimeSnapshot,
+    RelVolSnapshot, RelativeEpsGrowthSnapshot, RelativeValuation, SharpeRatioSnapshot,
+    SizeFactorSnapshot, SvmSnapshot, VolOfVolSnapshot, WaccSnapshot, WickBiasSnapshot,
 };
 
 /// Write the symbol-investigation **overview** block for a resolved
@@ -510,6 +513,525 @@ pub(super) fn write_ivol(p: &mut String, iv: &IvolSnapshot) {
         if !iv.note.is_empty() {
             let _ = writeln!(p, "- Note: {}", iv.note);
         }
+        let _ = writeln!(p);
+    }
+}
+
+// ── Price-behavior ratios (SHARPR / EFFRATIO / WICKBIAS / VOLOFVOL) ──
+
+/// Sharpe ratio (rf=0) — SHARPR.
+pub(super) fn write_sharpr(p: &mut String, sr: &SharpeRatioSnapshot) {
+    if sr.sharpe_label != "INSUFFICIENT_DATA" && !sr.sharpe_label.is_empty() {
+        let _ = writeln!(
+            p,
+            "### Sharpe Ratio (rf=0) — SHARPR ({}, as of {})",
+            sr.sharpe_label, sr.as_of
+        );
+        let _ = writeln!(
+            p,
+            "- Bars {} · mean r {:.6} · stdev r {:.6}",
+            sr.bars_used, sr.mean_log_return, sr.stdev_log_return
+        );
+        let _ = writeln!(
+            p,
+            "- Sharpe {:.3} (ann {:.3}) · mean ann {:.4} · stdev ann {:.4}",
+            sr.sharpe_ratio, sr.sharpe_ratio_ann, sr.mean_return_ann, sr.stdev_return_ann
+        );
+        if !sr.note.is_empty() {
+            let _ = writeln!(p, "- Note: {}", sr.note);
+        }
+        let _ = writeln!(p);
+    }
+}
+
+/// Kaufman efficiency ratio — EFFRATIO.
+pub(super) fn write_effratio(p: &mut String, er: &EfficiencyRatioSnapshot) {
+    if er.efficiency_label != "INSUFFICIENT_DATA" && !er.efficiency_label.is_empty() {
+        let _ = writeln!(
+            p,
+            "### Kaufman Efficiency Ratio — EFFRATIO ({}, as of {})",
+            er.efficiency_label, er.as_of
+        );
+        let _ = writeln!(
+            p,
+            "- Bars {} · start {:.4} · end {:.4} · net {:+.4} ({:+.2}%)",
+            er.bars_used, er.start_close, er.end_close, er.net_change, er.net_change_pct
+        );
+        let _ = writeln!(
+            p,
+            "- Σ |Δclose| {:.4} · ER {:.3} · signed {:+.3}",
+            er.sum_abs_changes, er.efficiency_ratio, er.signed_efficiency
+        );
+        if !er.note.is_empty() {
+            let _ = writeln!(p, "- Note: {}", er.note);
+        }
+        let _ = writeln!(p);
+    }
+}
+
+/// Wick bias — WICKBIAS.
+pub(super) fn write_wickbias(p: &mut String, wb: &WickBiasSnapshot) {
+    if wb.bias_label != "INSUFFICIENT_DATA" && !wb.bias_label.is_empty() {
+        let _ = writeln!(
+            p,
+            "### Wick Bias — WICKBIAS ({}, as of {})",
+            wb.bias_label, wb.as_of
+        );
+        let _ = writeln!(
+            p,
+            "- Bars {} · avg upper {:.3} · avg lower {:.3} · body {:.3}",
+            wb.bars_used, wb.avg_upper_wick, wb.avg_lower_wick, wb.avg_body_share
+        );
+        let _ = writeln!(
+            p,
+            "- Median upper {:.3} · median lower {:.3} · bias score {:+.4}",
+            wb.median_upper_wick, wb.median_lower_wick, wb.wick_bias_score
+        );
+        if !wb.note.is_empty() {
+            let _ = writeln!(p, "- Note: {}", wb.note);
+        }
+        let _ = writeln!(p);
+    }
+}
+
+/// Vol-of-vol (stdev of rolling 20d RV) — VOLOFVOL.
+pub(super) fn write_volofvol(p: &mut String, vv: &VolOfVolSnapshot) {
+    if vv.cv_label != "INSUFFICIENT_DATA" && !vv.cv_label.is_empty() {
+        let _ = writeln!(
+            p,
+            "### Vol-of-Vol (stdev of rolling 20d RV) — VOLOFVOL ({}, as of {})",
+            vv.cv_label, vv.as_of
+        );
+        let _ = writeln!(
+            p,
+            "- RV points {} · mean RV20 {:.5} · stdev RV20 {:.5} · CV {:.3}",
+            vv.bars_used, vv.mean_rv20, vv.stdev_rv20, vv.cv_rv20
+        );
+        let _ = writeln!(
+            p,
+            "- Min RV20 {:.5} · max {:.5} · latest {:.5}",
+            vv.min_rv20, vv.max_rv20, vv.latest_rv20
+        );
+        if !vv.note.is_empty() {
+            let _ = writeln!(p, "- Note: {}", vv.note);
+        }
+        let _ = writeln!(p);
+    }
+}
+
+// ── Composite signal blocks (GROWM / FLOW / REGIME / RELVOL / MARGINS) ──
+
+/// GARP composite — GROWM.
+pub(super) fn write_growm(p: &mut String, gw: &GrowmSnapshot) {
+    if gw.inputs_available > 0 {
+        let _ = writeln!(p, "### GARP Composite — GROWM (as of {})", gw.as_of);
+        let _ = writeln!(
+            p,
+            "- {} · composite {:.1}/100 · {}/3 inputs",
+            gw.garp_label, gw.composite_score, gw.inputs_available
+        );
+        let _ = writeln!(
+            p,
+            "- Momentum: {} ({:.1}) · Earnings: {} ({:.1}) · Dividend CAGR 3y: {:.2}% ({})",
+            gw.momentum_regime,
+            gw.momentum_score,
+            gw.earnings_label,
+            gw.earnings_momentum_score,
+            gw.dividend_cagr_3y_pct,
+            gw.dividend_trend
+        );
+        if !gw.components.is_empty() {
+            let _ = writeln!(p, "- Components:");
+            for c in gw.components.iter().take(5) {
+                let _ = writeln!(
+                    p,
+                    "  - {}: {} · score {:.1} · weight {:.0}% · contrib {:.1}",
+                    c.name, c.value, c.score, c.weight, c.contribution
+                );
+            }
+        }
+        if !gw.note.is_empty() {
+            let _ = writeln!(p, "- Note: {}", gw.note);
+        }
+        let _ = writeln!(p);
+    }
+}
+
+/// Smart-money flow — FLOW.
+pub(super) fn write_flow(p: &mut String, fl: &FlowSnapshot) {
+    if fl.insider_trade_count > 0 || fl.institutional_holders_tracked > 0 {
+        let _ = writeln!(
+            p,
+            "### Smart-Money Flow — FLOW ({}d, as of {})",
+            fl.window_days, fl.as_of
+        );
+        let _ = writeln!(
+            p,
+            "- {} · composite {:.1}/100 · insider {:.1} · institutional {:.1}",
+            fl.flow_label, fl.composite_score, fl.insider_score, fl.institutional_score
+        );
+        let _ = writeln!(
+            p,
+            "- Insiders: {} trades / {} unique · buy ${:.0} · sell ${:.0} · net ${:+.0}",
+            fl.insider_trade_count,
+            fl.unique_insiders,
+            fl.insider_buy_value_usd,
+            fl.insider_sell_value_usd,
+            fl.insider_net_value_usd
+        );
+        let _ = writeln!(
+            p,
+            "- Institutional: {} buyers / {} sellers / {} tracked · net ratio {:+.2} · share delta {:+.0}",
+            fl.institutional_buyers,
+            fl.institutional_sellers,
+            fl.institutional_holders_tracked,
+            fl.institutional_net_ratio,
+            fl.institutional_share_delta
+        );
+        if !fl.note.is_empty() {
+            let _ = writeln!(p, "- Note: {}", fl.note);
+        }
+        let _ = writeln!(p);
+    }
+}
+
+/// Market regime — REGIME.
+pub(super) fn write_regime(p: &mut String, rg: &RegimeSnapshot) {
+    if rg.inputs_available > 0 {
+        let _ = writeln!(p, "### Market Regime — REGIME (as of {})", rg.as_of);
+        let _ = writeln!(
+            p,
+            "- {} · composite {:.1}/100 · {}/3 inputs",
+            rg.regime_label, rg.composite_score, rg.inputs_available
+        );
+        let _ = writeln!(
+            p,
+            "- Realized vol: {:.2}% ({}) · ADX: {:.1} ({}) · 1Y return {:+.2}% · Sharpe {:.2}",
+            rg.realized_vol_pct,
+            rg.vol_source,
+            rg.adx_value,
+            rg.trend_summary,
+            rg.return_1y_pct,
+            rg.sharpe_ratio
+        );
+        let _ = writeln!(
+            p,
+            "- Sub-scores: trend {:.1} · volatility {:.1} · return {:.1}",
+            rg.trend_strength_score, rg.volatility_score, rg.return_score
+        );
+        if !rg.note.is_empty() {
+            let _ = writeln!(p, "- Note: {}", rg.note);
+        }
+        let _ = writeln!(p);
+    }
+}
+
+/// Relative volume — RELVOL.
+pub(super) fn write_relvol(p: &mut String, rv: &RelVolSnapshot) {
+    if rv.activity_label != "INSUFFICIENT_DATA" && !rv.activity_label.is_empty() {
+        let _ = writeln!(p, "### Relative Volume — RELVOL (as of {})", rv.as_of);
+        let _ = writeln!(
+            p,
+            "- {} · {} · rel-vol 5d/20d/60d {:.2}×/{:.2}×/{:.2}×",
+            rv.activity_label,
+            rv.direction_label,
+            rv.rel_volume_5d,
+            rv.rel_volume_20d,
+            rv.rel_volume_60d
+        );
+        let _ = writeln!(
+            p,
+            "- Current {:.0} · avg 5d/20d/60d {:.0}/{:.0}/{:.0}",
+            rv.current_volume, rv.avg_volume_5d, rv.avg_volume_20d, rv.avg_volume_60d
+        );
+        let _ = writeln!(
+            p,
+            "- 5d-vs-20d trend {:+.2}% · 60d percentile {:.0}",
+            rv.volume_trend_5d_pct, rv.volume_percentile_60d
+        );
+        if !rv.note.is_empty() {
+            let _ = writeln!(p, "- Note: {}", rv.note);
+        }
+        let _ = writeln!(p);
+    }
+}
+
+/// Margin trajectory — MARGINS.
+pub(super) fn write_margins(p: &mut String, mg: &MarginsSnapshot) {
+    if mg.periods_used > 0 {
+        let _ = writeln!(
+            p,
+            "### Margin Trajectory — MARGINS ({} basis, as of {})",
+            mg.basis, mg.as_of
+        );
+        let _ = writeln!(
+            p,
+            "- Overall: {} · quality {} · latest period {}",
+            mg.overall_trend_label, mg.quality_label, mg.latest_period
+        );
+        let _ = writeln!(
+            p,
+            "- Gross: {:.2}% (prior {:.2}%, Δ{:+.2}pp, {}) · Op: {:.2}% (prior {:.2}%, Δ{:+.2}pp, {}) · Net: {:.2}% (prior {:.2}%, Δ{:+.2}pp, {})",
+            mg.latest_gross_margin_pct,
+            mg.prior_gross_margin_pct,
+            mg.gross_margin_change_pct,
+            mg.gross_trend_label,
+            mg.latest_operating_margin_pct,
+            mg.prior_operating_margin_pct,
+            mg.operating_margin_change_pct,
+            mg.operating_trend_label,
+            mg.latest_net_margin_pct,
+            mg.prior_net_margin_pct,
+            mg.net_margin_change_pct,
+            mg.net_trend_label
+        );
+        let _ = writeln!(
+            p,
+            "- Avg gross/op/net {:.2}%/{:.2}%/{:.2}% · periods used {}",
+            mg.avg_gross_margin_pct,
+            mg.avg_operating_margin_pct,
+            mg.avg_net_margin_pct,
+            mg.periods_used
+        );
+        if !mg.periods.is_empty() {
+            let _ = writeln!(p, "- Per-period (gross/op/net %):");
+            for row in mg.periods.iter().take(6) {
+                let _ = writeln!(
+                    p,
+                    "  - {}: {:.2} / {:.2} / {:.2}",
+                    row.period,
+                    row.gross_margin_pct,
+                    row.operating_margin_pct,
+                    row.net_margin_pct
+                );
+            }
+        }
+        if !mg.note.is_empty() {
+            let _ = writeln!(p, "- Note: {}", mg.note);
+        }
+        let _ = writeln!(p);
+    }
+}
+
+// ── Rank / drift factors (RELEPSGR / PEAD / SIZEF / MOMF) ──
+
+/// Relative EPS growth — RELEPSGR.
+pub(super) fn write_relepsgr(p: &mut String, eg: &RelativeEpsGrowthSnapshot) {
+    if eg.relative_label != "NO_DATA" && !eg.relative_label.is_empty() {
+        let _ = writeln!(
+            p,
+            "### Relative EPS Growth — RELEPSGR ({}, as of {})",
+            eg.relative_label, eg.as_of
+        );
+        let _ = writeln!(
+            p,
+            "- Sector: {} · 3y CAGR {:.1}% (EPS {:.2} → {:.2} over {} yrs)",
+            eg.sector, eg.symbol_cagr_pct, eg.earliest_eps, eg.latest_eps, eg.years_used
+        );
+        let _ = writeln!(
+            p,
+            "- Sector median/p25/p75 CAGR: {:.1}% / {:.1}% / {:.1}% · Gap to median {:+.1}pp ({} peers with data)",
+            eg.sector_median_cagr_pct,
+            eg.sector_p25_cagr_pct,
+            eg.sector_p75_cagr_pct,
+            eg.gap_to_median_pp,
+            eg.peers_with_data
+        );
+        if !eg.note.is_empty() {
+            let _ = writeln!(p, "- Note: {}", eg.note);
+        }
+        let _ = writeln!(p);
+    }
+}
+
+/// Post-earnings drift — PEAD.
+pub(super) fn write_pead(p: &mut String, pd: &PeadSnapshot) {
+    if pd.drift_direction_label != "INSUFFICIENT_DATA" && !pd.drift_direction_label.is_empty() {
+        let _ = writeln!(
+            p,
+            "### Post-Earnings Drift — PEAD ({}, as of {})",
+            pd.drift_direction_label, pd.as_of
+        );
+        let _ = writeln!(
+            p,
+            "- Events: {}/{} used · Avg drift 1d/3d/5d/10d: {:+.2}% / {:+.2}% / {:+.2}% / {:+.2}%",
+            pd.events_used,
+            pd.num_events,
+            pd.avg_drift_1d_pct,
+            pd.avg_drift_3d_pct,
+            pd.avg_drift_5d_pct,
+            pd.avg_drift_10d_pct
+        );
+        let _ = writeln!(
+            p,
+            "- Beat 5d {:+.2}% · Miss 5d {:+.2}% · Latest {} ({:+.2}% surprise, {:+.2}% 5d drift)",
+            pd.beat_event_drift_5d_pct,
+            pd.miss_event_drift_5d_pct,
+            pd.latest_event_date,
+            pd.latest_event_surprise_pct,
+            pd.latest_event_drift_5d_pct
+        );
+        if !pd.note.is_empty() {
+            let _ = writeln!(p, "- Note: {}", pd.note);
+        }
+        let _ = writeln!(p);
+    }
+}
+
+/// Size factor — SIZEF.
+pub(super) fn write_sizef(p: &mut String, sf: &SizeFactorSnapshot) {
+    if sf.rank_label != "NO_DATA"
+        && sf.rank_label != "INSUFFICIENT_DATA"
+        && !sf.rank_label.is_empty()
+    {
+        let _ = writeln!(
+            p,
+            "### Size Factor — SIZEF ({} / {}, as of {})",
+            sf.tier_label, sf.rank_label, sf.as_of
+        );
+        let _ = writeln!(
+            p,
+            "- Market cap ${:.2}B · log {:.3} · rank {}/{} · pct {:.0}",
+            sf.market_cap / 1e9,
+            sf.log_market_cap,
+            sf.rank_position,
+            sf.peers_considered + 1,
+            sf.percentile_rank
+        );
+        let _ = writeln!(
+            p,
+            "- Sector {} median / p25 / p75: ${:.2}B / ${:.2}B / ${:.2}B",
+            sf.sector,
+            sf.sector_median_cap / 1e9,
+            sf.sector_p25_cap / 1e9,
+            sf.sector_p75_cap / 1e9
+        );
+        if !sf.note.is_empty() {
+            let _ = writeln!(p, "- Note: {}", sf.note);
+        }
+        let _ = writeln!(p);
+    }
+}
+
+/// Momentum rank — MOMF.
+pub(super) fn write_momf(p: &mut String, mf: &MomentumRankSnapshot) {
+    if mf.rank_label != "NO_DATA"
+        && mf.rank_label != "INSUFFICIENT_DATA"
+        && !mf.rank_label.is_empty()
+    {
+        let _ = writeln!(
+            p,
+            "### Momentum Rank — MOMF ({}, as of {})",
+            mf.rank_label, mf.as_of
+        );
+        let _ = writeln!(
+            p,
+            "- Composite {:.1} · rank {}/{} · pct {:.0}",
+            mf.composite_score, mf.rank_position, mf.peers_considered + 1, mf.percentile_rank
+        );
+        let _ = writeln!(
+            p,
+            "- Sector {} median / p25 / p75: {:.1} / {:.1} / {:.1}",
+            mf.sector, mf.sector_median_score, mf.sector_p25, mf.sector_p75
+        );
+        if !mf.note.is_empty() {
+            let _ = writeln!(p, "- Note: {}", mf.note);
+        }
+        let _ = writeln!(p);
+    }
+}
+
+// ── Cross-symbol comparison ──
+
+/// Sector peer comparison: this symbol's metrics vs the median of its sector
+/// peers. Pure over the symbol's [`Fundamentals`] and the resolved peer slice
+/// (the caller filters `all_fundamentals` by sector). Emits only with ≥3 peers.
+pub(super) fn write_sector_peer_comparison(
+    p: &mut String,
+    f: &Fundamentals,
+    peers: &[&Fundamentals],
+) {
+    if peers.len() >= 3 {
+        let median = |mut v: Vec<f64>| -> Option<f64> {
+            if v.is_empty() {
+                return None;
+            }
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            Some(v[v.len() / 2])
+        };
+        let collect = |getter: fn(&Fundamentals) -> Option<f64>| -> Vec<f64> {
+            peers.iter().filter_map(|p| getter(p)).collect()
+        };
+        let fmt_o =
+            |v: Option<f64>| v.map(|x| format!("{:.2}", x)).unwrap_or_else(|| "—".into());
+        let _ = writeln!(
+            p,
+            "### Sector Peer Comparison ({} — {} peers)",
+            f.sector,
+            peers.len()
+        );
+        let _ = writeln!(p, "| Metric | This Symbol | Sector Median |");
+        let _ = writeln!(p, "|---|---|---|");
+        let _ = writeln!(
+            p,
+            "| P/E | {} | {} |",
+            fmt_o(f.pe_ratio),
+            fmt_o(median(collect(|x| x.pe_ratio)))
+        );
+        let _ = writeln!(
+            p,
+            "| Forward P/E | {} | {} |",
+            fmt_o(f.forward_pe),
+            fmt_o(median(collect(|x| x.forward_pe)))
+        );
+        let _ = writeln!(
+            p,
+            "| P/B | {} | {} |",
+            fmt_o(f.price_to_book),
+            fmt_o(median(collect(|x| x.price_to_book)))
+        );
+        let _ = writeln!(
+            p,
+            "| P/S | {} | {} |",
+            fmt_o(f.price_to_sales),
+            fmt_o(median(collect(|x| x.price_to_sales)))
+        );
+        let _ = writeln!(
+            p,
+            "| EV/EBITDA | {} | {} |",
+            fmt_o(f.ev_to_ebitda),
+            fmt_o(median(collect(|x| x.ev_to_ebitda)))
+        );
+        let _ = writeln!(
+            p,
+            "| Profit Margin | {} | {} |",
+            fmt_o(f.profit_margin),
+            fmt_o(median(collect(|x| x.profit_margin)))
+        );
+        let _ = writeln!(
+            p,
+            "| ROE | {} | {} |",
+            fmt_o(f.roe),
+            fmt_o(median(collect(|x| x.roe)))
+        );
+        let _ = writeln!(
+            p,
+            "| Beta | {} | {} |",
+            fmt_o(f.beta),
+            fmt_o(median(collect(|x| x.beta)))
+        );
+        let _ = writeln!(
+            p,
+            "| Short % Float | {} | {} |",
+            fmt_o(f.short_percent_of_float),
+            fmt_o(median(collect(|x| x.short_percent_of_float)))
+        );
+        let _ = writeln!(
+            p,
+            "| Div Yield | {} | {} |",
+            fmt_o(f.dividend_yield),
+            fmt_o(median(collect(|x| x.dividend_yield)))
+        );
         let _ = writeln!(p);
     }
 }

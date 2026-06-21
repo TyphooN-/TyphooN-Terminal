@@ -2,8 +2,9 @@
 
 **Status:** Accepted as migration plan | **Date:** 2026-06-20 | **Last updated:**
 2026-06-21 (Phase 0 inventory; Phase 1 step 1 — floating-windows research boundary;
-Phase 1 step 2 — `symbol_investigation_packet` overview + capital-valuation section
-formatters extracted to free functions — see [Implementation Progress](#implementation-progress))
+Phase 1 step 2 — `symbol_investigation_packet` section formatters extracted to ~25 free
+functions (overview, capital-valuation, peer/behavior/signal/rank) — see
+[Implementation Progress](#implementation-progress))
 
 **Related:** ADR-086 (`typhoon-native` module decomposition), ADR-108
 (research module compile-time modularization), ADR-118 (test module
@@ -343,22 +344,33 @@ move is that each section both *reads* app state and *formats* it in one method.
   byte-identical to the pre-move section (verified by diff), and the compiler checked
   every DTO field access. The options-chain block (put/call ratios, ATM-IV, ATM-window
   table) is pure over the snapshot, so it moved whole.
+- `peer_comparison` + the price-behavior / composite-signal / rank-drift section files
+  followed in one batch: fourteen more formatters (`write_sharpr` … `write_momf`, plus
+  `write_sector_peer_comparison(p, &Fundamentals, &[&Fundamentals])` whose method still
+  gathers the sector peers from `all_fundamentals` and hands the slice to the pure
+  table builder). Behavior-preserving: all 55 markdown literals across the four
+  pre-move sections are present unchanged (verified by diff), with compiler-checked
+  field access.
 
-Identified next extractions (same pattern, same `format.rs` home): `peer_comparison`
-and the other Fundamentals-table sites (`price_behavior_ratios`,
-`composite_signal_blocks`, `rank_drift_growth_drift`).
+`format.rs` is now a substantial formatter layer (~25 free functions over engine DTOs)
+with no `TyphooNApp` access. The remaining packet sections (`distribution_risk`,
+`fractal_tail_*`, `momentum_volume_*`, `moving_average_*`, `price_transform_*`, and the
+other `price_behavior_*` / `rank_drift_*` / `composite_signal_*` files) are the same
+mechanical `rx::get_*` → format shape and migrate the same way.
 
 Verified: `cargo check -p typhoon-native` (clean), `cargo check --workspace` (clean),
-`cargo test -p typhoon-native` (395 passed — +3 formatter tests), `git diff --check`
-(clean).
+`cargo test -p typhoon-native` (395 passed), `git diff --check` (clean).
 
 ### Next slice
 
-Continue Phase 1 step 2 across the packet (`peer_comparison` and the remaining
-Fundamentals-table sites next), then steps 3–4: introduce read-only context struct(s) for the data the
-section methods gather, so the *gathering* — not just the formatting — also stops
-touching `TyphooNApp` directly. That full decoupling — not another file move — is
-the real gate for the Phase 2 `typhoon-research-ui` crate promotion.
+Phase 1 step 2 is now proven across six section files (overview, capital-valuation,
+peer-comparison, and the price-behavior / composite-signal / rank-drift blocks). The
+remaining packet sections are the same mechanical extraction; the higher-value next
+work is **steps 3–4** — introduce read-only context struct(s) for the data the section
+methods gather (cached snapshots keyed by symbol, the `all_fundamentals` lookup), so
+the *gathering* — not just the formatting — also stops touching `TyphooNApp`. That full
+decoupling, not another file move, is the real gate for the Phase 2
+`typhoon-research-ui` crate promotion.
 
 ## Verification Standard for Future Implementation
 
