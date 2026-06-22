@@ -35,52 +35,27 @@ impl TyphooNApp {
         }
 
         // HURST — Hurst exponent via R/S
-        if self.show_hurst {
-            if self.hurst_symbol.is_empty() {
-                self.hurst_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_hurst;
-            egui::Window::new("HURST — Hurst Exponent (R/S)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 400.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.hurst_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.hurst_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.hurst_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_hurst(&conn, &sym_u)
-                                    {
-                                        self.hurst_snapshot = snap;
-                                        self.hurst_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.hurst_symbol.to_uppercase();
-                            self.hurst_loading = true;
-                            self.hurst_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeHurstSnapshot { symbol: sym });
-                        }
-                        if self.hurst_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_hurst_snapshot(ui, &self.hurst_snapshot);
-                });
-            self.show_hurst = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "HURST — Hurst Exponent (R/S)",
+                default_size: [640.0, 400.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_hurst,
+            &mut self.hurst_symbol,
+            &mut self.hurst_loading,
+            &mut self.hurst_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_hurst(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeHurstSnapshot { symbol },
+            super::render::render_hurst_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // HITRATE — Multi-horizon hit rate

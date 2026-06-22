@@ -55,52 +55,27 @@ impl TyphooNApp {
             let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_lmom {
-            if self.lmom_symbol.is_empty() {
-                self.lmom_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_lmom;
-            egui::Window::new("LMOM — L-Moments (Hosking 1990)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([520.0, 300.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.lmom_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.lmom_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.lmom_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_lmom(&conn, &sym_u)
-                                    {
-                                        self.lmom_snapshot = snap;
-                                        self.lmom_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.lmom_symbol.to_uppercase();
-                            self.lmom_loading = true;
-                            self.lmom_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeLmomSnapshot { symbol: sym });
-                        }
-                        if self.lmom_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_lmom_snapshot(ui, &self.lmom_snapshot);
-                });
-            self.show_lmom = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "LMOM — L-Moments (Hosking 1990)",
+                default_size: [520.0, 300.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_lmom,
+            &mut self.lmom_symbol,
+            &mut self.lmom_loading,
+            &mut self.lmom_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_lmom(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeLmomSnapshot { symbol },
+            super::render::render_lmom_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if let Some(cmd) = window_shell::render_compute_window(

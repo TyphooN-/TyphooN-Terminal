@@ -65,101 +65,51 @@ impl TyphooNApp {
         }
 
         // DIVG — Dividend Growth Analysis
-        if self.show_divg {
-            if self.divg_symbol.is_empty() {
-                self.divg_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_divg;
-            egui::Window::new("DIVG — Dividend Growth Analysis")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([600.0, 440.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.divg_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.divg_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.divg_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_divg(&conn, &sym_u)
-                                    {
-                                        self.divg_snapshot = snap;
-                                        self.divg_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.divg_symbol.to_uppercase();
-                            self.divg_loading = true;
-                            self.divg_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeDivgSnapshot { symbol: sym });
-                        }
-                        if self.divg_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_divg_snapshot(ui, &self.divg_snapshot);
-                });
-            self.show_divg = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "DIVG — Dividend Growth Analysis",
+                default_size: [600.0, 440.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_divg,
+            &mut self.divg_symbol,
+            &mut self.divg_loading,
+            &mut self.divg_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_divg(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeDivgSnapshot { symbol },
+            super::render::render_divg_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // EARM — Earnings Momentum Trend
-        if self.show_earm {
-            if self.earm_symbol.is_empty() {
-                self.earm_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_earm;
-            egui::Window::new("EARM — Earnings Momentum Trend")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([620.0, 460.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.earm_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.earm_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.earm_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_earm(&conn, &sym_u)
-                                    {
-                                        self.earm_snapshot = snap;
-                                        self.earm_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.earm_symbol.to_uppercase();
-                            self.earm_loading = true;
-                            self.earm_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeEarmSnapshot { symbol: sym });
-                        }
-                        if self.earm_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_earm_snapshot(ui, &self.earm_snapshot);
-                });
-            self.show_earm = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "EARM — Earnings Momentum Trend",
+                default_size: [620.0, 460.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_earm,
+            &mut self.earm_symbol,
+            &mut self.earm_loading,
+            &mut self.earm_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_earm(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeEarmSnapshot { symbol },
+            super::render::render_earm_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // SECTR — Sector Rotation Strength
@@ -234,52 +184,27 @@ impl TyphooNApp {
         }
 
         // UPDM — Upgrade/Downgrade Momentum
-        if self.show_updm {
-            if self.updm_symbol.is_empty() {
-                self.updm_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_updm;
-            egui::Window::new("UPDM — Upgrade/Downgrade Momentum")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 420.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.updm_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.updm_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.updm_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_updm(&conn, &sym_u)
-                                    {
-                                        self.updm_snapshot = snap;
-                                        self.updm_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.updm_symbol.to_uppercase();
-                            self.updm_loading = true;
-                            self.updm_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeUpdmSnapshot { symbol: sym });
-                        }
-                        if self.updm_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_updm_snapshot(ui, &self.updm_snapshot);
-                });
-            self.show_updm = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "UPDM — Upgrade/Downgrade Momentum",
+                default_size: [560.0, 420.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_updm,
+            &mut self.updm_symbol,
+            &mut self.updm_loading,
+            &mut self.updm_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_updm(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeUpdmSnapshot { symbol },
+            super::render::render_updm_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

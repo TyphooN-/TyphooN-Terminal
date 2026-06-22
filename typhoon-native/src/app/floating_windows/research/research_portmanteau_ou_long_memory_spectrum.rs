@@ -32,100 +32,50 @@ impl TyphooNApp {
             let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_oufit {
-            if self.oufit_symbol.is_empty() {
-                self.oufit_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_oufit;
-            egui::Window::new("OUFIT — Ornstein-Uhlenbeck Mean-Reversion Fit")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 340.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.oufit_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.oufit_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.oufit_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_oufit(&conn, &sym_u)
-                                    {
-                                        self.oufit_snapshot = snap;
-                                        self.oufit_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.oufit_symbol.to_uppercase();
-                            self.oufit_loading = true;
-                            self.oufit_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeOuFitSnapshot { symbol: sym });
-                        }
-                        if self.oufit_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_oufit_snapshot(ui, &self.oufit_snapshot);
-                });
-            self.show_oufit = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "OUFIT — Ornstein-Uhlenbeck Mean-Reversion Fit",
+                default_size: [560.0, 340.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_oufit,
+            &mut self.oufit_symbol,
+            &mut self.oufit_loading,
+            &mut self.oufit_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_oufit(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeOuFitSnapshot { symbol },
+            super::render::render_oufit_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_gph {
-            if self.gph_symbol.is_empty() {
-                self.gph_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_gph;
-            egui::Window::new("GPH — Geweke-Porter-Hudak Long-Memory d̂")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 320.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.gph_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.gph_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.gph_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_gph(&conn, &sym_u)
-                                    {
-                                        self.gph_snapshot = snap;
-                                        self.gph_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.gph_symbol.to_uppercase();
-                            self.gph_loading = true;
-                            self.gph_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeGphSnapshot { symbol: sym });
-                        }
-                        if self.gph_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_gph_snapshot(ui, &self.gph_snapshot);
-                });
-            self.show_gph = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "GPH — Geweke-Porter-Hudak Long-Memory d̂",
+                default_size: [560.0, 320.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_gph,
+            &mut self.gph_symbol,
+            &mut self.gph_loading,
+            &mut self.gph_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_gph(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeGphSnapshot { symbol },
+            super::render::render_gph_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if let Some(cmd) = window_shell::render_compute_window(

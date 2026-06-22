@@ -32,148 +32,73 @@ impl TyphooNApp {
             let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_gkvol {
-            if self.gkvol_symbol.is_empty() {
-                self.gkvol_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_gkvol;
-            egui::Window::new("GKVOL — Garman-Klass OHLC Volatility")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 380.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.gkvol_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.gkvol_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.gkvol_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_gkvol(&conn, &sym_u)
-                                    {
-                                        self.gkvol_snapshot = snap;
-                                        self.gkvol_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.gkvol_symbol.to_uppercase();
-                            self.gkvol_loading = true;
-                            self.gkvol_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeGkvolSnapshot { symbol: sym });
-                        }
-                        if self.gkvol_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_gkvol_snapshot(ui, &self.gkvol_snapshot);
-                });
-            self.show_gkvol = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "GKVOL — Garman-Klass OHLC Volatility",
+                default_size: [560.0, 380.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_gkvol,
+            &mut self.gkvol_symbol,
+            &mut self.gkvol_loading,
+            &mut self.gkvol_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_gkvol(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeGkvolSnapshot { symbol },
+            super::render::render_gkvol_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_rsvol {
-            if self.rsvol_symbol.is_empty() {
-                self.rsvol_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_rsvol;
-            egui::Window::new("RSVOL — Rogers-Satchell OHLC Volatility")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 340.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.rsvol_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.rsvol_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.rsvol_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_rsvol(&conn, &sym_u)
-                                    {
-                                        self.rsvol_snapshot = snap;
-                                        self.rsvol_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.rsvol_symbol.to_uppercase();
-                            self.rsvol_loading = true;
-                            self.rsvol_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeRsvolSnapshot { symbol: sym });
-                        }
-                        if self.rsvol_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_rsvol_snapshot(ui, &self.rsvol_snapshot);
-                });
-            self.show_rsvol = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "RSVOL — Rogers-Satchell OHLC Volatility",
+                default_size: [560.0, 340.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_rsvol,
+            &mut self.rsvol_symbol,
+            &mut self.rsvol_loading,
+            &mut self.rsvol_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_rsvol(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeRsvolSnapshot { symbol },
+            super::render::render_rsvol_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_cvar {
-            if self.cvar_symbol.is_empty() {
-                self.cvar_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_cvar;
-            egui::Window::new("CVAR — Conditional VaR / Expected Shortfall")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([600.0, 420.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.cvar_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.cvar_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.cvar_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_cvar(&conn, &sym_u)
-                                    {
-                                        self.cvar_snapshot = snap;
-                                        self.cvar_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.cvar_symbol.to_uppercase();
-                            self.cvar_loading = true;
-                            self.cvar_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeCvarSnapshot { symbol: sym });
-                        }
-                        if self.cvar_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_cvar_snapshot(ui, &self.cvar_snapshot);
-                });
-            self.show_cvar = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "CVAR — Conditional VaR / Expected Shortfall",
+                default_size: [600.0, 420.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_cvar,
+            &mut self.cvar_symbol,
+            &mut self.cvar_loading,
+            &mut self.cvar_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_cvar(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeCvarSnapshot { symbol },
+            super::render::render_cvar_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if let Some(cmd) = window_shell::render_compute_window(

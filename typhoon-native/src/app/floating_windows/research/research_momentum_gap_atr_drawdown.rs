@@ -105,101 +105,51 @@ impl TyphooNApp {
         }
 
         // GY — Gap Yearly (253-bar gap census)
-        if self.show_gy {
-            if self.gy_symbol.is_empty() {
-                self.gy_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_gy;
-            egui::Window::new("GY — Gap Yearly (253d census)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 400.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.gy_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.gy_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.gy_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_gy(&conn, &sym_u)
-                                    {
-                                        self.gy_snapshot = snap;
-                                        self.gy_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.gy_symbol.to_uppercase();
-                            self.gy_loading = true;
-                            self.gy_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeGySnapshot { symbol: sym });
-                        }
-                        if self.gy_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_gy_snapshot(ui, &self.gy_snapshot);
-                });
-            self.show_gy = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "GY — Gap Yearly (253d census)",
+                default_size: [640.0, 400.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_gy,
+            &mut self.gy_symbol,
+            &mut self.gy_loading,
+            &mut self.gy_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_gy(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeGySnapshot { symbol },
+            super::render::render_gy_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // DES — Daily Event Streak
-        if self.show_des {
-            if self.des_symbol.is_empty() {
-                self.des_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_des;
-            egui::Window::new("DES — Daily Event Streak")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 400.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.des_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.des_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.des_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_des(&conn, &sym_u)
-                                    {
-                                        self.des_snapshot = snap;
-                                        self.des_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.des_symbol.to_uppercase();
-                            self.des_loading = true;
-                            self.des_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeDesSnapshot { symbol: sym });
-                        }
-                        if self.des_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_des_snapshot(ui, &self.des_snapshot);
-                });
-            self.show_des = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "DES — Daily Event Streak",
+                default_size: [640.0, 400.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_des,
+            &mut self.des_symbol,
+            &mut self.des_loading,
+            &mut self.des_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_des(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeDesSnapshot { symbol },
+            super::render::render_des_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // DVDYIELDRANK — Dividend Yield Rank vs Sector Peers

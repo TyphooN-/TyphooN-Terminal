@@ -78,52 +78,27 @@ impl TyphooNApp {
             let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_msent {
-            if self.msent_symbol.is_empty() {
-                self.msent_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_msent;
-            egui::Window::new("MSENT — Multiscale Entropy")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([520.0, 300.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.msent_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.msent_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.msent_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_msent(&conn, &sym_u)
-                                    {
-                                        self.msent_snapshot = snap;
-                                        self.msent_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.msent_symbol.to_uppercase();
-                            self.msent_loading = true;
-                            self.msent_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeMsentSnapshot { symbol: sym });
-                        }
-                        if self.msent_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_msent_snapshot(ui, &self.msent_snapshot);
-                });
-            self.show_msent = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "MSENT — Multiscale Entropy",
+                default_size: [520.0, 300.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_msent,
+            &mut self.msent_symbol,
+            &mut self.msent_loading,
+            &mut self.msent_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_msent(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeMsentSnapshot { symbol },
+            super::render::render_msent_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if let Some(cmd) = window_shell::render_compute_window(

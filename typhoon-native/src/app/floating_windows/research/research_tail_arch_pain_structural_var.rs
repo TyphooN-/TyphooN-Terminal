@@ -78,100 +78,50 @@ impl TyphooNApp {
             let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_cusum {
-            if self.cusum_symbol.is_empty() {
-                self.cusum_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_cusum;
-            egui::Window::new("CUSUM — Brown-Durbin-Evans Structural Break Test")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([580.0, 380.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.cusum_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.cusum_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.cusum_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_cusum(&conn, &sym_u)
-                                    {
-                                        self.cusum_snapshot = snap;
-                                        self.cusum_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.cusum_symbol.to_uppercase();
-                            self.cusum_loading = true;
-                            self.cusum_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeCusumSnapshot { symbol: sym });
-                        }
-                        if self.cusum_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_cusum_snapshot(ui, &self.cusum_snapshot);
-                });
-            self.show_cusum = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "CUSUM — Brown-Durbin-Evans Structural Break Test",
+                default_size: [580.0, 380.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_cusum,
+            &mut self.cusum_symbol,
+            &mut self.cusum_loading,
+            &mut self.cusum_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_cusum(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeCusumSnapshot { symbol },
+            super::render::render_cusum_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_cfvar {
-            if self.cfvar_symbol.is_empty() {
-                self.cfvar_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_cfvar;
-            egui::Window::new("CFVAR — Cornish-Fisher Modified VaR")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([620.0, 420.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.cfvar_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.cfvar_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.cfvar_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_cfvar(&conn, &sym_u)
-                                    {
-                                        self.cfvar_snapshot = snap;
-                                        self.cfvar_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.cfvar_symbol.to_uppercase();
-                            self.cfvar_loading = true;
-                            self.cfvar_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeCfvarSnapshot { symbol: sym });
-                        }
-                        if self.cfvar_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_cfvar_snapshot(ui, &self.cfvar_snapshot);
-                });
-            self.show_cfvar = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "CFVAR — Cornish-Fisher Modified VaR",
+                default_size: [620.0, 420.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_cfvar,
+            &mut self.cfvar_symbol,
+            &mut self.cfvar_loading,
+            &mut self.cfvar_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_cfvar(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeCfvarSnapshot { symbol },
+            super::render::render_cfvar_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

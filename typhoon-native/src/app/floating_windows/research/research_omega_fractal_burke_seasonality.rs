@@ -9,148 +9,73 @@ impl TyphooNApp {
             research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
-        if self.show_omega {
-            if self.omega_symbol.is_empty() {
-                self.omega_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_omega;
-            egui::Window::new("OMEGA — Omega Ratio (τ=0)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 440.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.omega_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.omega_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.omega_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_omega(&conn, &sym_u)
-                                    {
-                                        self.omega_snapshot = snap;
-                                        self.omega_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.omega_symbol.to_uppercase();
-                            self.omega_loading = true;
-                            self.omega_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeOmegaSnapshot { symbol: sym });
-                        }
-                        if self.omega_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_omega_snapshot(ui, &self.omega_snapshot);
-                });
-            self.show_omega = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "OMEGA — Omega Ratio (τ=0)",
+                default_size: [640.0, 440.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_omega,
+            &mut self.omega_symbol,
+            &mut self.omega_loading,
+            &mut self.omega_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_omega(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeOmegaSnapshot { symbol },
+            super::render::render_omega_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_dfa {
-            if self.dfa_symbol.is_empty() {
-                self.dfa_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_dfa;
-            egui::Window::new("DFA — Detrended Fluctuation Analysis")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 440.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.dfa_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.dfa_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.dfa_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_dfa(&conn, &sym_u)
-                                    {
-                                        self.dfa_snapshot = snap;
-                                        self.dfa_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.dfa_symbol.to_uppercase();
-                            self.dfa_loading = true;
-                            self.dfa_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeDfaSnapshot { symbol: sym });
-                        }
-                        if self.dfa_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_dfa_snapshot(ui, &self.dfa_snapshot);
-                });
-            self.show_dfa = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "DFA — Detrended Fluctuation Analysis",
+                default_size: [640.0, 440.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_dfa,
+            &mut self.dfa_symbol,
+            &mut self.dfa_loading,
+            &mut self.dfa_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_dfa(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeDfaSnapshot { symbol },
+            super::render::render_dfa_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_burke {
-            if self.burke_symbol.is_empty() {
-                self.burke_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_burke;
-            egui::Window::new("BURKE — Burke Ratio (Σdd² adjusted)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 440.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.burke_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.burke_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.burke_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_burke(&conn, &sym_u)
-                                    {
-                                        self.burke_snapshot = snap;
-                                        self.burke_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.burke_symbol.to_uppercase();
-                            self.burke_loading = true;
-                            self.burke_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeBurkeSnapshot { symbol: sym });
-                        }
-                        if self.burke_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_burke_snapshot(ui, &self.burke_snapshot);
-                });
-            self.show_burke = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "BURKE — Burke Ratio (Σdd² adjusted)",
+                default_size: [640.0, 440.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_burke,
+            &mut self.burke_symbol,
+            &mut self.burke_loading,
+            &mut self.burke_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_burke(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeBurkeSnapshot { symbol },
+            super::render::render_burke_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if let Some(cmd) = window_shell::render_compute_window(

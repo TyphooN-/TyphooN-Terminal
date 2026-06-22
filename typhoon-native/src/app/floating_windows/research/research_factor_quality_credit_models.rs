@@ -9,52 +9,27 @@ impl TyphooNApp {
             research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // MOM — 12-1 Month Momentum Score
-        if self.show_mom {
-            if self.mom_symbol.is_empty() {
-                self.mom_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_mom;
-            egui::Window::new("MOM — 12-1 Month Momentum Score")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([520.0, 380.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.mom_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.mom_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.mom_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_momentum(&conn, &sym_u)
-                                    {
-                                        self.mom_snapshot = snap;
-                                        self.mom_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.mom_symbol.to_uppercase();
-                            self.mom_loading = true;
-                            self.mom_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeMomentumSnapshot { symbol: sym });
-                        }
-                        if self.mom_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_momentum_snapshot(ui, &self.mom_snapshot);
-                });
-            self.show_mom = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "MOM — 12-1 Month Momentum Score",
+                default_size: [520.0, 380.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_mom,
+            &mut self.mom_symbol,
+            &mut self.mom_loading,
+            &mut self.mom_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_momentum(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeMomentumSnapshot { symbol },
+            super::render::render_momentum_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // LIQ — Liquidity Profile
@@ -127,52 +102,27 @@ impl TyphooNApp {
         }
 
         // BREAK — Breakout Proximity
-        if self.show_break {
-            if self.break_symbol.is_empty() {
-                self.break_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_break;
-            egui::Window::new("BREAK — Breakout Proximity")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([540.0, 420.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.break_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.break_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.break_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_breakout(&conn, &sym_u)
-                                    {
-                                        self.break_snapshot = snap;
-                                        self.break_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.break_symbol.to_uppercase();
-                            self.break_loading = true;
-                            self.break_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeBreakoutSnapshot { symbol: sym });
-                        }
-                        if self.break_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_break_snapshot(ui, &self.break_snapshot);
-                });
-            self.show_break = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "BREAK — Breakout Proximity",
+                default_size: [540.0, 420.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_break,
+            &mut self.break_symbol,
+            &mut self.break_loading,
+            &mut self.break_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_breakout(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeBreakoutSnapshot { symbol },
+            super::render::render_break_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // CCRL — Cash Conversion Cycle
@@ -251,52 +201,27 @@ impl TyphooNApp {
         }
 
         // GROWM — Growth at a Reasonable Price (GARP) composite
-        if self.show_growm {
-            if self.growm_symbol.is_empty() {
-                self.growm_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_growm;
-            egui::Window::new("GROWM — GARP Composite (MOM + EARM + DIVG)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([620.0, 420.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.growm_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.growm_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.growm_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_growm(&conn, &sym_u)
-                                    {
-                                        self.growm_snapshot = snap;
-                                        self.growm_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.growm_symbol.to_uppercase();
-                            self.growm_loading = true;
-                            self.growm_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeGrowmSnapshot { symbol: sym });
-                        }
-                        if self.growm_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_growm_snapshot(ui, &self.growm_snapshot);
-                });
-            self.show_growm = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "GROWM — GARP Composite (MOM + EARM + DIVG)",
+                default_size: [620.0, 420.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_growm,
+            &mut self.growm_symbol,
+            &mut self.growm_loading,
+            &mut self.growm_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_growm(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeGrowmSnapshot { symbol },
+            super::render::render_growm_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // FLOW — Insider + Institutional flow score
@@ -428,150 +353,75 @@ impl TyphooNApp {
         }
 
         // VAL — Value-factor composite vs sector peers
-        if self.show_val {
-            if self.val_symbol.is_empty() {
-                self.val_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_val;
-            egui::Window::new("VAL — Value-Factor Composite")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 460.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.val_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.val_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.val_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_val(&conn, &sym_u)
-                                    {
-                                        self.val_snapshot = snap;
-                                        self.val_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.val_symbol.to_uppercase();
-                            self.val_loading = true;
-                            self.val_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeValSnapshot { symbol: sym });
-                        }
-                        if self.val_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_val_snapshot(ui, &self.val_snapshot);
-                });
-            self.show_val = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "VAL — Value-Factor Composite",
+                default_size: [640.0, 460.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_val,
+            &mut self.val_symbol,
+            &mut self.val_loading,
+            &mut self.val_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_val(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeValSnapshot { symbol },
+            super::render::render_val_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // QUAL — Quality-factor composite
-        if self.show_qual {
-            if self.qual_symbol.is_empty() {
-                self.qual_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_qual;
-            egui::Window::new("QUAL — Quality-Factor Composite")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 400.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.qual_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.qual_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.qual_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_qual(&conn, &sym_u)
-                                    {
-                                        self.qual_snapshot = snap;
-                                        self.qual_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.qual_symbol.to_uppercase();
-                            self.qual_loading = true;
-                            self.qual_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeQualSnapshot { symbol: sym });
-                        }
-                        if self.qual_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_qual_snapshot(ui, &self.qual_snapshot);
-                });
-            self.show_qual = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "QUAL — Quality-Factor Composite",
+                default_size: [640.0, 400.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_qual,
+            &mut self.qual_symbol,
+            &mut self.qual_loading,
+            &mut self.qual_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_qual(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeQualSnapshot { symbol },
+            super::render::render_qual_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // RISK — Risk-factor composite
-        if self.show_risk {
-            if self.risk_symbol.is_empty() {
-                self.risk_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_risk;
-            egui::Window::new("RISK — Risk-Factor Composite")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 420.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.risk_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.risk_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.risk_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_risk(&conn, &sym_u)
-                                    {
-                                        self.risk_snapshot = snap;
-                                        self.risk_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.risk_symbol.to_uppercase();
-                            self.risk_loading = true;
-                            self.risk_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeRiskSnapshot { symbol: sym });
-                        }
-                        if self.risk_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_risk_snapshot(ui, &self.risk_snapshot);
-                });
-            self.show_risk = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "RISK — Risk-Factor Composite",
+                default_size: [640.0, 420.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_risk,
+            &mut self.risk_symbol,
+            &mut self.risk_loading,
+            &mut self.risk_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_risk(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeRiskSnapshot { symbol },
+            super::render::render_risk_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // INSSTRK — Insider streak detector
@@ -629,52 +479,27 @@ impl TyphooNApp {
         }
 
         // COVG — Analyst coverage breadth + churn
-        if self.show_covg {
-            if self.covg_symbol.is_empty() {
-                self.covg_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_covg;
-            egui::Window::new("COVG — Analyst Coverage Breadth & Churn")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 420.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.covg_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.covg_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.covg_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_covg(&conn, &sym_u)
-                                    {
-                                        self.covg_snapshot = snap;
-                                        self.covg_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.covg_symbol.to_uppercase();
-                            self.covg_loading = true;
-                            self.covg_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeCovgSnapshot { symbol: sym });
-                        }
-                        if self.covg_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_covg_snapshot(ui, &self.covg_snapshot);
-                });
-            self.show_covg = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "COVG — Analyst Coverage Breadth & Churn",
+                default_size: [640.0, 420.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_covg,
+            &mut self.covg_symbol,
+            &mut self.covg_loading,
+            &mut self.covg_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_covg(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeCovgSnapshot { symbol },
+            super::render::render_covg_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

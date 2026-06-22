@@ -200,52 +200,27 @@ impl TyphooNApp {
         }
 
         // EPSB — EPS Beat Streak & Surprise
-        if self.show_epsb {
-            if self.epsb_symbol.is_empty() {
-                self.epsb_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_epsb;
-            egui::Window::new("EPSB — EPS Beat Streak")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 380.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.epsb_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.epsb_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.epsb_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_eps_beat(&conn, &sym_u)
-                                    {
-                                        self.epsb_snapshot = snap;
-                                        self.epsb_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.epsb_symbol.to_uppercase();
-                            self.epsb_loading = true;
-                            self.epsb_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeEpsBeatSnapshot { symbol: sym });
-                        }
-                        if self.epsb_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_epsb_snapshot(ui, &self.epsb_snapshot);
-                });
-            self.show_epsb = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "EPSB — EPS Beat Streak",
+                default_size: [560.0, 380.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_epsb,
+            &mut self.epsb_symbol,
+            &mut self.epsb_loading,
+            &mut self.epsb_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_eps_beat(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeEpsBeatSnapshot { symbol },
+            super::render::render_epsb_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // PTD — Price Target Dispersion & Implied Return

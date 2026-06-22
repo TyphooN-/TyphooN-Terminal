@@ -11,150 +11,75 @@ impl TyphooNApp {
         // ── Research section ──
 
         // VRK — Value Rank vs sector peers
-        if self.show_vrk {
-            if self.vrk_symbol.is_empty() {
-                self.vrk_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_vrk;
-            egui::Window::new("VRK — Value Rank vs Sector Peers")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 360.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.vrk_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.vrk_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.vrk_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_vrk(&conn, &sym_u)
-                                    {
-                                        self.vrk_snapshot = snap;
-                                        self.vrk_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.vrk_symbol.to_uppercase();
-                            self.vrk_loading = true;
-                            self.vrk_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeVrkSnapshot { symbol: sym });
-                        }
-                        if self.vrk_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_vrk_snapshot(ui, &self.vrk_snapshot);
-                });
-            self.show_vrk = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "VRK — Value Rank vs Sector Peers",
+                default_size: [640.0, 360.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_vrk,
+            &mut self.vrk_symbol,
+            &mut self.vrk_loading,
+            &mut self.vrk_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_vrk(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeVrkSnapshot { symbol },
+            super::render::render_vrk_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // QRK — Quality Rank vs sector peers
-        if self.show_qrk {
-            if self.qrk_symbol.is_empty() {
-                self.qrk_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_qrk;
-            egui::Window::new("QRK — Quality Rank vs Sector Peers")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 360.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.qrk_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.qrk_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.qrk_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_qrk(&conn, &sym_u)
-                                    {
-                                        self.qrk_snapshot = snap;
-                                        self.qrk_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.qrk_symbol.to_uppercase();
-                            self.qrk_loading = true;
-                            self.qrk_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeQrkSnapshot { symbol: sym });
-                        }
-                        if self.qrk_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_qrk_snapshot(ui, &self.qrk_snapshot);
-                });
-            self.show_qrk = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "QRK — Quality Rank vs Sector Peers",
+                default_size: [640.0, 360.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_qrk,
+            &mut self.qrk_symbol,
+            &mut self.qrk_loading,
+            &mut self.qrk_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_qrk(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeQrkSnapshot { symbol },
+            super::render::render_qrk_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // RRK — Risk Rank vs sector peers (inverted — higher pct = SAFER)
-        if self.show_rrk {
-            if self.rrk_symbol.is_empty() {
-                self.rrk_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_rrk;
-            egui::Window::new("RRK — Risk Rank vs Sector Peers (Higher = Safer)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 360.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.rrk_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.rrk_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.rrk_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_rrk(&conn, &sym_u)
-                                    {
-                                        self.rrk_snapshot = snap;
-                                        self.rrk_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.rrk_symbol.to_uppercase();
-                            self.rrk_loading = true;
-                            self.rrk_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeRrkSnapshot { symbol: sym });
-                        }
-                        if self.rrk_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_rrk_snapshot(ui, &self.rrk_snapshot);
-                });
-            self.show_rrk = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "RRK — Risk Rank vs Sector Peers (Higher = Safer)",
+                default_size: [640.0, 360.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_rrk,
+            &mut self.rrk_symbol,
+            &mut self.rrk_loading,
+            &mut self.rrk_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_rrk(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeRrkSnapshot { symbol },
+            super::render::render_rrk_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // RELEPSGR — Relative 3y EPS CAGR vs sector median
@@ -182,52 +107,27 @@ impl TyphooNApp {
         }
 
         // PEAD — Post-Earnings-Announcement Drift
-        if self.show_pead {
-            if self.pead_symbol.is_empty() {
-                self.pead_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_pead;
-            egui::Window::new("PEAD — Post-Earnings-Announcement Drift")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([720.0, 480.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.pead_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.pead_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.pead_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_pead(&conn, &sym_u)
-                                    {
-                                        self.pead_snapshot = snap;
-                                        self.pead_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.pead_symbol.to_uppercase();
-                            self.pead_loading = true;
-                            self.pead_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputePeadSnapshot { symbol: sym });
-                        }
-                        if self.pead_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_pead_snapshot(ui, &self.pead_snapshot);
-                });
-            self.show_pead = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "PEAD — Post-Earnings-Announcement Drift",
+                default_size: [720.0, 480.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_pead,
+            &mut self.pead_symbol,
+            &mut self.pead_loading,
+            &mut self.pead_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_pead(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputePeadSnapshot { symbol },
+            super::render::render_pead_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

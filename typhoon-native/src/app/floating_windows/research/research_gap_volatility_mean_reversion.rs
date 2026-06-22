@@ -129,52 +129,27 @@ impl TyphooNApp {
             let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_mrhl {
-            if self.mrhl_symbol.is_empty() {
-                self.mrhl_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_mrhl;
-            egui::Window::new("MRHL — Mean-Reversion Half-Life (AR1)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 440.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.mrhl_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.mrhl_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.mrhl_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_mrhl(&conn, &sym_u)
-                                    {
-                                        self.mrhl_snapshot = snap;
-                                        self.mrhl_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.mrhl_symbol.to_uppercase();
-                            self.mrhl_loading = true;
-                            self.mrhl_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeMrhlSnapshot { symbol: sym });
-                        }
-                        if self.mrhl_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_mrhl_snapshot(ui, &self.mrhl_snapshot);
-                });
-            self.show_mrhl = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "MRHL — Mean-Reversion Half-Life (AR1)",
+                default_size: [640.0, 440.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_mrhl,
+            &mut self.mrhl_symbol,
+            &mut self.mrhl_loading,
+            &mut self.mrhl_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_mrhl(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeMrhlSnapshot { symbol },
+            super::render::render_mrhl_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

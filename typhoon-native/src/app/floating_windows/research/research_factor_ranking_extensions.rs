@@ -10,101 +10,51 @@ impl TyphooNApp {
 
         // ── Research section ──
         // SIZEF — Size Factor Rank vs Sector Peers
-        if self.show_sizef {
-            if self.sizef_symbol.is_empty() {
-                self.sizef_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_sizef;
-            egui::Window::new("SIZEF — Size Factor Rank vs Sector Peers")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 360.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.sizef_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.sizef_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.sizef_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_sizef(&conn, &sym_u)
-                                    {
-                                        self.sizef_snapshot = snap;
-                                        self.sizef_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.sizef_symbol.to_uppercase();
-                            self.sizef_loading = true;
-                            self.sizef_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeSizefSnapshot { symbol: sym });
-                        }
-                        if self.sizef_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_sizef_snapshot(ui, &self.sizef_snapshot);
-                });
-            self.show_sizef = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "SIZEF — Size Factor Rank vs Sector Peers",
+                default_size: [640.0, 360.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_sizef,
+            &mut self.sizef_symbol,
+            &mut self.sizef_loading,
+            &mut self.sizef_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_sizef(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeSizefSnapshot { symbol },
+            super::render::render_sizef_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // MOMF — Momentum Factor Rank vs Sector Peers
-        if self.show_momf {
-            if self.momf_symbol.is_empty() {
-                self.momf_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_momf;
-            egui::Window::new("MOMF — Momentum Factor Rank vs Sector Peers")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 360.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.momf_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.momf_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.momf_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_momf(&conn, &sym_u)
-                                    {
-                                        self.momf_snapshot = snap;
-                                        self.momf_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.momf_symbol.to_uppercase();
-                            self.momf_loading = true;
-                            self.momf_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeMomfSnapshot { symbol: sym });
-                        }
-                        if self.momf_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_momf_snapshot(ui, &self.momf_snapshot);
-                });
-            self.show_momf = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "MOMF — Momentum Factor Rank vs Sector Peers",
+                default_size: [640.0, 360.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_momf,
+            &mut self.momf_symbol,
+            &mut self.momf_loading,
+            &mut self.momf_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_momf(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeMomfSnapshot { symbol },
+            super::render::render_momf_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // PEADRANK — Post-Earnings Drift Rank vs Sector Peers
@@ -132,52 +82,27 @@ impl TyphooNApp {
         }
 
         // FQM — Fundamental Quality Meter
-        if self.show_fqm {
-            if self.fqm_symbol.is_empty() {
-                self.fqm_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_fqm;
-            egui::Window::new("FQM — Fundamental Quality Meter")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 380.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.fqm_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.fqm_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.fqm_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_fqm(&conn, &sym_u)
-                                    {
-                                        self.fqm_snapshot = snap;
-                                        self.fqm_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.fqm_symbol.to_uppercase();
-                            self.fqm_loading = true;
-                            self.fqm_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeFqmSnapshot { symbol: sym });
-                        }
-                        if self.fqm_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_fqm_snapshot(ui, &self.fqm_snapshot);
-                });
-            self.show_fqm = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "FQM — Fundamental Quality Meter",
+                default_size: [640.0, 380.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_fqm,
+            &mut self.fqm_symbol,
+            &mut self.fqm_loading,
+            &mut self.fqm_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_fqm(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeFqmSnapshot { symbol },
+            super::render::render_fqm_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // REVRANK — Relative 3y Revenue CAGR vs Sector Median
