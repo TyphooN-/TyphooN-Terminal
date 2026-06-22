@@ -40,8 +40,7 @@ fn render_user_position_section(
     live_positions: &[PositionInfo],
     kr_positions: &[PositionInfo],
 ) -> String {
-    let matches_sym =
-        |p: &PositionInfo| p.symbol.eq_ignore_ascii_case(sym_upper) && p.qty != 0.0;
+    let matches_sym = |p: &PositionInfo| p.symbol.eq_ignore_ascii_case(sym_upper) && p.qty != 0.0;
     let alpaca: Vec<&PositionInfo> = live_positions.iter().filter(|p| matches_sym(p)).collect();
     let kr: Vec<&PositionInfo> = kr_positions.iter().filter(|p| matches_sym(p)).collect();
     if alpaca.is_empty() && kr.is_empty() {
