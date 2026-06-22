@@ -46,6 +46,7 @@ mod tests {
     }
 }
 
+mod render;
 mod research_advanced_moving_averages;
 mod research_aroon_macd_variable_ma;
 mod research_autocorrelation_hurst_volume;

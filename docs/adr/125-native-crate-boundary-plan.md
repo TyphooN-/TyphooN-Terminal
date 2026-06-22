@@ -479,20 +479,26 @@ call sites now pass `self.charts.get(self.active_tab).map(|c| c.symbol.as_str())
 Behavior-preserving (logic unchanged; 2 unit tests pin the `source:symbol:timeframe`
 extraction + `AAPL` fallback).
 
-The renderers' deeper coupling remains: each window reads/writes its own
-`self.<x>_win_symbol` / `_snapshot` / `_loading` / `show_<x>_win` state and sends a
-`BrokerCmd` (the action). Decoupling that is the next work — the snapshot-display bodies
-(the bulk of each window) are already pure over `&Snapshot` and extract like the packet's
-formatter layer; the input/action half needs per-window state bundles + an action sink.
+Then the display-half extraction began (the egui analog of the packet's `format.rs`).
+New `research/render.rs`: pure snapshot-display renderers, free functions over
+`(&mut egui::Ui, &Snapshot)` with no `TyphooNApp` — crate-movable since
+`typhoon-research-ui` may depend on egui. First file done as proof of concept:
+`research_ohlc_price_transforms` (AVGPRICE / MEDPRICE / TYPPRICE / WCLPRICE / VARIANCE)
+— each window's display body (the label + summary `egui::Grid`, ~90 lines) moved to a
+`render::render_<x>_snapshot` free function; the renderer keeps the header/input/action
+half and calls it. Behavior-preserving: all 56 string literals present unchanged
+(verified by diff), all 5 display Grids relocated (renderer 5 → 0, `render.rs` 0 → 5).
+Done via an indent-based guarded transform (format strings contain `{}`, so
+brace-counting is unsafe).
 
 ### Next slice
 
-Continue the research egui tree: (1) extract the pure snapshot-display bodies into free
-functions over `(&mut egui::Ui, &Snapshot)` — the egui analog of the packet's formatter
-layer, crate-movable since `typhoon-research-ui` is allowed to depend on egui; (2) then
-the `&mut self` input/action half (per-window state bundles + a `ResearchUiAction` sink in
-place of direct `broker_tx` sends). Apply the same to `command_research_windows`. Then
-decide the crate's public surface and begin Phase 2 (creating the crate).
+Continue the display-half extraction across the rest of `floating_windows/research`
+(per-file, same `render.rs` home — the windows are heterogeneous, so per-file verified
+slices, not one blanket script). Then the harder `&mut self` input/action half:
+per-window state bundles + a `ResearchUiAction` sink replacing direct `broker_tx` sends,
+so the renderer's header half also stops needing full `TyphooNApp`. Apply the same to
+`command_research_windows`. Then decide the crate's public surface and begin Phase 2.
 
 ## Verification Standard for Future Implementation
 
