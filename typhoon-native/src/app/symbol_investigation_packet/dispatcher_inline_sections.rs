@@ -1,11 +1,16 @@
 //! Dispatcher-level inline research sections for the symbol-investigation
-//! packet (ADR-125 Phase 1 step 3): the options-expiration calendar and the
-//! candlestick-pattern + statistical-test blocks that were inline in the
-//! per-symbol dispatcher. Free functions over `&SymbolResearchContext` using
-//! `ctx.conn`; output is unchanged (same `rx::get_*` calls in the same order).
+//! packet (ADR-125 Phase 1 step 3): the blocks that were inline in the per-symbol
+//! dispatcher — options-expiration calendar, candlestick + statistical-test
+//! snapshots, quarterly financials / holders, SEC filings, insider activity, and
+//! price/volatility stats. Free functions over `&SymbolResearchContext`,
+//! `&SqliteCache`, or engine slices instead of `&TyphooNApp`. Each keeps its own
+//! connection handling, so output is unchanged.
 use super::context::SymbolResearchContext;
 use std::fmt::Write as _;
+use typhoon_engine::core::cache::SqliteCache;
+use typhoon_engine::core::fundamentals::format_large_number;
 use typhoon_engine::core::research as rx;
+use typhoon_engine::core::sec_filing::{InsiderTrade, SecFiling};
 
 /// Options Expiration Calendar (EXPCAL).
 pub(super) fn write_expiration_calendar(
@@ -2196,5 +2201,255 @@ pub(super) fn write_candlestick_and_stats(
             }
             let _ = writeln!(p);
         }
+    }
+}
+
+/// Quarterly financials + top institutional holders (from the research DB).
+pub(super) fn write_quarterly_and_holders(cache: &SqliteCache, p: &mut String, sym_upper: &str) {
+    let Some(conn) = cache.try_connection() else {
+        return;
+    };
+    if let Ok(quarters) =
+        typhoon_engine::core::fundamentals::get_quarterly_financials(&conn, sym_upper)
+    {
+        if !quarters.is_empty() {
+            let _ = writeln!(p, "### Last {} Quarterly Financials", quarters.len().min(4));
+            let _ = writeln!(
+                p,
+                "| Period | Revenue | Net Income | FCF | Gross Profit | Op Income | EPS |"
+            );
+            let _ = writeln!(p, "|---|---|---|---|---|---|---|");
+            let fmt_money = format_large_number;
+            let fmt_mopt = |v: Option<f64>| v.map(fmt_money).unwrap_or_else(|| "—".to_string());
+            let fmt_opt2 = |v: Option<f64>| {
+                v.map(|x| format!("{:.2}", x))
+                    .unwrap_or_else(|| "—".to_string())
+            };
+            for q in quarters.iter().take(4) {
+                let _ = writeln!(
+                    p,
+                    "| {} | {} | {} | {} | {} | {} | {} |",
+                    q.period_end,
+                    fmt_mopt(q.total_revenue),
+                    fmt_mopt(q.net_income),
+                    fmt_mopt(q.free_cash_flow),
+                    fmt_mopt(q.gross_profit),
+                    fmt_mopt(q.operating_income),
+                    fmt_opt2(q.eps)
+                );
+            }
+            let _ = writeln!(p);
+        }
+    }
+    if let Ok(holders) =
+        typhoon_engine::core::fundamentals::get_institutional_holders(&conn, sym_upper)
+    {
+        if !holders.is_empty() {
+            let _ = writeln!(p, "### Top {} Institutional Holders", holders.len().min(5));
+            let _ = writeln!(p, "| Holder | Shares | % Held | Value |");
+            let _ = writeln!(p, "|---|---|---|---|");
+            let fmt_money = format_large_number;
+            for h in holders.iter().take(5) {
+                let _ = writeln!(
+                    p,
+                    "| {} | {} | {:.2}% | {} |",
+                    h.holder_name,
+                    fmt_money(h.shares as f64),
+                    h.pct_held * 100.0,
+                    fmt_money(h.value)
+                );
+            }
+            let _ = writeln!(p);
+        }
+    }
+}
+
+/// Recent SEC filings (from the `bg.sec_filings` cache slice).
+pub(super) fn write_sec_filings(p: &mut String, sym_upper: &str, sec_filings: &[SecFiling]) {
+    let recent_filings: Vec<_> = sec_filings
+        .iter()
+        .filter(|fl| fl.ticker.eq_ignore_ascii_case(sym_upper))
+        .take(10)
+        .collect();
+    if !recent_filings.is_empty() {
+        let _ = writeln!(p, "### Recent SEC Filings ({})", recent_filings.len());
+        let _ = writeln!(p, "| Date | Form | Category | Summary |");
+        let _ = writeln!(p, "|---|---|---|---|");
+        for fl in &recent_filings {
+            let summary = if fl.summary.len() > 120 {
+                &fl.summary[..120]
+            } else {
+                fl.summary.as_str()
+            };
+            let _ = writeln!(
+                p,
+                "| {} | {} | {} | {} |",
+                fl.filing_date, fl.form_type, fl.category, summary
+            );
+        }
+        let _ = writeln!(p);
+    }
+}
+
+/// Insider trade summary (aggregates from the `bg.insider_trades` cache slice).
+pub(super) fn write_insider_activity(p: &mut String, trades: Option<&[InsiderTrade]>) {
+    let Some(trades) = trades else { return };
+    if trades.is_empty() {
+        return;
+    }
+    let mut n_buys = 0usize;
+    let mut n_sells = 0usize;
+    let mut buy_value = 0.0f64;
+    let mut sell_value = 0.0f64;
+    for t in trades.iter() {
+        let typ = t.transaction_type.as_str();
+        let is_buy = typ.eq_ignore_ascii_case("P") || typ.to_lowercase().contains("buy");
+        let is_sell = typ.eq_ignore_ascii_case("S") || typ.to_lowercase().contains("sell");
+        if is_buy {
+            n_buys += 1;
+            buy_value += t.aggregate_value;
+        }
+        if is_sell {
+            n_sells += 1;
+            sell_value += t.aggregate_value;
+        }
+    }
+    let net = buy_value - sell_value;
+    let _ = writeln!(p, "### Insider Activity");
+    let fmt_money = format_large_number;
+    let _ = writeln!(
+        p,
+        "- {} transactions on file ({} buys, {} sells)",
+        trades.len(),
+        n_buys,
+        n_sells
+    );
+    let _ = writeln!(
+        p,
+        "- Buy aggregate: {} | Sell aggregate: {} | Net: {}",
+        fmt_money(buy_value),
+        fmt_money(sell_value),
+        fmt_money(net)
+    );
+    let _ = writeln!(p, "| Date | Insider | Title | Type | Shares | Value |");
+    let _ = writeln!(p, "|---|---|---|---|---|---|");
+    for t in trades.iter().take(5) {
+        let _ = writeln!(
+            p,
+            "| {} | {} | {} | {} | {} | {} |",
+            t.transaction_date,
+            t.insider_name,
+            t.insider_title,
+            t.transaction_type,
+            fmt_money(t.shares),
+            fmt_money(t.aggregate_value)
+        );
+    }
+    let _ = writeln!(p);
+}
+
+/// Price & volatility stats (returns / ATR(14) / VaR95) from the D1 bar cache.
+pub(super) fn write_price_volatility(cache: &SqliteCache, p: &mut String, sym_upper: &str) {
+    let keys = [
+        format!("kraken-equities:{}:1Day", sym_upper),
+        format!("alpaca:{}:1Day", sym_upper),
+    ];
+    let mut closes: Vec<f64> = Vec::new();
+    let mut ohlc: Vec<(f64, f64, f64, f64)> = Vec::new();
+    for key in &keys {
+        if let Ok(Some(bars)) = cache.get_bars_raw(key) {
+            if bars.len() >= 20 {
+                closes = bars.iter().map(|(_, _, _, _, c, _)| *c).collect();
+                ohlc = bars
+                    .iter()
+                    .map(|(_, o, h, l, c, _)| (*o, *h, *l, *c))
+                    .collect();
+                break;
+            }
+        }
+    }
+    if closes.len() >= 20 {
+        let last = *closes.last().unwrap();
+        let n = closes.len();
+        let ret_pct = |n_back: usize| -> Option<f64> {
+            if n > n_back {
+                let prev = closes[n - 1 - n_back];
+                if prev > 0.0 {
+                    Some((last / prev - 1.0) * 100.0)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        let r20 = ret_pct(20);
+        let r60 = ret_pct(60);
+        let r252 = ret_pct(252);
+        // ATR(14)
+        let period = 14usize;
+        let mut atr = 0.0_f64;
+        if ohlc.len() > period {
+            for i in 1..=period {
+                let tr = (ohlc[i].1 - ohlc[i].2)
+                    .max((ohlc[i].1 - ohlc[i - 1].3).abs())
+                    .max((ohlc[i].2 - ohlc[i - 1].3).abs());
+                atr += tr;
+            }
+            atr /= period as f64;
+            for i in (period + 1)..ohlc.len() {
+                let tr = (ohlc[i].1 - ohlc[i].2)
+                    .max((ohlc[i].1 - ohlc[i - 1].3).abs())
+                    .max((ohlc[i].2 - ohlc[i - 1].3).abs());
+                atr = (atr * (period as f64 - 1.0) + tr) / period as f64;
+            }
+        }
+        let atr_pct = if last > 0.0 { atr / last * 100.0 } else { 0.0 };
+        // VaR 95% from closes
+        let var95 = typhoon_engine::core::var::compute_var_from_closes(&closes, 0.95)
+            .map(|(dollars, ratio)| format!("${:.2} ({:.2}% of ask)", dollars, ratio))
+            .unwrap_or_else(|| "—".to_string());
+        let _ = writeln!(p, "### Price & Volatility (D1 bars, n={n})");
+        let _ = writeln!(p, "- Last close: **{:.4}**", last);
+        let _ = writeln!(
+            p,
+            "- 20d return: {}",
+            r20.map(|x| format!("{:+.2}%", x))
+                .unwrap_or_else(|| "—".into())
+        );
+        let _ = writeln!(
+            p,
+            "- 60d return: {}",
+            r60.map(|x| format!("{:+.2}%", x))
+                .unwrap_or_else(|| "—".into())
+        );
+        let _ = writeln!(
+            p,
+            "- 252d return: {}",
+            r252.map(|x| format!("{:+.2}%", x))
+                .unwrap_or_else(|| "—".into())
+        );
+        let _ = writeln!(p, "- ATR(14): {:.4} ({:.2}% of price)", atr, atr_pct);
+        let _ = writeln!(p, "- VaR 95% (1 lot): {}", var95);
+        let _ = writeln!(p);
+    } else {
+        let _ = writeln!(
+            p,
+            "_No D1 bar data in cache — price/volatility stats unavailable. Run BARDATA to populate._"
+        );
+        let _ = writeln!(p);
+    }
+}
+
+/// Recent news (fetches the latest articles from the DB, then renders them).
+pub(super) fn write_recent_news(cache: &SqliteCache, p: &mut String, sym_upper: &str) {
+    let Some(conn) = cache.try_connection() else {
+        return;
+    };
+    const NEWS_ARTICLE_COUNT: usize = 8;
+    if let Ok(articles) =
+        typhoon_engine::core::news::get_news_by_symbol(&conn, sym_upper, NEWS_ARTICLE_COUNT)
+    {
+        super::recent_news::write_symbol_recent_news_section(p, &articles);
     }
 }

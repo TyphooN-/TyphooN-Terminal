@@ -447,16 +447,35 @@ unchanged; `style_scope.rs` is a pure 74-line deletion).
 Every named `write_symbol_*` packet section is now a free function over engine types —
 no section method remains on `impl TyphooNApp`.
 
+Finally the dispatcher's own inline glue moved out: quarterly-financials + holders,
+SEC filings (`bg.sec_filings`), insider summary (`bg.insider_trades`), price/volatility
+stats (D1 bar cache), recent news, and the cached-research surfaces. All read engine
+types (`SecFiling`, `InsiderTrade`, `NewsArticle`, fundamentals/research DTOs) or the
+cache, so each became a free function over `&SqliteCache` / engine slices / the context
+in `dispatcher_inline_sections.rs` (or its own module for `recent_news` /
+`cached_research`). `cached_research` merged into the main `open_bg` ctx block (it was
+adjacent), so it now shares the one connection. Behavior-preserving: all 1,139 markdown
+literals across the whole packet tree are unchanged (verified by diff), output order
+identical.
+
+**Step 3 is complete for the symbol-investigation packet.** Every section and inline
+block is a free function over engine types / `&SqliteCache` / `&SymbolResearchContext` —
+no `write_symbol_*` work remains on `impl TyphooNApp`. The dispatcher method
+`write_symbol_investigation_sections` shrank from ~2,640 to ~180 lines and is now a pure
+orchestrator: it loops symbols, emits the `## SYM` header, does the one `all_fundamentals`
+lookup, and passes app-state slices down. Per ADR-125 that orchestrator legitimately
+stays in `typhoon-native` (the app shell owns integration); the sections are the
+crate-movable surface.
+
 ### Next slice
 
-What still reads `TyphooNApp` in the packet is only the **dispatcher's own** inline
-glue: the quarterly-financials / institutional-holders DB block (its own
-`try_connection`), the SEC-filings block (`bg.sec_filings`), and the insider-summary
-block (`bg.insider_trades`). These read native cache state (not engine DTOs), so fully
-moving them needs either those snapshots threaded through the context or the relevant
-`bg` types made nameable. That dispatcher glue — plus deciding whether the eventual
-`typhoon-research-ui` crate owns the orchestration or just the sections — is the last
-step before the Phase 2 crate extraction.
+The packet's section layer is now extraction-ready. Remaining before a `typhoon-research-ui`
+crate can be cut: (1) apply the same context/free-function treatment to the
+`command_research_windows` and `floating_windows/research` trees (still `impl TyphooNApp`
+egui renderers — these need the `&mut self` → context+action-enum work from Phase 1
+steps 3–4, harder than the packet's `&self` text builders); (2) decide the crate's public
+surface (`render_research_*` / `write_*` free functions + the context/action types). Only
+then does Phase 2 (creating the crate) begin.
 
 ## Verification Standard for Future Implementation
 
