@@ -2790,6 +2790,10 @@ impl TyphooNApp {
             dragging_right_panel_section: None,
             risk_mode: RiskMode::VaR,
             order_broker: OrderBroker::Kraken,
+            // Default primary preserves legacy behavior (Kraken main, Alpaca
+            // assist) until the user flips the top-bar switch; the choice is
+            // then persisted. `order_broker` is re-derived from this on load.
+            primary_broker: OrderBroker::Kraken,
             sl_input: String::new(),
             tp_input: String::new(),
             trade_risk_pct_input: "0.5".to_string(),

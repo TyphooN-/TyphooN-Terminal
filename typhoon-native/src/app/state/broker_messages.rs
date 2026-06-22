@@ -1,7 +1,9 @@
 use super::*;
 
-/// Which broker to route orders to.
-#[derive(Clone, Copy, PartialEq)]
+/// Broker identity. Doubles as the order-routing target and the primary/assist
+/// role selector (see `primary_broker`). New brokers are added here and to the
+/// match arms below; nothing else hardcodes a 2-way Alpaca/Kraken split.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum OrderBroker {
     Alpaca,
     Kraken,
@@ -13,6 +15,45 @@ impl OrderBroker {
             OrderBroker::Alpaca => "Alpaca",
             OrderBroker::Kraken => "Kraken",
         }
+    }
+
+    /// The equity-merge source tag this broker provides (bridges the identity
+    /// enum to the string-keyed merge sources in `chart/equity_merge.rs`).
+    pub(crate) fn equity_source_tag(self) -> &'static str {
+        match self {
+            OrderBroker::Alpaca => "alpaca",
+            OrderBroker::Kraken => "kraken-equities",
+        }
+    }
+
+    /// Stable token used for session persistence.
+    pub(crate) fn as_persist_str(self) -> &'static str {
+        match self {
+            OrderBroker::Alpaca => "alpaca",
+            OrderBroker::Kraken => "kraken",
+        }
+    }
+
+    pub(crate) fn from_persist_str(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "alpaca" => Some(OrderBroker::Alpaca),
+            "kraken" => Some(OrderBroker::Kraken),
+            _ => None,
+        }
+    }
+
+    /// Ordered list of brokers to offer in the top-bar Primary switch, limited to
+    /// those the user has enabled. Order here is the cycle order. Extends to N
+    /// brokers by adding rows.
+    pub(crate) fn enabled_cycle(alpaca_enabled: bool, kraken_enabled: bool) -> Vec<OrderBroker> {
+        let mut out = Vec::new();
+        if alpaca_enabled {
+            out.push(OrderBroker::Alpaca);
+        }
+        if kraken_enabled {
+            out.push(OrderBroker::Kraken);
+        }
+        out
     }
 }
 

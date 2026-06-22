@@ -6,6 +6,11 @@ Companion to **ADR-113** (Cross-Source Equity Bar Merge & Data Integrity) and
 **ADR-122** (Curated Stock-Split Fallback). Governs
 `chart_reconcile_depth_split_adjustment` in `typhoon-native/src/app/chart.rs`.
 
+> **Note (2026-06):** the symmetry of this guard is what makes the **primary/assist
+> broker** merge inversion safe — [ADR-126](126-primary-assist-broker-selection.md)
+> lets the user pick which tradeable source is the trusted rank-0 scale, and
+> `SCALE_CAP` protects whichever orientation is selected.
+
 ## Context
 
 ADR-113 added `chart_reconcile_depth_split_adjustment`: when a depth source

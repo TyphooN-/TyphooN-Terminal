@@ -19,6 +19,7 @@ impl TyphooNApp {
             "alpaca_full_bar_sync_enabled": self.alpaca_full_bar_sync_enabled,
             "kraken_enabled": self.kraken_enabled,
             "kraken_full_bar_sync_enabled": self.kraken_full_bar_sync_enabled,
+            "primary_broker": self.primary_broker.as_persist_str(),
             "kraken_scrape_xstocks": self.kraken_scrape_xstocks,
             "kraken_scrape_usd_crypto": self.kraken_scrape_usd_crypto,
             "kraken_scrape_fiat_crypto": self.kraken_scrape_fiat_crypto,
@@ -67,6 +68,17 @@ impl TyphooNApp {
         }
         if let Some(enabled) = value["kraken_enabled"].as_bool() {
             self.kraken_enabled = enabled;
+        }
+        if let Some(primary) = value["primary_broker"]
+            .as_str()
+            .and_then(OrderBroker::from_persist_str)
+        {
+            self.primary_broker = primary;
+            // Routing default follows the persisted primary; resolve_order_broker
+            // re-points only if the primary is unavailable once brokers connect.
+            self.order_broker = primary;
+            // Mirror into the merge's process-wide selection (ADR-126).
+            set_chart_merge_primary_broker(primary);
         }
         if let Some(enabled) = value["kraken_scrape_xstocks"].as_bool() {
             self.kraken_scrape_xstocks = enabled;

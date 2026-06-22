@@ -3380,6 +3380,10 @@ pub struct TyphooNApp {
     /// Risk sizing mode dropdown.
     pub(crate) risk_mode: RiskMode,
     pub(crate) order_broker: OrderBroker,
+    /// Primary broker (top-bar switch). The primary broker is the order-routing
+    /// default and the trusted/reference lane for the equity data merge; every
+    /// other enabled broker acts as a sync **assist** lane. Persisted.
+    pub(crate) primary_broker: OrderBroker,
     /// SL price input text.
     pub(crate) sl_input: String,
     /// TP price input text.

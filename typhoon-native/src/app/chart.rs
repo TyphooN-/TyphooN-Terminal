@@ -381,7 +381,9 @@ mod indicator_compute;
 /// * **Trusted** (rank ≤ 2 — `kraken-equities`, `alpaca`): live /
 ///   native feeds that define the authoritative, corporate-action-adjusted
 ///   price scale. Merged per-bucket by priority (best rank wins; latest tick
-///   wins within a source).
+///   wins within a source). The PRIMARY broker (top-bar switch, ADR-126) is
+///   rank 0 and defines the scale; the other tradeable broker is rank 2 and
+///   corroborates/gap-fills without redefining it.
 /// * **Depth** (rank ≥ 3 — `yahoo-chart`, `default`): history-extenders. Yahoo
 ///   carries far deeper history but is frequently *unadjusted* across splits and
 ///   token re-denominations (WOK was ~10,000× too high before its 2025 action),
@@ -401,15 +403,17 @@ mod indicator_compute;
 mod equity_merge;
 pub(crate) use equity_merge::{
     CHART_SOURCE_ORDER, cache_source_label, chart_equity_low_timeframe_requires_native_source,
-    chart_equity_source_rank, chart_forming_bar_allowed, chart_load_merged_equity_bars_from_cache,
-    chart_log_merged_cache_load_done, chart_log_merged_cache_load_start,
-    chart_materialize_merged_equity_cache, chart_merged_equity_cache_key,
-    chart_prefers_fresh_equity_source, extract_news_symbols_from_market_data_cache,
+    chart_equity_native_source_tag, chart_equity_source_rank, chart_forming_bar_allowed,
+    chart_load_merged_equity_bars_from_cache, chart_log_merged_cache_load_done,
+    chart_log_merged_cache_load_start, chart_materialize_merged_equity_cache,
+    chart_merged_equity_cache_key, chart_prefers_fresh_equity_source,
+    extract_news_symbols_from_market_data_cache, set_chart_merge_primary_broker,
 };
 
 #[cfg(test)]
 pub(crate) use equity_merge::{
-    ChartSplit, chart_curated_known_splits, chart_merge_equity_raw_bars,
+    ChartSplit, chart_curated_known_splits, chart_equity_source_rank_for,
+    chart_merge_equity_raw_bars, chart_merge_equity_raw_bars_with_primary,
     chart_persist_merged_equity_bars_to_cache, news_symbol_from_market_data_cache_key,
 };
 

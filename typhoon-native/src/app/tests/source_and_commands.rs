@@ -158,8 +158,106 @@ fn chart_equity_source_selection_can_prefer_fresher_fallback() {
     let stale_native = vec![test_bar(1 * day), test_bar(2 * day)];
     let fresh_fallback = vec![test_bar(8 * day), test_bar(9 * day)];
     assert!(chart_bar_last_valid_ts(&fresh_fallback) > chart_bar_last_valid_ts(&stale_native));
-    assert!(chart_equity_source_rank("kraken-equities") < chart_equity_source_rank("alpaca"));
+    // Default orientation (Kraken primary): kraken-equities defines the scale.
+    assert!(
+        chart_equity_source_rank_for("kraken-equities", OrderBroker::Kraken)
+            < chart_equity_source_rank_for("alpaca", OrderBroker::Kraken)
+    );
     assert_eq!(chart_equity_source_rank("kraken"), None);
+}
+
+#[test]
+fn chart_equity_source_rank_inverts_with_primary_broker() {
+    // ADR-126: the primary broker's equity source is the trusted rank-0 scale; the
+    // other tradeable broker drops to the rank-2 assist. Yahoo/default are unchanged
+    // depth fallbacks in both orientations.
+    assert_eq!(
+        chart_equity_source_rank_for("kraken-equities", OrderBroker::Kraken),
+        Some(0)
+    );
+    assert_eq!(
+        chart_equity_source_rank_for("alpaca", OrderBroker::Kraken),
+        Some(2)
+    );
+    assert_eq!(
+        chart_equity_source_rank_for("alpaca", OrderBroker::Alpaca),
+        Some(0)
+    );
+    assert_eq!(
+        chart_equity_source_rank_for("kraken-equities", OrderBroker::Alpaca),
+        Some(2)
+    );
+    for primary in [OrderBroker::Kraken, OrderBroker::Alpaca] {
+        assert_eq!(chart_equity_source_rank_for("yahoo-chart", primary), Some(3));
+        assert_eq!(chart_equity_source_rank_for("default", primary), Some(4));
+        assert_eq!(chart_equity_source_rank_for("kraken", primary), None);
+    }
+}
+
+#[test]
+fn order_broker_persistence_and_cycle_helpers() {
+    // Persistence round-trip (string token <-> enum), case-insensitive parse.
+    for broker in [OrderBroker::Alpaca, OrderBroker::Kraken] {
+        assert_eq!(
+            OrderBroker::from_persist_str(broker.as_persist_str()),
+            Some(broker)
+        );
+    }
+    assert_eq!(
+        OrderBroker::from_persist_str("ALPACA"),
+        Some(OrderBroker::Alpaca)
+    );
+    assert_eq!(OrderBroker::from_persist_str("nope"), None);
+    // Identity -> equity-merge source tag bridge.
+    assert_eq!(OrderBroker::Alpaca.equity_source_tag(), "alpaca");
+    assert_eq!(OrderBroker::Kraken.equity_source_tag(), "kraken-equities");
+    // The top-bar switch cycle lists only enabled brokers, in stable order, and is
+    // empty/singleton when fewer than two are enabled (switch hidden in the UI).
+    assert_eq!(
+        OrderBroker::enabled_cycle(true, true),
+        vec![OrderBroker::Alpaca, OrderBroker::Kraken]
+    );
+    assert_eq!(
+        OrderBroker::enabled_cycle(false, true),
+        vec![OrderBroker::Kraken]
+    );
+    assert_eq!(
+        OrderBroker::enabled_cycle(true, false),
+        vec![OrderBroker::Alpaca]
+    );
+    assert!(OrderBroker::enabled_cycle(false, false).is_empty());
+}
+
+#[test]
+fn chart_equity_merge_trusted_scale_follows_primary_broker() {
+    // Two tradeable sources on DIFFERENT scales over the same buckets. Whichever
+    // broker is primary defines the merged price scale (rank 0); the other only
+    // fills buckets the primary lacks. ADR-126.
+    let day = 86_400_000i64;
+    let alpaca = vec![
+        (1 * day, 10.0, 10.0, 10.0, 10.0, 100.0),
+        (2 * day, 11.0, 11.0, 11.0, 11.0, 100.0),
+    ];
+    let kraken = vec![
+        (2 * day, 22.0, 22.0, 22.0, 22.0, 100.0),
+        (3 * day, 33.0, 33.0, 33.0, 33.0, 100.0),
+    ];
+    let sources: [(&str, &[(i64, f64, f64, f64, f64, f64)]); 2] =
+        [("alpaca", &alpaca), ("kraken-equities", &kraken)];
+
+    // Alpaca primary: the shared bucket (day2) takes Alpaca's 11.0, not Kraken's 22.0.
+    let merged_alpaca =
+        chart_merge_equity_raw_bars_with_primary("1Day", &sources, &[], OrderBroker::Alpaca);
+    let alpaca_by_ts: std::collections::HashMap<i64, f64> =
+        merged_alpaca.iter().map(|b| (b.ts_ms, b.close)).collect();
+    assert_eq!(alpaca_by_ts[&(2 * day)], 11.0);
+
+    // Kraken primary: the same shared bucket now takes Kraken's 22.0.
+    let merged_kraken =
+        chart_merge_equity_raw_bars_with_primary("1Day", &sources, &[], OrderBroker::Kraken);
+    let kraken_by_ts: std::collections::HashMap<i64, f64> =
+        merged_kraken.iter().map(|b| (b.ts_ms, b.close)).collect();
+    assert_eq!(kraken_by_ts[&(2 * day)], 22.0);
 }
 
 #[test]

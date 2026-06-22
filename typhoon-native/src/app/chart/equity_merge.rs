@@ -224,13 +224,30 @@ pub(crate) fn chart_merge_equity_raw_bars(
     sources: &[(&str, &[(i64, f64, f64, f64, f64, f64)])],
     splits: &[ChartSplit],
 ) -> Vec<Bar> {
+    chart_merge_equity_raw_bars_with_primary(
+        timeframe,
+        sources,
+        splits,
+        chart_merge_primary_broker(),
+    )
+}
+
+/// As [`chart_merge_equity_raw_bars`], but with an explicit primary broker (the
+/// trusted-scale source). The no-arg wrapper reads the process-wide selection;
+/// this variant lets callers/tests pin the orientation. ADR-126.
+pub(crate) fn chart_merge_equity_raw_bars_with_primary(
+    timeframe: &str,
+    sources: &[(&str, &[(i64, f64, f64, f64, f64, f64)])],
+    splits: &[ChartSplit],
+    primary: OrderBroker,
+) -> Vec<Bar> {
     use std::collections::BTreeMap;
     const TRUSTED_MAX_RANK: u8 = 2; // alpaca and better define the price scale
 
     // Validate + bucket each usable source, tagged by its priority rank.
     let mut tagged: Vec<(u8, BTreeMap<i64, Bar>)> = Vec::new();
     for (source, raw) in sources {
-        let Some(rank) = chart_equity_source_rank(source) else {
+        let Some(rank) = chart_equity_source_rank_for(source, primary) else {
             continue;
         };
         if !chart_source_bars_match_timeframe(source, timeframe, raw) {
@@ -828,10 +845,55 @@ fn chart_recent_overlap_scale(
     (median.is_finite() && median > 0.0).then_some((median, window_start))
 }
 
+/// Process-wide primary broker for the equity data merge (ADR-126). The merge
+/// runs on many background cache/load threads that do not carry app state, so the
+/// single app-level `primary_broker` choice is mirrored here as an atomic that the
+/// pure ranking core reads. 0 = Kraken (legacy default), 1 = Alpaca. The app
+/// updates this whenever `primary_broker` changes (top-bar switch + session load).
+static MERGE_PRIMARY_BROKER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub(crate) fn set_chart_merge_primary_broker(primary: OrderBroker) {
+    let encoded = match primary {
+        OrderBroker::Kraken => 0,
+        OrderBroker::Alpaca => 1,
+    };
+    MERGE_PRIMARY_BROKER.store(encoded, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn chart_merge_primary_broker() -> OrderBroker {
+    match MERGE_PRIMARY_BROKER.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => OrderBroker::Alpaca,
+        _ => OrderBroker::Kraken,
+    }
+}
+
+/// The equity source tag that defines the trusted price scale under the current
+/// primary broker — also the sole valid native source for low-TF (M1/M5) equity
+/// merges. ADR-126.
+pub(crate) fn chart_equity_native_source_tag() -> &'static str {
+    chart_merge_primary_broker().equity_source_tag()
+}
+
+/// Source priority for the equity merge under the *current* primary broker
+/// (reads the process-wide selection). See [`chart_equity_source_rank_for`].
 pub(crate) fn chart_equity_source_rank(source: &str) -> Option<u8> {
+    chart_equity_source_rank_for(source, chart_merge_primary_broker())
+}
+
+/// Pure ranking core. The primary broker's equity source defines the trusted
+/// price scale (rank 0); the *other* tradeable broker is the trusted-tier assist
+/// (rank 2 — still ≤ `TRUSTED_MAX_RANK`, so it corroborates/gap-fills but cannot
+/// redefine the scale). Yahoo/default stay depth-only fallbacks (ranks 3/4).
+/// Swapping which tradeable source is rank 0 vs 2 is the entire ADR-126 merge
+/// inversion; the SCALE_CAP staleness guard (ADR-124) is symmetric, so it
+/// protects the chosen scale in either orientation.
+pub(crate) fn chart_equity_source_rank_for(source: &str, primary: OrderBroker) -> Option<u8> {
+    if source == primary.equity_source_tag() {
+        return Some(0);
+    }
     match source {
-        "kraken-equities" => Some(0),
-        "alpaca" => Some(2),
+        // The non-primary tradeable broker (the assist lane).
+        "alpaca" | "kraken-equities" => Some(2),
         "yahoo-chart" => Some(3),
         "default" => Some(4),
         _ => None,
@@ -1107,12 +1169,15 @@ fn chart_build_merged_equity_bars_from_cache(
 
     type RawBars = Vec<(i64, f64, f64, f64, f64, f64)>;
     let mut loaded: Vec<(&'static str, RawBars)> = Vec::new();
-    let sources: &[&'static str] = match timeframe {
-        // For equity/xStock M1/M5, only native Kraken Equities rows are valid
-        // merged inputs. Alpaca/Yahoo low-TF rows are stale provider-assist
-        // artifacts unless explicitly selected by source override.
-        tf if chart_equity_low_timeframe_requires_native_source(tf) => &["kraken-equities"],
-        _ => &["yahoo-chart", "alpaca", "kraken-equities", "default"],
+    // For equity/xStock M1/M5, only the PRIMARY broker's native rows are valid
+    // merged inputs (ADR-126). The assist broker's / Yahoo's low-TF rows are stale
+    // provider-assist artifacts unless explicitly selected by source override.
+    let low_tf_native: [&'static str; 1] = [chart_equity_native_source_tag()];
+    let broad_sources: [&'static str; 4] = ["yahoo-chart", "alpaca", "kraken-equities", "default"];
+    let sources: &[&'static str] = if chart_equity_low_timeframe_requires_native_source(timeframe) {
+        &low_tf_native
+    } else {
+        &broad_sources
     };
     for source in sources {
         for key in chart_source_cache_keys(source, symbol, timeframe) {

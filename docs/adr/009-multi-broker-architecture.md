@@ -1,6 +1,8 @@
 # ADR-009: Multi-Broker Architecture
 
 > **Note (2026-06):** broker scope was reduced to **Kraken + Alpaca** — see [ADR-111](111-broker-scope-reduction-kraken-alpaca-only.md). The pluggable broker abstraction described here remains in force; the Tastytrade / MT5 / Darwin integrations were removed (code on `deprecated/*`).
+>
+> **Note (2026-06):** which enabled broker is **primary** (order-routing default + trusted equity-merge lane) vs **assist** is now a user-selectable, persisted choice — see [ADR-126](126-primary-assist-broker-selection.md). `OrderBroker` is the broker-identity enum that ADR-126 extends for N brokers.
 
 **Status:** Implemented | **Date:** 2026-03-24
 

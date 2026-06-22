@@ -629,7 +629,7 @@ impl ChartState {
                     let source = cache_source_from_key(k);
                     let is_gap_fill = k.starts_with("kraken:") || k.starts_with("kraken-futures:");
                     if prefer_fresh_equity {
-                        if native_equity_low_tf_only && source != "kraken-equities" {
+                        if native_equity_low_tf_only && source != chart_equity_native_source_tag() {
                             continue;
                         }
                         if let Some(rank) = chart_equity_source_rank(source) {

@@ -1363,28 +1363,34 @@ impl TyphooNApp {
         }
     }
 
-    pub(super) fn resolve_order_broker(&mut self) {
-        // Live > Paper. Bias the order-routing default toward a live-funds broker:
-        // Alpaca can run in paper mode (`broker_paper`); Kraken spot is always
-        // live funds. So never rest on paper-mode Alpaca when live Kraken is
-        // available, and when the selection is unavailable, fall back to the live
-        // broker first. (This is a default/normalization bias, not a hard lock —
-        // an explicit combo selection still applies until the next resolve.)
-        let kraken_live = self.kraken_order_available(); // Kraken spot has no paper mode
+    /// Enabled brokers other than the primary — the sync **assist** lanes.
+    pub(super) fn assist_brokers(&self) -> Vec<OrderBroker> {
+        OrderBroker::enabled_cycle(self.alpaca_enabled, self.kraken_enabled)
+            .into_iter()
+            .filter(|broker| *broker != self.primary_broker)
+            .collect()
+    }
 
-        if !self.order_broker_available(self.order_broker) {
-            self.order_broker = if kraken_live {
-                OrderBroker::Kraken
-            } else if self.alpaca_order_available() {
-                OrderBroker::Alpaca
-            } else {
-                self.order_broker
-            };
+    pub(super) fn resolve_order_broker(&mut self) {
+        // Normalize the order-routing target ONLY when the current selection is
+        // unavailable (broker disabled/disconnected). An explicit, available
+        // selection from the Broker combo is always respected.
+        //
+        // This runs every frame and again at submit, so the previous version —
+        // which force-routed a paper-mode Alpaca selection to live Kraken — made
+        // an explicit Alpaca pick snap straight back to Kraken (and would have
+        // silently re-routed at order submit). Primary/assist routing is now a
+        // user choice: prefer the primary broker on fallback, never override a
+        // valid selection.
+        if self.order_broker_available(self.order_broker) {
             return;
         }
-
-        if matches!(self.order_broker, OrderBroker::Alpaca) && self.broker_paper && kraken_live {
+        if self.order_broker_available(self.primary_broker) {
+            self.order_broker = self.primary_broker;
+        } else if self.kraken_order_available() {
             self.order_broker = OrderBroker::Kraken;
+        } else if self.alpaca_order_available() {
+            self.order_broker = OrderBroker::Alpaca;
         }
     }
 
@@ -2190,12 +2196,20 @@ impl TyphooNApp {
 
     pub(super) fn selected_trade_account_snapshots(&self) -> Vec<TradeAccountSnapshot> {
         let (send_alpaca, send_kraken) = self.selected_live_broker_targets();
+        // Primary broker leads, assist brokers follow, so the primary account's
+        // equity heads the Trading panel.
+        let mut order = vec![self.primary_broker];
+        order.extend(self.assist_brokers());
         let mut snapshots = Vec::new();
-        if send_alpaca && let Some(snap) = self.alpaca_trade_account_snapshot() {
-            snapshots.push(snap);
-        }
-        if send_kraken && let Some(snap) = self.kraken_trade_account_snapshot() {
-            snapshots.push(snap);
+        for broker in order {
+            let snap = match broker {
+                OrderBroker::Alpaca if send_alpaca => self.alpaca_trade_account_snapshot(),
+                OrderBroker::Kraken if send_kraken => self.kraken_trade_account_snapshot(),
+                _ => None,
+            };
+            if let Some(snap) = snap {
+                snapshots.push(snap);
+            }
         }
         snapshots
     }

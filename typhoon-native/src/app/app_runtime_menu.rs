@@ -350,9 +350,15 @@ impl TyphooNApp {
                                 .color(ACCENT)
                                 .strong(),
                         );
+                        // The Scope and Primary switches only mean something with
+                        // 2+ enabled brokers; with a single broker there is nothing
+                        // to filter or re-prioritize, so both are hidden.
+                        let top_brokers =
+                            OrderBroker::enabled_cycle(self.alpaca_enabled, self.kraken_enabled);
                         // Broker scope indicator — click to cycle through scopes.
                         // Shows the current global filter so the trader always knows what
                         // data universe they're looking at (All / enabled brokers).
+                        if top_brokers.len() >= 2 {
                         ui.separator();
                         let (scope_lbl, scope_col) = match self.broker_scope {
                             EventSource::All => ("ALL", egui::Color32::from_rgb(140, 140, 160)),
@@ -409,6 +415,67 @@ impl TyphooNApp {
                                 self.broker_scope_label(),
                                 n
                             )));
+                        }
+                        } // end Scope switch (only shown with 2+ enabled brokers)
+                        // Primary broker switch — click to cycle which enabled
+                        // broker is PRIMARY (order-routing default + trusted
+                        // equity-merge lane). Every other enabled broker becomes a
+                        // sync ASSIST lane. Mirrors the Scope button; scales to N
+                        // brokers via OrderBroker::enabled_cycle.
+                        if top_brokers.len() >= 2 {
+                            let enabled_brokers = &top_brokers;
+                            ui.separator();
+                            let primary_col = match self.primary_broker {
+                                OrderBroker::Alpaca => egui::Color32::from_rgb(255, 160, 60),
+                                OrderBroker::Kraken => egui::Color32::from_rgb(0, 170, 160),
+                            };
+                            let primary_btn = egui::Button::new(
+                                egui::RichText::new(format!(
+                                    "Primary: {}",
+                                    self.primary_broker.label()
+                                ))
+                                .strong()
+                                .color(egui::Color32::WHITE),
+                            )
+                            .fill(primary_col);
+                            if ui
+                                .add(primary_btn)
+                                .on_hover_text("Primary broker = order-routing default + trusted data-merge lane; other enabled brokers are sync assist lanes. Click to cycle.")
+                                .clicked()
+                            {
+                                let next_idx = enabled_brokers
+                                    .iter()
+                                    .position(|broker| *broker == self.primary_broker)
+                                    .map(|idx| (idx + 1) % enabled_brokers.len())
+                                    .unwrap_or(0);
+                                let next = enabled_brokers[next_idx];
+                                if next != self.primary_broker {
+                                    self.primary_broker = next;
+                                    // Routing follows the primary immediately; the
+                                    // per-trade Broker combo can still override.
+                                    self.order_broker = next;
+                                    // Flip the equity data-merge trusted lane too
+                                    // (ADR-126): primary defines the price scale,
+                                    // the other broker becomes gap-fill assist.
+                                    set_chart_merge_primary_broker(next);
+                                    let assists = self.assist_brokers();
+                                    let assist_str = if assists.is_empty() {
+                                        "none".to_string()
+                                    } else {
+                                        assists
+                                            .iter()
+                                            .map(|broker| broker.label())
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    };
+                                    self.log.push_back(LogEntry::info(format!(
+                                        "Primary broker → {} (assist: {})",
+                                        next.label(),
+                                        assist_str
+                                    )));
+                                    self.save_session();
+                                }
+                            }
                         }
                         // Alert breach badge — visible red counter when alerts have fired.
                         // Clicking clears the counter and opens the alerts window.
