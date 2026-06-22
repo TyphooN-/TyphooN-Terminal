@@ -9,55 +9,27 @@ impl TyphooNApp {
             research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
-        if self.show_mass_index_win {
-            if self.mass_index_win_symbol.is_empty() {
-                self.mass_index_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_mass_index_win;
-            egui::Window::new("MASSINDEX — Dorsey Mass Index (EMA/EMA ratio, reversal bulge)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([580.0, 280.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.mass_index_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.mass_index_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.mass_index_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_mass_index(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.mass_index_win_snapshot = snap;
-                                        self.mass_index_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.mass_index_win_symbol.to_uppercase();
-                            self.mass_index_win_loading = true;
-                            self.mass_index_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeMassIndexSnapshot { symbol: sym });
-                        }
-                        if self.mass_index_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_mass_index_snapshot(ui, &self.mass_index_win_snapshot);
-                });
-            self.show_mass_index_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "MASSINDEX — Dorsey Mass Index (EMA/EMA ratio, reversal bulge)",
+                default_size: [580.0, 280.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_mass_index_win,
+            &mut self.mass_index_win_symbol,
+            &mut self.mass_index_win_loading,
+            &mut self.mass_index_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_mass_index(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeMassIndexSnapshot { symbol },
+            super::render::render_mass_index_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if let Some(cmd) = window_shell::render_compute_window(
@@ -83,106 +55,50 @@ impl TyphooNApp {
             let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_ttm_squeeze_win {
-            if self.ttm_squeeze_win_symbol.is_empty() {
-                self.ttm_squeeze_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_ttm_squeeze_win;
-            egui::Window::new("TTM_SQUEEZE — Carter's BB ⊂ KC Regime + Momentum (20)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([600.0, 280.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.ttm_squeeze_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.ttm_squeeze_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.ttm_squeeze_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_ttm_squeeze(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.ttm_squeeze_win_snapshot = snap;
-                                        self.ttm_squeeze_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.ttm_squeeze_win_symbol.to_uppercase();
-                            self.ttm_squeeze_win_loading = true;
-                            self.ttm_squeeze_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeTtmSqueezeSnapshot { symbol: sym });
-                        }
-                        if self.ttm_squeeze_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_ttm_squeeze_snapshot(ui, &self.ttm_squeeze_win_snapshot);
-                });
-            self.show_ttm_squeeze_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "TTM_SQUEEZE — Carter's BB ⊂ KC Regime + Momentum (20)",
+                default_size: [600.0, 280.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_ttm_squeeze_win,
+            &mut self.ttm_squeeze_win_symbol,
+            &mut self.ttm_squeeze_win_loading,
+            &mut self.ttm_squeeze_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_ttm_squeeze(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeTtmSqueezeSnapshot { symbol },
+            super::render::render_ttm_squeeze_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_force_index_win {
-            if self.force_index_win_symbol.is_empty() {
-                self.force_index_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_force_index_win;
-            egui::Window::new("FORCE_INDEX — Elder Force Index (EMA of volume × Δclose, 13)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([580.0, 260.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.force_index_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.force_index_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.force_index_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_force_index(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.force_index_win_snapshot = snap;
-                                        self.force_index_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.force_index_win_symbol.to_uppercase();
-                            self.force_index_win_loading = true;
-                            self.force_index_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeForceIndexSnapshot { symbol: sym });
-                        }
-                        if self.force_index_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_force_index_snapshot(ui, &self.force_index_win_snapshot);
-                });
-            self.show_force_index_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "FORCE_INDEX — Elder Force Index (EMA of volume × Δclose, 13)",
+                default_size: [580.0, 260.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_force_index_win,
+            &mut self.force_index_win_symbol,
+            &mut self.force_index_win_loading,
+            &mut self.force_index_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_force_index(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeForceIndexSnapshot { symbol },
+            super::render::render_force_index_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if let Some(cmd) = window_shell::render_compute_window(

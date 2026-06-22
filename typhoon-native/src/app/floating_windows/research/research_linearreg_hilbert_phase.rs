@@ -83,55 +83,27 @@ impl TyphooNApp {
             self.show_linearreg_angle_win = open;
         }
 
-        if self.show_ht_dcphase_win {
-            if self.ht_dcphase_win_symbol.is_empty() {
-                self.ht_dcphase_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_ht_dcphase_win;
-            egui::Window::new("HT_DCPHASE — Ehlers Hilbert Dominant Cycle Phase (degrees)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 260.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.ht_dcphase_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.ht_dcphase_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.ht_dcphase_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_ht_dcphase(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.ht_dcphase_win_snapshot = snap;
-                                        self.ht_dcphase_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.ht_dcphase_win_symbol.to_uppercase();
-                            self.ht_dcphase_win_loading = true;
-                            self.ht_dcphase_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeHtDcphaseSnapshot { symbol: sym });
-                        }
-                        if self.ht_dcphase_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_ht_dcphase_snapshot(ui, &self.ht_dcphase_win_snapshot);
-                });
-            self.show_ht_dcphase_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "HT_DCPHASE — Ehlers Hilbert Dominant Cycle Phase (degrees)",
+                default_size: [560.0, 260.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_ht_dcphase_win,
+            &mut self.ht_dcphase_win_symbol,
+            &mut self.ht_dcphase_win_loading,
+            &mut self.ht_dcphase_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_ht_dcphase(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeHtDcphaseSnapshot { symbol },
+            super::render::render_ht_dcphase_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if let Some(cmd) = window_shell::render_compute_window(

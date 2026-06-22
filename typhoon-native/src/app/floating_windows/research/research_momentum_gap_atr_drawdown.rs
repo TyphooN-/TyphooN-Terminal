@@ -153,55 +153,27 @@ impl TyphooNApp {
         }
 
         // DVDYIELDRANK — Dividend Yield Rank vs Sector Peers
-        if self.show_dvdyieldrank {
-            if self.dvdyieldrank_symbol.is_empty() {
-                self.dvdyieldrank_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_dvdyieldrank;
-            egui::Window::new("DVDYIELDRANK — Dividend Yield Rank")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 400.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.dvdyieldrank_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.dvdyieldrank_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.dvdyieldrank_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_dvdyieldrank(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.dvdyieldrank_snapshot = snap;
-                                        self.dvdyieldrank_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.dvdyieldrank_symbol.to_uppercase();
-                            self.dvdyieldrank_loading = true;
-                            self.dvdyieldrank_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeDvdyieldrankSnapshot { symbol: sym });
-                        }
-                        if self.dvdyieldrank_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_dvdyieldrank_snapshot(ui, &self.dvdyieldrank_snapshot);
-                });
-            self.show_dvdyieldrank = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "DVDYIELDRANK — Dividend Yield Rank",
+                default_size: [640.0, 400.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_dvdyieldrank,
+            &mut self.dvdyieldrank_symbol,
+            &mut self.dvdyieldrank_loading,
+            &mut self.dvdyieldrank_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_dvdyieldrank(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeDvdyieldrankSnapshot { symbol },
+            super::render::render_dvdyieldrank_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // SHRANK — Short Interest Rank (risk-inverted)
@@ -284,55 +256,27 @@ impl TyphooNApp {
         }
 
         // INSIDERCONC — Insider ownership concentration vs sector peers
-        if self.show_insiderconc {
-            if self.insiderconc_symbol.is_empty() {
-                self.insiderconc_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_insiderconc;
-            egui::Window::new("INSIDERCONC — Insider Ownership Concentration")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([720.0, 440.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.insiderconc_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.insiderconc_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.insiderconc_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_insiderconc(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.insiderconc_snapshot = snap;
-                                        self.insiderconc_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.insiderconc_symbol.to_uppercase();
-                            self.insiderconc_loading = true;
-                            self.insiderconc_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeInsiderconcSnapshot { symbol: sym });
-                        }
-                        if self.insiderconc_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_insiderconc_snapshot(ui, &self.insiderconc_snapshot);
-                });
-            self.show_insiderconc = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "INSIDERCONC — Insider Ownership Concentration",
+                default_size: [720.0, 440.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_insiderconc,
+            &mut self.insiderconc_symbol,
+            &mut self.insiderconc_loading,
+            &mut self.insiderconc_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_insiderconc(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeInsiderconcSnapshot { symbol },
+            super::render::render_insiderconc_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

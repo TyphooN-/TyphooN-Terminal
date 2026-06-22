@@ -101,55 +101,27 @@ impl TyphooNApp {
             let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_kendalltau {
-            if self.kendalltau_symbol.is_empty() {
-                self.kendalltau_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_kendalltau;
-            egui::Window::new("KENDALLTAU — Kendall's Tau Lag-1 Rank Autocorrelation")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 320.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.kendalltau_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.kendalltau_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.kendalltau_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_kendalltau(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.kendalltau_snapshot = snap;
-                                        self.kendalltau_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.kendalltau_symbol.to_uppercase();
-                            self.kendalltau_loading = true;
-                            self.kendalltau_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeKendallTauSnapshot { symbol: sym });
-                        }
-                        if self.kendalltau_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_kendalltau_snapshot(ui, &self.kendalltau_snapshot);
-                });
-            self.show_kendalltau = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "KENDALLTAU — Kendall's Tau Lag-1 Rank Autocorrelation",
+                default_size: [560.0, 320.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_kendalltau,
+            &mut self.kendalltau_symbol,
+            &mut self.kendalltau_loading,
+            &mut self.kendalltau_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_kendalltau(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeKendallTauSnapshot { symbol },
+            super::render::render_kendalltau_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

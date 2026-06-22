@@ -55,55 +55,27 @@ impl TyphooNApp {
             let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_volcluster {
-            if self.volcluster_symbol.is_empty() {
-                self.volcluster_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_volcluster;
-            egui::Window::new("VOLCLUSTER — Volatility Clustering ACF")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 440.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.volcluster_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.volcluster_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.volcluster_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_volcluster(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.volcluster_snapshot = snap;
-                                        self.volcluster_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.volcluster_symbol.to_uppercase();
-                            self.volcluster_loading = true;
-                            self.volcluster_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeVolclusterSnapshot { symbol: sym });
-                        }
-                        if self.volcluster_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_volcluster_snapshot(ui, &self.volcluster_snapshot);
-                });
-            self.show_volcluster = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "VOLCLUSTER — Volatility Clustering ACF",
+                default_size: [640.0, 440.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_volcluster,
+            &mut self.volcluster_symbol,
+            &mut self.volcluster_loading,
+            &mut self.volcluster_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_volcluster(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeVolclusterSnapshot { symbol },
+            super::render::render_volcluster_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if let Some(cmd) = window_shell::render_compute_window(

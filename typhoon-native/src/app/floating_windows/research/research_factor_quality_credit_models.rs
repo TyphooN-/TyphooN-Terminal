@@ -126,54 +126,27 @@ impl TyphooNApp {
         }
 
         // CCRL — Cash Conversion Cycle
-        if self.show_ccrl {
-            if self.ccrl_symbol.is_empty() {
-                self.ccrl_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_ccrl;
-            egui::Window::new("CCRL — Cash Conversion Cycle")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([620.0, 440.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.ccrl_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.ccrl_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.ccrl_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_cash_cycle(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.ccrl_snapshot = snap;
-                                        self.ccrl_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.ccrl_symbol.to_uppercase();
-                            self.ccrl_loading = true;
-                            self.ccrl_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeCashCycleSnapshot { symbol: sym });
-                        }
-                        if self.ccrl_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_ccrl_snapshot(ui, &self.ccrl_snapshot);
-                });
-            self.show_ccrl = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "CCRL — Cash Conversion Cycle",
+                default_size: [620.0, 440.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_ccrl,
+            &mut self.ccrl_symbol,
+            &mut self.ccrl_loading,
+            &mut self.ccrl_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_cash_cycle(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeCashCycleSnapshot { symbol },
+            super::render::render_ccrl_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // CREDIT — Unified Credit Score

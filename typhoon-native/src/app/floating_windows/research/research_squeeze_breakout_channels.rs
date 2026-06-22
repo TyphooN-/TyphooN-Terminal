@@ -32,55 +32,27 @@ impl TyphooNApp {
             let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_squeezerank {
-            if self.squeezerank_symbol.is_empty() {
-                self.squeezerank_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_squeezerank;
-            egui::Window::new("SQUEEZERANK — Cross-Symbol Squeeze Percentile")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([520.0, 260.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.squeezerank_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.squeezerank_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.squeezerank_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_squeezerank(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.squeezerank_snapshot = snap;
-                                        self.squeezerank_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.squeezerank_symbol.to_uppercase();
-                            self.squeezerank_loading = true;
-                            self.squeezerank_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeSqueezeRankSnapshot { symbol: sym });
-                        }
-                        if self.squeezerank_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_squeezerank_snapshot(ui, &self.squeezerank_snapshot);
-                });
-            self.show_squeezerank = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "SQUEEZERANK — Cross-Symbol Squeeze Percentile",
+                default_size: [520.0, 260.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_squeezerank,
+            &mut self.squeezerank_symbol,
+            &mut self.squeezerank_loading,
+            &mut self.squeezerank_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_squeezerank(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeSqueezeRankSnapshot { symbol },
+            super::render::render_squeezerank_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if self.show_squeeze_watchlist {
