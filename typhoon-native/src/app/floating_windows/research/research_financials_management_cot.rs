@@ -5,9 +5,8 @@ impl TyphooNApp {
         &mut self,
         ctx: &egui::Context,
     ) {
-        let chart_sym_research = research_chart_symbol(
-            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
-        );
+        let chart_sym_research =
+            research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // Financial statements, management, and COT research
 
@@ -276,99 +275,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    if self.executives.is_empty() {
-                        ui.label(
-                            egui::RichText::new(
-                                "No officers on file — click Load Cached or Fetch.",
-                            )
-                            .color(AXIS_TEXT)
-                            .small(),
-                        );
-                    } else {
-                        // Aggregate total comp
-                        let total_comp: f64 = self.executives.iter().map(|e| e.compensation).sum();
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "Total comp: ${:.1}M",
-                                    total_comp / 1e6
-                                ))
-                                .strong()
-                                .color(UP),
-                            );
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "({} officers)",
-                                    self.executives.len()
-                                ))
-                                .color(AXIS_TEXT)
-                                .small(),
-                            );
-                        });
-                        ui.separator();
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                egui::Grid::new("mgmt_grid")
-                                    .striped(true)
-                                    .num_columns(6)
-                                    .spacing([14.0, 3.0])
-                                    .show(ui, |ui| {
-                                        ui.label(egui::RichText::new("Name").strong());
-                                        ui.label(egui::RichText::new("Position").strong());
-                                        ui.label(egui::RichText::new("Age").strong());
-                                        ui.label(egui::RichText::new("Sex").strong());
-                                        ui.label(egui::RichText::new("Since").strong());
-                                        ui.label(egui::RichText::new("Compensation").strong());
-                                        ui.end_row();
-                                        for e in self.executives.iter() {
-                                            ui.label(egui::RichText::new(&e.name).small().strong());
-                                            ui.label(
-                                                egui::RichText::new(&e.position)
-                                                    .color(AXIS_TEXT)
-                                                    .small(),
-                                            );
-                                            if e.age > 0 {
-                                                ui.label(
-                                                    egui::RichText::new(format!("{}", e.age))
-                                                        .monospace()
-                                                        .small(),
-                                                );
-                                            } else {
-                                                ui.label(
-                                                    egui::RichText::new("—")
-                                                        .color(AXIS_TEXT)
-                                                        .small(),
-                                                );
-                                            }
-                                            ui.label(
-                                                egui::RichText::new(&e.sex).monospace().small(),
-                                            );
-                                            ui.label(
-                                                egui::RichText::new(&e.since).monospace().small(),
-                                            );
-                                            if e.compensation > 0.0 {
-                                                ui.label(
-                                                    egui::RichText::new(format!(
-                                                        "${:.2}M",
-                                                        e.compensation / 1e6
-                                                    ))
-                                                    .color(UP)
-                                                    .monospace(),
-                                                );
-                                            } else {
-                                                ui.label(
-                                                    egui::RichText::new("—")
-                                                        .color(AXIS_TEXT)
-                                                        .small(),
-                                                );
-                                            }
-                                            ui.end_row();
-                                        }
-                                    });
-                            });
-                    }
+                    super::render::render_executives(ui, &self.executives);
                 });
             self.show_executives = open;
         }

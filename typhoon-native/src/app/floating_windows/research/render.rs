@@ -3,7 +3,7 @@
 //! `(&mut egui::Ui, &Snapshot)` with no `TyphooNApp` access — the egui analog of
 //! the symbol-investigation packet's formatter layer. Crate-movable: the future
 //! `typhoon-research-ui` crate may depend on egui directly.
-use crate::app::common::{AXIS_TEXT, DOWN, UP};
+use crate::app::common::{AXIS_TEXT, BTN_GREEN_TEXT, BTN_RED_TEXT, DOWN, UP};
 // Glob: these renderers cover ~80 distinct research snapshot DTOs; listing each is
 // noise. Unused names from a glob do not warn.
 use typhoon_engine::core::research::*;
@@ -22429,5 +22429,890 @@ pub(super) fn render_shortrank_delta_snapshot(
             ui.separator();
             ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
         }
+    }
+}
+
+pub(super) fn render_dividend_history(ui: &mut egui::Ui, rows: &[DividendRecord]) {
+    ui.separator();
+    if rows.is_empty() {
+        ui.label(
+            egui::RichText::new("No dividend history — click Load Cached or Fetch.")
+                .color(AXIS_TEXT)
+                .small(),
+        );
+    } else {
+        // Summary line: TTM dividend sum + count
+        let ttm_cut = (chrono::Utc::now() - chrono::Duration::days(365))
+            .format("%Y-%m-%d")
+            .to_string();
+        let ttm_sum: f64 = rows
+            .iter()
+            .filter(|d| d.ex_date.as_str() >= ttm_cut.as_str())
+            .map(|d| d.amount)
+            .sum();
+        let ttm_count = rows
+            .iter()
+            .filter(|d| d.ex_date.as_str() >= ttm_cut.as_str())
+            .count();
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!("TTM: ${:.4}", ttm_sum))
+                    .strong()
+                    .color(UP),
+            );
+            ui.label(
+                egui::RichText::new(format!("({} payments)", ttm_count))
+                    .color(AXIS_TEXT)
+                    .small(),
+            );
+            ui.label(
+                egui::RichText::new(format!("total records: {}", rows.len()))
+                    .color(AXIS_TEXT)
+                    .small(),
+            );
+        });
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("dvd_grid")
+                    .striped(true)
+                    .num_columns(6)
+                    .spacing([12.0, 2.0])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Ex-Date").strong());
+                        ui.label(egui::RichText::new("Pay Date").strong());
+                        ui.label(egui::RichText::new("Record").strong());
+                        ui.label(egui::RichText::new("Amount").strong());
+                        ui.label(egui::RichText::new("Adj").strong());
+                        ui.label(egui::RichText::new("Label").strong());
+                        ui.end_row();
+                        for d in rows.iter().take(200) {
+                            ui.label(egui::RichText::new(&d.ex_date).monospace().small());
+                            ui.label(egui::RichText::new(&d.pay_date).monospace().small());
+                            ui.label(egui::RichText::new(&d.record_date).monospace().small());
+                            ui.label(
+                                egui::RichText::new(format!("${:.4}", d.amount))
+                                    .color(UP)
+                                    .monospace(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("${:.4}", d.adjusted_amount))
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(egui::RichText::new(&d.label).color(AXIS_TEXT).small());
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+}
+
+pub(super) fn render_earnings_estimates(ui: &mut egui::Ui, rows: &[EarningsEstimate]) {
+    ui.separator();
+    if rows.is_empty() {
+        ui.label(
+            egui::RichText::new("No forward estimates — click Load Cached or Fetch.")
+                .color(AXIS_TEXT)
+                .small(),
+        );
+    } else {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("eeb_grid")
+                    .striped(true)
+                    .num_columns(8)
+                    .spacing([10.0, 2.0])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Period").strong());
+                        ui.label(egui::RichText::new("EPS Avg").strong());
+                        ui.label(egui::RichText::new("EPS Low").strong());
+                        ui.label(egui::RichText::new("EPS High").strong());
+                        ui.label(egui::RichText::new("Rev Avg").strong());
+                        ui.label(egui::RichText::new("Rev Low").strong());
+                        ui.label(egui::RichText::new("Rev High").strong());
+                        ui.label(egui::RichText::new("#Analysts").strong());
+                        ui.end_row();
+                        for e in rows.iter().take(40) {
+                            ui.label(egui::RichText::new(&e.date).monospace().small());
+                            ui.label(
+                                egui::RichText::new(format!("{:.2}", e.eps_avg))
+                                    .color(UP)
+                                    .monospace(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:.2}", e.eps_low))
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:.2}", e.eps_high))
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "${:.0}M",
+                                    e.revenue_avg / 1_000_000.0
+                                ))
+                                .monospace(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "${:.0}M",
+                                    e.revenue_low / 1_000_000.0
+                                ))
+                                .monospace()
+                                .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "${:.0}M",
+                                    e.revenue_high / 1_000_000.0
+                                ))
+                                .monospace()
+                                .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{}",
+                                    e.num_analysts_eps.max(e.num_analysts_rev)
+                                ))
+                                .color(AXIS_TEXT)
+                                .small(),
+                            );
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+}
+
+pub(super) fn render_eps_surprises(ui: &mut egui::Ui, rows: &[EarningsSurprise]) {
+    ui.separator();
+    if rows.is_empty() {
+        ui.label(
+            egui::RichText::new("No EPS history — click Load Cached or Fetch.")
+                .color(AXIS_TEXT)
+                .small(),
+        );
+    } else {
+        let beats = rows.iter().filter(|s| s.surprise > 0.0).count();
+        let misses = rows.iter().filter(|s| s.surprise < 0.0).count();
+        let avg_surprise: f64 = rows.iter().take(8).map(|s| s.surprise_pct).sum::<f64>()
+            / rows.iter().take(8).count().max(1) as f64;
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(format!("{} quarters", rows.len())).strong());
+            ui.label(
+                egui::RichText::new(format!("Beats: {}", beats))
+                    .color(UP)
+                    .monospace()
+                    .small(),
+            );
+            ui.label(
+                egui::RichText::new(format!("Misses: {}", misses))
+                    .color(DOWN)
+                    .monospace()
+                    .small(),
+            );
+            let avg_col = if avg_surprise >= 0.0 { UP } else { DOWN };
+            ui.label(
+                egui::RichText::new(format!("8Q avg: {:+.2}%", avg_surprise))
+                    .color(avg_col)
+                    .strong()
+                    .monospace()
+                    .small(),
+            );
+        });
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("eps_grid")
+                    .striped(true)
+                    .num_columns(5)
+                    .spacing([20.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Date").strong());
+                        ui.label(egui::RichText::new("Actual").strong());
+                        ui.label(egui::RichText::new("Estimate").strong());
+                        ui.label(egui::RichText::new("Surprise").strong());
+                        ui.label(egui::RichText::new("Surprise %").strong());
+                        ui.end_row();
+                        for s in rows.iter() {
+                            let col = if s.surprise >= 0.0 { UP } else { DOWN };
+                            ui.label(egui::RichText::new(&s.date).monospace().small());
+                            ui.label(
+                                egui::RichText::new(format!("${:.2}", s.eps_actual))
+                                    .strong()
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("${:.2}", s.eps_estimate))
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:+.2}", s.surprise))
+                                    .color(col)
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:+.2}%", s.surprise_pct))
+                                    .color(col)
+                                    .strong()
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+}
+
+pub(super) fn render_esg_rows(ui: &mut egui::Ui, rows: &[EsgScore]) {
+    ui.separator();
+    if rows.is_empty() {
+        ui.label(
+            egui::RichText::new("No ESG data — click Load Cached or Fetch.")
+                .color(AXIS_TEXT)
+                .small(),
+        );
+    } else {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("esg_grid")
+                    .striped(true)
+                    .num_columns(5)
+                    .spacing([20.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Year").strong());
+                        ui.label(egui::RichText::new("Environmental").strong());
+                        ui.label(egui::RichText::new("Social").strong());
+                        ui.label(egui::RichText::new("Governance").strong());
+                        ui.label(egui::RichText::new("Overall").strong());
+                        ui.end_row();
+                        let score_color = |s: f64| -> egui::Color32 {
+                            if s >= 70.0 {
+                                UP
+                            } else if s >= 50.0 {
+                                AXIS_TEXT
+                            } else {
+                                DOWN
+                            }
+                        };
+                        for e in rows.iter() {
+                            ui.label(
+                                egui::RichText::new(format!("{}", e.year))
+                                    .monospace()
+                                    .strong(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:.1}", e.environmental_score))
+                                    .color(score_color(e.environmental_score))
+                                    .monospace(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:.1}", e.social_score))
+                                    .color(score_color(e.social_score))
+                                    .monospace(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:.1}", e.governance_score))
+                                    .color(score_color(e.governance_score))
+                                    .monospace(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:.1}", e.esg_score))
+                                    .color(score_color(e.esg_score))
+                                    .monospace()
+                                    .strong(),
+                            );
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+}
+
+pub(super) fn render_etf_holdings(ui: &mut egui::Ui, rows: &[EtfHolding]) {
+    ui.separator();
+    if rows.is_empty() {
+        ui.label(egui::RichText::new("No ETF holdings — click Load Cached or Fetch. Pass an ETF ticker (SPY, QQQ, IWM, VTI, …).").color(AXIS_TEXT).small());
+    } else {
+        let total_weight: f64 = rows.iter().map(|h| h.weight_pct).sum();
+        let total_value: f64 = rows.iter().map(|h| h.market_value).sum();
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(format!("{} holdings", rows.len())).strong());
+            ui.label(
+                egui::RichText::new(format!(
+                    "(sum weight: {:.2}%, AUM: ${:.1}B)",
+                    total_weight,
+                    total_value / 1e9
+                ))
+                .color(AXIS_TEXT)
+                .small(),
+            );
+        });
+        ui.separator();
+        let fmt_money = |v: f64| -> String {
+            if v.abs() >= 1e9 {
+                format!("${:.2}B", v / 1e9)
+            } else if v.abs() >= 1e6 {
+                format!("${:.1}M", v / 1e6)
+            } else if v.abs() >= 1e3 {
+                format!("${:.0}K", v / 1e3)
+            } else {
+                format!("${:.0}", v)
+            }
+        };
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("etf_grid")
+                    .striped(true)
+                    .num_columns(5)
+                    .spacing([14.0, 3.0])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Symbol").strong());
+                        ui.label(egui::RichText::new("Name").strong());
+                        ui.label(egui::RichText::new("Weight %").strong());
+                        ui.label(egui::RichText::new("Shares").strong());
+                        ui.label(egui::RichText::new("Market Value").strong());
+                        ui.end_row();
+                        for h in rows.iter().take(500) {
+                            ui.label(egui::RichText::new(&h.symbol).monospace().strong());
+                            let short_name: String = h.name.chars().take(40).collect();
+                            ui.label(egui::RichText::new(short_name).small());
+                            ui.label(
+                                egui::RichText::new(format!("{:.2}%", h.weight_pct))
+                                    .color(UP)
+                                    .monospace(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:.0}", h.shares))
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(fmt_money(h.market_value))
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+}
+
+pub(super) fn render_executives(ui: &mut egui::Ui, rows: &[Executive]) {
+    ui.separator();
+    if rows.is_empty() {
+        ui.label(
+            egui::RichText::new("No officers on file — click Load Cached or Fetch.")
+                .color(AXIS_TEXT)
+                .small(),
+        );
+    } else {
+        // Aggregate total comp
+        let total_comp: f64 = rows.iter().map(|e| e.compensation).sum();
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!("Total comp: ${:.1}M", total_comp / 1e6))
+                    .strong()
+                    .color(UP),
+            );
+            ui.label(
+                egui::RichText::new(format!("({} officers)", rows.len()))
+                    .color(AXIS_TEXT)
+                    .small(),
+            );
+        });
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("mgmt_grid")
+                    .striped(true)
+                    .num_columns(6)
+                    .spacing([14.0, 3.0])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Name").strong());
+                        ui.label(egui::RichText::new("Position").strong());
+                        ui.label(egui::RichText::new("Age").strong());
+                        ui.label(egui::RichText::new("Sex").strong());
+                        ui.label(egui::RichText::new("Since").strong());
+                        ui.label(egui::RichText::new("Compensation").strong());
+                        ui.end_row();
+                        for e in rows.iter() {
+                            ui.label(egui::RichText::new(&e.name).small().strong());
+                            ui.label(egui::RichText::new(&e.position).color(AXIS_TEXT).small());
+                            if e.age > 0 {
+                                ui.label(
+                                    egui::RichText::new(format!("{}", e.age))
+                                        .monospace()
+                                        .small(),
+                                );
+                            } else {
+                                ui.label(egui::RichText::new("—").color(AXIS_TEXT).small());
+                            }
+                            ui.label(egui::RichText::new(&e.sex).monospace().small());
+                            ui.label(egui::RichText::new(&e.since).monospace().small());
+                            if e.compensation > 0.0 {
+                                ui.label(
+                                    egui::RichText::new(format!("${:.2}M", e.compensation / 1e6))
+                                        .color(UP)
+                                        .monospace(),
+                                );
+                            } else {
+                                ui.label(egui::RichText::new("—").color(AXIS_TEXT).small());
+                            }
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+}
+
+pub(super) fn render_hp_rows(ui: &mut egui::Ui, rows: &[HistoricalPriceRow]) {
+    ui.separator();
+    if rows.is_empty() {
+        ui.label(
+            egui::RichText::new("No historical bars — click Load Cached or Fetch.")
+                .color(AXIS_TEXT)
+                .small(),
+        );
+    } else {
+        ui.label(egui::RichText::new(format!("{} daily bars", rows.len())).strong());
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("hp_grid")
+                    .striped(true)
+                    .num_columns(8)
+                    .spacing([14.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Date").strong());
+                        ui.label(egui::RichText::new("Open").strong());
+                        ui.label(egui::RichText::new("High").strong());
+                        ui.label(egui::RichText::new("Low").strong());
+                        ui.label(egui::RichText::new("Close").strong());
+                        ui.label(egui::RichText::new("Volume").strong());
+                        ui.label(egui::RichText::new("Chg").strong());
+                        ui.label(egui::RichText::new("Chg %").strong());
+                        ui.end_row();
+                        for r in rows.iter() {
+                            let chg_col = if r.change >= 0.0 { UP } else { DOWN };
+                            ui.label(egui::RichText::new(&r.date).monospace().small());
+                            ui.label(
+                                egui::RichText::new(format!("{:.2}", r.open))
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:.2}", r.high))
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:.2}", r.low))
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:.2}", r.close))
+                                    .strong()
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:.1}M", r.volume / 1e6))
+                                    .color(AXIS_TEXT)
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:+.2}", r.change))
+                                    .color(chg_col)
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:+.2}%", r.change_pct))
+                                    .color(chg_col)
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+}
+
+pub(super) fn render_insider_trades(ui: &mut egui::Ui, rows: &[InsiderTrade]) {
+    ui.separator();
+    if rows.is_empty() {
+        ui.label(
+            egui::RichText::new("No insider trades — click Load Cached or Fetch.")
+                .color(AXIS_TEXT)
+                .small(),
+        );
+    } else {
+        // Derive a quick net-flow summary.
+        let (mut bought, mut sold) = (0.0_f64, 0.0_f64);
+        for t in rows.iter() {
+            match t.acquisition_disposition.as_str() {
+                "A" => bought += t.value_usd,
+                "D" => sold += t.value_usd,
+                _ => {}
+            }
+        }
+        let net = bought - sold;
+        let net_col = if net >= 0.0 { UP } else { DOWN };
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(format!("{} filings", rows.len())).strong());
+            ui.label(
+                egui::RichText::new(format!("Buys: ${:.1}M", bought / 1e6))
+                    .color(UP)
+                    .monospace()
+                    .small(),
+            );
+            ui.label(
+                egui::RichText::new(format!("Sells: ${:.1}M", sold / 1e6))
+                    .color(DOWN)
+                    .monospace()
+                    .small(),
+            );
+            ui.label(
+                egui::RichText::new(format!("Net: ${:.1}M", net / 1e6))
+                    .color(net_col)
+                    .strong()
+                    .monospace()
+                    .small(),
+            );
+        });
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("ins_grid")
+                    .striped(true)
+                    .num_columns(7)
+                    .spacing([14.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Filed").strong());
+                        ui.label(egui::RichText::new("Tx Date").strong());
+                        ui.label(egui::RichText::new("Insider").strong());
+                        ui.label(egui::RichText::new("Type").strong());
+                        ui.label(egui::RichText::new("Shares").strong());
+                        ui.label(egui::RichText::new("Price").strong());
+                        ui.label(egui::RichText::new("Value").strong());
+                        ui.end_row();
+                        for t in rows.iter().take(100) {
+                            let dir_col = match t.acquisition_disposition.as_str() {
+                                "A" => UP,
+                                "D" => DOWN,
+                                _ => AXIS_TEXT,
+                            };
+                            ui.label(egui::RichText::new(&t.filing_date).monospace().small());
+                            ui.label(egui::RichText::new(&t.transaction_date).monospace().small());
+                            ui.label(egui::RichText::new(&t.reporting_name).small());
+                            ui.label(
+                                egui::RichText::new(&t.transaction_type)
+                                    .color(dir_col)
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:.0}", t.shares))
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("${:.2}", t.price))
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("${:.1}k", t.value_usd / 1e3))
+                                    .color(dir_col)
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+}
+
+pub(super) fn render_institutional_holders(ui: &mut egui::Ui, rows: &[InstitutionalHolder]) {
+    ui.separator();
+    if rows.is_empty() {
+        ui.label(
+            egui::RichText::new("No institutional holders — click Load Cached or Fetch.")
+                .color(AXIS_TEXT)
+                .small(),
+        );
+    } else {
+        let total: f64 = rows.iter().map(|h| h.shares).sum();
+        ui.label(
+            egui::RichText::new(format!(
+                "{} holders — {:.1}M total shares",
+                rows.len(),
+                total / 1e6
+            ))
+            .strong(),
+        );
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("hds_grid")
+                    .striped(true)
+                    .num_columns(4)
+                    .spacing([18.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Holder").strong());
+                        ui.label(egui::RichText::new("Shares").strong());
+                        ui.label(egui::RichText::new("QoQ Δ").strong());
+                        ui.label(egui::RichText::new("Reported").strong());
+                        ui.end_row();
+                        for h in rows.iter().take(200) {
+                            let chg_col = if h.change > 0.0 {
+                                UP
+                            } else if h.change < 0.0 {
+                                DOWN
+                            } else {
+                                AXIS_TEXT
+                            };
+                            ui.label(egui::RichText::new(&h.holder).small());
+                            ui.label(
+                                egui::RichText::new(format!("{:.2}M", h.shares / 1e6))
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:+.2}M", h.change / 1e6))
+                                    .color(chg_col)
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(egui::RichText::new(&h.date_reported).monospace().small());
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+}
+
+pub(super) fn render_rating_changes(ui: &mut egui::Ui, rows: &[RatingChange]) {
+    ui.separator();
+    if rows.is_empty() {
+        ui.label(
+            egui::RichText::new("No rating changes — click Load Cached or Fetch.")
+                .color(AXIS_TEXT)
+                .small(),
+        );
+    } else {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("updg_grid")
+                    .striped(true)
+                    .num_columns(6)
+                    .spacing([12.0, 2.0])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Date").strong());
+                        ui.label(egui::RichText::new("Firm").strong());
+                        ui.label(egui::RichText::new("Action").strong());
+                        ui.label(egui::RichText::new("From").strong());
+                        ui.label(egui::RichText::new("To").strong());
+                        ui.label(egui::RichText::new("Target").strong());
+                        ui.end_row();
+                        for r in rows.iter().take(200) {
+                            ui.label(egui::RichText::new(&r.date).monospace().small());
+                            ui.label(egui::RichText::new(&r.firm).small());
+                            let act_col = match r.action.as_str() {
+                                "upgrade" => BTN_GREEN_TEXT,
+                                "downgrade" => BTN_RED_TEXT,
+                                "initiation" => egui::Color32::from_rgb(100, 200, 255),
+                                _ => AXIS_TEXT,
+                            };
+                            ui.label(
+                                egui::RichText::new(r.action.to_uppercase())
+                                    .color(act_col)
+                                    .small()
+                                    .strong(),
+                            );
+                            ui.label(egui::RichText::new(&r.from_grade).color(AXIS_TEXT).small());
+                            ui.label(egui::RichText::new(&r.to_grade).small().strong());
+                            if r.price_target > 0.0 {
+                                ui.label(
+                                    egui::RichText::new(format!("${:.2}", r.price_target))
+                                        .color(UP)
+                                        .monospace(),
+                                );
+                            } else {
+                                ui.label(egui::RichText::new("—").color(AXIS_TEXT).small());
+                            }
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+}
+
+pub(super) fn render_sector_perf(ui: &mut egui::Ui, rows: &[SectorPerformance]) {
+    ui.separator();
+    if rows.is_empty() {
+        ui.label(
+            egui::RichText::new("No data — click Fetch to pull FMP sector-performance.")
+                .color(AXIS_TEXT)
+                .small(),
+        );
+    } else {
+        // Sort descending by pct for heatmap feel
+        let mut rows: Vec<&typhoon_engine::core::research::SectorPerformance> =
+            rows.iter().collect();
+        rows.sort_by(|a, b| {
+            b.change_pct
+                .partial_cmp(&a.change_pct)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let up = rows.iter().filter(|r| r.change_pct > 0.0).count();
+        let down = rows.iter().filter(|r| r.change_pct < 0.0).count();
+        let avg: f64 = if rows.is_empty() {
+            0.0
+        } else {
+            rows.iter().map(|r| r.change_pct).sum::<f64>() / rows.len() as f64
+        };
+        ui.label(
+            egui::RichText::new(format!(
+                "{} sectors · {} up · {} down · avg {:+.2}%",
+                rows.len(),
+                up,
+                down,
+                avg
+            ))
+            .color(AXIS_TEXT)
+            .small(),
+        );
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                egui::Grid::new("indu_grid")
+                    .striped(true)
+                    .num_columns(3)
+                    .min_col_width(140.0)
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new("Sector")
+                                .color(AXIS_TEXT)
+                                .small()
+                                .strong(),
+                        );
+                        ui.label(
+                            egui::RichText::new("Chg %")
+                                .color(AXIS_TEXT)
+                                .small()
+                                .strong(),
+                        );
+                        ui.label(egui::RichText::new("Bar").color(AXIS_TEXT).small().strong());
+                        ui.end_row();
+                        let max_abs = rows
+                            .iter()
+                            .map(|r| r.change_pct.abs())
+                            .fold(0.0_f64, f64::max)
+                            .max(0.1);
+                        for r in rows.iter() {
+                            let col = if r.change_pct > 0.0 {
+                                UP
+                            } else if r.change_pct < 0.0 {
+                                DOWN
+                            } else {
+                                AXIS_TEXT
+                            };
+                            ui.label(egui::RichText::new(&r.sector).small().strong());
+                            ui.label(
+                                egui::RichText::new(format!("{:+.2}%", r.change_pct))
+                                    .color(col)
+                                    .small()
+                                    .monospace()
+                                    .strong(),
+                            );
+                            let width = (r.change_pct.abs() / max_abs * 30.0).round() as usize;
+                            let bar = if r.change_pct >= 0.0 {
+                                format!("▌{}", "█".repeat(width))
+                            } else {
+                                format!("{}▐", "█".repeat(width))
+                            };
+                            ui.label(egui::RichText::new(bar).color(col).monospace().small());
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+}
+
+pub(super) fn render_splits_list(ui: &mut egui::Ui, rows: &[StockSplit]) {
+    ui.separator();
+    if rows.is_empty() {
+        ui.label(
+            egui::RichText::new("No split history — click Load Cached or Fetch.")
+                .color(AXIS_TEXT)
+                .small(),
+        );
+    } else {
+        ui.label(egui::RichText::new(format!("{} split events", rows.len())).strong());
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("splt_grid")
+                    .striped(true)
+                    .num_columns(4)
+                    .spacing([20.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Date").strong());
+                        ui.label(egui::RichText::new("Label").strong());
+                        ui.label(egui::RichText::new("Ratio").strong());
+                        ui.label(egui::RichText::new("From → To").strong());
+                        ui.end_row();
+                        for s in rows.iter() {
+                            ui.label(egui::RichText::new(&s.date).monospace().small());
+                            ui.label(egui::RichText::new(&s.label).monospace().strong().color(UP));
+                            let ratio = if s.denominator > 0.0 {
+                                s.numerator / s.denominator
+                            } else {
+                                0.0
+                            };
+                            ui.label(
+                                egui::RichText::new(format!("{:.3}x", ratio))
+                                    .monospace()
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{:.0} → {:.0}",
+                                    s.denominator, s.numerator
+                                ))
+                                .color(AXIS_TEXT)
+                                .small(),
+                            );
+                            ui.end_row();
+                        }
+                    });
+            });
     }
 }

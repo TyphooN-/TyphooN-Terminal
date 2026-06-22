@@ -5,9 +5,8 @@ impl TyphooNApp {
         &mut self,
         ctx: &egui::Context,
     ) {
-        let chart_sym_research = research_chart_symbol(
-            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
-        );
+        let chart_sym_research =
+            research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
 
@@ -75,65 +74,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    if self.splits_list.is_empty() {
-                        ui.label(
-                            egui::RichText::new("No split history — click Load Cached or Fetch.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                    } else {
-                        ui.label(
-                            egui::RichText::new(format!("{} split events", self.splits_list.len()))
-                                .strong(),
-                        );
-                        ui.separator();
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                egui::Grid::new("splt_grid")
-                                    .striped(true)
-                                    .num_columns(4)
-                                    .spacing([20.0, 4.0])
-                                    .show(ui, |ui| {
-                                        ui.label(egui::RichText::new("Date").strong());
-                                        ui.label(egui::RichText::new("Label").strong());
-                                        ui.label(egui::RichText::new("Ratio").strong());
-                                        ui.label(egui::RichText::new("From → To").strong());
-                                        ui.end_row();
-                                        for s in self.splits_list.iter() {
-                                            ui.label(
-                                                egui::RichText::new(&s.date).monospace().small(),
-                                            );
-                                            ui.label(
-                                                egui::RichText::new(&s.label)
-                                                    .monospace()
-                                                    .strong()
-                                                    .color(UP),
-                                            );
-                                            let ratio = if s.denominator > 0.0 {
-                                                s.numerator / s.denominator
-                                            } else {
-                                                0.0
-                                            };
-                                            ui.label(
-                                                egui::RichText::new(format!("{:.3}x", ratio))
-                                                    .monospace()
-                                                    .small(),
-                                            );
-                                            ui.label(
-                                                egui::RichText::new(format!(
-                                                    "{:.0} → {:.0}",
-                                                    s.denominator, s.numerator
-                                                ))
-                                                .color(AXIS_TEXT)
-                                                .small(),
-                                            );
-                                            ui.end_row();
-                                        }
-                                    });
-                            });
-                    }
+                    super::render::render_splits_list(ui, &self.splits_list);
                 });
             self.show_splits = open;
         }
@@ -152,13 +93,21 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("ETF:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.etf_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.etf_symbol = chart_sym_research.clone(); }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.etf_symbol).desired_width(100.0),
+                        );
+                        if ui.button("Use Chart").clicked() {
+                            self.etf_symbol = chart_sym_research.clone();
+                        }
                         if ui.button("Load Cached").clicked() {
                             if let Some(ref cache) = self.cache {
                                 if let Ok(conn) = cache.connection() {
                                     let sym_u = self.etf_symbol.to_uppercase();
-                                    if let Ok(Some(rows)) = typhoon_engine::core::research::get_etf_holdings(&conn, &sym_u) {
+                                    if let Ok(Some(rows)) =
+                                        typhoon_engine::core::research::get_etf_holdings(
+                                            &conn, &sym_u,
+                                        )
+                                    {
                                         self.etf_holdings = rows;
                                         self.etf_symbol = sym_u;
                                     }
@@ -166,56 +115,30 @@ impl TyphooNApp {
                             }
                         }
                         let have_key = !self.fmp_key.is_empty();
-                        if ui.add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                        if ui
+                            .add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG))
+                            .clicked()
+                        {
                             let sym = self.etf_symbol.to_uppercase();
                             self.etf_loading = true;
                             self.etf_symbol = sym.clone();
-                            let _ = self.broker_tx.send(BrokerCmd::FetchEtfHoldings { symbol: sym, fmp_key: self.fmp_key.clone() });
+                            let _ = self.broker_tx.send(BrokerCmd::FetchEtfHoldings {
+                                symbol: sym,
+                                fmp_key: self.fmp_key.clone(),
+                            });
                         }
                         if self.fmp_key.is_empty() {
-                            ui.label(egui::RichText::new("(add FMP key in Settings)").color(AXIS_TEXT).small());
+                            ui.label(
+                                egui::RichText::new("(add FMP key in Settings)")
+                                    .color(AXIS_TEXT)
+                                    .small(),
+                            );
                         }
                         if self.etf_loading {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    if self.etf_holdings.is_empty() {
-                        ui.label(egui::RichText::new("No ETF holdings — click Load Cached or Fetch. Pass an ETF ticker (SPY, QQQ, IWM, VTI, …).").color(AXIS_TEXT).small());
-                    } else {
-                        let total_weight: f64 = self.etf_holdings.iter().map(|h| h.weight_pct).sum();
-                        let total_value: f64 = self.etf_holdings.iter().map(|h| h.market_value).sum();
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(format!("{} holdings", self.etf_holdings.len())).strong());
-                            ui.label(egui::RichText::new(format!("(sum weight: {:.2}%, AUM: ${:.1}B)", total_weight, total_value / 1e9)).color(AXIS_TEXT).small());
-                        });
-                        ui.separator();
-                        let fmt_money = |v: f64| -> String {
-                            if v.abs() >= 1e9 { format!("${:.2}B", v / 1e9) }
-                            else if v.abs() >= 1e6 { format!("${:.1}M", v / 1e6) }
-                            else if v.abs() >= 1e3 { format!("${:.0}K", v / 1e3) }
-                            else { format!("${:.0}", v) }
-                        };
-                        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                            egui::Grid::new("etf_grid").striped(true).num_columns(5).spacing([14.0, 3.0]).show(ui, |ui| {
-                                ui.label(egui::RichText::new("Symbol").strong());
-                                ui.label(egui::RichText::new("Name").strong());
-                                ui.label(egui::RichText::new("Weight %").strong());
-                                ui.label(egui::RichText::new("Shares").strong());
-                                ui.label(egui::RichText::new("Market Value").strong());
-                                ui.end_row();
-                                for h in self.etf_holdings.iter().take(500) {
-                                    ui.label(egui::RichText::new(&h.symbol).monospace().strong());
-                                    let short_name: String = h.name.chars().take(40).collect();
-                                    ui.label(egui::RichText::new(short_name).small());
-                                    ui.label(egui::RichText::new(format!("{:.2}%", h.weight_pct)).color(UP).monospace());
-                                    ui.label(egui::RichText::new(format!("{:.0}", h.shares)).monospace().small());
-                                    ui.label(egui::RichText::new(fmt_money(h.market_value)).monospace().small());
-                                    ui.end_row();
-                                }
-                            });
-                        });
-                    }
+                    super::render::render_etf_holdings(ui, &self.etf_holdings);
                 });
             self.show_etf_holdings = open;
         }
@@ -507,78 +430,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    if self.esg_rows.is_empty() {
-                        ui.label(
-                            egui::RichText::new("No ESG data — click Load Cached or Fetch.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                    } else {
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                egui::Grid::new("esg_grid")
-                                    .striped(true)
-                                    .num_columns(5)
-                                    .spacing([20.0, 4.0])
-                                    .show(ui, |ui| {
-                                        ui.label(egui::RichText::new("Year").strong());
-                                        ui.label(egui::RichText::new("Environmental").strong());
-                                        ui.label(egui::RichText::new("Social").strong());
-                                        ui.label(egui::RichText::new("Governance").strong());
-                                        ui.label(egui::RichText::new("Overall").strong());
-                                        ui.end_row();
-                                        let score_color = |s: f64| -> egui::Color32 {
-                                            if s >= 70.0 {
-                                                UP
-                                            } else if s >= 50.0 {
-                                                AXIS_TEXT
-                                            } else {
-                                                DOWN
-                                            }
-                                        };
-                                        for e in self.esg_rows.iter() {
-                                            ui.label(
-                                                egui::RichText::new(format!("{}", e.year))
-                                                    .monospace()
-                                                    .strong(),
-                                            );
-                                            ui.label(
-                                                egui::RichText::new(format!(
-                                                    "{:.1}",
-                                                    e.environmental_score
-                                                ))
-                                                .color(score_color(e.environmental_score))
-                                                .monospace(),
-                                            );
-                                            ui.label(
-                                                egui::RichText::new(format!(
-                                                    "{:.1}",
-                                                    e.social_score
-                                                ))
-                                                .color(score_color(e.social_score))
-                                                .monospace(),
-                                            );
-                                            ui.label(
-                                                egui::RichText::new(format!(
-                                                    "{:.1}",
-                                                    e.governance_score
-                                                ))
-                                                .color(score_color(e.governance_score))
-                                                .monospace(),
-                                            );
-                                            ui.label(
-                                                egui::RichText::new(format!("{:.1}", e.esg_score))
-                                                    .color(score_color(e.esg_score))
-                                                    .monospace()
-                                                    .strong(),
-                                            );
-                                            ui.end_row();
-                                        }
-                                    });
-                            });
-                    }
+                    super::render::render_esg_rows(ui, &self.esg_rows);
                 });
             self.show_esg = open;
         }
