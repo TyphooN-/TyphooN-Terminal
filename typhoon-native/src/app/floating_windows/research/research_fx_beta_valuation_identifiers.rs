@@ -216,68 +216,44 @@ impl TyphooNApp {
         }
 
         // DDM — Gordon Growth Dividend Discount Model
-        if self.show_ddm {
-            if self.ddm_symbol.is_empty() {
-                self.ddm_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_ddm;
-            egui::Window::new("DDM — Gordon Growth Dividend Discount")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([540.0, 420.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.ddm_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.ddm_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.ddm_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_ddm(&conn, &sym_u)
-                                    {
-                                        self.ddm_snapshot = snap;
-                                        self.ddm_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.ddm_symbol.to_uppercase();
-                            self.ddm_loading = true;
-                            self.ddm_symbol = sym.clone();
-                            let wacc_snap = &self.wacc_snapshot;
-                            let (r, src) = if wacc_snap.symbol.eq_ignore_ascii_case(&sym)
-                                && wacc_snap.wacc_pct > 0.0
-                            {
-                                (
-                                    wacc_snap.cost_of_equity_pct,
-                                    format!(
-                                        "Cost of equity {:.2}% (from WACC)",
-                                        wacc_snap.cost_of_equity_pct
-                                    ),
-                                )
-                            } else {
-                                (10.0, "default required return 10.0%".to_string())
-                            };
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeDdmSnapshot {
-                                symbol: sym,
-                                required_return_pct: r,
-                                return_source: src,
-                            });
-                        }
-                        if self.ddm_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_ddm_snapshot(ui, &self.ddm_snapshot);
-                });
-            self.show_ddm = open;
+        if let Some(sym) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "DDM — Gordon Growth Dividend Discount",
+                default_size: [540.0, 420.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_ddm,
+            &mut self.ddm_symbol,
+            &mut self.ddm_loading,
+            &mut self.ddm_snapshot,
+            |conn, s| {
+                typhoon_engine::core::research::get_ddm(conn, s)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| symbol,
+            super::render::render_ddm_snapshot,
+        ) {
+            let wacc_snap = &self.wacc_snapshot;
+            let (r, src) =
+                if wacc_snap.symbol.eq_ignore_ascii_case(&sym) && wacc_snap.wacc_pct > 0.0 {
+                    (
+                        wacc_snap.cost_of_equity_pct,
+                        format!(
+                            "Cost of equity {:.2}% (from WACC)",
+                            wacc_snap.cost_of_equity_pct
+                        ),
+                    )
+                } else {
+                    (10.0, "default required return 10.0%".to_string())
+                };
+            let _ = self.broker_tx.send(BrokerCmd::ComputeDdmSnapshot {
+                symbol: sym,
+                required_return_pct: r,
+                return_source: src,
+            });
         }
 
         // RV — Relative Valuation (peer matrix)

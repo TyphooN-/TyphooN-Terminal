@@ -140,110 +140,127 @@ impl TyphooNApp {
         }
 
         // SVM — Stock Valuation Model synthesis
-        if self.show_svm {
-            if self.svm_symbol.is_empty() {
-                self.svm_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_svm;
-            egui::Window::new("SVM — Stock Valuation Model")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([680.0, 440.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.svm_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.svm_symbol = chart_sym_research.clone(); }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.svm_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_svm(&conn, &sym_u) {
-                                        self.svm_snapshot = snap;
-                                        self.svm_symbol = sym_u;
-                                    }
-                                }
-                            }
+        if let Some(sym) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "SVM — Stock Valuation Model",
+                default_size: [680.0, 440.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_svm,
+            &mut self.svm_symbol,
+            &mut self.svm_loading,
+            &mut self.svm_snapshot,
+            |conn, s| {
+                typhoon_engine::core::research::get_svm(conn, s)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| symbol,
+            super::render::render_svm_snapshot,
+        ) {
+            if let Some(ref cache) = self.cache {
+                if let Ok(conn) = cache.connection() {
+                    let self_fund =
+                        typhoon_engine::core::fundamentals::get_fundamentals(&conn, &sym)
+                            .unwrap_or(None)
+                            .unwrap_or_default();
+                    let current_price = self_fund.stock_price.unwrap_or(0.0);
+                    let ddm = typhoon_engine::core::research::get_ddm(&conn, &sym).unwrap_or(None);
+                    let dcf = typhoon_engine::core::research::get_dcf(&conn, &sym).unwrap_or(None);
+                    let quarters =
+                        typhoon_engine::core::fundamentals::get_quarterly_financials(&conn, &sym)
+                            .unwrap_or_default();
+                    let ttm_eps: Option<f64> = {
+                        let s: f64 = quarters.iter().take(4).filter_map(|q| q.eps).sum();
+                        if s > 0.0 {
+                            Some(s)
+                        } else {
+                            None
                         }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.svm_symbol.to_uppercase();
-                            self.svm_loading = true;
-                            self.svm_symbol = sym.clone();
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let self_fund = typhoon_engine::core::fundamentals::get_fundamentals(&conn, &sym)
-                                        .unwrap_or(None).unwrap_or_default();
-                                    let current_price = self_fund.stock_price.unwrap_or(0.0);
-                                    let ddm = typhoon_engine::core::research::get_ddm(&conn, &sym).unwrap_or(None);
-                                    let dcf = typhoon_engine::core::research::get_dcf(&conn, &sym).unwrap_or(None);
-                                    let quarters = typhoon_engine::core::fundamentals::get_quarterly_financials(&conn, &sym)
-                                        .unwrap_or_default();
-                                    let ttm_eps: Option<f64> = {
-                                        let s: f64 = quarters.iter().take(4).filter_map(|q| q.eps).sum();
-                                        if s > 0.0 { Some(s) } else { None }
-                                    };
-                                    let ttm_ebitda: Option<f64> = {
-                                        let s: f64 = quarters.iter().take(4).filter_map(|q| q.ebitda).sum();
-                                        if s > 0.0 { Some(s) } else { None }
-                                    };
-                                    let peer_syms = typhoon_engine::core::research::get_peers(&conn, &sym)
-                                        .unwrap_or(None).unwrap_or_default();
-                                    let peers: Vec<typhoon_engine::core::fundamentals::Fundamentals> = peer_syms.iter()
-                                        .filter(|p| !p.eq_ignore_ascii_case(&sym))
-                                        .filter_map(|p| typhoon_engine::core::fundamentals::get_fundamentals(&conn, p).unwrap_or(None))
-                                        .collect();
-                                    fn median(mut v: Vec<f64>) -> Option<f64> {
-                                        if v.is_empty() { return None; }
-                                        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                                        let m = v.len() / 2;
-                                        Some(if v.len() % 2 == 0 { (v[m-1] + v[m]) / 2.0 } else { v[m] })
-                                    }
-                                    let peer_pe = median(peers.iter().filter_map(|p| p.pe_ratio).collect())
-                                        .and_then(|m| ttm_eps.map(|e| (m, e)));
-                                    let peer_ev = median(peers.iter().filter_map(|p| p.ev_to_ebitda).collect())
-                                        .and_then(|m| {
-                                            let ebitda = ttm_ebitda?;
-                                            let shares = self_fund.shares_outstanding?;
-                                            Some((
-                                                m, ebitda,
-                                                self_fund.total_debt.unwrap_or(0.0),
-                                                self_fund.cash_and_equivalents.unwrap_or(0.0),
-                                                shares,
-                                            ))
-                                        });
-                                    // BVPS: approximate book value / shares from market_cap / p/b and shares.
-                                    let bvps: Option<f64> = (|| {
-                                        let mc = self_fund.market_cap?;
-                                        let shares = self_fund.shares_outstanding?;
-                                        let pb = self_fund.price_to_book?;
-                                        if pb > 0.0 && shares > 0.0 {
-                                            Some((mc / pb) / shares)
-                                        } else { None }
-                                    })();
-                                    let peer_pb = median(peers.iter().filter_map(|p| p.price_to_book).collect())
-                                        .and_then(|m| bvps.map(|bv| (m, bv)));
+                    };
+                    let ttm_ebitda: Option<f64> = {
+                        let s: f64 = quarters.iter().take(4).filter_map(|q| q.ebitda).sum();
+                        if s > 0.0 {
+                            Some(s)
+                        } else {
+                            None
+                        }
+                    };
+                    let peer_syms = typhoon_engine::core::research::get_peers(&conn, &sym)
+                        .unwrap_or(None)
+                        .unwrap_or_default();
+                    let peers: Vec<typhoon_engine::core::fundamentals::Fundamentals> = peer_syms
+                        .iter()
+                        .filter(|p| !p.eq_ignore_ascii_case(&sym))
+                        .filter_map(|p| {
+                            typhoon_engine::core::fundamentals::get_fundamentals(&conn, p)
+                                .unwrap_or(None)
+                        })
+                        .collect();
+                    fn median(mut v: Vec<f64>) -> Option<f64> {
+                        if v.is_empty() {
+                            return None;
+                        }
+                        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                        let m = v.len() / 2;
+                        Some(if v.len() % 2 == 0 {
+                            (v[m - 1] + v[m]) / 2.0
+                        } else {
+                            v[m]
+                        })
+                    }
+                    let peer_pe = median(peers.iter().filter_map(|p| p.pe_ratio).collect())
+                        .and_then(|m| ttm_eps.map(|e| (m, e)));
+                    let peer_ev = median(peers.iter().filter_map(|p| p.ev_to_ebitda).collect())
+                        .and_then(|m| {
+                            let ebitda = ttm_ebitda?;
+                            let shares = self_fund.shares_outstanding?;
+                            Some((
+                                m,
+                                ebitda,
+                                self_fund.total_debt.unwrap_or(0.0),
+                                self_fund.cash_and_equivalents.unwrap_or(0.0),
+                                shares,
+                            ))
+                        });
+                    // BVPS: approximate book value / shares from market_cap / p/b and shares.
+                    let bvps: Option<f64> = (|| {
+                        let mc = self_fund.market_cap?;
+                        let shares = self_fund.shares_outstanding?;
+                        let pb = self_fund.price_to_book?;
+                        if pb > 0.0 && shares > 0.0 {
+                            Some((mc / pb) / shares)
+                        } else {
+                            None
+                        }
+                    })();
+                    let peer_pb = median(peers.iter().filter_map(|p| p.price_to_book).collect())
+                        .and_then(|m| bvps.map(|bv| (m, bv)));
 
-                                    let ddm_json = serde_json::to_string(&ddm).unwrap_or_else(|_| "null".to_string());
-                                    let dcf_json = serde_json::to_string(&dcf).unwrap_or_else(|_| "null".to_string());
-                                    let peer_pe_tuple_json = serde_json::to_string(&peer_pe).unwrap_or_else(|_| "null".to_string());
-                                    let peer_ev_tuple_json = serde_json::to_string(&peer_ev).unwrap_or_else(|_| "null".to_string());
-                                    let peer_pb_tuple_json = serde_json::to_string(&peer_pb).unwrap_or_else(|_| "null".to_string());
+                    let ddm_json =
+                        serde_json::to_string(&ddm).unwrap_or_else(|_| "null".to_string());
+                    let dcf_json =
+                        serde_json::to_string(&dcf).unwrap_or_else(|_| "null".to_string());
+                    let peer_pe_tuple_json =
+                        serde_json::to_string(&peer_pe).unwrap_or_else(|_| "null".to_string());
+                    let peer_ev_tuple_json =
+                        serde_json::to_string(&peer_ev).unwrap_or_else(|_| "null".to_string());
+                    let peer_pb_tuple_json =
+                        serde_json::to_string(&peer_pb).unwrap_or_else(|_| "null".to_string());
 
-                                    let _ = self.broker_tx.send(BrokerCmd::ComputeSvmSnapshot {
-                                        symbol: sym, current_price,
-                                        ddm_json, dcf_json,
-                                        peer_pe_tuple_json, peer_ev_tuple_json, peer_pb_tuple_json,
-                                    });
-                                }
-                            }
-                        }
-                        if self.svm_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
+                    let _ = self.broker_tx.send(BrokerCmd::ComputeSvmSnapshot {
+                        symbol: sym,
+                        current_price,
+                        ddm_json,
+                        dcf_json,
+                        peer_pe_tuple_json,
+                        peer_ev_tuple_json,
+                        peer_pb_tuple_json,
                     });
-                    super::render::render_svm_snapshot(ui, &self.svm_snapshot);
-                });
-            self.show_svm = open;
+                }
+            }
         }
 
         // OMON — Options chain monitor
@@ -299,108 +316,76 @@ impl TyphooNApp {
         }
 
         // IVOL — Implied volatility rank / percentile
-        if self.show_ivol {
-            if self.ivol_symbol.is_empty() {
-                self.ivol_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_ivol;
-            egui::Window::new("IVOL — Implied Vol Rank / Percentile")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 380.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.ivol_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.ivol_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.ivol_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_ivol(&conn, &sym_u)
-                                    {
-                                        self.ivol_snapshot = snap;
-                                        self.ivol_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.ivol_symbol.to_uppercase();
-                            self.ivol_loading = true;
-                            self.ivol_symbol = sym.clone();
-                            // Derive current ATM IV from cached OMON nearest-expiry nearest-to-money option.
-                            let (current_iv, history_json) = if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let chain = typhoon_engine::core::research::get_options_chain(
-                                        &conn, &sym,
-                                    )
-                                    .unwrap_or(None);
-                                    let iv = chain
-                                        .as_ref()
-                                        .and_then(|c| {
-                                            let exp = c.expirations.first()?;
-                                            let spot = c.underlying_price;
-                                            let mut all = Vec::with_capacity(
-                                                exp.calls.len() + exp.puts.len(),
-                                            );
-                                            all.extend(exp.calls.iter().cloned());
-                                            all.extend(exp.puts.iter().cloned());
-                                            all.sort_by(|a, b| {
-                                                (a.strike - spot)
-                                                    .abs()
-                                                    .partial_cmp(&(b.strike - spot).abs())
-                                                    .unwrap_or(std::cmp::Ordering::Equal)
-                                            });
-                                            all.first().map(|c| c.implied_volatility * 100.0)
-                                        })
-                                        .unwrap_or(0.0);
-                                    // History = prior IvolSnapshot.history entries rolled forward
-                                    let prior =
-                                        typhoon_engine::core::research::get_ivol(&conn, &sym)
-                                            .unwrap_or(None);
-                                    let mut hist: Vec<
-                                        typhoon_engine::core::research::IvolObservation,
-                                    > = prior.map(|p| p.history).unwrap_or_default();
-                                    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                                    if iv > 0.0 {
-                                        hist.retain(|h| h.date != today);
-                                        hist.push(
-                                            typhoon_engine::core::research::IvolObservation {
-                                                date: today,
-                                                atm_iv_pct: iv,
-                                            },
-                                        );
-                                    }
-                                    (
-                                        iv,
-                                        serde_json::to_string(&hist)
-                                            .unwrap_or_else(|_| "[]".to_string()),
-                                    )
-                                } else {
-                                    (0.0, "[]".to_string())
-                                }
-                            } else {
-                                (0.0, "[]".to_string())
-                            };
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeIvolSnapshot {
-                                symbol: sym,
-                                current_atm_iv_pct: current_iv,
-                                history_json,
+        if let Some(sym) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "IVOL — Implied Vol Rank / Percentile",
+                default_size: [560.0, 380.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_ivol,
+            &mut self.ivol_symbol,
+            &mut self.ivol_loading,
+            &mut self.ivol_snapshot,
+            |conn, s| {
+                typhoon_engine::core::research::get_ivol(conn, s)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| symbol,
+            super::render::render_ivol_snapshot,
+        ) {
+            // Derive current ATM IV from cached OMON nearest-expiry nearest-to-money option.
+            let (current_iv, history_json) = if let Some(ref cache) = self.cache {
+                if let Ok(conn) = cache.connection() {
+                    let chain = typhoon_engine::core::research::get_options_chain(&conn, &sym)
+                        .unwrap_or(None);
+                    let iv = chain
+                        .as_ref()
+                        .and_then(|c| {
+                            let exp = c.expirations.first()?;
+                            let spot = c.underlying_price;
+                            let mut all = Vec::with_capacity(exp.calls.len() + exp.puts.len());
+                            all.extend(exp.calls.iter().cloned());
+                            all.extend(exp.puts.iter().cloned());
+                            all.sort_by(|a, b| {
+                                (a.strike - spot)
+                                    .abs()
+                                    .partial_cmp(&(b.strike - spot).abs())
+                                    .unwrap_or(std::cmp::Ordering::Equal)
                             });
-                        }
-                        if self.ivol_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_ivol_snapshot(ui, &self.ivol_snapshot);
-                });
-            self.show_ivol = open;
+                            all.first().map(|c| c.implied_volatility * 100.0)
+                        })
+                        .unwrap_or(0.0);
+                    // History = prior IvolSnapshot.history entries rolled forward
+                    let prior =
+                        typhoon_engine::core::research::get_ivol(&conn, &sym).unwrap_or(None);
+                    let mut hist: Vec<typhoon_engine::core::research::IvolObservation> =
+                        prior.map(|p| p.history).unwrap_or_default();
+                    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                    if iv > 0.0 {
+                        hist.retain(|h| h.date != today);
+                        hist.push(typhoon_engine::core::research::IvolObservation {
+                            date: today,
+                            atm_iv_pct: iv,
+                        });
+                    }
+                    (
+                        iv,
+                        serde_json::to_string(&hist).unwrap_or_else(|_| "[]".to_string()),
+                    )
+                } else {
+                    (0.0, "[]".to_string())
+                }
+            } else {
+                (0.0, "[]".to_string())
+            };
+            let _ = self.broker_tx.send(BrokerCmd::ComputeIvolSnapshot {
+                symbol: sym,
+                current_atm_iv_pct: current_iv,
+                history_json,
+            });
         }
     }
 }

@@ -129,74 +129,48 @@ impl TyphooNApp {
         }
 
         // VOLE — OHLC Volatility Estimators
-        if self.show_vole {
-            if self.vole_symbol.is_empty() {
-                self.vole_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_vole;
-            egui::Window::new("VOLE — OHLC Volatility Estimators")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([580.0, 360.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.vole_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.vole_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.vole_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_ohlc_vol(&conn, &sym_u)
-                                    {
-                                        self.vole_snapshot = snap;
-                                        self.vole_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.vole_symbol.to_uppercase();
-                            self.vole_loading = true;
-                            self.vole_symbol = sym.clone();
-                            let bars_json = if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let mut bars: Vec<
-                                        typhoon_engine::core::research::HistoricalPriceRow,
-                                    > = typhoon_engine::core::research::get_historical_price(
-                                        &conn, &sym,
-                                    )
-                                    .ok()
-                                    .flatten()
-                                    .unwrap_or_default();
-                                    if bars.len() >= 2 && bars[0].date > bars[bars.len() - 1].date {
-                                        bars.reverse();
-                                    }
-                                    serde_json::to_string(&bars).unwrap_or_default()
-                                } else {
-                                    String::new()
-                                }
-                            } else {
-                                String::new()
-                            };
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeOhlcVolSnapshot {
-                                symbol: sym,
-                                window_days: 60,
-                                bars_json,
-                            });
-                        }
-                        if self.vole_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_vole_snapshot(ui, &self.vole_snapshot);
-                });
-            self.show_vole = open;
+        if let Some(sym) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "VOLE — OHLC Volatility Estimators",
+                default_size: [580.0, 360.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_vole,
+            &mut self.vole_symbol,
+            &mut self.vole_loading,
+            &mut self.vole_snapshot,
+            |conn, s| {
+                typhoon_engine::core::research::get_ohlc_vol(conn, s)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| symbol,
+            super::render::render_vole_snapshot,
+        ) {
+            let bars_json = if let Some(ref cache) = self.cache {
+                if let Ok(conn) = cache.connection() {
+                    let mut bars: Vec<typhoon_engine::core::research::HistoricalPriceRow> =
+                        typhoon_engine::core::research::get_historical_price(&conn, &sym)
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default();
+                    if bars.len() >= 2 && bars[0].date > bars[bars.len() - 1].date {
+                        bars.reverse();
+                    }
+                    serde_json::to_string(&bars).unwrap_or_default()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+            let _ = self.broker_tx.send(BrokerCmd::ComputeOhlcVolSnapshot {
+                symbol: sym,
+                window_days: 60,
+                bars_json,
+            });
         }
 
         // EPSB — EPS Beat Streak & Surprise
@@ -224,74 +198,47 @@ impl TyphooNApp {
         }
 
         // PTD — Price Target Dispersion & Implied Return
-        if self.show_ptd {
-            if self.ptd_symbol.is_empty() {
-                self.ptd_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_ptd;
-            egui::Window::new("PTD — Price Target Dispersion")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 380.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.ptd_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.ptd_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.ptd_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_price_target_dispersion(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.ptd_snapshot = snap;
-                                        self.ptd_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.ptd_symbol.to_uppercase();
-                            self.ptd_loading = true;
-                            self.ptd_symbol = sym.clone();
-                            let current_price = if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    if let Ok(Some(fa)) =
-                                        typhoon_engine::core::fundamentals::get_fundamentals(
-                                            &conn, &sym,
-                                        )
-                                    {
-                                        fa.stock_price.unwrap_or(0.0)
-                                    } else {
-                                        0.0
-                                    }
-                                } else {
-                                    0.0
-                                }
-                            } else {
-                                0.0
-                            };
-                            let _ = self.broker_tx.send(
-                                BrokerCmd::ComputePriceTargetDispersionSnapshot {
-                                    symbol: sym,
-                                    current_price,
-                                },
-                            );
-                        }
-                        if self.ptd_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_ptd_snapshot(ui, &self.ptd_snapshot);
+        if let Some(sym) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "PTD — Price Target Dispersion",
+                default_size: [560.0, 380.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_ptd,
+            &mut self.ptd_symbol,
+            &mut self.ptd_loading,
+            &mut self.ptd_snapshot,
+            |conn, s| {
+                typhoon_engine::core::research::get_price_target_dispersion(conn, s)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| symbol,
+            super::render::render_ptd_snapshot,
+        ) {
+            let current_price = if let Some(ref cache) = self.cache {
+                if let Ok(conn) = cache.connection() {
+                    if let Ok(Some(fa)) =
+                        typhoon_engine::core::fundamentals::get_fundamentals(&conn, &sym)
+                    {
+                        fa.stock_price.unwrap_or(0.0)
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+            let _ = self
+                .broker_tx
+                .send(BrokerCmd::ComputePriceTargetDispersionSnapshot {
+                    symbol: sym,
+                    current_price,
                 });
-            self.show_ptd = open;
         }
     }
 }

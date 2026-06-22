@@ -33,72 +33,42 @@ impl TyphooNApp {
         }
 
         // LIQ — Liquidity Profile
-        if self.show_liq {
-            if self.liq_symbol.is_empty() {
-                self.liq_symbol = chart_sym_research.clone();
+        if let Some(sym) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "LIQ — Liquidity Profile",
+                default_size: [540.0, 420.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_liq,
+            &mut self.liq_symbol,
+            &mut self.liq_loading,
+            &mut self.liq_snapshot,
+            |conn, s| {
+                typhoon_engine::core::research::get_liquidity(conn, s)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| symbol,
+            super::render::render_liq_snapshot,
+        ) {
+            // Pre-read shares outstanding from cached Fundamentals so the
+            // broker thread can stay Send-safe without reaching back into SQLite.
+            let mut shares_outstanding = 0.0_f64;
+            if let Some(ref cache) = self.cache {
+                if let Ok(conn) = cache.connection() {
+                    if let Ok(Some(prof)) = typhoon_engine::core::research::get_profile(&conn, &sym)
+                    {
+                        shares_outstanding = prof.shares_outstanding;
+                    }
+                }
             }
-            let mut open = self.show_liq;
-            egui::Window::new("LIQ — Liquidity Profile")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([540.0, 420.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.liq_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.liq_symbol = chart_sym_research.clone();
-                        }
-                        ui.label(egui::RichText::new("Window days:").color(AXIS_TEXT).small());
-                        ui.add(
-                            egui::DragValue::new(&mut self.liq_window_days)
-                                .range(10..=252)
-                                .speed(1),
-                        );
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.liq_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_liquidity(&conn, &sym_u)
-                                    {
-                                        self.liq_snapshot = snap;
-                                        self.liq_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.liq_symbol.to_uppercase();
-                            self.liq_loading = true;
-                            self.liq_symbol = sym.clone();
-                            // Pre-read shares outstanding from cached Fundamentals so the
-                            // broker thread can stay Send-safe without reaching back into SQLite.
-                            let mut shares_outstanding = 0.0_f64;
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    if let Ok(Some(prof)) =
-                                        typhoon_engine::core::research::get_profile(&conn, &sym)
-                                    {
-                                        shares_outstanding = prof.shares_outstanding;
-                                    }
-                                }
-                            }
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeLiquiditySnapshot {
-                                symbol: sym,
-                                window_days: self.liq_window_days,
-                                shares_outstanding,
-                            });
-                        }
-                        if self.liq_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_liq_snapshot(ui, &self.liq_snapshot);
-                });
-            self.show_liq = open;
+            let _ = self.broker_tx.send(BrokerCmd::ComputeLiquiditySnapshot {
+                symbol: sym,
+                window_days: self.liq_window_days,
+                shares_outstanding,
+            });
         }
 
         // BREAK — Breakout Proximity
@@ -198,59 +168,30 @@ impl TyphooNApp {
         }
 
         // FLOW — Insider + Institutional flow score
-        if self.show_flow {
-            if self.flow_symbol.is_empty() {
-                self.flow_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_flow;
-            egui::Window::new("FLOW — Insider + Institutional Flow")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([620.0, 400.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.flow_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.flow_symbol = chart_sym_research.clone();
-                        }
-                        ui.label(egui::RichText::new("Window (days):").color(AXIS_TEXT));
-                        ui.add(
-                            egui::DragValue::new(&mut self.flow_window_days)
-                                .range(7..=365)
-                                .speed(1),
-                        );
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.flow_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_flow(&conn, &sym_u)
-                                    {
-                                        self.flow_snapshot = snap;
-                                        self.flow_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.flow_symbol.to_uppercase();
-                            self.flow_loading = true;
-                            self.flow_symbol = sym.clone();
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeFlowSnapshot {
-                                symbol: sym,
-                                window_days: self.flow_window_days,
-                            });
-                        }
-                        if self.flow_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_flow_snapshot(ui, &self.flow_snapshot);
-                });
-            self.show_flow = open;
+        if let Some(sym) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "FLOW — Insider + Institutional Flow",
+                default_size: [620.0, 400.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_flow,
+            &mut self.flow_symbol,
+            &mut self.flow_loading,
+            &mut self.flow_snapshot,
+            |conn, s| {
+                typhoon_engine::core::research::get_flow(conn, s)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| symbol,
+            super::render::render_flow_snapshot,
+        ) {
+            let _ = self.broker_tx.send(BrokerCmd::ComputeFlowSnapshot {
+                symbol: sym,
+                window_days: self.flow_window_days,
+            });
         }
 
         // REGIME — Market regime classifier

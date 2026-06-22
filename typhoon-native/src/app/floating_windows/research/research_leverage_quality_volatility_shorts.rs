@@ -132,83 +132,53 @@ impl TyphooNApp {
         }
 
         // RVOL — Realized Volatility Cone
-        if self.show_rvol {
-            if self.rvol_symbol.is_empty() {
-                self.rvol_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_rvol;
-            egui::Window::new("RVOL — Realized Volatility Cone")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([620.0, 400.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.rvol_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.rvol_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.rvol_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_realized_vol(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.rvol_snapshot = snap;
-                                        self.rvol_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.rvol_symbol.to_uppercase();
-                            self.rvol_loading = true;
-                            self.rvol_symbol = sym.clone();
-                            let (bars_json, current_atm_iv_pct) = if let Some(ref cache) =
-                                self.cache
-                            {
-                                if let Ok(conn) = cache.connection() {
-                                    let mut bars: Vec<
-                                        typhoon_engine::core::research::HistoricalPriceRow,
-                                    > = typhoon_engine::core::research::get_historical_price(
-                                        &conn, &sym,
-                                    )
-                                    .ok()
-                                    .flatten()
-                                    .unwrap_or_default();
-                                    if bars.len() >= 2 && bars[0].date > bars[bars.len() - 1].date {
-                                        bars.reverse();
-                                    }
-                                    let iv = typhoon_engine::core::research::get_ivol(&conn, &sym)
-                                        .ok()
-                                        .flatten()
-                                        .map(|s| s.current_atm_iv_pct)
-                                        .filter(|v| *v > 0.0);
-                                    (serde_json::to_string(&bars).unwrap_or_default(), iv)
-                                } else {
-                                    (String::new(), None)
-                                }
-                            } else {
-                                (String::new(), None)
-                            };
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeRealizedVolSnapshot {
-                                symbol: sym,
-                                current_atm_iv_pct,
-                                bars_json,
-                            });
-                        }
-                        if self.rvol_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_rvol_snapshot(ui, &self.rvol_snapshot);
-                });
-            self.show_rvol = open;
+        if let Some(sym) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "RVOL — Realized Volatility Cone",
+                default_size: [620.0, 400.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_rvol,
+            &mut self.rvol_symbol,
+            &mut self.rvol_loading,
+            &mut self.rvol_snapshot,
+            |conn, s| {
+                typhoon_engine::core::research::get_realized_vol(conn, s)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| symbol,
+            super::render::render_rvol_snapshot,
+        ) {
+            let (bars_json, current_atm_iv_pct) = if let Some(ref cache) = self.cache {
+                if let Ok(conn) = cache.connection() {
+                    let mut bars: Vec<typhoon_engine::core::research::HistoricalPriceRow> =
+                        typhoon_engine::core::research::get_historical_price(&conn, &sym)
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default();
+                    if bars.len() >= 2 && bars[0].date > bars[bars.len() - 1].date {
+                        bars.reverse();
+                    }
+                    let iv = typhoon_engine::core::research::get_ivol(&conn, &sym)
+                        .ok()
+                        .flatten()
+                        .map(|s| s.current_atm_iv_pct)
+                        .filter(|v| *v > 0.0);
+                    (serde_json::to_string(&bars).unwrap_or_default(), iv)
+                } else {
+                    (String::new(), None)
+                }
+            } else {
+                (String::new(), None)
+            };
+            let _ = self.broker_tx.send(BrokerCmd::ComputeRealizedVolSnapshot {
+                symbol: sym,
+                current_atm_iv_pct,
+                bars_json,
+            });
         }
 
         // FCFY — FCF Yield & Dividend Sustainability
@@ -284,116 +254,78 @@ impl TyphooNApp {
         }
 
         // SHRT — Short Interest & Days-to-Cover
-        if self.show_shrt {
-            if self.shrt_symbol.is_empty() {
-                self.shrt_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_shrt;
-            egui::Window::new("SHRT — Short Interest & DTC")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 340.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.shrt_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.shrt_symbol = chart_sym_research.clone();
+        if let Some(sym) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "SHRT — Short Interest & DTC",
+                default_size: [560.0, 340.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_shrt,
+            &mut self.shrt_symbol,
+            &mut self.shrt_loading,
+            &mut self.shrt_snapshot,
+            |conn, s| {
+                typhoon_engine::core::research::get_short_interest(conn, s)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| symbol,
+            super::render::render_shrt_snapshot,
+        ) {
+            let (shares_out, float_shares, short_pct_of_float, short_ratio_reported, bars_json) =
+                if let Some(ref cache) = self.cache {
+                    if let Ok(conn) = cache.connection() {
+                        let fa = typhoon_engine::core::fundamentals::get_fundamentals(&conn, &sym)
+                            .ok()
+                            .flatten();
+                        let shares_out = fa
+                            .as_ref()
+                            .and_then(|f| f.shares_outstanding)
+                            .unwrap_or(0.0);
+                        let short_pct = fa
+                            .as_ref()
+                            .and_then(|f| f.short_percent_of_float)
+                            .unwrap_or(0.0);
+                        let short_ratio = fa.as_ref().and_then(|f| f.short_ratio).unwrap_or(0.0);
+                        let float_shares =
+                            typhoon_engine::core::research::get_shares_float(&conn, &sym)
+                                .ok()
+                                .flatten()
+                                .map(|s| s.float_shares)
+                                .unwrap_or(0.0);
+                        let mut bars: Vec<typhoon_engine::core::research::HistoricalPriceRow> =
+                            typhoon_engine::core::research::get_historical_price(&conn, &sym)
+                                .ok()
+                                .flatten()
+                                .unwrap_or_default();
+                        if bars.len() >= 2 && bars[0].date > bars[bars.len() - 1].date {
+                            bars.reverse();
                         }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.shrt_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_short_interest(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.shrt_snapshot = snap;
-                                        self.shrt_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.shrt_symbol.to_uppercase();
-                            self.shrt_loading = true;
-                            self.shrt_symbol = sym.clone();
-                            let (
-                                shares_out,
-                                float_shares,
-                                short_pct_of_float,
-                                short_ratio_reported,
-                                bars_json,
-                            ) = if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let fa = typhoon_engine::core::fundamentals::get_fundamentals(
-                                        &conn, &sym,
-                                    )
-                                    .ok()
-                                    .flatten();
-                                    let shares_out = fa
-                                        .as_ref()
-                                        .and_then(|f| f.shares_outstanding)
-                                        .unwrap_or(0.0);
-                                    let short_pct = fa
-                                        .as_ref()
-                                        .and_then(|f| f.short_percent_of_float)
-                                        .unwrap_or(0.0);
-                                    let short_ratio =
-                                        fa.as_ref().and_then(|f| f.short_ratio).unwrap_or(0.0);
-                                    let float_shares =
-                                        typhoon_engine::core::research::get_shares_float(
-                                            &conn, &sym,
-                                        )
-                                        .ok()
-                                        .flatten()
-                                        .map(|s| s.float_shares)
-                                        .unwrap_or(0.0);
-                                    let mut bars: Vec<
-                                        typhoon_engine::core::research::HistoricalPriceRow,
-                                    > = typhoon_engine::core::research::get_historical_price(
-                                        &conn, &sym,
-                                    )
-                                    .ok()
-                                    .flatten()
-                                    .unwrap_or_default();
-                                    if bars.len() >= 2 && bars[0].date > bars[bars.len() - 1].date {
-                                        bars.reverse();
-                                    }
-                                    (
-                                        shares_out,
-                                        float_shares,
-                                        short_pct,
-                                        short_ratio,
-                                        serde_json::to_string(&bars).unwrap_or_default(),
-                                    )
-                                } else {
-                                    (0.0, 0.0, 0.0, 0.0, String::new())
-                                }
-                            } else {
-                                (0.0, 0.0, 0.0, 0.0, String::new())
-                            };
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeShortInterestSnapshot {
-                                    symbol: sym,
-                                    shares_out,
-                                    float_shares,
-                                    short_pct_of_float,
-                                    short_ratio_reported,
-                                    bars_json,
-                                });
-                        }
-                        if self.shrt_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_shrt_snapshot(ui, &self.shrt_snapshot);
+                        (
+                            shares_out,
+                            float_shares,
+                            short_pct,
+                            short_ratio,
+                            serde_json::to_string(&bars).unwrap_or_default(),
+                        )
+                    } else {
+                        (0.0, 0.0, 0.0, 0.0, String::new())
+                    }
+                } else {
+                    (0.0, 0.0, 0.0, 0.0, String::new())
+                };
+            let _ = self
+                .broker_tx
+                .send(BrokerCmd::ComputeShortInterestSnapshot {
+                    symbol: sym,
+                    shares_out,
+                    float_shares,
+                    short_pct_of_float,
+                    short_ratio_reported,
+                    bars_json,
                 });
-            self.show_shrt = open;
         }
     }
 }

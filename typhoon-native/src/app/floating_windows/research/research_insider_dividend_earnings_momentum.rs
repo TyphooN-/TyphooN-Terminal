@@ -113,74 +113,47 @@ impl TyphooNApp {
         }
 
         // SECTR — Sector Rotation Strength
-        if self.show_sectr {
-            if self.sectr_symbol.is_empty() {
-                self.sectr_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_sectr;
-            egui::Window::new("SECTR — Sector Rotation Strength")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 420.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.sectr_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.sectr_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.sectr_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_sector_rotation(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.sectr_snapshot = snap;
-                                        self.sectr_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.sectr_symbol.to_uppercase();
-                            self.sectr_loading = true;
-                            self.sectr_symbol = sym.clone();
-                            let symbol_sector = if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    if let Ok(Some(fa)) =
-                                        typhoon_engine::core::fundamentals::get_fundamentals(
-                                            &conn, &sym,
-                                        )
-                                    {
-                                        fa.sector
-                                    } else {
-                                        String::new()
-                                    }
-                                } else {
-                                    String::new()
-                                }
-                            } else {
-                                String::new()
-                            };
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeSectorRotationSnapshot {
-                                    symbol: sym,
-                                    symbol_sector,
-                                });
-                        }
-                        if self.sectr_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_sectr_snapshot(ui, &self.sectr_snapshot);
+        if let Some(sym) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "SECTR — Sector Rotation Strength",
+                default_size: [560.0, 420.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_sectr,
+            &mut self.sectr_symbol,
+            &mut self.sectr_loading,
+            &mut self.sectr_snapshot,
+            |conn, s| {
+                typhoon_engine::core::research::get_sector_rotation(conn, s)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| symbol,
+            super::render::render_sectr_snapshot,
+        ) {
+            let symbol_sector = if let Some(ref cache) = self.cache {
+                if let Ok(conn) = cache.connection() {
+                    if let Ok(Some(fa)) =
+                        typhoon_engine::core::fundamentals::get_fundamentals(&conn, &sym)
+                    {
+                        fa.sector
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+            let _ = self
+                .broker_tx
+                .send(BrokerCmd::ComputeSectorRotationSnapshot {
+                    symbol: sym,
+                    symbol_sector,
                 });
-            self.show_sectr = open;
         }
 
         // UPDM — Upgrade/Downgrade Momentum
