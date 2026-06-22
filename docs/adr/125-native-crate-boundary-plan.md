@@ -536,13 +536,35 @@ declarative window specs + closures with zero inline `egui::Window`; the borrow 
 accepts the call (disjoint `&mut self.<x>_*` field borrows + `self.cache.as_deref()`).
 Behavior-preserving by construction (the shell replicates the exact button logic).
 
+The shell then scaled across the tree via a strict template matcher (whitespace +
+method-chain + multi-line-title normalized): **194 compute windows now route through
+`window_shell::render_compute_window`** (189 of the 202 canonical windows + the 5
+proof-of-concept), each a declarative spec + closures instead of inline
+`egui::Window`/buttons/`broker_tx`. Only blocks whose normalized text matches the
+canonical template exactly are transformed; every window title is preserved (verified by
+diff per batch). `render.rs` holds the 259 display functions; the shell owns the
+interaction and returns the action.
+
 ### Next slice
 
-Scale the shell across the other compute-snapshot windows (the bulk of the ~250 that
-follow this exact pattern), with per-pattern shells for the variants (windows without
-Load Cached, or with extra controls). Then the multi-field/interactive grids left out of
-the display pass, and `command_research_windows`. Then decide the crate's public surface
-and begin Phase 2.
+What remains in `floating_windows/research`:
+
+- **13 canonical-shaped but extra-logic windows** (the fundamental indicators — LIQ,
+  FLOW, DDM, LEV, ACRL, RVOL, FCFY, SVM, IVOL, SKEW, ALTZ, PTFS, VOLE): their Compute
+  pre-reads fundamentals/shares before dispatch, or sends a multi-field command. The
+  strict matcher correctly skips them; they need either a shell variant with a pre-read
+  hook or bespoke per-window closures.
+- **52 variant windows**: no "Load Cached" (≈31), "Fetch"-button fundamental windows,
+  and a few with extra controls (Slider/DragValue) — each needs a sibling shell.
+- **The multi-field summary cards + interactive filtered tables** left out of the display
+  pass (≈19 grids).
+
+Then `command_research_windows`, decide the crate's public surface, and begin Phase 2.
+
+The window state itself (`show_*` / `*_symbol` / `*_loading` / `*_snapshot`) still lives
+on `TyphooNApp` and is threaded in as `&mut` field refs; bundling it into per-window
+structs is a later optional step (only needed if the shell signatures become unwieldy or
+a cycle forces it), not a prerequisite for the crate.
 
 ## Verification Standard for Future Implementation
 
