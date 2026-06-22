@@ -9,53 +9,27 @@ impl TyphooNApp {
             research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
-        if self.show_mcleodli {
-            if self.mcleodli_symbol.is_empty() {
-                self.mcleodli_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_mcleodli;
-            egui::Window::new("MCLEODLI — McLeod-Li Squared-Returns Portmanteau")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 320.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.mcleodli_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.mcleodli_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.mcleodli_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_mcleodli(&conn, &sym_u)
-                                    {
-                                        self.mcleodli_snapshot = snap;
-                                        self.mcleodli_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.mcleodli_symbol.to_uppercase();
-                            self.mcleodli_loading = true;
-                            self.mcleodli_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeMcLeodLiSnapshot { symbol: sym });
-                        }
-                        if self.mcleodli_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_mcleodli_snapshot(ui, &self.mcleodli_snapshot);
-                });
-            self.show_mcleodli = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "MCLEODLI — McLeod-Li Squared-Returns Portmanteau",
+                default_size: [560.0, 320.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_mcleodli,
+            &mut self.mcleodli_symbol,
+            &mut self.mcleodli_loading,
+            &mut self.mcleodli_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_mcleodli(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeMcLeodLiSnapshot { symbol },
+            super::render::render_mcleodli_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if self.show_oufit {
@@ -154,53 +128,27 @@ impl TyphooNApp {
             self.show_gph = open;
         }
 
-        if self.show_burgspec {
-            if self.burgspec_symbol.is_empty() {
-                self.burgspec_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_burgspec;
-            egui::Window::new("BURGSPEC — Burg Maximum-Entropy AR Spectrum")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 340.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.burgspec_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.burgspec_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.burgspec_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_burgspec(&conn, &sym_u)
-                                    {
-                                        self.burgspec_snapshot = snap;
-                                        self.burgspec_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.burgspec_symbol.to_uppercase();
-                            self.burgspec_loading = true;
-                            self.burgspec_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeBurgSpecSnapshot { symbol: sym });
-                        }
-                        if self.burgspec_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_burgspec_snapshot(ui, &self.burgspec_snapshot);
-                });
-            self.show_burgspec = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "BURGSPEC — Burg Maximum-Entropy AR Spectrum",
+                default_size: [560.0, 340.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_burgspec,
+            &mut self.burgspec_symbol,
+            &mut self.burgspec_loading,
+            &mut self.burgspec_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_burgspec(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeBurgSpecSnapshot { symbol },
+            super::render::render_burgspec_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if self.show_kendalltau {

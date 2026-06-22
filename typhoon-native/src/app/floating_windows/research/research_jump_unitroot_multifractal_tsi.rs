@@ -9,102 +9,50 @@ impl TyphooNApp {
             research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
-        if self.show_bnsjump {
-            if self.bnsjump_symbol.is_empty() {
-                self.bnsjump_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_bnsjump;
-            egui::Window::new("BNSJUMP — Barndorff-Nielsen-Shephard Jump-Test Z")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 320.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.bnsjump_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.bnsjump_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.bnsjump_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_bnsjump(&conn, &sym_u)
-                                    {
-                                        self.bnsjump_snapshot = snap;
-                                        self.bnsjump_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.bnsjump_symbol.to_uppercase();
-                            self.bnsjump_loading = true;
-                            self.bnsjump_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeBnsjumpSnapshot { symbol: sym });
-                        }
-                        if self.bnsjump_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_bnsjump_snapshot(ui, &self.bnsjump_snapshot);
-                });
-            self.show_bnsjump = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "BNSJUMP — Barndorff-Nielsen-Shephard Jump-Test Z",
+                default_size: [560.0, 320.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_bnsjump,
+            &mut self.bnsjump_symbol,
+            &mut self.bnsjump_loading,
+            &mut self.bnsjump_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_bnsjump(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeBnsjumpSnapshot { symbol },
+            super::render::render_bnsjump_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_pproot {
-            if self.pproot_symbol.is_empty() {
-                self.pproot_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_pproot;
-            egui::Window::new("PPROOT — Phillips-Perron Unit-Root Test")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 320.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.pproot_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.pproot_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.pproot_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_pproot(&conn, &sym_u)
-                                    {
-                                        self.pproot_snapshot = snap;
-                                        self.pproot_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.pproot_symbol.to_uppercase();
-                            self.pproot_loading = true;
-                            self.pproot_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputePprootSnapshot { symbol: sym });
-                        }
-                        if self.pproot_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_pproot_snapshot(ui, &self.pproot_snapshot);
-                });
-            self.show_pproot = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "PPROOT — Phillips-Perron Unit-Root Test",
+                default_size: [560.0, 320.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_pproot,
+            &mut self.pproot_symbol,
+            &mut self.pproot_loading,
+            &mut self.pproot_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_pproot(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputePprootSnapshot { symbol },
+            super::render::render_pproot_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if self.show_mfdfa {
@@ -155,53 +103,27 @@ impl TyphooNApp {
             self.show_mfdfa = open;
         }
 
-        if self.show_hillks {
-            if self.hillks_symbol.is_empty() {
-                self.hillks_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_hillks;
-            egui::Window::new("HILLKS — Hill-Tail KS Goodness-of-Fit")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([540.0, 300.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.hillks_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.hillks_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.hillks_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_hillks(&conn, &sym_u)
-                                    {
-                                        self.hillks_snapshot = snap;
-                                        self.hillks_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.hillks_symbol.to_uppercase();
-                            self.hillks_loading = true;
-                            self.hillks_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeHillksSnapshot { symbol: sym });
-                        }
-                        if self.hillks_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_hillks_snapshot(ui, &self.hillks_snapshot);
-                });
-            self.show_hillks = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "HILLKS — Hill-Tail KS Goodness-of-Fit",
+                default_size: [540.0, 300.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_hillks,
+            &mut self.hillks_symbol,
+            &mut self.hillks_loading,
+            &mut self.hillks_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_hillks(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeHillksSnapshot { symbol },
+            super::render::render_hillks_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if self.show_tsi {

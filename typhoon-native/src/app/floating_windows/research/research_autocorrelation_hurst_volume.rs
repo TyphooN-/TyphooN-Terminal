@@ -11,53 +11,27 @@ impl TyphooNApp {
         // ── Research section ──
 
         // AUTOCOR — Autocorrelation at multiple lags
-        if self.show_autocor {
-            if self.autocor_symbol.is_empty() {
-                self.autocor_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_autocor;
-            egui::Window::new("AUTOCOR — Return Autocorrelation")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 420.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.autocor_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.autocor_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.autocor_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_autocor(&conn, &sym_u)
-                                    {
-                                        self.autocor_snapshot = snap;
-                                        self.autocor_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.autocor_symbol.to_uppercase();
-                            self.autocor_loading = true;
-                            self.autocor_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeAutocorSnapshot { symbol: sym });
-                        }
-                        if self.autocor_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_autocor_snapshot(ui, &self.autocor_snapshot);
-                });
-            self.show_autocor = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "AUTOCOR — Return Autocorrelation",
+                default_size: [640.0, 420.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_autocor,
+            &mut self.autocor_symbol,
+            &mut self.autocor_loading,
+            &mut self.autocor_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_autocor(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeAutocorSnapshot { symbol },
+            super::render::render_autocor_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // HURST — Hurst exponent via R/S
@@ -110,153 +84,75 @@ impl TyphooNApp {
         }
 
         // HITRATE — Multi-horizon hit rate
-        if self.show_hitrate {
-            if self.hitrate_symbol.is_empty() {
-                self.hitrate_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_hitrate;
-            egui::Window::new("HITRATE — Multi-Horizon Win Rate")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 420.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.hitrate_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.hitrate_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.hitrate_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_hitrate(&conn, &sym_u)
-                                    {
-                                        self.hitrate_snapshot = snap;
-                                        self.hitrate_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.hitrate_symbol.to_uppercase();
-                            self.hitrate_loading = true;
-                            self.hitrate_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeHitrateSnapshot { symbol: sym });
-                        }
-                        if self.hitrate_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_hitrate_snapshot(ui, &self.hitrate_snapshot);
-                });
-            self.show_hitrate = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "HITRATE — Multi-Horizon Win Rate",
+                default_size: [640.0, 420.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_hitrate,
+            &mut self.hitrate_symbol,
+            &mut self.hitrate_loading,
+            &mut self.hitrate_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_hitrate(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeHitrateSnapshot { symbol },
+            super::render::render_hitrate_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // GLASYM — Gain/loss asymmetry
-        if self.show_glasym {
-            if self.glasym_symbol.is_empty() {
-                self.glasym_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_glasym;
-            egui::Window::new("GLASYM — Gain/Loss Asymmetry")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 420.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.glasym_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.glasym_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.glasym_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_glasym(&conn, &sym_u)
-                                    {
-                                        self.glasym_snapshot = snap;
-                                        self.glasym_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.glasym_symbol.to_uppercase();
-                            self.glasym_loading = true;
-                            self.glasym_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeGlasymSnapshot { symbol: sym });
-                        }
-                        if self.glasym_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_glasym_snapshot(ui, &self.glasym_snapshot);
-                });
-            self.show_glasym = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "GLASYM — Gain/Loss Asymmetry",
+                default_size: [640.0, 420.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_glasym,
+            &mut self.glasym_symbol,
+            &mut self.glasym_loading,
+            &mut self.glasym_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_glasym(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeGlasymSnapshot { symbol },
+            super::render::render_glasym_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // VOLRATIO — Up vs down volume ratio
-        if self.show_volratio {
-            if self.volratio_symbol.is_empty() {
-                self.volratio_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_volratio;
-            egui::Window::new("VOLRATIO — Up/Down Volume Ratio")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 440.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.volratio_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.volratio_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.volratio_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_volratio(&conn, &sym_u)
-                                    {
-                                        self.volratio_snapshot = snap;
-                                        self.volratio_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.volratio_symbol.to_uppercase();
-                            self.volratio_loading = true;
-                            self.volratio_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeVolratioSnapshot { symbol: sym });
-                        }
-                        if self.volratio_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_volratio_snapshot(ui, &self.volratio_snapshot);
-                });
-            self.show_volratio = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "VOLRATIO — Up/Down Volume Ratio",
+                default_size: [640.0, 440.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_volratio,
+            &mut self.volratio_symbol,
+            &mut self.volratio_loading,
+            &mut self.volratio_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_volratio(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeVolratioSnapshot { symbol },
+            super::render::render_volratio_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

@@ -158,53 +158,27 @@ impl TyphooNApp {
         }
 
         // RELEPSGR — Relative 3y EPS CAGR vs sector median
-        if self.show_relepsgr {
-            if self.relepsgr_symbol.is_empty() {
-                self.relepsgr_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_relepsgr;
-            egui::Window::new("RELEPSGR — Relative 3y EPS CAGR vs Sector")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 380.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.relepsgr_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.relepsgr_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.relepsgr_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_relepsgr(&conn, &sym_u)
-                                    {
-                                        self.relepsgr_snapshot = snap;
-                                        self.relepsgr_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.relepsgr_symbol.to_uppercase();
-                            self.relepsgr_loading = true;
-                            self.relepsgr_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeRelepsgrSnapshot { symbol: sym });
-                        }
-                        if self.relepsgr_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_relepsgr_snapshot(ui, &self.relepsgr_snapshot);
-                });
-            self.show_relepsgr = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "RELEPSGR — Relative 3y EPS CAGR vs Sector",
+                default_size: [640.0, 380.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_relepsgr,
+            &mut self.relepsgr_symbol,
+            &mut self.relepsgr_loading,
+            &mut self.relepsgr_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_relepsgr(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeRelepsgrSnapshot { symbol },
+            super::render::render_relepsgr_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // PEAD — Post-Earnings-Announcement Drift

@@ -216,53 +216,27 @@ impl TyphooNApp {
             self.show_accbands_win = open;
         }
 
-        if self.show_stochf_win {
-            if self.stochf_win_symbol.is_empty() {
-                self.stochf_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_stochf_win;
-            egui::Window::new("STOCHF — Fast Stochastic (TA-Lib, unsmoothed %K + SMA-3 %D)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 280.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.stochf_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.stochf_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.stochf_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_stochf(&conn, &sym_u)
-                                    {
-                                        self.stochf_win_snapshot = snap;
-                                        self.stochf_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.stochf_win_symbol.to_uppercase();
-                            self.stochf_win_loading = true;
-                            self.stochf_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeStochfSnapshot { symbol: sym });
-                        }
-                        if self.stochf_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_stochf_snapshot(ui, &self.stochf_win_snapshot);
-                });
-            self.show_stochf_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "STOCHF — Fast Stochastic (TA-Lib, unsmoothed %K + SMA-3 %D)",
+                default_size: [560.0, 280.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_stochf_win,
+            &mut self.stochf_win_symbol,
+            &mut self.stochf_win_loading,
+            &mut self.stochf_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_stochf(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeStochfSnapshot { symbol },
+            super::render::render_stochf_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

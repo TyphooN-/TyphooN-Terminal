@@ -227,53 +227,27 @@ impl TyphooNApp {
         }
 
         // CREDIT — Unified Credit Score
-        if self.show_credit {
-            if self.credit_symbol.is_empty() {
-                self.credit_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_credit;
-            egui::Window::new("CREDIT — Unified Credit Score")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([620.0, 460.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.credit_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.credit_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.credit_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_credit(&conn, &sym_u)
-                                    {
-                                        self.credit_snapshot = snap;
-                                        self.credit_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.credit_symbol.to_uppercase();
-                            self.credit_loading = true;
-                            self.credit_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeCreditSnapshot { symbol: sym });
-                        }
-                        if self.credit_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_credit_snapshot(ui, &self.credit_snapshot);
-                });
-            self.show_credit = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "CREDIT — Unified Credit Score",
+                default_size: [620.0, 460.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_credit,
+            &mut self.credit_symbol,
+            &mut self.credit_loading,
+            &mut self.credit_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_credit(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeCreditSnapshot { symbol },
+            super::render::render_credit_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // GROWM — Growth at a Reasonable Price (GARP) composite
@@ -382,153 +356,75 @@ impl TyphooNApp {
         }
 
         // REGIME — Market regime classifier
-        if self.show_regime {
-            if self.regime_symbol.is_empty() {
-                self.regime_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_regime;
-            egui::Window::new("REGIME — Market Regime Classifier (VOLE + TECH + HRA)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([600.0, 380.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.regime_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.regime_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.regime_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_regime(&conn, &sym_u)
-                                    {
-                                        self.regime_snapshot = snap;
-                                        self.regime_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.regime_symbol.to_uppercase();
-                            self.regime_loading = true;
-                            self.regime_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeRegimeSnapshot { symbol: sym });
-                        }
-                        if self.regime_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_regime_snapshot(ui, &self.regime_snapshot);
-                });
-            self.show_regime = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "REGIME — Market Regime Classifier (VOLE + TECH + HRA)",
+                default_size: [600.0, 380.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_regime,
+            &mut self.regime_symbol,
+            &mut self.regime_loading,
+            &mut self.regime_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_regime(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeRegimeSnapshot { symbol },
+            super::render::render_regime_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // RELVOL — Relative volume
-        if self.show_relvol {
-            if self.relvol_symbol.is_empty() {
-                self.relvol_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_relvol;
-            egui::Window::new("RELVOL — Relative Volume")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([580.0, 360.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.relvol_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.relvol_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.relvol_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_relvol(&conn, &sym_u)
-                                    {
-                                        self.relvol_snapshot = snap;
-                                        self.relvol_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.relvol_symbol.to_uppercase();
-                            self.relvol_loading = true;
-                            self.relvol_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeRelvolSnapshot { symbol: sym });
-                        }
-                        if self.relvol_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_relvol_snapshot(ui, &self.relvol_snapshot);
-                });
-            self.show_relvol = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "RELVOL — Relative Volume",
+                default_size: [580.0, 360.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_relvol,
+            &mut self.relvol_symbol,
+            &mut self.relvol_loading,
+            &mut self.relvol_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_relvol(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeRelvolSnapshot { symbol },
+            super::render::render_relvol_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // MARGINS — Margin trajectory
-        if self.show_margins {
-            if self.margins_symbol.is_empty() {
-                self.margins_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_margins;
-            egui::Window::new("MARGINS — Margin Trajectory (Gross / Op / Net)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 460.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.margins_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.margins_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.margins_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_margins(&conn, &sym_u)
-                                    {
-                                        self.margins_snapshot = snap;
-                                        self.margins_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.margins_symbol.to_uppercase();
-                            self.margins_loading = true;
-                            self.margins_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeMarginsSnapshot { symbol: sym });
-                        }
-                        if self.margins_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_margins_snapshot(ui, &self.margins_snapshot);
-                });
-            self.show_margins = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "MARGINS — Margin Trajectory (Gross / Op / Net)",
+                default_size: [640.0, 460.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_margins,
+            &mut self.margins_symbol,
+            &mut self.margins_loading,
+            &mut self.margins_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_margins(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeMarginsSnapshot { symbol },
+            super::render::render_margins_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // VAL — Value-factor composite vs sector peers

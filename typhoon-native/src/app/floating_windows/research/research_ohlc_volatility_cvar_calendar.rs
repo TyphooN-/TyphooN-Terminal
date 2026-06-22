@@ -9,53 +9,27 @@ impl TyphooNApp {
             research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
-        if self.show_parkinson {
-            if self.parkinson_symbol.is_empty() {
-                self.parkinson_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_parkinson;
-            egui::Window::new("PARKINSON — H-L Range Volatility")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 360.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.parkinson_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.parkinson_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.parkinson_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_parkinson(&conn, &sym_u)
-                                    {
-                                        self.parkinson_snapshot = snap;
-                                        self.parkinson_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.parkinson_symbol.to_uppercase();
-                            self.parkinson_loading = true;
-                            self.parkinson_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeParkinsonSnapshot { symbol: sym });
-                        }
-                        if self.parkinson_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_parkinson_snapshot(ui, &self.parkinson_snapshot);
-                });
-            self.show_parkinson = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "PARKINSON — H-L Range Volatility",
+                default_size: [560.0, 360.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_parkinson,
+            &mut self.parkinson_symbol,
+            &mut self.parkinson_loading,
+            &mut self.parkinson_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_parkinson(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeParkinsonSnapshot { symbol },
+            super::render::render_parkinson_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if self.show_gkvol {
@@ -202,53 +176,27 @@ impl TyphooNApp {
             self.show_cvar = open;
         }
 
-        if self.show_doweffect {
-            if self.doweffect_symbol.is_empty() {
-                self.doweffect_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_doweffect;
-            egui::Window::new("DOWEFFECT — Day-of-Week Intraday Seasonality")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 460.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.doweffect_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.doweffect_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.doweffect_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_doweffect(&conn, &sym_u)
-                                    {
-                                        self.doweffect_snapshot = snap;
-                                        self.doweffect_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.doweffect_symbol.to_uppercase();
-                            self.doweffect_loading = true;
-                            self.doweffect_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeDoweffectSnapshot { symbol: sym });
-                        }
-                        if self.doweffect_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_doweffect_snapshot(ui, &self.doweffect_snapshot);
-                });
-            self.show_doweffect = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "DOWEFFECT — Day-of-Week Intraday Seasonality",
+                default_size: [640.0, 460.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_doweffect,
+            &mut self.doweffect_symbol,
+            &mut self.doweffect_loading,
+            &mut self.doweffect_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_doweffect(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeDoweffectSnapshot { symbol },
+            super::render::render_doweffect_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

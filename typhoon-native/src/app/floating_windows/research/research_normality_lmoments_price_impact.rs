@@ -9,102 +9,50 @@ impl TyphooNApp {
             research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
-        if self.show_ksnorm {
-            if self.ksnorm_symbol.is_empty() {
-                self.ksnorm_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_ksnorm;
-            egui::Window::new("KSNORM — Kolmogorov-Smirnov Normality Test")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([540.0, 320.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.ksnorm_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.ksnorm_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.ksnorm_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_ksnorm(&conn, &sym_u)
-                                    {
-                                        self.ksnorm_snapshot = snap;
-                                        self.ksnorm_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.ksnorm_symbol.to_uppercase();
-                            self.ksnorm_loading = true;
-                            self.ksnorm_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeKsnormSnapshot { symbol: sym });
-                        }
-                        if self.ksnorm_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_ksnorm_snapshot(ui, &self.ksnorm_snapshot);
-                });
-            self.show_ksnorm = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "KSNORM — Kolmogorov-Smirnov Normality Test",
+                default_size: [540.0, 320.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_ksnorm,
+            &mut self.ksnorm_symbol,
+            &mut self.ksnorm_loading,
+            &mut self.ksnorm_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_ksnorm(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeKsnormSnapshot { symbol },
+            super::render::render_ksnorm_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_adtest {
-            if self.adtest_symbol.is_empty() {
-                self.adtest_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_adtest;
-            egui::Window::new("ADTEST — Anderson-Darling Normality Test")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([540.0, 320.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.adtest_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.adtest_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.adtest_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_adtest(&conn, &sym_u)
-                                    {
-                                        self.adtest_snapshot = snap;
-                                        self.adtest_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.adtest_symbol.to_uppercase();
-                            self.adtest_loading = true;
-                            self.adtest_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeAdtestSnapshot { symbol: sym });
-                        }
-                        if self.adtest_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_adtest_snapshot(ui, &self.adtest_snapshot);
-                });
-            self.show_adtest = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "ADTEST — Anderson-Darling Normality Test",
+                default_size: [540.0, 320.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_adtest,
+            &mut self.adtest_symbol,
+            &mut self.adtest_loading,
+            &mut self.adtest_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_adtest(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeAdtestSnapshot { symbol },
+            super::render::render_adtest_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if self.show_lmom {
@@ -155,53 +103,27 @@ impl TyphooNApp {
             self.show_lmom = open;
         }
 
-        if self.show_kylelam {
-            if self.kylelam_symbol.is_empty() {
-                self.kylelam_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_kylelam;
-            egui::Window::new("KYLELAM — Kyle's Price-Impact λ")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([540.0, 320.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.kylelam_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.kylelam_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.kylelam_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_kylelam(&conn, &sym_u)
-                                    {
-                                        self.kylelam_snapshot = snap;
-                                        self.kylelam_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.kylelam_symbol.to_uppercase();
-                            self.kylelam_loading = true;
-                            self.kylelam_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeKylelamSnapshot { symbol: sym });
-                        }
-                        if self.kylelam_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_kylelam_snapshot(ui, &self.kylelam_snapshot);
-                });
-            self.show_kylelam = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "KYLELAM — Kyle's Price-Impact λ",
+                default_size: [540.0, 320.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_kylelam,
+            &mut self.kylelam_symbol,
+            &mut self.kylelam_loading,
+            &mut self.kylelam_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_kylelam(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeKylelamSnapshot { symbol },
+            super::render::render_kylelam_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

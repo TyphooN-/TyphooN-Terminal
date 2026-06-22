@@ -9,53 +9,27 @@ impl TyphooNApp {
             research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
-        if self.show_squeeze_win {
-            if self.squeeze_win_symbol.is_empty() {
-                self.squeeze_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_squeeze_win;
-            egui::Window::new("SQUEEZE — Short-Squeeze Composite")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 360.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.squeeze_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.squeeze_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.squeeze_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_squeeze(&conn, &sym_u)
-                                    {
-                                        self.squeeze_win_snapshot = snap;
-                                        self.squeeze_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.squeeze_win_symbol.to_uppercase();
-                            self.squeeze_win_loading = true;
-                            self.squeeze_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeSqueezeSnapshot { symbol: sym });
-                        }
-                        if self.squeeze_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_squeeze_snapshot(ui, &self.squeeze_win_snapshot);
-                });
-            self.show_squeeze_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "SQUEEZE — Short-Squeeze Composite",
+                default_size: [560.0, 360.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_squeeze_win,
+            &mut self.squeeze_win_symbol,
+            &mut self.squeeze_win_loading,
+            &mut self.squeeze_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_squeeze(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeSqueezeSnapshot { symbol },
+            super::render::render_squeeze_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if self.show_squeezerank {
@@ -238,151 +212,73 @@ impl TyphooNApp {
             self.show_squeeze_watchlist = open;
         }
 
-        if self.show_bbsqueeze {
-            if self.bbsqueeze_symbol.is_empty() {
-                self.bbsqueeze_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_bbsqueeze;
-            egui::Window::new("BBSQUEEZE — Bollinger-Band Width Squeeze")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([520.0, 300.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.bbsqueeze_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.bbsqueeze_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.bbsqueeze_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_bbsqueeze(&conn, &sym_u)
-                                    {
-                                        self.bbsqueeze_snapshot = snap;
-                                        self.bbsqueeze_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.bbsqueeze_symbol.to_uppercase();
-                            self.bbsqueeze_loading = true;
-                            self.bbsqueeze_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeBbsqueezeSnapshot { symbol: sym });
-                        }
-                        if self.bbsqueeze_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_bbsqueeze_snapshot(ui, &self.bbsqueeze_snapshot);
-                });
-            self.show_bbsqueeze = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "BBSQUEEZE — Bollinger-Band Width Squeeze",
+                default_size: [520.0, 300.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_bbsqueeze,
+            &mut self.bbsqueeze_symbol,
+            &mut self.bbsqueeze_loading,
+            &mut self.bbsqueeze_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_bbsqueeze(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeBbsqueezeSnapshot { symbol },
+            super::render::render_bbsqueeze_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_donchian_win {
-            if self.donchian_win_symbol.is_empty() {
-                self.donchian_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_donchian_win;
-            egui::Window::new("DONCHIAN — 20-Bar Channel Breakout")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([520.0, 300.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.donchian_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.donchian_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.donchian_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_donchian(&conn, &sym_u)
-                                    {
-                                        self.donchian_win_snapshot = snap;
-                                        self.donchian_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.donchian_win_symbol.to_uppercase();
-                            self.donchian_win_loading = true;
-                            self.donchian_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeDonchianSnapshot { symbol: sym });
-                        }
-                        if self.donchian_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_donchian_snapshot(ui, &self.donchian_win_snapshot);
-                });
-            self.show_donchian_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "DONCHIAN — 20-Bar Channel Breakout",
+                default_size: [520.0, 300.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_donchian_win,
+            &mut self.donchian_win_symbol,
+            &mut self.donchian_win_loading,
+            &mut self.donchian_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_donchian(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeDonchianSnapshot { symbol },
+            super::render::render_donchian_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_kama_win {
-            if self.kama_win_symbol.is_empty() {
-                self.kama_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_kama_win;
-            egui::Window::new("KAMA — Kaufman Adaptive MA / Efficiency Ratio")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([520.0, 280.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.kama_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.kama_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.kama_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_kama(&conn, &sym_u)
-                                    {
-                                        self.kama_win_snapshot = snap;
-                                        self.kama_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.kama_win_symbol.to_uppercase();
-                            self.kama_win_loading = true;
-                            self.kama_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeKamaSnapshot { symbol: sym });
-                        }
-                        if self.kama_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_kama_snapshot(ui, &self.kama_win_snapshot);
-                });
-            self.show_kama_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "KAMA — Kaufman Adaptive MA / Efficiency Ratio",
+                default_size: [520.0, 280.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_kama_win,
+            &mut self.kama_win_symbol,
+            &mut self.kama_win_loading,
+            &mut self.kama_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_kama(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeKamaSnapshot { symbol },
+            super::render::render_kama_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

@@ -105,102 +105,50 @@ impl TyphooNApp {
             self.show_adf = open;
         }
 
-        if self.show_mnkendall {
-            if self.mnkendall_symbol.is_empty() {
-                self.mnkendall_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_mnkendall;
-            egui::Window::new("MNKENDALL — Mann-Kendall Trend Test")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([580.0, 380.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.mnkendall_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.mnkendall_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.mnkendall_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_mnkendall(&conn, &sym_u)
-                                    {
-                                        self.mnkendall_snapshot = snap;
-                                        self.mnkendall_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.mnkendall_symbol.to_uppercase();
-                            self.mnkendall_loading = true;
-                            self.mnkendall_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeMnkendallSnapshot { symbol: sym });
-                        }
-                        if self.mnkendall_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_mnkendall_snapshot(ui, &self.mnkendall_snapshot);
-                });
-            self.show_mnkendall = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "MNKENDALL — Mann-Kendall Trend Test",
+                default_size: [580.0, 380.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_mnkendall,
+            &mut self.mnkendall_symbol,
+            &mut self.mnkendall_loading,
+            &mut self.mnkendall_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_mnkendall(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeMnkendallSnapshot { symbol },
+            super::render::render_mnkendall_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_bipower {
-            if self.bipower_symbol.is_empty() {
-                self.bipower_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_bipower;
-            egui::Window::new("BIPOWER — Bipower Variation / Jump Ratio")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([580.0, 380.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.bipower_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.bipower_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.bipower_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_bipower(&conn, &sym_u)
-                                    {
-                                        self.bipower_snapshot = snap;
-                                        self.bipower_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.bipower_symbol.to_uppercase();
-                            self.bipower_loading = true;
-                            self.bipower_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeBipowerSnapshot { symbol: sym });
-                        }
-                        if self.bipower_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_bipower_snapshot(ui, &self.bipower_snapshot);
-                });
-            self.show_bipower = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "BIPOWER — Bipower Variation / Jump Ratio",
+                default_size: [580.0, 380.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_bipower,
+            &mut self.bipower_symbol,
+            &mut self.bipower_loading,
+            &mut self.bipower_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_bipower(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeBipowerSnapshot { symbol },
+            super::render::render_bipower_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if self.show_dddur {

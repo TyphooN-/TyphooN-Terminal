@@ -9,102 +9,50 @@ impl TyphooNApp {
             research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
-        if self.show_entropy {
-            if self.entropy_symbol.is_empty() {
-                self.entropy_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_entropy;
-            egui::Window::new("ENTROPY — Shannon Return Entropy")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([520.0, 300.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.entropy_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.entropy_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.entropy_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_entropy(&conn, &sym_u)
-                                    {
-                                        self.entropy_snapshot = snap;
-                                        self.entropy_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.entropy_symbol.to_uppercase();
-                            self.entropy_loading = true;
-                            self.entropy_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeEntropySnapshot { symbol: sym });
-                        }
-                        if self.entropy_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_entropy_snapshot(ui, &self.entropy_snapshot);
-                });
-            self.show_entropy = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "ENTROPY — Shannon Return Entropy",
+                default_size: [520.0, 300.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_entropy,
+            &mut self.entropy_symbol,
+            &mut self.entropy_loading,
+            &mut self.entropy_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_entropy(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeEntropySnapshot { symbol },
+            super::render::render_entropy_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_rachev {
-            if self.rachev_symbol.is_empty() {
-                self.rachev_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_rachev;
-            egui::Window::new("RACHEV — Conditional Tail Expectation Ratio")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 350.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.rachev_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.rachev_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.rachev_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_rachev(&conn, &sym_u)
-                                    {
-                                        self.rachev_snapshot = snap;
-                                        self.rachev_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.rachev_symbol.to_uppercase();
-                            self.rachev_loading = true;
-                            self.rachev_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeRachevSnapshot { symbol: sym });
-                        }
-                        if self.rachev_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_rachev_snapshot(ui, &self.rachev_snapshot);
-                });
-            self.show_rachev = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "RACHEV — Conditional Tail Expectation Ratio",
+                default_size: [560.0, 350.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_rachev,
+            &mut self.rachev_symbol,
+            &mut self.rachev_loading,
+            &mut self.rachev_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_rachev(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeRachevSnapshot { symbol },
+            super::render::render_rachev_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if self.show_gpr {

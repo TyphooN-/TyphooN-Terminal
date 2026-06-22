@@ -64,53 +64,27 @@ impl TyphooNApp {
             self.show_laguerre_rsi_win = open;
         }
 
-        if self.show_zigzag_win {
-            if self.zigzag_win_symbol.is_empty() {
-                self.zigzag_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_zigzag_win;
-            egui::Window::new("ZIGZAG — Percent-Threshold Pivot Reversal Detector (5% default)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 260.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.zigzag_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.zigzag_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.zigzag_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_zigzag(&conn, &sym_u)
-                                    {
-                                        self.zigzag_win_snapshot = snap;
-                                        self.zigzag_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.zigzag_win_symbol.to_uppercase();
-                            self.zigzag_win_loading = true;
-                            self.zigzag_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeZigzagSnapshot { symbol: sym });
-                        }
-                        if self.zigzag_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_zigzag_snapshot(ui, &self.zigzag_win_snapshot);
-                });
-            self.show_zigzag_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "ZIGZAG — Percent-Threshold Pivot Reversal Detector (5% default)",
+                default_size: [560.0, 260.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_zigzag_win,
+            &mut self.zigzag_win_symbol,
+            &mut self.zigzag_win_loading,
+            &mut self.zigzag_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_zigzag(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeZigzagSnapshot { symbol },
+            super::render::render_zigzag_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if self.show_pgo_win {
@@ -214,53 +188,27 @@ impl TyphooNApp {
             self.show_ht_trendline_win = open;
         }
 
-        if self.show_midpoint_win {
-            if self.midpoint_win_symbol.is_empty() {
-                self.midpoint_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_midpoint_win;
-            egui::Window::new("MIDPOINT — (HHV(N) + LLV(N)) / 2 with Close Position (N=14)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 260.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.midpoint_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.midpoint_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.midpoint_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_midpoint(&conn, &sym_u)
-                                    {
-                                        self.midpoint_win_snapshot = snap;
-                                        self.midpoint_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.midpoint_win_symbol.to_uppercase();
-                            self.midpoint_win_loading = true;
-                            self.midpoint_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeMidpointSnapshot { symbol: sym });
-                        }
-                        if self.midpoint_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_midpoint_snapshot(ui, &self.midpoint_win_snapshot);
-                });
-            self.show_midpoint_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "MIDPOINT — (HHV(N) + LLV(N)) / 2 with Close Position (N=14)",
+                default_size: [560.0, 260.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_midpoint_win,
+            &mut self.midpoint_win_symbol,
+            &mut self.midpoint_win_loading,
+            &mut self.midpoint_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_midpoint(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeMidpointSnapshot { symbol },
+            super::render::render_midpoint_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

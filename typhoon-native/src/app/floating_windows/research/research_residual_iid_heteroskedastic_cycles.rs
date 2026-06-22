@@ -60,53 +60,27 @@ impl TyphooNApp {
             self.show_durbinwatson = open;
         }
 
-        if self.show_bdstest {
-            if self.bdstest_symbol.is_empty() {
-                self.bdstest_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_bdstest;
-            egui::Window::new("BDSTEST — Brock-Dechert-Scheinkman iid Test")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 320.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.bdstest_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.bdstest_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.bdstest_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_bdstest(&conn, &sym_u)
-                                    {
-                                        self.bdstest_snapshot = snap;
-                                        self.bdstest_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.bdstest_symbol.to_uppercase();
-                            self.bdstest_loading = true;
-                            self.bdstest_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeBdsTestSnapshot { symbol: sym });
-                        }
-                        if self.bdstest_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_bdstest_snapshot(ui, &self.bdstest_snapshot);
-                });
-            self.show_bdstest = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "BDSTEST — Brock-Dechert-Scheinkman iid Test",
+                default_size: [560.0, 320.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_bdstest,
+            &mut self.bdstest_symbol,
+            &mut self.bdstest_loading,
+            &mut self.bdstest_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_bdstest(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeBdsTestSnapshot { symbol },
+            super::render::render_bdstest_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if self.show_breuschpagan {
@@ -160,53 +134,27 @@ impl TyphooNApp {
             self.show_breuschpagan = open;
         }
 
-        if self.show_turnpts {
-            if self.turnpts_symbol.is_empty() {
-                self.turnpts_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_turnpts;
-            egui::Window::new("TURNPTS — Bartels Turning-Points Test")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 300.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.turnpts_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.turnpts_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.turnpts_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_turnpts(&conn, &sym_u)
-                                    {
-                                        self.turnpts_snapshot = snap;
-                                        self.turnpts_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.turnpts_symbol.to_uppercase();
-                            self.turnpts_loading = true;
-                            self.turnpts_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeTurnPtsSnapshot { symbol: sym });
-                        }
-                        if self.turnpts_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_turnpts_snapshot(ui, &self.turnpts_snapshot);
-                });
-            self.show_turnpts = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "TURNPTS — Bartels Turning-Points Test",
+                default_size: [560.0, 300.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_turnpts,
+            &mut self.turnpts_symbol,
+            &mut self.turnpts_loading,
+            &mut self.turnpts_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_turnpts(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeTurnPtsSnapshot { symbol },
+            super::render::render_turnpts_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if self.show_periodogram {

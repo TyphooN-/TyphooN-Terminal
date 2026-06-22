@@ -6,53 +6,27 @@ impl TyphooNApp {
             research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
-        if self.show_aroonosc_win {
-            if self.aroonosc_win_symbol.is_empty() {
-                self.aroonosc_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_aroonosc_win;
-            egui::Window::new("AROONOSC — Aroon Oscillator (period 14)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([540.0, 260.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.aroonosc_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.aroonosc_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.aroonosc_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_aroonosc(&conn, &sym_u)
-                                    {
-                                        self.aroonosc_win_snapshot = snap;
-                                        self.aroonosc_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.aroonosc_win_symbol.to_uppercase();
-                            self.aroonosc_win_loading = true;
-                            self.aroonosc_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeAroonoscSnapshot { symbol: sym });
-                        }
-                        if self.aroonosc_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_aroonosc_snapshot(ui, &self.aroonosc_win_snapshot);
-                });
-            self.show_aroonosc_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "AROONOSC — Aroon Oscillator (period 14)",
+                default_size: [540.0, 260.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_aroonosc_win,
+            &mut self.aroonosc_win_symbol,
+            &mut self.aroonosc_win_loading,
+            &mut self.aroonosc_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_aroonosc(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeAroonoscSnapshot { symbol },
+            super::render::render_aroonosc_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if self.show_minmaxindex_win {
@@ -106,151 +80,73 @@ impl TyphooNApp {
             self.show_minmaxindex_win = open;
         }
 
-        if self.show_macdext_win {
-            if self.macdext_win_symbol.is_empty() {
-                self.macdext_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_macdext_win;
-            egui::Window::new("MACDEXT — MACD with SMA (12/26/9)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([540.0, 290.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.macdext_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.macdext_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.macdext_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_macdext(&conn, &sym_u)
-                                    {
-                                        self.macdext_win_snapshot = snap;
-                                        self.macdext_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.macdext_win_symbol.to_uppercase();
-                            self.macdext_win_loading = true;
-                            self.macdext_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeMacdextSnapshot { symbol: sym });
-                        }
-                        if self.macdext_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_macdext_snapshot(ui, &self.macdext_win_snapshot);
-                });
-            self.show_macdext_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "MACDEXT — MACD with SMA (12/26/9)",
+                default_size: [540.0, 290.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_macdext_win,
+            &mut self.macdext_win_symbol,
+            &mut self.macdext_win_loading,
+            &mut self.macdext_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_macdext(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeMacdextSnapshot { symbol },
+            super::render::render_macdext_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_macdfix_win {
-            if self.macdfix_win_symbol.is_empty() {
-                self.macdfix_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_macdfix_win;
-            egui::Window::new("MACDFIX — MACD with hardcoded EMA 12/26 + signal 9")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([540.0, 280.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.macdfix_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.macdfix_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.macdfix_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_macdfix(&conn, &sym_u)
-                                    {
-                                        self.macdfix_win_snapshot = snap;
-                                        self.macdfix_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.macdfix_win_symbol.to_uppercase();
-                            self.macdfix_win_loading = true;
-                            self.macdfix_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeMacdfixSnapshot { symbol: sym });
-                        }
-                        if self.macdfix_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_macdfix_snapshot(ui, &self.macdfix_win_snapshot);
-                });
-            self.show_macdfix_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "MACDFIX — MACD with hardcoded EMA 12/26 + signal 9",
+                default_size: [540.0, 280.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_macdfix_win,
+            &mut self.macdfix_win_symbol,
+            &mut self.macdfix_win_loading,
+            &mut self.macdfix_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_macdfix(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeMacdfixSnapshot { symbol },
+            super::render::render_macdfix_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_mavp_win {
-            if self.mavp_win_symbol.is_empty() {
-                self.mavp_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_mavp_win;
-            egui::Window::new("MAVP — Moving Average with Variable Period (5..30 ramp)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([540.0, 260.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.mavp_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.mavp_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.mavp_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_mavp(&conn, &sym_u)
-                                    {
-                                        self.mavp_win_snapshot = snap;
-                                        self.mavp_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.mavp_win_symbol.to_uppercase();
-                            self.mavp_win_loading = true;
-                            self.mavp_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeMavpSnapshot { symbol: sym });
-                        }
-                        if self.mavp_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_mavp_snapshot(ui, &self.mavp_win_snapshot);
-                });
-            self.show_mavp_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "MAVP — Moving Average with Variable Period (5..30 ramp)",
+                default_size: [540.0, 260.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_mavp_win,
+            &mut self.mavp_win_symbol,
+            &mut self.mavp_win_loading,
+            &mut self.mavp_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_mavp(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeMavpSnapshot { symbol },
+            super::render::render_mavp_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

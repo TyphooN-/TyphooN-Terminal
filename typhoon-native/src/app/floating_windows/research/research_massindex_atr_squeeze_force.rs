@@ -60,53 +60,27 @@ impl TyphooNApp {
             self.show_mass_index_win = open;
         }
 
-        if self.show_natr_win {
-            if self.natr_win_symbol.is_empty() {
-                self.natr_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_natr_win;
-            egui::Window::new("NATR — Normalized ATR (TA-Lib, 100 × ATR / close)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([540.0, 240.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.natr_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.natr_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.natr_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_natr(&conn, &sym_u)
-                                    {
-                                        self.natr_win_snapshot = snap;
-                                        self.natr_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.natr_win_symbol.to_uppercase();
-                            self.natr_win_loading = true;
-                            self.natr_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeNatrSnapshot { symbol: sym });
-                        }
-                        if self.natr_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_natr_snapshot(ui, &self.natr_win_snapshot);
-                });
-            self.show_natr_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "NATR — Normalized ATR (TA-Lib, 100 × ATR / close)",
+                default_size: [540.0, 240.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_natr_win,
+            &mut self.natr_win_symbol,
+            &mut self.natr_win_loading,
+            &mut self.natr_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_natr(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeNatrSnapshot { symbol },
+            super::render::render_natr_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if self.show_ttm_squeeze_win {
@@ -211,53 +185,27 @@ impl TyphooNApp {
             self.show_force_index_win = open;
         }
 
-        if self.show_trange_win {
-            if self.trange_win_symbol.is_empty() {
-                self.trange_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_trange_win;
-            egui::Window::new("TRANGE — True Range (raw, single-bar, gap-aware)")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([580.0, 280.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.trange_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.trange_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.trange_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_trange(&conn, &sym_u)
-                                    {
-                                        self.trange_win_snapshot = snap;
-                                        self.trange_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.trange_win_symbol.to_uppercase();
-                            self.trange_win_loading = true;
-                            self.trange_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeTrangeSnapshot { symbol: sym });
-                        }
-                        if self.trange_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_trange_snapshot(ui, &self.trange_win_snapshot);
-                });
-            self.show_trange_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "TRANGE — True Range (raw, single-bar, gap-aware)",
+                default_size: [580.0, 280.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_trange_win,
+            &mut self.trange_win_symbol,
+            &mut self.trange_win_loading,
+            &mut self.trange_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_trange(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeTrangeSnapshot { symbol },
+            super::render::render_trange_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

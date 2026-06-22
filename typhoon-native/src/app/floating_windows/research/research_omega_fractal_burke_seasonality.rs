@@ -153,102 +153,50 @@ impl TyphooNApp {
             self.show_burke = open;
         }
 
-        if self.show_monthseas {
-            if self.monthseas_symbol.is_empty() {
-                self.monthseas_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_monthseas;
-            egui::Window::new("MONTHSEAS — Monthly Seasonality")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([720.0, 540.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.monthseas_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.monthseas_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.monthseas_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_monthseas(&conn, &sym_u)
-                                    {
-                                        self.monthseas_snapshot = snap;
-                                        self.monthseas_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.monthseas_symbol.to_uppercase();
-                            self.monthseas_loading = true;
-                            self.monthseas_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeMonthseasSnapshot { symbol: sym });
-                        }
-                        if self.monthseas_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_monthseas_snapshot(ui, &self.monthseas_snapshot);
-                });
-            self.show_monthseas = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "MONTHSEAS — Monthly Seasonality",
+                default_size: [720.0, 540.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_monthseas,
+            &mut self.monthseas_symbol,
+            &mut self.monthseas_loading,
+            &mut self.monthseas_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_monthseas(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeMonthseasSnapshot { symbol },
+            super::render::render_monthseas_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_rollsprd {
-            if self.rollsprd_symbol.is_empty() {
-                self.rollsprd_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_rollsprd;
-            egui::Window::new("ROLLSPRD — Roll's Implicit Bid-Ask Spread")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([640.0, 440.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.rollsprd_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.rollsprd_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.rollsprd_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_rollsprd(&conn, &sym_u)
-                                    {
-                                        self.rollsprd_snapshot = snap;
-                                        self.rollsprd_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.rollsprd_symbol.to_uppercase();
-                            self.rollsprd_loading = true;
-                            self.rollsprd_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeRollsprdSnapshot { symbol: sym });
-                        }
-                        if self.rollsprd_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_rollsprd_snapshot(ui, &self.rollsprd_snapshot);
-                });
-            self.show_rollsprd = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "ROLLSPRD — Roll's Implicit Bid-Ask Spread",
+                default_size: [640.0, 440.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_rollsprd,
+            &mut self.rollsprd_symbol,
+            &mut self.rollsprd_loading,
+            &mut self.rollsprd_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_rollsprd(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeRollsprdSnapshot { symbol },
+            super::render::render_rollsprd_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }
