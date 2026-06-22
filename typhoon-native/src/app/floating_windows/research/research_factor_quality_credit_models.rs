@@ -21,13 +21,19 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.mom_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.mom_symbol = chart_sym_research.clone(); }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.mom_symbol).desired_width(100.0),
+                        );
+                        if ui.button("Use Chart").clicked() {
+                            self.mom_symbol = chart_sym_research.clone();
+                        }
                         if ui.button("Load Cached").clicked() {
                             if let Some(ref cache) = self.cache {
                                 if let Ok(conn) = cache.connection() {
                                     let sym_u = self.mom_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_momentum(&conn, &sym_u) {
+                                    if let Ok(Some(snap)) =
+                                        typhoon_engine::core::research::get_momentum(&conn, &sym_u)
+                                    {
                                         self.mom_snapshot = snap;
                                         self.mom_symbol = sym_u;
                                     }
@@ -38,55 +44,15 @@ impl TyphooNApp {
                             let sym = self.mom_symbol.to_uppercase();
                             self.mom_loading = true;
                             self.mom_symbol = sym.clone();
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeMomentumSnapshot { symbol: sym });
+                            let _ = self
+                                .broker_tx
+                                .send(BrokerCmd::ComputeMomentumSnapshot { symbol: sym });
                         }
                         if self.mom_loading {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.mom_snapshot;
-                    if snap.symbol.is_empty() || snap.bars_used == 0 {
-                        ui.label(egui::RichText::new("No data — ensure HP bars are cached for this symbol, then click Compute.")
-                            .color(AXIS_TEXT).small());
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.regime_label.as_str() {
-                            "STRONG" => UP,
-                            "CRASH" | "WEAK" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(egui::RichText::new(format!(
-                            "{} — {} — trend: {} — bars: {} — as of {}",
-                            snap.symbol, snap.regime_label, snap.trend_label, snap.bars_used, snap.as_of,
-                        )).strong().color(color));
-                        ui.separator();
-                        egui::Grid::new("mom_grid").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
-                            let pct_row = |ui: &mut egui::Ui, label: &str, val: f64| {
-                                ui.label(egui::RichText::new(label).small().strong());
-                                let c = if val > 0.0 { UP } else if val < 0.0 { DOWN } else { AXIS_TEXT };
-                                ui.label(egui::RichText::new(format!("{:+.2}%", val)).small().monospace().color(c));
-                                ui.end_row();
-                            };
-                            pct_row(ui, "Return 1m",    snap.return_1m_pct);
-                            pct_row(ui, "Return 3m",    snap.return_3m_pct);
-                            pct_row(ui, "Return 6m",    snap.return_6m_pct);
-                            pct_row(ui, "Return 12m",   snap.return_12m_pct);
-                            pct_row(ui, "Return 12-1",  snap.return_12_1_pct);
-                            ui.label(egui::RichText::new("Annualized vol").small().strong());
-                            ui.label(egui::RichText::new(format!("{:.2}%", snap.vol_annualized_pct)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Vol-adjusted score").small().strong());
-                            let cv = if snap.vol_adjusted_score > 0.0 { UP } else if snap.vol_adjusted_score < 0.0 { DOWN } else { AXIS_TEXT };
-                            ui.label(egui::RichText::new(format!("{:+.3}", snap.vol_adjusted_score)).small().monospace().color(cv));
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Composite score").small().strong());
-                            ui.label(egui::RichText::new(format!("{:.1} / 100", snap.composite_score)).small().monospace().color(color));
-                            ui.end_row();
-                        });
-                    }
+                    super::render::render_momentum_snapshot(ui, &self.mom_snapshot);
                 });
             self.show_mom = open;
         }

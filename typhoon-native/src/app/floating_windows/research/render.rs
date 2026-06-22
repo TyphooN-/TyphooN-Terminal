@@ -22123,3 +22123,311 @@ pub(super) fn render_zeroret_snapshot(ui: &mut egui::Ui, snap: &ZeroReturnSnapsh
         );
     }
 }
+
+pub(super) fn render_cdl_closing_marubozu_snapshot(
+    ui: &mut egui::Ui,
+    snap: &CdlClosingMarubozuSnapshot,
+) {
+    ui.separator();
+    if snap.symbol.is_empty() || snap.cdl_closing_marubozu_label == "INSUFFICIENT_DATA" {
+        ui.label(
+            egui::RichText::new("No data — HP cache needs ≥2 bars.")
+                .color(AXIS_TEXT)
+                .small(),
+        );
+    } else {
+        let color = match snap.cdl_closing_marubozu_label.as_str() {
+            "BULLISH_PATTERN" => UP,
+            "BEARISH_PATTERN" => DOWN,
+            _ => AXIS_TEXT,
+        };
+        ui.label(egui::RichText::new(format!("{} — {} — value {} — body {:.1}% — opening_shadow {:.1}% — closing_shadow {:.1}% — close {:.4} — as of {}",
+            snap.symbol, snap.cdl_closing_marubozu_label, snap.pattern_value, snap.body_pct_range, snap.opening_shadow_pct, snap.closing_shadow_pct, snap.last_close, snap.as_of)).strong().color(color));
+        ui.separator();
+        egui::Grid::new("cdl_closing_marubozu_summary")
+            .striped(true)
+            .num_columns(2)
+            .min_col_width(200.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Bars used").small().strong());
+                ui.label(
+                    egui::RichText::new(format!("{}", snap.bars_used))
+                        .small()
+                        .monospace(),
+                );
+                ui.end_row();
+                ui.label(egui::RichText::new("Pattern value").small().strong());
+                ui.label(
+                    egui::RichText::new(format!("{}", snap.pattern_value))
+                        .small()
+                        .monospace(),
+                );
+                ui.end_row();
+                ui.label(egui::RichText::new("Prev value").small().strong());
+                ui.label(
+                    egui::RichText::new(format!("{}", snap.pattern_value_prev))
+                        .small()
+                        .monospace(),
+                );
+                ui.end_row();
+                ui.label(egui::RichText::new("Body % range").small().strong());
+                ui.label(
+                    egui::RichText::new(format!("{:.2}", snap.body_pct_range))
+                        .small()
+                        .monospace(),
+                );
+                ui.end_row();
+                ui.label(egui::RichText::new("Opening shadow %").small().strong());
+                ui.label(
+                    egui::RichText::new(format!("{:.2}", snap.opening_shadow_pct))
+                        .small()
+                        .monospace(),
+                );
+                ui.end_row();
+                ui.label(egui::RichText::new("Closing shadow %").small().strong());
+                ui.label(
+                    egui::RichText::new(format!("{:.2}", snap.closing_shadow_pct))
+                        .small()
+                        .monospace(),
+                );
+                ui.end_row();
+                ui.label(egui::RichText::new("Last bar match").small().strong());
+                ui.label(
+                    egui::RichText::new(format!("{}", snap.last_bar_match))
+                        .small()
+                        .monospace(),
+                );
+                ui.end_row();
+                ui.label(egui::RichText::new("Days since pattern").small().strong());
+                ui.label(
+                    egui::RichText::new(format!("{}", snap.days_since_pattern))
+                        .small()
+                        .monospace(),
+                );
+                ui.end_row();
+                ui.label(egui::RichText::new("Last close").small().strong());
+                ui.label(
+                    egui::RichText::new(format!("{:.4}", snap.last_close))
+                        .small()
+                        .monospace(),
+                );
+                ui.end_row();
+            });
+        if !snap.note.is_empty() {
+            ui.separator();
+            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
+        }
+    }
+}
+
+pub(super) fn render_momentum_snapshot(ui: &mut egui::Ui, snap: &MomentumSnapshot) {
+    ui.separator();
+    if snap.symbol.is_empty() || snap.bars_used == 0 {
+        ui.label(
+            egui::RichText::new(
+                "No data — ensure HP bars are cached for this symbol, then click Compute.",
+            )
+            .color(AXIS_TEXT)
+            .small(),
+        );
+        if !snap.note.is_empty() {
+            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+        }
+    } else {
+        let color = match snap.regime_label.as_str() {
+            "STRONG" => UP,
+            "CRASH" | "WEAK" => DOWN,
+            _ => AXIS_TEXT,
+        };
+        ui.label(
+            egui::RichText::new(format!(
+                "{} — {} — trend: {} — bars: {} — as of {}",
+                snap.symbol, snap.regime_label, snap.trend_label, snap.bars_used, snap.as_of,
+            ))
+            .strong()
+            .color(color),
+        );
+        ui.separator();
+        egui::Grid::new("mom_grid")
+            .striped(true)
+            .num_columns(2)
+            .min_col_width(220.0)
+            .show(ui, |ui| {
+                let pct_row = |ui: &mut egui::Ui, label: &str, val: f64| {
+                    ui.label(egui::RichText::new(label).small().strong());
+                    let c = if val > 0.0 {
+                        UP
+                    } else if val < 0.0 {
+                        DOWN
+                    } else {
+                        AXIS_TEXT
+                    };
+                    ui.label(
+                        egui::RichText::new(format!("{:+.2}%", val))
+                            .small()
+                            .monospace()
+                            .color(c),
+                    );
+                    ui.end_row();
+                };
+                pct_row(ui, "Return 1m", snap.return_1m_pct);
+                pct_row(ui, "Return 3m", snap.return_3m_pct);
+                pct_row(ui, "Return 6m", snap.return_6m_pct);
+                pct_row(ui, "Return 12m", snap.return_12m_pct);
+                pct_row(ui, "Return 12-1", snap.return_12_1_pct);
+                ui.label(egui::RichText::new("Annualized vol").small().strong());
+                ui.label(
+                    egui::RichText::new(format!("{:.2}%", snap.vol_annualized_pct))
+                        .small()
+                        .monospace(),
+                );
+                ui.end_row();
+                ui.label(egui::RichText::new("Vol-adjusted score").small().strong());
+                let cv = if snap.vol_adjusted_score > 0.0 {
+                    UP
+                } else if snap.vol_adjusted_score < 0.0 {
+                    DOWN
+                } else {
+                    AXIS_TEXT
+                };
+                ui.label(
+                    egui::RichText::new(format!("{:+.3}", snap.vol_adjusted_score))
+                        .small()
+                        .monospace()
+                        .color(cv),
+                );
+                ui.end_row();
+                ui.label(egui::RichText::new("Composite score").small().strong());
+                ui.label(
+                    egui::RichText::new(format!("{:.1} / 100", snap.composite_score))
+                        .small()
+                        .monospace()
+                        .color(color),
+                );
+                ui.end_row();
+            });
+    }
+}
+
+pub(super) fn render_shortrank_delta_snapshot(
+    ui: &mut egui::Ui,
+    snap: &ShortInterestDeltaRankSnapshot,
+) {
+    ui.separator();
+    if snap.symbol.is_empty()
+        || snap.rank_label == "NO_DATA"
+        || snap.rank_label == "INSUFFICIENT_DATA"
+    {
+        ui.label(
+            egui::RichText::new(
+                "No data — needs short-interest history for the subject and at least 3 same-sector peers. History accumulates from fundamentals scrapes and SHORT_INTEREST fetches.",
+            )
+            .color(AXIS_TEXT)
+            .small(),
+        );
+        if !snap.note.is_empty() {
+            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
+        }
+    } else {
+        let color = match snap.rank_label.as_str() {
+            "SAFEST_DECILE" | "SAFEST_QUARTILE" | "ABOVE_MEDIAN_SAFE" => UP,
+            "BELOW_MEDIAN_RISKY" | "BOTTOM_QUARTILE_RISKY" | "RISKIEST_DECILE" => DOWN,
+            _ => AXIS_TEXT,
+        };
+        ui.label(
+            egui::RichText::new(format!(
+                "{} — {} — {} {:+.2} pts — rank {}/{} — as of {}",
+                snap.symbol,
+                snap.rank_label,
+                snap.subject_trend_label,
+                snap.delta_short_pct_points,
+                snap.rank_position,
+                snap.peers_considered + 1,
+                snap.as_of,
+            ))
+            .strong()
+            .color(color),
+        );
+        ui.separator();
+        egui::Grid::new("shortrank_delta_summary")
+            .striped(true)
+            .num_columns(2)
+            .min_col_width(240.0)
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new("Window / history span")
+                        .small()
+                        .strong(),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}d / {} → {}",
+                        snap.lookback_days, snap.history_start_date, snap.history_end_date
+                    ))
+                    .small()
+                    .monospace(),
+                );
+                ui.end_row();
+                ui.label(
+                    egui::RichText::new("Short % float / delta")
+                        .small()
+                        .strong(),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{:.2}% from {:.2}% ({:+.2} pts)",
+                        snap.latest_short_pct_of_float,
+                        snap.prior_short_pct_of_float,
+                        snap.delta_short_pct_points
+                    ))
+                    .small()
+                    .monospace(),
+                );
+                ui.end_row();
+                ui.label(egui::RichText::new("Short ratio / prior").small().strong());
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{:.2} / {:.2}",
+                        snap.latest_short_ratio, snap.prior_short_ratio
+                    ))
+                    .small()
+                    .monospace(),
+                );
+                ui.end_row();
+                ui.label(
+                    egui::RichText::new("Sector median / p25 / p75 delta")
+                        .small()
+                        .strong(),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{:+.2} / {:+.2} / {:+.2}",
+                        snap.sector_median_delta_pct_pts,
+                        snap.sector_p25_delta_pct_pts,
+                        snap.sector_p75_delta_pct_pts
+                    ))
+                    .small()
+                    .monospace(),
+                );
+                ui.end_row();
+                ui.label(
+                    egui::RichText::new("Percentile / peers considered")
+                        .small()
+                        .strong(),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{:.0} / {} with data ({})",
+                        snap.percentile_rank, snap.peers_with_data, snap.peers_considered
+                    ))
+                    .small()
+                    .monospace(),
+                );
+                ui.end_row();
+            });
+        if !snap.note.is_empty() {
+            ui.separator();
+            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
+        }
+    }
+}
