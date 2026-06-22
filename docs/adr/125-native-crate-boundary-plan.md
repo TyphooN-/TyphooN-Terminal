@@ -432,16 +432,31 @@ with the render thread's `read_conn`) and threaded to every section via the cont
 section re-acquires `read_conn`. The earlier per-aggregator independent-connection
 workaround is gone.
 
+The fundamentals-driven section methods followed: `overview` and `peer`. These are
+called *outside* the connection block and need app-state slices, not the DB — so rather
+than bloat the DB context (`SymbolResearchContext` stays `conn`-only for the DB
+sections), they became free functions over **explicit engine slices**:
+`write_symbol_investigation_overview_sections(p, sym, fund, &[PositionInfo],
+&[PositionInfo])` and `write_symbol_sector_peer_comparison(p, sym, fund,
+&[Fundamentals])`. `user_position_section` (only called by `overview`) moved out of
+`style_scope.rs` into `overview.rs` as a pure free function over the position slices
+(`PositionInfo` is an engine type). The dispatcher does the one `all_fundamentals`
+lookup and passes the resolved record + slices. Behavior-preserving (literals
+unchanged; `style_scope.rs` is a pure 74-line deletion).
+
+Every named `write_symbol_*` packet section is now a free function over engine types —
+no section method remains on `impl TyphooNApp`.
+
 ### Next slice
 
-The fundamentals-driven sections still on `impl TyphooNApp`: `overview` (reads
-`bg.all_fundamentals` + `user_position_section`) and `peer` (filters
-`bg.all_fundamentals` for sector peers). These are called outside the connection block
-and read app state beyond the DB, so they extend the context with `all_fundamentals`
-(and a small position-section input) rather than just `conn`. Converting them, plus the
-quarterly-financials / institutional-holders / SEC-filings / insider inline blocks still
-in the dispatcher, completes the packet's decoupling from `TyphooNApp` — the Phase 2
-`typhoon-research-ui` gate.
+What still reads `TyphooNApp` in the packet is only the **dispatcher's own** inline
+glue: the quarterly-financials / institutional-holders DB block (its own
+`try_connection`), the SEC-filings block (`bg.sec_filings`), and the insider-summary
+block (`bg.insider_trades`). These read native cache state (not engine DTOs), so fully
+moving them needs either those snapshots threaded through the context or the relevant
+`bg` types made nameable. That dispatcher glue — plus deciding whether the eventual
+`typhoon-research-ui` crate owns the orchestration or just the sections — is the last
+step before the Phase 2 crate extraction.
 
 ## Verification Standard for Future Implementation
 

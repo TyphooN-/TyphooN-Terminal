@@ -66,12 +66,18 @@ impl TyphooNApp {
             let _ = writeln!(p, "---");
             let _ = writeln!(p, "## {sym_upper}");
 
-            self.write_symbol_investigation_overview_sections(p, &sym_upper);
             let fund = self
                 .bg
                 .all_fundamentals
                 .iter()
                 .find(|f| f.symbol.eq_ignore_ascii_case(&sym_upper));
+            overview::write_symbol_investigation_overview_sections(
+                p,
+                &sym_upper,
+                fund,
+                &self.live_positions,
+                &self.kr_positions,
+            );
 
             // Quarterly financials (from DB if available)
             if let Some(ref cache) = self.cache {
@@ -405,7 +411,12 @@ impl TyphooNApp {
                 }
             }
 
-            self.write_symbol_sector_peer_comparison(p, &sym_upper, fund);
+            peer_comparison::write_symbol_sector_peer_comparison(
+                p,
+                &sym_upper,
+                fund,
+                &self.bg.all_fundamentals,
+            );
         }
     }
 }
