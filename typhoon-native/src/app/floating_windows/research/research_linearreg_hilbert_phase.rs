@@ -2,19 +2,9 @@ use super::*;
 
 impl TyphooNApp {
     pub(super) fn render_research_linearreg_hilbert_phase_windows(&mut self, ctx: &egui::Context) {
-        let chart_sym_research: String = self
-            .charts
-            .get(self.active_tab)
-            .map(|c| {
-                c.symbol
-                    .split(':')
-                    .rev()
-                    .nth(1)
-                    .or_else(|| c.symbol.split(':').last())
-                    .unwrap_or("AAPL")
-                    .to_string()
-            })
-            .unwrap_or_else(|| "AAPL".to_string());
+        let chart_sym_research = research_chart_symbol(
+            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+        );
 
         // ── egui windows ──
         if self.show_linearreg_win {

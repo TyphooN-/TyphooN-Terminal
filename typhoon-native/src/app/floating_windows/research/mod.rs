@@ -10,6 +10,42 @@
 //! unchanged; this is a module-boundary move only.
 use super::*;
 
+/// Default research symbol derived from a chart's full symbol key (e.g.
+/// `ALPACA:AAPL:1Day` → `AAPL`), falling back to `AAPL` when no chart is active.
+/// ADR-125: the per-window renderers all derived this identically inline; this is
+/// the first shared read-context helper for the research-UI boundary. Pure over the
+/// symbol string (no `TyphooNApp`), so it is crate-movable.
+pub(super) fn research_chart_symbol(chart_symbol: Option<&str>) -> String {
+    chart_symbol
+        .map(|sym| {
+            sym.split(':')
+                .rev()
+                .nth(1)
+                .or_else(|| sym.split(':').last())
+                .unwrap_or("AAPL")
+                .to_string()
+        })
+        .unwrap_or_else(|| "AAPL".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::research_chart_symbol;
+
+    #[test]
+    fn extracts_symbol_from_source_symbol_timeframe_key() {
+        assert_eq!(research_chart_symbol(Some("ALPACA:AAPL:1Day")), "AAPL");
+        assert_eq!(research_chart_symbol(Some("KRAKEN:WOK:1Hour")), "WOK");
+    }
+
+    #[test]
+    fn falls_back_to_aapl_when_absent_or_bare() {
+        assert_eq!(research_chart_symbol(None), "AAPL");
+        // A bare token with no ':' has no nth(1); `last()` yields the token itself.
+        assert_eq!(research_chart_symbol(Some("TSLA")), "TSLA");
+    }
+}
+
 mod research_advanced_moving_averages;
 mod research_aroon_macd_variable_ma;
 mod research_autocorrelation_hurst_volume;

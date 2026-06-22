@@ -6,19 +6,9 @@ impl TyphooNApp {
         ctx: &egui::Context,
     ) {
         // Company events, sentiment, transcripts, commodities, and tape research
-        let chart_sym_research: String = self
-            .charts
-            .get(self.active_tab)
-            .map(|c| {
-                c.symbol
-                    .split(':')
-                    .rev()
-                    .nth(1)
-                    .or_else(|| c.symbol.split(':').last())
-                    .unwrap_or("AAPL")
-                    .to_string()
-            })
-            .unwrap_or_else(|| "AAPL".to_string());
+        let chart_sym_research = research_chart_symbol(
+            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+        );
 
         // DES — Company Description (profile + peers + earnings + press)
         if self.show_company_desc {

@@ -467,15 +467,32 @@ lookup, and passes app-state slices down. Per ADR-125 that orchestrator legitima
 stays in `typhoon-native` (the app shell owns integration); the sections are the
 crate-movable surface.
 
+### Phase 1, step 3 — research egui renderer trees, started (2026-06-22)
+
+Began the harder `floating_windows/research` tree (the `&mut self` egui renderers). The
+per-window renderers each derived the active chart's research symbol with a byte-identical
+~13-line inline block (`self.charts.get(self.active_tab).map(|c| c.symbol.split(':')…)`) —
+58 copies. Extracted to one `research_chart_symbol(Option<&str>) -> String` free function
+in `research/mod.rs`: pure over the symbol string (no `TyphooNApp`, no native types), so
+it is crate-movable, and it is the first shared read-context helper for this tree. The 58
+call sites now pass `self.charts.get(self.active_tab).map(|c| c.symbol.as_str())`.
+Behavior-preserving (logic unchanged; 2 unit tests pin the `source:symbol:timeframe`
+extraction + `AAPL` fallback).
+
+The renderers' deeper coupling remains: each window reads/writes its own
+`self.<x>_win_symbol` / `_snapshot` / `_loading` / `show_<x>_win` state and sends a
+`BrokerCmd` (the action). Decoupling that is the next work — the snapshot-display bodies
+(the bulk of each window) are already pure over `&Snapshot` and extract like the packet's
+formatter layer; the input/action half needs per-window state bundles + an action sink.
+
 ### Next slice
 
-The packet's section layer is now extraction-ready. Remaining before a `typhoon-research-ui`
-crate can be cut: (1) apply the same context/free-function treatment to the
-`command_research_windows` and `floating_windows/research` trees (still `impl TyphooNApp`
-egui renderers — these need the `&mut self` → context+action-enum work from Phase 1
-steps 3–4, harder than the packet's `&self` text builders); (2) decide the crate's public
-surface (`render_research_*` / `write_*` free functions + the context/action types). Only
-then does Phase 2 (creating the crate) begin.
+Continue the research egui tree: (1) extract the pure snapshot-display bodies into free
+functions over `(&mut egui::Ui, &Snapshot)` — the egui analog of the packet's formatter
+layer, crate-movable since `typhoon-research-ui` is allowed to depend on egui; (2) then
+the `&mut self` input/action half (per-window state bundles + a `ResearchUiAction` sink in
+place of direct `broker_tx` sends). Apply the same to `command_research_windows`. Then
+decide the crate's public surface and begin Phase 2 (creating the crate).
 
 ## Verification Standard for Future Implementation
 
