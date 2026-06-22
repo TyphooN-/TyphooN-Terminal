@@ -404,17 +404,24 @@ momentum-volume. Each used only `self.cache`, so each is now a free function ove
 all 8 converted sections. Behavior-preserving: every markdown literal is byte-identical
 to the pre-conversion files (the large line delta is body dedent + rustfmt).
 
+Then the 3 nesting families followed (one batch, 27 files): `price_behavior`,
+`rank_drift`, `technical_indicator`. Each family converted atomically — all leaves to
+ctx-functions, plus the aggregator, which now threads `ctx` to its leaves
+(`super::<leaf>::write_…(ctx, …)`) and uses `ctx.conn` for its own inline rx. The 3
+aggregators dropped their `open_bg_read_connection` workaround entirely — they no
+longer touch a connection at all. ~35 sections are now free functions over the context;
+behavior-preserving (every markdown literal byte-identical across the 27 files).
+
 ### Next slice
 
-Two shapes remain under the connection block: the pass-through aggregators
-(`composite_signal_sections`, `price_transform_indicator_sections` — no own
-`try_connection`, they just call leaves) and the 3 nesting families
-(`price_behavior` / `rank_drift` / `technical_indicator`, whose holders open an
-independent connection today). Converting these threads `ctx` through each aggregator
-to its leaves; once every section under the block takes the context, the dispatcher's
-independent-connection workaround comes out. The fundamentals-driven sections
-(overview, peer) extend the context with `all_fundamentals`. That fully decoupled state
-is the Phase 2 `typhoon-research-ui` gate.
+Remaining under the connection block: the 2 pass-through aggregators
+(`composite_signal_sections` → `composite_signal_*`,
+`price_transform_indicator_sections` → `price_transform_*`) and `talib_price_momentum`.
+Then the dispatcher's own inline rx sections (EXPCAL / CDLDOJI / …) and the
+fundamentals-driven `overview` / `peer` (which extend the context with
+`all_fundamentals`). Once every section under the block takes `ctx`, the dispatcher's
+`open_bg` workaround comes out and the connection is held once. That fully decoupled
+state is the Phase 2 `typhoon-research-ui` gate.
 
 ## Verification Standard for Future Implementation
 

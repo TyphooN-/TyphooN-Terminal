@@ -364,15 +364,15 @@ impl TyphooNApp {
 
                     self.write_symbol_composite_signal_sections(p, &sym_upper);
 
-                    self.write_symbol_rank_drift_sections(p, &sym_upper);
+                    rank_drift_sections::write_symbol_rank_drift_sections(&ctx, p, &sym_upper);
 
-                    self.write_symbol_price_behavior_sections(p, &sym_upper);
+                    price_behavior_sections::write_symbol_price_behavior_sections(&ctx, p, &sym_upper);
 
                     distribution_risk_sections::write_symbol_distribution_risk_sections(&ctx, p, &sym_upper);
 
                     fractal_tail_stationarity_sections::write_symbol_fractal_tail_stationarity_sections(&ctx, p, &sym_upper);
 
-                    self.write_symbol_technical_indicator_sections(p, &sym_upper);
+                    technical_indicator_sections::write_symbol_technical_indicator_sections(&ctx, p, &sym_upper);
 
                     moving_average_research_sections::write_symbol_moving_average_research_sections(&ctx, p, &sym_upper);
 
