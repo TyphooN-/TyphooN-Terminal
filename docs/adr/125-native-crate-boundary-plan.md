@@ -518,13 +518,31 @@ a `self.<x>_filter`). Neither fits a mechanical pure-display transform — they 
 a small per-window context struct or belong to the input/action half. They are left for
 that phase rather than forced through a transform that doesn't fit.
 
+### Phase 1, step 3 — input/action half, started (2026-06-22)
+
+Began the `&mut self` input/action decoupling with a **generic window shell**.
+The "compute snapshot" windows share one interaction shell — symbol input + Use Chart /
+Load Cached / Compute buttons + loading indicator, then the snapshot display.
+`window_shell::render_compute_window<S, Cmd>` now owns it: generic over the snapshot
+type `S` and the action type `Cmd`, so it has **no `TyphooNApp` or `BrokerCmd`
+coupling** (depends only on egui + the engine cache types — crate-movable). The
+per-window variation arrives as closures (`load_cached`, `make_cmd`, `render_snapshot`),
+the window's own state is threaded as `&mut` field refs, and the Compute action is
+**returned** (`Option<Cmd>`) instead of sent inline — the caller dispatches it.
+
+Proof of concept: `research_ohlc_price_transforms` (AVGPRICE / MEDPRICE / TYPPRICE /
+WCLPRICE / VARIANCE). The renderer dropped from 254 to 124 lines and now holds five
+declarative window specs + closures with zero inline `egui::Window`; the borrow checker
+accepts the call (disjoint `&mut self.<x>_*` field borrows + `self.cache.as_deref()`).
+Behavior-preserving by construction (the shell replicates the exact button logic).
+
 ### Next slice
 
-The `&mut self` input/action half: per-window state bundles + a `ResearchUiAction` sink
-replacing direct `broker_tx` sends, so the renderer's header half (and the remaining
-multi-field/interactive grids) also stop needing full `TyphooNApp`. Apply the display +
-input/action treatment to `command_research_windows`. Then decide the crate's public
-surface and begin Phase 2.
+Scale the shell across the other compute-snapshot windows (the bulk of the ~250 that
+follow this exact pattern), with per-pattern shells for the variants (windows without
+Load Cached, or with extra controls). Then the multi-field/interactive grids left out of
+the display pass, and `command_research_windows`. Then decide the crate's public surface
+and begin Phase 2.
 
 ## Verification Standard for Future Implementation
 
