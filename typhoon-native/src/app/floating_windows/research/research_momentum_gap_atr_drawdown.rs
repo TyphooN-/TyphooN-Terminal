@@ -5,9 +5,8 @@ impl TyphooNApp {
         &mut self,
         ctx: &egui::Context,
     ) {
-        let chart_sym_research = research_chart_symbol(
-            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
-        );
+        let chart_sym_research =
+            research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // SURPSTK — Earnings Surprise Streak
         if self.show_surpstk {
@@ -54,97 +53,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.surpstk_snapshot;
-                    if snap.symbol.is_empty() || snap.streak_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new(
-                                "No data — needs ≥4 cached earnings surprise rows for the subject.",
-                            )
-                            .color(AXIS_TEXT)
-                            .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.streak_label.as_str() {
-                            "HOT_STREAK" | "BEAT_TREND" => UP,
-                            "MISS_TREND" | "COLD_STREAK" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — beat rate {:.0}% — current {} × {} — as of {}",
-                                snap.symbol,
-                                snap.streak_label,
-                                snap.beat_rate_pct,
-                                snap.current_streak_type,
-                                snap.current_streak_len,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("surpstk_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("Events (beats/misses/inlines)")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} ({} / {} / {})",
-                                        snap.total_events, snap.beats, snap.misses, snap.inlines
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Longest beat / miss streak")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} / {}",
-                                        snap.longest_beat_streak, snap.longest_miss_streak
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Avg surprise %").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.2}%", snap.avg_surprise_pct))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Latest event").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} — {} — {:+.2}%",
-                                        snap.latest_event_date,
-                                        snap.latest_event_label,
-                                        snap.latest_event_surprise_pct
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                        if !snap.note.is_empty() {
-                            ui.separator();
-                            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
-                        }
-                    }
+                    super::render::render_surpstk_snapshot(ui, &self.surpstk_snapshot);
                 });
             self.show_surpstk = open;
         }
@@ -194,96 +103,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.dvdrank_snapshot;
-                    if snap.symbol.is_empty()
-                        || snap.rank_label == "INSUFFICIENT_DATA"
-                        || snap.rank_label == "NO_DATA"
-                    {
-                        ui.label(
-                            egui::RichText::new(
-                                "No data — needs ≥3 sector peers with DIVG snapshots.",
-                            )
-                            .color(AXIS_TEXT)
-                            .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.rank_label.as_str() {
-                            "TOP_DECILE" | "TOP_QUARTILE" | "ABOVE_MEDIAN" => UP,
-                            "BELOW_MEDIAN" | "BOTTOM_QUARTILE" | "BOTTOM_DECILE" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(egui::RichText::new(format!(
-                            "{} — {} — trend {} — pct {:.0} — rank {}/{} — sector {} — as of {}",
-                            snap.symbol, snap.rank_label, snap.trend_label, snap.percentile_rank,
-                            snap.rank_position, snap.peers_considered + 1, snap.sector, snap.as_of,
-                        )).strong().color(color));
-                        ui.separator();
-                        egui::Grid::new("dvdrank_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Subject 3y CAGR %").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.2}%", snap.cagr_3y_pct))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Consecutive growth years")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{}",
-                                        snap.consecutive_growth_years
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Sector median / p25 / p75 CAGR")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:+.2}% / {:+.2}% / {:+.2}%",
-                                        snap.sector_median_cagr_pct,
-                                        snap.sector_p25_cagr_pct,
-                                        snap.sector_p75_cagr_pct
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Peers considered / with data")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} / {}",
-                                        snap.peers_considered, snap.peers_with_data
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                        if !snap.note.is_empty() {
-                            ui.separator();
-                            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
-                        }
-                    }
+                    super::render::render_dvdrank_snapshot(ui, &self.dvdrank_snapshot);
                 });
             self.show_dvdrank = open;
         }
@@ -333,84 +153,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.earmrank_snapshot;
-                    if snap.symbol.is_empty()
-                        || snap.rank_label == "INSUFFICIENT_DATA"
-                        || snap.rank_label == "NO_DATA"
-                    {
-                        ui.label(
-                            egui::RichText::new(
-                                "No data — needs ≥3 sector peers with EARM snapshots.",
-                            )
-                            .color(AXIS_TEXT)
-                            .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.rank_label.as_str() {
-                            "TOP_DECILE" | "TOP_QUARTILE" | "ABOVE_MEDIAN" => UP,
-                            "BELOW_MEDIAN" | "BOTTOM_QUARTILE" | "BOTTOM_DECILE" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(egui::RichText::new(format!(
-                            "{} — {} — momentum {} — pct {:.0} — rank {}/{} — sector {} — as of {}",
-                            snap.symbol, snap.rank_label, snap.momentum_label, snap.percentile_rank,
-                            snap.rank_position, snap.peers_considered + 1, snap.sector, snap.as_of,
-                        )).strong().color(color));
-                        ui.separator();
-                        egui::Grid::new("earmrank_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("Subject composite score")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:.2}", snap.composite_score))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Sector median / p25 / p75 score")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:.2} / {:.2} / {:.2}",
-                                        snap.sector_median_score, snap.sector_p25, snap.sector_p75
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Peers considered / with data")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} / {}",
-                                        snap.peers_considered, snap.peers_with_data
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                        if !snap.note.is_empty() {
-                            ui.separator();
-                            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
-                        }
-                    }
+                    super::render::render_earmrank_snapshot(ui, &self.earmrank_snapshot);
                 });
             self.show_earmrank = open;
         }
@@ -460,96 +203,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.updgrank_snapshot;
-                    if snap.symbol.is_empty()
-                        || snap.rank_label == "INSUFFICIENT_DATA"
-                        || snap.rank_label == "NO_DATA"
-                    {
-                        ui.label(
-                            egui::RichText::new(
-                                "No data — needs ≥3 sector peers with UPDM snapshots.",
-                            )
-                            .color(AXIS_TEXT)
-                            .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.rank_label.as_str() {
-                            "TOP_DECILE" | "TOP_QUARTILE" | "ABOVE_MEDIAN" => UP,
-                            "BELOW_MEDIAN" | "BOTTOM_QUARTILE" | "BOTTOM_DECILE" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — bias {} — pct {:.0} — rank {}/{} — sector {} — as of {}",
-                                snap.symbol,
-                                snap.rank_label,
-                                snap.bias_label,
-                                snap.percentile_rank,
-                                snap.rank_position,
-                                snap.peers_considered + 1,
-                                snap.sector,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("updgrank_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("Subject net rating changes 90d")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:+}", snap.net_90d))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Sector median / p25 / p75 net")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:+.1} / {:+.1} / {:+.1}",
-                                        snap.sector_median_net_90d,
-                                        snap.sector_p25_net_90d,
-                                        snap.sector_p75_net_90d
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Peers considered / with data")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} / {}",
-                                        snap.peers_considered, snap.peers_with_data
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                        if !snap.note.is_empty() {
-                            ui.separator();
-                            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
-                        }
-                    }
+                    super::render::render_updgrank_snapshot(ui, &self.updgrank_snapshot);
                 });
             self.show_updgrank = open;
         }
@@ -598,107 +252,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.gy_snapshot;
-                    if snap.symbol.is_empty() || snap.gap_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new(
-                                "No data — needs ≥20 cached daily bars for the subject.",
-                            )
-                            .color(AXIS_TEXT)
-                            .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.gap_label.as_str() {
-                            "EXPLOSIVE" => DOWN,
-                            "GAPPY" => UP,
-                            "SMOOTH" => UP,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — {} bars — {} gaps — as of {}",
-                                snap.symbol,
-                                snap.gap_label,
-                                snap.bars_used,
-                                snap.gaps_total,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("gy_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("Gaps up (≥2% / ≥5% / ≥10%)")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} / {} / {}",
-                                        snap.gaps_up_2pct, snap.gaps_up_5pct, snap.gaps_up_10pct
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Gaps down (≥2% / ≥5% / ≥10%)")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} / {} / {}",
-                                        snap.gaps_down_2pct,
-                                        snap.gaps_down_5pct,
-                                        snap.gaps_down_10pct
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Largest up gap").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:+.2}% on {}",
-                                        snap.largest_up_gap_pct, snap.largest_up_gap_date
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Largest down gap").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:+.2}% on {}",
-                                        snap.largest_down_gap_pct, snap.largest_down_gap_date
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Avg |gap %|").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.2}%", snap.avg_abs_gap_pct))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                        if !snap.note.is_empty() {
-                            ui.separator();
-                            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
-                        }
-                    }
+                    super::render::render_gy_snapshot(ui, &self.gy_snapshot);
                 });
             self.show_gy = open;
         }
@@ -747,97 +301,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.des_snapshot;
-                    if snap.symbol.is_empty() || snap.streak_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new(
-                                "No data — needs ≥20 cached daily bars for the subject.",
-                            )
-                            .color(AXIS_TEXT)
-                            .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.streak_label.as_str() {
-                            "STRONG_UPTREND" | "UPTREND_BIAS" => UP,
-                            "STRONG_DOWNTREND" | "DOWNTREND_BIAS" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — up rate {:.0}% — current {} × {} — as of {}",
-                                snap.symbol,
-                                snap.streak_label,
-                                snap.up_day_rate_pct,
-                                snap.current_streak_type,
-                                snap.current_streak_len,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("des_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Bars used").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.bars_used))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Up / down / flat days")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} / {} / {}",
-                                        snap.up_days, snap.down_days, snap.flat_days
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Longest up / down streak")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} / {}",
-                                        snap.longest_up_streak, snap.longest_down_streak
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Avg up / down move %").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:+.2}% / {:+.2}%",
-                                        snap.avg_up_move_pct, snap.avg_down_move_pct
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                        if !snap.note.is_empty() {
-                            ui.separator();
-                            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
-                        }
-                    }
+                    super::render::render_des_snapshot(ui, &self.des_snapshot);
                 });
             self.show_des = open;
         }
@@ -855,13 +319,22 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.dvdyieldrank_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.dvdyieldrank_symbol = chart_sym_research.clone(); }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.dvdyieldrank_symbol)
+                                .desired_width(100.0),
+                        );
+                        if ui.button("Use Chart").clicked() {
+                            self.dvdyieldrank_symbol = chart_sym_research.clone();
+                        }
                         if ui.button("Load Cached").clicked() {
                             if let Some(ref cache) = self.cache {
                                 if let Ok(conn) = cache.connection() {
                                     let sym_u = self.dvdyieldrank_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_dvdyieldrank(&conn, &sym_u) {
+                                    if let Ok(Some(snap)) =
+                                        typhoon_engine::core::research::get_dvdyieldrank(
+                                            &conn, &sym_u,
+                                        )
+                                    {
                                         self.dvdyieldrank_snapshot = snap;
                                         self.dvdyieldrank_symbol = sym_u;
                                     }
@@ -872,49 +345,15 @@ impl TyphooNApp {
                             let sym = self.dvdyieldrank_symbol.to_uppercase();
                             self.dvdyieldrank_loading = true;
                             self.dvdyieldrank_symbol = sym.clone();
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeDvdyieldrankSnapshot { symbol: sym });
+                            let _ = self
+                                .broker_tx
+                                .send(BrokerCmd::ComputeDvdyieldrankSnapshot { symbol: sym });
                         }
                         if self.dvdyieldrank_loading {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.dvdyieldrank_snapshot;
-                    if snap.symbol.is_empty() || snap.rank_label == "INSUFFICIENT_DATA" || snap.rank_label == "NO_DATA" {
-                        ui.label(egui::RichText::new("No data — subject needs a positive dividend yield and ≥3 sector peers also paying dividends.")
-                            .color(AXIS_TEXT).small());
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.rank_label.as_str() {
-                            "TOP_DECILE" | "TOP_QUARTILE" | "ABOVE_MEDIAN" => UP,
-                            "BELOW_MEDIAN" | "BOTTOM_QUARTILE" | "BOTTOM_DECILE" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(egui::RichText::new(format!(
-                            "{} — {} — yield {:.2}% — pct {:.0} — rank {}/{} — sector {} — as of {}",
-                            snap.symbol, snap.rank_label, snap.dividend_yield_pct, snap.percentile_rank,
-                            snap.rank_position, snap.peers_considered + 1, snap.sector, snap.as_of,
-                        )).strong().color(color));
-                        ui.separator();
-                        egui::Grid::new("dvdyieldrank_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
-                            ui.label(egui::RichText::new("Subject yield %").small().strong());
-                            ui.label(egui::RichText::new(format!("{:.2}%", snap.dividend_yield_pct)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Sector median / p25 / p75 yield").small().strong());
-                            ui.label(egui::RichText::new(format!("{:.2}% / {:.2}% / {:.2}%",
-                                snap.sector_median_yield_pct, snap.sector_p25_yield_pct, snap.sector_p75_yield_pct)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Peers considered / with data").small().strong());
-                            ui.label(egui::RichText::new(format!("{} / {}", snap.peers_considered, snap.peers_with_data)).small().monospace());
-                            ui.end_row();
-                        });
-                        if !snap.note.is_empty() {
-                            ui.separator();
-                            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
-                        }
-                    }
+                    super::render::render_dvdyieldrank_snapshot(ui, &self.dvdyieldrank_snapshot);
                 });
             self.show_dvdyieldrank = open;
         }
@@ -932,13 +371,20 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.shrank_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.shrank_symbol = chart_sym_research.clone(); }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.shrank_symbol)
+                                .desired_width(100.0),
+                        );
+                        if ui.button("Use Chart").clicked() {
+                            self.shrank_symbol = chart_sym_research.clone();
+                        }
                         if ui.button("Load Cached").clicked() {
                             if let Some(ref cache) = self.cache {
                                 if let Ok(conn) = cache.connection() {
                                     let sym_u = self.shrank_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_shrank(&conn, &sym_u) {
+                                    if let Ok(Some(snap)) =
+                                        typhoon_engine::core::research::get_shrank(&conn, &sym_u)
+                                    {
                                         self.shrank_snapshot = snap;
                                         self.shrank_symbol = sym_u;
                                     }
@@ -949,50 +395,15 @@ impl TyphooNApp {
                             let sym = self.shrank_symbol.to_uppercase();
                             self.shrank_loading = true;
                             self.shrank_symbol = sym.clone();
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeShrankSnapshot { symbol: sym });
+                            let _ = self
+                                .broker_tx
+                                .send(BrokerCmd::ComputeShrankSnapshot { symbol: sym });
                         }
                         if self.shrank_loading {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.shrank_snapshot;
-                    if snap.symbol.is_empty() || snap.rank_label == "INSUFFICIENT_DATA" || snap.rank_label == "NO_DATA" {
-                        ui.label(egui::RichText::new("No data — needs ≥3 sector peers with short_percent_of_float in Fundamentals.")
-                            .color(AXIS_TEXT).small());
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        // Risk-inverted: SAFEST is green, RISKIEST is red.
-                        let color = match snap.rank_label.as_str() {
-                            "SAFEST_DECILE" | "SAFEST_QUARTILE" | "ABOVE_MEDIAN_SAFE" => UP,
-                            "BELOW_MEDIAN_RISKY" | "BOTTOM_QUARTILE_RISKY" | "RISKIEST_DECILE" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(egui::RichText::new(format!(
-                            "{} — {} — short {:.2}% — pct {:.0} — rank {}/{} — sector {} — as of {}",
-                            snap.symbol, snap.rank_label, snap.short_pct_of_float, snap.percentile_rank,
-                            snap.rank_position, snap.peers_considered + 1, snap.sector, snap.as_of,
-                        )).strong().color(color));
-                        ui.separator();
-                        egui::Grid::new("shrank_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
-                            ui.label(egui::RichText::new("Subject short % of float").small().strong());
-                            ui.label(egui::RichText::new(format!("{:.2}%", snap.short_pct_of_float)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Sector median / p25 / p75 short").small().strong());
-                            ui.label(egui::RichText::new(format!("{:.2}% / {:.2}% / {:.2}%",
-                                snap.sector_median_short_pct, snap.sector_p25_short_pct, snap.sector_p75_short_pct)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Peers considered / with data").small().strong());
-                            ui.label(egui::RichText::new(format!("{} / {}", snap.peers_considered, snap.peers_with_data)).small().monospace());
-                            ui.end_row();
-                        });
-                        if !snap.note.is_empty() {
-                            ui.separator();
-                            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
-                        }
-                    }
+                    super::render::render_shrank_snapshot(ui, &self.shrank_snapshot);
                 });
             self.show_shrank = open;
         }
@@ -1219,176 +630,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.insiderconc_snapshot;
-                    if snap.symbol.is_empty()
-                        || snap.rank_label == "NO_DATA"
-                        || snap.rank_label == "INSUFFICIENT_DATA"
-                    {
-                        ui.label(
-                            egui::RichText::new(
-                                "No data — needs Fundamentals.shares_outstanding and cached INS rows for the subject plus at least 3 same-sector peers. This is estimated from the latest shares_owned_after per reporter, not a direct ownership feed.",
-                            )
-                            .color(AXIS_TEXT)
-                            .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.rank_label.as_str() {
-                            "TOP_DECILE" | "TOP_QUARTILE" | "ABOVE_MEDIAN" => UP,
-                            "BELOW_MEDIAN" | "BOTTOM_QUARTILE" | "BOTTOM_DECILE" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — insider-held {:.2}% — rank {}/{} — sector {} — as of {}",
-                                snap.symbol,
-                                snap.rank_label,
-                                snap.estimated_insider_pct_held,
-                                snap.rank_position,
-                                snap.peers_considered + 1,
-                                snap.sector,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.label(
-                            egui::RichText::new(
-                                "Estimated from the latest cached INS holdings per reporter.",
-                            )
-                            .small()
-                            .color(AXIS_TEXT),
-                        );
-                        ui.separator();
-                        egui::Grid::new("insiderconc_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(250.0)
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("Estimated insider-held % / shares")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:.2}% / {:.0}",
-                                        snap.estimated_insider_pct_held,
-                                        snap.total_estimated_insider_shares
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Reporters covered / active holders")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} / {}",
-                                        snap.reporters_covered, snap.reporters_holding_shares
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Shares outstanding / rows used")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:.0} / {}",
-                                        snap.shares_outstanding, snap.trade_rows_used
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Latest holdings date").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(&snap.latest_holdings_date)
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Largest reporter").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(if snap.largest_reporter.is_empty() {
-                                        "-".to_string()
-                                    } else {
-                                        format!(
-                                            "{} ({:.0} shares)",
-                                            snap.largest_reporter, snap.largest_reporter_shares
-                                        )
-                                    })
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Largest reporter % out / weight")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:.2}% / {:.1}%",
-                                        snap.largest_reporter_pct_of_outstanding,
-                                        snap.largest_reporter_weight_pct
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Sector median / p25 / p75 insider-held")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:.2}% / {:.2}% / {:.2}%",
-                                        snap.sector_median_pct_held,
-                                        snap.sector_p25_pct_held,
-                                        snap.sector_p75_pct_held
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Percentile / peers considered")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:.0} / {} with {} usable",
-                                        snap.percentile_rank,
-                                        snap.peers_considered,
-                                        snap.peers_with_data
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                        if !snap.note.is_empty() {
-                            ui.separator();
-                            ui.label(egui::RichText::new(&snap.note).small().color(AXIS_TEXT));
-                        }
-                    }
+                    super::render::render_insiderconc_snapshot(ui, &self.insiderconc_snapshot);
                 });
             self.show_insiderconc = open;
         }

@@ -5,9 +5,8 @@ impl TyphooNApp {
         &mut self,
         ctx: &egui::Context,
     ) {
-        let chart_sym_research = research_chart_symbol(
-            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
-        );
+        let chart_sym_research =
+            research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
         if self.show_omega {
@@ -53,84 +52,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.omega_snapshot;
-                    if snap.symbol.is_empty() || snap.omega_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥30 returns.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.omega_label.as_str() {
-                            "GOOD" | "EXCELLENT" => UP,
-                            "POOR" | "VERY_POOR" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        let omega_disp = if snap.omega_ratio.is_finite() {
-                            format!("{:.3}", snap.omega_ratio)
-                        } else {
-                            "∞".to_string()
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — Ω {} — win {:.1}% — {} bars — as of {}",
-                                snap.symbol,
-                                snap.omega_label,
-                                omega_disp,
-                                snap.win_rate_pct,
-                                snap.bars_used,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("omega_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Gains sum (log)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.5}", snap.gains_sum))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Losses sum (log)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.5}", snap.losses_sum))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Gain days").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.gain_days))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Loss days").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.loss_days))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Win rate").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.2}%", snap.win_rate_pct))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_omega_snapshot(ui, &self.omega_snapshot);
                 });
             self.show_omega = open;
         }
@@ -178,66 +100,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.dfa_snapshot;
-                    if snap.symbol.is_empty() || snap.dfa_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥100 returns.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.dfa_label.as_str() {
-                            "PERSISTENT" | "STRONGLY_PERSISTENT" => UP,
-                            "ANTI_PERSISTENT" | "MEAN_REVERTING" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — α {:.4} — R² {:.3} — {} scales — {} bars — as of {}",
-                                snap.symbol,
-                                snap.dfa_label,
-                                snap.alpha,
-                                snap.r_squared,
-                                snap.num_scales,
-                                snap.bars_used,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("dfa_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("α (Hurst-like)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.alpha))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Scales sampled").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.num_scales))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Log-log R²").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.r_squared))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_dfa_snapshot(ui, &self.dfa_snapshot);
                 });
             self.show_dfa = open;
         }
@@ -285,78 +148,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.burke_snapshot;
-                    if snap.symbol.is_empty() || snap.burke_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥30 bars.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.burke_label.as_str() {
-                            "GOOD" | "EXCELLENT" => UP,
-                            "POOR" | "VERY_POOR" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — Burke {:+.3} — events {} — ann ret {:+.2}% — as of {}",
-                                snap.symbol,
-                                snap.burke_label,
-                                snap.burke_ratio,
-                                snap.dd_event_count,
-                                snap.annualized_return_pct,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("burke_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Annualized return").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:+.3}%",
-                                        snap.annualized_return_pct
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Drawdown events").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.dd_event_count))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Σdd²").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.3}", snap.sum_sq_drawdowns))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Worst event dd").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "-{:.2}%",
-                                        snap.worst_event_dd_pct
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_burke_snapshot(ui, &self.burke_snapshot);
                 });
             self.show_burke = open;
         }
@@ -405,68 +197,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.monthseas_snapshot;
-                    if snap.symbol.is_empty() || snap.season_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new(
-                                "No data — HP cache needs ≥120 bars across ≥1 year.",
-                            )
-                            .color(AXIS_TEXT)
-                            .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.season_label.as_str() {
-                            "STRONG_SEASONAL" | "MILD_SEASONAL" => UP,
-                            "INCONSISTENT" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        const MONTHS: [&str; 12] = [
-                            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
-                            "Nov", "Dec",
-                        ];
-                        ui.label(egui::RichText::new(format!(
-                            "{} — {} — {} yrs — best {} ({:.0}%) / worst {} ({:.0}%) — as of {}",
-                            snap.symbol, snap.season_label, snap.years_covered,
-                            MONTHS[snap.best_month_idx], snap.best_month_hit_pct,
-                            MONTHS[snap.worst_month_idx], snap.worst_month_hit_pct,
-                            snap.as_of,
-                        )).strong().color(color));
-                        ui.separator();
-                        egui::Grid::new("monthseas_grid")
-                            .striped(true)
-                            .num_columns(3)
-                            .min_col_width(120.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Month").small().strong());
-                                ui.label(egui::RichText::new("Hit %").small().strong());
-                                ui.label(egui::RichText::new("Mean ret %").small().strong());
-                                ui.end_row();
-                                for m in 0..12 {
-                                    ui.label(egui::RichText::new(MONTHS[m]).small());
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{:.1}%",
-                                            snap.month_hit_pct[m]
-                                        ))
-                                        .small()
-                                        .monospace(),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{:+.3}%",
-                                            snap.month_mean_ret_pct[m]
-                                        ))
-                                        .small()
-                                        .monospace(),
-                                    );
-                                    ui.end_row();
-                                }
-                            });
-                    }
+                    super::render::render_monthseas_snapshot(ui, &self.monthseas_snapshot);
                 });
             self.show_monthseas = open;
         }
@@ -483,13 +214,20 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.rollsprd_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.rollsprd_symbol = chart_sym_research.clone(); }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.rollsprd_symbol)
+                                .desired_width(100.0),
+                        );
+                        if ui.button("Use Chart").clicked() {
+                            self.rollsprd_symbol = chart_sym_research.clone();
+                        }
                         if ui.button("Load Cached").clicked() {
                             if let Some(ref cache) = self.cache {
                                 if let Ok(conn) = cache.connection() {
                                     let sym_u = self.rollsprd_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_rollsprd(&conn, &sym_u) {
+                                    if let Ok(Some(snap)) =
+                                        typhoon_engine::core::research::get_rollsprd(&conn, &sym_u)
+                                    {
                                         self.rollsprd_snapshot = snap;
                                         self.rollsprd_symbol = sym_u;
                                     }
@@ -500,54 +238,15 @@ impl TyphooNApp {
                             let sym = self.rollsprd_symbol.to_uppercase();
                             self.rollsprd_loading = true;
                             self.rollsprd_symbol = sym.clone();
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeRollsprdSnapshot { symbol: sym });
+                            let _ = self
+                                .broker_tx
+                                .send(BrokerCmd::ComputeRollsprdSnapshot { symbol: sym });
                         }
                         if self.rollsprd_loading {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.rollsprd_snapshot;
-                    if snap.symbol.is_empty() || snap.roll_label == "INSUFFICIENT_DATA" {
-                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 bars.")
-                            .color(AXIS_TEXT).small());
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else if snap.roll_label == "INVALID_POSITIVE_COV" {
-                        ui.label(egui::RichText::new(format!(
-                            "{} — INVALID — first-lag cov {:+.6} (≥0) — Roll model undefined (trending series)",
-                            snap.symbol, snap.first_lag_cov,
-                        )).strong().color(DOWN));
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).small());
-                        }
-                    } else {
-                        let color = match snap.roll_label.as_str() {
-                            "TIGHT" => UP,
-                            "WIDE" | "VERY_WIDE" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(egui::RichText::new(format!(
-                            "{} — {} — spread {:.4} ({:.1} bps) — {} bars — as of {}",
-                            snap.symbol, snap.roll_label, snap.implicit_spread, snap.implicit_spread_bps, snap.bars_used, snap.as_of,
-                        )).strong().color(color));
-                        ui.separator();
-                        egui::Grid::new("rollsprd_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
-                            ui.label(egui::RichText::new("First-lag cov").small().strong());
-                            ui.label(egui::RichText::new(format!("{:+.6}", snap.first_lag_cov)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Mean price").small().strong());
-                            ui.label(egui::RichText::new(format!("{:.4}", snap.mean_price)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Implicit spread").small().strong());
-                            ui.label(egui::RichText::new(format!("{:.4}", snap.implicit_spread)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Implicit spread (bps)").small().strong());
-                            ui.label(egui::RichText::new(format!("{:.2}", snap.implicit_spread_bps)).small().monospace());
-                            ui.end_row();
-                        });
-                    }
+                    super::render::render_rollsprd_snapshot(ui, &self.rollsprd_snapshot);
                 });
             self.show_rollsprd = open;
         }

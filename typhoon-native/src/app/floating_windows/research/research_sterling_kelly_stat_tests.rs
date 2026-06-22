@@ -5,9 +5,8 @@ impl TyphooNApp {
         &mut self,
         ctx: &egui::Context,
     ) {
-        let chart_sym_research = research_chart_symbol(
-            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
-        );
+        let chart_sym_research =
+            research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
 
@@ -23,13 +22,20 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.sterling_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.sterling_symbol = chart_sym_research.clone(); }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.sterling_symbol)
+                                .desired_width(100.0),
+                        );
+                        if ui.button("Use Chart").clicked() {
+                            self.sterling_symbol = chart_sym_research.clone();
+                        }
                         if ui.button("Load Cached").clicked() {
                             if let Some(ref cache) = self.cache {
                                 if let Ok(conn) = cache.connection() {
                                     let sym_u = self.sterling_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_sterling(&conn, &sym_u) {
+                                    if let Ok(Some(snap)) =
+                                        typhoon_engine::core::research::get_sterling(&conn, &sym_u)
+                                    {
                                         self.sterling_snapshot = snap;
                                         self.sterling_symbol = sym_u;
                                     }
@@ -40,52 +46,15 @@ impl TyphooNApp {
                             let sym = self.sterling_symbol.to_uppercase();
                             self.sterling_loading = true;
                             self.sterling_symbol = sym.clone();
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeSterlingSnapshot { symbol: sym });
+                            let _ = self
+                                .broker_tx
+                                .send(BrokerCmd::ComputeSterlingSnapshot { symbol: sym });
                         }
                         if self.sterling_loading {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.sterling_snapshot;
-                    if snap.symbol.is_empty() || snap.sterling_label == "INSUFFICIENT_DATA" {
-                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 bars.").color(AXIS_TEXT).small());
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.sterling_label.as_str() {
-                            "GOOD" | "EXCELLENT" => UP,
-                            "POOR" | "VERY_POOR" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(egui::RichText::new(format!(
-                            "{} — {} — ratio {:.3} — ann ret {:+.2}% — mean worst {} dd {:.2}% — as of {}",
-                            snap.symbol, snap.sterling_label, snap.sterling_ratio,
-                            snap.annualized_return_pct, snap.worst_n, snap.mean_worst_dd_pct, snap.as_of,
-                        )).strong().color(color));
-                        ui.separator();
-                        egui::Grid::new("sterling_summary").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
-                            ui.label(egui::RichText::new("Sterling ratio").small().strong());
-                            ui.label(egui::RichText::new(format!("{:.4}", snap.sterling_ratio)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Annualized return %").small().strong());
-                            ui.label(egui::RichText::new(format!("{:+.3}%", snap.annualized_return_pct)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Mean worst-N drawdown %").small().strong());
-                            ui.label(egui::RichText::new(format!("{:.3}%", snap.mean_worst_dd_pct)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Worst-N size").small().strong());
-                            ui.label(egui::RichText::new(format!("{}", snap.worst_n)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Total dd events").small().strong());
-                            ui.label(egui::RichText::new(format!("{}", snap.dd_event_count)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Bars used").small().strong());
-                            ui.label(egui::RichText::new(format!("{}", snap.bars_used)).small().monospace());
-                            ui.end_row();
-                        });
-                    }
+                    super::render::render_sterling_snapshot(ui, &self.sterling_snapshot);
                 });
             self.show_sterling = open;
         }
@@ -134,107 +103,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.kellyf_snapshot;
-                    if snap.symbol.is_empty() || snap.kelly_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new(
-                                "No data — HP cache needs ≥30 returns with wins and losses.",
-                            )
-                            .color(AXIS_TEXT)
-                            .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.kelly_label.as_str() {
-                            "MODERATE" | "AGGRESSIVE" => UP,
-                            "SKIP" | "ALL_IN" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — f* {:.4} — half {:.4} — p {:.2} — b {:.3} — as of {}",
-                                snap.symbol,
-                                snap.kelly_label,
-                                snap.kelly_fraction,
-                                snap.half_kelly,
-                                snap.win_rate,
-                                snap.win_loss_ratio,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("kellyf_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("Kelly fraction (f*)").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.kelly_fraction))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Half Kelly").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.half_kelly))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Win rate (p)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.3}", snap.win_rate))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Loss rate (q)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.3}", snap.loss_rate))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Avg win %").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.3}%", snap.avg_win_pct))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Avg loss %").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.3}%", snap.avg_loss_pct))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Win/loss ratio (b)").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:.3}", snap.win_loss_ratio))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Bars used").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.bars_used))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_kellyf_snapshot(ui, &self.kellyf_snapshot);
                 });
             self.show_kellyf = open;
         }
@@ -283,29 +152,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.ljungb_snapshot;
-                    if snap.symbol.is_empty() || snap.ljungb_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥40 returns (h=10).")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.ljungb_label.as_str() {
-                            "WHITE_NOISE" => UP,
-                            "STRONG_DEP" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(egui::RichText::new(format!(
-                            "{} — {} — Q {:.3} — p {:.4} — h {} — reject {} — {} bars — as of {}",
-                            snap.symbol, snap.ljungb_label, snap.q_statistic, snap.p_value,
-                            snap.lag_h, snap.reject_white_noise, snap.bars_used, snap.as_of,
-                        )).strong().color(color));
-                    }
+                    super::render::render_ljungb_snapshot(ui, &self.ljungb_snapshot);
                 });
             self.show_ljungb = open;
         }
@@ -354,101 +201,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.runstest_snapshot;
-                    if snap.symbol.is_empty() || snap.runs_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥20 signed returns.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.runs_label.as_str() {
-                            "RANDOM" => UP,
-                            "STRONG_CLUST" | "MOD_CLUST" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — z {:+.3} — p {:.4} — runs {}/{:.1} — as of {}",
-                                snap.symbol,
-                                snap.runs_label,
-                                snap.z_statistic,
-                                snap.p_value,
-                                snap.runs_observed,
-                                snap.runs_expected,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("runstest_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Runs observed").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.runs_observed))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Runs expected").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.2}", snap.runs_expected))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Runs std").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.3}", snap.runs_std))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("z-statistic").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.4}", snap.z_statistic))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("p-value").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.p_value))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Positive days").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.positive_days))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Negative days").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.negative_days))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Reject randomness").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.reject_randomness))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_runstest_snapshot(ui, &self.runstest_snapshot);
                 });
             self.show_runstest = open;
         }
@@ -465,13 +218,20 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.zeroret_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.zeroret_symbol = chart_sym_research.clone(); }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.zeroret_symbol)
+                                .desired_width(100.0),
+                        );
+                        if ui.button("Use Chart").clicked() {
+                            self.zeroret_symbol = chart_sym_research.clone();
+                        }
                         if ui.button("Load Cached").clicked() {
                             if let Some(ref cache) = self.cache {
                                 if let Ok(conn) = cache.connection() {
                                     let sym_u = self.zeroret_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_zeroret(&conn, &sym_u) {
+                                    if let Ok(Some(snap)) =
+                                        typhoon_engine::core::research::get_zeroret(&conn, &sym_u)
+                                    {
                                         self.zeroret_snapshot = snap;
                                         self.zeroret_symbol = sym_u;
                                     }
@@ -482,32 +242,15 @@ impl TyphooNApp {
                             let sym = self.zeroret_symbol.to_uppercase();
                             self.zeroret_loading = true;
                             self.zeroret_symbol = sym.clone();
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeZeroretSnapshot { symbol: sym });
+                            let _ = self
+                                .broker_tx
+                                .send(BrokerCmd::ComputeZeroretSnapshot { symbol: sym });
                         }
                         if self.zeroret_loading {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.zeroret_snapshot;
-                    if snap.symbol.is_empty() || snap.zero_label == "INSUFFICIENT_DATA" {
-                        ui.label(egui::RichText::new("No data — HP cache needs ≥30 returns.").color(AXIS_TEXT).small());
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.zero_label.as_str() {
-                            "HIGHLY_LIQUID" | "LIQUID" => UP,
-                            "ILLIQUID" | "VERY_ILLIQUID" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(egui::RichText::new(format!(
-                            "{} — {} — zero {:.2}% ({}/{}) — longest streak {} — ε {:.0e} — as of {}",
-                            snap.symbol, snap.zero_label,
-                            snap.zero_day_pct, snap.zero_day_count, snap.bars_used,
-                            snap.longest_zero_streak, snap.epsilon, snap.as_of,
-                        )).strong().color(color));
-                    }
+                    super::render::render_zeroret_snapshot(ui, &self.zeroret_snapshot);
                 });
             self.show_zeroret = open;
         }

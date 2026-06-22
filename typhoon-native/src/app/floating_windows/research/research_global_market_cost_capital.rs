@@ -5,9 +5,8 @@ impl TyphooNApp {
         &mut self,
         ctx: &egui::Context,
     ) {
-        let chart_sym_research = research_chart_symbol(
-            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
-        );
+        let chart_sym_research =
+            research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
 
@@ -515,13 +514,19 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.wacc_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.wacc_symbol = chart_sym_research.clone(); }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.wacc_symbol).desired_width(100.0),
+                        );
+                        if ui.button("Use Chart").clicked() {
+                            self.wacc_symbol = chart_sym_research.clone();
+                        }
                         if ui.button("Load Cached").clicked() {
                             if let Some(ref cache) = self.cache {
                                 if let Ok(conn) = cache.connection() {
                                     let sym_u = self.wacc_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_wacc(&conn, &sym_u) {
+                                    if let Ok(Some(snap)) =
+                                        typhoon_engine::core::research::get_wacc(&conn, &sym_u)
+                                    {
                                         self.wacc_snapshot = snap;
                                         self.wacc_symbol = sym_u;
                                     }
@@ -529,68 +534,37 @@ impl TyphooNApp {
                             }
                         }
                         let have_key = !self.fmp_key.is_empty();
-                        if ui.add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
+                        if ui
+                            .add_enabled(have_key, egui::Button::new("Fetch").fill(BTN_MG))
+                            .clicked()
+                        {
                             let sym = self.wacc_symbol.to_uppercase();
                             self.wacc_loading = true;
                             self.wacc_symbol = sym.clone();
-                            let rf = self.treasury_yields.iter()
+                            let rf = self
+                                .treasury_yields
+                                .iter()
                                 .find(|y| y.tenor == "10Y")
                                 .map(|y| y.yield_pct)
                                 .unwrap_or(4.5);
                             let _ = self.broker_tx.send(BrokerCmd::FetchWaccSnapshot {
-                                symbol: sym, fmp_key: self.fmp_key.clone(), risk_free_pct: rf,
+                                symbol: sym,
+                                fmp_key: self.fmp_key.clone(),
+                                risk_free_pct: rf,
                             });
                         }
                         if self.fmp_key.is_empty() {
-                            ui.label(egui::RichText::new("(add FMP key in Settings)").color(AXIS_TEXT).small());
+                            ui.label(
+                                egui::RichText::new("(add FMP key in Settings)")
+                                    .color(AXIS_TEXT)
+                                    .small(),
+                            );
                         }
                         if self.wacc_loading {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.wacc_snapshot;
-                    if snap.symbol.is_empty() {
-                        ui.label(egui::RichText::new("No data — click Fetch to pull FMP profile + balance sheet.")
-                            .color(AXIS_TEXT).small());
-                        ui.label(egui::RichText::new("Tip: run GY first to cache the latest 10Y Treasury yield as your risk-free rate.")
-                            .color(AXIS_TEXT).small());
-                    } else {
-                        let fmt_money = |v: f64| -> String {
-                            if v >= 1e12 { format!("${:.2}T", v / 1e12) }
-                            else if v >= 1e9 { format!("${:.2}B", v / 1e9) }
-                            else if v >= 1e6 { format!("${:.1}M", v / 1e6) }
-                            else { format!("${:.0}", v) }
-                        };
-                        ui.label(egui::RichText::new(format!(
-                            "{} — WACC {:.2}%",
-                            snap.symbol, snap.wacc_pct,
-                        )).strong().size(16.0).color(if snap.wacc_pct > 0.0 { UP } else { AXIS_TEXT }));
-                        ui.label(egui::RichText::new(format!("as of {}", snap.as_of)).color(AXIS_TEXT).small());
-                        ui.separator();
-                        egui::Grid::new("wacc_grid").striped(true).num_columns(2).min_col_width(220.0).show(ui, |ui| {
-                            let row = |ui: &mut egui::Ui, k: &str, v: String| {
-                                ui.label(egui::RichText::new(k).color(AXIS_TEXT).small());
-                                ui.label(egui::RichText::new(v).small().monospace().strong());
-                                ui.end_row();
-                            };
-                            row(ui, "Beta (β)",                    format!("{:.3}", snap.beta));
-                            row(ui, "Risk-free rate (Rf, 10Y)",    format!("{:.2}%", snap.risk_free_pct));
-                            row(ui, "Equity risk premium (ERP)",   format!("{:.2}%", snap.equity_risk_premium_pct));
-                            row(ui, "Cost of equity (Re = Rf + β·ERP)", format!("{:.2}%", snap.cost_of_equity_pct));
-                            row(ui, "Pre-tax cost of debt (Rd)",   format!("{:.2}%", snap.pre_tax_cost_of_debt_pct));
-                            row(ui, "Effective tax rate",          format!("{:.2}%", snap.tax_rate_pct));
-                            row(ui, "After-tax cost of debt",      format!("{:.2}%", snap.after_tax_cost_of_debt_pct));
-                            row(ui, "Market cap (E)",              fmt_money(snap.market_cap));
-                            row(ui, "Total debt (D)",              fmt_money(snap.total_debt));
-                            row(ui, "Equity weight (wE)",          format!("{:.1}%", snap.equity_weight * 100.0));
-                            row(ui, "Debt weight (wD)",            format!("{:.1}%", snap.debt_weight * 100.0));
-                            row(ui, "WACC",                        format!("{:.2}%", snap.wacc_pct));
-                        });
-                        ui.separator();
-                        ui.label(egui::RichText::new("CAPM formula: WACC = wE × (Rf + β × ERP) + wD × Rd × (1 - t)")
-                            .color(AXIS_TEXT).small().italics());
-                    }
+                    super::render::render_wacc_snapshot(ui, &self.wacc_snapshot);
                 });
             self.show_wacc = open;
         }

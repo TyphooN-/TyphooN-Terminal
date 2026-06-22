@@ -2,9 +2,8 @@ use super::*;
 
 impl TyphooNApp {
     pub(super) fn render_research_return_risk_dcf_options_windows(&mut self, ctx: &egui::Context) {
-        let chart_sym_research = research_chart_symbol(
-            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
-        );
+        let chart_sym_research =
+            research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
 
@@ -22,13 +21,19 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.hra_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.hra_symbol = chart_sym_research.clone(); }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.hra_symbol).desired_width(100.0),
+                        );
+                        if ui.button("Use Chart").clicked() {
+                            self.hra_symbol = chart_sym_research.clone();
+                        }
                         if ui.button("Load Cached").clicked() {
                             if let Some(ref cache) = self.cache {
                                 if let Ok(conn) = cache.connection() {
                                     let sym_u = self.hra_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_hra(&conn, &sym_u) {
+                                    if let Ok(Some(snap)) =
+                                        typhoon_engine::core::research::get_hra(&conn, &sym_u)
+                                    {
                                         self.hra_snapshot = snap;
                                         self.hra_symbol = sym_u;
                                     }
@@ -39,67 +44,22 @@ impl TyphooNApp {
                             let sym = self.hra_symbol.to_uppercase();
                             self.hra_loading = true;
                             self.hra_symbol = sym.clone();
-                            let rf = self.treasury_yields.iter()
+                            let rf = self
+                                .treasury_yields
+                                .iter()
                                 .find(|y| y.tenor.contains("10"))
                                 .map(|y| y.yield_pct)
                                 .unwrap_or(4.0);
-                            let _ = self.broker_tx.send(BrokerCmd::FetchHraSnapshot { symbol: sym, risk_free_pct: rf });
+                            let _ = self.broker_tx.send(BrokerCmd::FetchHraSnapshot {
+                                symbol: sym,
+                                risk_free_pct: rf,
+                            });
                         }
                         if self.hra_loading {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.hra_snapshot;
-                    if snap.symbol.is_empty() || snap.windows.is_empty() {
-                        ui.label(egui::RichText::new("No data — run HP for this symbol to populate history, then click Compute.")
-                            .color(AXIS_TEXT).small());
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        ui.label(egui::RichText::new(format!("{} — last close ${:.2} — as of {}",
-                            snap.symbol, snap.last_close, snap.as_of)).strong().color(AXIS_TEXT));
-                        ui.separator();
-                        egui::Grid::new("hra_ratios_grid").striped(true).num_columns(2).min_col_width(200.0).show(ui, |ui| {
-                            let row = |ui: &mut egui::Ui, k: &str, v: String| {
-                                ui.label(egui::RichText::new(k).color(AXIS_TEXT).small());
-                                ui.label(egui::RichText::new(v).small().monospace().strong());
-                                ui.end_row();
-                            };
-                            row(ui, "Annualized volatility", format!("{:.2}%", snap.volatility_annual_pct));
-                            row(ui, "Sharpe ratio",          format!("{:.3}", snap.sharpe_ratio));
-                            row(ui, "Sortino ratio",         format!("{:.3}", snap.sortino_ratio));
-                            row(ui, "Calmar ratio",          format!("{:.3}", snap.calmar_ratio));
-                            row(ui, "Max drawdown",          format!("{:.2}%", snap.max_drawdown_pct));
-                            row(ui, "DD peak",               snap.drawdown_peak_date.clone());
-                            row(ui, "DD trough",             snap.drawdown_trough_date.clone());
-                            row(ui, "Risk-free rate",        format!("{:.2}%", snap.risk_free_pct));
-                        });
-                        ui.separator();
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            egui::Grid::new("hra_windows_grid").striped(true).num_columns(4).min_col_width(80.0).show(ui, |ui| {
-                                ui.label(egui::RichText::new("Window").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Return").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("CAGR").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("N").color(AXIS_TEXT).small().strong());
-                                ui.end_row();
-                                for w in &snap.windows {
-                                    let c = if w.return_pct >= 0.0 { UP } else { DOWN };
-                                    ui.label(egui::RichText::new(&w.label).small().monospace().strong());
-                                    ui.label(egui::RichText::new(format!("{:+.2}%", w.return_pct)).color(c).small().monospace());
-                                    let cagr = if w.cagr_pct == 0.0 { "—".to_string() } else { format!("{:+.2}%", w.cagr_pct) };
-                                    ui.label(egui::RichText::new(cagr).small().monospace());
-                                    ui.label(egui::RichText::new(format!("{}", w.n_observations)).small().monospace());
-                                    ui.end_row();
-                                }
-                            });
-                        });
-                        if !snap.note.is_empty() {
-                            ui.separator();
-                            ui.label(egui::RichText::new(&snap.note).color(AXIS_TEXT).small().italics());
-                        }
-                    }
+                    super::render::render_hra_snapshot(ui, &self.hra_snapshot);
                 });
             self.show_hra = open;
         }
@@ -174,63 +134,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.dcf_snapshot;
-                    if snap.symbol.is_empty() {
-                        ui.label(egui::RichText::new("No data — run DES + FA/IS/CF for this symbol first, then click Compute.")
-                            .color(AXIS_TEXT).small());
-                        ui.label(egui::RichText::new("Tip: run WACC for this symbol to use it as the discount rate.").color(AXIS_TEXT).small());
-                    } else {
-                        let color = if snap.implied_price > 0.0 { UP } else { DOWN };
-                        ui.label(egui::RichText::new(format!("{} — implied price ${:.2}", snap.symbol, snap.implied_price))
-                            .strong().size(16.0).color(color));
-                        ui.label(egui::RichText::new(format!("{} — as of {} — WACC {:.2}%", snap.method, snap.as_of, snap.wacc_pct))
-                            .color(AXIS_TEXT).small());
-                        ui.separator();
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            egui::Grid::new("dcf_sum_grid").striped(true).num_columns(2).min_col_width(200.0).show(ui, |ui| {
-                                let row = |ui: &mut egui::Ui, k: &str, v: String| {
-                                    ui.label(egui::RichText::new(k).color(AXIS_TEXT).small());
-                                    ui.label(egui::RichText::new(v).small().monospace().strong());
-                                    ui.end_row();
-                                };
-                                row(ui, "Base revenue (TTM)", format!("${:.0}M", snap.base_revenue / 1e6));
-                                row(ui, "Base FCFF (TTM)",    format!("${:.0}M", snap.base_fcff / 1e6));
-                                row(ui, "FCFF margin",         format!("{:.2}%", snap.fcff_margin_pct));
-                                row(ui, "Revenue growth",      format!("{:.2}%", snap.growth_pct));
-                                row(ui, "Terminal growth",     format!("{:.2}%", snap.terminal_growth_pct));
-                                row(ui, "Enterprise value",    format!("${:.0}M", snap.enterprise_value / 1e6));
-                                row(ui, "(+) Cash",            format!("${:.0}M", snap.cash_and_equivalents / 1e6));
-                                row(ui, "(-) Debt",            format!("${:.0}M", snap.total_debt / 1e6));
-                                row(ui, "Equity value",        format!("${:.0}M", snap.equity_value / 1e6));
-                                row(ui, "Shares outstanding",  format!("{:.0}M", snap.shares_outstanding / 1e6));
-                                row(ui, "Implied price",       format!("${:.2}", snap.implied_price));
-                            });
-                            ui.separator();
-                            egui::Grid::new("dcf_years_grid").striped(true).num_columns(6).min_col_width(80.0).show(ui, |ui| {
-                                ui.label(egui::RichText::new("Year").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Revenue").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("EBIT").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("NOPAT").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("FCFF").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("PV FCFF").color(AXIS_TEXT).small().strong());
-                                ui.end_row();
-                                for y in &snap.years {
-                                    ui.label(egui::RichText::new(format!("{}", y.year)).small().monospace().strong());
-                                    ui.label(egui::RichText::new(format!("${:.0}M", y.revenue / 1e6)).small().monospace());
-                                    ui.label(egui::RichText::new(format!("${:.0}M", y.ebit / 1e6)).small().monospace());
-                                    ui.label(egui::RichText::new(format!("${:.0}M", y.nopat / 1e6)).small().monospace());
-                                    ui.label(egui::RichText::new(format!("${:.0}M", y.fcff / 1e6)).small().monospace());
-                                    ui.label(egui::RichText::new(format!("${:.0}M", y.pv_fcff / 1e6)).small().monospace());
-                                    ui.end_row();
-                                }
-                            });
-                        });
-                        if !snap.note.is_empty() {
-                            ui.separator();
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small().italics());
-                        }
-                    }
+                    super::render::render_dcf_snapshot(ui, &self.dcf_snapshot);
                 });
             self.show_dcf = open;
         }
@@ -337,43 +241,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.svm_snapshot;
-                    if snap.symbol.is_empty() || snap.rows.is_empty() {
-                        ui.label(egui::RichText::new("No data — run DDM/DCF/PEERS for this symbol first, then click Compute.")
-                            .color(AXIS_TEXT).small());
-                    } else {
-                        let color = if snap.upside_mid_pct >= 0.0 { UP } else { DOWN };
-                        ui.label(egui::RichText::new(format!("{} — current ${:.2} — fair mid ${:.2} ({:+.2}%)",
-                            snap.symbol, snap.current_price, snap.fair_mid, snap.upside_mid_pct))
-                            .strong().size(16.0).color(color));
-                        ui.label(egui::RichText::new(format!("Fair range ${:.2} – ${:.2} — as of {}",
-                            snap.fair_low, snap.fair_high, snap.as_of)).color(AXIS_TEXT).small());
-                        ui.separator();
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            egui::Grid::new("svm_grid").striped(true).num_columns(5).min_col_width(110.0).show(ui, |ui| {
-                                ui.label(egui::RichText::new("Model").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Implied").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Upside").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Confidence").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Source").color(AXIS_TEXT).small().strong());
-                                ui.end_row();
-                                for r in &snap.rows {
-                                    let rc = if r.upside_pct >= 0.0 { UP } else { DOWN };
-                                    ui.label(egui::RichText::new(&r.model).small().monospace().strong());
-                                    ui.label(egui::RichText::new(format!("${:.2}", r.implied_price)).small().monospace());
-                                    ui.label(egui::RichText::new(format!("{:+.2}%", r.upside_pct)).color(rc).small().monospace());
-                                    ui.label(egui::RichText::new(&r.confidence).small().monospace());
-                                    ui.label(egui::RichText::new(&r.source).small().monospace());
-                                    ui.end_row();
-                                }
-                            });
-                        });
-                        if !snap.note.is_empty() {
-                            ui.separator();
-                            ui.label(egui::RichText::new(&snap.note).color(AXIS_TEXT).small().italics());
-                        }
-                    }
+                    super::render::render_svm_snapshot(ui, &self.svm_snapshot);
                 });
             self.show_svm = open;
         }
@@ -392,13 +260,21 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.omon_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.omon_symbol = chart_sym_research.clone(); }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.omon_symbol).desired_width(100.0),
+                        );
+                        if ui.button("Use Chart").clicked() {
+                            self.omon_symbol = chart_sym_research.clone();
+                        }
                         if ui.button("Load Cached").clicked() {
                             if let Some(ref cache) = self.cache {
                                 if let Ok(conn) = cache.connection() {
                                     let sym_u = self.omon_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_options_chain(&conn, &sym_u) {
+                                    if let Ok(Some(snap)) =
+                                        typhoon_engine::core::research::get_options_chain(
+                                            &conn, &sym_u,
+                                        )
+                                    {
                                         self.omon_snapshot = snap;
                                         self.omon_symbol = sym_u;
                                     }
@@ -409,71 +285,15 @@ impl TyphooNApp {
                             let sym = self.omon_symbol.to_uppercase();
                             self.omon_loading = true;
                             self.omon_symbol = sym.clone();
-                            let _ = self.broker_tx.send(BrokerCmd::FetchOptionsChain { symbol: sym });
+                            let _ = self
+                                .broker_tx
+                                .send(BrokerCmd::FetchOptionsChain { symbol: sym });
                         }
                         if self.omon_loading {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.omon_snapshot;
-                    if snap.symbol.is_empty() || snap.expirations.is_empty() {
-                        ui.label(egui::RichText::new("No data — click Fetch to pull the nearest expiration from Yahoo (no key).")
-                            .color(AXIS_TEXT).small());
-                    } else {
-                        ui.label(egui::RichText::new(format!("{} — underlying ${:.2} — {} expiry — as of {}",
-                            snap.symbol, snap.underlying_price, snap.expirations.len(), snap.as_of))
-                            .strong().color(AXIS_TEXT));
-                        ui.separator();
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            for exp in &snap.expirations {
-                                ui.label(egui::RichText::new(format!("Expiry {} ({} days) — {} calls / {} puts",
-                                    exp.expiration, exp.days_to_expiry, exp.calls.len(), exp.puts.len()))
-                                    .strong().color(AXIS_TEXT));
-                                egui::Grid::new(format!("omon_calls_{}", exp.expiration)).striped(true).num_columns(7).min_col_width(70.0).show(ui, |ui| {
-                                    ui.label(egui::RichText::new("Strike").color(AXIS_TEXT).small().strong());
-                                    ui.label(egui::RichText::new("C Last").color(AXIS_TEXT).small().strong());
-                                    ui.label(egui::RichText::new("C IV").color(AXIS_TEXT).small().strong());
-                                    ui.label(egui::RichText::new("C Vol").color(AXIS_TEXT).small().strong());
-                                    ui.label(egui::RichText::new("P Last").color(AXIS_TEXT).small().strong());
-                                    ui.label(egui::RichText::new("P IV").color(AXIS_TEXT).small().strong());
-                                    ui.label(egui::RichText::new("P Vol").color(AXIS_TEXT).small().strong());
-                                    ui.end_row();
-                                    let mut strikes: Vec<f64> = exp.calls.iter().map(|c| c.strike).collect();
-                                    for p in &exp.puts {
-                                        if !strikes.iter().any(|s| (s - p.strike).abs() < 1e-6) {
-                                            strikes.push(p.strike);
-                                        }
-                                    }
-                                    strikes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                                    for k in strikes.iter().take(40) {
-                                        let call = exp.calls.iter().find(|c| (c.strike - k).abs() < 1e-6);
-                                        let put = exp.puts.iter().find(|p| (p.strike - k).abs() < 1e-6);
-                                        ui.label(egui::RichText::new(format!("{:.2}", k)).small().monospace().strong());
-                                        if let Some(c) = call {
-                                            ui.label(egui::RichText::new(format!("{:.2}", c.last_price)).small().monospace());
-                                            ui.label(egui::RichText::new(format!("{:.1}%", c.implied_volatility * 100.0)).small().monospace());
-                                            ui.label(egui::RichText::new(format!("{:.0}", c.volume)).small().monospace());
-                                        } else {
-                                            ui.label(""); ui.label(""); ui.label("");
-                                        }
-                                        if let Some(p) = put {
-                                            ui.label(egui::RichText::new(format!("{:.2}", p.last_price)).small().monospace());
-                                            ui.label(egui::RichText::new(format!("{:.1}%", p.implied_volatility * 100.0)).small().monospace());
-                                            ui.label(egui::RichText::new(format!("{:.0}", p.volume)).small().monospace());
-                                        } else {
-                                            ui.label(""); ui.label(""); ui.label("");
-                                        }
-                                        ui.end_row();
-                                    }
-                                });
-                                ui.separator();
-                            }
-                        });
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(AXIS_TEXT).small().italics());
-                        }
-                    }
+                    super::render::render_omon_snapshot(ui, &self.omon_snapshot);
                 });
             self.show_omon = open;
         }
@@ -578,57 +398,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.ivol_snapshot;
-                    if snap.symbol.is_empty() {
-                        ui.label(
-                            egui::RichText::new(
-                                "No data — run OMON to pull today's ATM IV, then click Compute.",
-                            )
-                            .color(AXIS_TEXT)
-                            .small(),
-                        );
-                    } else {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — ATM IV {:.1}% — as of {}",
-                                snap.symbol, snap.current_atm_iv_pct, snap.as_of
-                            ))
-                            .strong()
-                            .color(AXIS_TEXT),
-                        );
-                        ui.separator();
-                        egui::Grid::new("ivol_grid")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(200.0)
-                            .show(ui, |ui| {
-                                let row = |ui: &mut egui::Ui, k: &str, v: String| {
-                                    ui.label(egui::RichText::new(k).color(AXIS_TEXT).small());
-                                    ui.label(egui::RichText::new(v).small().monospace().strong());
-                                    ui.end_row();
-                                };
-                                row(
-                                    ui,
-                                    "Current ATM IV",
-                                    format!("{:.2}%", snap.current_atm_iv_pct),
-                                );
-                                row(ui, "52w low", format!("{:.2}%", snap.iv_52w_low_pct));
-                                row(ui, "52w high", format!("{:.2}%", snap.iv_52w_high_pct));
-                                row(ui, "IV rank", format!("{:.1}", snap.iv_rank));
-                                row(ui, "IV percentile", format!("{:.1}", snap.iv_percentile));
-                                row(ui, "Observations", format!("{}", snap.observation_count));
-                            });
-                        if !snap.note.is_empty() {
-                            ui.separator();
-                            ui.label(
-                                egui::RichText::new(&snap.note)
-                                    .color(AXIS_TEXT)
-                                    .small()
-                                    .italics(),
-                            );
-                        }
-                    }
+                    super::render::render_ivol_snapshot(ui, &self.ivol_snapshot);
                 });
             self.show_ivol = open;
         }

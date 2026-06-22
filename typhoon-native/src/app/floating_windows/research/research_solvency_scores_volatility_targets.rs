@@ -5,9 +5,8 @@ impl TyphooNApp {
         &mut self,
         ctx: &egui::Context,
     ) {
-        let chart_sym_research = research_chart_symbol(
-            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
-        );
+        let chart_sym_research =
+            research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // Solvency, quality, volatility-estimator, EPS-beat, and price-target research
 
@@ -25,13 +24,19 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.altz_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.altz_symbol = chart_sym_research.clone(); }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.altz_symbol).desired_width(100.0),
+                        );
+                        if ui.button("Use Chart").clicked() {
+                            self.altz_symbol = chart_sym_research.clone();
+                        }
                         if ui.button("Load Cached").clicked() {
                             if let Some(ref cache) = self.cache {
                                 if let Ok(conn) = cache.connection() {
                                     let sym_u = self.altz_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_altman_z(&conn, &sym_u) {
+                                    if let Ok(Some(snap)) =
+                                        typhoon_engine::core::research::get_altman_z(&conn, &sym_u)
+                                    {
                                         self.altz_snapshot = snap;
                                         self.altz_symbol = sym_u;
                                     }
@@ -44,64 +49,31 @@ impl TyphooNApp {
                             self.altz_symbol = sym.clone();
                             let market_value_equity = if let Some(ref cache) = self.cache {
                                 if let Ok(conn) = cache.connection() {
-                                    if let Ok(Some(fa)) = typhoon_engine::core::fundamentals::get_fundamentals(&conn, &sym) {
+                                    if let Ok(Some(fa)) =
+                                        typhoon_engine::core::fundamentals::get_fundamentals(
+                                            &conn, &sym,
+                                        )
+                                    {
                                         fa.market_cap.unwrap_or(0.0)
-                                    } else { 0.0 }
-                                } else { 0.0 }
-                            } else { 0.0 };
+                                    } else {
+                                        0.0
+                                    }
+                                } else {
+                                    0.0
+                                }
+                            } else {
+                                0.0
+                            };
                             let _ = self.broker_tx.send(BrokerCmd::ComputeAltmanZSnapshot {
-                                symbol: sym, market_value_equity,
+                                symbol: sym,
+                                market_value_equity,
                             });
                         }
                         if self.altz_loading {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.altz_snapshot;
-                    if snap.symbol.is_empty() || snap.components.is_empty() {
-                        ui.label(egui::RichText::new("No data — run FA (Financials) + Fundamentals, then click Compute.")
-                            .color(AXIS_TEXT).small());
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.zone.as_str() {
-                            "SAFE" => UP,
-                            "GRAY" => AXIS_TEXT,
-                            "DISTRESS" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(egui::RichText::new(format!(
-                            "{} — Z = {:.2} — {} — as of {}",
-                            snap.symbol, snap.z_score, snap.zone, snap.as_of,
-                        )).strong().color(color));
-                        ui.label(egui::RichText::new(format!(
-                            "WC ${:.0}M · RE ${:.0}M · EBIT ${:.0}M · MVE ${:.0}M · Sales ${:.0}M · TA ${:.0}M · TL ${:.0}M",
-                            snap.working_capital / 1e6, snap.retained_earnings / 1e6, snap.ebit / 1e6,
-                            snap.market_value_equity / 1e6, snap.sales / 1e6,
-                            snap.total_assets / 1e6, snap.total_liabilities / 1e6,
-                        )).small().color(AXIS_TEXT));
-                        ui.separator();
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            egui::Grid::new("altz_grid").striped(true).num_columns(5).min_col_width(80.0).show(ui, |ui| {
-                                ui.label(egui::RichText::new("Component").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Ratio").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Coeff").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Contribution").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Note").color(AXIS_TEXT).small().strong());
-                                ui.end_row();
-                                for c in &snap.components {
-                                    ui.label(egui::RichText::new(&c.name).small().monospace().strong());
-                                    ui.label(egui::RichText::new(format!("{:.3}", c.ratio)).small().monospace());
-                                    ui.label(egui::RichText::new(format!("{:.1}", c.coefficient)).small().monospace());
-                                    ui.label(egui::RichText::new(format!("{:.3}", c.contribution)).small().monospace());
-                                    ui.label(egui::RichText::new(&c.note).color(AXIS_TEXT).small().monospace());
-                                    ui.end_row();
-                                }
-                            });
-                        });
-                    }
+                    super::render::render_altz_snapshot(ui, &self.altz_snapshot);
                 });
             self.show_altz = open;
         }
@@ -120,13 +92,19 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.ptfs_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.ptfs_symbol = chart_sym_research.clone(); }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.ptfs_symbol).desired_width(100.0),
+                        );
+                        if ui.button("Use Chart").clicked() {
+                            self.ptfs_symbol = chart_sym_research.clone();
+                        }
                         if ui.button("Load Cached").clicked() {
                             if let Some(ref cache) = self.cache {
                                 if let Ok(conn) = cache.connection() {
                                     let sym_u = self.ptfs_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_piotroski(&conn, &sym_u) {
+                                    if let Ok(Some(snap)) =
+                                        typhoon_engine::core::research::get_piotroski(&conn, &sym_u)
+                                    {
                                         self.ptfs_snapshot = snap;
                                         self.ptfs_symbol = sym_u;
                                     }
@@ -137,58 +115,15 @@ impl TyphooNApp {
                             let sym = self.ptfs_symbol.to_uppercase();
                             self.ptfs_loading = true;
                             self.ptfs_symbol = sym.clone();
-                            let _ = self.broker_tx.send(BrokerCmd::ComputePiotroskiSnapshot { symbol: sym });
+                            let _ = self
+                                .broker_tx
+                                .send(BrokerCmd::ComputePiotroskiSnapshot { symbol: sym });
                         }
                         if self.ptfs_loading {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.ptfs_snapshot;
-                    if snap.symbol.is_empty() || snap.checks.is_empty() {
-                        ui.label(egui::RichText::new("No data — run FA (Financials) with 2+ annual periods, then click Compute.")
-                            .color(AXIS_TEXT).small());
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.strength_label.as_str() {
-                            "STRONG" => UP,
-                            "MIXED" => AXIS_TEXT,
-                            "WEAK" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(egui::RichText::new(format!(
-                            "{} — F-Score {}/9 — {} — {} vs {} — as of {}",
-                            snap.symbol, snap.f_score, snap.strength_label,
-                            snap.current_period, snap.prior_period, snap.as_of,
-                        )).strong().color(color));
-                        ui.label(egui::RichText::new(format!(
-                            "Profitability {}/4 · Leverage/Liquidity {}/3 · Efficiency {}/2",
-                            snap.profitability_score, snap.leverage_score, snap.efficiency_score,
-                        )).small().color(AXIS_TEXT));
-                        ui.separator();
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            egui::Grid::new("ptfs_grid").striped(true).num_columns(5).min_col_width(80.0).show(ui, |ui| {
-                                ui.label(egui::RichText::new("Category").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Check").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Passed").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Current").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Prior").color(AXIS_TEXT).small().strong());
-                                ui.end_row();
-                                for c in &snap.checks {
-                                    let check_color = if c.passed { UP } else { DOWN };
-                                    let check_text = if c.passed { "PASS" } else { "FAIL" };
-                                    ui.label(egui::RichText::new(&c.category).small().monospace());
-                                    ui.label(egui::RichText::new(&c.name).small().monospace().strong());
-                                    ui.label(egui::RichText::new(check_text).color(check_color).small().monospace().strong());
-                                    ui.label(egui::RichText::new(format!("{:.2}", c.value_current)).small().monospace());
-                                    ui.label(egui::RichText::new(format!("{:.2}", c.value_prior)).small().monospace());
-                                    ui.end_row();
-                                }
-                            });
-                        });
-                    }
+                    super::render::render_ptfs_snapshot(ui, &self.ptfs_snapshot);
                 });
             self.show_ptfs = open;
         }
@@ -259,98 +194,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.vole_snapshot;
-                    if snap.symbol.is_empty() || snap.estimators.is_empty() {
-                        ui.label(
-                            egui::RichText::new(
-                                "No data — run HP for this symbol, then click Compute.",
-                            )
-                            .color(AXIS_TEXT)
-                            .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — preferred {} = {:.2}% · {} trading days · as of {}",
-                                snap.symbol,
-                                snap.preferred_label,
-                                snap.preferred_estimate_pct,
-                                snap.trading_days,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(AXIS_TEXT),
-                        );
-                        ui.separator();
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            egui::Grid::new("vole_grid")
-                                .striped(true)
-                                .num_columns(4)
-                                .min_col_width(100.0)
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        egui::RichText::new("Estimator")
-                                            .color(AXIS_TEXT)
-                                            .small()
-                                            .strong(),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new("Annualized %")
-                                            .color(AXIS_TEXT)
-                                            .small()
-                                            .strong(),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new("Efficiency vs CtC")
-                                            .color(AXIS_TEXT)
-                                            .small()
-                                            .strong(),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new("Note")
-                                            .color(AXIS_TEXT)
-                                            .small()
-                                            .strong(),
-                                    );
-                                    ui.end_row();
-                                    for e in &snap.estimators {
-                                        ui.label(
-                                            egui::RichText::new(&e.name)
-                                                .small()
-                                                .monospace()
-                                                .strong(),
-                                        );
-                                        ui.label(
-                                            egui::RichText::new(format!(
-                                                "{:.2}",
-                                                e.annualized_vol_pct
-                                            ))
-                                            .small()
-                                            .monospace(),
-                                        );
-                                        ui.label(
-                                            egui::RichText::new(format!(
-                                                "{:.2}x",
-                                                e.efficiency_vs_close
-                                            ))
-                                            .small()
-                                            .monospace(),
-                                        );
-                                        ui.label(
-                                            egui::RichText::new(&e.note)
-                                                .color(AXIS_TEXT)
-                                                .small()
-                                                .monospace(),
-                                        );
-                                        ui.end_row();
-                                    }
-                                });
-                        });
-                    }
+                    super::render::render_vole_snapshot(ui, &self.vole_snapshot);
                 });
             self.show_vole = open;
         }
@@ -368,13 +212,19 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.epsb_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.epsb_symbol = chart_sym_research.clone(); }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.epsb_symbol).desired_width(100.0),
+                        );
+                        if ui.button("Use Chart").clicked() {
+                            self.epsb_symbol = chart_sym_research.clone();
+                        }
                         if ui.button("Load Cached").clicked() {
                             if let Some(ref cache) = self.cache {
                                 if let Ok(conn) = cache.connection() {
                                     let sym_u = self.epsb_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) = typhoon_engine::core::research::get_eps_beat(&conn, &sym_u) {
+                                    if let Ok(Some(snap)) =
+                                        typhoon_engine::core::research::get_eps_beat(&conn, &sym_u)
+                                    {
                                         self.epsb_snapshot = snap;
                                         self.epsb_symbol = sym_u;
                                     }
@@ -385,60 +235,15 @@ impl TyphooNApp {
                             let sym = self.epsb_symbol.to_uppercase();
                             self.epsb_loading = true;
                             self.epsb_symbol = sym.clone();
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeEpsBeatSnapshot { symbol: sym });
+                            let _ = self
+                                .broker_tx
+                                .send(BrokerCmd::ComputeEpsBeatSnapshot { symbol: sym });
                         }
                         if self.epsb_loading {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.epsb_snapshot;
-                    if snap.symbol.is_empty() || snap.total_reports == 0 {
-                        ui.label(egui::RichText::new("No data — run earnings surprise fetch (ERN) for this symbol, then click Compute.")
-                            .color(AXIS_TEXT).small());
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.bias_label.as_str() {
-                            "POSITIVE" => UP,
-                            "NEUTRAL" => AXIS_TEXT,
-                            "NEGATIVE" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(egui::RichText::new(format!(
-                            "{} — {} · {} · beat rate {:.0}% · streak {:+} — as of {}",
-                            snap.symbol, snap.bias_label, snap.trend_label,
-                            snap.beat_rate_pct, snap.current_streak, snap.as_of,
-                        )).strong().color(color));
-                        ui.separator();
-                        egui::Grid::new("epsb_grid").striped(true).num_columns(2).min_col_width(160.0).show(ui, |ui| {
-                            ui.label(egui::RichText::new("Total reports").small().strong());
-                            ui.label(egui::RichText::new(format!("{}", snap.total_reports)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Beats / Misses / Inlines").small().strong());
-                            ui.label(egui::RichText::new(format!("{} / {} / {}", snap.beats, snap.misses, snap.inlines)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Longest beat streak").small().strong());
-                            ui.label(egui::RichText::new(format!("{}", snap.longest_beat_streak)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Longest miss streak").small().strong());
-                            ui.label(egui::RichText::new(format!("{}", snap.longest_miss_streak)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Avg surprise %").small().strong());
-                            ui.label(egui::RichText::new(format!("{:+.2}%", snap.avg_surprise_pct)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Median surprise %").small().strong());
-                            ui.label(egui::RichText::new(format!("{:+.2}%", snap.median_surprise_pct)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Recent-4 avg %").small().strong());
-                            ui.label(egui::RichText::new(format!("{:+.2}%", snap.recent_avg_surprise_pct)).small().monospace());
-                            ui.end_row();
-                            ui.label(egui::RichText::new("Latest report").small().strong());
-                            ui.label(egui::RichText::new(format!("{} ({:+.2}%)", snap.latest_date, snap.latest_surprise_pct)).small().monospace());
-                            ui.end_row();
-                        });
-                    }
+                    super::render::render_epsb_snapshot(ui, &self.epsb_snapshot);
                 });
             self.show_epsb = open;
         }
@@ -509,131 +314,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.ptd_snapshot;
-                    if snap.symbol.is_empty() || snap.num_analysts <= 0 {
-                        ui.label(
-                            egui::RichText::new(
-                                "No data — run UPDG / PT for this symbol, then click Compute.",
-                            )
-                            .color(AXIS_TEXT)
-                            .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.consensus_label.as_str() {
-                            "BULLISH" => UP,
-                            "NEUTRAL" => AXIS_TEXT,
-                            "BEARISH" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — {} analysts — as of {}",
-                                snap.symbol, snap.consensus_label, snap.num_analysts, snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("ptd_grid")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(180.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Current price").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("${:.2}", snap.current_price))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Target high / low").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "${:.2} / ${:.2}",
-                                        snap.target_high, snap.target_low
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Target mean / median").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "${:.2} / ${:.2}",
-                                        snap.target_mean, snap.target_median
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Dispersion %").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.1}%", snap.dispersion_pct))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Spread % (vs current)")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:.1}%", snap.spread_pct))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Implied return (median)")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:+.1}%",
-                                        snap.implied_return_median_pct
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Implied return (mean)")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:+.1}%",
-                                        snap.implied_return_mean_pct
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Upside to high / Downside to low")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:+.1}% / {:+.1}%",
-                                        snap.upside_to_high_pct, snap.downside_to_low_pct
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_ptd_snapshot(ui, &self.ptd_snapshot);
                 });
             self.show_ptd = open;
         }

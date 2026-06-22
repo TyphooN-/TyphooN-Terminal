@@ -5,9 +5,8 @@ impl TyphooNApp {
         &mut self,
         ctx: &egui::Context,
     ) {
-        let chart_sym_research = research_chart_symbol(
-            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
-        );
+        let chart_sym_research =
+            research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
         if self.show_downvol {
@@ -54,108 +53,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.downvol_snapshot;
-                    if snap.symbol.is_empty() || snap.sortino_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥30 returns.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.sortino_label.as_str() {
-                            "GOOD" | "EXCELLENT" => UP,
-                            "POOR" | "VERY_POOR" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — Sortino {:.3} (ann {:.3}) — {} bars — as of {}",
-                                snap.symbol,
-                                snap.sortino_label,
-                                snap.sortino_ratio,
-                                snap.sortino_ratio_ann,
-                                snap.bars_used,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("downvol_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Mean log return").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.6}", snap.mean_log_return))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Downside deviation").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:.6}", snap.downside_dev))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Downside deviation (ann)")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:.6}", snap.downside_dev_ann))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Upside deviation").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.6}", snap.upside_dev))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Sortino (raw)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.sortino_ratio))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Sortino (annualized)").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.sortino_ratio_ann))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Downside % of total var")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:.2}%",
-                                        snap.downside_pct_of_total
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_downvol_snapshot(ui, &self.downvol_snapshot);
                 });
             self.show_downvol = open;
         }
@@ -204,90 +102,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.sharpr_snapshot;
-                    if snap.symbol.is_empty() || snap.sharpe_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥30 returns.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.sharpe_label.as_str() {
-                            "GOOD" | "EXCELLENT" => UP,
-                            "POOR" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — Sharpe {:.3} (ann {:.3}) — {} bars — as of {}",
-                                snap.symbol,
-                                snap.sharpe_label,
-                                snap.sharpe_ratio,
-                                snap.sharpe_ratio_ann,
-                                snap.bars_used,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("sharpr_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Mean log return").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.6}", snap.mean_log_return))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Stdev log return").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.6}", snap.stdev_log_return))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Mean return (ann)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.6}", snap.mean_return_ann))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Stdev return (ann)").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:.6}", snap.stdev_return_ann))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Sharpe (raw)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.sharpe_ratio))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Sharpe (annualized)").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.sharpe_ratio_ann))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_sharpr_snapshot(ui, &self.sharpr_snapshot);
                 });
             self.show_sharpr = open;
         }
@@ -336,93 +151,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.effratio_snapshot;
-                    if snap.symbol.is_empty() || snap.efficiency_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥30 bars.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.efficiency_label.as_str() {
-                            "TRENDING" | "STRONG_TREND" => UP,
-                            "CHOP" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — ER {:.3} (signed {:+.3}) — {} bars — as of {}",
-                                snap.symbol,
-                                snap.efficiency_label,
-                                snap.efficiency_ratio,
-                                snap.signed_efficiency,
-                                snap.bars_used,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("effratio_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Start close").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.start_close))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("End close").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.end_close))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Net change").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.4}", snap.net_change))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Net change %").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.2}%", snap.net_change_pct))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Σ |Δclose|").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.sum_abs_changes))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Efficiency ratio").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.efficiency_ratio))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Signed efficiency").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.4}", snap.signed_efficiency))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_effratio_snapshot(ui, &self.effratio_snapshot);
                 });
             self.show_effratio = open;
         }
@@ -471,89 +200,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.wickbias_snapshot;
-                    if snap.symbol.is_empty() || snap.bias_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — need ≥20 non-flat bars.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.bias_label.as_str() {
-                            "BUYER_LEAN" | "BUYER_DEFEND" => UP,
-                            "SELLER_LEAN" | "SELLER_REJECT" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — bias {:+.4} — {} bars — as of {}",
-                                snap.symbol,
-                                snap.bias_label,
-                                snap.wick_bias_score,
-                                snap.bars_used,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("wickbias_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("Avg upper wick share").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.avg_upper_wick))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Avg lower wick share").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.avg_lower_wick))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Median upper wick").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.median_upper_wick))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Median lower wick").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.median_lower_wick))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Avg body share").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.avg_body_share))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Bias score").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.4}", snap.wick_bias_score))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_wickbias_snapshot(ui, &self.wickbias_snapshot);
                 });
             self.show_wickbias = open;
         }
@@ -602,85 +249,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.volofvol_snapshot;
-                    if snap.symbol.is_empty() || snap.cv_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥50 returns.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.cv_label.as_str() {
-                            "STABLE" => UP,
-                            "UNSTABLE" | "CHAOTIC" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — CV {:.3} — {} RV points — as of {}",
-                                snap.symbol,
-                                snap.cv_label,
-                                snap.cv_rv20,
-                                snap.bars_used,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("volofvol_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Mean RV20").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.6}", snap.mean_rv20))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Stdev RV20").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.6}", snap.stdev_rv20))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Min RV20").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.6}", snap.min_rv20))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Max RV20").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.6}", snap.max_rv20))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Latest RV20").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.6}", snap.latest_rv20))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("CV (stdev/mean)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.cv_rv20))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_volofvol_snapshot(ui, &self.volofvol_snapshot);
                 });
             self.show_volofvol = open;
         }

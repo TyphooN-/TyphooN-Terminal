@@ -64,42 +64,47 @@ impl TyphooNApp {
             }
             let mut open = self.show_squeezerank;
             egui::Window::new("SQUEEZERANK — Cross-Symbol Squeeze Percentile")
-                .open(&mut open).resizable(true).default_size([520.0, 260.0])
+                .open(&mut open)
+                .resizable(true)
+                .default_size([520.0, 260.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.squeezerank_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.squeezerank_symbol = chart_sym_research.clone(); }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.squeezerank_symbol)
+                                .desired_width(100.0),
+                        );
+                        if ui.button("Use Chart").clicked() {
+                            self.squeezerank_symbol = chart_sym_research.clone();
+                        }
                         if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache { if let Ok(conn) = cache.connection() {
-                                let sym_u = self.squeezerank_symbol.to_uppercase();
-                                if let Ok(Some(snap)) = typhoon_engine::core::research::get_squeezerank(&conn, &sym_u) { self.squeezerank_snapshot = snap; self.squeezerank_symbol = sym_u; }
-                            }}
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.squeezerank_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) =
+                                        typhoon_engine::core::research::get_squeezerank(
+                                            &conn, &sym_u,
+                                        )
+                                    {
+                                        self.squeezerank_snapshot = snap;
+                                        self.squeezerank_symbol = sym_u;
+                                    }
+                                }
+                            }
                         }
                         if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.squeezerank_symbol.to_uppercase(); self.squeezerank_loading = true; self.squeezerank_symbol = sym.clone();
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeSqueezeRankSnapshot { symbol: sym });
+                            let sym = self.squeezerank_symbol.to_uppercase();
+                            self.squeezerank_loading = true;
+                            self.squeezerank_symbol = sym.clone();
+                            let _ = self
+                                .broker_tx
+                                .send(BrokerCmd::ComputeSqueezeRankSnapshot { symbol: sym });
                         }
-                        if self.squeezerank_loading { ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small()); }
+                        if self.squeezerank_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
                     });
-                    ui.separator();
-                    let snap = &self.squeezerank_snapshot;
-                    if snap.symbol.is_empty() || snap.squeezerank_label == "INSUFFICIENT_DATA" {
-                        ui.label(egui::RichText::new("No data — need ≥5 symbols with SQUEEZE rows. Try the Watchlist Refresh first.").color(AXIS_TEXT).small());
-                    } else {
-                        let color = match snap.squeezerank_label.as_str() {
-                            "TOP_1PCT" | "TOP_5PCT" => DOWN,
-                            "TOP_10PCT" => AXIS_TEXT,
-                            _ => UP,
-                        };
-                        ui.label(egui::RichText::new(format!("{} — {} — rank {}/{} — percentile {:.1} — as of {}", snap.symbol, snap.squeezerank_label, snap.rank, snap.peer_count, snap.percentile, snap.as_of)).strong().color(color));
-                        ui.separator();
-                        egui::Grid::new("sqzrank_summary").striped(true).num_columns(2).min_col_width(180.0).show(ui, |ui| {
-                            ui.label(egui::RichText::new("Composite score").small().strong()); ui.label(egui::RichText::new(format!("{:.1}", snap.composite_score)).small().monospace()); ui.end_row();
-                            ui.label(egui::RichText::new("Rank").small().strong()); ui.label(egui::RichText::new(format!("{} / {}", snap.rank, snap.peer_count)).small().monospace()); ui.end_row();
-                            ui.label(egui::RichText::new("Percentile").small().strong()); ui.label(egui::RichText::new(format!("{:.1}", snap.percentile)).small().monospace()); ui.end_row();
-                        });
-                    }
+                    super::render::render_squeezerank_snapshot(ui, &self.squeezerank_snapshot);
                 });
             self.show_squeezerank = open;
         }
@@ -277,110 +282,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.bbsqueeze_snapshot;
-                    if snap.symbol.is_empty() || snap.bbsqueeze_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥140 bars.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                    } else {
-                        let color = match snap.bbsqueeze_label.as_str() {
-                            "TIGHT_SQUEEZE" => DOWN,
-                            "MODERATE_SQUEEZE" => AXIS_TEXT,
-                            "EXPANSION" => UP,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — width pct {:.1} — as of {}",
-                                snap.symbol,
-                                snap.bbsqueeze_label,
-                                snap.bb_width_percentile,
-                                snap.as_of
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("bbsq_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(180.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Bars used").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.bars_used))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Period").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.period))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("BB width current").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.5}", snap.bb_width_current))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("BB width min 120").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.5}", snap.bb_width_min_120))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("BB width max 120").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.5}", snap.bb_width_max_120))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Width percentile").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.1}", snap.bb_width_percentile))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Upper band").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.upper_band))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Mid band").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.mid_band))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Lower band").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.lower_band))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Last close").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.last_close))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_bbsqueeze_snapshot(ui, &self.bbsqueeze_snapshot);
                 });
             self.show_bbsqueeze = open;
         }

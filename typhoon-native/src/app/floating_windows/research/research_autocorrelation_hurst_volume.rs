@@ -5,9 +5,8 @@ impl TyphooNApp {
         &mut self,
         ctx: &egui::Context,
     ) {
-        let chart_sym_research = research_chart_symbol(
-            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
-        );
+        let chart_sym_research =
+            research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
 
@@ -56,78 +55,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.autocor_snapshot;
-                    if snap.symbol.is_empty() || snap.regime_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — needs ≥30 cached daily bars.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.regime_label.as_str() {
-                            "MOMENTUM" | "STRONG_MOMENTUM" => UP,
-                            "MEAN_REVERT" | "STRONG_MEAN_REVERT" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — lag1 {:.3} — {} bars — as of {}",
-                                snap.symbol,
-                                snap.regime_label,
-                                snap.lag1_acf,
-                                snap.bars_used,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("autocor_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Lag-1 ACF").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.lag1_acf))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Lag-5 ACF").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.lag5_acf))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Lag-10 ACF").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.lag10_acf))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Lag-20 ACF").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.lag20_acf))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Mean log return").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.6}", snap.mean_log_return))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_autocor_snapshot(ui, &self.autocor_snapshot);
                 });
             self.show_autocor = open;
         }
@@ -176,72 +104,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.hurst_snapshot;
-                    if snap.symbol.is_empty() || snap.memory_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — needs ≥40 cached daily bars.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.memory_label.as_str() {
-                            "PERSISTENT" | "STRONG_PERSISTENT" => UP,
-                            "MEAN_REVERT" | "STRONG_MEAN_REVERT" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — H {:.3} — {} bars — as of {}",
-                                snap.symbol,
-                                snap.memory_label,
-                                snap.hurst_exponent,
-                                snap.bars_used,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("hurst_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Hurst exponent H").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.hurst_exponent))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("R/S scales fit").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.scales_used))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Min / max scale").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} / {}",
-                                        snap.min_scale, snap.max_scale
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Memory label").small().strong());
-                                ui.label(
-                                    egui::RichText::new(&snap.memory_label).small().monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_hurst_snapshot(ui, &self.hurst_snapshot);
                 });
             self.show_hurst = open;
         }
@@ -291,86 +154,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.hitrate_snapshot;
-                    if snap.symbol.is_empty() || snap.hit_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — needs ≥20 cached daily bars.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.hit_label.as_str() {
-                            "BULLISH" | "WEAK_BULLISH" => UP,
-                            "BEARISH" | "WEAK_BEARISH" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — 20d {:.1}% — 60d {:.1}% — {} bars — as of {}",
-                                snap.symbol,
-                                snap.hit_label,
-                                snap.hitrate_20d,
-                                snap.hitrate_60d,
-                                snap.bars_used,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("hitrate_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("5d hit rate").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.1}%", snap.hitrate_5d))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("20d hit rate").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.1}%", snap.hitrate_20d))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("60d hit rate").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.1}%", snap.hitrate_60d))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("252d hit rate").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.1}%", snap.hitrate_252d))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Up / down / flat days")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} / {} / {}",
-                                        snap.up_days, snap.down_days, snap.flat_days
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_hitrate_snapshot(ui, &self.hitrate_snapshot);
                 });
             self.show_hitrate = open;
         }
@@ -420,94 +204,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.glasym_snapshot;
-                    if snap.symbol.is_empty() || snap.asymmetry_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — needs ≥20 cached daily bars.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.asymmetry_label.as_str() {
-                            "UPSIDE_HEAVY" | "SLIGHT_UPSIDE" => UP,
-                            "DOWNSIDE_HEAVY" | "SLIGHT_DOWNSIDE" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — ratio {:.2} — {} bars — as of {}",
-                                snap.symbol,
-                                snap.asymmetry_label,
-                                snap.magnitude_ratio,
-                                snap.bars_used,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("glasym_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("Avg up-day / down-day magnitude")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:.3}% / {:.3}%",
-                                        snap.avg_up_pct, snap.avg_down_pct
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Median up-day / down-day magnitude")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:.3}% / {:.3}%",
-                                        snap.median_up_pct, snap.median_down_pct
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Magnitude ratio (avg up / avg down)")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:.3}", snap.magnitude_ratio))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Up / down days count").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} / {}",
-                                        snap.up_days, snap.down_days
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_glasym_snapshot(ui, &self.glasym_snapshot);
                 });
             self.show_glasym = open;
         }
@@ -557,109 +254,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.volratio_snapshot;
-                    if snap.symbol.is_empty() || snap.flow_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥20 bars with volume.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        if !snap.note.is_empty() {
-                            ui.label(egui::RichText::new(&snap.note).color(DOWN).small());
-                        }
-                    } else {
-                        let color = match snap.flow_label.as_str() {
-                            "ACCUMULATION" | "SLIGHT_ACCUMULATION" => UP,
-                            "DISTRIBUTION" | "SLIGHT_DISTRIBUTION" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — ratio {:.2} — {} bars — as of {}",
-                                snap.symbol,
-                                snap.flow_label,
-                                snap.up_down_volume_ratio,
-                                snap.bars_used,
-                                snap.as_of,
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("volratio_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(220.0)
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("Avg up-day / down-day volume")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:.0} / {:.0}",
-                                        snap.avg_up_volume, snap.avg_down_volume
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Median up-day / down-day volume")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:.0} / {:.0}",
-                                        snap.median_up_volume, snap.median_down_volume
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Up/down volume ratio").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:.3}",
-                                        snap.up_down_volume_ratio
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Max up-day / down-day volume")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:.0} / {:.0}",
-                                        snap.max_up_volume, snap.max_down_volume
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Up / down days count").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} / {}",
-                                        snap.up_days, snap.down_days
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_volratio_snapshot(ui, &self.volratio_snapshot);
                 });
             self.show_volratio = open;
         }

@@ -5,9 +5,8 @@ impl TyphooNApp {
         &mut self,
         ctx: &egui::Context,
     ) {
-        let chart_sym_research = research_chart_symbol(
-            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
-        );
+        let chart_sym_research =
+            research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
         if self.show_higuchi {
@@ -54,71 +53,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.higuchi_snapshot;
-                    if snap.symbol.is_empty() || snap.higuchi_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥100 returns.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                    } else {
-                        let color = match snap.higuchi_label.as_str() {
-                            "SMOOTH" => UP,
-                            "ROUGH" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — FD {:.4} — as of {}",
-                                snap.symbol, snap.higuchi_label, snap.fractal_dim, snap.as_of
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("higuchi_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(180.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Returns used").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.bars_used))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("k_max").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.k_max))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Fractal dim (FD)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.fractal_dim))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("R² (log-k fit)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.r_squared))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("log-k points").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.log_k_count))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_higuchi_snapshot(ui, &self.higuchi_snapshot);
                 });
             self.show_higuchi = open;
         }
@@ -167,85 +102,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.pickands_snapshot;
-                    if snap.symbol.is_empty() || snap.pickands_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥80 returns.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                    } else {
-                        let color = match snap.pickands_label.as_str() {
-                            "WEIBULL_BOUNDED" | "GUMBEL_EXPONENTIAL" => UP,
-                            "FRECHET_HEAVY" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — γ̂ {:+.4} — as of {}",
-                                snap.symbol, snap.pickands_label, snap.gamma_hat, snap.as_of
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("pickands_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(180.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Returns used").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.bars_used))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("k (order-stat)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.k_index))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("γ̂ (Pickands)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.4}", snap.gamma_hat))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Tail α = 1/γ̂").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.3}", snap.tail_index))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("x_k").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.5}", snap.x_k))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("x_2k").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.5}", snap.x_2k))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("x_4k").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.5}", snap.x_4k))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_pickands_snapshot(ui, &self.pickands_snapshot);
                 });
             self.show_pickands = open;
         }
@@ -294,91 +151,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.kappa3_snapshot;
-                    if snap.symbol.is_empty() || snap.kappa3_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥30 returns.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                    } else {
-                        let color = match snap.kappa3_label.as_str() {
-                            "STRONG" | "POSITIVE" => UP,
-                            "NEGATIVE" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — κ3 {:+.4} — as of {}",
-                                snap.symbol, snap.kappa3_label, snap.kappa3, snap.as_of
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("kappa3_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(200.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Returns used").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.bars_used))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("MAR").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.mar))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Excess μ (annualised)")
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.4}", snap.excess_mean))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("LPM3").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.3e}", snap.lpm3))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("LPM3^(1/3) (ann)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.lpm3_root))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Kappa-3").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.4}", snap.kappa3))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Sortino (reference)").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.4}", snap.sortino_compare))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_kappa3_snapshot(ui, &self.kappa3_snapshot);
                 });
             self.show_kappa3 = open;
         }
@@ -427,78 +200,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.lyapunov_snapshot;
-                    if snap.symbol.is_empty() || snap.lyapunov_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥100 returns.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                    } else {
-                        let color = match snap.lyapunov_label.as_str() {
-                            "STABLE" | "PERIODIC" => UP,
-                            "CHAOTIC" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — λ {:+.5} — as of {}",
-                                snap.symbol, snap.lyapunov_label, snap.lambda_max, snap.as_of
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("lyapunov_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(180.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Returns used").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.bars_used))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Embedding dim m").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.embed_dim))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Time delay τ").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.time_delay))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("λ_max (per bar)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.5}", snap.lambda_max))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("R² (fit)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.r_squared))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Steps used").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.steps_used))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_lyapunov_snapshot(ui, &self.lyapunov_snapshot);
                 });
             self.show_lyapunov = open;
         }
@@ -547,78 +249,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.rankac_snapshot;
-                    if snap.symbol.is_empty() || snap.rankac_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥30 returns.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                    } else {
-                        let color = match snap.rankac_label.as_str() {
-                            "INDEPENDENT" | "WEAK_DEPENDENCE" => UP,
-                            "STRONG_DEPENDENCE" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — max|ρ| {:.4} — as of {}",
-                                snap.symbol, snap.rankac_label, snap.max_abs_rho, snap.as_of
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("rankac_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(180.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Returns used").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.bars_used))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("ρ(lag 1)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.4}", snap.rho_lag1))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("ρ(lag 5)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.4}", snap.rho_lag5))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("ρ(lag 10)").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.4}", snap.rho_lag10))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("mean |ρ|").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.mean_abs_rho))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("max |ρ|").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.max_abs_rho))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_rankac_snapshot(ui, &self.rankac_snapshot);
                 });
             self.show_rankac = open;
         }
