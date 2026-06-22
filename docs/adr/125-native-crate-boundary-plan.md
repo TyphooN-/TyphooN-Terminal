@@ -491,14 +491,40 @@ half and calls it. Behavior-preserving: all 56 string literals present unchanged
 Done via an indent-based guarded transform (format strings contain `{}`, so
 brace-counting is unsafe).
 
+The display-half extraction then ran to completion across the tree via two
+self-discovering, guarded transforms into the same `render.rs`:
+
+- **Snapshot pattern** (`render_<x>_snapshot(ui, &Snapshot)`): every window with a
+  separator-anchored `let snap = &self.<x>_snapshot;` and a *pure* display body. 247
+  functions extracted (the type lookup reads multi-line `state.rs` declarations; a
+  collision guard falls back to a type-based name; impure bodies are skipped).
+- **Data-table pattern** (`render_<field>(ui, &[Elem])`): the fundamental-data windows
+  that render a `Vec` field (dividends, earnings, ratings, splits, holders, …). The
+  body is extracted by passing the slice and substituting `self.<field>` → `rows`
+  (join-then-substitute for multi-line method chains; `\b` keeps `self.<field>_symbol`
+  safe). 12 functions.
+
+`render.rs` now holds **259 pure display functions** over engine DTOs / slices, with the
+common color constants auto-imported from actual (string-stripped) usage. Each batch was
+verified by full-tree literal-preservation diff + `cargo check`/`test`. Crucially, the
+external auto-formatter kept re-touching the previous commit's `research_chart_symbol`
+call across ~45 files; each batch filtered the commit to only the files that actually
+gained a `render::` call (per the lint caveat — no blanket-format churn).
+
+What deliberately remains inline (≈19 grids in 7 files): **multi-field summary cards**
+(a window's header block that reads several `self.<x>` fields into one fixed-layout grid,
+not a single snapshot/slice) and **interactive filtered tables** (display bodies that read
+a `self.<x>_filter`). Neither fits a mechanical pure-display transform — they need either
+a small per-window context struct or belong to the input/action half. They are left for
+that phase rather than forced through a transform that doesn't fit.
+
 ### Next slice
 
-Continue the display-half extraction across the rest of `floating_windows/research`
-(per-file, same `render.rs` home — the windows are heterogeneous, so per-file verified
-slices, not one blanket script). Then the harder `&mut self` input/action half:
-per-window state bundles + a `ResearchUiAction` sink replacing direct `broker_tx` sends,
-so the renderer's header half also stops needing full `TyphooNApp`. Apply the same to
-`command_research_windows`. Then decide the crate's public surface and begin Phase 2.
+The `&mut self` input/action half: per-window state bundles + a `ResearchUiAction` sink
+replacing direct `broker_tx` sends, so the renderer's header half (and the remaining
+multi-field/interactive grids) also stop needing full `TyphooNApp`. Apply the display +
+input/action treatment to `command_research_windows`. Then decide the crate's public
+surface and begin Phase 2.
 
 ## Verification Standard for Future Implementation
 
