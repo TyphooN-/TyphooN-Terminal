@@ -412,16 +412,19 @@ aggregators dropped their `open_bg_read_connection` workaround entirely — they
 longer touch a connection at all. ~35 sections are now free functions over the context;
 behavior-preserving (every markdown literal byte-identical across the 27 files).
 
+The 2 pass-through families followed (composite_signal + price_transform, 9 files): the
+leaves convert like any other, and the aggregators — which hold no connection, just call
+leaves — became trivial `ctx`-threading free functions. ~44 packet sections now take the
+context.
+
 ### Next slice
 
-Remaining under the connection block: the 2 pass-through aggregators
-(`composite_signal_sections` → `composite_signal_*`,
-`price_transform_indicator_sections` → `price_transform_*`) and `talib_price_momentum`.
-Then the dispatcher's own inline rx sections (EXPCAL / CDLDOJI / …) and the
-fundamentals-driven `overview` / `peer` (which extend the context with
-`all_fundamentals`). Once every section under the block takes `ctx`, the dispatcher's
-`open_bg` workaround comes out and the connection is held once. That fully decoupled
-state is the Phase 2 `typhoon-research-ui` gate.
+What's left under the connection block: `talib_price_momentum` (a small family) and the
+dispatcher's own inline rx sections (EXPCAL / CDLDOJI / candlestick patterns / …), which
+move into `ctx`-functions too. Then the fundamentals-driven `overview` / `peer` (called
+outside the connection block) extend the context with `all_fundamentals`. Once every
+section under the block takes `ctx`, the dispatcher's `open_bg` workaround comes out and
+the connection is acquired exactly once — the Phase 2 `typhoon-research-ui` gate.
 
 ## Verification Standard for Future Implementation
 

@@ -362,7 +362,7 @@ impl TyphooNApp {
 
                     fundamental_risk_sections::write_symbol_fundamental_risk_sections(&ctx, p, &sym_upper);
 
-                    self.write_symbol_composite_signal_sections(p, &sym_upper);
+                    composite_signal_sections::write_symbol_composite_signal_sections(&ctx, p, &sym_upper);
 
                     rank_drift_sections::write_symbol_rank_drift_sections(&ctx, p, &sym_upper);
 
@@ -424,7 +424,7 @@ impl TyphooNApp {
 
                     momentum_volume_indicator_sections::write_symbol_momentum_volume_indicator_sections(&ctx, p, &sym_upper);
 
-                    self.write_symbol_price_transform_indicator_sections(p, &sym_upper);
+                    price_transform_indicator_sections::write_symbol_price_transform_indicator_sections(&ctx, p, &sym_upper);
 
                     self.write_symbol_talib_price_momentum_sections(p, &sym_upper);
 
