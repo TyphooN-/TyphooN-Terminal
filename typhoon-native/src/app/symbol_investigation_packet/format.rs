@@ -10,13 +10,13 @@
 //! (e.g. "only when WACC > 0"), so a default/empty snapshot emits nothing.
 
 use std::fmt::Write as _;
-use typhoon_engine::core::fundamentals::{Fundamentals, format_large_number};
+use typhoon_engine::core::fundamentals::{format_large_number, Fundamentals};
 use typhoon_engine::core::research::{
-    BetaSnapshot, DcfSnapshot, DdmSnapshot, EfficiencyRatioSnapshot, FigiSnapshot,
-    FlowSnapshot, GrowmSnapshot, HraSnapshot, IvolSnapshot, MarginsSnapshot,
-    MomentumRankSnapshot, OptionsChainSnapshot, PeadSnapshot, RegimeSnapshot,
-    RelVolSnapshot, RelativeEpsGrowthSnapshot, RelativeValuation, SharpeRatioSnapshot,
-    SizeFactorSnapshot, SvmSnapshot, VolOfVolSnapshot, WaccSnapshot, WickBiasSnapshot,
+    BetaSnapshot, DcfSnapshot, DdmSnapshot, EfficiencyRatioSnapshot, FigiSnapshot, FlowSnapshot,
+    GrowmSnapshot, HraSnapshot, IvolSnapshot, MarginsSnapshot, MomentumRankSnapshot,
+    OptionsChainSnapshot, PeadSnapshot, RegimeSnapshot, RelVolSnapshot, RelativeEpsGrowthSnapshot,
+    RelativeValuation, SharpeRatioSnapshot, SizeFactorSnapshot, SvmSnapshot, VolOfVolSnapshot,
+    WaccSnapshot, WickBiasSnapshot,
 };
 
 /// Write the symbol-investigation **overview** block for a resolved
@@ -132,19 +132,18 @@ pub(super) fn write_wacc(p: &mut String, w: &WaccSnapshot) {
 /// Rolling BETA history (1Y / 3Y / 5Y vs the market ticker).
 pub(super) fn write_beta(p: &mut String, b: &BetaSnapshot) {
     if !b.windows.is_empty() {
-        let _ = writeln!(p, "### Rolling Beta vs {} (as of {})", b.market_ticker, b.as_of);
+        let _ = writeln!(
+            p,
+            "### Rolling Beta vs {} (as of {})",
+            b.market_ticker, b.as_of
+        );
         let _ = writeln!(p, "| Window | β | α (ann) | R² | Corr | N |");
         let _ = writeln!(p, "|---|---|---|---|---|---|");
         for w in b.windows.iter() {
             let _ = writeln!(
                 p,
                 "| {} | {:.3} | {:+.2}% | {:.3} | {:.3} | {} |",
-                w.window_label,
-                w.beta,
-                w.alpha_pct,
-                w.r_squared,
-                w.correlation,
-                w.n_observations
+                w.window_label, w.beta, w.alpha_pct, w.r_squared, w.correlation, w.n_observations
             );
         }
         if !b.note.is_empty() {
@@ -204,7 +203,11 @@ pub(super) fn write_relative_valuation(p: &mut String, rv: &RelativeValuation) {
 /// FIGI instrument identifiers (top 3).
 pub(super) fn write_figi(p: &mut String, f: &FigiSnapshot) {
     if !f.identifiers.is_empty() {
-        let _ = writeln!(p, "### Instrument Identifiers (OpenFIGI, as of {})", f.as_of);
+        let _ = writeln!(
+            p,
+            "### Instrument Identifiers (OpenFIGI, as of {})",
+            f.as_of
+        );
         for id in f.identifiers.iter().take(3) {
             let _ = writeln!(
                 p,
@@ -799,10 +802,7 @@ pub(super) fn write_margins(p: &mut String, mg: &MarginsSnapshot) {
                 let _ = writeln!(
                     p,
                     "  - {}: {:.2} / {:.2} / {:.2}",
-                    row.period,
-                    row.gross_margin_pct,
-                    row.operating_margin_pct,
-                    row.net_margin_pct
+                    row.period, row.gross_margin_pct, row.operating_margin_pct, row.net_margin_pct
                 );
             }
         }
@@ -927,7 +927,10 @@ pub(super) fn write_momf(p: &mut String, mf: &MomentumRankSnapshot) {
         let _ = writeln!(
             p,
             "- Composite {:.1} · rank {}/{} · pct {:.0}",
-            mf.composite_score, mf.rank_position, mf.peers_considered + 1, mf.percentile_rank
+            mf.composite_score,
+            mf.rank_position,
+            mf.peers_considered + 1,
+            mf.percentile_rank
         );
         let _ = writeln!(
             p,
@@ -962,8 +965,7 @@ pub(super) fn write_sector_peer_comparison(
         let collect = |getter: fn(&Fundamentals) -> Option<f64>| -> Vec<f64> {
             peers.iter().filter_map(|p| getter(p)).collect()
         };
-        let fmt_o =
-            |v: Option<f64>| v.map(|x| format!("{:.2}", x)).unwrap_or_else(|| "—".into());
+        let fmt_o = |v: Option<f64>| v.map(|x| format!("{:.2}", x)).unwrap_or_else(|| "—".into());
         let _ = writeln!(
             p,
             "### Sector Peer Comparison ({} — {} peers)",

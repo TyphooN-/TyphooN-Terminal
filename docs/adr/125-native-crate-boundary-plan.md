@@ -414,17 +414,34 @@ behavior-preserving (every markdown literal byte-identical across the 27 files).
 
 The 2 pass-through families followed (composite_signal + price_transform, 9 files): the
 leaves convert like any other, and the aggregators — which hold no connection, just call
-leaves — became trivial `ctx`-threading free functions. ~44 packet sections now take the
-context.
+leaves — became trivial `ctx`-threading free functions. The `talib_price_momentum`
+family (4 leaves + aggregator) converted the same way.
+
+Finally the dispatcher's own inline rx code moved out: the options-expiration calendar
+(EXPCAL) and the ~70 candlestick-pattern + statistical-test blocks — ~2,200 lines that
+were inline in the per-symbol loop — are now `write_expiration_calendar` /
+`write_candlestick_and_stats` in a new `dispatcher_inline_sections.rs`, free functions
+over `&SymbolResearchContext` called in their exact positions (output order unchanged;
+all 167 markdown literals preserved, all 73 `rx::get_*` calls relocated to `ctx.conn`).
+The dispatcher's per-symbol DB block is now purely a list of `ctx` section calls — it
+shrank from ~2,640 to ~410 lines and contains zero inline research code.
+
+**End state reached for the connection block:** the research connection is acquired
+exactly once (`open_bg_read_connection`, an independent connection that never contends
+with the render thread's `read_conn`) and threaded to every section via the context. No
+section re-acquires `read_conn`. The earlier per-aggregator independent-connection
+workaround is gone.
 
 ### Next slice
 
-What's left under the connection block: `talib_price_momentum` (a small family) and the
-dispatcher's own inline rx sections (EXPCAL / CDLDOJI / candlestick patterns / …), which
-move into `ctx`-functions too. Then the fundamentals-driven `overview` / `peer` (called
-outside the connection block) extend the context with `all_fundamentals`. Once every
-section under the block takes `ctx`, the dispatcher's `open_bg` workaround comes out and
-the connection is acquired exactly once — the Phase 2 `typhoon-research-ui` gate.
+The fundamentals-driven sections still on `impl TyphooNApp`: `overview` (reads
+`bg.all_fundamentals` + `user_position_section`) and `peer` (filters
+`bg.all_fundamentals` for sector peers). These are called outside the connection block
+and read app state beyond the DB, so they extend the context with `all_fundamentals`
+(and a small position-section input) rather than just `conn`. Converting them, plus the
+quarterly-financials / institutional-holders / SEC-filings / insider inline blocks still
+in the dispatcher, completes the packet's decoupling from `TyphooNApp` — the Phase 2
+`typhoon-research-ui` gate.
 
 ## Verification Standard for Future Implementation
 
