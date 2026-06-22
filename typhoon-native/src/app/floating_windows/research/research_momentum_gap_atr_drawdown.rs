@@ -201,58 +201,27 @@ impl TyphooNApp {
         }
 
         // SHORTRANK_DELTA — Short Interest Trend Rank (risk-inverted)
-        if self.show_shortrank_delta {
-            if self.shortrank_delta_symbol.is_empty() {
-                self.shortrank_delta_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_shortrank_delta;
-            egui::Window::new("SHORTRANK_DELTA — Short Interest Trend Rank")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([700.0, 420.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.shortrank_delta_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.shortrank_delta_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.shortrank_delta_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_shortrank_delta(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.shortrank_delta_snapshot = snap;
-                                        self.shortrank_delta_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.shortrank_delta_symbol.to_uppercase();
-                            self.shortrank_delta_loading = true;
-                            self.shortrank_delta_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeShortrankDeltaSnapshot { symbol: sym });
-                        }
-                        if self.shortrank_delta_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_shortrank_delta_snapshot(
-                        ui,
-                        &self.shortrank_delta_snapshot,
-                    );
-                });
-            self.show_shortrank_delta = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "SHORTRANK_DELTA — Short Interest Trend Rank",
+                default_size: [700.0, 420.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_shortrank_delta,
+            &mut self.shortrank_delta_symbol,
+            &mut self.shortrank_delta_loading,
+            &mut self.shortrank_delta_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_shortrank_delta(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeShortrankDeltaSnapshot { symbol },
+            super::render::render_shortrank_delta_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // INSIDERCONC — Insider ownership concentration vs sector peers

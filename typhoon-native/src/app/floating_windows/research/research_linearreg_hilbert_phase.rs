@@ -29,58 +29,27 @@ impl TyphooNApp {
             let _ = self.broker_tx.send(cmd);
         }
 
-        if self.show_linearreg_angle_win {
-            if self.linearreg_angle_win_symbol.is_empty() {
-                self.linearreg_angle_win_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_linearreg_angle_win;
-            egui::Window::new("LINEARREG_ANGLE — atan(slope)·180/π of 14-bar fit")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 260.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.linearreg_angle_win_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.linearreg_angle_win_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.linearreg_angle_win_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_linearreg_angle(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.linearreg_angle_win_snapshot = snap;
-                                        self.linearreg_angle_win_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.linearreg_angle_win_symbol.to_uppercase();
-                            self.linearreg_angle_win_loading = true;
-                            self.linearreg_angle_win_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeLinearregAngleSnapshot { symbol: sym });
-                        }
-                        if self.linearreg_angle_win_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_linearreg_angle_snapshot(
-                        ui,
-                        &self.linearreg_angle_win_snapshot,
-                    );
-                });
-            self.show_linearreg_angle_win = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "LINEARREG_ANGLE — atan(slope)·180/π of 14-bar fit",
+                default_size: [560.0, 260.0],
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_linearreg_angle_win,
+            &mut self.linearreg_angle_win_symbol,
+            &mut self.linearreg_angle_win_loading,
+            &mut self.linearreg_angle_win_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_linearreg_angle(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeLinearregAngleSnapshot { symbol },
+            super::render::render_linearreg_angle_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         if let Some(cmd) = window_shell::render_compute_window(
