@@ -5,9 +5,8 @@ impl TyphooNApp {
         &mut self,
         ctx: &egui::Context,
     ) {
-        let chart_sym_research = research_chart_symbol(
-            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
-        );
+        let chart_sym_research =
+            research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── Research section ──
         if self.show_squeeze_win {
@@ -16,48 +15,45 @@ impl TyphooNApp {
             }
             let mut open = self.show_squeeze_win;
             egui::Window::new("SQUEEZE — Short-Squeeze Composite")
-                .open(&mut open).resizable(true).default_size([560.0, 360.0])
+                .open(&mut open)
+                .resizable(true)
+                .default_size([560.0, 360.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(egui::TextEdit::singleline(&mut self.squeeze_win_symbol).desired_width(100.0));
-                        if ui.button("Use Chart").clicked() { self.squeeze_win_symbol = chart_sym_research.clone(); }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.squeeze_win_symbol)
+                                .desired_width(100.0),
+                        );
+                        if ui.button("Use Chart").clicked() {
+                            self.squeeze_win_symbol = chart_sym_research.clone();
+                        }
                         if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache { if let Ok(conn) = cache.connection() {
-                                let sym_u = self.squeeze_win_symbol.to_uppercase();
-                                if let Ok(Some(snap)) = typhoon_engine::core::research::get_squeeze(&conn, &sym_u) { self.squeeze_win_snapshot = snap; self.squeeze_win_symbol = sym_u; }
-                            }}
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let sym_u = self.squeeze_win_symbol.to_uppercase();
+                                    if let Ok(Some(snap)) =
+                                        typhoon_engine::core::research::get_squeeze(&conn, &sym_u)
+                                    {
+                                        self.squeeze_win_snapshot = snap;
+                                        self.squeeze_win_symbol = sym_u;
+                                    }
+                                }
+                            }
                         }
                         if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.squeeze_win_symbol.to_uppercase(); self.squeeze_win_loading = true; self.squeeze_win_symbol = sym.clone();
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeSqueezeSnapshot { symbol: sym });
+                            let sym = self.squeeze_win_symbol.to_uppercase();
+                            self.squeeze_win_loading = true;
+                            self.squeeze_win_symbol = sym.clone();
+                            let _ = self
+                                .broker_tx
+                                .send(BrokerCmd::ComputeSqueezeSnapshot { symbol: sym });
                         }
-                        if self.squeeze_win_loading { ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small()); }
+                        if self.squeeze_win_loading {
+                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+                        }
                     });
-                    ui.separator();
-                    let snap = &self.squeeze_win_snapshot;
-                    if snap.symbol.is_empty() || snap.squeeze_label == "INSUFFICIENT_DATA" {
-                        ui.label(egui::RichText::new("No data — need ≥3 of 5 axes (short interest, IV, relvol, HP bars).").color(AXIS_TEXT).small());
-                    } else {
-                        let color = match snap.squeeze_label.as_str() {
-                            "NO_SQUEEZE" | "WATCH" => UP,
-                            "STRONG" | "EXTREME" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(egui::RichText::new(format!("{} — {} — composite {:.1}/100 — as of {}", snap.symbol, snap.squeeze_label, snap.composite_score, snap.as_of)).strong().color(color));
-                        ui.separator();
-                        egui::Grid::new("squeeze_summary").striped(true).num_columns(3).min_col_width(120.0).show(ui, |ui| {
-                            ui.label(egui::RichText::new("Axis").small().strong());
-                            ui.label(egui::RichText::new("Raw").small().strong());
-                            ui.label(egui::RichText::new("Score 0..100").small().strong()); ui.end_row();
-                            ui.label(egui::RichText::new("Short % float").small()); ui.label(egui::RichText::new(format!("{:.2}%", snap.short_percent_of_float)).small().monospace()); ui.label(egui::RichText::new(format!("{:.0}", snap.short_float_score)).small().monospace()); ui.end_row();
-                            ui.label(egui::RichText::new("Days to cover").small()); ui.label(egui::RichText::new(format!("{:.2}d", snap.days_to_cover)).small().monospace()); ui.label(egui::RichText::new(format!("{:.0}", snap.days_to_cover_score)).small().monospace()); ui.end_row();
-                            ui.label(egui::RichText::new("20d momentum").small()); ui.label(egui::RichText::new(format!("{:+.2}%", snap.momentum_20d_pct)).small().monospace()); ui.label(egui::RichText::new(format!("{:.0}", snap.momentum_score)).small().monospace()); ui.end_row();
-                            ui.label(egui::RichText::new("RelVol 20d").small()); ui.label(egui::RichText::new(format!("{:.2}×", snap.relvol_20d)).small().monospace()); ui.label(egui::RichText::new(format!("{:.0}", snap.relvol_score)).small().monospace()); ui.end_row();
-                            ui.label(egui::RichText::new("IV rank").small()); ui.label(egui::RichText::new(format!("{:.1}", snap.iv_rank)).small().monospace()); ui.label(egui::RichText::new(format!("{:.0}", snap.iv_rank_score)).small().monospace()); ui.end_row();
-                            ui.label(egui::RichText::new("Axes present").small().strong()); ui.label(egui::RichText::new(format!("{}/5", snap.inputs_present)).small().monospace()); ui.label(""); ui.end_row();
-                        });
-                    }
+                    super::render::render_squeeze_snapshot(ui, &self.squeeze_win_snapshot);
                 });
             self.show_squeeze_win = open;
         }
@@ -433,107 +429,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.donchian_win_snapshot;
-                    if snap.symbol.is_empty() || snap.donchian_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥21 bars.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                    } else {
-                        let color = match snap.donchian_label.as_str() {
-                            "BREAKOUT_UP" => UP,
-                            "BREAKOUT_DOWN" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — pos {:.1}% — as of {}",
-                                snap.symbol,
-                                snap.donchian_label,
-                                snap.channel_position_pct,
-                                snap.as_of
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("donchian_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(180.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Bars used").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.bars_used))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Period").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.period))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Upper channel").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.upper_channel))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Mid channel").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.mid_channel))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Lower channel").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.lower_channel))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Last close").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.last_close))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("Channel position %").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{:.1}",
-                                        snap.channel_position_pct
-                                    ))
-                                    .small()
-                                    .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Breakout upper").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.breakout_upper))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Breakout lower").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.breakout_lower))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_donchian_snapshot(ui, &self.donchian_win_snapshot);
                 });
             self.show_donchian_win = open;
         }
@@ -582,84 +478,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    ui.separator();
-                    let snap = &self.kama_win_snapshot;
-                    if snap.symbol.is_empty() || snap.kama_label == "INSUFFICIENT_DATA" {
-                        ui.label(
-                            egui::RichText::new("No data — HP cache needs ≥25 bars.")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                    } else {
-                        let color = match snap.kama_label.as_str() {
-                            "STRONG_TREND" | "MODERATE_TREND" => UP,
-                            "CHOPPY" => DOWN,
-                            _ => AXIS_TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} — {} — ER {:.3} — slope {:+.2}% — as of {}",
-                                snap.symbol,
-                                snap.kama_label,
-                                snap.efficiency_ratio,
-                                snap.kama_slope_pct,
-                                snap.as_of
-                            ))
-                            .strong()
-                            .color(color),
-                        );
-                        ui.separator();
-                        egui::Grid::new("kama_summary")
-                            .striped(true)
-                            .num_columns(2)
-                            .min_col_width(180.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("Bars used").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.bars_used))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Period").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{}", snap.period))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Efficiency ratio").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.3}", snap.efficiency_ratio))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("KAMA value").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.kama_value))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(egui::RichText::new("Last close").small().strong());
-                                ui.label(
-                                    egui::RichText::new(format!("{:.4}", snap.last_close))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                                ui.label(
-                                    egui::RichText::new("KAMA 5-bar slope %").small().strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{:+.2}", snap.kama_slope_pct))
-                                        .small()
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    }
+                    super::render::render_kama_snapshot(ui, &self.kama_win_snapshot);
                 });
             self.show_kama_win = open;
         }
