@@ -536,14 +536,23 @@ declarative window specs + closures with zero inline `egui::Window`; the borrow 
 accepts the call (disjoint `&mut self.<x>_*` field borrows + `self.cache.as_deref()`).
 Behavior-preserving by construction (the shell replicates the exact button logic).
 
-The shell then scaled across the tree via a strict template matcher (whitespace +
-method-chain + multi-line-title normalized): **194 compute windows now route through
-`window_shell::render_compute_window`** (189 of the 202 canonical windows + the 5
-proof-of-concept), each a declarative spec + closures instead of inline
-`egui::Window`/buttons/`broker_tx`. Only blocks whose normalized text matches the
-canonical template exactly are transformed; every window title is preserved (verified by
-diff per batch). `render.rs` holds the 259 display functions; the shell owns the
-interaction and returns the action.
+The shell then scaled across the tree via a strict template matcher, widened over several
+batches to tolerate pure-formatting variation (method-chain wrapping, multi-line titles
+with trailing commas, wrapped getter/render calls) while still rejecting any logic
+difference: **219 compute windows now route through `window_shell::render_compute_window`**,
+each a declarative spec + closures instead of inline `egui::Window`/buttons/`broker_tx`.
+Only blocks whose normalized text matches the canonical template exactly are transformed;
+every window title is preserved (verified by diff per batch). `render.rs` holds the 259
+display functions; the shell owns the interaction and returns the action.
+
+The remaining ~23 canonical-*shaped* compute windows are genuine variants the strict
+matcher correctly refuses (transforming would drop logic): **13 multi-field commands**
+(`BrokerCmd::Compute… { symbol, window_days, … }` — need a pre-read local captured by the
+`make_cmd` closure), **6 `.max_size(...)` windows** (need an optional shell field — but
+adding one churns all 219 existing call sites, so not worth it for six), and **4 with
+extra controls** (Slider/DragValue/checkbox — need a richer shell). These plus the
+non-canonical windows (≈31 "Fetch"-button fundamental windows, the multi-field summary
+cards, interactive filtered tables) are the variant-shell backlog.
 
 ### Next slice
 
