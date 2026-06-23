@@ -545,14 +545,37 @@ Only blocks whose normalized text matches the canonical template exactly are tra
 every window title is preserved (verified by diff per batch). `render.rs` holds the 259
 display functions; the shell owns the interaction and returns the action.
 
-The remaining ~23 canonical-*shaped* compute windows are genuine variants the strict
-matcher correctly refuses (transforming would drop logic): **13 multi-field commands**
-(`BrokerCmd::Compute… { symbol, window_days, … }` — need a pre-read local captured by the
-`make_cmd` closure), **6 `.max_size(...)` windows** (need an optional shell field — but
-adding one churns all 219 existing call sites, so not worth it for six), and **4 with
-extra controls** (Slider/DragValue/checkbox — need a richer shell). These plus the
-non-canonical windows (≈31 "Fetch"-button fundamental windows, the multi-field summary
-cards, interactive filtered tables) are the variant-shell backlog.
+**Multi-field commands handled (10 windows).** The compute windows whose Compute body
+runs a bespoke pre-read producing a multi-field `BrokerCmd` (FLOW, DDM, SECTR, RVOL,
+SHRT, SVM, IVOL, VOLE, PTD, LIQ) route through the same shell with an *identity*
+`make_cmd` (`|symbol| symbol`): the shell returns the symbol on Compute click, and the
+pre-read + multi-field send move verbatim into the `if let Some(sym)` body — where `self`
+is free (the shell's `&mut` borrows are released) and the pre-read runs only on click, so
+behavior is exactly preserved. **229 compute windows now route through the shell**; all
+BrokerCmd sends + window titles verified preserved.
+
+Remaining in `floating_windows/research`: the few `.max_size(...)` windows (need an
+optional shell field, not worth churning all call sites), windows with extra controls
+(Slider/DragValue), and the non-canonical "Fetch"-button / multi-field-card / filtered
+tables.
+
+### Phase 1, step 3 — `command_research_windows`, started (2026-06-23)
+
+Began decoupling the *other* research tree — the command handlers that map command
+strings (e.g. `"AVGPRICE"`) to actions (set `show_*` flags, send broker fetches). Every
+handler arm derived the active-chart symbol with a byte-identical inline block — **429
+copies across 52 files** — now one `command_chart_symbol(Option<&str>) -> String` free
+function (empty default, matching the originals; pure over the symbol string, no
+`TyphooNApp`). Behavior-preserving; the dispatch (`handle_research_window_command`) and
+command names are unchanged.
+
+### Next slice
+
+Continue `command_research_windows`: the handlers still set `self.show_*` / `self.*_symbol`
+and call `broker_tx.send` directly. The ADR's target is `handle_research_command(...) ->
+ResearchUiAction` — return the visibility/fetch actions instead of mutating app state
+inline. Then the `floating_windows/research` variant tail (max_size / extra-controls /
+Fetch windows), decide the crate's public surface, and begin Phase 2.
 
 ### Next slice
 
