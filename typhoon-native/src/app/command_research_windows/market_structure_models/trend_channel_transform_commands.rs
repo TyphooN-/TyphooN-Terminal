@@ -7,19 +7,9 @@ impl TyphooNApp {
             // Bare ICHIMOKU / SUPERTREND / KELTNER / FISHER are already bound to
             // chart-overlay toggles upstream; only disambiguated forms are used here.
             "ICHIMOKUFIT" | "ICHIMOKU_WIN" | "IKH" | "KUMO" | "TENKAN_KIJUN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.ichimoku_win_symbol = sym;
                 }
@@ -41,19 +31,9 @@ impl TyphooNApp {
                 true
             }
             "SUPERTRENDFIT" | "SUPERTREND_WIN" | "ST_FIT" | "ATR_TRAIL" | "SUPERTREND_ATR" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.supertrend_win_symbol = sym;
                 }
@@ -75,19 +55,9 @@ impl TyphooNApp {
                 true
             }
             "KELTNERFIT" | "KELTNER_WIN" | "KC_FIT" | "KELTNERCHAN" | "KELCHAN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.keltner_win_symbol = sym;
                 }
@@ -109,19 +79,9 @@ impl TyphooNApp {
                 true
             }
             "FISHERFIT" | "FISHER_WIN" | "FISHER_TRANSFORM" | "EHLERS_FISHER" | "FT_EHLERS" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.fisher_win_symbol = sym;
                 }
@@ -142,19 +102,9 @@ impl TyphooNApp {
                 true
             }
             "AROON" | "AROON_UP" | "AROON_DOWN" | "AROONFIT" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.aroon_win_symbol = sym;
                 }

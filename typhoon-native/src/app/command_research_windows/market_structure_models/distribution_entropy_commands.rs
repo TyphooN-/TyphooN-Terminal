@@ -5,19 +5,9 @@ impl TyphooNApp {
         match cmd_upper.as_str() {
             // ── Distribution and entropy palette aliases ──
             "ROBVOL" | "ROBUST_VOL" | "ROBUSTVOL" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.robvol_symbol = sym;
                 }
@@ -37,19 +27,9 @@ impl TyphooNApp {
                 true
             }
             "RENYIENT" | "RENYI_ENTROPY" | "RENYIENTROPY" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.renyient_symbol = sym;
                 }
@@ -69,19 +49,9 @@ impl TyphooNApp {
                 true
             }
             "RETQUANT" | "RETURN_QUANTILES" | "RETURNQUANTILES" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.retquant_symbol = sym;
                 }
@@ -101,19 +71,9 @@ impl TyphooNApp {
                 true
             }
             "MSENT" | "MULTISCALE_ENTROPY" | "MULTISCALEENTROPY" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.msent_symbol = sym;
                 }
@@ -132,19 +92,9 @@ impl TyphooNApp {
                 true
             }
             "EWMAVOL" | "EWMA_VOL" | "EWMAVOLATILITY" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.ewmavol_symbol = sym;
                 }
@@ -164,19 +114,9 @@ impl TyphooNApp {
                 true
             }
             "KSNORM" | "KS_NORM" | "KS_TEST" | "KSTEST" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.ksnorm_symbol = sym;
                 }
@@ -196,19 +136,9 @@ impl TyphooNApp {
                 true
             }
             "ADTEST" | "AD_TEST" | "ANDERSON_DARLING" | "ANDERSONDARLING" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.adtest_symbol = sym;
                 }
@@ -228,19 +158,9 @@ impl TyphooNApp {
                 true
             }
             "LMOM" | "L_MOMENTS" | "LMOMENTS" | "HOSKING" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.lmom_symbol = sym;
                 }
@@ -259,19 +179,9 @@ impl TyphooNApp {
                 true
             }
             "KYLELAM" | "KYLE_LAMBDA" | "KYLELAMBDA" | "PRICE_IMPACT" | "PRICEIMPACT" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.kylelam_symbol = sym;
                 }
@@ -291,19 +201,9 @@ impl TyphooNApp {
                 true
             }
             "PEAKOVER" | "PEAKS_OVER_THRESHOLD" | "POT" | "EVT_POT" | "EXCEEDANCES" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.peakover_symbol = sym;
                 }

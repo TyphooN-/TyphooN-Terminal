@@ -8,19 +8,9 @@ impl TyphooNApp {
         match cmd_upper.as_str() {
             // ── Upside, leverage asymmetry, drawdown-at-risk, and concentration palette aliases ──
             "UPR" | "UPSIDE_POTENTIAL" | "UPSIDEPOTENTIAL" | "UPSIDE_RATIO" | "UPSIDERATIO" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.upr_symbol = sym;
                 }
@@ -40,19 +30,9 @@ impl TyphooNApp {
             }
             "LEVEREFF" | "LEVERAGE_EFFECT" | "LEVERAGEEFFECT" | "LEVER_EFF" | "ASYM_VOL"
             | "ASYMVOL" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.levereff_symbol = sym;
                 }
@@ -73,19 +53,9 @@ impl TyphooNApp {
             }
             "DRAWDAR" | "DRAWDOWN_AT_RISK" | "DRAWDOWNATRISK" | "DAR" | "CDAR"
             | "CONDITIONAL_DAR" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.drawdar_symbol = sym;
                 }
@@ -110,19 +80,9 @@ impl TyphooNApp {
             | "VOL_PERSIST"
             | "VOLPERSIST"
             | "VOLATILITY_HALFLIFE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.varhalf_symbol = sym;
                 }
@@ -142,19 +102,9 @@ impl TyphooNApp {
                 true
             }
             "GINI" | "GINI_COEFF" | "GINICOEFF" | "GINI_COEFFICIENT" | "RETURN_CONCENTRATION" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.gini_symbol = sym;
                 }

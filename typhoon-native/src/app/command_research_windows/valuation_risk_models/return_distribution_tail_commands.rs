@@ -5,19 +5,9 @@ impl TyphooNApp {
         match cmd_upper.as_str() {
             // ── Return distribution and tail metric palette aliases ──
             "RETSKEW" | "RET_SKEW" | "SKEWNESS" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.retskew_symbol = sym;
                 }
@@ -37,19 +27,9 @@ impl TyphooNApp {
                 true
             }
             "RETKURT" | "RET_KURT" | "KURTOSIS" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.retkurt_symbol = sym;
                 }
@@ -69,19 +49,9 @@ impl TyphooNApp {
                 true
             }
             "TAILR" | "TAIL_RATIO" | "TAILRATIO" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.tailr_symbol = sym;
                 }
@@ -100,19 +70,9 @@ impl TyphooNApp {
                 true
             }
             "RUNLEN" | "RUN_LEN" | "RUN_LENGTH" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.runlen_symbol = sym;
                 }
@@ -132,19 +92,9 @@ impl TyphooNApp {
                 true
             }
             "DAYRANGE" | "DAY_RANGE" | "RANGESTAT" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.dayrange_symbol = sym;
                 }
@@ -165,19 +115,9 @@ impl TyphooNApp {
             }
             // ── Serial-dependence and asymmetry metrics ──
             "AUTOCOR" | "AUTO_COR" | "ACF" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.autocor_symbol = sym;
                 }
@@ -197,19 +137,9 @@ impl TyphooNApp {
                 true
             }
             "HURST" | "HURST_EXPONENT" | "RESCALED_RANGE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.hurst_symbol = sym;
                 }
@@ -228,19 +158,9 @@ impl TyphooNApp {
                 true
             }
             "HITRATE" | "HIT_RATE" | "WIN_RATE" | "WINRATE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.hitrate_symbol = sym;
                 }
@@ -260,19 +180,9 @@ impl TyphooNApp {
                 true
             }
             "GLASYM" | "GL_ASYM" | "GAIN_LOSS_ASYM" | "GAINLOSSASYM" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.glasym_symbol = sym;
                 }
@@ -292,19 +202,9 @@ impl TyphooNApp {
                 true
             }
             "VOLRATIO" | "VOL_RATIO" | "VOLUMERATIO" | "VOLUME_RATIO" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.volratio_symbol = sym;
                 }

@@ -15,19 +15,9 @@ impl TyphooNApp {
                 }
             }
             "ERN" | "EARNINGS_HISTORY" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.earnings_history_symbol = sym;
                 }
@@ -41,19 +31,9 @@ impl TyphooNApp {
                 }
             }
             "PEERS" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.peers_symbol = sym;
                 }
@@ -67,19 +47,9 @@ impl TyphooNApp {
                 }
             }
             "PRESS" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.press_symbol = sym;
                 }

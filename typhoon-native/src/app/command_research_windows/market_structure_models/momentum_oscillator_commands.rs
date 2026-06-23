@@ -6,19 +6,9 @@ impl TyphooNApp {
             // ── Momentum oscillator palette aliases ──
             // Bare PPO / DPO / KST / ULTOSC / WILLR are unbound upstream (verified) and kept as aliases.
             "PPO" | "PPOFIT" | "PPO_WIN" | "PCT_PRICE_OSC" | "PERCENT_PRICE_OSC" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.ppo_win_symbol = sym;
                 }
@@ -37,19 +27,9 @@ impl TyphooNApp {
                 true
             }
             "DPO" | "DPOFIT" | "DPO_WIN" | "DETRENDED_PRICE" | "DETRENDED_OSC" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.dpo_win_symbol = sym;
                 }
@@ -68,19 +48,9 @@ impl TyphooNApp {
                 true
             }
             "KST" | "KSTFIT" | "KST_WIN" | "KNOW_SURE_THING" | "PRING_KST" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.kst_win_symbol = sym;
                 }
@@ -104,19 +74,9 @@ impl TyphooNApp {
             | "ULTIMATE_OSC"
             | "ULTIMATE_OSCILLATOR"
             | "WILLIAMS_ULTOSC" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.ultosc_win_symbol = sym;
                 }
@@ -137,19 +97,9 @@ impl TyphooNApp {
                 true
             }
             "WILLR" | "WILLRFIT" | "WILLR_WIN" | "WILLIAMS_R" | "WILLIAMS_PCT_R" | "PERCENT_R" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.willr_win_symbol = sym;
                 }

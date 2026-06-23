@@ -8,19 +8,9 @@ impl TyphooNApp {
         match cmd_upper.as_str() {
             // ── Range volatility, expected shortfall, and calendar palette aliases ──
             "PARKINSON" | "PARKINSON_VOL" | "PARKVOL" | "HL_VOL" | "RANGE_VOL" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.parkinson_symbol = sym;
                 }
@@ -40,19 +30,9 @@ impl TyphooNApp {
                 true
             }
             "GKVOL" | "GARMAN_KLASS" | "GARMANKLASS" | "GK_VOL" | "GARMAN_KLASS_VOL" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.gkvol_symbol = sym;
                 }
@@ -71,19 +51,9 @@ impl TyphooNApp {
                 true
             }
             "RSVOL" | "ROGERS_SATCHELL" | "ROGERSSATCHELL" | "RS_VOL" | "DRIFT_FREE_VOL" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.rsvol_symbol = sym;
                 }
@@ -103,19 +73,9 @@ impl TyphooNApp {
             }
             "CVAR" | "EXPECTED_SHORTFALL" | "ES" | "CONDITIONAL_VAR" | "ES5" | "ES_5"
             | "TAIL_EXPECTED" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cvar_symbol = sym;
                 }
@@ -134,19 +94,9 @@ impl TyphooNApp {
                 true
             }
             "DOWEFFECT" | "DOW_EFFECT" | "DOW" | "WEEKDAY_EFFECT" | "DAY_OF_WEEK" | "DAYOFWEEK" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.doweffect_symbol = sym;
                 }

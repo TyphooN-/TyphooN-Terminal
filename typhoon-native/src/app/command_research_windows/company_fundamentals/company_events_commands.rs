@@ -4,19 +4,9 @@ impl TyphooNApp {
     pub(super) fn handle_company_events_commands(&mut self, cmd_upper: &String) -> bool {
         match cmd_upper.as_str() {
             "DES" | "DESCRIPTION" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.desc_symbol = sym.clone();
                 }

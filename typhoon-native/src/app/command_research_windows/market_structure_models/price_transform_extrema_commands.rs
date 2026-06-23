@@ -6,19 +6,9 @@ impl TyphooNApp {
             // ── Price-transform extrema palette aliases ──
             // Bare MASS / CHAIKOSC / KLINGER / STOCHRSI / AWESOME are unbound upstream (verified) and kept as aliases.
             "MASS" | "MASSFIT" | "MASS_WIN" | "MASS_INDEX" | "DORSEY_MASS" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.mass_win_symbol = sym;
                 }
@@ -39,19 +29,9 @@ impl TyphooNApp {
             }
             "CHAIKOSC" | "CHAIKOSCFIT" | "CHAIKOSC_WIN" | "CHAIKIN_OSC" | "CHAIKIN_OSCILLATOR"
             | "CHKOSC" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.chaikosc_win_symbol = sym;
                 }
@@ -73,19 +53,9 @@ impl TyphooNApp {
                 true
             }
             "KLINGER" | "KLINGERFIT" | "KLINGER_WIN" | "KVO" | "KLINGER_OSC" | "KLINGER_VOLUME" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.klinger_win_symbol = sym;
                 }
@@ -108,19 +78,9 @@ impl TyphooNApp {
             }
             "STOCHRSI" | "STOCHRSIFIT" | "STOCHRSI_WIN" | "STOCH_RSI" | "STOCHASTIC_RSI"
             | "SRSI" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.stochrsi_win_symbol = sym;
                 }
@@ -143,19 +103,9 @@ impl TyphooNApp {
             }
             "AWESOME" | "AWESOMEFIT" | "AWESOME_WIN" | "AO" | "AWESOME_OSC"
             | "AWESOME_OSCILLATOR" | "BILL_WILLIAMS" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.awesome_win_symbol = sym;
                 }

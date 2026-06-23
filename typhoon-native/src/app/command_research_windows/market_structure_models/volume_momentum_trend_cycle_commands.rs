@@ -9,19 +9,9 @@ impl TyphooNApp {
             // ── Volume, momentum, and trend-cycle palette aliases ──
             // Bare EFI / EMV / NVI / PVI / COPPOCK are unbound upstream (verified) and kept as aliases.
             "EFI" | "EFIFIT" | "EFI_WIN" | "FORCE_INDEX" | "ELDER_FORCE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.efi_win_symbol = sym;
                 }
@@ -40,19 +30,9 @@ impl TyphooNApp {
                 true
             }
             "EMV" | "EMVFIT" | "EMV_WIN" | "EASE_OF_MOVEMENT" | "ARMS_EMV" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.emv_win_symbol = sym;
                 }
@@ -71,19 +51,9 @@ impl TyphooNApp {
                 true
             }
             "NVI" | "NVIFIT" | "NVI_WIN" | "NEG_VOLUME_INDEX" | "NEGATIVE_VOLUME" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.nvi_win_symbol = sym;
                 }
@@ -102,19 +72,9 @@ impl TyphooNApp {
                 true
             }
             "PVI" | "PVIFIT" | "PVI_WIN" | "POS_VOLUME_INDEX" | "POSITIVE_VOLUME" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.pvi_win_symbol = sym;
                 }
@@ -133,19 +93,9 @@ impl TyphooNApp {
                 true
             }
             "COPPOCK" | "COPPOCKFIT" | "COPPOCK_WIN" | "COPPOCK_CURVE" | "COPPOCK_GUIDE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.coppock_win_symbol = sym;
                 }
@@ -167,19 +117,9 @@ impl TyphooNApp {
                 true
             }
             "CMO" | "CMOFIT" | "CMO_WIN" | "CHANDE_MOMENTUM" | "CHANDE_MO" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cmo_win_symbol = sym;
                 }
@@ -198,19 +138,9 @@ impl TyphooNApp {
                 true
             }
             "QSTICK" | "QSTICKFIT" | "QSTICK_WIN" | "Q_STICK" | "CHANDE_QSTICK" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.qstick_win_symbol = sym;
                 }
@@ -231,19 +161,9 @@ impl TyphooNApp {
                 true
             }
             "DISPARITY" | "DISPARITYFIT" | "DISPARITY_WIN" | "DISPARITY_INDEX" | "DISP_INDEX" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.disparity_win_symbol = sym;
                 }
@@ -265,19 +185,9 @@ impl TyphooNApp {
                 true
             }
             "BOP" | "BOPFIT" | "BOP_WIN" | "BALANCE_OF_POWER" | "LIVSHIN_BOP" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.bop_win_symbol = sym;
                 }
@@ -296,19 +206,9 @@ impl TyphooNApp {
                 true
             }
             "SCHAFF" | "SCHAFFFIT" | "SCHAFF_WIN" | "STC" | "SCHAFF_TREND_CYCLE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.schaff_win_symbol = sym;
                 }

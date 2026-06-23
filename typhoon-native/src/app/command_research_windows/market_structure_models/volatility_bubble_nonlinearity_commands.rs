@@ -8,19 +8,9 @@ impl TyphooNApp {
         match cmd_upper.as_str() {
             // ── Volatility, bubble, and nonlinearity palette aliases ──
             "GARCH11" | "GARCH" | "GARCH_11" | "BOLLERSLEV" | "CONDVOL" | "CONDITIONAL_VOL" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.garch11_symbol = sym;
                 }
@@ -41,19 +31,9 @@ impl TyphooNApp {
             }
             "SADF" | "SUP_ADF" | "SUPADF" | "BUBBLETEST" | "BUBBLE_TEST" | "PWY"
             | "PHILLIPS_WU_YU" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.sadf_symbol = sym;
                 }
@@ -72,19 +52,9 @@ impl TyphooNApp {
                 true
             }
             "CORDIM" | "CORR_DIM" | "CORRDIM" | "D2" | "GRASSBERGER" | "GRASSBERGER_PROCACCIA" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cordim_symbol = sym;
                 }
@@ -105,19 +75,9 @@ impl TyphooNApp {
             }
             "SKSPEC" | "SKEW_SPEC" | "ROLLING_SKEW" | "SKEWSPECTRUM" | "SKEWSTAB"
             | "SKEWSTABILITY" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.skspec_symbol = sym;
                 }
@@ -138,19 +98,9 @@ impl TyphooNApp {
             }
             "AUTOMI" | "AUTO_MI" | "MUTUALINFO" | "MUTUAL_INFORMATION" | "MI_ACF"
             | "INFOTHEOACF" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.automi_symbol = sym;
                 }

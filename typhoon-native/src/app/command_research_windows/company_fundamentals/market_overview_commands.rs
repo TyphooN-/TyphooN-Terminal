@@ -68,19 +68,9 @@ impl TyphooNApp {
                 }
             }
             "CACS" | "CORP_ACTIONS" | "CORPORATE_ACTIONS" | "ACTIONS" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cacs_symbol = sym;
                 }
@@ -88,19 +78,9 @@ impl TyphooNApp {
                 // No fetcher — the window aggregates cached splits/dividends/earnings/IPOs.
             }
             "WACC" | "COST_OF_CAPITAL" | "CAPM" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.wacc_symbol = sym;
                 }

@@ -11,19 +11,9 @@ impl TyphooNApp {
             // only disambiguated forms are used for OBV/HMA research windows.
             // Bare VORTEX, CHOP, TRIX are unbound and kept as aliases.
             "VORTEX" | "VORTEXFIT" | "VORTEX_WIN" | "VI" | "VI_14" | "BOTES_SIEPMAN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.vortex_win_symbol = sym;
                 }
@@ -44,19 +34,9 @@ impl TyphooNApp {
                 true
             }
             "CHOP" | "CHOPFIT" | "CHOP_WIN" | "CHOPPINESS" | "CHOPPINESS_INDEX" | "DREISS" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.chop_win_symbol = sym;
                 }
@@ -76,19 +56,9 @@ impl TyphooNApp {
                 true
             }
             "OBVFIT" | "OBV_WIN" | "OBVREG" | "GRANVILLE_OBV" | "ONBALANCE_VOLUME" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.obv_win_symbol = sym;
                 }
@@ -107,19 +77,9 @@ impl TyphooNApp {
                 true
             }
             "TRIX" | "TRIXFIT" | "TRIX_WIN" | "TRIPLE_EMA" | "HUTSON_TRIX" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.trix_win_symbol = sym;
                 }
@@ -139,19 +99,9 @@ impl TyphooNApp {
                 true
             }
             "HMAFIT" | "HMA_WIN" | "HMAREG" | "HULL_MA" | "HULL_MOVING_AVG" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.hma_win_symbol = sym;
                 }

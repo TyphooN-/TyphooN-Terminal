@@ -5,19 +5,9 @@ impl TyphooNApp {
         match cmd_upper.as_str() {
             // ── Jump, stationarity, and tail palette aliases ──
             "BNSJUMP" | "BNS_JUMP" | "JUMPTEST" | "JUMP_TEST" | "BARNDORFF" | "BIPOWERJUMP" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.bnsjump_symbol = sym;
                 }
@@ -38,19 +28,9 @@ impl TyphooNApp {
             }
             "PPROOT" | "PHILLIPS_PERRON" | "PHILLIPSPERRON" | "PP_TEST" | "PPTEST"
             | "UNITROOTPP" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.pproot_symbol = sym;
                 }
@@ -70,19 +50,9 @@ impl TyphooNApp {
                 true
             }
             "MFDFA" | "MF_DFA" | "MULTIFRACTAL" | "MULTIFRACTALDFA" | "MFSPECTRUM" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.mfdfa_symbol = sym;
                 }
@@ -101,19 +71,9 @@ impl TyphooNApp {
                 true
             }
             "HILLKS" | "HILL_KS" | "PARETO_KS" | "TAILFIT" | "HILLTAILFIT" | "HILLGOF" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.hillks_symbol = sym;
                 }
@@ -134,19 +94,9 @@ impl TyphooNApp {
             }
             "TSI" | "TRUE_STRENGTH" | "TRUESTRENGTHINDEX" | "BLAU_TSI" | "BLAUINDEX"
             | "MOMENTUMTSI" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.tsi_symbol = sym;
                 }

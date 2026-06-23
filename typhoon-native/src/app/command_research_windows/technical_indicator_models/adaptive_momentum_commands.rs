@@ -10,19 +10,9 @@ impl TyphooNApp {
             | "OPTION_CALENDAR"
             | "OPTIONS_CALENDAR"
             | "OPTION_EXPIRATION_CALENDAR" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.expcal_win_symbol = sym;
                 }
@@ -54,19 +44,9 @@ impl TyphooNApp {
             // ── Research section ──
             "SMMA" | "SMMAFIT" | "SMMA_WIN" | "WILDER_MA" | "WILDER_SMMA" | "RMA"
             | "SMOOTHED_MA" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.smma_win_symbol = sym;
                 }
@@ -90,19 +70,9 @@ impl TyphooNApp {
             | "ALLIGATOR_WIN"
             | "WILLIAMS_ALLIGATOR"
             | "BILL_WILLIAMS_ALLIGATOR" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.alligator_win_symbol = sym;
                 }
@@ -123,19 +93,9 @@ impl TyphooNApp {
                 }
             }
             "CRSI" | "CRSIFIT" | "CRSI_WIN" | "CONNORS_RSI" | "CONNORSRSI" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.crsi_win_symbol = sym;
                 }
@@ -154,19 +114,9 @@ impl TyphooNApp {
                 }
             }
             "SEB" | "SEBFIT" | "SEB_WIN" | "STDERR_BANDS" | "STANDARD_ERROR_BANDS" | "SE_BANDS" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.seb_win_symbol = sym;
                 }
@@ -184,19 +134,9 @@ impl TyphooNApp {
                 }
             }
             "IMI" | "IMIFIT" | "IMI_WIN" | "INTRADAY_MOMENTUM_INDEX" | "CHANDE_IMI" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.imi_win_symbol = sym;
                 }
@@ -214,19 +154,9 @@ impl TyphooNApp {
                 }
             }
             "GMMA" | "GMMAFIT" | "GMMA_WIN" | "GUPPY" | "GUPPY_MMA" | "GUPPY_MULTIPLE_MA" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.gmma_win_symbol = sym;
                 }
@@ -250,19 +180,9 @@ impl TyphooNApp {
             | "MA_ENVELOPE"
             | "MOVING_AVG_ENVELOPE"
             | "MA_ENV" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.maenv_win_symbol = sym;
                 }
@@ -287,19 +207,9 @@ impl TyphooNApp {
             | "ACCUMULATION_DISTRIBUTION"
             | "CHAIKIN_ADL"
             | "AD_LINE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.adl_win_symbol = sym;
                 }
@@ -322,19 +232,9 @@ impl TyphooNApp {
             | "VERTHORZ"
             | "VERT_HORZ_FILTER"
             | "VERTICAL_HORIZONTAL_FILTER" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.vhf_win_symbol = sym;
                 }
@@ -357,19 +257,9 @@ impl TyphooNApp {
             | "VOLUME_ROC"
             | "VOL_ROC"
             | "VOLUME_RATE_OF_CHANGE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.vroc_win_symbol = sym;
                 }
@@ -388,19 +278,9 @@ impl TyphooNApp {
                 }
             }
             "KDJ" | "KDJFIT" | "KDJ_WIN" | "K_D_J" | "KDJ_STOCH" | "STOCH_KDJ" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.kdj_win_symbol = sym;
                 }
@@ -423,19 +303,9 @@ impl TyphooNApp {
             | "QQE_MOD"
             | "QUANT_QUAL_EST"
             | "QUANTITATIVE_QUALITATIVE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.qqe_win_symbol = sym;
                 }

@@ -6,19 +6,9 @@ impl TyphooNApp {
             // ── palette aliases ──
             // Note: "MASS_INDEX"/"DORSEY_MASS" already claimed by curvefit.
             "MASSINDEX" | "MI" | "MASS_INDEX_WIN" | "MINDEX" | "MASS_25" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.mass_index_win_symbol = sym;
                 }
@@ -39,19 +29,9 @@ impl TyphooNApp {
                 }
             }
             "NATR" | "NORMALIZED_ATR" | "NATR_WIN" | "NORMALIZED_ATR_WIN" | "ATR_PCT" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.natr_win_symbol = sym;
                 }
@@ -71,19 +51,9 @@ impl TyphooNApp {
             }
             // Note: bare "SQUEEZE" is a chart toggle, not claimed here.
             "TTM_SQUEEZE" | "TTMSQUEEZE" | "TTM_SQUEEZE_WIN" | "CARTER_SQUEEZE" | "TTM" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.ttm_squeeze_win_symbol = sym;
                 }
@@ -105,19 +75,9 @@ impl TyphooNApp {
             }
             // Note: "FORCE_INDEX"/"ELDER_FORCE" already claimed by EFI curvefit.
             "FORCEINDEX" | "FORCE" | "FI" | "FORCE_INDEX_WIN" | "FORCE13" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.force_index_win_symbol = sym;
                 }
@@ -138,19 +98,9 @@ impl TyphooNApp {
                 }
             }
             "TRANGE" | "TRUE_RANGE" | "TR" | "TRANGE_WIN" | "RAW_TRUE_RANGE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.trange_win_symbol = sym;
                 }

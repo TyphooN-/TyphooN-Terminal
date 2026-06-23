@@ -5,19 +5,9 @@ impl TyphooNApp {
         match cmd_upper.as_str() {
             // ── palette aliases ──
             "LINEARREG_SLOPE" | "LINREG_SLOPE" | "LINREGSLOPE" | "LRSLOPE" | "SLOPE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.linearreg_slope_win_symbol = sym;
                 }
@@ -40,19 +30,9 @@ impl TyphooNApp {
                 }
             }
             "HT_DCPERIOD" | "HTDCPERIOD" | "DCPERIOD" | "HILBERT_PERIOD" | "CYCLE_PERIOD" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.ht_dcperiod_win_symbol = sym;
                 }
@@ -74,19 +54,9 @@ impl TyphooNApp {
             }
             "HT_TRENDMODE" | "HTTRENDMODE" | "TRENDMODE" | "HILBERT_TRENDMODE"
             | "CYCLE_TRENDMODE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.ht_trendmode_win_symbol = sym;
                 }
@@ -107,19 +77,9 @@ impl TyphooNApp {
                 }
             }
             "ACCBANDS" | "ACCELERATION_BANDS" | "ACCBAND" | "HEADLEY" | "ACC_BANDS" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.accbands_win_symbol = sym;
                 }
@@ -140,19 +100,9 @@ impl TyphooNApp {
                 }
             }
             "STOCHF" | "STOCHFAST" | "FAST_STOCH" | "FASTSTOCH" | "STOCH_FAST" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.stochf_win_symbol = sym;
                 }

@@ -8,19 +8,9 @@ impl TyphooNApp {
             // bound to chart-overlay toggles — these research windows use
             // disambiguated aliases only.
             "SHORTSQUEEZE" | "SHORT_SQUEEZE" | "SQZCOMP" | "SQUEEZESCORE" | "SQZSCORE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.squeeze_win_symbol = sym;
                 }
@@ -42,19 +32,9 @@ impl TyphooNApp {
                 true
             }
             "SQUEEZERANK" | "SQZRANK" | "SQUEEZE_RANK" | "SQRANK" | "SHORTSQUEEZERANK" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.squeezerank_symbol = sym;
                 }
@@ -84,19 +64,9 @@ impl TyphooNApp {
                 true
             }
             "BBSQUEEZE" | "BB_SQUEEZE" | "BOLLINGERSQUEEZE" | "BBANDS_SQUEEZE" | "BBWIDTH" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.bbsqueeze_symbol = sym;
                 }
@@ -116,19 +86,9 @@ impl TyphooNApp {
                 true
             }
             "DONCHIANBREAK" | "DONCHIANCHANNEL" | "DONCHIAN_CHANNEL" | "DONBREAK" | "DCCHAN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.donchian_win_symbol = sym;
                 }
@@ -150,19 +110,9 @@ impl TyphooNApp {
                 true
             }
             "KAMAFIT" | "KAMA_ER" | "KAMA_ADAPTIVE" | "ADAPTIVEMA" | "KAUFMAN_AMA" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.kama_win_symbol = sym;
                 }

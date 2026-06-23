@@ -4,19 +4,9 @@ impl TyphooNApp {
     pub(super) fn handle_macd_oscillator_extrema_command(&mut self, cmd_upper: &String) -> bool {
         match cmd_upper.as_str() {
             "AROONOSC" | "AROONOSCWIN" | "AROON_OSC" | "AROONOSCILLATOR" | "AROON_DIFF" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.aroonosc_win_symbol = sym;
                 }
@@ -37,19 +27,9 @@ impl TyphooNApp {
                 }
             }
             "MINMAXINDEX" | "MMIDXWIN" | "MINMAX_IDX" | "EXTREMA_IDX" | "HL_IDX" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.minmaxindex_win_symbol = sym;
                 }
@@ -70,19 +50,9 @@ impl TyphooNApp {
                 }
             }
             "MACDEXT" | "MACDEXTWIN" | "MACD_EXT" | "MACD_CONFIG" | "MACD_FLEX" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.macdext_win_symbol = sym;
                 }
@@ -103,19 +73,9 @@ impl TyphooNApp {
                 }
             }
             "MACDFIX" | "MACDFIXWIN" | "MACD_FIX" | "MACD_12_26" | "MACD_STD" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.macdfix_win_symbol = sym;
                 }
@@ -136,19 +96,9 @@ impl TyphooNApp {
                 }
             }
             "MAVP" | "MAVPWIN" | "VAR_PERIOD_MA" | "MA_VARPERIOD" | "MA_DYNAMIC" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.mavp_win_symbol = sym;
                 }

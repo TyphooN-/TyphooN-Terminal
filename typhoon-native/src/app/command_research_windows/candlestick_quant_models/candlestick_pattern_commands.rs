@@ -5,19 +5,9 @@ impl TyphooNApp {
         match cmd_upper.as_str() {
             // Candlestick pattern storage/helpers
             "CDLDOJI" | "CDLDOJIWIN" | "DOJI" | "DOJI_PATTERN" | "DOJI_CANDLE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_doji_win_symbol = sym;
                 }
@@ -38,19 +28,9 @@ impl TyphooNApp {
                 }
             }
             "CDLHAMMER" | "CDLHAMMERWIN" | "HAMMER" | "HAMMER_PATTERN" | "HAMMER_CANDLE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_hammer_win_symbol = sym;
                 }
@@ -75,19 +55,9 @@ impl TyphooNApp {
             | "SHOOTING_STAR"
             | "CDLSHOOTINGSTARWIN"
             | "SHOOTING_STAR_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_shooting_star_win_symbol = sym;
                 }
@@ -111,19 +81,9 @@ impl TyphooNApp {
             }
             "CDLENGULFING" | "ENGULFING" | "CDLENGULFINGWIN" | "ENGULFING_PATTERN"
             | "ENGULFING_CANDLE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_engulfing_win_symbol = sym;
                 }
@@ -146,19 +106,9 @@ impl TyphooNApp {
                 }
             }
             "CDLHARAMI" | "HARAMI" | "CDLHARAMIWIN" | "HARAMI_PATTERN" | "INSIDE_BAR" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_harami_win_symbol = sym;
                 }
@@ -184,19 +134,9 @@ impl TyphooNApp {
             | "MORNING_STAR"
             | "CDLMORNINGSTARWIN"
             | "MORNING_STAR_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_morning_star_win_symbol = sym;
                 }
@@ -223,19 +163,9 @@ impl TyphooNApp {
             | "EVENING_STAR"
             | "CDLEVENINGSTARWIN"
             | "EVENING_STAR_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_evening_star_win_symbol = sym;
                 }
@@ -262,19 +192,9 @@ impl TyphooNApp {
             | "THREE_BLACK_CROWS"
             | "BLACK_CROWS"
             | "CDLTHREEBLACKCROWSWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_three_black_crows_win_symbol = sym;
                 }
@@ -301,19 +221,9 @@ impl TyphooNApp {
             | "THREE_WHITE_SOLDIERS"
             | "WHITE_SOLDIERS"
             | "CDLTHREEWHITESOLDIERSWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_three_white_soldiers_win_symbol = sym;
                 }
@@ -340,19 +250,9 @@ impl TyphooNApp {
             | "DARK_CLOUD_COVER"
             | "DARK_CLOUD"
             | "CDLDARKCLOUDCOVERWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_dark_cloud_cover_win_symbol = sym;
                 }
@@ -376,19 +276,9 @@ impl TyphooNApp {
             }
             // ── CDL* piercing / doji variants / hammer mirrors ──
             "CDLPIERCING" | "PIERCING" | "PIERCING_LINE" | "PIERCINGLINE" | "CDLPIERCINGWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_piercing_win_symbol = sym;
                 }
@@ -413,19 +303,9 @@ impl TyphooNApp {
             | "DRAGONFLY_DOJI"
             | "DRAGONFLY"
             | "CDLDRAGONFLYDOJIWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_dragonfly_doji_win_symbol = sym;
                 }
@@ -452,19 +332,9 @@ impl TyphooNApp {
             | "GRAVESTONE_DOJI"
             | "GRAVESTONE"
             | "CDLGRAVESTONEDOJIWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_gravestone_doji_win_symbol = sym;
                 }
@@ -487,19 +357,9 @@ impl TyphooNApp {
                 }
             }
             "CDLHANGINGMAN" | "HANGINGMAN" | "HANGING_MAN" | "CDLHANGINGMANWIN" | "HANGMAN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_hanging_man_win_symbol = sym;
                 }
@@ -526,19 +386,9 @@ impl TyphooNApp {
             | "INVERTED_HAMMER"
             | "INVHAMMER"
             | "CDLINVERTEDHAMMERWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_inverted_hammer_win_symbol = sym;
                 }
@@ -566,19 +416,9 @@ impl TyphooNApp {
             | "HARAMI_CROSS"
             | "CDLHARAMICROSSWIN"
             | "HARAMI_CROSS_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_harami_cross_win_symbol = sym;
                 }
@@ -605,19 +445,9 @@ impl TyphooNApp {
             | "LONG_LEGGED_DOJI"
             | "LONGLEGGED"
             | "CDLLONGLEGGEDDOJIWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_long_legged_doji_win_symbol = sym;
                 }
@@ -641,19 +471,9 @@ impl TyphooNApp {
             }
             "CDLMARUBOZU" | "MARUBOZU" | "MARUBOZU_CANDLE" | "MARUBOZU_PATTERN"
             | "CDLMARUBOZUWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_marubozu_win_symbol = sym;
                 }
@@ -678,19 +498,9 @@ impl TyphooNApp {
             | "SPINNING_TOP"
             | "SPINNING_TOP_PATTERN"
             | "CDLSPINNINGTOPWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_spinning_top_win_symbol = sym;
                 }
@@ -713,19 +523,9 @@ impl TyphooNApp {
                 }
             }
             "CDLTRISTAR" | "TRISTAR" | "TRI_STAR" | "TRIPLE_DOJI" | "CDLTRISTARWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_tristar_win_symbol = sym;
                 }
@@ -747,19 +547,9 @@ impl TyphooNApp {
             }
             // ── CDL* doji star / morning doji star / evening doji star / abandoned baby / three inside ──
             "CDLDOJISTAR" | "DOJISTAR" | "DOJI_STAR" | "CDLDOJISTARWIN" | "DOJISTAR_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_doji_star_win_symbol = sym;
                 }
@@ -786,19 +576,9 @@ impl TyphooNApp {
             | "MORNING_DOJI_STAR"
             | "CDLMORNINGDOJISTARWIN"
             | "MORNING_DOJI_STAR_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_morning_doji_star_win_symbol = sym;
                 }
@@ -825,19 +605,9 @@ impl TyphooNApp {
             | "EVENING_DOJI_STAR"
             | "CDLEVENINGDOJISTARWIN"
             | "EVENING_DOJI_STAR_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_evening_doji_star_win_symbol = sym;
                 }
@@ -864,19 +634,9 @@ impl TyphooNApp {
             | "ABANDONED_BABY"
             | "CDLABANDONEDBABYWIN"
             | "ABANDONED_BABY_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_abandoned_baby_win_symbol = sym;
                 }
@@ -903,19 +663,9 @@ impl TyphooNApp {
             | "THREE_INSIDE"
             | "CDL3INSIDEWIN"
             | "THREE_INSIDE_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_three_inside_win_symbol = sym;
                 }
@@ -939,19 +689,9 @@ impl TyphooNApp {
             }
             // ── CDL* belt hold / closing marubozu / high wave / long line / short line ──
             "CDLBELTHOLD" | "BELTHOLD" | "BELT_HOLD" | "CDLBELTHOLDWIN" | "BELT_HOLD_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_belt_hold_win_symbol = sym;
                 }
@@ -978,19 +718,9 @@ impl TyphooNApp {
             | "CLOSING_MARUBOZU"
             | "CDLCLOSINGMARUBOZUWIN"
             | "CLOSING_MARUBOZU_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_closing_marubozu_win_symbol = sym;
                 }
@@ -1013,19 +743,9 @@ impl TyphooNApp {
                 }
             }
             "CDLHIGHWAVE" | "HIGHWAVE" | "HIGH_WAVE" | "CDLHIGHWAVEWIN" | "HIGH_WAVE_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_high_wave_win_symbol = sym;
                 }
@@ -1048,19 +768,9 @@ impl TyphooNApp {
                 }
             }
             "CDLLONGLINE" | "LONGLINE" | "LONG_LINE" | "CDLLONGLINEWIN" | "LONG_LINE_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_long_line_win_symbol = sym;
                 }
@@ -1084,19 +794,9 @@ impl TyphooNApp {
             }
             "CDLSHORTLINE" | "SHORTLINE" | "SHORT_LINE" | "CDLSHORTLINEWIN"
             | "SHORT_LINE_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_short_line_win_symbol = sym;
                 }
@@ -1124,19 +824,9 @@ impl TyphooNApp {
             | "COUNTER_ATTACK"
             | "CDLCOUNTERATTACKWIN"
             | "COUNTERATTACK_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_counterattack_win_symbol = sym;
                 }
@@ -1163,19 +853,9 @@ impl TyphooNApp {
             | "HOMING_PIGEON"
             | "CDLHOMINGPIGEONWIN"
             | "HOMING_PIGEON_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_homing_pigeon_win_symbol = sym;
                 }
@@ -1198,19 +878,9 @@ impl TyphooNApp {
                 }
             }
             "CDLINNECK" | "INNECK" | "IN_NECK" | "CDLINNECKWIN" | "IN_NECK_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_in_neck_win_symbol = sym;
                 }
@@ -1231,19 +901,9 @@ impl TyphooNApp {
                 }
             }
             "CDLONNECK" | "ONNECK" | "ON_NECK" | "CDLONNECKWIN" | "ON_NECK_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_on_neck_win_symbol = sym;
                 }
@@ -1264,19 +924,9 @@ impl TyphooNApp {
                 }
             }
             "CDLTHRUSTING" | "THRUSTING" | "THRUST" | "CDLTHRUSTINGWIN" | "THRUSTING_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_thrusting_win_symbol = sym;
                 }
@@ -1299,19 +949,9 @@ impl TyphooNApp {
                 }
             }
             "CDL2CROWS" | "TWOCROWS" | "TWO_CROWS" | "CDL2CROWSWIN" | "TWO_CROWS_PATTERN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_two_crows_win_symbol = sym;
                 }
@@ -1335,19 +975,9 @@ impl TyphooNApp {
             }
             "CDL3LINESTRIKE" | "THREELINESTRIKE" | "THREE_LINE_STRIKE" | "CDL3LINESTRIKEWIN"
             | "LINE_STRIKE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_three_line_strike_win_symbol = sym;
                 }
@@ -1370,19 +1000,9 @@ impl TyphooNApp {
                 }
             }
             "CDL3OUTSIDE" | "THREEOUTSIDE" | "THREE_OUTSIDE" | "CDL3OUTSIDEWIN" | "OUTSIDE3" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_three_outside_win_symbol = sym;
                 }
@@ -1406,19 +1026,9 @@ impl TyphooNApp {
             }
             "CDLMATCHINGLOW" | "MATCHINGLOW" | "MATCHING_LOW" | "CDLMATCHINGLOWWIN"
             | "MATCH_LOW" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_matching_low_win_symbol = sym;
                 }
@@ -1445,19 +1055,9 @@ impl TyphooNApp {
             | "SEPARATING_LINES"
             | "CDLSEPARATINGLINESWIN"
             | "SEP_LINES" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_separating_lines_win_symbol = sym;
                 }
@@ -1484,19 +1084,9 @@ impl TyphooNApp {
             | "STICK_SANDWICH"
             | "CDLSTICKSANDWICHWIN"
             | "SANDWICH" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_stick_sandwich_win_symbol = sym;
                 }
@@ -1520,19 +1110,9 @@ impl TyphooNApp {
             }
             "CDLRICKSHAWMAN" | "RICKSHAWMAN" | "RICKSHAW_MAN" | "CDLRICKSHAWMANWIN"
             | "RICKSHAW" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_rickshaw_man_win_symbol = sym;
                 }
@@ -1555,19 +1135,9 @@ impl TyphooNApp {
                 }
             }
             "CDLTAKURI" | "TAKURI" | "CDLTAKURIWIN" | "TAKURI_CANDLE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_takuri_win_symbol = sym;
                 }
@@ -1592,19 +1162,9 @@ impl TyphooNApp {
             | "THREE_STARS_IN_SOUTH"
             | "SOUTH_STARS"
             | "CDL3STARSINSOUTHWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_three_stars_in_south_win_symbol = sym;
                 }
@@ -1631,19 +1191,9 @@ impl TyphooNApp {
             | "IDENTICAL_THREE_CROWS"
             | "THREE_IDENTICAL_CROWS"
             | "CDLIDENTICAL3CROWSWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_identical_three_crows_win_symbol = sym;
                 }
@@ -1669,19 +1219,9 @@ impl TyphooNApp {
                 }
             }
             "CDLKICKING" | "KICKING" | "CDLKICKINGWIN" | "KICKING_CANDLE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_kicking_win_symbol = sym;
                 }
@@ -1706,19 +1246,9 @@ impl TyphooNApp {
             | "KICKING_BY_LENGTH"
             | "CDLKICKINGBYLENGTHWIN"
             | "KICKING_LENGTH" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_kicking_by_length_win_symbol = sym;
                 }
@@ -1742,19 +1272,9 @@ impl TyphooNApp {
             }
             "CDLLADDERBOTTOM" | "LADDERBOTTOM" | "LADDER_BOTTOM" | "BOTTOM_LADDER"
             | "CDLLADDERBOTTOMWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_ladder_bottom_win_symbol = sym;
                 }
@@ -1778,19 +1298,9 @@ impl TyphooNApp {
             }
             "CDLUNIQUE3RIVER" | "UNIQUE3RIVER" | "UNIQUE_THREE_RIVER" | "THREE_RIVER"
             | "CDLUNIQUE3RIVERWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_unique_three_river_win_symbol = sym;
                 }
@@ -1814,19 +1324,9 @@ impl TyphooNApp {
             }
             "CDLADVANCEBLOCK" | "ADVANCEBLOCK" | "ADVANCE_BLOCK" | "CDLADVANCEBLOCKWIN"
             | "ADV_BLOCK" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_advance_block_win_symbol = sym;
                 }
@@ -1849,19 +1349,9 @@ impl TyphooNApp {
                 }
             }
             "CDLBREAKAWAY" | "BREAKAWAY" | "CDLBREAKAWAYWIN" | "BREAK_AWAY" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_breakaway_win_symbol = sym;
                 }
@@ -1888,19 +1378,9 @@ impl TyphooNApp {
             | "GAP_SIDE_SIDE_WHITE"
             | "CDLGAPSIDESIDEWHITEWIN"
             | "SIDE_BY_SIDE_WHITE" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_gap_side_side_white_win_symbol = sym;
                 }
@@ -1927,19 +1407,9 @@ impl TyphooNApp {
             | "UPSIDE_GAP_TWO_CROWS"
             | "CDLUPSIDEGAP2CROWSWIN"
             | "GAP2CROWS" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_upside_gap_two_crows_win_symbol = sym;
                 }
@@ -1966,19 +1436,9 @@ impl TyphooNApp {
             | "XSIDE_GAP_THREE_METHODS"
             | "CDLXSIDEGAP3METHODSWIN"
             | "GAP3METHODS" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_xside_gap_three_methods_win_symbol = sym;
                 }
@@ -2008,19 +1468,9 @@ impl TyphooNApp {
             | "CONCEAL_BABY_SWALLOW"
             | "CDLCONCEALBABYSWALLWIN"
             | "BABY_SWALLOW" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_conceal_baby_swallow_win_symbol = sym;
                 }
@@ -2043,19 +1493,9 @@ impl TyphooNApp {
                 }
             }
             "CDLHIKKAKE" | "HIKKAKE" | "HIKKAKEWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_hikkake_win_symbol = sym;
                 }
@@ -2076,19 +1516,9 @@ impl TyphooNApp {
                 }
             }
             "CDLHIKKAKEMOD" | "HIKKAKEMOD" | "MODHIKKAKE" | "HIKKAKEMODWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_hikkake_mod_win_symbol = sym;
                 }
@@ -2111,19 +1541,9 @@ impl TyphooNApp {
                 }
             }
             "CDLMATHOLD" | "MATHOLD" | "MAT_HOLD" | "MATHOLDWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_mat_hold_win_symbol = sym;
                 }
@@ -2147,19 +1567,9 @@ impl TyphooNApp {
             | "RISEFALL3METHODS"
             | "RISE_FALL_THREE_METHODS"
             | "CDLRISEFALL3METHODSWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_rise_fall_three_methods_win_symbol = sym;
                 }
@@ -2189,19 +1599,9 @@ impl TyphooNApp {
             | "STALLED_PATTERN"
             | "STALLPATTERN"
             | "CDLSTALLEDPATTERNWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_stalled_pattern_win_symbol = sym;
                 }
@@ -2224,19 +1624,9 @@ impl TyphooNApp {
                 }
             }
             "CDLTASUKIGAP" | "TASUKIGAP" | "TASUKI_GAP" | "CDLTASUKIGAPWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.cdl_tasuki_gap_win_symbol = sym;
                 }
@@ -2260,19 +1650,9 @@ impl TyphooNApp {
             }
             // ── Quant Stats aliases ──
             "MODSHARPE" | "ADJSHARPE" | "ADJUSTED_SHARPE" | "PEZIER_WHITE" | "MODSHARPEWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.modsharpe_win_symbol = sym;
                 }
@@ -2293,19 +1673,9 @@ impl TyphooNApp {
                 }
             }
             "HSIEHTEST" | "HSIEH" | "HSIEH_NONLIN" | "NONLIN_3RDMOM" | "HSIEHTESTWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.hsiehtest_win_symbol = sym;
                 }
@@ -2326,19 +1696,9 @@ impl TyphooNApp {
                 }
             }
             "CHOWBREAK" | "CHOW" | "CHOW_TEST" | "STRUCT_BREAK" | "CHOWBREAKWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.chowbreak_win_symbol = sym;
                 }
@@ -2359,19 +1719,9 @@ impl TyphooNApp {
                 }
             }
             "DRIFTBURST" | "DRIFT_BURST" | "COR18" | "KERNEL_DRIFT" | "DRIFTBURSTWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.driftburst_win_symbol = sym;
                 }
@@ -2392,19 +1742,9 @@ impl TyphooNApp {
                 }
             }
             "HLVCLUST" | "PARKINSON_CLUST" | "HL_CLUSTER" | "HL_VOLCLUST" | "HLVCLUSTWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.hlvclust_win_symbol = sym;
                 }
@@ -2426,19 +1766,9 @@ impl TyphooNApp {
             }
             // ── palette aliases (Quant Stats) ──
             "YANGZHANG" | "YZ_VOL" | "YZVOL" | "YZ_RANGEVOL" | "YANGZHANGWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.yangzhang_win_symbol = sym;
                 }
@@ -2459,19 +1789,9 @@ impl TyphooNApp {
                 }
             }
             "KUIPER" | "KUIPERTEST" | "KUIPER_CDF" | "VSTAT" | "KUIPERWIN" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.kuiper_win_symbol = sym;
                 }

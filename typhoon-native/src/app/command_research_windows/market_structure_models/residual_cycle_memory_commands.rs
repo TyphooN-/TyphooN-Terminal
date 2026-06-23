@@ -5,19 +5,9 @@ impl TyphooNApp {
         match cmd_upper.as_str() {
             // ── Residual, cycle, memory, and rank-dependence palette aliases ──
             "DURBINWATSON" | "DURBIN_WATSON" | "DW" | "DWSTAT" | "DWTEST" | "RESIDAC" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.durbinwatson_symbol = sym;
                 }
@@ -39,19 +29,9 @@ impl TyphooNApp {
                 true
             }
             "BDSTEST" | "BDS_TEST" | "BDS" | "BROCK_DECHERT" | "BROCKDECHERT" | "IIDTEST" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.bdstest_symbol = sym;
                 }
@@ -71,19 +51,9 @@ impl TyphooNApp {
                 true
             }
             "BREUSCHPAGAN" | "BREUSCH_PAGAN" | "BP" | "BPTEST" | "HETEROTEST" | "HETEROLMTEST" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.breuschpagan_symbol = sym;
                 }
@@ -105,19 +75,9 @@ impl TyphooNApp {
                 true
             }
             "TURNPTS" | "TURN_PTS" | "TURNINGPOINTS" | "BARTELS" | "TURNINGTEST" | "TURNINGPTS" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.turnpts_symbol = sym;
                 }
@@ -138,19 +98,9 @@ impl TyphooNApp {
             }
             "PERIODOGRAM" | "PERGRAM" | "DFTSPEC" | "SPECDENSITY" | "DOMINANTCYCLE"
             | "CYCLEFINDER" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.periodogram_symbol = sym;
                 }
@@ -172,19 +122,9 @@ impl TyphooNApp {
                 true
             }
             "MCLEODLI" | "MCLEOD" | "MLTEST" | "SQRETURNS" | "ARCHPORTMANTEAU" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.mcleodli_symbol = sym;
                 }
@@ -204,19 +144,9 @@ impl TyphooNApp {
                 true
             }
             "OUFIT" | "ORNSTEIN" | "OU" | "OUPROCESS" | "OU_FIT" | "MEANREVERTFIT" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.oufit_symbol = sym;
                 }
@@ -236,19 +166,9 @@ impl TyphooNApp {
             }
             "GPH" | "GEWEKE" | "GEWEKEPORTERHUDAK" | "LONGMEMORY" | "FRACTIONAL_D"
             | "LOGPERIODOGRAM" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.gph_symbol = sym;
                 }
@@ -267,19 +187,9 @@ impl TyphooNApp {
                 true
             }
             "BURGSPEC" | "BURG" | "MAXENTROPY" | "ARSPECTRUM" | "MESPEC" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.burgspec_symbol = sym;
                 }
@@ -299,19 +209,9 @@ impl TyphooNApp {
                 true
             }
             "KENDALLTAU" | "KTAU" | "RANKAUTOCORR" | "TAULAG1" | "KENDALLLAG" => {
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| {
-                        c.symbol
-                            .split(':')
-                            .rev()
-                            .nth(1)
-                            .or_else(|| c.symbol.split(':').last())
-                            .unwrap_or("")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
                 if !sym.is_empty() {
                     self.kendalltau_symbol = sym;
                 }
