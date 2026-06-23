@@ -557,12 +557,33 @@ BrokerCmd sends + window titles verified preserved.
 **`.max_size(...)` handled (9 windows).** `ComputeWindow` gained an optional `max_size`
 field (applied to the egui builder when `Some`); `max_size: None` was mechanically added
 to the 229 existing call sites, and the transforms now capture `.max_size([w,h])`.
-**238 compute windows now route through the shell** — every single-field, multi-field,
-and max-size canonical compute window. The only canonical compute windows left inline are
-**4 with extra interactive controls** (INSSTRK, MNGR, DCF, COR — a Slider/DragValue for a
-parameter); they need a richer shell (an extra-control closure) and are genuinely
-bespoke. The non-canonical "Fetch"-button / multi-field-card / filtered tables also
-remain.
+**238 compute windows route through the shell** — every single-field, multi-field, and
+max-size canonical compute window.
+
+**Extra-control windows handled (3 of 4).** `render_compute_window_ext` adds an
+`extra_controls` closure rendered in the button row (between Use Chart and Load Cached);
+`render_compute_window` is now a thin wrapper passing a no-op, so the 238 callers are
+untouched. INSSTRK / MNGR (`window_days` DragValue) and COR (DragValue + peer-JSON
+pre-read) route through it — **241 compute windows total**. DCF stays inline: it lays its
+3 assumption DragValues + Compute in a *separate* second `ui.horizontal` row, which the
+shell's single-row layout would visibly change — a genuine exception, not forced.
+
+### Bespoke-tail analysis: the "Fetch" windows stay native (by ADR design)
+
+The 27 "Fetch"-button windows pull fundamental data from an external API. Their *display*
+is already crate-extracted (15 use the `render::` data-table functions from the display
+pass). But their *header* is integration glue — API-key-gated buttons that send broker
+fetches (`BrokerCmd::FetchX { symbol, fmp_key / finnhub_key }`). Per ADR Target 1 the
+crate owns view models / table formatters, **not** broker/provider fetch logic, which
+"`typhoon-native` remains the … integration owner." So the fetch headers correctly stay
+in native (the same call as the `command_research_windows` handlers): routing them
+through a "crate-movable" shell would be deduplication of integration code, not a crate
+boundary. The crate-relevant extraction for these windows — the displays — is done.
+
+**Net:** every research view (display) and the compute-window interaction layer are
+decoupled into crate-movable free functions; what remains inline is integration glue the
+ADR explicitly keeps in `typhoon-native`. The research-UI boundary is ready for the
+Phase 2 crate-extraction decision.
 
 ### Phase 1, step 3 — `command_research_windows`, started (2026-06-23)
 
@@ -574,13 +595,27 @@ function (empty default, matching the originals; pure over the symbol string, no
 `TyphooNApp`). Behavior-preserving; the dispatch (`handle_research_window_command`) and
 command names are unchanged.
 
-### Next slice
+### Next slice — Phase 2 readiness
 
-Continue `command_research_windows`: the handlers still set `self.show_*` / `self.*_symbol`
-and call `broker_tx.send` directly. The ADR's target is `handle_research_command(...) ->
-ResearchUiAction` — return the visibility/fetch actions instead of mutating app state
-inline. Then the `floating_windows/research` variant tail (max_size / extra-controls /
-Fetch windows), decide the crate's public surface, and begin Phase 2.
+The research-UI decoupling has reached the boundary the ADR set: views and the
+compute-window interaction layer are crate-movable free functions; the residual inline
+code (command handlers, Fetch headers) is integration glue the ADR keeps in native. The
+remaining decisions are Phase-2 proper:
+
+1. **Pick the crate's public surface.** Candidates already exist as free functions:
+   `render::render_*` (the 259 display functions), `window_shell::render_compute_window[_ext]`,
+   and the `ComputeWindow` / context types. Decide which become `pub` crate API vs stay
+   native-internal.
+2. **Confirm the dependency cut.** The display + shell layers depend only on `egui` +
+   `typhoon_engine` DTOs/cache — no `TyphooNApp`. Verify nothing in the candidate set
+   imports app internals, then move the `render`/`window_shell`/`format` modules into a
+   new `typhoon-research-ui` crate (Phase 2 step in the plan above).
+3. **Leave integration in native** — the dispatchers (`render_research_ui_windows`,
+   `write_symbol_investigation_sections`), command handlers, and Fetch headers stay as the
+   app-shell's integration layer, calling into the crate.
+
+Per the guardrails this is still one boundary at a time: `typhoon-research-ui` first,
+then chart UI, then broker runtime.
 
 ### Next slice
 
