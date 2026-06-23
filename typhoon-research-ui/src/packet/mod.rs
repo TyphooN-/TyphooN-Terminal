@@ -1,0 +1,60 @@
+//! Symbol-investigation packet section tree (ADR-125 Phase 2): the
+//! `write_symbol_*_sections(&SymbolResearchContext, …)` free functions that
+//! gather research-DB rows via the context connection and format them. Free
+//! functions over engine DTOs + `crate::format`; the dispatcher that builds the
+//! context from app state stays in `typhoon-native`.
+pub mod cached_research;
+pub mod capital_valuation_sections;
+pub mod composite_signal_blocks;
+pub mod composite_signal_early;
+pub mod composite_signal_factors;
+pub mod composite_signal_sections;
+pub mod context;
+pub mod dispatcher_inline_sections;
+pub mod distribution_risk_sections;
+pub mod fractal_tail_stationarity_sections;
+pub mod fundamental_risk_sections;
+pub mod market_behavior_sections;
+pub mod momentum_volume_indicator_sections;
+pub mod moving_average_research_sections;
+pub mod overview;
+pub mod ownership_price_history;
+pub mod peer_comparison;
+pub mod price_behavior_distribution;
+pub mod price_behavior_illiquidity_norm;
+pub mod price_behavior_local;
+pub mod price_behavior_ratios;
+pub mod price_behavior_risk_metrics;
+pub mod price_behavior_seasonality_vol;
+pub mod price_behavior_sections;
+pub mod price_behavior_stat_tests;
+pub mod price_behavior_tests_ratios;
+pub mod price_behavior_vol_estimators;
+pub mod price_transform_adaptive_osc;
+pub mod price_transform_indicator_sections;
+pub mod price_transform_linear_hilbert;
+pub mod price_transform_regression_phase;
+pub mod price_transform_volatility_force;
+pub mod rank_drift_accs_vrp;
+pub mod rank_drift_cone_corrs;
+pub mod rank_drift_core_ranks;
+pub mod rank_drift_div_earn_streaks;
+pub mod rank_drift_fund_quality;
+pub mod rank_drift_growth_drift;
+pub mod rank_drift_liquidity_streaks;
+pub mod rank_drift_research_ranks;
+pub mod rank_drift_sections;
+pub mod rank_drift_vol_perf;
+pub mod rank_drift_yield_short_conc;
+pub mod recent_news;
+pub mod talib_dmi_movement;
+pub mod talib_extended_emitters;
+pub mod talib_momentum_range;
+pub mod talib_price_momentum_sections;
+pub mod talib_price_ohlc_stats;
+pub mod technical_indicator_cloud_trend;
+pub mod technical_indicator_final_osc;
+pub mod technical_indicator_oscillators;
+pub mod technical_indicator_sections;
+pub mod technical_indicator_squeeze_breakouts;
+pub mod technical_indicator_volume_trend;

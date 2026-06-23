@@ -1,10 +1,12 @@
 # ADR-125: Native Crate Boundary Plan
 
-**Status:** Phase 2 begun — `typhoon-research-ui` crate created | **Date:** 2026-06-20 |
+**Status:** Phase 2 — `typhoon-research-ui` crate owns the full research-UI layer | **Date:** 2026-06-20 |
 **Last updated:** 2026-06-23 (Phase 1 complete for the research trees: read-context
 helpers, 259-fn `render` view layer, ~244 windows through `window_shell`, packet
-formatters/context; **Phase 2 step 1 — `typhoon-research-ui` crate extracted** with
-`render` + `window_shell`, acyclic deps, 2272 workspace tests green — see
+formatters/context; **Phase 2 steps 1–3 — `typhoon-research-ui` crate extracted** with
+`render` + `window_shell` + `format` + the 55-module `packet` section tree +
+`SymbolResearchContext`, acyclic deps, 2272 workspace tests green; native retains only the
+dispatchers / command handlers / Fetch headers — see
 [Implementation Progress](#implementation-progress))
 
 **Related:** ADR-086 (`typhoon-native` module decomposition), ADR-108
@@ -634,56 +636,49 @@ workspace clean (0 warnings), 2272 tests (the 3 format tests now run in the crat
 The crate now owns: `render` (259 display fns), `window_shell` (compute shell), `format`
 (packet formatters), `theme`.
 
-### Next slice
+### Phase 2, step 3 — packet section tree moved (2026-06-23)
 
-The remaining crate-movable research code is the **packet section tree** itself — the
-`write_symbol_*_sections(&SymbolResearchContext, …)` free functions (capital-valuation,
-behavior, signal, rank, …, plus `dispatcher_inline_sections`) and the
-`SymbolResearchContext` type. They are already free functions over `ctx.conn` (engine
-`Connection`) + `rx::get_*` (engine) + the crate's `format` — no `TyphooNApp`, no egui —
-so they move the same way, leaving only the dispatcher
-(`write_symbol_investigation_sections`, which gathers app state and builds the context) in
-native. That is a larger (~50-file) move; do it as its own verified slice. Then evaluate
-the chart-UI crate (Target 2) only once research-UI is fully settled — one boundary at a
-time.
+The **packet section tree** — all 55 `symbol_investigation_packet/*` section modules
+(`capital_valuation_sections`, `composite_signal_*`, `distribution_risk_sections`,
+`talib_*`, `dispatcher_inline_sections`, …, plus `context`) — moved into
+`typhoon-research-ui` as the `packet` module. These are `write_symbol_*_sections(&SymbolResearchContext, …)`
+free functions over `ctx.conn` (engine `Connection`) + `rx::get_*` (engine) + the crate's
+`format` — no `TyphooNApp`, no egui — so they moved the same way as `render`/`format`.
+`SymbolResearchContext` (the read-only `{ conn: &Connection }` thread) moved with them as
+`packet::context`. Functions/structs became `pub`; intra-tree paths rewrote
+`super::format` → `crate::format`; the crate stays acyclic (`cargo tree` shows no
+`typhoon-native`).
 
-### Earlier note — Phase 2 readiness (now satisfied by step 1)
+What stays in native is exactly the **dispatcher**: `write_symbol_investigation_sections`
+(`symbol_investigation_packet.rs`) gathers app state (`self.bg`, `self.live_positions`,
+`self.cache`), opens the single `open_bg_read_connection()` (ADR-125 step 3), builds the
+`SymbolResearchContext`, and calls the moved section functions — re-exported via
+`use typhoon_research_ui::packet::*;`, so every call site (`capital_valuation_sections::write_…`)
+resolves unchanged. Verified: crate standalone (0 err / 0 warn), native (0 err / 0 warn),
+workspace 2272 tests pass / 0 fail (the 3 `format` tests run in the crate).
 
-The research-UI decoupling has reached the boundary the ADR set: views and the
-compute-window interaction layer are crate-movable free functions; the residual inline
-code (command handlers, Fetch headers) is integration glue the ADR keeps in native. The
-remaining decisions are Phase-2 proper:
-
-1. **Pick the crate's public surface.** Candidates already exist as free functions:
-   `render::render_*` (the 259 display functions), `window_shell::render_compute_window[_ext]`,
-   and the `ComputeWindow` / context types. Decide which become `pub` crate API vs stay
-   native-internal.
-2. **Confirm the dependency cut.** The display + shell layers depend only on `egui` +
-   `typhoon_engine` DTOs/cache — no `TyphooNApp`. Verify nothing in the candidate set
-   imports app internals, then move the `render`/`window_shell`/`format` modules into a
-   new `typhoon-research-ui` crate (Phase 2 step in the plan above).
-3. **Leave integration in native** — the dispatchers (`render_research_ui_windows`,
-   `write_symbol_investigation_sections`), command handlers, and Fetch headers stay as the
-   app-shell's integration layer, calling into the crate.
-
-Per the guardrails this is still one boundary at a time: `typhoon-research-ui` first,
-then chart UI, then broker runtime.
+The crate now owns: `render` (259 display fns), `window_shell` (compute shell), `format`
+(packet formatters), `packet` (55-module section tree + `SymbolResearchContext`), `theme`.
 
 ### Next slice
 
-What remains in `floating_windows/research`:
+Research-UI is now fully settled as a crate: views (`render`), interaction shell
+(`window_shell`), and the entire packet text-generation layer (`format` + `packet`) live
+in `typhoon-research-ui`; native retains only the dispatchers/command handlers/Fetch
+headers that are app-shell integration glue (they hold `TyphooNApp` state). Per the
+guardrails — one boundary at a time — the next boundary to evaluate is **Target 2,
+`typhoon-chart-ui`**, but only as its own scoped slice and not before this one has settled
+in use.
 
-- **13 canonical-shaped but extra-logic windows** (the fundamental indicators — LIQ,
-  FLOW, DDM, LEV, ACRL, RVOL, FCFY, SVM, IVOL, SKEW, ALTZ, PTFS, VOLE): their Compute
-  pre-reads fundamentals/shares before dispatch, or sends a multi-field command. The
-  strict matcher correctly skips them; they need either a shell variant with a pre-read
-  hook or bespoke per-window closures.
-- **52 variant windows**: no "Load Cached" (≈31), "Fetch"-button fundamental windows,
-  and a few with extra controls (Slider/DragValue) — each needs a sibling shell.
-- **The multi-field summary cards + interactive filtered tables** left out of the display
-  pass (≈19 grids).
+### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
-Then `command_research_windows`, decide the crate's public surface, and begin Phase 2.
+The Phase-1 decoupling work that preceded the crate (deciding the public surface,
+confirming the dependency cut, converting the per-window renderers and packet sections to
+`TyphooNApp`-free free functions, and the variant-shell / `command_research_windows`
+slices) is recorded in the git history of this ADR. It is fully captured by the Phase 2
+step 1–3 records above and no longer tracks open work; the crate now owns `render`,
+`window_shell`, `format`, `packet`, and `theme`, with only dispatchers / command handlers
+/ Fetch headers (app-shell integration glue) left in native.
 
 The window state itself (`show_*` / `*_symbol` / `*_loading` / `*_snapshot`) still lives
 on `TyphooNApp` and is threaded in as `&mut` field refs; bundling it into per-window

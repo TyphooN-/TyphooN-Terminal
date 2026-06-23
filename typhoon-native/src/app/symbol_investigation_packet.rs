@@ -1,64 +1,11 @@
-use self::context::SymbolResearchContext;
+// Packet section tree now lives in the typhoon-research-ui crate (ADR-125
+// Phase 2). Re-exported so the dispatcher's section calls (e.g.
+// `capital_valuation_sections::write_…`) and `SymbolResearchContext` resolve
+// unchanged; the dispatcher itself (gathers app state, builds the context)
+// stays here in native.
+use typhoon_research_ui::packet::context::SymbolResearchContext;
+use typhoon_research_ui::packet::*;
 use super::*;
-mod cached_research;
-mod capital_valuation_sections;
-mod composite_signal_blocks;
-mod composite_signal_early;
-mod composite_signal_factors;
-mod composite_signal_sections;
-mod context;
-mod dispatcher_inline_sections;
-mod distribution_risk_sections;
-// Packet text formatters now live in the `typhoon-research-ui` crate (ADR-125
-// Phase 2). Re-exported so the section call sites (`format::…`, `super::format::…`)
-// resolve unchanged.
-use typhoon_research_ui::format;
-mod fractal_tail_stationarity_sections;
-mod fundamental_risk_sections;
-mod market_behavior_sections;
-mod momentum_volume_indicator_sections;
-mod moving_average_research_sections;
-mod overview;
-mod ownership_price_history;
-mod peer_comparison;
-mod price_behavior_distribution;
-mod price_behavior_illiquidity_norm;
-mod price_behavior_local;
-mod price_behavior_ratios;
-mod price_behavior_risk_metrics;
-mod price_behavior_seasonality_vol;
-mod price_behavior_sections;
-mod price_behavior_stat_tests;
-mod price_behavior_tests_ratios;
-mod price_behavior_vol_estimators;
-mod price_transform_adaptive_osc;
-mod price_transform_indicator_sections;
-mod price_transform_linear_hilbert;
-mod price_transform_regression_phase;
-mod price_transform_volatility_force;
-mod rank_drift_accs_vrp;
-mod rank_drift_cone_corrs;
-mod rank_drift_core_ranks;
-mod rank_drift_div_earn_streaks;
-mod rank_drift_fund_quality;
-mod rank_drift_growth_drift;
-mod rank_drift_liquidity_streaks;
-mod rank_drift_research_ranks;
-mod rank_drift_sections;
-mod rank_drift_vol_perf;
-mod rank_drift_yield_short_conc;
-mod recent_news;
-mod talib_dmi_movement;
-mod talib_extended_emitters;
-mod talib_momentum_range;
-mod talib_price_momentum_sections;
-mod talib_price_ohlc_stats;
-mod technical_indicator_cloud_trend;
-mod technical_indicator_final_osc;
-mod technical_indicator_oscillators;
-mod technical_indicator_sections;
-mod technical_indicator_squeeze_breakouts;
-mod technical_indicator_volume_trend;
 
 impl TyphooNApp {
     pub(super) fn write_symbol_investigation_sections(&self, p: &mut String, syms: &[String]) {

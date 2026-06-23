@@ -10,6 +10,7 @@
 //! depend on `typhoon-native`.
 
 pub mod format;
+pub mod packet;
 pub mod render;
 pub mod theme;
 pub mod window_shell;
