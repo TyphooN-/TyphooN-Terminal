@@ -45,6 +45,36 @@ pub(super) fn render_compute_window<S, Cmd>(
     make_cmd: impl FnOnce(String) -> Cmd,
     render_snapshot: impl FnOnce(&mut egui::Ui, &S),
 ) -> Option<Cmd> {
+    render_compute_window_ext(
+        ctx,
+        win,
+        show,
+        symbol,
+        loading,
+        snapshot,
+        |_| {},
+        load_cached,
+        make_cmd,
+        render_snapshot,
+    )
+}
+
+/// As [`render_compute_window`], plus `extra_controls`: a closure rendered in the
+/// button row (between "Use Chart" and "Load Cached") for windows that expose an
+/// extra parameter control (e.g. a `window_days` DragValue).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn render_compute_window_ext<S, Cmd>(
+    ctx: &egui::Context,
+    win: ComputeWindow,
+    show: &mut bool,
+    symbol: &mut String,
+    loading: &mut bool,
+    snapshot: &mut S,
+    extra_controls: impl FnOnce(&mut egui::Ui),
+    load_cached: impl FnOnce(&Connection, &str) -> Option<S>,
+    make_cmd: impl FnOnce(String) -> Cmd,
+    render_snapshot: impl FnOnce(&mut egui::Ui, &S),
+) -> Option<Cmd> {
     if !*show {
         return None;
     }
@@ -67,6 +97,7 @@ pub(super) fn render_compute_window<S, Cmd>(
             if ui.button("Use Chart").clicked() {
                 *symbol = win.chart_symbol.to_string();
             }
+            extra_controls(ui);
             if ui.button("Load Cached").clicked() {
                 if let Some(cache) = win.cache {
                     if let Ok(conn) = cache.connection() {

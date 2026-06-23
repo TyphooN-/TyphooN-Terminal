@@ -9,59 +9,37 @@ impl TyphooNApp {
             research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // MNGR — Insider Activity Bias
-        if self.show_mngr {
-            if self.mngr_symbol.is_empty() {
-                self.mngr_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_mngr;
-            egui::Window::new("MNGR — Insider Activity Bias")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([560.0, 420.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.mngr_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.mngr_symbol = chart_sym_research.clone();
-                        }
-                        ui.label(egui::RichText::new("Window (days):").color(AXIS_TEXT));
-                        ui.add(egui::DragValue::new(&mut self.mngr_window_days).range(30..=365));
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.mngr_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_insider_activity(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.mngr_snapshot = snap;
-                                        self.mngr_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.mngr_symbol.to_uppercase();
-                            self.mngr_loading = true;
-                            self.mngr_symbol = sym.clone();
-                            let _ =
-                                self.broker_tx
-                                    .send(BrokerCmd::ComputeInsiderActivitySnapshot {
-                                        symbol: sym,
-                                        window_days: self.mngr_window_days,
-                                    });
-                        }
-                        if self.mngr_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_mngr_snapshot(ui, &self.mngr_snapshot);
+        if let Some(sym) = window_shell::render_compute_window_ext(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "MNGR — Insider Activity Bias",
+                default_size: [560.0, 420.0],
+                max_size: None,
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_mngr,
+            &mut self.mngr_symbol,
+            &mut self.mngr_loading,
+            &mut self.mngr_snapshot,
+            |ui| {
+                ui.label(egui::RichText::new("Window (days):").color(AXIS_TEXT));
+                ui.add(egui::DragValue::new(&mut self.mngr_window_days).range(30..=365));
+            },
+            |conn, s| {
+                typhoon_engine::core::research::get_insider_activity(conn, s)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| symbol,
+            super::render::render_mngr_snapshot,
+        ) {
+            let _ = self
+                .broker_tx
+                .send(BrokerCmd::ComputeInsiderActivitySnapshot {
+                    symbol: sym,
+                    window_days: self.mngr_window_days,
                 });
-            self.show_mngr = open;
         }
 
         // DIVG — Dividend Growth Analysis

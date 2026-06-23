@@ -36,100 +36,71 @@ impl TyphooNApp {
         }
 
         // COR — Correlation Matrix
-        if self.show_cor {
-            if self.cor_symbol.is_empty() {
-                self.cor_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_cor;
-            egui::Window::new("COR — Correlation Matrix")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([620.0, 440.0])
-                .max_size([620.0, 560.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.cor_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.cor_symbol = chart_sym_research.clone();
+        if let Some(sym) = window_shell::render_compute_window_ext(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "COR — Correlation Matrix",
+                default_size: [620.0, 440.0],
+                max_size: Some([620.0, 560.0]),
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_cor,
+            &mut self.cor_symbol,
+            &mut self.cor_loading,
+            &mut self.cor_snapshot,
+            |ui| {
+                ui.label(
+                    egui::RichText::new("Window (days)")
+                        .color(AXIS_TEXT)
+                        .small(),
+                );
+                ui.add(egui::DragValue::new(&mut self.cor_window_days).range(30..=1260));
+            },
+            |conn, s| {
+                typhoon_engine::core::research::get_correlation(conn, s)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| symbol,
+            super::render::render_cor_snapshot,
+        ) {
+            let window_days = self.cor_window_days;
+            // Build peer series JSON on the main thread where the cache lives.
+            let peer_json = if let Some(ref cache) = self.cache {
+                if let Ok(conn) = cache.connection() {
+                    let peer_syms = typhoon_engine::core::research::get_peers(&conn, &sym)
+                        .unwrap_or(None)
+                        .unwrap_or_default();
+                    let mut peers_raw: Vec<(
+                        String,
+                        Vec<typhoon_engine::core::research::HistoricalPriceRow>,
+                    )> = Vec::new();
+                    for p in &peer_syms {
+                        if p.eq_ignore_ascii_case(&sym) {
+                            continue;
                         }
-                        ui.label(
-                            egui::RichText::new("Window (days)")
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        ui.add(egui::DragValue::new(&mut self.cor_window_days).range(30..=1260));
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.cor_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_correlation(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.cor_snapshot = snap;
-                                        self.cor_symbol = sym_u;
-                                    }
-                                }
+                        if let Ok(Some(mut rows)) =
+                            typhoon_engine::core::research::get_historical_price(&conn, p)
+                        {
+                            if rows.len() >= 2 && rows[0].date > rows[rows.len() - 1].date {
+                                rows.reverse();
                             }
+                            peers_raw.push((p.to_uppercase(), rows));
                         }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.cor_symbol.to_uppercase();
-                            self.cor_loading = true;
-                            self.cor_symbol = sym.clone();
-                            let window_days = self.cor_window_days;
-                            // Build peer series JSON on the main thread where the cache lives.
-                            let peer_json = if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let peer_syms =
-                                        typhoon_engine::core::research::get_peers(&conn, &sym)
-                                            .unwrap_or(None)
-                                            .unwrap_or_default();
-                                    let mut peers_raw: Vec<(
-                                        String,
-                                        Vec<typhoon_engine::core::research::HistoricalPriceRow>,
-                                    )> = Vec::new();
-                                    for p in &peer_syms {
-                                        if p.eq_ignore_ascii_case(&sym) {
-                                            continue;
-                                        }
-                                        if let Ok(Some(mut rows)) =
-                                            typhoon_engine::core::research::get_historical_price(
-                                                &conn, p,
-                                            )
-                                        {
-                                            if rows.len() >= 2
-                                                && rows[0].date > rows[rows.len() - 1].date
-                                            {
-                                                rows.reverse();
-                                            }
-                                            peers_raw.push((p.to_uppercase(), rows));
-                                        }
-                                    }
-                                    serde_json::to_string(&peers_raw)
-                                        .unwrap_or_else(|_| "[]".to_string())
-                                } else {
-                                    "[]".to_string()
-                                }
-                            } else {
-                                "[]".to_string()
-                            };
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeCorrelationMatrix {
-                                symbol: sym,
-                                window_days,
-                                peer_series_json: peer_json,
-                            });
-                        }
-                        if self.cor_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_cor_snapshot(ui, &self.cor_snapshot);
-                });
-            self.show_cor = open;
+                    }
+                    serde_json::to_string(&peers_raw).unwrap_or_else(|_| "[]".to_string())
+                } else {
+                    "[]".to_string()
+                }
+            } else {
+                "[]".to_string()
+            };
+            let _ = self.broker_tx.send(BrokerCmd::ComputeCorrelationMatrix {
+                symbol: sym,
+                window_days,
+                peer_series_json: peer_json,
+            });
         }
 
         // TRA — Total Return Analysis

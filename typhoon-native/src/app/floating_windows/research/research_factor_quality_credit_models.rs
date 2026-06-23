@@ -352,57 +352,36 @@ impl TyphooNApp {
         }
 
         // INSSTRK — Insider streak detector
-        if self.show_insstrk {
-            if self.insstrk_symbol.is_empty() {
-                self.insstrk_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_insstrk;
-            egui::Window::new("INSSTRK — Insider Streak Detector")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([680.0, 460.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.insstrk_symbol)
-                                .desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.insstrk_symbol = chart_sym_research.clone();
-                        }
-                        ui.label(egui::RichText::new("Window (days):").color(AXIS_TEXT));
-                        ui.add(egui::DragValue::new(&mut self.insstrk_window_days).range(30..=720));
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.insstrk_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_insstrk(&conn, &sym_u)
-                                    {
-                                        self.insstrk_snapshot = snap;
-                                        self.insstrk_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.insstrk_symbol.to_uppercase();
-                            self.insstrk_loading = true;
-                            self.insstrk_symbol = sym.clone();
-                            let wd = self.insstrk_window_days;
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeInsstrkSnapshot {
-                                symbol: sym,
-                                window_days: wd,
-                            });
-                        }
-                        if self.insstrk_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_insstrk_snapshot(ui, &self.insstrk_snapshot);
-                });
-            self.show_insstrk = open;
+        if let Some(sym) = window_shell::render_compute_window_ext(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "INSSTRK — Insider Streak Detector",
+                default_size: [680.0, 460.0],
+                max_size: None,
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_insstrk,
+            &mut self.insstrk_symbol,
+            &mut self.insstrk_loading,
+            &mut self.insstrk_snapshot,
+            |ui| {
+                ui.label(egui::RichText::new("Window (days):").color(AXIS_TEXT));
+                ui.add(egui::DragValue::new(&mut self.insstrk_window_days).range(30..=720));
+            },
+            |conn, s| {
+                typhoon_engine::core::research::get_insstrk(conn, s)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| symbol,
+            super::render::render_insstrk_snapshot,
+        ) {
+            let wd = self.insstrk_window_days;
+            let _ = self.broker_tx.send(BrokerCmd::ComputeInsstrkSnapshot {
+                symbol: sym,
+                window_days: wd,
+            });
         }
 
         // COVG — Analyst coverage breadth + churn
