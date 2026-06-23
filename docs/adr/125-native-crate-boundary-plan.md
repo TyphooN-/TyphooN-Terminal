@@ -554,10 +554,15 @@ is free (the shell's `&mut` borrows are released) and the pre-read runs only on 
 behavior is exactly preserved. **229 compute windows now route through the shell**; all
 BrokerCmd sends + window titles verified preserved.
 
-Remaining in `floating_windows/research`: the few `.max_size(...)` windows (need an
-optional shell field, not worth churning all call sites), windows with extra controls
-(Slider/DragValue), and the non-canonical "Fetch"-button / multi-field-card / filtered
-tables.
+**`.max_size(...)` handled (9 windows).** `ComputeWindow` gained an optional `max_size`
+field (applied to the egui builder when `Some`); `max_size: None` was mechanically added
+to the 229 existing call sites, and the transforms now capture `.max_size([w,h])`.
+**238 compute windows now route through the shell** — every single-field, multi-field,
+and max-size canonical compute window. The only canonical compute windows left inline are
+**4 with extra interactive controls** (INSSTRK, MNGR, DCF, COR — a Slider/DragValue for a
+parameter); they need a richer shell (an extra-control closure) and are genuinely
+bespoke. The non-canonical "Fetch"-button / multi-field-card / filtered tables also
+remain.
 
 ### Phase 1, step 3 — `command_research_windows`, started (2026-06-23)
 
