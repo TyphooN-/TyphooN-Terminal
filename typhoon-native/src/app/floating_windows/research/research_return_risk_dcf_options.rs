@@ -145,6 +145,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "SVM — Stock Valuation Model",
                 default_size: [680.0, 440.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -321,6 +322,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "IVOL — Implied Vol Rank / Percentile",
                 default_size: [560.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

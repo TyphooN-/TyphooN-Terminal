@@ -14,6 +14,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "PARKINSON — H-L Range Volatility",
                 default_size: [560.0, 360.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -37,6 +38,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "GKVOL — Garman-Klass OHLC Volatility",
                 default_size: [560.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -60,6 +62,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "RSVOL — Rogers-Satchell OHLC Volatility",
                 default_size: [560.0, 340.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -83,6 +86,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "CVAR — Conditional VaR / Expected Shortfall",
                 default_size: [600.0, 420.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -106,6 +110,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "DOWEFFECT — Day-of-Week Intraday Seasonality",
                 default_size: [640.0, 460.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

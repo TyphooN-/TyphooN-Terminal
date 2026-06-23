@@ -17,6 +17,8 @@ use typhoon_engine::core::cache::{Connection, SqliteCache};
 pub(super) struct ComputeWindow<'a> {
     pub title: &'a str,
     pub default_size: [f32; 2],
+    /// Optional `.max_size(...)` constraint (most windows leave this `None`).
+    pub max_size: Option<[f32; 2]>,
     /// Default symbol (from the active chart) used to seed an empty input and the
     /// "Use Chart" button.
     pub chart_symbol: &'a str,
@@ -51,40 +53,43 @@ pub(super) fn render_compute_window<S, Cmd>(
     }
     let mut action: Option<Cmd> = None;
     let mut open = *show;
-    egui::Window::new(win.title)
+    let mut window = egui::Window::new(win.title)
         .open(&mut open)
         .resizable(true)
-        .default_size(win.default_size)
-        .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                ui.add(egui::TextEdit::singleline(symbol).desired_width(100.0));
-                if ui.button("Use Chart").clicked() {
-                    *symbol = win.chart_symbol.to_string();
-                }
-                if ui.button("Load Cached").clicked() {
-                    if let Some(cache) = win.cache {
-                        if let Ok(conn) = cache.connection() {
-                            let sym_u = symbol.to_uppercase();
-                            if let Some(snap) = load_cached(&conn, &sym_u) {
-                                *snapshot = snap;
-                                *symbol = sym_u;
-                            }
+        .default_size(win.default_size);
+    if let Some(max_size) = win.max_size {
+        window = window.max_size(max_size);
+    }
+    window.show(ctx, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
+            ui.add(egui::TextEdit::singleline(symbol).desired_width(100.0));
+            if ui.button("Use Chart").clicked() {
+                *symbol = win.chart_symbol.to_string();
+            }
+            if ui.button("Load Cached").clicked() {
+                if let Some(cache) = win.cache {
+                    if let Ok(conn) = cache.connection() {
+                        let sym_u = symbol.to_uppercase();
+                        if let Some(snap) = load_cached(&conn, &sym_u) {
+                            *snapshot = snap;
+                            *symbol = sym_u;
                         }
                     }
                 }
-                if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                    let sym = symbol.to_uppercase();
-                    *loading = true;
-                    *symbol = sym.clone();
-                    action = Some(make_cmd(sym));
-                }
-                if *loading {
-                    ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                }
-            });
-            render_snapshot(ui, snapshot);
+            }
+            if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
+                let sym = symbol.to_uppercase();
+                *loading = true;
+                *symbol = sym.clone();
+                action = Some(make_cmd(sym));
+            }
+            if *loading {
+                ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
+            }
         });
+        render_snapshot(ui, snapshot);
+    });
     *show = open;
     action
 }

@@ -14,6 +14,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "PSR — Probabilistic Sharpe Ratio",
                 default_size: [580.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -37,6 +38,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "ADF — Dickey-Fuller Unit-Root Test",
                 default_size: [580.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -60,6 +62,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "MNKENDALL — Mann-Kendall Trend Test",
                 default_size: [580.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -83,6 +86,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "BIPOWER — Bipower Variation / Jump Ratio",
                 default_size: [580.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -106,6 +110,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "DDDUR — Drawdown Duration Statistics",
                 default_size: [580.0, 400.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

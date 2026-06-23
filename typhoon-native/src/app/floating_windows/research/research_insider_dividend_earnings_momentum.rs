@@ -70,6 +70,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "DIVG — Dividend Growth Analysis",
                 default_size: [600.0, 440.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -94,6 +95,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "EARM — Earnings Momentum Trend",
                 default_size: [620.0, 460.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -118,6 +120,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "SECTR — Sector Rotation Strength",
                 default_size: [560.0, 420.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -162,6 +165,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "UPDM — Upgrade/Downgrade Momentum",
                 default_size: [560.0, 420.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

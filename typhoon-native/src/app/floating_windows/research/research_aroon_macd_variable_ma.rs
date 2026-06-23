@@ -11,6 +11,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "AROONOSC — Aroon Oscillator (period 14)",
                 default_size: [540.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -34,6 +35,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "MINMAXINDEX — combined min+max recency (period 30)",
                 default_size: [540.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -57,6 +59,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "MACDEXT — MACD with SMA (12/26/9)",
                 default_size: [540.0, 290.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -80,6 +83,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "MACDFIX — MACD with hardcoded EMA 12/26 + signal 9",
                 default_size: [540.0, 280.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -103,6 +107,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "MAVP — Moving Average with Variable Period (5..30 ramp)",
                 default_size: [540.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

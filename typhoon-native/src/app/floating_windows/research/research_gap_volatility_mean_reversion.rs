@@ -14,6 +14,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "DRAWUP — Rally History",
                 default_size: [640.0, 440.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -37,6 +38,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "GAPSTATS — Overnight Gap Statistics",
                 default_size: [640.0, 440.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -60,6 +62,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "VOLCLUSTER — Volatility Clustering ACF",
                 default_size: [640.0, 440.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -83,6 +86,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "CLOSEPLC — Close Placement in Daily Range",
                 default_size: [640.0, 440.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -106,6 +110,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "MRHL — Mean-Reversion Half-Life (AR1)",
                 default_size: [640.0, 440.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

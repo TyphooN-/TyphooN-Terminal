@@ -14,6 +14,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "SAMPEN — Sample Entropy",
                 default_size: [520.0, 300.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -37,6 +38,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "PERMEN — Permutation Entropy",
                 default_size: [520.0, 300.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -60,6 +62,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "RECFACT — Recovery Factor",
                 default_size: [520.0, 300.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -83,6 +86,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "KPSS — Stationarity Test",
                 default_size: [520.0, 300.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -106,6 +110,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "SPECENT — Spectral Entropy",
                 default_size: [520.0, 300.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

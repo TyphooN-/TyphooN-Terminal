@@ -14,6 +14,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "PPO — Percentage Price Oscillator (12/26/9)",
                 default_size: [520.0, 280.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -37,6 +38,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "DPO — Detrended Price Oscillator (20)",
                 default_size: [520.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -60,6 +62,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "KST — Know Sure Thing (Pring, 1992)",
                 default_size: [520.0, 300.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -83,6 +86,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "ULTOSC — Ultimate Oscillator (7/14/28)",
                 default_size: [520.0, 280.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -106,6 +110,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "WILLR — Williams %R (14)",
                 default_size: [520.0, 240.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

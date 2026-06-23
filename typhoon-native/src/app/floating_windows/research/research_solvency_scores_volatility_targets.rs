@@ -11,121 +11,71 @@ impl TyphooNApp {
         // Solvency, quality, volatility-estimator, EPS-beat, and price-target research
 
         // ALTZ — Altman Z-Score
-        if self.show_altz {
-            if self.altz_symbol.is_empty() {
-                self.altz_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_altz;
-            egui::Window::new("ALTZ — Altman Z-Score")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([620.0, 420.0])
-                .max_size([620.0, 560.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.altz_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.altz_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.altz_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_altman_z(&conn, &sym_u)
-                                    {
-                                        self.altz_snapshot = snap;
-                                        self.altz_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.altz_symbol.to_uppercase();
-                            self.altz_loading = true;
-                            self.altz_symbol = sym.clone();
-                            let market_value_equity = if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    if let Ok(Some(fa)) =
-                                        typhoon_engine::core::fundamentals::get_fundamentals(
-                                            &conn, &sym,
-                                        )
-                                    {
-                                        fa.market_cap.unwrap_or(0.0)
-                                    } else {
-                                        0.0
-                                    }
-                                } else {
-                                    0.0
-                                }
-                            } else {
-                                0.0
-                            };
-                            let _ = self.broker_tx.send(BrokerCmd::ComputeAltmanZSnapshot {
-                                symbol: sym,
-                                market_value_equity,
-                            });
-                        }
-                        if self.altz_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_altz_snapshot(ui, &self.altz_snapshot);
-                });
-            self.show_altz = open;
+        if let Some(sym) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "ALTZ — Altman Z-Score",
+                default_size: [620.0, 420.0],
+                max_size: Some([620.0, 560.0]),
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_altz,
+            &mut self.altz_symbol,
+            &mut self.altz_loading,
+            &mut self.altz_snapshot,
+            |conn, s| {
+                typhoon_engine::core::research::get_altman_z(conn, s)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| symbol,
+            super::render::render_altz_snapshot,
+        ) {
+            let market_value_equity = if let Some(ref cache) = self.cache {
+                if let Ok(conn) = cache.connection() {
+                    if let Ok(Some(fa)) =
+                        typhoon_engine::core::fundamentals::get_fundamentals(&conn, &sym)
+                    {
+                        fa.market_cap.unwrap_or(0.0)
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+            let _ = self.broker_tx.send(BrokerCmd::ComputeAltmanZSnapshot {
+                symbol: sym,
+                market_value_equity,
+            });
         }
 
         // PTFS — Piotroski F-Score
-        if self.show_ptfs {
-            if self.ptfs_symbol.is_empty() {
-                self.ptfs_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_ptfs;
-            egui::Window::new("PTFS — Piotroski F-Score")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([520.0, 480.0])
-                .max_size([640.0, 560.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.ptfs_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.ptfs_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.ptfs_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_piotroski(&conn, &sym_u)
-                                    {
-                                        self.ptfs_snapshot = snap;
-                                        self.ptfs_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.ptfs_symbol.to_uppercase();
-                            self.ptfs_loading = true;
-                            self.ptfs_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputePiotroskiSnapshot { symbol: sym });
-                        }
-                        if self.ptfs_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_ptfs_snapshot(ui, &self.ptfs_snapshot);
-                });
-            self.show_ptfs = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "PTFS — Piotroski F-Score",
+                default_size: [520.0, 480.0],
+                max_size: Some([640.0, 560.0]),
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_ptfs,
+            &mut self.ptfs_symbol,
+            &mut self.ptfs_loading,
+            &mut self.ptfs_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_piotroski(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputePiotroskiSnapshot { symbol },
+            super::render::render_ptfs_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // VOLE — OHLC Volatility Estimators
@@ -134,6 +84,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "VOLE — OHLC Volatility Estimators",
                 default_size: [580.0, 360.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -179,6 +130,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "EPSB — EPS Beat Streak",
                 default_size: [560.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -203,6 +155,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "PTD — Price Target Dispersion",
                 default_size: [560.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

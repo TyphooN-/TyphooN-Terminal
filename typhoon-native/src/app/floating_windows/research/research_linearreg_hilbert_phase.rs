@@ -11,6 +11,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "LINEARREG — TA-Lib fitted endpoint of 14-bar least-squares close",
                 default_size: [560.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -34,6 +35,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "LINEARREG_ANGLE — atan(slope)·180/π of 14-bar fit",
                 default_size: [560.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -57,6 +59,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "HT_DCPHASE — Ehlers Hilbert Dominant Cycle Phase (degrees)",
                 default_size: [560.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -80,6 +83,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "HT_SINE — Ehlers Sine + Leadsine cycle-turn detector",
                 default_size: [560.0, 280.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -103,6 +107,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "HT_PHASOR — Ehlers raw I/Q + magnitude + phase",
                 default_size: [560.0, 280.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -126,6 +131,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "MIDPRICE — (HHV + LLV) / 2 range midpoint (14-bar)",
                 default_size: [560.0, 280.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -149,6 +155,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "APO — Absolute Price Oscillator (EMA12 − EMA26)",
                 default_size: [560.0, 280.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -172,6 +179,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "MOM — raw close − close[n−10] momentum",
                 default_size: [560.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -195,6 +203,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "SAREXT — Extended Parabolic SAR (asymmetric long/short AF)",
                 default_size: [620.0, 320.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -218,6 +227,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "ADXR — Average Directional Movement Rating (14-bar)",
                 default_size: [560.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

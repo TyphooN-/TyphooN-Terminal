@@ -15,6 +15,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "SIZEF — Size Factor Rank vs Sector Peers",
                 default_size: [640.0, 360.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -39,6 +40,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "MOMF — Momentum Factor Rank vs Sector Peers",
                 default_size: [640.0, 360.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -63,6 +65,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "PEADRANK — PEAD Drift Rank vs Sector Peers",
                 default_size: [640.0, 360.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -87,6 +90,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "FQM — Fundamental Quality Meter",
                 default_size: [640.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -111,6 +115,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "REVRANK — Relative 3y Revenue CAGR vs Sector",
                 default_size: [640.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -135,6 +140,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "LEVRANK — Leverage Rank vs Sector",
                 default_size: [640.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -159,6 +165,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "OPERANK — Operating Quality Rank vs Sector",
                 default_size: [640.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -183,6 +190,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "FQMRANK — Fundamental Quality Rank vs Sector",
                 default_size: [640.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -207,6 +215,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "LIQRANK — Liquidity Rank vs Sector",
                 default_size: [640.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -231,6 +240,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "TLRANK — 30-Day Liquidity Rank",
                 default_size: [660.0, 400.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

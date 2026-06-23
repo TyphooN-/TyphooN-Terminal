@@ -11,6 +11,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "AVGPRICE — OHLC average (O+H+L+C)/4",
                 default_size: [520.0, 240.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -34,6 +35,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "MEDPRICE — range median (H+L)/2",
                 default_size: [520.0, 240.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -57,6 +59,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "TYPPRICE — typical price (H+L+C)/3",
                 default_size: [520.0, 240.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -80,6 +83,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "WCLPRICE — weighted close (H+L+2C)/4",
                 default_size: [520.0, 240.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -103,6 +107,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "VARIANCE — close variance (5-bar population, TA-Lib default)",
                 default_size: [540.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

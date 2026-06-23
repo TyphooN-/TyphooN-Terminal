@@ -15,6 +15,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "WMA — Weighted Moving Average (linearly-weighted SMA, N=20)",
                 default_size: [560.0, 240.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -38,6 +39,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "RAINBOW — Rainbow MA Oscillator (10-level recursive SMA stack)",
                 default_size: [580.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -61,6 +63,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "MESA_SINE — Ehlers MESA Sine Wave (cycle phase + lead-sine)",
                 default_size: [580.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -84,6 +87,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "FRAMA — Fractal Adaptive Moving Average (Ehlers, D-driven α)",
                 default_size: [560.0, 240.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -107,6 +111,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "IBS — Internal Bar Strength ((close−low)/(high−low) + 14-bar SMA)",
                 default_size: [560.0, 240.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

@@ -16,6 +16,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "AUTOCOR — Return Autocorrelation",
                 default_size: [640.0, 420.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -40,6 +41,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "HURST — Hurst Exponent (R/S)",
                 default_size: [640.0, 400.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -64,6 +66,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "HITRATE — Multi-Horizon Win Rate",
                 default_size: [640.0, 420.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -88,6 +91,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "GLASYM — Gain/Loss Asymmetry",
                 default_size: [640.0, 420.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -112,6 +116,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "VOLRATIO — Up/Down Volume Ratio",
                 default_size: [640.0, 440.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

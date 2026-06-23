@@ -16,6 +16,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "VRK — Value Rank vs Sector Peers",
                 default_size: [640.0, 360.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -40,6 +41,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "QRK — Quality Rank vs Sector Peers",
                 default_size: [640.0, 360.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -64,6 +66,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "RRK — Risk Rank vs Sector Peers (Higher = Safer)",
                 default_size: [640.0, 360.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -88,6 +91,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "RELEPSGR — Relative 3y EPS CAGR vs Sector",
                 default_size: [640.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -112,6 +116,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "PEAD — Post-Earnings-Announcement Drift",
                 default_size: [720.0, 480.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

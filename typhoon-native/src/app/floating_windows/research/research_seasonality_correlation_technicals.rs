@@ -11,55 +11,28 @@ impl TyphooNApp {
         // ── Research section ──
 
         // SEAG — Seasonality (monthly + day-of-week)
-        if self.show_seag {
-            if self.seag_symbol.is_empty() {
-                self.seag_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_seag;
-            egui::Window::new("SEAG — Seasonality Analysis")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([620.0, 480.0])
-                .max_size([620.0, 560.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.seag_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.seag_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.seag_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_seasonality(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.seag_snapshot = snap;
-                                        self.seag_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.seag_symbol.to_uppercase();
-                            self.seag_loading = true;
-                            self.seag_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeSeasonalitySnapshot { symbol: sym });
-                        }
-                        if self.seag_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_seag_snapshot(ui, &self.seag_snapshot);
-                });
-            self.show_seag = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "SEAG — Seasonality Analysis",
+                default_size: [620.0, 480.0],
+                max_size: Some([620.0, 560.0]),
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_seag,
+            &mut self.seag_symbol,
+            &mut self.seag_loading,
+            &mut self.seag_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_seasonality(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeSeasonalitySnapshot { symbol },
+            super::render::render_seag_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // COR — Correlation Matrix
@@ -160,157 +133,78 @@ impl TyphooNApp {
         }
 
         // TRA — Total Return Analysis
-        if self.show_tra {
-            if self.tra_symbol.is_empty() {
-                self.tra_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_tra;
-            egui::Window::new("TRA — Total Return Analysis")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([600.0, 420.0])
-                .max_size([600.0, 560.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.tra_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.tra_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.tra_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_total_return(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.tra_snapshot = snap;
-                                        self.tra_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.tra_symbol.to_uppercase();
-                            self.tra_loading = true;
-                            self.tra_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeTotalReturnSnapshot { symbol: sym });
-                        }
-                        if self.tra_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_tra_snapshot(ui, &self.tra_snapshot);
-                });
-            self.show_tra = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "TRA — Total Return Analysis",
+                default_size: [600.0, 420.0],
+                max_size: Some([600.0, 560.0]),
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_tra,
+            &mut self.tra_symbol,
+            &mut self.tra_loading,
+            &mut self.tra_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_total_return(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeTotalReturnSnapshot { symbol },
+            super::render::render_tra_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // TECH — Technical Indicators
-        if self.show_tech {
-            if self.tech_symbol.is_empty() {
-                self.tech_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_tech;
-            egui::Window::new("TECH — Technical Indicators")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([620.0, 460.0])
-                .max_size([620.0, 560.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.tech_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.tech_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.tech_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_technicals(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.tech_snapshot = snap;
-                                        self.tech_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.tech_symbol.to_uppercase();
-                            self.tech_loading = true;
-                            self.tech_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeTechnicalsSnapshot { symbol: sym });
-                        }
-                        if self.tech_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_tech_snapshot(ui, &self.tech_snapshot);
-                });
-            self.show_tech = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "TECH — Technical Indicators",
+                default_size: [620.0, 460.0],
+                max_size: Some([620.0, 560.0]),
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_tech,
+            &mut self.tech_symbol,
+            &mut self.tech_loading,
+            &mut self.tech_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_technicals(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeTechnicalsSnapshot { symbol },
+            super::render::render_tech_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
 
         // SKEW — Volatility Skew / Smile
-        if self.show_skew {
-            if self.skew_symbol.is_empty() {
-                self.skew_symbol = chart_sym_research.clone();
-            }
-            let mut open = self.show_skew;
-            egui::Window::new("SKEW — Implied Volatility Skew")
-                .open(&mut open)
-                .resizable(true)
-                .default_size([680.0, 480.0])
-                .max_size([680.0, 560.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.skew_symbol).desired_width(100.0),
-                        );
-                        if ui.button("Use Chart").clicked() {
-                            self.skew_symbol = chart_sym_research.clone();
-                        }
-                        if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.skew_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_vol_skew(&conn, &sym_u)
-                                    {
-                                        self.skew_snapshot = snap;
-                                        self.skew_symbol = sym_u;
-                                    }
-                                }
-                            }
-                        }
-                        if ui.add(egui::Button::new("Compute").fill(BTN_MG)).clicked() {
-                            let sym = self.skew_symbol.to_uppercase();
-                            self.skew_loading = true;
-                            self.skew_symbol = sym.clone();
-                            let _ = self
-                                .broker_tx
-                                .send(BrokerCmd::ComputeVolSkewSnapshot { symbol: sym });
-                        }
-                        if self.skew_loading {
-                            ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
-                        }
-                    });
-                    super::render::render_skew_snapshot(ui, &self.skew_snapshot);
-                });
-            self.show_skew = open;
+        if let Some(cmd) = window_shell::render_compute_window(
+            ctx,
+            window_shell::ComputeWindow {
+                title: "SKEW — Implied Volatility Skew",
+                default_size: [680.0, 480.0],
+                max_size: Some([680.0, 560.0]),
+                chart_symbol: &chart_sym_research,
+                cache: self.cache.as_deref(),
+            },
+            &mut self.show_skew,
+            &mut self.skew_symbol,
+            &mut self.skew_loading,
+            &mut self.skew_snapshot,
+            |conn, sym| {
+                typhoon_engine::core::research::get_vol_skew(conn, sym)
+                    .ok()
+                    .flatten()
+            },
+            |symbol| BrokerCmd::ComputeVolSkewSnapshot { symbol },
+            super::render::render_skew_snapshot,
+        ) {
+            let _ = self.broker_tx.send(cmd);
         }
     }
 }

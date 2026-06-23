@@ -15,6 +15,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "LAGUERRE_RSI — Ehlers 4-stage Laguerre Filter RSI (γ=0.5)",
                 default_size: [560.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -38,6 +39,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "ZIGZAG — Percent-Threshold Pivot Reversal Detector (5% default)",
                 default_size: [560.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -61,6 +63,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "PGO — Pretty Good Oscillator (Mark Johnson, (close−SMA)/EMA(TR), N=14)",
                 default_size: [560.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -85,6 +88,7 @@ impl TyphooNApp {
                 title:
                     "HT_TRENDLINE — Hilbert Instantaneous Trendline (Ehlers, period-adaptive WMA)",
                 default_size: [560.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -108,6 +112,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "MIDPOINT — (HHV(N) + LLV(N)) / 2 with Close Position (N=14)",
                 default_size: [560.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

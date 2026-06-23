@@ -14,6 +14,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "SQUEEZE — Short-Squeeze Composite",
                 default_size: [560.0, 360.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -37,6 +38,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "SQUEEZERANK — Cross-Symbol Squeeze Percentile",
                 default_size: [520.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -189,6 +191,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "BBSQUEEZE — Bollinger-Band Width Squeeze",
                 default_size: [520.0, 300.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -212,6 +215,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "DONCHIAN — 20-Bar Channel Breakout",
                 default_size: [520.0, 300.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -235,6 +239,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "KAMA — Kaufman Adaptive MA / Efficiency Ratio",
                 default_size: [520.0, 280.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

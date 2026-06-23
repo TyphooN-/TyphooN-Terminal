@@ -221,6 +221,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "DDM — Gordon Growth Dividend Discount",
                 default_size: [540.0, 420.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

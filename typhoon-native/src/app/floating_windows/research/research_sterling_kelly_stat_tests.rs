@@ -15,6 +15,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "STERLING — Sterling Ratio",
                 default_size: [560.0, 360.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -38,6 +39,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "KELLYF — Kelly Fraction / Optimal Leverage",
                 default_size: [580.0, 400.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -61,6 +63,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "LJUNGB — Ljung-Box Q-Statistic (h=10)",
                 default_size: [560.0, 340.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -84,6 +87,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "RUNSTEST — Wald-Wolfowitz Runs Test",
                 default_size: [580.0, 400.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -107,6 +111,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "ZERORET — Zero-Return-Day Fraction (Lesmond-Ogden-Trzcinka)",
                 default_size: [580.0, 340.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

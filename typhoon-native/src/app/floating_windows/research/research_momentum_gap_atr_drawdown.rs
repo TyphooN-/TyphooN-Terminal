@@ -14,6 +14,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "SURPSTK — Earnings Surprise Streak",
                 default_size: [640.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -38,6 +39,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "DVDRANK — Dividend Growth Rank",
                 default_size: [640.0, 360.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -62,6 +64,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "EARMRANK — Earnings Momentum Rank",
                 default_size: [640.0, 360.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -86,6 +89,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "UPDGRANK — Upgrade/Downgrade Rank",
                 default_size: [640.0, 360.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -110,6 +114,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "GY — Gap Yearly (253d census)",
                 default_size: [640.0, 400.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -134,6 +139,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "DES — Daily Event Streak",
                 default_size: [640.0, 400.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -158,6 +164,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "DVDYIELDRANK — Dividend Yield Rank",
                 default_size: [640.0, 400.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -182,6 +189,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "SHRANK — Short Interest Rank",
                 default_size: [640.0, 400.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -206,6 +214,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "SHORTRANK_DELTA — Short Interest Trend Rank",
                 default_size: [700.0, 420.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -230,6 +239,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "INSIDERCONC — Insider Ownership Concentration",
                 default_size: [720.0, 440.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

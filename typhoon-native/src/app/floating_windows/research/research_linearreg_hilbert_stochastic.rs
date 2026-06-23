@@ -14,6 +14,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "LINEARREG_SLOPE — Least-squares slope on close (TA-Lib parity)",
                 default_size: [560.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -37,6 +38,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "HT_DCPERIOD — Hilbert Dominant Cycle Period (Ehlers homodyne)",
                 default_size: [560.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -60,6 +62,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "HT_TRENDMODE — Hilbert Trend vs Cycle Regime (Ehlers CV classifier)",
                 default_size: [560.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -83,6 +86,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "ACCBANDS — Headley Acceleration Bands (SMA-20 of H×(1+4·(H-L)/(H+L)))",
                 default_size: [580.0, 280.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -106,6 +110,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "STOCHF — Fast Stochastic (TA-Lib, unsmoothed %K + SMA-3 %D)",
                 default_size: [560.0, 280.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

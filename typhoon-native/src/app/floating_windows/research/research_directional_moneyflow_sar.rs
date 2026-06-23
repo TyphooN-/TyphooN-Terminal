@@ -14,6 +14,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "ADX — Wilder's Directional Index (14)",
                 default_size: [520.0, 280.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -37,6 +38,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "CCI — Commodity Channel Index (20)",
                 default_size: [520.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -60,6 +62,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "CMF — Chaikin Money Flow (20)",
                 default_size: [520.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -83,6 +86,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "MFI — Money Flow Index (14)",
                 default_size: [520.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -106,6 +110,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "PSAR — Parabolic Stop-And-Reverse",
                 default_size: [520.0, 300.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -129,6 +134,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "VORTEX — Vortex Indicator (14)",
                 default_size: [520.0, 280.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -152,6 +158,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "CHOP — Choppiness Index (14)",
                 default_size: [520.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -175,6 +182,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "OBV — On-Balance Volume (20-bar slope)",
                 default_size: [520.0, 280.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -198,6 +206,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "TRIX — Triple-EMA Oscillator (15/9)",
                 default_size: [520.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -221,6 +230,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "HMA — Hull Moving Average (20)",
                 default_size: [520.0, 260.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },

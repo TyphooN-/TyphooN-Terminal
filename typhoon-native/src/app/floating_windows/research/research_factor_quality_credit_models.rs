@@ -14,6 +14,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "MOM — 12-1 Month Momentum Score",
                 default_size: [520.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -38,6 +39,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "LIQ — Liquidity Profile",
                 default_size: [540.0, 420.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -77,6 +79,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "BREAK — Breakout Proximity",
                 default_size: [540.0, 420.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -101,6 +104,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "CCRL — Cash Conversion Cycle",
                 default_size: [620.0, 440.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -125,6 +129,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "CREDIT — Unified Credit Score",
                 default_size: [620.0, 460.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -149,6 +154,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "GROWM — GARP Composite (MOM + EARM + DIVG)",
                 default_size: [620.0, 420.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -173,6 +179,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "FLOW — Insider + Institutional Flow",
                 default_size: [620.0, 400.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -200,6 +207,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "REGIME — Market Regime Classifier (VOLE + TECH + HRA)",
                 default_size: [600.0, 380.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -224,6 +232,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "RELVOL — Relative Volume",
                 default_size: [580.0, 360.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -248,6 +257,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "MARGINS — Margin Trajectory (Gross / Op / Net)",
                 default_size: [640.0, 460.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -272,6 +282,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "VAL — Value-Factor Composite",
                 default_size: [640.0, 460.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -296,6 +307,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "QUAL — Quality-Factor Composite",
                 default_size: [640.0, 400.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -320,6 +332,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "RISK — Risk-Factor Composite",
                 default_size: [640.0, 420.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
@@ -398,6 +411,7 @@ impl TyphooNApp {
             window_shell::ComputeWindow {
                 title: "COVG — Analyst Coverage Breadth & Churn",
                 default_size: [640.0, 420.0],
+                max_size: None,
                 chart_symbol: &chart_sym_research,
                 cache: self.cache.as_deref(),
             },
