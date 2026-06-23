@@ -1,0 +1,11 @@
+[package]
+name = "typhoon-research-ui"
+version = "0.1.0"
+edition = "2024"
+description = "Research-UI view + interaction layer for TyphooN Terminal (ADR-125)"
+
+[dependencies]
+typhoon-engine = { workspace = true }
+chrono = { workspace = true }
+# Same egui as typhoon-native (0.34.3) so egui types unify across the workspace.
+egui = { version = "0.34.3", default-features = false }

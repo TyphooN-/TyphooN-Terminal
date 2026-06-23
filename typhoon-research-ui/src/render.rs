@@ -3,12 +3,12 @@
 //! `(&mut egui::Ui, &Snapshot)` with no `TyphooNApp` access — the egui analog of
 //! the symbol-investigation packet's formatter layer. Crate-movable: the future
 //! `typhoon-research-ui` crate may depend on egui directly.
-use crate::app::common::{AXIS_TEXT, BTN_GREEN_TEXT, BTN_RED_TEXT, DOWN, UP};
+use crate::theme::{AXIS_TEXT, BTN_GREEN_TEXT, BTN_RED_TEXT, DOWN, UP};
 // Glob: these renderers cover ~80 distinct research snapshot DTOs; listing each is
 // noise. Unused names from a glob do not warn.
 use typhoon_engine::core::research::*;
 
-pub(super) fn render_avgprice_snapshot(ui: &mut egui::Ui, snap: &AvgpriceSnapshot) {
+pub fn render_avgprice_snapshot(ui: &mut egui::Ui, snap: &AvgpriceSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.avgprice_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -105,7 +105,7 @@ pub(super) fn render_avgprice_snapshot(ui: &mut egui::Ui, snap: &AvgpriceSnapsho
     }
 }
 
-pub(super) fn render_medprice_snapshot(ui: &mut egui::Ui, snap: &MedpriceSnapshot) {
+pub fn render_medprice_snapshot(ui: &mut egui::Ui, snap: &MedpriceSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.medprice_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -195,7 +195,7 @@ pub(super) fn render_medprice_snapshot(ui: &mut egui::Ui, snap: &MedpriceSnapsho
     }
 }
 
-pub(super) fn render_typprice_snapshot(ui: &mut egui::Ui, snap: &TypPriceSnapshot) {
+pub fn render_typprice_snapshot(ui: &mut egui::Ui, snap: &TypPriceSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.typprice_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -285,7 +285,7 @@ pub(super) fn render_typprice_snapshot(ui: &mut egui::Ui, snap: &TypPriceSnapsho
     }
 }
 
-pub(super) fn render_wclprice_snapshot(ui: &mut egui::Ui, snap: &WclPriceSnapshot) {
+pub fn render_wclprice_snapshot(ui: &mut egui::Ui, snap: &WclPriceSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.wclprice_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -375,7 +375,7 @@ pub(super) fn render_wclprice_snapshot(ui: &mut egui::Ui, snap: &WclPriceSnapsho
     }
 }
 
-pub(super) fn render_variance_snapshot(ui: &mut egui::Ui, snap: &VarianceSnapshot) {
+pub fn render_variance_snapshot(ui: &mut egui::Ui, snap: &VarianceSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.variance_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -473,7 +473,7 @@ pub(super) fn render_variance_snapshot(ui: &mut egui::Ui, snap: &VarianceSnapsho
     }
 }
 
-pub(super) fn render_accbands_snapshot(ui: &mut egui::Ui, snap: &AccbandsSnapshot) {
+pub fn render_accbands_snapshot(ui: &mut egui::Ui, snap: &AccbandsSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.accbands_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -559,7 +559,7 @@ pub(super) fn render_accbands_snapshot(ui: &mut egui::Ui, snap: &AccbandsSnapsho
     }
 }
 
-pub(super) fn render_adx_snapshot(ui: &mut egui::Ui, snap: &AdxSnapshot) {
+pub fn render_adx_snapshot(ui: &mut egui::Ui, snap: &AdxSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.adx_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -647,7 +647,7 @@ pub(super) fn render_adx_snapshot(ui: &mut egui::Ui, snap: &AdxSnapshot) {
     }
 }
 
-pub(super) fn render_adxr_snapshot(ui: &mut egui::Ui, snap: &AdxrSnapshot) {
+pub fn render_adxr_snapshot(ui: &mut egui::Ui, snap: &AdxrSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.adxr_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -738,7 +738,7 @@ pub(super) fn render_adxr_snapshot(ui: &mut egui::Ui, snap: &AdxrSnapshot) {
     }
 }
 
-pub(super) fn render_apo_snapshot(ui: &mut egui::Ui, snap: &ApoSnapshot) {
+pub fn render_apo_snapshot(ui: &mut egui::Ui, snap: &ApoSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.apo_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -836,7 +836,7 @@ pub(super) fn render_apo_snapshot(ui: &mut egui::Ui, snap: &ApoSnapshot) {
     }
 }
 
-pub(super) fn render_aroon_snapshot(ui: &mut egui::Ui, snap: &AroonSnapshot) {
+pub fn render_aroon_snapshot(ui: &mut egui::Ui, snap: &AroonSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.aroon_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -929,7 +929,7 @@ pub(super) fn render_aroon_snapshot(ui: &mut egui::Ui, snap: &AroonSnapshot) {
     }
 }
 
-pub(super) fn render_aroonosc_snapshot(ui: &mut egui::Ui, snap: &AroonoscSnapshot) {
+pub fn render_aroonosc_snapshot(ui: &mut egui::Ui, snap: &AroonoscSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.aroonosc_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -1020,7 +1020,7 @@ pub(super) fn render_aroonosc_snapshot(ui: &mut egui::Ui, snap: &AroonoscSnapsho
     }
 }
 
-pub(super) fn render_cci_snapshot(ui: &mut egui::Ui, snap: &CciSnapshot) {
+pub fn render_cci_snapshot(ui: &mut egui::Ui, snap: &CciSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.cci_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -1103,7 +1103,7 @@ pub(super) fn render_cci_snapshot(ui: &mut egui::Ui, snap: &CciSnapshot) {
     }
 }
 
-pub(super) fn render_cdl_belt_hold_snapshot(ui: &mut egui::Ui, snap: &CdlBeltHoldSnapshot) {
+pub fn render_cdl_belt_hold_snapshot(ui: &mut egui::Ui, snap: &CdlBeltHoldSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.cdl_belt_hold_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -1196,7 +1196,7 @@ pub(super) fn render_cdl_belt_hold_snapshot(ui: &mut egui::Ui, snap: &CdlBeltHol
     }
 }
 
-pub(super) fn render_cdl_high_wave_snapshot(ui: &mut egui::Ui, snap: &CdlHighWaveSnapshot) {
+pub fn render_cdl_high_wave_snapshot(ui: &mut egui::Ui, snap: &CdlHighWaveSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.cdl_high_wave_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -1289,7 +1289,7 @@ pub(super) fn render_cdl_high_wave_snapshot(ui: &mut egui::Ui, snap: &CdlHighWav
     }
 }
 
-pub(super) fn render_cdl_long_line_snapshot(ui: &mut egui::Ui, snap: &CdlLongLineSnapshot) {
+pub fn render_cdl_long_line_snapshot(ui: &mut egui::Ui, snap: &CdlLongLineSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.cdl_long_line_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -1382,7 +1382,7 @@ pub(super) fn render_cdl_long_line_snapshot(ui: &mut egui::Ui, snap: &CdlLongLin
     }
 }
 
-pub(super) fn render_cdl_short_line_snapshot(ui: &mut egui::Ui, snap: &CdlShortLineSnapshot) {
+pub fn render_cdl_short_line_snapshot(ui: &mut egui::Ui, snap: &CdlShortLineSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.cdl_short_line_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -1475,7 +1475,7 @@ pub(super) fn render_cdl_short_line_snapshot(ui: &mut egui::Ui, snap: &CdlShortL
     }
 }
 
-pub(super) fn render_chaikosc_snapshot(ui: &mut egui::Ui, snap: &ChaikoscSnapshot) {
+pub fn render_chaikosc_snapshot(ui: &mut egui::Ui, snap: &ChaikoscSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.chaikosc_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -1556,7 +1556,7 @@ pub(super) fn render_chaikosc_snapshot(ui: &mut egui::Ui, snap: &ChaikoscSnapsho
     }
 }
 
-pub(super) fn render_chop_snapshot(ui: &mut egui::Ui, snap: &ChopSnapshot) {
+pub fn render_chop_snapshot(ui: &mut egui::Ui, snap: &ChopSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.chop_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -1644,7 +1644,7 @@ pub(super) fn render_chop_snapshot(ui: &mut egui::Ui, snap: &ChopSnapshot) {
     }
 }
 
-pub(super) fn render_cmf_snapshot(ui: &mut egui::Ui, snap: &CmfSnapshot) {
+pub fn render_cmf_snapshot(ui: &mut egui::Ui, snap: &CmfSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.cmf_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -1718,7 +1718,7 @@ pub(super) fn render_cmf_snapshot(ui: &mut egui::Ui, snap: &CmfSnapshot) {
     }
 }
 
-pub(super) fn render_dema_snapshot(ui: &mut egui::Ui, snap: &DemaSnapshot) {
+pub fn render_dema_snapshot(ui: &mut egui::Ui, snap: &DemaSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.dema_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -1797,7 +1797,7 @@ pub(super) fn render_dema_snapshot(ui: &mut egui::Ui, snap: &DemaSnapshot) {
     }
 }
 
-pub(super) fn render_donchian_snapshot(ui: &mut egui::Ui, snap: &DonchianSnapshot) {
+pub fn render_donchian_snapshot(ui: &mut egui::Ui, snap: &DonchianSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.donchian_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -1892,7 +1892,7 @@ pub(super) fn render_donchian_snapshot(ui: &mut egui::Ui, snap: &DonchianSnapsho
     }
 }
 
-pub(super) fn render_dpo_snapshot(ui: &mut egui::Ui, snap: &DpoSnapshot) {
+pub fn render_dpo_snapshot(ui: &mut egui::Ui, snap: &DpoSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.dpo_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -1966,7 +1966,7 @@ pub(super) fn render_dpo_snapshot(ui: &mut egui::Ui, snap: &DpoSnapshot) {
     }
 }
 
-pub(super) fn render_dx_snapshot(ui: &mut egui::Ui, snap: &DxSnapshot) {
+pub fn render_dx_snapshot(ui: &mut egui::Ui, snap: &DxSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.dx_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -2063,7 +2063,7 @@ pub(super) fn render_dx_snapshot(ui: &mut egui::Ui, snap: &DxSnapshot) {
     }
 }
 
-pub(super) fn render_fisher_snapshot(ui: &mut egui::Ui, snap: &FisherSnapshot) {
+pub fn render_fisher_snapshot(ui: &mut egui::Ui, snap: &FisherSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.fisher_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -2144,7 +2144,7 @@ pub(super) fn render_fisher_snapshot(ui: &mut egui::Ui, snap: &FisherSnapshot) {
     }
 }
 
-pub(super) fn render_force_index_snapshot(ui: &mut egui::Ui, snap: &ForceIndexSnapshot) {
+pub fn render_force_index_snapshot(ui: &mut egui::Ui, snap: &ForceIndexSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.force_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -2235,7 +2235,7 @@ pub(super) fn render_force_index_snapshot(ui: &mut egui::Ui, snap: &ForceIndexSn
     }
 }
 
-pub(super) fn render_frama_snapshot(ui: &mut egui::Ui, snap: &FramaSnapshot) {
+pub fn render_frama_snapshot(ui: &mut egui::Ui, snap: &FramaSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.frama_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -2326,7 +2326,7 @@ pub(super) fn render_frama_snapshot(ui: &mut egui::Ui, snap: &FramaSnapshot) {
     }
 }
 
-pub(super) fn render_heikin_snapshot(ui: &mut egui::Ui, snap: &HeikinSnapshot) {
+pub fn render_heikin_snapshot(ui: &mut egui::Ui, snap: &HeikinSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.heikin_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -2432,7 +2432,7 @@ pub(super) fn render_heikin_snapshot(ui: &mut egui::Ui, snap: &HeikinSnapshot) {
     }
 }
 
-pub(super) fn render_hma_snapshot(ui: &mut egui::Ui, snap: &HmaSnapshot) {
+pub fn render_hma_snapshot(ui: &mut egui::Ui, snap: &HmaSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.hma_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -2514,7 +2514,7 @@ pub(super) fn render_hma_snapshot(ui: &mut egui::Ui, snap: &HmaSnapshot) {
     }
 }
 
-pub(super) fn render_ht_dcperiod_snapshot(ui: &mut egui::Ui, snap: &HtDcperiodSnapshot) {
+pub fn render_ht_dcperiod_snapshot(ui: &mut egui::Ui, snap: &HtDcperiodSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.period_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -2586,7 +2586,7 @@ pub(super) fn render_ht_dcperiod_snapshot(ui: &mut egui::Ui, snap: &HtDcperiodSn
     }
 }
 
-pub(super) fn render_ht_dcphase_snapshot(ui: &mut egui::Ui, snap: &HtDcphaseSnapshot) {
+pub fn render_ht_dcphase_snapshot(ui: &mut egui::Ui, snap: &HtDcphaseSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.phase_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -2658,7 +2658,7 @@ pub(super) fn render_ht_dcphase_snapshot(ui: &mut egui::Ui, snap: &HtDcphaseSnap
     }
 }
 
-pub(super) fn render_ht_phasor_snapshot(ui: &mut egui::Ui, snap: &HtPhasorSnapshot) {
+pub fn render_ht_phasor_snapshot(ui: &mut egui::Ui, snap: &HtPhasorSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.phasor_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -2744,7 +2744,7 @@ pub(super) fn render_ht_phasor_snapshot(ui: &mut egui::Ui, snap: &HtPhasorSnapsh
     }
 }
 
-pub(super) fn render_ht_sine_snapshot(ui: &mut egui::Ui, snap: &HtSineSnapshot) {
+pub fn render_ht_sine_snapshot(ui: &mut egui::Ui, snap: &HtSineSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.sine_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -2830,7 +2830,7 @@ pub(super) fn render_ht_sine_snapshot(ui: &mut egui::Ui, snap: &HtSineSnapshot) 
     }
 }
 
-pub(super) fn render_ht_trendline_snapshot(ui: &mut egui::Ui, snap: &HtTrendlineSnapshot) {
+pub fn render_ht_trendline_snapshot(ui: &mut egui::Ui, snap: &HtTrendlineSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.ht_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -2915,7 +2915,7 @@ pub(super) fn render_ht_trendline_snapshot(ui: &mut egui::Ui, snap: &HtTrendline
     }
 }
 
-pub(super) fn render_ht_trendmode_snapshot(ui: &mut egui::Ui, snap: &HtTrendmodeSnapshot) {
+pub fn render_ht_trendmode_snapshot(ui: &mut egui::Ui, snap: &HtTrendmodeSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.mode_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -2987,7 +2987,7 @@ pub(super) fn render_ht_trendmode_snapshot(ui: &mut egui::Ui, snap: &HtTrendmode
     }
 }
 
-pub(super) fn render_ibs_snapshot(ui: &mut egui::Ui, snap: &IbsSnapshot) {
+pub fn render_ibs_snapshot(ui: &mut egui::Ui, snap: &IbsSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.ibs_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -3086,7 +3086,7 @@ pub(super) fn render_ibs_snapshot(ui: &mut egui::Ui, snap: &IbsSnapshot) {
     }
 }
 
-pub(super) fn render_ichimoku_snapshot(ui: &mut egui::Ui, snap: &IchimokuSnapshot) {
+pub fn render_ichimoku_snapshot(ui: &mut egui::Ui, snap: &IchimokuSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.ichimoku_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -3181,7 +3181,7 @@ pub(super) fn render_ichimoku_snapshot(ui: &mut egui::Ui, snap: &IchimokuSnapsho
     }
 }
 
-pub(super) fn render_kama_snapshot(ui: &mut egui::Ui, snap: &KamaSnapshot) {
+pub fn render_kama_snapshot(ui: &mut egui::Ui, snap: &KamaSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.kama_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -3259,7 +3259,7 @@ pub(super) fn render_kama_snapshot(ui: &mut egui::Ui, snap: &KamaSnapshot) {
     }
 }
 
-pub(super) fn render_keltner_snapshot(ui: &mut egui::Ui, snap: &KeltnerSnapshot) {
+pub fn render_keltner_snapshot(ui: &mut egui::Ui, snap: &KeltnerSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.keltner_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -3373,7 +3373,7 @@ pub(super) fn render_keltner_snapshot(ui: &mut egui::Ui, snap: &KeltnerSnapshot)
     }
 }
 
-pub(super) fn render_klinger_snapshot(ui: &mut egui::Ui, snap: &KlingerSnapshot) {
+pub fn render_klinger_snapshot(ui: &mut egui::Ui, snap: &KlingerSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.klinger_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -3469,7 +3469,7 @@ pub(super) fn render_klinger_snapshot(ui: &mut egui::Ui, snap: &KlingerSnapshot)
     }
 }
 
-pub(super) fn render_kst_snapshot(ui: &mut egui::Ui, snap: &KstSnapshot) {
+pub fn render_kst_snapshot(ui: &mut egui::Ui, snap: &KstSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.kst_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -3569,7 +3569,7 @@ pub(super) fn render_kst_snapshot(ui: &mut egui::Ui, snap: &KstSnapshot) {
     }
 }
 
-pub(super) fn render_laguerre_rsi_snapshot(ui: &mut egui::Ui, snap: &LaguerreRsiSnapshot) {
+pub fn render_laguerre_rsi_snapshot(ui: &mut egui::Ui, snap: &LaguerreRsiSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.lrsi_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -3675,7 +3675,7 @@ pub(super) fn render_laguerre_rsi_snapshot(ui: &mut egui::Ui, snap: &LaguerreRsi
     }
 }
 
-pub(super) fn render_linearreg_angle_snapshot(ui: &mut egui::Ui, snap: &LinearregAngleSnapshot) {
+pub fn render_linearreg_angle_snapshot(ui: &mut egui::Ui, snap: &LinearregAngleSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.angle_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -3759,7 +3759,7 @@ pub(super) fn render_linearreg_angle_snapshot(ui: &mut egui::Ui, snap: &Linearre
     }
 }
 
-pub(super) fn render_linearreg_slope_snapshot(ui: &mut egui::Ui, snap: &LinearregSlopeSnapshot) {
+pub fn render_linearreg_slope_snapshot(ui: &mut egui::Ui, snap: &LinearregSlopeSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.slope_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -3843,7 +3843,7 @@ pub(super) fn render_linearreg_slope_snapshot(ui: &mut egui::Ui, snap: &Linearre
     }
 }
 
-pub(super) fn render_linearreg_snapshot(ui: &mut egui::Ui, snap: &LinearregSnapshot) {
+pub fn render_linearreg_snapshot(ui: &mut egui::Ui, snap: &LinearregSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.linearreg_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -3922,7 +3922,7 @@ pub(super) fn render_linearreg_snapshot(ui: &mut egui::Ui, snap: &LinearregSnaps
     }
 }
 
-pub(super) fn render_linreg_snapshot(ui: &mut egui::Ui, snap: &LinregSnapshot) {
+pub fn render_linreg_snapshot(ui: &mut egui::Ui, snap: &LinregSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.linreg_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -4029,7 +4029,7 @@ pub(super) fn render_linreg_snapshot(ui: &mut egui::Ui, snap: &LinregSnapshot) {
     }
 }
 
-pub(super) fn render_macdext_snapshot(ui: &mut egui::Ui, snap: &MacdextSnapshot) {
+pub fn render_macdext_snapshot(ui: &mut egui::Ui, snap: &MacdextSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.macdext_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -4126,7 +4126,7 @@ pub(super) fn render_macdext_snapshot(ui: &mut egui::Ui, snap: &MacdextSnapshot)
     }
 }
 
-pub(super) fn render_macdfix_snapshot(ui: &mut egui::Ui, snap: &MacdfixSnapshot) {
+pub fn render_macdfix_snapshot(ui: &mut egui::Ui, snap: &MacdfixSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.macdfix_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -4224,7 +4224,7 @@ pub(super) fn render_macdfix_snapshot(ui: &mut egui::Ui, snap: &MacdfixSnapshot)
     }
 }
 
-pub(super) fn render_mass_index_snapshot(ui: &mut egui::Ui, snap: &MassIndexSnapshot) {
+pub fn render_mass_index_snapshot(ui: &mut egui::Ui, snap: &MassIndexSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.mass_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -4330,7 +4330,7 @@ pub(super) fn render_mass_index_snapshot(ui: &mut egui::Ui, snap: &MassIndexSnap
     }
 }
 
-pub(super) fn render_mass_snapshot(ui: &mut egui::Ui, snap: &MassSnapshot) {
+pub fn render_mass_snapshot(ui: &mut egui::Ui, snap: &MassSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.mass_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -4397,7 +4397,7 @@ pub(super) fn render_mass_snapshot(ui: &mut egui::Ui, snap: &MassSnapshot) {
     }
 }
 
-pub(super) fn render_mavp_snapshot(ui: &mut egui::Ui, snap: &MavpSnapshot) {
+pub fn render_mavp_snapshot(ui: &mut egui::Ui, snap: &MavpSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.mavp_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -4488,7 +4488,7 @@ pub(super) fn render_mavp_snapshot(ui: &mut egui::Ui, snap: &MavpSnapshot) {
     }
 }
 
-pub(super) fn render_mesa_sine_snapshot(ui: &mut egui::Ui, snap: &MesaSineSnapshot) {
+pub fn render_mesa_sine_snapshot(ui: &mut egui::Ui, snap: &MesaSineSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.mesa_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -4586,7 +4586,7 @@ pub(super) fn render_mesa_sine_snapshot(ui: &mut egui::Ui, snap: &MesaSineSnapsh
     }
 }
 
-pub(super) fn render_mfi_snapshot(ui: &mut egui::Ui, snap: &MfiSnapshot) {
+pub fn render_mfi_snapshot(ui: &mut egui::Ui, snap: &MfiSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.mfi_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -4669,7 +4669,7 @@ pub(super) fn render_mfi_snapshot(ui: &mut egui::Ui, snap: &MfiSnapshot) {
     }
 }
 
-pub(super) fn render_midpoint_snapshot(ui: &mut egui::Ui, snap: &MidpointSnapshot) {
+pub fn render_midpoint_snapshot(ui: &mut egui::Ui, snap: &MidpointSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.midpoint_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -4767,7 +4767,7 @@ pub(super) fn render_midpoint_snapshot(ui: &mut egui::Ui, snap: &MidpointSnapsho
     }
 }
 
-pub(super) fn render_midprice_snapshot(ui: &mut egui::Ui, snap: &MidpriceSnapshot) {
+pub fn render_midprice_snapshot(ui: &mut egui::Ui, snap: &MidpriceSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.midprice_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -4853,7 +4853,7 @@ pub(super) fn render_midprice_snapshot(ui: &mut egui::Ui, snap: &MidpriceSnapsho
     }
 }
 
-pub(super) fn render_minmaxindex_snapshot(ui: &mut egui::Ui, snap: &MinMaxIndexSnapshot) {
+pub fn render_minmaxindex_snapshot(ui: &mut egui::Ui, snap: &MinMaxIndexSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.minmaxindex_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -4940,7 +4940,7 @@ pub(super) fn render_minmaxindex_snapshot(ui: &mut egui::Ui, snap: &MinMaxIndexS
     }
 }
 
-pub(super) fn render_minus_di_snapshot(ui: &mut egui::Ui, snap: &MinusDiSnapshot) {
+pub fn render_minus_di_snapshot(ui: &mut egui::Ui, snap: &MinusDiSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.minus_di_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -5031,7 +5031,7 @@ pub(super) fn render_minus_di_snapshot(ui: &mut egui::Ui, snap: &MinusDiSnapshot
     }
 }
 
-pub(super) fn render_minus_dm_snapshot(ui: &mut egui::Ui, snap: &MinusDmSnapshot) {
+pub fn render_minus_dm_snapshot(ui: &mut egui::Ui, snap: &MinusDmSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.minus_dm_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -5132,7 +5132,7 @@ pub(super) fn render_minus_dm_snapshot(ui: &mut egui::Ui, snap: &MinusDmSnapshot
     }
 }
 
-pub(super) fn render_mom_snapshot(ui: &mut egui::Ui, snap: &MomSnapshot) {
+pub fn render_mom_snapshot(ui: &mut egui::Ui, snap: &MomSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.mom_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -5210,7 +5210,7 @@ pub(super) fn render_mom_snapshot(ui: &mut egui::Ui, snap: &MomSnapshot) {
     }
 }
 
-pub(super) fn render_natr_snapshot(ui: &mut egui::Ui, snap: &NatrSnapshot) {
+pub fn render_natr_snapshot(ui: &mut egui::Ui, snap: &NatrSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.natr_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -5295,7 +5295,7 @@ pub(super) fn render_natr_snapshot(ui: &mut egui::Ui, snap: &NatrSnapshot) {
     }
 }
 
-pub(super) fn render_obv_snapshot(ui: &mut egui::Ui, snap: &ObvSnapshot) {
+pub fn render_obv_snapshot(ui: &mut egui::Ui, snap: &ObvSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.obv_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -5383,7 +5383,7 @@ pub(super) fn render_obv_snapshot(ui: &mut egui::Ui, snap: &ObvSnapshot) {
     }
 }
 
-pub(super) fn render_pgo_snapshot(ui: &mut egui::Ui, snap: &PgoSnapshot) {
+pub fn render_pgo_snapshot(ui: &mut egui::Ui, snap: &PgoSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.pgo_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -5475,7 +5475,7 @@ pub(super) fn render_pgo_snapshot(ui: &mut egui::Ui, snap: &PgoSnapshot) {
     }
 }
 
-pub(super) fn render_pivots_snapshot(ui: &mut egui::Ui, snap: &PivotsSnapshot) {
+pub fn render_pivots_snapshot(ui: &mut egui::Ui, snap: &PivotsSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.pivots_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -5577,7 +5577,7 @@ pub(super) fn render_pivots_snapshot(ui: &mut egui::Ui, snap: &PivotsSnapshot) {
     }
 }
 
-pub(super) fn render_plus_di_snapshot(ui: &mut egui::Ui, snap: &PlusDiSnapshot) {
+pub fn render_plus_di_snapshot(ui: &mut egui::Ui, snap: &PlusDiSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.plus_di_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -5668,7 +5668,7 @@ pub(super) fn render_plus_di_snapshot(ui: &mut egui::Ui, snap: &PlusDiSnapshot) 
     }
 }
 
-pub(super) fn render_plus_dm_snapshot(ui: &mut egui::Ui, snap: &PlusDmSnapshot) {
+pub fn render_plus_dm_snapshot(ui: &mut egui::Ui, snap: &PlusDmSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.plus_dm_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -5769,7 +5769,7 @@ pub(super) fn render_plus_dm_snapshot(ui: &mut egui::Ui, snap: &PlusDmSnapshot) 
     }
 }
 
-pub(super) fn render_ppo_snapshot(ui: &mut egui::Ui, snap: &PpoSnapshot) {
+pub fn render_ppo_snapshot(ui: &mut egui::Ui, snap: &PpoSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.ppo_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -5865,7 +5865,7 @@ pub(super) fn render_ppo_snapshot(ui: &mut egui::Ui, snap: &PpoSnapshot) {
     }
 }
 
-pub(super) fn render_psar_snapshot(ui: &mut egui::Ui, snap: &PsarSnapshot) {
+pub fn render_psar_snapshot(ui: &mut egui::Ui, snap: &PsarSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.psar_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -5965,7 +5965,7 @@ pub(super) fn render_psar_snapshot(ui: &mut egui::Ui, snap: &PsarSnapshot) {
     }
 }
 
-pub(super) fn render_rainbow_snapshot(ui: &mut egui::Ui, snap: &RainbowSnapshot) {
+pub fn render_rainbow_snapshot(ui: &mut egui::Ui, snap: &RainbowSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rainbow_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -6077,7 +6077,7 @@ pub(super) fn render_rainbow_snapshot(ui: &mut egui::Ui, snap: &RainbowSnapshot)
     }
 }
 
-pub(super) fn render_sarext_snapshot(ui: &mut egui::Ui, snap: &SarextSnapshot) {
+pub fn render_sarext_snapshot(ui: &mut egui::Ui, snap: &SarextSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.sarext_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -6206,7 +6206,7 @@ pub(super) fn render_sarext_snapshot(ui: &mut egui::Ui, snap: &SarextSnapshot) {
     }
 }
 
-pub(super) fn render_squeeze_snapshot(ui: &mut egui::Ui, snap: &SqueezeSnapshot) {
+pub fn render_squeeze_snapshot(ui: &mut egui::Ui, snap: &SqueezeSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.squeeze_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -6312,7 +6312,7 @@ pub(super) fn render_squeeze_snapshot(ui: &mut egui::Ui, snap: &SqueezeSnapshot)
     }
 }
 
-pub(super) fn render_stochf_snapshot(ui: &mut egui::Ui, snap: &StochfSnapshot) {
+pub fn render_stochf_snapshot(ui: &mut egui::Ui, snap: &StochfSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.stochf_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -6398,7 +6398,7 @@ pub(super) fn render_stochf_snapshot(ui: &mut egui::Ui, snap: &StochfSnapshot) {
     }
 }
 
-pub(super) fn render_stochrsi_snapshot(ui: &mut egui::Ui, snap: &StochRsiSnapshot) {
+pub fn render_stochrsi_snapshot(ui: &mut egui::Ui, snap: &StochRsiSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.stochrsi_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -6505,7 +6505,7 @@ pub(super) fn render_stochrsi_snapshot(ui: &mut egui::Ui, snap: &StochRsiSnapsho
     }
 }
 
-pub(super) fn render_supertrend_snapshot(ui: &mut egui::Ui, snap: &SupertrendSnapshot) {
+pub fn render_supertrend_snapshot(ui: &mut egui::Ui, snap: &SupertrendSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.supertrend_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -6605,7 +6605,7 @@ pub(super) fn render_supertrend_snapshot(ui: &mut egui::Ui, snap: &SupertrendSna
     }
 }
 
-pub(super) fn render_tema_snapshot(ui: &mut egui::Ui, snap: &TemaSnapshot) {
+pub fn render_tema_snapshot(ui: &mut egui::Ui, snap: &TemaSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.tema_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -6684,7 +6684,7 @@ pub(super) fn render_tema_snapshot(ui: &mut egui::Ui, snap: &TemaSnapshot) {
     }
 }
 
-pub(super) fn render_trange_snapshot(ui: &mut egui::Ui, snap: &TrangeSnapshot) {
+pub fn render_trange_snapshot(ui: &mut egui::Ui, snap: &TrangeSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.trange_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -6777,7 +6777,7 @@ pub(super) fn render_trange_snapshot(ui: &mut egui::Ui, snap: &TrangeSnapshot) {
     }
 }
 
-pub(super) fn render_trix_snapshot(ui: &mut egui::Ui, snap: &TrixSnapshot) {
+pub fn render_trix_snapshot(ui: &mut egui::Ui, snap: &TrixSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.trix_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -6870,7 +6870,7 @@ pub(super) fn render_trix_snapshot(ui: &mut egui::Ui, snap: &TrixSnapshot) {
     }
 }
 
-pub(super) fn render_ttm_squeeze_snapshot(ui: &mut egui::Ui, snap: &TtmSqueezeSnapshot) {
+pub fn render_ttm_squeeze_snapshot(ui: &mut egui::Ui, snap: &TtmSqueezeSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.squeeze_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -6983,7 +6983,7 @@ pub(super) fn render_ttm_squeeze_snapshot(ui: &mut egui::Ui, snap: &TtmSqueezeSn
     }
 }
 
-pub(super) fn render_ultosc_snapshot(ui: &mut egui::Ui, snap: &UltoscSnapshot) {
+pub fn render_ultosc_snapshot(ui: &mut egui::Ui, snap: &UltoscSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.ultosc_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -7067,7 +7067,7 @@ pub(super) fn render_ultosc_snapshot(ui: &mut egui::Ui, snap: &UltoscSnapshot) {
     }
 }
 
-pub(super) fn render_vortex_snapshot(ui: &mut egui::Ui, snap: &VortexSnapshot) {
+pub fn render_vortex_snapshot(ui: &mut egui::Ui, snap: &VortexSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.vortex_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -7167,7 +7167,7 @@ pub(super) fn render_vortex_snapshot(ui: &mut egui::Ui, snap: &VortexSnapshot) {
     }
 }
 
-pub(super) fn render_willr_snapshot(ui: &mut egui::Ui, snap: &WillrSnapshot) {
+pub fn render_willr_snapshot(ui: &mut egui::Ui, snap: &WillrSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.willr_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -7241,7 +7241,7 @@ pub(super) fn render_willr_snapshot(ui: &mut egui::Ui, snap: &WillrSnapshot) {
     }
 }
 
-pub(super) fn render_wma_snapshot(ui: &mut egui::Ui, snap: &WmaSnapshot) {
+pub fn render_wma_snapshot(ui: &mut egui::Ui, snap: &WmaSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.wma_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -7328,7 +7328,7 @@ pub(super) fn render_wma_snapshot(ui: &mut egui::Ui, snap: &WmaSnapshot) {
     }
 }
 
-pub(super) fn render_zigzag_snapshot(ui: &mut egui::Ui, snap: &ZigzagSnapshot) {
+pub fn render_zigzag_snapshot(ui: &mut egui::Ui, snap: &ZigzagSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.zigzag_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -7429,7 +7429,7 @@ pub(super) fn render_zigzag_snapshot(ui: &mut egui::Ui, snap: &ZigzagSnapshot) {
     }
 }
 
-pub(super) fn render_acrl_snapshot(ui: &mut egui::Ui, snap: &AccrualsSnapshot) {
+pub fn render_acrl_snapshot(ui: &mut egui::Ui, snap: &AccrualsSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.periods.is_empty() {
         ui.label(
@@ -7524,7 +7524,7 @@ pub(super) fn render_acrl_snapshot(ui: &mut egui::Ui, snap: &AccrualsSnapshot) {
     }
 }
 
-pub(super) fn render_adf_snapshot(ui: &mut egui::Ui, snap: &DickeyFullerSnapshot) {
+pub fn render_adf_snapshot(ui: &mut egui::Ui, snap: &DickeyFullerSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.adf_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -7614,7 +7614,7 @@ pub(super) fn render_adf_snapshot(ui: &mut egui::Ui, snap: &DickeyFullerSnapshot
     }
 }
 
-pub(super) fn render_adtest_snapshot(ui: &mut egui::Ui, snap: &AdtestSnapshot) {
+pub fn render_adtest_snapshot(ui: &mut egui::Ui, snap: &AdtestSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.adtest_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -7704,7 +7704,7 @@ pub(super) fn render_adtest_snapshot(ui: &mut egui::Ui, snap: &AdtestSnapshot) {
     }
 }
 
-pub(super) fn render_altz_snapshot(ui: &mut egui::Ui, snap: &AltmanZSnapshot) {
+pub fn render_altz_snapshot(ui: &mut egui::Ui, snap: &AltmanZSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.components.is_empty() {
         ui.label(
@@ -7806,7 +7806,7 @@ pub(super) fn render_altz_snapshot(ui: &mut egui::Ui, snap: &AltmanZSnapshot) {
     }
 }
 
-pub(super) fn render_amihud_snapshot(ui: &mut egui::Ui, snap: &AmihudIlliqSnapshot) {
+pub fn render_amihud_snapshot(ui: &mut egui::Ui, snap: &AmihudIlliqSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.illiq_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -7869,7 +7869,7 @@ pub(super) fn render_amihud_snapshot(ui: &mut egui::Ui, snap: &AmihudIlliqSnapsh
     }
 }
 
-pub(super) fn render_apen_snapshot(ui: &mut egui::Ui, snap: &ApenSnapshot) {
+pub fn render_apen_snapshot(ui: &mut egui::Ui, snap: &ApenSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.apen_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -7946,7 +7946,7 @@ pub(super) fn render_apen_snapshot(ui: &mut egui::Ui, snap: &ApenSnapshot) {
     }
 }
 
-pub(super) fn render_archlm_snapshot(ui: &mut egui::Ui, snap: &ArchLmSnapshot) {
+pub fn render_archlm_snapshot(ui: &mut egui::Ui, snap: &ArchLmSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.arch_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -8033,7 +8033,7 @@ pub(super) fn render_archlm_snapshot(ui: &mut egui::Ui, snap: &ArchLmSnapshot) {
     }
 }
 
-pub(super) fn render_autocor_snapshot(ui: &mut egui::Ui, snap: &AutocorrelationSnapshot) {
+pub fn render_autocor_snapshot(ui: &mut egui::Ui, snap: &AutocorrelationSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.regime_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -8103,7 +8103,7 @@ pub(super) fn render_autocor_snapshot(ui: &mut egui::Ui, snap: &AutocorrelationS
     }
 }
 
-pub(super) fn render_automi_snapshot(ui: &mut egui::Ui, snap: &AutomiSnapshot) {
+pub fn render_automi_snapshot(ui: &mut egui::Ui, snap: &AutomiSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.automi_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -8184,7 +8184,7 @@ pub(super) fn render_automi_snapshot(ui: &mut egui::Ui, snap: &AutomiSnapshot) {
     }
 }
 
-pub(super) fn render_bbsqueeze_snapshot(ui: &mut egui::Ui, snap: &BbsqueezeSnapshot) {
+pub fn render_bbsqueeze_snapshot(ui: &mut egui::Ui, snap: &BbsqueezeSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.bbsqueeze_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -8287,7 +8287,7 @@ pub(super) fn render_bbsqueeze_snapshot(ui: &mut egui::Ui, snap: &BbsqueezeSnaps
     }
 }
 
-pub(super) fn render_bdstest_snapshot(ui: &mut egui::Ui, snap: &BdsTestSnapshot) {
+pub fn render_bdstest_snapshot(ui: &mut egui::Ui, snap: &BdsTestSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.bds_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -8361,7 +8361,7 @@ pub(super) fn render_bdstest_snapshot(ui: &mut egui::Ui, snap: &BdsTestSnapshot)
     }
 }
 
-pub(super) fn render_beta_snapshot(ui: &mut egui::Ui, snap: &BetaSnapshot) {
+pub fn render_beta_snapshot(ui: &mut egui::Ui, snap: &BetaSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.windows.is_empty() {
         ui.label(
@@ -8456,7 +8456,7 @@ pub(super) fn render_beta_snapshot(ui: &mut egui::Ui, snap: &BetaSnapshot) {
     }
 }
 
-pub(super) fn render_bipower_snapshot(ui: &mut egui::Ui, snap: &BipowerVariationSnapshot) {
+pub fn render_bipower_snapshot(ui: &mut egui::Ui, snap: &BipowerVariationSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.jump_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -8550,7 +8550,7 @@ pub(super) fn render_bipower_snapshot(ui: &mut egui::Ui, snap: &BipowerVariation
     }
 }
 
-pub(super) fn render_bnsjump_snapshot(ui: &mut egui::Ui, snap: &BnsjumpSnapshot) {
+pub fn render_bnsjump_snapshot(ui: &mut egui::Ui, snap: &BnsjumpSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.bnsjump_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -8624,7 +8624,7 @@ pub(super) fn render_bnsjump_snapshot(ui: &mut egui::Ui, snap: &BnsjumpSnapshot)
     }
 }
 
-pub(super) fn render_break_snapshot(ui: &mut egui::Ui, snap: &BreakoutSnapshot) {
+pub fn render_break_snapshot(ui: &mut egui::Ui, snap: &BreakoutSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.current_price <= 0.0 {
         ui.label(
@@ -8746,7 +8746,7 @@ pub(super) fn render_break_snapshot(ui: &mut egui::Ui, snap: &BreakoutSnapshot) 
     }
 }
 
-pub(super) fn render_breuschpagan_snapshot(ui: &mut egui::Ui, snap: &BreuschPaganSnapshot) {
+pub fn render_breuschpagan_snapshot(ui: &mut egui::Ui, snap: &BreuschPaganSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.bp_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -8824,7 +8824,7 @@ pub(super) fn render_breuschpagan_snapshot(ui: &mut egui::Ui, snap: &BreuschPaga
     }
 }
 
-pub(super) fn render_burgspec_snapshot(ui: &mut egui::Ui, snap: &BurgSpecSnapshot) {
+pub fn render_burgspec_snapshot(ui: &mut egui::Ui, snap: &BurgSpecSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.burgspec_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -8909,7 +8909,7 @@ pub(super) fn render_burgspec_snapshot(ui: &mut egui::Ui, snap: &BurgSpecSnapsho
     }
 }
 
-pub(super) fn render_burke_snapshot(ui: &mut egui::Ui, snap: &BurkeRatioSnapshot) {
+pub fn render_burke_snapshot(ui: &mut egui::Ui, snap: &BurkeRatioSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.burke_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -8977,7 +8977,7 @@ pub(super) fn render_burke_snapshot(ui: &mut egui::Ui, snap: &BurkeRatioSnapshot
     }
 }
 
-pub(super) fn render_calmar_snapshot(ui: &mut egui::Ui, snap: &CalmarRatioSnapshot) {
+pub fn render_calmar_snapshot(ui: &mut egui::Ui, snap: &CalmarRatioSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.calmar_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -9040,7 +9040,7 @@ pub(super) fn render_calmar_snapshot(ui: &mut egui::Ui, snap: &CalmarRatioSnapsh
     }
 }
 
-pub(super) fn render_ccrl_snapshot(ui: &mut egui::Ui, snap: &CashCycleSnapshot) {
+pub fn render_ccrl_snapshot(ui: &mut egui::Ui, snap: &CashCycleSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.periods_used == 0 {
         ui.label(
@@ -9187,7 +9187,7 @@ pub(super) fn render_ccrl_snapshot(ui: &mut egui::Ui, snap: &CashCycleSnapshot) 
     }
 }
 
-pub(super) fn render_cfvar_snapshot(ui: &mut egui::Ui, snap: &CornishFisherSnapshot) {
+pub fn render_cfvar_snapshot(ui: &mut egui::Ui, snap: &CornishFisherSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.cfvar_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -9311,7 +9311,7 @@ pub(super) fn render_cfvar_snapshot(ui: &mut egui::Ui, snap: &CornishFisherSnaps
     }
 }
 
-pub(super) fn render_closeplc_snapshot(ui: &mut egui::Ui, snap: &ClosePlacementSnapshot) {
+pub fn render_closeplc_snapshot(ui: &mut egui::Ui, snap: &ClosePlacementSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.placement_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -9381,7 +9381,7 @@ pub(super) fn render_closeplc_snapshot(ui: &mut egui::Ui, snap: &ClosePlacementS
     }
 }
 
-pub(super) fn render_cor_snapshot(ui: &mut egui::Ui, snap: &CorrelationMatrix) {
+pub fn render_cor_snapshot(ui: &mut egui::Ui, snap: &CorrelationMatrix) {
     ui.separator();
     if snap.symbol.is_empty() || snap.cells.is_empty() {
         ui.label(
@@ -9456,7 +9456,7 @@ pub(super) fn render_cor_snapshot(ui: &mut egui::Ui, snap: &CorrelationMatrix) {
     }
 }
 
-pub(super) fn render_cordim_snapshot(ui: &mut egui::Ui, snap: &CordimSnapshot) {
+pub fn render_cordim_snapshot(ui: &mut egui::Ui, snap: &CordimSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.cordim_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -9523,7 +9523,7 @@ pub(super) fn render_cordim_snapshot(ui: &mut egui::Ui, snap: &CordimSnapshot) {
     }
 }
 
-pub(super) fn render_covg_snapshot(ui: &mut egui::Ui, snap: &CoverageSnapshot) {
+pub fn render_covg_snapshot(ui: &mut egui::Ui, snap: &CoverageSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.coverage_label == "NONE" {
         ui.label(egui::RichText::new("No data — needs ANR (price targets / consensus) and/or UPDG (rating changes) cached.")
@@ -9641,7 +9641,7 @@ pub(super) fn render_covg_snapshot(ui: &mut egui::Ui, snap: &CoverageSnapshot) {
     }
 }
 
-pub(super) fn render_credit_snapshot(ui: &mut egui::Ui, snap: &CreditSnapshot) {
+pub fn render_credit_snapshot(ui: &mut egui::Ui, snap: &CreditSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.inputs_available == 0 {
         ui.label(
@@ -9764,7 +9764,7 @@ pub(super) fn render_credit_snapshot(ui: &mut egui::Ui, snap: &CreditSnapshot) {
     }
 }
 
-pub(super) fn render_cusum_snapshot(ui: &mut egui::Ui, snap: &CusumBreakSnapshot) {
+pub fn render_cusum_snapshot(ui: &mut egui::Ui, snap: &CusumBreakSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.cusum_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -9856,7 +9856,7 @@ pub(super) fn render_cusum_snapshot(ui: &mut egui::Ui, snap: &CusumBreakSnapshot
     }
 }
 
-pub(super) fn render_cvar_snapshot(ui: &mut egui::Ui, snap: &CVaRSnapshot) {
+pub fn render_cvar_snapshot(ui: &mut egui::Ui, snap: &CVaRSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.cvar_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -9946,7 +9946,7 @@ pub(super) fn render_cvar_snapshot(ui: &mut egui::Ui, snap: &CVaRSnapshot) {
     }
 }
 
-pub(super) fn render_dcf_snapshot(ui: &mut egui::Ui, snap: &DcfSnapshot) {
+pub fn render_dcf_snapshot(ui: &mut egui::Ui, snap: &DcfSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() {
         ui.label(
@@ -10123,7 +10123,7 @@ pub(super) fn render_dcf_snapshot(ui: &mut egui::Ui, snap: &DcfSnapshot) {
     }
 }
 
-pub(super) fn render_dddur_snapshot(ui: &mut egui::Ui, snap: &DrawdownDurationSnapshot) {
+pub fn render_dddur_snapshot(ui: &mut egui::Ui, snap: &DrawdownDurationSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.dddur_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -10227,7 +10227,7 @@ pub(super) fn render_dddur_snapshot(ui: &mut egui::Ui, snap: &DrawdownDurationSn
     }
 }
 
-pub(super) fn render_ddm_snapshot(ui: &mut egui::Ui, snap: &DdmSnapshot) {
+pub fn render_ddm_snapshot(ui: &mut egui::Ui, snap: &DdmSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() {
         ui.label(
@@ -10312,7 +10312,7 @@ pub(super) fn render_ddm_snapshot(ui: &mut egui::Ui, snap: &DdmSnapshot) {
     }
 }
 
-pub(super) fn render_des_snapshot(ui: &mut egui::Ui, snap: &DailyEventStreakSnapshot) {
+pub fn render_des_snapshot(ui: &mut egui::Ui, snap: &DailyEventStreakSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.streak_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -10401,7 +10401,7 @@ pub(super) fn render_des_snapshot(ui: &mut egui::Ui, snap: &DailyEventStreakSnap
     }
 }
 
-pub(super) fn render_dfa_snapshot(ui: &mut egui::Ui, snap: &DetrendedFluctuationSnapshot) {
+pub fn render_dfa_snapshot(ui: &mut egui::Ui, snap: &DetrendedFluctuationSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.dfa_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -10463,7 +10463,7 @@ pub(super) fn render_dfa_snapshot(ui: &mut egui::Ui, snap: &DetrendedFluctuation
     }
 }
 
-pub(super) fn render_divg_snapshot(ui: &mut egui::Ui, snap: &DivgSnapshot) {
+pub fn render_divg_snapshot(ui: &mut egui::Ui, snap: &DivgSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.total_payments == 0 {
         ui.label(
@@ -10609,7 +10609,7 @@ pub(super) fn render_divg_snapshot(ui: &mut egui::Ui, snap: &DivgSnapshot) {
     }
 }
 
-pub(super) fn render_doweffect_snapshot(ui: &mut egui::Ui, snap: &DayOfWeekEffectSnapshot) {
+pub fn render_doweffect_snapshot(ui: &mut egui::Ui, snap: &DayOfWeekEffectSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.dow_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -10676,7 +10676,7 @@ pub(super) fn render_doweffect_snapshot(ui: &mut egui::Ui, snap: &DayOfWeekEffec
     }
 }
 
-pub(super) fn render_downvol_snapshot(ui: &mut egui::Ui, snap: &DownsideVolSnapshot) {
+pub fn render_downvol_snapshot(ui: &mut egui::Ui, snap: &DownsideVolSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.sortino_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -10773,7 +10773,7 @@ pub(super) fn render_downvol_snapshot(ui: &mut egui::Ui, snap: &DownsideVolSnaps
     }
 }
 
-pub(super) fn render_drawdar_snapshot(ui: &mut egui::Ui, snap: &DrawDaRSnapshot) {
+pub fn render_drawdar_snapshot(ui: &mut egui::Ui, snap: &DrawDaRSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.drawdar_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -10854,7 +10854,7 @@ pub(super) fn render_drawdar_snapshot(ui: &mut egui::Ui, snap: &DrawDaRSnapshot)
     }
 }
 
-pub(super) fn render_drawup_snapshot(ui: &mut egui::Ui, snap: &DrawupHistorySnapshot) {
+pub fn render_drawup_snapshot(ui: &mut egui::Ui, snap: &DrawupHistorySnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rally_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -10940,7 +10940,7 @@ pub(super) fn render_drawup_snapshot(ui: &mut egui::Ui, snap: &DrawupHistorySnap
     }
 }
 
-pub(super) fn render_durbinwatson_snapshot(ui: &mut egui::Ui, snap: &DurbinWatsonSnapshot) {
+pub fn render_durbinwatson_snapshot(ui: &mut egui::Ui, snap: &DurbinWatsonSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.dw_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -10993,7 +10993,7 @@ pub(super) fn render_durbinwatson_snapshot(ui: &mut egui::Ui, snap: &DurbinWatso
     }
 }
 
-pub(super) fn render_dvdrank_snapshot(ui: &mut egui::Ui, snap: &DividendGrowthRankSnapshot) {
+pub fn render_dvdrank_snapshot(ui: &mut egui::Ui, snap: &DividendGrowthRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty()
         || snap.rank_label == "INSUFFICIENT_DATA"
@@ -11090,7 +11090,7 @@ pub(super) fn render_dvdrank_snapshot(ui: &mut egui::Ui, snap: &DividendGrowthRa
     }
 }
 
-pub(super) fn render_dvdyieldrank_snapshot(ui: &mut egui::Ui, snap: &DividendYieldRankSnapshot) {
+pub fn render_dvdyieldrank_snapshot(ui: &mut egui::Ui, snap: &DividendYieldRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty()
         || snap.rank_label == "INSUFFICIENT_DATA"
@@ -11173,7 +11173,7 @@ pub(super) fn render_dvdyieldrank_snapshot(ui: &mut egui::Ui, snap: &DividendYie
     }
 }
 
-pub(super) fn render_earm_snapshot(ui: &mut egui::Ui, snap: &EarmSnapshot) {
+pub fn render_earm_snapshot(ui: &mut egui::Ui, snap: &EarmSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.quarters_used < 5 {
         ui.label(
@@ -11354,7 +11354,7 @@ pub(super) fn render_earm_snapshot(ui: &mut egui::Ui, snap: &EarmSnapshot) {
     }
 }
 
-pub(super) fn render_earmrank_snapshot(ui: &mut egui::Ui, snap: &EarningsMomentumRankSnapshot) {
+pub fn render_earmrank_snapshot(ui: &mut egui::Ui, snap: &EarningsMomentumRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty()
         || snap.rank_label == "INSUFFICIENT_DATA"
@@ -11442,7 +11442,7 @@ pub(super) fn render_earmrank_snapshot(ui: &mut egui::Ui, snap: &EarningsMomentu
     }
 }
 
-pub(super) fn render_effratio_snapshot(ui: &mut egui::Ui, snap: &EfficiencyRatioSnapshot) {
+pub fn render_effratio_snapshot(ui: &mut egui::Ui, snap: &EfficiencyRatioSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.efficiency_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -11531,7 +11531,7 @@ pub(super) fn render_effratio_snapshot(ui: &mut egui::Ui, snap: &EfficiencyRatio
     }
 }
 
-pub(super) fn render_entropy_snapshot(ui: &mut egui::Ui, snap: &EntropySnapshot) {
+pub fn render_entropy_snapshot(ui: &mut egui::Ui, snap: &EntropySnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.entropy_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -11605,7 +11605,7 @@ pub(super) fn render_entropy_snapshot(ui: &mut egui::Ui, snap: &EntropySnapshot)
     }
 }
 
-pub(super) fn render_epsb_snapshot(ui: &mut egui::Ui, snap: &EpsBeatSnapshot) {
+pub fn render_epsb_snapshot(ui: &mut egui::Ui, snap: &EpsBeatSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.total_reports == 0 {
         ui.label(
@@ -11714,7 +11714,7 @@ pub(super) fn render_epsb_snapshot(ui: &mut egui::Ui, snap: &EpsBeatSnapshot) {
     }
 }
 
-pub(super) fn render_ewmavol_snapshot(ui: &mut egui::Ui, snap: &EwmaVolSnapshot) {
+pub fn render_ewmavol_snapshot(ui: &mut egui::Ui, snap: &EwmaVolSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.ewmavol_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -11795,7 +11795,7 @@ pub(super) fn render_ewmavol_snapshot(ui: &mut egui::Ui, snap: &EwmaVolSnapshot)
     }
 }
 
-pub(super) fn render_fcfy_snapshot(ui: &mut egui::Ui, snap: &FcfYieldSnapshot) {
+pub fn render_fcfy_snapshot(ui: &mut egui::Ui, snap: &FcfYieldSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() {
         ui.label(
@@ -11890,7 +11890,7 @@ pub(super) fn render_fcfy_snapshot(ui: &mut egui::Ui, snap: &FcfYieldSnapshot) {
     }
 }
 
-pub(super) fn render_figi_snapshot(ui: &mut egui::Ui, snap: &FigiSnapshot) {
+pub fn render_figi_snapshot(ui: &mut egui::Ui, snap: &FigiSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.identifiers.is_empty() {
         ui.label(
@@ -11947,7 +11947,7 @@ pub(super) fn render_figi_snapshot(ui: &mut egui::Ui, snap: &FigiSnapshot) {
     }
 }
 
-pub(super) fn render_flow_snapshot(ui: &mut egui::Ui, snap: &FlowSnapshot) {
+pub fn render_flow_snapshot(ui: &mut egui::Ui, snap: &FlowSnapshot) {
     ui.separator();
     if snap.symbol.is_empty()
         || (snap.insider_trade_count == 0 && snap.institutional_holders_tracked == 0)
@@ -12087,7 +12087,7 @@ pub(super) fn render_flow_snapshot(ui: &mut egui::Ui, snap: &FlowSnapshot) {
     }
 }
 
-pub(super) fn render_fqm_snapshot(ui: &mut egui::Ui, snap: &FundamentalQualityMeterSnapshot) {
+pub fn render_fqm_snapshot(ui: &mut egui::Ui, snap: &FundamentalQualityMeterSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.operator_label == "NO_DATA" {
         ui.label(egui::RichText::new("No data — needs at least one of Piotroski / Margins / Accruals cached for this symbol.")
@@ -12188,7 +12188,7 @@ pub(super) fn render_fqm_snapshot(ui: &mut egui::Ui, snap: &FundamentalQualityMe
     }
 }
 
-pub(super) fn render_fqmrank_snapshot(ui: &mut egui::Ui, snap: &FqmRankSnapshot) {
+pub fn render_fqmrank_snapshot(ui: &mut egui::Ui, snap: &FqmRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rank_label == "NO_DATA" {
         ui.label(
@@ -12276,7 +12276,7 @@ pub(super) fn render_fqmrank_snapshot(ui: &mut egui::Ui, snap: &FqmRankSnapshot)
     }
 }
 
-pub(super) fn render_gapstats_snapshot(ui: &mut egui::Ui, snap: &GapStatsSnapshot) {
+pub fn render_gapstats_snapshot(ui: &mut egui::Ui, snap: &GapStatsSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.bias_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -12356,7 +12356,7 @@ pub(super) fn render_gapstats_snapshot(ui: &mut egui::Ui, snap: &GapStatsSnapsho
     }
 }
 
-pub(super) fn render_garch11_snapshot(ui: &mut egui::Ui, snap: &Garch11Snapshot) {
+pub fn render_garch11_snapshot(ui: &mut egui::Ui, snap: &Garch11Snapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.garch11_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -12444,7 +12444,7 @@ pub(super) fn render_garch11_snapshot(ui: &mut egui::Ui, snap: &Garch11Snapshot)
     }
 }
 
-pub(super) fn render_gini_snapshot(ui: &mut egui::Ui, snap: &GiniSnapshot) {
+pub fn render_gini_snapshot(ui: &mut egui::Ui, snap: &GiniSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.gini_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -12504,7 +12504,7 @@ pub(super) fn render_gini_snapshot(ui: &mut egui::Ui, snap: &GiniSnapshot) {
     }
 }
 
-pub(super) fn render_gkvol_snapshot(ui: &mut egui::Ui, snap: &GarmanKlassVolSnapshot) {
+pub fn render_gkvol_snapshot(ui: &mut egui::Ui, snap: &GarmanKlassVolSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.vol_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -12580,7 +12580,7 @@ pub(super) fn render_gkvol_snapshot(ui: &mut egui::Ui, snap: &GarmanKlassVolSnap
     }
 }
 
-pub(super) fn render_glasym_snapshot(ui: &mut egui::Ui, snap: &GainLossAsymmetrySnapshot) {
+pub fn render_glasym_snapshot(ui: &mut egui::Ui, snap: &GainLossAsymmetrySnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.asymmetry_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -12661,7 +12661,7 @@ pub(super) fn render_glasym_snapshot(ui: &mut egui::Ui, snap: &GainLossAsymmetry
     }
 }
 
-pub(super) fn render_gph_snapshot(ui: &mut egui::Ui, snap: &GphSnapshot) {
+pub fn render_gph_snapshot(ui: &mut egui::Ui, snap: &GphSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.gph_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -12735,7 +12735,7 @@ pub(super) fn render_gph_snapshot(ui: &mut egui::Ui, snap: &GphSnapshot) {
     }
 }
 
-pub(super) fn render_gpr_snapshot(ui: &mut egui::Ui, snap: &GprSnapshot) {
+pub fn render_gpr_snapshot(ui: &mut egui::Ui, snap: &GprSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.gpr_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -12819,7 +12819,7 @@ pub(super) fn render_gpr_snapshot(ui: &mut egui::Ui, snap: &GprSnapshot) {
     }
 }
 
-pub(super) fn render_growm_snapshot(ui: &mut egui::Ui, snap: &GrowmSnapshot) {
+pub fn render_growm_snapshot(ui: &mut egui::Ui, snap: &GrowmSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.inputs_available == 0 {
         ui.label(
@@ -12934,7 +12934,7 @@ pub(super) fn render_growm_snapshot(ui: &mut egui::Ui, snap: &GrowmSnapshot) {
     }
 }
 
-pub(super) fn render_gy_snapshot(ui: &mut egui::Ui, snap: &GapYearlySnapshot) {
+pub fn render_gy_snapshot(ui: &mut egui::Ui, snap: &GapYearlySnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.gap_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -13029,7 +13029,7 @@ pub(super) fn render_gy_snapshot(ui: &mut egui::Ui, snap: &GapYearlySnapshot) {
     }
 }
 
-pub(super) fn render_higuchi_snapshot(ui: &mut egui::Ui, snap: &HiguchiSnapshot) {
+pub fn render_higuchi_snapshot(ui: &mut egui::Ui, snap: &HiguchiSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.higuchi_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -13096,7 +13096,7 @@ pub(super) fn render_higuchi_snapshot(ui: &mut egui::Ui, snap: &HiguchiSnapshot)
     }
 }
 
-pub(super) fn render_hillks_snapshot(ui: &mut egui::Ui, snap: &HillksSnapshot) {
+pub fn render_hillks_snapshot(ui: &mut egui::Ui, snap: &HillksSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.hillks_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -13163,7 +13163,7 @@ pub(super) fn render_hillks_snapshot(ui: &mut egui::Ui, snap: &HillksSnapshot) {
     }
 }
 
-pub(super) fn render_hilltail_snapshot(ui: &mut egui::Ui, snap: &HillTailSnapshot) {
+pub fn render_hilltail_snapshot(ui: &mut egui::Ui, snap: &HillTailSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.tail_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -13245,7 +13245,7 @@ pub(super) fn render_hilltail_snapshot(ui: &mut egui::Ui, snap: &HillTailSnapsho
     }
 }
 
-pub(super) fn render_hitrate_snapshot(ui: &mut egui::Ui, snap: &HitRateSnapshot) {
+pub fn render_hitrate_snapshot(ui: &mut egui::Ui, snap: &HitRateSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.hit_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -13327,7 +13327,7 @@ pub(super) fn render_hitrate_snapshot(ui: &mut egui::Ui, snap: &HitRateSnapshot)
     }
 }
 
-pub(super) fn render_hra_snapshot(ui: &mut egui::Ui, snap: &HraSnapshot) {
+pub fn render_hra_snapshot(ui: &mut egui::Ui, snap: &HraSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.windows.is_empty() {
         ui.label(
@@ -13436,7 +13436,7 @@ pub(super) fn render_hra_snapshot(ui: &mut egui::Ui, snap: &HraSnapshot) {
     }
 }
 
-pub(super) fn render_hurst_snapshot(ui: &mut egui::Ui, snap: &HurstSnapshot) {
+pub fn render_hurst_snapshot(ui: &mut egui::Ui, snap: &HurstSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.memory_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -13495,7 +13495,7 @@ pub(super) fn render_hurst_snapshot(ui: &mut egui::Ui, snap: &HurstSnapshot) {
     }
 }
 
-pub(super) fn render_insiderconc_snapshot(ui: &mut egui::Ui, snap: &InsiderConcentrationSnapshot) {
+pub fn render_insiderconc_snapshot(ui: &mut egui::Ui, snap: &InsiderConcentrationSnapshot) {
     ui.separator();
     if snap.symbol.is_empty()
         || snap.rank_label == "NO_DATA"
@@ -13657,7 +13657,7 @@ pub(super) fn render_insiderconc_snapshot(ui: &mut egui::Ui, snap: &InsiderConce
     }
 }
 
-pub(super) fn render_insstrk_snapshot(ui: &mut egui::Ui, snap: &InsiderStreakSnapshot) {
+pub fn render_insstrk_snapshot(ui: &mut egui::Ui, snap: &InsiderStreakSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.streak_label == "NONE" {
         ui.label(
@@ -13770,7 +13770,7 @@ pub(super) fn render_insstrk_snapshot(ui: &mut egui::Ui, snap: &InsiderStreakSna
     }
 }
 
-pub(super) fn render_ivol_snapshot(ui: &mut egui::Ui, snap: &IvolSnapshot) {
+pub fn render_ivol_snapshot(ui: &mut egui::Ui, snap: &IvolSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() {
         ui.label(
@@ -13821,7 +13821,7 @@ pub(super) fn render_ivol_snapshot(ui: &mut egui::Ui, snap: &IvolSnapshot) {
     }
 }
 
-pub(super) fn render_jbnorm_snapshot(ui: &mut egui::Ui, snap: &JarqueBeraSnapshot) {
+pub fn render_jbnorm_snapshot(ui: &mut egui::Ui, snap: &JarqueBeraSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.normal_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -13889,7 +13889,7 @@ pub(super) fn render_jbnorm_snapshot(ui: &mut egui::Ui, snap: &JarqueBeraSnapsho
     }
 }
 
-pub(super) fn render_kappa3_snapshot(ui: &mut egui::Ui, snap: &Kappa3Snapshot) {
+pub fn render_kappa3_snapshot(ui: &mut egui::Ui, snap: &Kappa3Snapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.kappa3_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -13974,7 +13974,7 @@ pub(super) fn render_kappa3_snapshot(ui: &mut egui::Ui, snap: &Kappa3Snapshot) {
     }
 }
 
-pub(super) fn render_kellyf_snapshot(ui: &mut egui::Ui, snap: &KellyFractionSnapshot) {
+pub fn render_kellyf_snapshot(ui: &mut egui::Ui, snap: &KellyFractionSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.kelly_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -14071,7 +14071,7 @@ pub(super) fn render_kellyf_snapshot(ui: &mut egui::Ui, snap: &KellyFractionSnap
     }
 }
 
-pub(super) fn render_kendalltau_snapshot(ui: &mut egui::Ui, snap: &KendallTauSnapshot) {
+pub fn render_kendalltau_snapshot(ui: &mut egui::Ui, snap: &KendallTauSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.kendalltau_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -14152,7 +14152,7 @@ pub(super) fn render_kendalltau_snapshot(ui: &mut egui::Ui, snap: &KendallTauSna
     }
 }
 
-pub(super) fn render_kpss_snapshot(ui: &mut egui::Ui, snap: &KpssSnapshot) {
+pub fn render_kpss_snapshot(ui: &mut egui::Ui, snap: &KpssSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.kpss_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -14233,7 +14233,7 @@ pub(super) fn render_kpss_snapshot(ui: &mut egui::Ui, snap: &KpssSnapshot) {
     }
 }
 
-pub(super) fn render_ksnorm_snapshot(ui: &mut egui::Ui, snap: &KsnormSnapshot) {
+pub fn render_ksnorm_snapshot(ui: &mut egui::Ui, snap: &KsnormSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.ksnorm_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -14323,7 +14323,7 @@ pub(super) fn render_ksnorm_snapshot(ui: &mut egui::Ui, snap: &KsnormSnapshot) {
     }
 }
 
-pub(super) fn render_kylelam_snapshot(ui: &mut egui::Ui, snap: &KylelamSnapshot) {
+pub fn render_kylelam_snapshot(ui: &mut egui::Ui, snap: &KylelamSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.kylelam_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -14397,7 +14397,7 @@ pub(super) fn render_kylelam_snapshot(ui: &mut egui::Ui, snap: &KylelamSnapshot)
     }
 }
 
-pub(super) fn render_lev_snapshot(ui: &mut egui::Ui, snap: &LeverageSnapshot) {
+pub fn render_lev_snapshot(ui: &mut egui::Ui, snap: &LeverageSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.ratios.is_empty() {
         ui.label(
@@ -14500,7 +14500,7 @@ pub(super) fn render_lev_snapshot(ui: &mut egui::Ui, snap: &LeverageSnapshot) {
     }
 }
 
-pub(super) fn render_levereff_snapshot(ui: &mut egui::Ui, snap: &LeverEffSnapshot) {
+pub fn render_levereff_snapshot(ui: &mut egui::Ui, snap: &LeverEffSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.lever_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -14575,7 +14575,7 @@ pub(super) fn render_levereff_snapshot(ui: &mut egui::Ui, snap: &LeverEffSnapsho
     }
 }
 
-pub(super) fn render_levrank_snapshot(ui: &mut egui::Ui, snap: &LeverageRankSnapshot) {
+pub fn render_levrank_snapshot(ui: &mut egui::Ui, snap: &LeverageRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rank_label == "NO_DATA" {
         ui.label(egui::RichText::new("No data — needs a cached LEV snapshot for the subject and ≥3 sector peers with positive equity.")
@@ -14679,7 +14679,7 @@ pub(super) fn render_levrank_snapshot(ui: &mut egui::Ui, snap: &LeverageRankSnap
     }
 }
 
-pub(super) fn render_liq_snapshot(ui: &mut egui::Ui, snap: &LiquiditySnapshot) {
+pub fn render_liq_snapshot(ui: &mut egui::Ui, snap: &LiquiditySnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.window_days == 0 {
         ui.label(
@@ -14803,7 +14803,7 @@ pub(super) fn render_liq_snapshot(ui: &mut egui::Ui, snap: &LiquiditySnapshot) {
     }
 }
 
-pub(super) fn render_liqrank_snapshot(ui: &mut egui::Ui, snap: &LiquidityRankSnapshot) {
+pub fn render_liqrank_snapshot(ui: &mut egui::Ui, snap: &LiquidityRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rank_label == "NO_DATA" {
         ui.label(
@@ -14892,7 +14892,7 @@ pub(super) fn render_liqrank_snapshot(ui: &mut egui::Ui, snap: &LiquidityRankSna
     }
 }
 
-pub(super) fn render_ljungb_snapshot(ui: &mut egui::Ui, snap: &LjungBoxSnapshot) {
+pub fn render_ljungb_snapshot(ui: &mut egui::Ui, snap: &LjungBoxSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.ljungb_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -14927,7 +14927,7 @@ pub(super) fn render_ljungb_snapshot(ui: &mut egui::Ui, snap: &LjungBoxSnapshot)
     }
 }
 
-pub(super) fn render_lmom_snapshot(ui: &mut egui::Ui, snap: &LmomSnapshot) {
+pub fn render_lmom_snapshot(ui: &mut egui::Ui, snap: &LmomSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.lmom_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -15008,7 +15008,7 @@ pub(super) fn render_lmom_snapshot(ui: &mut egui::Ui, snap: &LmomSnapshot) {
     }
 }
 
-pub(super) fn render_lyapunov_snapshot(ui: &mut egui::Ui, snap: &LyapunovSnapshot) {
+pub fn render_lyapunov_snapshot(ui: &mut egui::Ui, snap: &LyapunovSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.lyapunov_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -15082,7 +15082,7 @@ pub(super) fn render_lyapunov_snapshot(ui: &mut egui::Ui, snap: &LyapunovSnapsho
     }
 }
 
-pub(super) fn render_margins_snapshot(ui: &mut egui::Ui, snap: &MarginsSnapshot) {
+pub fn render_margins_snapshot(ui: &mut egui::Ui, snap: &MarginsSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.periods_used == 0 {
         ui.label(
@@ -15291,7 +15291,7 @@ pub(super) fn render_margins_snapshot(ui: &mut egui::Ui, snap: &MarginsSnapshot)
     }
 }
 
-pub(super) fn render_mcleodli_snapshot(ui: &mut egui::Ui, snap: &McLeodLiSnapshot) {
+pub fn render_mcleodli_snapshot(ui: &mut egui::Ui, snap: &McLeodLiSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.mcleodli_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -15365,7 +15365,7 @@ pub(super) fn render_mcleodli_snapshot(ui: &mut egui::Ui, snap: &McLeodLiSnapsho
     }
 }
 
-pub(super) fn render_mfdfa_snapshot(ui: &mut egui::Ui, snap: &MfdfaSnapshot) {
+pub fn render_mfdfa_snapshot(ui: &mut egui::Ui, snap: &MfdfaSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.mfdfa_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -15439,7 +15439,7 @@ pub(super) fn render_mfdfa_snapshot(ui: &mut egui::Ui, snap: &MfdfaSnapshot) {
     }
 }
 
-pub(super) fn render_mngr_snapshot(ui: &mut egui::Ui, snap: &InsiderActivitySnapshot) {
+pub fn render_mngr_snapshot(ui: &mut egui::Ui, snap: &InsiderActivitySnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.total_trades == 0 {
         ui.label(
@@ -15541,7 +15541,7 @@ pub(super) fn render_mngr_snapshot(ui: &mut egui::Ui, snap: &InsiderActivitySnap
     }
 }
 
-pub(super) fn render_mnkendall_snapshot(ui: &mut egui::Ui, snap: &MannKendallSnapshot) {
+pub fn render_mnkendall_snapshot(ui: &mut egui::Ui, snap: &MannKendallSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.mk_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -15631,7 +15631,7 @@ pub(super) fn render_mnkendall_snapshot(ui: &mut egui::Ui, snap: &MannKendallSna
     }
 }
 
-pub(super) fn render_momf_snapshot(ui: &mut egui::Ui, snap: &MomentumRankSnapshot) {
+pub fn render_momf_snapshot(ui: &mut egui::Ui, snap: &MomentumRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rank_label == "NO_DATA" {
         ui.label(egui::RichText::new("No data — needs a MOMENTUM snapshot on the subject, fundamentals w/ sector, and ≥3 peers in the same sector with MOMENTUM snapshots.")
@@ -15712,7 +15712,7 @@ pub(super) fn render_momf_snapshot(ui: &mut egui::Ui, snap: &MomentumRankSnapsho
     }
 }
 
-pub(super) fn render_monthseas_snapshot(ui: &mut egui::Ui, snap: &MonthlySeasonalitySnapshot) {
+pub fn render_monthseas_snapshot(ui: &mut egui::Ui, snap: &MonthlySeasonalitySnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.season_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -15775,7 +15775,7 @@ pub(super) fn render_monthseas_snapshot(ui: &mut egui::Ui, snap: &MonthlySeasona
     }
 }
 
-pub(super) fn render_mrhl_snapshot(ui: &mut egui::Ui, snap: &MeanReversionHalfLifeSnapshot) {
+pub fn render_mrhl_snapshot(ui: &mut egui::Ui, snap: &MeanReversionHalfLifeSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.regime_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -15843,7 +15843,7 @@ pub(super) fn render_mrhl_snapshot(ui: &mut egui::Ui, snap: &MeanReversionHalfLi
     }
 }
 
-pub(super) fn render_msent_snapshot(ui: &mut egui::Ui, snap: &MsentSnapshot) {
+pub fn render_msent_snapshot(ui: &mut egui::Ui, snap: &MsentSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.msent_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -15938,7 +15938,7 @@ pub(super) fn render_msent_snapshot(ui: &mut egui::Ui, snap: &MsentSnapshot) {
     }
 }
 
-pub(super) fn render_omega_snapshot(ui: &mut egui::Ui, snap: &OmegaRatioSnapshot) {
+pub fn render_omega_snapshot(ui: &mut egui::Ui, snap: &OmegaRatioSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.omega_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -16018,7 +16018,7 @@ pub(super) fn render_omega_snapshot(ui: &mut egui::Ui, snap: &OmegaRatioSnapshot
     }
 }
 
-pub(super) fn render_omon_snapshot(ui: &mut egui::Ui, snap: &OptionsChainSnapshot) {
+pub fn render_omon_snapshot(ui: &mut egui::Ui, snap: &OptionsChainSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.expirations.is_empty() {
         ui.label(
@@ -16184,7 +16184,7 @@ pub(super) fn render_omon_snapshot(ui: &mut egui::Ui, snap: &OptionsChainSnapsho
     }
 }
 
-pub(super) fn render_operank_snapshot(ui: &mut egui::Ui, snap: &OperatingQualityRankSnapshot) {
+pub fn render_operank_snapshot(ui: &mut egui::Ui, snap: &OperatingQualityRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rank_label == "NO_DATA" {
         ui.label(
@@ -16271,7 +16271,7 @@ pub(super) fn render_operank_snapshot(ui: &mut egui::Ui, snap: &OperatingQuality
     }
 }
 
-pub(super) fn render_oufit_snapshot(ui: &mut egui::Ui, snap: &OuFitSnapshot) {
+pub fn render_oufit_snapshot(ui: &mut egui::Ui, snap: &OuFitSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.oufit_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -16357,7 +16357,7 @@ pub(super) fn render_oufit_snapshot(ui: &mut egui::Ui, snap: &OuFitSnapshot) {
     }
 }
 
-pub(super) fn render_pacf_snapshot(ui: &mut egui::Ui, snap: &PacfSnapshot) {
+pub fn render_pacf_snapshot(ui: &mut egui::Ui, snap: &PacfSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.pacf_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -16431,7 +16431,7 @@ pub(super) fn render_pacf_snapshot(ui: &mut egui::Ui, snap: &PacfSnapshot) {
     }
 }
 
-pub(super) fn render_painratio_snapshot(ui: &mut egui::Ui, snap: &PainRatioSnapshot) {
+pub fn render_painratio_snapshot(ui: &mut egui::Ui, snap: &PainRatioSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.pain_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -16514,7 +16514,7 @@ pub(super) fn render_painratio_snapshot(ui: &mut egui::Ui, snap: &PainRatioSnaps
     }
 }
 
-pub(super) fn render_parkinson_snapshot(ui: &mut egui::Ui, snap: &ParkinsonVolSnapshot) {
+pub fn render_parkinson_snapshot(ui: &mut egui::Ui, snap: &ParkinsonVolSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.vol_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -16575,7 +16575,7 @@ pub(super) fn render_parkinson_snapshot(ui: &mut egui::Ui, snap: &ParkinsonVolSn
     }
 }
 
-pub(super) fn render_pead_snapshot(ui: &mut egui::Ui, snap: &PeadSnapshot) {
+pub fn render_pead_snapshot(ui: &mut egui::Ui, snap: &PeadSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.drift_direction_label == "INSUFFICIENT_DATA" {
         ui.label(egui::RichText::new("No data — needs ≥3 cached EarningsSurprise rows and historical price bars spanning each event + 10 trading days forward.")
@@ -16732,7 +16732,7 @@ pub(super) fn render_pead_snapshot(ui: &mut egui::Ui, snap: &PeadSnapshot) {
     }
 }
 
-pub(super) fn render_peadrank_snapshot(ui: &mut egui::Ui, snap: &PeadRankSnapshot) {
+pub fn render_peadrank_snapshot(ui: &mut egui::Ui, snap: &PeadRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rank_label == "NO_DATA" {
         ui.label(egui::RichText::new("No data — needs a PEAD snapshot on the subject (≥3 events used), fundamentals w/ sector, and ≥3 peers in the same sector with qualifying PEAD snapshots.")
@@ -16815,7 +16815,7 @@ pub(super) fn render_peadrank_snapshot(ui: &mut egui::Ui, snap: &PeadRankSnapsho
     }
 }
 
-pub(super) fn render_periodogram_snapshot(ui: &mut egui::Ui, snap: &PeriodogramSnapshot) {
+pub fn render_periodogram_snapshot(ui: &mut egui::Ui, snap: &PeriodogramSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.periodogram_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -16904,7 +16904,7 @@ pub(super) fn render_periodogram_snapshot(ui: &mut egui::Ui, snap: &PeriodogramS
     }
 }
 
-pub(super) fn render_permen_snapshot(ui: &mut egui::Ui, snap: &PermenSnapshot) {
+pub fn render_permen_snapshot(ui: &mut egui::Ui, snap: &PermenSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.permen_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -16974,7 +16974,7 @@ pub(super) fn render_permen_snapshot(ui: &mut egui::Ui, snap: &PermenSnapshot) {
     }
 }
 
-pub(super) fn render_pickands_snapshot(ui: &mut egui::Ui, snap: &PickandsSnapshot) {
+pub fn render_pickands_snapshot(ui: &mut egui::Ui, snap: &PickandsSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.pickands_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -17055,7 +17055,7 @@ pub(super) fn render_pickands_snapshot(ui: &mut egui::Ui, snap: &PickandsSnapsho
     }
 }
 
-pub(super) fn render_pproot_snapshot(ui: &mut egui::Ui, snap: &PprootSnapshot) {
+pub fn render_pproot_snapshot(ui: &mut egui::Ui, snap: &PprootSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.pproot_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -17129,7 +17129,7 @@ pub(super) fn render_pproot_snapshot(ui: &mut egui::Ui, snap: &PprootSnapshot) {
     }
 }
 
-pub(super) fn render_psr_snapshot(ui: &mut egui::Ui, snap: &ProbabilisticSharpeSnapshot) {
+pub fn render_psr_snapshot(ui: &mut egui::Ui, snap: &ProbabilisticSharpeSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.psr_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -17212,7 +17212,7 @@ pub(super) fn render_psr_snapshot(ui: &mut egui::Ui, snap: &ProbabilisticSharpeS
     }
 }
 
-pub(super) fn render_ptd_snapshot(ui: &mut egui::Ui, snap: &PriceTargetDispersion) {
+pub fn render_ptd_snapshot(ui: &mut egui::Ui, snap: &PriceTargetDispersion) {
     ui.separator();
     if snap.symbol.is_empty() || snap.num_analysts <= 0 {
         ui.label(
@@ -17329,7 +17329,7 @@ pub(super) fn render_ptd_snapshot(ui: &mut egui::Ui, snap: &PriceTargetDispersio
     }
 }
 
-pub(super) fn render_ptfs_snapshot(ui: &mut egui::Ui, snap: &PiotroskiSnapshot) {
+pub fn render_ptfs_snapshot(ui: &mut egui::Ui, snap: &PiotroskiSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.checks.is_empty() {
         ui.label(
@@ -17437,7 +17437,7 @@ pub(super) fn render_ptfs_snapshot(ui: &mut egui::Ui, snap: &PiotroskiSnapshot) 
     }
 }
 
-pub(super) fn render_qrk_snapshot(ui: &mut egui::Ui, snap: &QualityRankSnapshot) {
+pub fn render_qrk_snapshot(ui: &mut egui::Ui, snap: &QualityRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rank_label == "NO_DATA" {
         ui.label(egui::RichText::new("No data — needs a QUAL snapshot on the subject, fundamentals w/ sector, and ≥3 peers in the same sector with QUAL snapshots.")
@@ -17514,7 +17514,7 @@ pub(super) fn render_qrk_snapshot(ui: &mut egui::Ui, snap: &QualityRankSnapshot)
     }
 }
 
-pub(super) fn render_qual_snapshot(ui: &mut egui::Ui, snap: &QualitySnapshot) {
+pub fn render_qual_snapshot(ui: &mut egui::Ui, snap: &QualitySnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.quality_label == "NO_DATA" {
         ui.label(
@@ -17633,7 +17633,7 @@ pub(super) fn render_qual_snapshot(ui: &mut egui::Ui, snap: &QualitySnapshot) {
     }
 }
 
-pub(super) fn render_rachev_snapshot(ui: &mut egui::Ui, snap: &RachevSnapshot) {
+pub fn render_rachev_snapshot(ui: &mut egui::Ui, snap: &RachevSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rachev_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -17717,7 +17717,7 @@ pub(super) fn render_rachev_snapshot(ui: &mut egui::Ui, snap: &RachevSnapshot) {
     }
 }
 
-pub(super) fn render_rankac_snapshot(ui: &mut egui::Ui, snap: &RankacSnapshot) {
+pub fn render_rankac_snapshot(ui: &mut egui::Ui, snap: &RankacSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rankac_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -17791,7 +17791,7 @@ pub(super) fn render_rankac_snapshot(ui: &mut egui::Ui, snap: &RankacSnapshot) {
     }
 }
 
-pub(super) fn render_recfact_snapshot(ui: &mut egui::Ui, snap: &RecfactSnapshot) {
+pub fn render_recfact_snapshot(ui: &mut egui::Ui, snap: &RecfactSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.recfact_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -17851,7 +17851,7 @@ pub(super) fn render_recfact_snapshot(ui: &mut egui::Ui, snap: &RecfactSnapshot)
     }
 }
 
-pub(super) fn render_regime_snapshot(ui: &mut egui::Ui, snap: &RegimeSnapshot) {
+pub fn render_regime_snapshot(ui: &mut egui::Ui, snap: &RegimeSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.inputs_available == 0 {
         ui.label(
@@ -17955,7 +17955,7 @@ pub(super) fn render_regime_snapshot(ui: &mut egui::Ui, snap: &RegimeSnapshot) {
     }
 }
 
-pub(super) fn render_relepsgr_snapshot(ui: &mut egui::Ui, snap: &RelativeEpsGrowthSnapshot) {
+pub fn render_relepsgr_snapshot(ui: &mut egui::Ui, snap: &RelativeEpsGrowthSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.relative_label == "NO_DATA" {
         ui.label(egui::RichText::new("No data — needs ≥4 annual income rows on subject, fundamentals w/ sector, and ≥3 peers in the same sector with ≥4 annual EPS rows.")
@@ -18040,7 +18040,7 @@ pub(super) fn render_relepsgr_snapshot(ui: &mut egui::Ui, snap: &RelativeEpsGrow
     }
 }
 
-pub(super) fn render_relvol_snapshot(ui: &mut egui::Ui, snap: &RelVolSnapshot) {
+pub fn render_relvol_snapshot(ui: &mut egui::Ui, snap: &RelVolSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.activity_label == "INSUFFICIENT_DATA" {
         ui.label(egui::RichText::new("No data — run HP (historical prices, ≥20 bars) for this symbol, then click Compute.")
@@ -18144,7 +18144,7 @@ pub(super) fn render_relvol_snapshot(ui: &mut egui::Ui, snap: &RelVolSnapshot) {
     }
 }
 
-pub(super) fn render_renyient_snapshot(ui: &mut egui::Ui, snap: &RenyientSnapshot) {
+pub fn render_renyient_snapshot(ui: &mut egui::Ui, snap: &RenyientSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.renyient_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -18218,7 +18218,7 @@ pub(super) fn render_renyient_snapshot(ui: &mut egui::Ui, snap: &RenyientSnapsho
     }
 }
 
-pub(super) fn render_retquant_snapshot(ui: &mut egui::Ui, snap: &RetquantSnapshot) {
+pub fn render_retquant_snapshot(ui: &mut egui::Ui, snap: &RetquantSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.retquant_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -18334,7 +18334,7 @@ pub(super) fn render_retquant_snapshot(ui: &mut egui::Ui, snap: &RetquantSnapsho
     }
 }
 
-pub(super) fn render_revrank_snapshot(ui: &mut egui::Ui, snap: &RevenueGrowthRankSnapshot) {
+pub fn render_revrank_snapshot(ui: &mut egui::Ui, snap: &RevenueGrowthRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty()
         || snap.relative_label == "NO_DATA"
@@ -18426,7 +18426,7 @@ pub(super) fn render_revrank_snapshot(ui: &mut egui::Ui, snap: &RevenueGrowthRan
     }
 }
 
-pub(super) fn render_risk_snapshot(ui: &mut egui::Ui, snap: &RiskSnapshot) {
+pub fn render_risk_snapshot(ui: &mut egui::Ui, snap: &RiskSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.risk_label == "NO_DATA" {
         ui.label(
@@ -18543,7 +18543,7 @@ pub(super) fn render_risk_snapshot(ui: &mut egui::Ui, snap: &RiskSnapshot) {
     }
 }
 
-pub(super) fn render_robvol_snapshot(ui: &mut egui::Ui, snap: &RobVolSnapshot) {
+pub fn render_robvol_snapshot(ui: &mut egui::Ui, snap: &RobVolSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.robvol_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -18617,7 +18617,7 @@ pub(super) fn render_robvol_snapshot(ui: &mut egui::Ui, snap: &RobVolSnapshot) {
     }
 }
 
-pub(super) fn render_rollsprd_snapshot(ui: &mut egui::Ui, snap: &RollSpreadSnapshot) {
+pub fn render_rollsprd_snapshot(ui: &mut egui::Ui, snap: &RollSpreadSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.roll_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -18701,7 +18701,7 @@ pub(super) fn render_rollsprd_snapshot(ui: &mut egui::Ui, snap: &RollSpreadSnaps
     }
 }
 
-pub(super) fn render_rrk_snapshot(ui: &mut egui::Ui, snap: &RiskRankSnapshot) {
+pub fn render_rrk_snapshot(ui: &mut egui::Ui, snap: &RiskRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rank_label == "NO_DATA" {
         ui.label(egui::RichText::new("No data — needs a RISK snapshot on the subject, fundamentals w/ sector, and ≥3 peers in the same sector with RISK snapshots.")
@@ -18782,7 +18782,7 @@ pub(super) fn render_rrk_snapshot(ui: &mut egui::Ui, snap: &RiskRankSnapshot) {
     }
 }
 
-pub(super) fn render_rsvol_snapshot(ui: &mut egui::Ui, snap: &RogersSatchellVolSnapshot) {
+pub fn render_rsvol_snapshot(ui: &mut egui::Ui, snap: &RogersSatchellVolSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.vol_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -18806,7 +18806,7 @@ pub(super) fn render_rsvol_snapshot(ui: &mut egui::Ui, snap: &RogersSatchellVolS
     }
 }
 
-pub(super) fn render_runstest_snapshot(ui: &mut egui::Ui, snap: &RunsTestSnapshot) {
+pub fn render_runstest_snapshot(ui: &mut egui::Ui, snap: &RunsTestSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.runs_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -18903,7 +18903,7 @@ pub(super) fn render_runstest_snapshot(ui: &mut egui::Ui, snap: &RunsTestSnapsho
     }
 }
 
-pub(super) fn render_rvol_snapshot(ui: &mut egui::Ui, snap: &RealizedVolSnapshot) {
+pub fn render_rvol_snapshot(ui: &mut egui::Ui, snap: &RealizedVolSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.windows.is_empty() {
         ui.label(
@@ -18984,7 +18984,7 @@ pub(super) fn render_rvol_snapshot(ui: &mut egui::Ui, snap: &RealizedVolSnapshot
     }
 }
 
-pub(super) fn render_sadf_snapshot(ui: &mut egui::Ui, snap: &SadfSnapshot) {
+pub fn render_sadf_snapshot(ui: &mut egui::Ui, snap: &SadfSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.sadf_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -19065,7 +19065,7 @@ pub(super) fn render_sadf_snapshot(ui: &mut egui::Ui, snap: &SadfSnapshot) {
     }
 }
 
-pub(super) fn render_sampen_snapshot(ui: &mut egui::Ui, snap: &SampenSnapshot) {
+pub fn render_sampen_snapshot(ui: &mut egui::Ui, snap: &SampenSnapshot) {
     ui.separator();
     if snap.symbol.is_empty()
         || snap.sampen_label == "INSUFFICIENT_DATA"
@@ -19142,7 +19142,7 @@ pub(super) fn render_sampen_snapshot(ui: &mut egui::Ui, snap: &SampenSnapshot) {
     }
 }
 
-pub(super) fn render_seag_snapshot(ui: &mut egui::Ui, snap: &SeasonalitySnapshot) {
+pub fn render_seag_snapshot(ui: &mut egui::Ui, snap: &SeasonalitySnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.months.is_empty() {
         ui.label(
@@ -19285,7 +19285,7 @@ pub(super) fn render_seag_snapshot(ui: &mut egui::Ui, snap: &SeasonalitySnapshot
     }
 }
 
-pub(super) fn render_sectr_snapshot(ui: &mut egui::Ui, snap: &SectorRotationSnapshot) {
+pub fn render_sectr_snapshot(ui: &mut egui::Ui, snap: &SectorRotationSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.sectors_total == 0 {
         ui.label(
@@ -19412,7 +19412,7 @@ pub(super) fn render_sectr_snapshot(ui: &mut egui::Ui, snap: &SectorRotationSnap
     }
 }
 
-pub(super) fn render_sharpr_snapshot(ui: &mut egui::Ui, snap: &SharpeRatioSnapshot) {
+pub fn render_sharpr_snapshot(ui: &mut egui::Ui, snap: &SharpeRatioSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.sharpe_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -19494,7 +19494,7 @@ pub(super) fn render_sharpr_snapshot(ui: &mut egui::Ui, snap: &SharpeRatioSnapsh
     }
 }
 
-pub(super) fn render_shrank_snapshot(ui: &mut egui::Ui, snap: &ShortInterestRankSnapshot) {
+pub fn render_shrank_snapshot(ui: &mut egui::Ui, snap: &ShortInterestRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty()
         || snap.rank_label == "INSUFFICIENT_DATA"
@@ -19587,7 +19587,7 @@ pub(super) fn render_shrank_snapshot(ui: &mut egui::Ui, snap: &ShortInterestRank
     }
 }
 
-pub(super) fn render_shrt_snapshot(ui: &mut egui::Ui, snap: &ShortInterestSnapshot) {
+pub fn render_shrt_snapshot(ui: &mut egui::Ui, snap: &ShortInterestSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() {
         ui.label(
@@ -19689,7 +19689,7 @@ pub(super) fn render_shrt_snapshot(ui: &mut egui::Ui, snap: &ShortInterestSnapsh
     }
 }
 
-pub(super) fn render_sizef_snapshot(ui: &mut egui::Ui, snap: &SizeFactorSnapshot) {
+pub fn render_sizef_snapshot(ui: &mut egui::Ui, snap: &SizeFactorSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rank_label == "NO_DATA" {
         ui.label(egui::RichText::new("No data — needs fundamentals w/ market_cap on the subject and ≥3 sector peers with market_cap.")
@@ -19776,7 +19776,7 @@ pub(super) fn render_sizef_snapshot(ui: &mut egui::Ui, snap: &SizeFactorSnapshot
     }
 }
 
-pub(super) fn render_skew_snapshot(ui: &mut egui::Ui, snap: &VolatilitySkew) {
+pub fn render_skew_snapshot(ui: &mut egui::Ui, snap: &VolatilitySkew) {
     ui.separator();
     if snap.symbol.is_empty() || snap.expiries.is_empty() {
         ui.label(
@@ -19884,7 +19884,7 @@ pub(super) fn render_skew_snapshot(ui: &mut egui::Ui, snap: &VolatilitySkew) {
     }
 }
 
-pub(super) fn render_skspec_snapshot(ui: &mut egui::Ui, snap: &SkspecSnapshot) {
+pub fn render_skspec_snapshot(ui: &mut egui::Ui, snap: &SkspecSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.skspec_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -19965,7 +19965,7 @@ pub(super) fn render_skspec_snapshot(ui: &mut egui::Ui, snap: &SkspecSnapshot) {
     }
 }
 
-pub(super) fn render_specent_snapshot(ui: &mut egui::Ui, snap: &SpecentSnapshot) {
+pub fn render_specent_snapshot(ui: &mut egui::Ui, snap: &SpecentSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.specent_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -20039,7 +20039,7 @@ pub(super) fn render_specent_snapshot(ui: &mut egui::Ui, snap: &SpecentSnapshot)
     }
 }
 
-pub(super) fn render_squeezerank_snapshot(ui: &mut egui::Ui, snap: &SqueezeRankSnapshot) {
+pub fn render_squeezerank_snapshot(ui: &mut egui::Ui, snap: &SqueezeRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.squeezerank_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -20099,7 +20099,7 @@ pub(super) fn render_squeezerank_snapshot(ui: &mut egui::Ui, snap: &SqueezeRankS
     }
 }
 
-pub(super) fn render_sterling_snapshot(ui: &mut egui::Ui, snap: &SterlingRatioSnapshot) {
+pub fn render_sterling_snapshot(ui: &mut egui::Ui, snap: &SterlingRatioSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.sterling_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -20186,7 +20186,7 @@ pub(super) fn render_sterling_snapshot(ui: &mut egui::Ui, snap: &SterlingRatioSn
     }
 }
 
-pub(super) fn render_surpstk_snapshot(ui: &mut egui::Ui, snap: &EarningsSurpriseStreakSnapshot) {
+pub fn render_surpstk_snapshot(ui: &mut egui::Ui, snap: &EarningsSurpriseStreakSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.streak_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -20279,7 +20279,7 @@ pub(super) fn render_surpstk_snapshot(ui: &mut egui::Ui, snap: &EarningsSurprise
     }
 }
 
-pub(super) fn render_svm_snapshot(ui: &mut egui::Ui, snap: &SvmSnapshot) {
+pub fn render_svm_snapshot(ui: &mut egui::Ui, snap: &SvmSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rows.is_empty() {
         ui.label(
@@ -20378,7 +20378,7 @@ pub(super) fn render_svm_snapshot(ui: &mut egui::Ui, snap: &SvmSnapshot) {
     }
 }
 
-pub(super) fn render_tech_snapshot(ui: &mut egui::Ui, snap: &TechnicalSnapshot) {
+pub fn render_tech_snapshot(ui: &mut egui::Ui, snap: &TechnicalSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.indicators.is_empty() {
         ui.label(
@@ -20473,7 +20473,7 @@ pub(super) fn render_tech_snapshot(ui: &mut egui::Ui, snap: &TechnicalSnapshot) 
     }
 }
 
-pub(super) fn render_tlrank_snapshot(ui: &mut egui::Ui, snap: &ThirtyDayLiquidityRankSnapshot) {
+pub fn render_tlrank_snapshot(ui: &mut egui::Ui, snap: &ThirtyDayLiquidityRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rank_label == "NO_DATA" {
         ui.label(
@@ -20565,7 +20565,7 @@ pub(super) fn render_tlrank_snapshot(ui: &mut egui::Ui, snap: &ThirtyDayLiquidit
     }
 }
 
-pub(super) fn render_tra_snapshot(ui: &mut egui::Ui, snap: &TotalReturnSnapshot) {
+pub fn render_tra_snapshot(ui: &mut egui::Ui, snap: &TotalReturnSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.windows.is_empty() {
         ui.label(
@@ -20669,7 +20669,7 @@ pub(super) fn render_tra_snapshot(ui: &mut egui::Ui, snap: &TotalReturnSnapshot)
     }
 }
 
-pub(super) fn render_tsi_snapshot(ui: &mut egui::Ui, snap: &TsiSnapshot) {
+pub fn render_tsi_snapshot(ui: &mut egui::Ui, snap: &TsiSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.tsi_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -20736,7 +20736,7 @@ pub(super) fn render_tsi_snapshot(ui: &mut egui::Ui, snap: &TsiSnapshot) {
     }
 }
 
-pub(super) fn render_turnpts_snapshot(ui: &mut egui::Ui, snap: &TurnPtsSnapshot) {
+pub fn render_turnpts_snapshot(ui: &mut egui::Ui, snap: &TurnPtsSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.turnpts_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -20817,7 +20817,7 @@ pub(super) fn render_turnpts_snapshot(ui: &mut egui::Ui, snap: &TurnPtsSnapshot)
     }
 }
 
-pub(super) fn render_ulcer_snapshot(ui: &mut egui::Ui, snap: &UlcerIndexSnapshot) {
+pub fn render_ulcer_snapshot(ui: &mut egui::Ui, snap: &UlcerIndexSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.ulcer_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -20899,7 +20899,7 @@ pub(super) fn render_ulcer_snapshot(ui: &mut egui::Ui, snap: &UlcerIndexSnapshot
     }
 }
 
-pub(super) fn render_updgrank_snapshot(ui: &mut egui::Ui, snap: &UpgradeDowngradeRankSnapshot) {
+pub fn render_updgrank_snapshot(ui: &mut egui::Ui, snap: &UpgradeDowngradeRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty()
         || snap.rank_label == "INSUFFICIENT_DATA"
@@ -20989,7 +20989,7 @@ pub(super) fn render_updgrank_snapshot(ui: &mut egui::Ui, snap: &UpgradeDowngrad
     }
 }
 
-pub(super) fn render_updm_snapshot(ui: &mut egui::Ui, snap: &UpdmSnapshot) {
+pub fn render_updm_snapshot(ui: &mut egui::Ui, snap: &UpdmSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.total_actions == 0 {
         ui.label(
@@ -21149,7 +21149,7 @@ pub(super) fn render_updm_snapshot(ui: &mut egui::Ui, snap: &UpdmSnapshot) {
     }
 }
 
-pub(super) fn render_upr_snapshot(ui: &mut egui::Ui, snap: &UprSnapshot) {
+pub fn render_upr_snapshot(ui: &mut egui::Ui, snap: &UprSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.upr_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -21216,7 +21216,7 @@ pub(super) fn render_upr_snapshot(ui: &mut egui::Ui, snap: &UprSnapshot) {
     }
 }
 
-pub(super) fn render_val_snapshot(ui: &mut egui::Ui, snap: &ValueSnapshot) {
+pub fn render_val_snapshot(ui: &mut egui::Ui, snap: &ValueSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.value_label == "NO_DATA" {
         ui.label(egui::RichText::new("No data — needs FUNDAMENTALS cached for this symbol + sector peers, ideally FCFY too.")
@@ -21368,7 +21368,7 @@ pub(super) fn render_val_snapshot(ui: &mut egui::Ui, snap: &ValueSnapshot) {
     }
 }
 
-pub(super) fn render_varhalf_snapshot(ui: &mut egui::Ui, snap: &VarHalfSnapshot) {
+pub fn render_varhalf_snapshot(ui: &mut egui::Ui, snap: &VarHalfSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.varhalf_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -21442,7 +21442,7 @@ pub(super) fn render_varhalf_snapshot(ui: &mut egui::Ui, snap: &VarHalfSnapshot)
     }
 }
 
-pub(super) fn render_varratio_snapshot(ui: &mut egui::Ui, snap: &VarianceRatioSnapshot) {
+pub fn render_varratio_snapshot(ui: &mut egui::Ui, snap: &VarianceRatioSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rw_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -21519,7 +21519,7 @@ pub(super) fn render_varratio_snapshot(ui: &mut egui::Ui, snap: &VarianceRatioSn
     }
 }
 
-pub(super) fn render_volcluster_snapshot(ui: &mut egui::Ui, snap: &VolClusterSnapshot) {
+pub fn render_volcluster_snapshot(ui: &mut egui::Ui, snap: &VolClusterSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.cluster_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -21582,7 +21582,7 @@ pub(super) fn render_volcluster_snapshot(ui: &mut egui::Ui, snap: &VolClusterSna
     }
 }
 
-pub(super) fn render_vole_snapshot(ui: &mut egui::Ui, snap: &OhlcVolSnapshot) {
+pub fn render_vole_snapshot(ui: &mut egui::Ui, snap: &OhlcVolSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.estimators.is_empty() {
         ui.label(
@@ -21663,7 +21663,7 @@ pub(super) fn render_vole_snapshot(ui: &mut egui::Ui, snap: &OhlcVolSnapshot) {
     }
 }
 
-pub(super) fn render_volofvol_snapshot(ui: &mut egui::Ui, snap: &VolOfVolSnapshot) {
+pub fn render_volofvol_snapshot(ui: &mut egui::Ui, snap: &VolOfVolSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.cv_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -21740,7 +21740,7 @@ pub(super) fn render_volofvol_snapshot(ui: &mut egui::Ui, snap: &VolOfVolSnapsho
     }
 }
 
-pub(super) fn render_volratio_snapshot(ui: &mut egui::Ui, snap: &VolumeRatioSnapshot) {
+pub fn render_volratio_snapshot(ui: &mut egui::Ui, snap: &VolumeRatioSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.flow_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -21831,7 +21831,7 @@ pub(super) fn render_volratio_snapshot(ui: &mut egui::Ui, snap: &VolumeRatioSnap
     }
 }
 
-pub(super) fn render_vrk_snapshot(ui: &mut egui::Ui, snap: &ValueRankSnapshot) {
+pub fn render_vrk_snapshot(ui: &mut egui::Ui, snap: &ValueRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.rank_label == "NO_DATA" {
         ui.label(egui::RichText::new("No data — needs a VAL snapshot on the subject and ≥3 VAL-carrying peers in the same sector.")
@@ -21908,7 +21908,7 @@ pub(super) fn render_vrk_snapshot(ui: &mut egui::Ui, snap: &ValueRankSnapshot) {
     }
 }
 
-pub(super) fn render_wacc_snapshot(ui: &mut egui::Ui, snap: &WaccSnapshot) {
+pub fn render_wacc_snapshot(ui: &mut egui::Ui, snap: &WaccSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() {
         ui.label(
@@ -22012,7 +22012,7 @@ pub(super) fn render_wacc_snapshot(ui: &mut egui::Ui, snap: &WaccSnapshot) {
     }
 }
 
-pub(super) fn render_wickbias_snapshot(ui: &mut egui::Ui, snap: &WickBiasSnapshot) {
+pub fn render_wickbias_snapshot(ui: &mut egui::Ui, snap: &WickBiasSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.bias_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -22089,7 +22089,7 @@ pub(super) fn render_wickbias_snapshot(ui: &mut egui::Ui, snap: &WickBiasSnapsho
     }
 }
 
-pub(super) fn render_zeroret_snapshot(ui: &mut egui::Ui, snap: &ZeroReturnSnapshot) {
+pub fn render_zeroret_snapshot(ui: &mut egui::Ui, snap: &ZeroReturnSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.zero_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -22124,7 +22124,7 @@ pub(super) fn render_zeroret_snapshot(ui: &mut egui::Ui, snap: &ZeroReturnSnapsh
     }
 }
 
-pub(super) fn render_cdl_closing_marubozu_snapshot(
+pub fn render_cdl_closing_marubozu_snapshot(
     ui: &mut egui::Ui,
     snap: &CdlClosingMarubozuSnapshot,
 ) {
@@ -22220,7 +22220,7 @@ pub(super) fn render_cdl_closing_marubozu_snapshot(
     }
 }
 
-pub(super) fn render_momentum_snapshot(ui: &mut egui::Ui, snap: &MomentumSnapshot) {
+pub fn render_momentum_snapshot(ui: &mut egui::Ui, snap: &MomentumSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.bars_used == 0 {
         ui.label(
@@ -22309,7 +22309,7 @@ pub(super) fn render_momentum_snapshot(ui: &mut egui::Ui, snap: &MomentumSnapsho
     }
 }
 
-pub(super) fn render_shortrank_delta_snapshot(
+pub fn render_shortrank_delta_snapshot(
     ui: &mut egui::Ui,
     snap: &ShortInterestDeltaRankSnapshot,
 ) {
@@ -22432,7 +22432,7 @@ pub(super) fn render_shortrank_delta_snapshot(
     }
 }
 
-pub(super) fn render_dividend_history(ui: &mut egui::Ui, rows: &[DividendRecord]) {
+pub fn render_dividend_history(ui: &mut egui::Ui, rows: &[DividendRecord]) {
     ui.separator();
     if rows.is_empty() {
         ui.label(
@@ -22509,7 +22509,7 @@ pub(super) fn render_dividend_history(ui: &mut egui::Ui, rows: &[DividendRecord]
     }
 }
 
-pub(super) fn render_earnings_estimates(ui: &mut egui::Ui, rows: &[EarningsEstimate]) {
+pub fn render_earnings_estimates(ui: &mut egui::Ui, rows: &[EarningsEstimate]) {
     ui.separator();
     if rows.is_empty() {
         ui.label(
@@ -22590,7 +22590,7 @@ pub(super) fn render_earnings_estimates(ui: &mut egui::Ui, rows: &[EarningsEstim
     }
 }
 
-pub(super) fn render_eps_surprises(ui: &mut egui::Ui, rows: &[EarningsSurprise]) {
+pub fn render_eps_surprises(ui: &mut egui::Ui, rows: &[EarningsSurprise]) {
     ui.separator();
     if rows.is_empty() {
         ui.label(
@@ -22675,7 +22675,7 @@ pub(super) fn render_eps_surprises(ui: &mut egui::Ui, rows: &[EarningsSurprise])
     }
 }
 
-pub(super) fn render_esg_rows(ui: &mut egui::Ui, rows: &[EsgScore]) {
+pub fn render_esg_rows(ui: &mut egui::Ui, rows: &[EsgScore]) {
     ui.separator();
     if rows.is_empty() {
         ui.label(
@@ -22741,7 +22741,7 @@ pub(super) fn render_esg_rows(ui: &mut egui::Ui, rows: &[EsgScore]) {
     }
 }
 
-pub(super) fn render_etf_holdings(ui: &mut egui::Ui, rows: &[EtfHolding]) {
+pub fn render_etf_holdings(ui: &mut egui::Ui, rows: &[EtfHolding]) {
     ui.separator();
     if rows.is_empty() {
         ui.label(egui::RichText::new("No ETF holdings — click Load Cached or Fetch. Pass an ETF ticker (SPY, QQQ, IWM, VTI, …).").color(AXIS_TEXT).small());
@@ -22812,7 +22812,7 @@ pub(super) fn render_etf_holdings(ui: &mut egui::Ui, rows: &[EtfHolding]) {
     }
 }
 
-pub(super) fn render_executives(ui: &mut egui::Ui, rows: &[Executive]) {
+pub fn render_executives(ui: &mut egui::Ui, rows: &[Executive]) {
     ui.separator();
     if rows.is_empty() {
         ui.label(
@@ -22881,7 +22881,7 @@ pub(super) fn render_executives(ui: &mut egui::Ui, rows: &[Executive]) {
     }
 }
 
-pub(super) fn render_hp_rows(ui: &mut egui::Ui, rows: &[HistoricalPriceRow]) {
+pub fn render_hp_rows(ui: &mut egui::Ui, rows: &[HistoricalPriceRow]) {
     ui.separator();
     if rows.is_empty() {
         ui.label(
@@ -22958,7 +22958,7 @@ pub(super) fn render_hp_rows(ui: &mut egui::Ui, rows: &[HistoricalPriceRow]) {
     }
 }
 
-pub(super) fn render_insider_trades(ui: &mut egui::Ui, rows: &[InsiderTrade]) {
+pub fn render_insider_trades(ui: &mut egui::Ui, rows: &[InsiderTrade]) {
     ui.separator();
     if rows.is_empty() {
         ui.label(
@@ -23055,7 +23055,7 @@ pub(super) fn render_insider_trades(ui: &mut egui::Ui, rows: &[InsiderTrade]) {
     }
 }
 
-pub(super) fn render_institutional_holders(ui: &mut egui::Ui, rows: &[InstitutionalHolder]) {
+pub fn render_institutional_holders(ui: &mut egui::Ui, rows: &[InstitutionalHolder]) {
     ui.separator();
     if rows.is_empty() {
         ui.label(
@@ -23115,7 +23115,7 @@ pub(super) fn render_institutional_holders(ui: &mut egui::Ui, rows: &[Institutio
     }
 }
 
-pub(super) fn render_rating_changes(ui: &mut egui::Ui, rows: &[RatingChange]) {
+pub fn render_rating_changes(ui: &mut egui::Ui, rows: &[RatingChange]) {
     ui.separator();
     if rows.is_empty() {
         ui.label(
@@ -23172,7 +23172,7 @@ pub(super) fn render_rating_changes(ui: &mut egui::Ui, rows: &[RatingChange]) {
     }
 }
 
-pub(super) fn render_sector_perf(ui: &mut egui::Ui, rows: &[SectorPerformance]) {
+pub fn render_sector_perf(ui: &mut egui::Ui, rows: &[SectorPerformance]) {
     ui.separator();
     if rows.is_empty() {
         ui.label(
@@ -23265,7 +23265,7 @@ pub(super) fn render_sector_perf(ui: &mut egui::Ui, rows: &[SectorPerformance]) 
     }
 }
 
-pub(super) fn render_splits_list(ui: &mut egui::Ui, rows: &[StockSplit]) {
+pub fn render_splits_list(ui: &mut egui::Ui, rows: &[StockSplit]) {
     ui.separator();
     if rows.is_empty() {
         ui.label(

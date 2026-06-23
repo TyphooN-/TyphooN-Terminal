@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "typhoon-engine",
     "typhoon-native",
+    "typhoon-research-ui",
     "typhoon-transpiler",
 ]
 
@@ -24,6 +25,7 @@ pbkdf2 = "0.13"
 base64 = "0.22"
 typhoon-transpiler = { path = "typhoon-transpiler" }
 typhoon-engine = { path = "typhoon-engine" }
+typhoon-research-ui = { path = "typhoon-research-ui" }
 
 [profile.release]
 opt-level = 3

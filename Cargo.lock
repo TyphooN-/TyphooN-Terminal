@@ -4927,9 +4927,19 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "typhoon-engine",
+ "typhoon-research-ui",
  "typhoon-transpiler",
  "wgpu",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "typhoon-research-ui"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "egui",
+ "typhoon-engine",
 ]
 
 [[package]]

@@ -11,6 +11,8 @@ path = "src/main.rs"
 [dependencies]
 # Engine (shared core library)
 typhoon-engine = { workspace = true }
+# Research-UI view + interaction layer (ADR-125 Phase 2)
+typhoon-research-ui = { workspace = true }
 
 # multi-language indicator transpiler (indicator compilation + execution)
 typhoon-transpiler = { workspace = true }

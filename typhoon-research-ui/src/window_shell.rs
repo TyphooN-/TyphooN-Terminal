@@ -10,11 +10,11 @@
 //! `&mut self.<x>_win_*` fields in and sends the returned command. Crate-movable:
 //! depends only on egui + the engine cache types.
 
-use crate::app::common::{AXIS_TEXT, BTN_MG};
+use crate::theme::{AXIS_TEXT, BTN_MG};
 use typhoon_engine::core::cache::{Connection, SqliteCache};
 
 /// Read-only context + presentation knobs for a compute window.
-pub(super) struct ComputeWindow<'a> {
+pub struct ComputeWindow<'a> {
     pub title: &'a str,
     pub default_size: [f32; 2],
     /// Optional `.max_size(...)` constraint (most windows leave this `None`).
@@ -34,7 +34,7 @@ pub(super) struct ComputeWindow<'a> {
 /// - `make_cmd`: build the compute command from the uppercased symbol.
 /// - `render_snapshot`: the pure display body (see `render.rs`).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_compute_window<S, Cmd>(
+pub fn render_compute_window<S, Cmd>(
     ctx: &egui::Context,
     win: ComputeWindow,
     show: &mut bool,
@@ -63,7 +63,7 @@ pub(super) fn render_compute_window<S, Cmd>(
 /// button row (between "Use Chart" and "Load Cached") for windows that expose an
 /// extra parameter control (e.g. a `window_days` DragValue).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_compute_window_ext<S, Cmd>(
+pub fn render_compute_window_ext<S, Cmd>(
     ctx: &egui::Context,
     win: ComputeWindow,
     show: &mut bool,

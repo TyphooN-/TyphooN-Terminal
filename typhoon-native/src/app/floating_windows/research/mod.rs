@@ -46,8 +46,10 @@ mod tests {
     }
 }
 
-mod render;
-mod window_shell;
+// Research-UI view + interaction layer now live in the `typhoon-research-ui` crate
+// (ADR-125 Phase 2). Re-exported here so the renderer call sites (`super::render::…`,
+// `window_shell::…`) resolve unchanged.
+use typhoon_research_ui::{render, window_shell};
 mod research_advanced_moving_averages;
 mod research_aroon_macd_variable_ma;
 mod research_autocorrelation_hurst_volume;
