@@ -1,10 +1,10 @@
 # ADR-125: Native Crate Boundary Plan
 
-**Status:** Accepted as migration plan | **Date:** 2026-06-20 | **Last updated:**
-2026-06-21 (Phase 0 inventory; Phase 1 step 1 — floating-windows research boundary;
-Phase 1 step 2 — `symbol_investigation_packet` section formatters → ~25 free functions;
-Phase 1 step 3 started — context threading (`SymbolResearchContext`, capital-valuation
-converted) + a `read_conn` nesting bug fix — see
+**Status:** Phase 2 begun — `typhoon-research-ui` crate created | **Date:** 2026-06-20 |
+**Last updated:** 2026-06-23 (Phase 1 complete for the research trees: read-context
+helpers, 259-fn `render` view layer, ~244 windows through `window_shell`, packet
+formatters/context; **Phase 2 step 1 — `typhoon-research-ui` crate extracted** with
+`render` + `window_shell`, acyclic deps, 2272 workspace tests green — see
 [Implementation Progress](#implementation-progress))
 
 **Related:** ADR-086 (`typhoon-native` module decomposition), ADR-108
@@ -595,7 +595,40 @@ function (empty default, matching the originals; pure over the symbol string, no
 `TyphooNApp`). Behavior-preserving; the dispatch (`handle_research_window_command`) and
 command names are unchanged.
 
-### Next slice — Phase 2 readiness
+### Phase 2, step 1 — `typhoon-research-ui` crate extracted (2026-06-23)
+
+The first crate is real. New workspace member `typhoon-research-ui` now owns the
+research-UI view + interaction layer:
+
+- `render` — the 259 pure snapshot-display functions (`git mv` from
+  `floating_windows/research/render.rs`).
+- `window_shell` — the compute-window interaction shell (`render_compute_window[_ext]`,
+  `ComputeWindow`).
+- `theme` — the six color constants the modules used, mirrored from `app::common` so the
+  crate needs no native import (a shared theme crate stays deferred per the guardrails).
+
+Dependencies: `egui`, `chrono`, `typhoon-engine` only. `cargo tree` confirms the crate
+does **not** depend on `typhoon-native` — the ADR's hard requirement; the direction is
+acyclic. The moved functions became `pub` (were `pub(super)`).
+
+Zero call-site churn: `typhoon-native` re-exports the modules from
+`floating_windows/research/mod.rs` (`use typhoon_research_ui::{render, window_shell};`),
+so every renderer call (`super::render::…`, `window_shell::…`) resolves unchanged.
+`typhoon-native` stays the only binary/app shell — dispatchers, command handlers, window
+state, and Fetch/integration logic remain native, calling into the crate.
+
+Verified: `cargo check -p typhoon-research-ui` (clean), `cargo check --workspace` (clean,
+0 warnings), `cargo test --workspace` (2272 passed: engine 1641 + native 400 +
+transpiler 231), `git diff --check` (clean).
+
+### Next slice
+
+Continue populating `typhoon-research-ui`: move the `symbol_investigation_packet`
+`format.rs` (the ~25 packet text formatters — pure over engine DTOs, no egui) into the
+crate the same way (re-export from the packet parent). Then evaluate the chart-UI crate
+(Target 2) only after the research-UI crate is fully settled — one boundary at a time.
+
+### Earlier note — Phase 2 readiness (now satisfied by step 1)
 
 The research-UI decoupling has reached the boundary the ADR set: views and the
 compute-window interaction layer are crate-movable free functions; the residual inline
