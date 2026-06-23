@@ -9,7 +9,10 @@ mod composite_signal_sections;
 mod context;
 mod dispatcher_inline_sections;
 mod distribution_risk_sections;
-mod format;
+// Packet text formatters now live in the `typhoon-research-ui` crate (ADR-125
+// Phase 2). Re-exported so the section call sites (`format::…`, `super::format::…`)
+// resolve unchanged.
+use typhoon_research_ui::format;
 mod fractal_tail_stationarity_sections;
 mod fundamental_risk_sections;
 mod market_behavior_sections;

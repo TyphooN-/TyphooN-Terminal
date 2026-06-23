@@ -23,7 +23,7 @@ use typhoon_engine::core::research::{
 /// [`Fundamentals`] record: the company header line, an optional (length-bounded)
 /// description, and the "Valuation & Risk" metric table. Pure — identical
 /// fundamentals produce identical markdown.
-pub(super) fn write_fundamentals_overview(p: &mut String, f: &Fundamentals) {
+pub fn write_fundamentals_overview(p: &mut String, f: &Fundamentals) {
     let _ = writeln!(
         p,
         "**{}** — {} / {}",
@@ -103,7 +103,7 @@ pub(super) fn write_fundamentals_overview(p: &mut String, f: &Fundamentals) {
 }
 
 /// WACC snapshot (CAPM-derived cost of capital). Emits only when `wacc_pct > 0`.
-pub(super) fn write_wacc(p: &mut String, w: &WaccSnapshot) {
+pub fn write_wacc(p: &mut String, w: &WaccSnapshot) {
     if w.wacc_pct > 0.0 {
         let fmt_money = format_large_number;
         let _ = writeln!(p, "### WACC Snapshot (CAPM, as of {})", w.as_of);
@@ -130,7 +130,7 @@ pub(super) fn write_wacc(p: &mut String, w: &WaccSnapshot) {
 }
 
 /// Rolling BETA history (1Y / 3Y / 5Y vs the market ticker).
-pub(super) fn write_beta(p: &mut String, b: &BetaSnapshot) {
+pub fn write_beta(p: &mut String, b: &BetaSnapshot) {
     if !b.windows.is_empty() {
         let _ = writeln!(
             p,
@@ -154,7 +154,7 @@ pub(super) fn write_beta(p: &mut String, b: &BetaSnapshot) {
 }
 
 /// DDM Gordon Growth fair value.
-pub(super) fn write_ddm(p: &mut String, d: &DdmSnapshot) {
+pub fn write_ddm(p: &mut String, d: &DdmSnapshot) {
     if d.annual_dividend > 0.0 || d.implied_price > 0.0 {
         let _ = writeln!(p, "### Gordon Growth DDM (as of {})", d.as_of);
         let _ = writeln!(
@@ -180,7 +180,7 @@ pub(super) fn write_ddm(p: &mut String, d: &DdmSnapshot) {
 }
 
 /// RV relative-valuation matrix (peer Z-scores).
-pub(super) fn write_relative_valuation(p: &mut String, rv: &RelativeValuation) {
+pub fn write_relative_valuation(p: &mut String, rv: &RelativeValuation) {
     if !rv.rows.is_empty() {
         let _ = writeln!(
             p,
@@ -201,7 +201,7 @@ pub(super) fn write_relative_valuation(p: &mut String, rv: &RelativeValuation) {
 }
 
 /// FIGI instrument identifiers (top 3).
-pub(super) fn write_figi(p: &mut String, f: &FigiSnapshot) {
+pub fn write_figi(p: &mut String, f: &FigiSnapshot) {
     if !f.identifiers.is_empty() {
         let _ = writeln!(
             p,
@@ -240,7 +240,7 @@ pub(super) fn write_figi(p: &mut String, f: &FigiSnapshot) {
 }
 
 /// HRA historical return / risk snapshot.
-pub(super) fn write_hra(p: &mut String, h: &HraSnapshot) {
+pub fn write_hra(p: &mut String, h: &HraSnapshot) {
     if !h.windows.is_empty() {
         let _ = writeln!(p, "### Historical Return / Risk (as of {})", h.as_of);
         let _ = writeln!(
@@ -279,7 +279,7 @@ pub(super) fn write_hra(p: &mut String, h: &HraSnapshot) {
 }
 
 /// DCF (FCFF model) fair value.
-pub(super) fn write_dcf(p: &mut String, d: &DcfSnapshot) {
+pub fn write_dcf(p: &mut String, d: &DcfSnapshot) {
     if d.implied_price > 0.0 || !d.note.is_empty() {
         let fmt_money = format_large_number;
         let _ = writeln!(p, "### DCF (FCFF) Fair Value (as of {})", d.as_of);
@@ -340,7 +340,7 @@ pub(super) fn write_dcf(p: &mut String, d: &DcfSnapshot) {
 }
 
 /// SVM multi-model fair-value triangulation.
-pub(super) fn write_svm(p: &mut String, s: &SvmSnapshot) {
+pub fn write_svm(p: &mut String, s: &SvmSnapshot) {
     if !s.rows.is_empty() {
         let _ = writeln!(p, "### Stock Valuation Model (as of {})", s.as_of);
         let _ = writeln!(
@@ -367,7 +367,7 @@ pub(super) fn write_svm(p: &mut String, s: &SvmSnapshot) {
 /// OMON options-chain summary (nearest expiry + ATM-zone strike table). The
 /// put/call ratios, ATM IV, and ATM-window selection are derived purely from the
 /// snapshot, so this stays a pure function of `o`.
-pub(super) fn write_options_chain(p: &mut String, o: &OptionsChainSnapshot) {
+pub fn write_options_chain(p: &mut String, o: &OptionsChainSnapshot) {
     if !o.expirations.is_empty() {
         let _ = writeln!(p, "### Options Chain (OMON, as of {})", o.as_of);
         let _ = writeln!(
@@ -490,7 +490,7 @@ pub(super) fn write_options_chain(p: &mut String, o: &OptionsChainSnapshot) {
 }
 
 /// IVOL implied-vol rank / percentile.
-pub(super) fn write_ivol(p: &mut String, iv: &IvolSnapshot) {
+pub fn write_ivol(p: &mut String, iv: &IvolSnapshot) {
     if iv.current_atm_iv_pct > 0.0 || iv.observation_count > 0 {
         let _ = writeln!(p, "### Implied Vol Rank (as of {})", iv.as_of);
         let _ = writeln!(
@@ -523,7 +523,7 @@ pub(super) fn write_ivol(p: &mut String, iv: &IvolSnapshot) {
 // ── Price-behavior ratios (SHARPR / EFFRATIO / WICKBIAS / VOLOFVOL) ──
 
 /// Sharpe ratio (rf=0) — SHARPR.
-pub(super) fn write_sharpr(p: &mut String, sr: &SharpeRatioSnapshot) {
+pub fn write_sharpr(p: &mut String, sr: &SharpeRatioSnapshot) {
     if sr.sharpe_label != "INSUFFICIENT_DATA" && !sr.sharpe_label.is_empty() {
         let _ = writeln!(
             p,
@@ -548,7 +548,7 @@ pub(super) fn write_sharpr(p: &mut String, sr: &SharpeRatioSnapshot) {
 }
 
 /// Kaufman efficiency ratio — EFFRATIO.
-pub(super) fn write_effratio(p: &mut String, er: &EfficiencyRatioSnapshot) {
+pub fn write_effratio(p: &mut String, er: &EfficiencyRatioSnapshot) {
     if er.efficiency_label != "INSUFFICIENT_DATA" && !er.efficiency_label.is_empty() {
         let _ = writeln!(
             p,
@@ -573,7 +573,7 @@ pub(super) fn write_effratio(p: &mut String, er: &EfficiencyRatioSnapshot) {
 }
 
 /// Wick bias — WICKBIAS.
-pub(super) fn write_wickbias(p: &mut String, wb: &WickBiasSnapshot) {
+pub fn write_wickbias(p: &mut String, wb: &WickBiasSnapshot) {
     if wb.bias_label != "INSUFFICIENT_DATA" && !wb.bias_label.is_empty() {
         let _ = writeln!(
             p,
@@ -598,7 +598,7 @@ pub(super) fn write_wickbias(p: &mut String, wb: &WickBiasSnapshot) {
 }
 
 /// Vol-of-vol (stdev of rolling 20d RV) — VOLOFVOL.
-pub(super) fn write_volofvol(p: &mut String, vv: &VolOfVolSnapshot) {
+pub fn write_volofvol(p: &mut String, vv: &VolOfVolSnapshot) {
     if vv.cv_label != "INSUFFICIENT_DATA" && !vv.cv_label.is_empty() {
         let _ = writeln!(
             p,
@@ -625,7 +625,7 @@ pub(super) fn write_volofvol(p: &mut String, vv: &VolOfVolSnapshot) {
 // ── Composite signal blocks (GROWM / FLOW / REGIME / RELVOL / MARGINS) ──
 
 /// GARP composite — GROWM.
-pub(super) fn write_growm(p: &mut String, gw: &GrowmSnapshot) {
+pub fn write_growm(p: &mut String, gw: &GrowmSnapshot) {
     if gw.inputs_available > 0 {
         let _ = writeln!(p, "### GARP Composite — GROWM (as of {})", gw.as_of);
         let _ = writeln!(
@@ -661,7 +661,7 @@ pub(super) fn write_growm(p: &mut String, gw: &GrowmSnapshot) {
 }
 
 /// Smart-money flow — FLOW.
-pub(super) fn write_flow(p: &mut String, fl: &FlowSnapshot) {
+pub fn write_flow(p: &mut String, fl: &FlowSnapshot) {
     if fl.insider_trade_count > 0 || fl.institutional_holders_tracked > 0 {
         let _ = writeln!(
             p,
@@ -699,7 +699,7 @@ pub(super) fn write_flow(p: &mut String, fl: &FlowSnapshot) {
 }
 
 /// Market regime — REGIME.
-pub(super) fn write_regime(p: &mut String, rg: &RegimeSnapshot) {
+pub fn write_regime(p: &mut String, rg: &RegimeSnapshot) {
     if rg.inputs_available > 0 {
         let _ = writeln!(p, "### Market Regime — REGIME (as of {})", rg.as_of);
         let _ = writeln!(
@@ -730,7 +730,7 @@ pub(super) fn write_regime(p: &mut String, rg: &RegimeSnapshot) {
 }
 
 /// Relative volume — RELVOL.
-pub(super) fn write_relvol(p: &mut String, rv: &RelVolSnapshot) {
+pub fn write_relvol(p: &mut String, rv: &RelVolSnapshot) {
     if rv.activity_label != "INSUFFICIENT_DATA" && !rv.activity_label.is_empty() {
         let _ = writeln!(p, "### Relative Volume — RELVOL (as of {})", rv.as_of);
         let _ = writeln!(
@@ -760,7 +760,7 @@ pub(super) fn write_relvol(p: &mut String, rv: &RelVolSnapshot) {
 }
 
 /// Margin trajectory — MARGINS.
-pub(super) fn write_margins(p: &mut String, mg: &MarginsSnapshot) {
+pub fn write_margins(p: &mut String, mg: &MarginsSnapshot) {
     if mg.periods_used > 0 {
         let _ = writeln!(
             p,
@@ -816,7 +816,7 @@ pub(super) fn write_margins(p: &mut String, mg: &MarginsSnapshot) {
 // ── Rank / drift factors (RELEPSGR / PEAD / SIZEF / MOMF) ──
 
 /// Relative EPS growth — RELEPSGR.
-pub(super) fn write_relepsgr(p: &mut String, eg: &RelativeEpsGrowthSnapshot) {
+pub fn write_relepsgr(p: &mut String, eg: &RelativeEpsGrowthSnapshot) {
     if eg.relative_label != "NO_DATA" && !eg.relative_label.is_empty() {
         let _ = writeln!(
             p,
@@ -845,7 +845,7 @@ pub(super) fn write_relepsgr(p: &mut String, eg: &RelativeEpsGrowthSnapshot) {
 }
 
 /// Post-earnings drift — PEAD.
-pub(super) fn write_pead(p: &mut String, pd: &PeadSnapshot) {
+pub fn write_pead(p: &mut String, pd: &PeadSnapshot) {
     if pd.drift_direction_label != "INSUFFICIENT_DATA" && !pd.drift_direction_label.is_empty() {
         let _ = writeln!(
             p,
@@ -879,7 +879,7 @@ pub(super) fn write_pead(p: &mut String, pd: &PeadSnapshot) {
 }
 
 /// Size factor — SIZEF.
-pub(super) fn write_sizef(p: &mut String, sf: &SizeFactorSnapshot) {
+pub fn write_sizef(p: &mut String, sf: &SizeFactorSnapshot) {
     if sf.rank_label != "NO_DATA"
         && sf.rank_label != "INSUFFICIENT_DATA"
         && !sf.rank_label.is_empty()
@@ -914,7 +914,7 @@ pub(super) fn write_sizef(p: &mut String, sf: &SizeFactorSnapshot) {
 }
 
 /// Momentum rank — MOMF.
-pub(super) fn write_momf(p: &mut String, mf: &MomentumRankSnapshot) {
+pub fn write_momf(p: &mut String, mf: &MomentumRankSnapshot) {
     if mf.rank_label != "NO_DATA"
         && mf.rank_label != "INSUFFICIENT_DATA"
         && !mf.rank_label.is_empty()
@@ -949,7 +949,7 @@ pub(super) fn write_momf(p: &mut String, mf: &MomentumRankSnapshot) {
 /// Sector peer comparison: this symbol's metrics vs the median of its sector
 /// peers. Pure over the symbol's [`Fundamentals`] and the resolved peer slice
 /// (the caller filters `all_fundamentals` by sector). Emits only with ≥3 peers.
-pub(super) fn write_sector_peer_comparison(
+pub fn write_sector_peer_comparison(
     p: &mut String,
     f: &Fundamentals,
     peers: &[&Fundamentals],
