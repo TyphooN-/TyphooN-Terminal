@@ -621,12 +621,31 @@ Verified: `cargo check -p typhoon-research-ui` (clean), `cargo check --workspace
 0 warnings), `cargo test --workspace` (2272 passed: engine 1641 + native 400 +
 transpiler 231), `git diff --check` (clean).
 
+### Phase 2, step 2 — packet `format` module moved (2026-06-23)
+
+`symbol_investigation_packet/format.rs` (the ~25 packet text formatters + their 3 unit
+tests) moved into `typhoon-research-ui` as the `format` module — pure over
+`typhoon_engine` DTOs (no egui, no `TyphooNApp`), the same clean move as
+`render`/`window_shell`. Functions became `pub`; the crate stays acyclic. `typhoon-native`
+re-exports it from `symbol_investigation_packet.rs` (`use typhoon_research_ui::format;`),
+so the section call sites (`format::…`, `super::format::…`) resolve unchanged. Verified:
+workspace clean (0 warnings), 2272 tests (the 3 format tests now run in the crate).
+
+The crate now owns: `render` (259 display fns), `window_shell` (compute shell), `format`
+(packet formatters), `theme`.
+
 ### Next slice
 
-Continue populating `typhoon-research-ui`: move the `symbol_investigation_packet`
-`format.rs` (the ~25 packet text formatters — pure over engine DTOs, no egui) into the
-crate the same way (re-export from the packet parent). Then evaluate the chart-UI crate
-(Target 2) only after the research-UI crate is fully settled — one boundary at a time.
+The remaining crate-movable research code is the **packet section tree** itself — the
+`write_symbol_*_sections(&SymbolResearchContext, …)` free functions (capital-valuation,
+behavior, signal, rank, …, plus `dispatcher_inline_sections`) and the
+`SymbolResearchContext` type. They are already free functions over `ctx.conn` (engine
+`Connection`) + `rx::get_*` (engine) + the crate's `format` — no `TyphooNApp`, no egui —
+so they move the same way, leaving only the dispatcher
+(`write_symbol_investigation_sections`, which gathers app state and builds the context) in
+native. That is a larger (~50-file) move; do it as its own verified slice. Then evaluate
+the chart-UI crate (Target 2) only once research-UI is fully settled — one boundary at a
+time.
 
 ### Earlier note — Phase 2 readiness (now satisfied by step 1)
 
