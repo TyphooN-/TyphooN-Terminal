@@ -1,12 +1,12 @@
 # ADR-125: Native Crate Boundary Plan
 
-**Status:** Phase 2 — `typhoon-research-ui` crate owns the full research-UI layer | **Date:** 2026-06-20 |
-**Last updated:** 2026-06-23 (Phase 1 complete for the research trees: read-context
-helpers, 259-fn `render` view layer, ~244 windows through `window_shell`, packet
-formatters/context; **Phase 2 steps 1–3 — `typhoon-research-ui` crate extracted** with
-`render` + `window_shell` + `format` + the 55-module `packet` section tree +
-`SymbolResearchContext`, acyclic deps, 2272 workspace tests green; native retains only the
-dispatchers / command handlers / Fetch headers — see
+**Status:** Target 1 (`typhoon-research-ui`) complete; Target 2 (`typhoon-chart-ui`) Phase 0 done | **Date:** 2026-06-20 |
+**Last updated:** 2026-06-24 (**Target 1 complete** — `typhoon-research-ui` owns `render` +
+`window_shell` + `format` + the 55-module `packet` section tree + `SymbolResearchContext`,
+acyclic, 2272 workspace tests green; `command_research_windows` assessed as native command
+dispatch and kept in native. **Target 2 Phase 0 done** — chart renderers are already
+`TyphooNApp`-free free functions; slice plan recorded, gated by the `ChartState` orphan-rule
++ `equity_merge`/`OrderBroker` constraint — see
 [Implementation Progress](#implementation-progress))
 
 **Related:** ADR-086 (`typhoon-native` module decomposition), ADR-108
@@ -660,15 +660,97 @@ workspace 2272 tests pass / 0 fail (the 3 `format` tests run in the crate).
 The crate now owns: `render` (259 display fns), `window_shell` (compute shell), `format`
 (packet formatters), `packet` (55-module section tree + `SymbolResearchContext`), `theme`.
 
-### Next slice
+### Phase 2, step 4 — `command_research_windows` boundary assessed: stays native (2026-06-23)
 
-Research-UI is now fully settled as a crate: views (`render`), interaction shell
-(`window_shell`), and the entire packet text-generation layer (`format` + `packet`) live
-in `typhoon-research-ui`; native retains only the dispatchers/command handlers/Fetch
-headers that are app-shell integration glue (they hold `TyphooNApp` state). Per the
-guardrails — one boundary at a time — the next boundary to evaluate is **Target 2,
-`typhoon-chart-ui`**, but only as its own scoped slice and not before this one has settled
-in use.
+With `render`/`window_shell`/`format`/`packet` extracted, the last item in Target 1's
+"owns, once prepared" list is `command_research_windows/*` (57 files, ~10.6k lines). It was
+inventoried against the crate boundary and **stays in `typhoon-native` as integration
+glue** — it is not crate-movable as written:
+
+- **No rendering lives there.** `grep` finds **0** `egui::` / `ui.` / `.show()` calls in
+  the tree — the actual command-window rendering is the `render_*_snapshot` functions,
+  which already moved to the crate's `render` module. What remains is pure command→state
+  dispatch.
+- **It mutates the `TyphooNApp` state graph directly** — **1295 distinct** `self.show_*_win`
+  / `self.*_win_symbol` / `self.*_win_snapshot` field writes across ~429 command arms, plus
+  `self.broker_tx` sends and `self.fmp_key`/`finnhub_key` reads. The ADR explicitly excludes
+  the `TyphooNApp` state graph from the crate, and the guardrail says a boundary that needs
+  the child to import `TyphooNApp` is "not ready."
+- Moving it would require either a ~429-variant `ResearchUiAction` enum or relocating the
+  per-window `{show, symbol, snapshot}` state off `TyphooNApp` into the crate — the latter
+  is the "later optional step … not a prerequisite" already noted below, and would churn the
+  entire `floating_windows` render dispatch (which reads those same fields). Neither is
+  warranted: these handlers are the native app-shell's command dispatch, the same role as
+  the `write_symbol_investigation_sections` dispatcher that also stays native.
+
+**Target 1 (`typhoon-research-ui`) is therefore complete.** The crate owns the entire
+movable research-UI presentation layer — `render` (259 display fns), `window_shell`,
+`format`, `packet` (55-module section tree + `SymbolResearchContext`), `theme` — and native
+retains only integration glue: the two dispatchers (`render_research_ui_windows`,
+`write_symbol_investigation_sections`), the `command_research_windows` command handlers, and
+the Fetch/API-key headers. Dependency direction is acyclic and verified.
+
+### Target 2 — `typhoon-chart-ui`: Phase 0 inventory (2026-06-24)
+
+The research-UI split is stable (compiles, 2272 tests green), so per Phase 3 the chart-UI
+boundary is cleared to begin. Inventory of the candidate region:
+
+| Tree / file | Lines | `impl TyphooNApp` | `&self` (other types) | `TyphooNApp` refs | Nature |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `technical_analysis/` (23 files) | 7910 | 0 | 0 | 0 | render/overlays/drawing — free fns |
+| `technical_analysis.rs` | 2112 | 0 | 0 | 0 | render entry + helpers — free fns |
+| `technical_indicators.rs` | 3089 | 0 | 0 | 0 | pure indicator math (no egui/engine) |
+| `chart.rs` | 852 | 0 | 9 | 1 (doc comment) | `ChartState` def + view/quote impls |
+| `chart/` (8 files) | 5659 | 0 | 181 | 0 | chart-local types + behavior + data |
+| `chart_ops.rs` | 1381 | **2** | 32 | — | **native glue** (TyphooNApp ops) |
+
+**The rendering layer is already decoupled.** `technical_analysis/` references `TyphooNApp`
+**zero** times; renderers are `pub(crate) fn draw_*(painter: &egui::Painter, chart:
+&ChartState, bars: &[Bar], flags: &IndicatorFlags, …)` free functions over egui (1302 refs)
++ chart-local data types, read-only on `&ChartState` (18 reads, **0** `&mut`). Unlike
+research-UI this needs almost no Phase-1 decoupling prep — the free-function form is already
+there.
+
+**The chart-local types are `TyphooNApp`-free and crate-shaped:** `ChartState` (chart.rs),
+`ChartCamera` / `IndicatorFlags` / color consts (`chart/models.rs`), and `Bar` / `ChartType`
+/ `Timeframe` (`types.rs`, alongside many native-only types that stay). These are exactly the
+"chart-local state and action DTOs" the ADR assigns to Target 2 and should move to the crate;
+`TyphooNApp.charts: Vec<ChartState>` then holds the crate type (native → crate, acyclic).
+
+**The orphan-rule constraint that shapes the slice plan.** `ChartState` has inherent-`impl`
+blocks in **7 files** — chart.rs (quote/forming-bar), `camera_controls`, `auto_fibonacci`,
+`mtf_overlays` (chart-local behavior, movable) **and** `load_cache`, `indicator_compute`,
+`equity_merge`, `market_data_helpers` (the data/merge pipeline). Rust requires every inherent
+`impl ChartState` to live in the crate that defines `ChartState`. So moving `ChartState`
+forces a decision per data-pipeline file:
+
+- `indicator_compute.rs` (1613l, pure math via `technical_indicators`), `market_data_helpers.rs`
+  (244l, engine only), `load_cache.rs` (1325l, engine cache + chrono) — engine-reachable, so
+  their `impl ChartState` can move **with** `ChartState` into the crate (crate → engine is
+  allowed).
+- `equity_merge.rs` (1338l) **cannot move**: it uses `OrderBroker` (defined in
+  `state/broker_messages.rs`, native) and owns the `MERGE_PRIMARY_BROKER` atomic +
+  `chart_equity_source_rank_for` (ADR-126). A crate dep on it would be a `crate → native`
+  cycle. Its `impl ChartState` methods must be **converted to native free functions** over
+  `&mut ChartState` (the same "glue stays native" pattern as the research dispatchers), since
+  they can't remain inherent impls once `ChartState` is in the crate.
+
+`chart_ops.rs` (2 `impl TyphooNApp` blocks) is native dispatch glue and stays, calling into
+the crate — the chart analogue of `command_research_windows`.
+
+**Slice plan (dependency order, one verified commit each):**
+1. Create the `typhoon-chart-ui` crate skeleton + move the leaf data types `Bar` / `ChartType`
+   / `Timeframe` out of `types.rs`; native re-exports them so call sites are unchanged.
+2. Move `technical_indicators.rs` (pure math) into the crate.
+3. Convert `equity_merge.rs`'s `impl ChartState` methods to native free functions over
+   `&mut ChartState` (un-block the orphan rule before `ChartState` moves).
+4. Move `ChartState` + `ChartCamera` / `IndicatorFlags` / consts + the movable behavior/data
+   impls (`chart.rs`, `models`, `camera_controls`, `auto_fibonacci`, `mtf_overlays`,
+   `load_cache`, `indicator_compute`, `market_data_helpers`) into the crate.
+5. Move the rendering layer (`technical_analysis/`, `technical_analysis.rs`) into the crate.
+6. Leave `chart_ops.rs` + `equity_merge.rs` free fns in native as integration glue; verify
+   pan/zoom, axis drag, crosshair, drawing tools, MTF overlays, live forming bars, source
+   labels (Phase 3 acceptance checks).
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
