@@ -1,57 +1,59 @@
-use super::*;
+//! Chart view-model types + indicator palette (ADR-125 Target 2, slice 5): `ChartCamera`
+//! (pan/zoom viewport), `IndicatorFlags` (per-chart indicator toggles), and the egui
+//! `Color32` palette consts for every indicator. egui-only, no engine/`TyphooNApp`.
 
 // ─── Ichimoku data ───────────────────────────────────────────────────────────
 
-pub(crate) const ICHI_TENKAN: egui::Color32 = egui::Color32::from_rgb(0, 180, 230);
-pub(crate) const ICHI_KIJUN: egui::Color32 = egui::Color32::from_rgb(200, 50, 50);
-pub(crate) const ICHI_SPAN_A: egui::Color32 = egui::Color32::from_rgb(80, 200, 80);
-pub(crate) const ICHI_SPAN_B: egui::Color32 = egui::Color32::from_rgb(200, 80, 80);
-pub(crate) const ICHI_CLOUD_BULL: egui::Color32 =
+pub const ICHI_TENKAN: egui::Color32 = egui::Color32::from_rgb(0, 180, 230);
+pub const ICHI_KIJUN: egui::Color32 = egui::Color32::from_rgb(200, 50, 50);
+pub const ICHI_SPAN_A: egui::Color32 = egui::Color32::from_rgb(80, 200, 80);
+pub const ICHI_SPAN_B: egui::Color32 = egui::Color32::from_rgb(200, 80, 80);
+pub const ICHI_CLOUD_BULL: egui::Color32 =
     egui::Color32::from_rgba_premultiplied(80, 200, 80, 20);
-pub(crate) const ICHI_CLOUD_BEAR: egui::Color32 =
+pub const ICHI_CLOUD_BEAR: egui::Color32 =
     egui::Color32::from_rgba_premultiplied(200, 80, 80, 20);
 
-pub(crate) const STOCH_K_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255);
-pub(crate) const STOCH_D_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 60);
-pub(crate) const ADX_COL: egui::Color32 = egui::Color32::from_rgb(200, 180, 60);
-pub(crate) const DI_PLUS_COL: egui::Color32 = egui::Color32::from_rgb(0, 200, 100);
-pub(crate) const DI_MINUS_COL: egui::Color32 = egui::Color32::from_rgb(200, 50, 50);
-pub(crate) const WMA_COL: egui::Color32 = egui::Color32::from_rgb(180, 100, 200);
-pub(crate) const HMA_COL: egui::Color32 = egui::Color32::from_rgb(0, 200, 200);
-pub(crate) const CCI_COL: egui::Color32 = egui::Color32::from_rgb(200, 140, 80);
-pub(crate) const WILLR_COL: egui::Color32 = egui::Color32::from_rgb(180, 80, 200);
-pub(crate) const OBV_COL: egui::Color32 = egui::Color32::from_rgb(100, 200, 160);
-pub(crate) const MFI_COL: egui::Color32 = egui::Color32::from_rgb(110, 210, 130);
-pub(crate) const TRIX_LINE_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 180);
-pub(crate) const TRIX_SIG_COL: egui::Color32 = egui::Color32::from_rgb(110, 210, 255);
-pub(crate) const PPO_LINE_COL: egui::Color32 = egui::Color32::from_rgb(180, 140, 255);
-pub(crate) const PPO_SIG_COL: egui::Color32 = egui::Color32::from_rgb(255, 185, 90);
-pub(crate) const ULTOSC_COL: egui::Color32 = egui::Color32::from_rgb(255, 205, 110);
-pub(crate) const SAR_COL: egui::Color32 = egui::Color32::from_rgb(255, 200, 0);
-pub(crate) const EHLERS_SS_COL: egui::Color32 = egui::Color32::from_rgb(0, 220, 220);
-pub(crate) const EHLERS_DEC_COL: egui::Color32 = egui::Color32::from_rgb(220, 160, 0);
-pub(crate) const EHLERS_ITL_COL: egui::Color32 = egui::Color32::from_rgb(180, 220, 0);
-pub(crate) const EHLERS_MAMA_COL: egui::Color32 = egui::Color32::from_rgb(255, 100, 200);
-pub(crate) const EHLERS_FAMA_COL: egui::Color32 = egui::Color32::from_rgb(100, 200, 255);
-pub(crate) const EHLERS_EBSW_COL: egui::Color32 = egui::Color32::from_rgb(0, 200, 180);
-pub(crate) const EHLERS_CYBER_COL: egui::Color32 = egui::Color32::from_rgb(200, 100, 255);
-pub(crate) const EHLERS_CG_COL: egui::Color32 = egui::Color32::from_rgb(255, 180, 0);
-pub(crate) const EHLERS_ROOF_COL: egui::Color32 = egui::Color32::from_rgb(100, 255, 100);
+pub const STOCH_K_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255);
+pub const STOCH_D_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 60);
+pub const ADX_COL: egui::Color32 = egui::Color32::from_rgb(200, 180, 60);
+pub const DI_PLUS_COL: egui::Color32 = egui::Color32::from_rgb(0, 200, 100);
+pub const DI_MINUS_COL: egui::Color32 = egui::Color32::from_rgb(200, 50, 50);
+pub const WMA_COL: egui::Color32 = egui::Color32::from_rgb(180, 100, 200);
+pub const HMA_COL: egui::Color32 = egui::Color32::from_rgb(0, 200, 200);
+pub const CCI_COL: egui::Color32 = egui::Color32::from_rgb(200, 140, 80);
+pub const WILLR_COL: egui::Color32 = egui::Color32::from_rgb(180, 80, 200);
+pub const OBV_COL: egui::Color32 = egui::Color32::from_rgb(100, 200, 160);
+pub const MFI_COL: egui::Color32 = egui::Color32::from_rgb(110, 210, 130);
+pub const TRIX_LINE_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 180);
+pub const TRIX_SIG_COL: egui::Color32 = egui::Color32::from_rgb(110, 210, 255);
+pub const PPO_LINE_COL: egui::Color32 = egui::Color32::from_rgb(180, 140, 255);
+pub const PPO_SIG_COL: egui::Color32 = egui::Color32::from_rgb(255, 185, 90);
+pub const ULTOSC_COL: egui::Color32 = egui::Color32::from_rgb(255, 205, 110);
+pub const SAR_COL: egui::Color32 = egui::Color32::from_rgb(255, 200, 0);
+pub const EHLERS_SS_COL: egui::Color32 = egui::Color32::from_rgb(0, 220, 220);
+pub const EHLERS_DEC_COL: egui::Color32 = egui::Color32::from_rgb(220, 160, 0);
+pub const EHLERS_ITL_COL: egui::Color32 = egui::Color32::from_rgb(180, 220, 0);
+pub const EHLERS_MAMA_COL: egui::Color32 = egui::Color32::from_rgb(255, 100, 200);
+pub const EHLERS_FAMA_COL: egui::Color32 = egui::Color32::from_rgb(100, 200, 255);
+pub const EHLERS_EBSW_COL: egui::Color32 = egui::Color32::from_rgb(0, 200, 180);
+pub const EHLERS_CYBER_COL: egui::Color32 = egui::Color32::from_rgb(200, 100, 255);
+pub const EHLERS_CG_COL: egui::Color32 = egui::Color32::from_rgb(255, 180, 0);
+pub const EHLERS_ROOF_COL: egui::Color32 = egui::Color32::from_rgb(100, 255, 100);
 // BetterVolume colors — exact MT5 BetterVolume.mqh values
-pub(crate) const BVOL_CLIMAX_UP: egui::Color32 = egui::Color32::from_rgb(255, 0, 0); // clrRed — bullish climax
-pub(crate) const BVOL_CLIMAX_DN: egui::Color32 = egui::Color32::from_rgb(255, 255, 255); // clrWhite — bearish climax
-pub(crate) const BVOL_HIGH: egui::Color32 = egui::Color32::from_rgb(0, 255, 0); // clrGreen — churn (high vol, low move)
-pub(crate) const BVOL_LOW: egui::Color32 = egui::Color32::from_rgb(255, 255, 0); // clrYellow — low volume
-pub(crate) const BVOL_CHURN: egui::Color32 = egui::Color32::from_rgb(255, 0, 255); // clrMagenta — climax + churn
-pub(crate) const BVOL_NORMAL: egui::Color32 = egui::Color32::from_rgb(70, 130, 180); // clrSteelBlue — normal volume
+pub const BVOL_CLIMAX_UP: egui::Color32 = egui::Color32::from_rgb(255, 0, 0); // clrRed — bullish climax
+pub const BVOL_CLIMAX_DN: egui::Color32 = egui::Color32::from_rgb(255, 255, 255); // clrWhite — bearish climax
+pub const BVOL_HIGH: egui::Color32 = egui::Color32::from_rgb(0, 255, 0); // clrGreen — churn (high vol, low move)
+pub const BVOL_LOW: egui::Color32 = egui::Color32::from_rgb(255, 255, 0); // clrYellow — low volume
+pub const BVOL_CHURN: egui::Color32 = egui::Color32::from_rgb(255, 0, 255); // clrMagenta — climax + churn
+pub const BVOL_NORMAL: egui::Color32 = egui::Color32::from_rgb(70, 130, 180); // clrSteelBlue — normal volume
 
 /// Right margin: empty bars of space after the last candle (MT5 "chart shift" feature).
-pub(crate) const CHART_RIGHT_MARGIN: usize = 5;
-pub(crate) const CHART_SUB_PANE_H: f32 = 80.0;
-pub(crate) const CHART_MIN_MAIN_CHART_H: f32 = 140.0;
-pub(crate) const CHART_TIME_AXIS_H: f32 = 22.0;
+pub const CHART_RIGHT_MARGIN: usize = 5;
+pub const CHART_SUB_PANE_H: f32 = 80.0;
+pub const CHART_MIN_MAIN_CHART_H: f32 = 140.0;
+pub const CHART_TIME_AXIS_H: f32 = 22.0;
 
-pub(crate) fn chart_price_pane_height(total_chart_height: f32, sub_pane_count: u8) -> f32 {
+pub fn chart_price_pane_height(total_chart_height: f32, sub_pane_count: u8) -> f32 {
     let sub_pane_height = if sub_pane_count > 0 {
         (CHART_SUB_PANE_H * sub_pane_count as f32)
             .min((total_chart_height - CHART_MIN_MAIN_CHART_H).max(0.0))
@@ -62,19 +64,19 @@ pub(crate) fn chart_price_pane_height(total_chart_height: f32, sub_pane_count: u
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ChartCamera {
-    pub(crate) center_bar: f64,
-    pub(crate) bars_visible: f64,
-    pub(crate) price_center: Option<f64>,
-    pub(crate) price_span: Option<f64>,
-    pub(crate) follow_latest: bool,
-    pub(crate) pan_start_center_bar: f64,
-    pub(crate) pan_start_price_center: Option<f64>,
-    pub(crate) pan_start_price_span: Option<f64>,
+pub struct ChartCamera {
+    pub center_bar: f64,
+    pub bars_visible: f64,
+    pub price_center: Option<f64>,
+    pub price_span: Option<f64>,
+    pub follow_latest: bool,
+    pub pan_start_center_bar: f64,
+    pub pan_start_price_center: Option<f64>,
+    pub pan_start_price_span: Option<f64>,
 }
 
 impl ChartCamera {
-    pub(crate) fn from_legacy(
+    pub fn from_legacy(
         view_offset: usize,
         visible_bars: usize,
         manual_view_override: bool,
@@ -94,15 +96,15 @@ impl ChartCamera {
         }
     }
 
-    pub(crate) fn right_edge_bar(&self) -> f64 {
+    pub fn right_edge_bar(&self) -> f64 {
         self.center_bar + (self.bars_visible - 1.0) * 0.5
     }
 
-    pub(crate) fn manual_override(&self) -> bool {
+    pub fn manual_override(&self) -> bool {
         !self.follow_latest
     }
 
-    pub(crate) fn follow_latest_right_edge(data_len: usize) -> f64 {
+    pub fn follow_latest_right_edge(data_len: usize) -> f64 {
         if data_len == 0 {
             0.0
         } else {
@@ -110,7 +112,7 @@ impl ChartCamera {
         }
     }
 
-    pub(crate) fn max_right_edge(&self, data_len: usize) -> f64 {
+    pub fn max_right_edge(&self, data_len: usize) -> f64 {
         if data_len == 0 {
             0.0
         } else {
@@ -123,18 +125,18 @@ impl ChartCamera {
         }
     }
 
-    pub(crate) fn set_right_edge_bar(&mut self, right_edge: f64, data_len: usize) {
+    pub fn set_right_edge_bar(&mut self, right_edge: f64, data_len: usize) {
         let max_right = self.max_right_edge(data_len);
         let clamped = right_edge.clamp(0.0, max_right);
         self.center_bar = clamped - (self.bars_visible - 1.0) * 0.5;
     }
 
-    pub(crate) fn set_price_view(&mut self, center: f64, span: f64) {
+    pub fn set_price_view(&mut self, center: f64, span: f64) {
         self.price_center = Some(center);
         self.price_span = Some(span.max(f64::EPSILON));
     }
 
-    pub(crate) fn begin_pan(
+    pub fn begin_pan(
         &mut self,
         _rect_width: f32,
         _rect_height: f32,
@@ -150,7 +152,7 @@ impl ChartCamera {
         self.follow_latest = false;
     }
 
-    pub(crate) fn pan_pixels(
+    pub fn pan_pixels(
         &mut self,
         delta_x: f32,
         delta_y: f32,
@@ -178,7 +180,7 @@ impl ChartCamera {
         self.follow_latest = false;
     }
 
-    pub(crate) fn zoom_price_by(
+    pub fn zoom_price_by(
         &mut self,
         factor: f64,
         natural_price_center: f64,
@@ -198,7 +200,7 @@ impl ChartCamera {
         self.follow_latest = false;
     }
 
-    pub(crate) fn zoom_bars_by(&mut self, factor: f64, data_len: usize) {
+    pub fn zoom_bars_by(&mut self, factor: f64, data_len: usize) {
         if data_len == 0 {
             return;
         }
@@ -208,7 +210,7 @@ impl ChartCamera {
         self.follow_latest = false;
     }
 
-    pub(crate) fn on_data_len_changed(&mut self, old_len: usize, new_len: usize) {
+    pub fn on_data_len_changed(&mut self, old_len: usize, new_len: usize) {
         if new_len == 0 {
             self.set_right_edge_bar(0.0, 0);
             return;
@@ -228,7 +230,7 @@ impl ChartCamera {
         self.set_right_edge_bar(right_edge, new_len);
     }
 
-    pub(crate) fn sync_legacy_fields(
+    pub fn sync_legacy_fields(
         &self,
         data_len: usize,
         visible_bars: &mut usize,
@@ -253,7 +255,7 @@ impl ChartCamera {
         }
     }
 
-    pub(crate) fn explicit_price_range(&self) -> Option<(f64, f64)> {
+    pub fn explicit_price_range(&self) -> Option<(f64, f64)> {
         let center = self.price_center?;
         let span = self.price_span?.max(f64::EPSILON);
         Some((center - span * 0.5, center + span * 0.5))
@@ -261,35 +263,35 @@ impl ChartCamera {
 }
 
 /// Indicator visibility flags passed to draw_chart.
-pub(crate) struct IndicatorFlags {
-    pub(crate) sma200: bool,
-    pub(crate) sma100: bool,
-    pub(crate) kama: bool,
-    pub(crate) ema21: bool,
-    pub(crate) bollinger: bool,
-    pub(crate) ichimoku: bool,
-    pub(crate) wma: bool,
-    pub(crate) hma: bool,
-    pub(crate) psar: bool,
-    pub(crate) atr_proj: bool,
-    pub(crate) prev_levels: bool,
-    pub(crate) pivots: bool,
-    pub(crate) fractals: bool,
-    pub(crate) harmonics: bool,
-    pub(crate) auto_fib: bool,
-    pub(crate) supply_demand: bool,
-    pub(crate) ehlers_ss: bool,
-    pub(crate) ehlers_decycler: bool,
-    pub(crate) ehlers_itl: bool,
-    pub(crate) ehlers_mama: bool,
-    pub(crate) sessions: bool,
-    pub(crate) vol_heatmap: bool,
-    pub(crate) vwap: bool,
-    pub(crate) price_histogram: bool,
-    pub(crate) supertrend: bool,
-    pub(crate) donchian: bool,
-    pub(crate) keltner: bool,
-    pub(crate) regression: bool,
-    pub(crate) fvg: bool,
-    pub(crate) order_blocks: bool,
+pub struct IndicatorFlags {
+    pub sma200: bool,
+    pub sma100: bool,
+    pub kama: bool,
+    pub ema21: bool,
+    pub bollinger: bool,
+    pub ichimoku: bool,
+    pub wma: bool,
+    pub hma: bool,
+    pub psar: bool,
+    pub atr_proj: bool,
+    pub prev_levels: bool,
+    pub pivots: bool,
+    pub fractals: bool,
+    pub harmonics: bool,
+    pub auto_fib: bool,
+    pub supply_demand: bool,
+    pub ehlers_ss: bool,
+    pub ehlers_decycler: bool,
+    pub ehlers_itl: bool,
+    pub ehlers_mama: bool,
+    pub sessions: bool,
+    pub vol_heatmap: bool,
+    pub vwap: bool,
+    pub price_histogram: bool,
+    pub supertrend: bool,
+    pub donchian: bool,
+    pub keltner: bool,
+    pub regression: bool,
+    pub fvg: bool,
+    pub order_blocks: bool,
 }

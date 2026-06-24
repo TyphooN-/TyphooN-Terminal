@@ -10,8 +10,9 @@ mod camera_controls;
 mod mtf_overlays;
 pub(crate) use mtf_overlays::mtf_htf_cache_put;
 
-mod models;
-pub(crate) use models::{
+// Chart view-model types + indicator palette now live in the typhoon-chart-ui crate
+// (ADR-125 Target 2, slice 5); re-exported so chart.rs + the app glob are unchanged.
+pub(crate) use typhoon_chart_ui::models::{
     ADX_COL, BVOL_CHURN, BVOL_CLIMAX_DN, BVOL_CLIMAX_UP, BVOL_HIGH, BVOL_LOW, BVOL_NORMAL, CCI_COL,
     CHART_MIN_MAIN_CHART_H, CHART_RIGHT_MARGIN, CHART_SUB_PANE_H, ChartCamera, DI_MINUS_COL,
     DI_PLUS_COL, EHLERS_CG_COL, EHLERS_CYBER_COL, EHLERS_DEC_COL, EHLERS_EBSW_COL, EHLERS_FAMA_COL,

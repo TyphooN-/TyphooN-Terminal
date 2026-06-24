@@ -11,4 +11,5 @@
 
 pub mod drawing;
 pub mod indicators;
+pub mod models;
 pub mod types;
