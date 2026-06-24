@@ -1,4 +1,10 @@
-use super::*;
+// ADR-127 Phase B: the broker message protocol depends only on typhoon-engine + std (no
+// `use super::*` native-state glob), so it can move to engine in Phase C. Everything else
+// it carries is referenced by fully-qualified `typhoon_engine::…` path; these are the only
+// bare-name types its variants use.
+use std::path::PathBuf;
+use typhoon_engine::broker::alpaca::{AccountInfo, OrderInfo, PositionInfo};
+use typhoon_engine::core::watchlist::WatchlistRow;
 
 /// Broker identity. Doubles as the order-routing target and the primary/assist
 /// role selector (see `primary_broker`). New brokers are added here and to the
