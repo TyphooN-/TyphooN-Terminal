@@ -4,6 +4,7 @@ members = [
     "typhoon-engine",
     "typhoon-native",
     "typhoon-research-ui",
+    "typhoon-chart-ui",
     "typhoon-transpiler",
 ]
 
@@ -26,6 +27,7 @@ base64 = "0.22"
 typhoon-transpiler = { path = "typhoon-transpiler" }
 typhoon-engine = { path = "typhoon-engine" }
 typhoon-research-ui = { path = "typhoon-research-ui" }
+typhoon-chart-ui = { path = "typhoon-chart-ui" }
 
 [profile.release]
 opt-level = 3

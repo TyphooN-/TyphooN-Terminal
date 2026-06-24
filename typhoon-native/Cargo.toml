@@ -13,6 +13,8 @@ path = "src/main.rs"
 typhoon-engine = { workspace = true }
 # Research-UI view + interaction layer (ADR-125 Phase 2)
 typhoon-research-ui = { workspace = true }
+# Chart-UI view + chart-local state layer (ADR-125 Target 2)
+typhoon-chart-ui = { workspace = true }
 
 # multi-language indicator transpiler (indicator compilation + execution)
 typhoon-transpiler = { workspace = true }
