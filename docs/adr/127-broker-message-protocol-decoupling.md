@@ -1,6 +1,6 @@
 # ADR-127: Broker Message Protocol Decoupling (prerequisite for ADR-125 Target 3)
 
-**Status:** Proposed | **Date:** 2026-06-24 |
+**Status:** IMPLEMENTED (Phases A–C done 2026-06-24) | **Date:** 2026-06-24 |
 **Related:** ADR-125 (native crate boundary plan — this unblocks its Target 3,
 `typhoon-broker-runtime`), ADR-108 (research module compile-time modularization — the
 `research_compute` engine split this depends on), ADR-126 (primary/assist broker selection —
@@ -129,3 +129,27 @@ Tradeoffs / open questions:
   into an unrelated change.
 - `research_compute`'s engine move (ADR-108) remains the larger downstream effort; this ADR
   only removes the protocol obstacle in its path.
+
+## Implementation (2026-06-24)
+
+All three phases landed, each its own commit, full workspace **2272 tests** green throughout.
+
+- **Phase A** — `WatchlistRow` relocated to `typhoon_engine::core::watchlist` (pure `serde`
+  DTO; fields widened `pub`). Native `app/state/watchlist` keeps the row builders + re-exports
+  it; the 8 call sites unchanged.
+- **Phase B** — `broker_messages.rs` made engine/std-only: `use super::*` replaced by exactly
+  three bare-name imports (`std::path::PathBuf`, the alpaca `AccountInfo`/`OrderInfo`/`PositionInfo`
+  trio, engine `WatchlistRow`). Everything else was *already* written with fully-qualified
+  `typhoon_engine::…` paths (439 `research::` refs alone), so the file reached zero `crate::app`
+  references with a 3-line import set — smaller than anticipated.
+- **Phase C** — the protocol moved to **`typhoon_engine::broker::protocol`** (the recommended
+  home; the open question resolved to engine, not a separate `typhoon-broker-protocol` crate).
+  450 `typhoon_engine::`→`crate::` rewrites, `pub(crate)`→`pub` ×30, the `impl OrderBroker`
+  block moved with it; no orphan-rule conflicts. `typhoon-native` keeps a 4-line re-export
+  shim, so the ~220/97 call sites are byte-for-byte unchanged. **`cargo tree` confirms engine
+  gained no `typhoon-native` dependency** (acyclic).
+
+**Outcome:** the broker message protocol is engine-resident and state-independent. ADR-127 is
+done. The two downstream efforts it unblocks are now clean cuts, each tracked by its own ADR:
+`research_compute → engine` (ADR-108) and the native broker runtime → `typhoon-broker-runtime`
+(ADR-125 Target 3).

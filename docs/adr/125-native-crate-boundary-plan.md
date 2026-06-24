@@ -1,6 +1,6 @@
 # ADR-125: Native Crate Boundary Plan
 
-**Status:** ACTIONABLE SCOPE COMPLETE — Targets 1 & 2 delivered (`typhoon-research-ui`, `typhoon-chart-ui`); Target 3 deferred behind ADR-127 (a real `BrokerMsg`↔native-state cycle, not the now-landed rip-out, gates the cut) | **Date:** 2026-06-20 |
+**Status:** Targets 1 & 2 delivered (`typhoon-research-ui`, `typhoon-chart-ui`); Target 3's protocol blocker cleared by ADR-127 (now IMPLEMENTED) — the runtime cut + ADR-108 `research_compute → engine` remain | **Date:** 2026-06-20 |
 **Last updated:** 2026-06-24 (**Target 1 complete** — `typhoon-research-ui` owns `render` +
 `window_shell` + `format` + the 55-module `packet` section tree; `command_research_windows`
 kept native as command dispatch. **Target 2 complete** — `typhoon-chart-ui` owns `types` +
@@ -836,20 +836,28 @@ message flow toward its ADR-108 engine home. That is its own boundary-prep effor
 than, and upstream of, a clean crate cut — and is out of scope for ADR-125's "one clean
 boundary at a time."
 
-That prerequisite is now scoped in **[ADR-127](127-broker-message-protocol-decoupling.md)**.
-A deeper measurement done for ADR-127 shrinks the protocol's native entanglement to a single
-relocatable DTO: the protocol references **451 engine types** and exactly **one** genuine
-native payload type — `WatchlistRow` (a plain `serde` struct, the false-positive `Indicator`
-aside). ADR-127's plan: relocate `WatchlistRow` to engine, make `broker_messages.rs`
-engine/std-only, and move the protocol into `typhoon-engine` (its types already live there, and
-`research_compute` — which *emits* `BrokerMsg` and is engine-bound per ADR-108 — needs it
-without a native back-dependency). Re-open Target 3 once ADR-127 lands the engine-resident
-protocol; the native broker *runtime* (the well-decoupled `spawn_broker_message_processor` task
-+ handler families) is then a clean cut.
+That prerequisite was scoped in **[ADR-127](127-broker-message-protocol-decoupling.md)** and is
+now **IMPLEMENTED**. A deeper measurement done for ADR-127 shrank the protocol's native
+entanglement to a single relocatable DTO (`WatchlistRow`), and the three-phase decoupling
+landed (full workspace 2272 tests green throughout): `WatchlistRow` → engine; `broker_messages.rs`
+made engine/std-only; and the protocol moved to **`typhoon_engine::broker::protocol`** with a
+4-line native re-export shim keeping the ~220/97 call sites unchanged. `cargo tree` confirms the
+engine gained no native dependency.
 
-With Targets 1 & 2 delivered and Target 3 evaluated in depth (feasible processor task, but a
-real protocol↔state cycle gates the cut, now scoped in ADR-127), ADR-125's actionable scope is
-complete; the broker boundary is sequenced behind ADR-127's protocol decoupling.
+**So the protocol↔state cycle no longer exists.** What remains for Target 3 is two clean,
+independent cuts, each its own effort:
+
+1. **`research_compute → engine`** (ADR-108) — now unblocked: the `BrokerMsg` it emits lives in
+   engine, so the compute can follow without a native back-dependency. This is the larger of
+   the two (58 files / ~13.1k lines).
+2. **the native broker runtime → `typhoon-broker-runtime`** — the well-decoupled
+   `spawn_broker_message_processor` task + the 19 handler families, depending on the
+   engine-resident protocol + engine clients + cache. Feasible once (1) frees the handlers from
+   the `research_compute` call graph (or `research_compute` is injected).
+
+With Targets 1 & 2 delivered and Target 3's structural blocker removed by ADR-127, the broker
+crate is no longer gated by a cycle — it is sequenced behind ADR-108's `research_compute` move,
+which the engine-resident protocol now enables.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
