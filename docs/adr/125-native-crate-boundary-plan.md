@@ -1,6 +1,6 @@
 # ADR-125: Native Crate Boundary Plan
 
-**Status:** Targets 1 & 2 complete (`typhoon-research-ui`, `typhoon-chart-ui`); Target 3 evaluation next | **Date:** 2026-06-20 |
+**Status:** ACTIONABLE SCOPE COMPLETE — Targets 1 & 2 delivered (`typhoon-research-ui`, `typhoon-chart-ui`); Target 3 evaluated, deferred with preconditions | **Date:** 2026-06-20 |
 **Last updated:** 2026-06-24 (**Target 1 complete** — `typhoon-research-ui` owns `render` +
 `window_shell` + `format` + the 55-module `packet` section tree; `command_research_windows`
 kept native as command dispatch. **Target 2 complete** — `typhoon-chart-ui` owns `types` +
@@ -786,6 +786,38 @@ Notable boundary calls: `gpu_compute` (wgpu) is too heavy/broad to pull into a U
 indicator compute stays native behind a trait rather than moving; the base chart palette was
 split out of native `app::common` (UI-button colors + `nav_*` helpers stay native); the pure
 `bare_symbol_from_key` parser moved to `types` since both renderers and native need it.
+
+### Target 3 — `typhoon-broker-runtime`: evaluated, DEFERRED (2026-06-24)
+
+Phase 4 says *evaluate* the broker split "only after research/chart patterns are proven"
+and promote "only if the crate can avoid depending on `typhoon-native`." Inventory of the
+candidate region `app/app_broker_processor/` (77 files, ~18.6k lines):
+
+- **It is 70% engine-style research compute, not broker logic.** `research_compute/` is 58
+  files / **13.1k lines** with **431 `typhoon_engine` refs** and only 58 channel refs — it
+  is research computation that happens to run on the broker-processor thread. Per ADR-108
+  and the ADR-125 guardrail *"do not move engine research compute/storage/provider code into
+  native-adjacent crates,"* this belongs in a future **engine** research crate, **not** a
+  broker-UI/runtime crate. Splitting `research_compute` out of `app_broker_processor` (and
+  resolving ADR-108's engine entanglement) is a prerequisite, not part of this boundary.
+- **The actual broker portion (19 files / 5.5k lines) is channel-heavy native runtime.** It
+  is the async message-processing layer (part of ~1.3k `Sender`/`Receiver`/`mpsc`/`BrokerCmd`
+  refs region-wide) and touches `SqliteCache` + the app runtime — exactly the
+  "channels, cache state, runtime handles, app-level coordination" the ADR flagged as the
+  reason broker extraction is "deliberately later" with the highest accidental-cycle risk.
+- **The broker layer is mid-rip-out.** The `deprecated/{darwin,mt5,tastytrade,cryptocompare,
+  cli-tui,lan-sync,…}` branches stage a Kraken+Alpaca-only rip-out of deprecated brokers.
+  Extracting a broker crate now would conflict with in-flight removal and would package code
+  slated for deletion.
+
+**Verdict: defer Target 3** until (a) the deprecated-broker rip-out lands so the surface is
+stable, and (b) `research_compute` is separated toward engine per ADR-108 so the broker crate
+isn't a research-compute dumping ground. This is the ADR's own conditional outcome — the two
+prioritized boundaries (`typhoon-research-ui`, `typhoon-chart-ui`) are delivered; the broker
+boundary's preconditions are not yet met. Re-evaluate when they are.
+
+With Targets 1 & 2 delivered and Target 3 evaluated/deferred with concrete preconditions,
+ADR-125's actionable scope is complete.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
