@@ -1,7 +1,44 @@
 use super::*;
 
-impl ChartState {
-    pub(crate) fn should_reload_for_bar_fetch(
+/// Cache-load + lower-timeframe-rebuild pipeline for a chart viewport (ADR-125 Target 2,
+/// slice 3). These were inherent `impl ChartState` methods; they are now a native
+/// **extension trait** because the load/rebuild path calls the broker-coupled equity-merge
+/// pipeline (`OrderBroker`, the `MERGE_PRIMARY_BROKER` atomic) which stays in `typhoon-native`.
+/// Implementing a local trait for `ChartState` (which moves to `typhoon-chart-ui`) keeps this
+/// glue native without violating the orphan rule, and call sites keep method syntax
+/// (`chart.try_load(…)`) unchanged. Re-exported from `chart` so the `app` glob carries it
+/// into every call site.
+pub(crate) trait ChartDataLoad {
+    fn should_reload_for_bar_fetch(&self, symbol: &str, timeframe: &str, source: &str) -> bool;
+    fn latest_quote_bar_from_cache(cache: &SqliteCache, symbol: &str) -> Option<Bar>;
+    fn chart_timeframe_ms(&self) -> i64;
+    fn aggregate_daily_raw_to_monthly(raw: Vec<(i64, f64, f64, f64, f64, f64)>) -> Vec<Bar>;
+    fn aggregate_bars_to_timeframe(raw: Vec<(i64, f64, f64, f64, f64, f64)>, tf_ms: i64) -> Vec<Bar>;
+    fn rebuild_from_lower_timeframe_if_dislocated(&mut self, cache: &SqliteCache, symbol: &str) -> bool;
+    fn apply_quote_cache_overlay(&mut self, cache: &SqliteCache, symbol: &str) -> bool;
+    fn find_cache_key(
+        &self,
+        cache: &SqliteCache,
+        dsm: &typhoon_engine::core::data_source::DataSourceManager,
+    ) -> String;
+    fn try_load(
+        &mut self,
+        cache: &SqliteCache,
+        log: &mut VecDeque<LogEntry>,
+        gpu: Option<&mut gpu_compute::GpuCompute>,
+    ) -> bool;
+    fn load(
+        &mut self,
+        cache: &SqliteCache,
+        log: &mut VecDeque<LogEntry>,
+        gpu: Option<&mut gpu_compute::GpuCompute>,
+        dsm: &typhoon_engine::core::data_source::DataSourceManager,
+    );
+}
+
+
+impl ChartDataLoad for ChartState {
+    fn should_reload_for_bar_fetch(
         &self,
         symbol: &str,
         timeframe: &str,
@@ -25,7 +62,7 @@ impl ChartState {
             || self.primary_source.eq_ignore_ascii_case(source)
     }
 
-    pub(crate) fn latest_quote_bar_from_cache(cache: &SqliteCache, symbol: &str) -> Option<Bar> {
+    fn latest_quote_bar_from_cache(cache: &SqliteCache, symbol: &str) -> Option<Bar> {
         chart_source_cache_keys("kraken-equities", symbol, "quote")
             .into_iter()
             .filter_map(|key| cache.get_bars_raw(&key).ok().flatten())
@@ -53,11 +90,11 @@ impl ChartState {
             })
     }
 
-    pub(crate) fn chart_timeframe_ms(&self) -> i64 {
+    fn chart_timeframe_ms(&self) -> i64 {
         (self.timeframe.minutes().max(1) as i64) * 60_000
     }
 
-    pub(crate) fn aggregate_daily_raw_to_monthly(
+    fn aggregate_daily_raw_to_monthly(
         raw: Vec<(i64, f64, f64, f64, f64, f64)>,
     ) -> Vec<Bar> {
         use chrono::{Datelike, TimeZone};
@@ -106,7 +143,7 @@ impl ChartState {
         monthly.into_values().collect()
     }
 
-    pub(crate) fn aggregate_bars_to_timeframe(
+    fn aggregate_bars_to_timeframe(
         raw: Vec<(i64, f64, f64, f64, f64, f64)>,
         tf_ms: i64,
     ) -> Vec<Bar> {
@@ -145,7 +182,7 @@ impl ChartState {
         aggregated
     }
 
-    pub(crate) fn rebuild_from_lower_timeframe_if_dislocated(
+    fn rebuild_from_lower_timeframe_if_dislocated(
         &mut self,
         cache: &SqliteCache,
         symbol: &str,
@@ -223,7 +260,7 @@ impl ChartState {
         false
     }
 
-    pub(crate) fn apply_quote_cache_overlay(&mut self, cache: &SqliteCache, symbol: &str) -> bool {
+    fn apply_quote_cache_overlay(&mut self, cache: &SqliteCache, symbol: &str) -> bool {
         let Some(quote) = Self::latest_quote_bar_from_cache(cache, symbol) else {
             return false;
         };
@@ -255,7 +292,7 @@ impl ChartState {
 
     /// Cache key for this symbol + timeframe.
     /// Try multiple prefix variants to find data in cache.
-    pub(crate) fn find_cache_key(
+    fn find_cache_key(
         &self,
         cache: &SqliteCache,
         dsm: &typhoon_engine::core::data_source::DataSourceManager,
@@ -415,7 +452,7 @@ impl ChartState {
     /// Load bars from cache. read_conn is exclusively owned by the UI thread,
     /// so lock() always succeeds immediately — no contention possible.
     /// Returns true if data was loaded (even if empty), false only on error.
-    pub(crate) fn try_load(
+    fn try_load(
         &mut self,
         cache: &SqliteCache,
         log: &mut VecDeque<LogEntry>,
@@ -923,7 +960,7 @@ impl ChartState {
     }
 
     /// Load bars from the shared cache, re-compute indicators.
-    pub(crate) fn load(
+    fn load(
         &mut self,
         cache: &SqliteCache,
         log: &mut VecDeque<LogEntry>,

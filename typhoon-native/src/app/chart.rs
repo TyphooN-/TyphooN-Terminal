@@ -372,6 +372,7 @@ pub(crate) use market_data_helpers::{
 pub(crate) use market_data_helpers::chart_quote_overlay_allowed;
 
 mod load_cache;
+pub(crate) use load_cache::ChartDataLoad;
 
 mod indicator_compute;
 
