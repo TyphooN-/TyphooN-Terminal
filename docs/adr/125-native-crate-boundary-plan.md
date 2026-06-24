@@ -1,6 +1,6 @@
 # ADR-125: Native Crate Boundary Plan
 
-**Status:** Targets 1 & 2 delivered (`typhoon-research-ui`, `typhoon-chart-ui`); Target 3's protocol blocker cleared by ADR-127 (now IMPLEMENTED) — the runtime cut + ADR-108 `research_compute → engine` remain | **Date:** 2026-06-20 |
+**Status:** Targets 1 & 2 delivered (`typhoon-research-ui`, `typhoon-chart-ui`); ADR-127 cleared Target 3's protocol cycle — Target 3 now scoped as a clean whole-`app_broker_processor` → `typhoon-broker-runtime` cut (2 trivial constants to relocate; no ADR-108 dependency) | **Date:** 2026-06-20 |
 **Last updated:** 2026-06-24 (**Target 1 complete** — `typhoon-research-ui` owns `render` +
 `window_shell` + `format` + the 55-module `packet` section tree; `command_research_windows`
 kept native as command dispatch. **Target 2 complete** — `typhoon-chart-ui` owns `types` +
@@ -844,20 +844,33 @@ made engine/std-only; and the protocol moved to **`typhoon_engine::broker::proto
 4-line native re-export shim keeping the ~220/97 call sites unchanged. `cargo tree` confirms the
 engine gained no native dependency.
 
-**So the protocol↔state cycle no longer exists.** What remains for Target 3 is two clean,
-independent cuts, each its own effort:
+**So the protocol↔state cycle no longer exists, and a post-ADR-127 scope of the whole
+`app_broker_processor/` (2026-06-24) supersedes the earlier "split `research_compute` to engine
+first" framing.** Measured against engine, the **entire** broker processor — all 77 files /
+~18.6k lines, both the 19 handler families *and* `research_compute` — references only **two**
+genuine native symbols, both trivial constants:
 
-1. **`research_compute → engine`** (ADR-108) — now unblocked: the `BrokerMsg` it emits lives in
-   engine, so the compute can follow without a native back-dependency. This is the larger of
-   the two (58 files / ~13.1k lines).
-2. **the native broker runtime → `typhoon-broker-runtime`** — the well-decoupled
-   `spawn_broker_message_processor` task + the 19 handler families, depending on the
-   engine-resident protocol + engine clients + cache. Feasible once (1) frees the handlers from
-   the `research_compute` call graph (or `research_compute` is injected).
+- `ALPACA_DEFAULT_HISTORICAL_RPM` (a `const u32 = 200` rate-limit in `app/alpaca_sync.rs`), and
+- `TyphooNApp::default_gemini_cli_model()` (a `&'static str` default model name).
 
-With Targets 1 & 2 delivered and Target 3's structural blocker removed by ADR-127, the broker
-crate is no longer gated by a cycle — it is sequenced behind ADR-108's `research_compute` move,
-which the engine-resident protocol now enables.
+Everything else is engine (`research_compute` alone has **431 engine refs, 0 `TyphooNApp`, 0
+egui**; the protocol/cache/clients are engine; channels are tokio, which engine already
+depends on). `research_compute` references engine types as **bare names through `use super::*`**
+— it is structurally one of the broker handlers (receive `BrokerCmd` → compute → emit
+`BrokerMsg`), so it should **stay with its siblings**, not split to engine. Keeping it native
+also keeps engine free of command-orchestration/runtime concerns (the ADR-108 caution).
+
+**Revised Target 3 plan: extract the whole `app_broker_processor/` as `typhoon-broker-runtime`,
+depending on `typhoon-engine` + tokio.** Resolve the two trivial constants (relocate to engine
+or the crate), then the bulk of the work is mechanical: replace `use super::*` across the 77
+files with explicit engine imports (the ADR-127 Phase B pattern, repeated), move the tree, and
+have `typhoon-native` call `spawn_broker_message_processor` from the crate. The processor task
+is already channel/cache/runtime-injected (0 `impl TyphooNApp`, 0 `self.` access), so the
+native↔crate seam is a single spawn call. No `research_compute → engine` / ADR-108 dependency
+is required for Target 3 after all.
+
+With Targets 1 & 2 delivered and ADR-127 removing the protocol cycle, Target 3 is now a clean
+(if large — 77-file) extraction with only two trivial constants to relocate first.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
