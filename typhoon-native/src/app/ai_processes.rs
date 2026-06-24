@@ -2,7 +2,7 @@ use super::*;
 
 impl TyphooNApp {
     pub(super) fn default_gemini_cli_model() -> &'static str {
-        "gemini-3.1-pro-preview"
+        typhoon_engine::core::ai_sessions::DEFAULT_GEMINI_CLI_MODEL
     }
 
     pub(super) fn gemini_cli_model_options() -> &'static [(&'static str, &'static str)] {

@@ -73,7 +73,7 @@ const DATA_BASE: &str = "https://data.alpaca.markets";
 /// Alpaca Basic historical data is currently documented at 200 req/min.
 /// We start there unless the caller provides a higher tier hint or the API
 /// confirms a different limit via `X-RateLimit-Limit` headers.
-const DEFAULT_BAR_REQUESTS_PER_MINUTE: u32 = 200;
+pub const DEFAULT_BAR_REQUESTS_PER_MINUTE: u32 = 200;
 
 /// If a single chunk takes longer than this, the API is throttling us progressively.
 /// Accept what we have rather than spending hours on historical data.

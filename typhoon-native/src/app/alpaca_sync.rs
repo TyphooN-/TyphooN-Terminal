@@ -8,7 +8,8 @@ use super::normalize_market_data_symbol;
 use super::sync_workset::{alpaca_sync_period_secs, normalize_sync_timeframe_key};
 use std::collections::HashMap;
 
-pub(super) const ALPACA_DEFAULT_HISTORICAL_RPM: u32 = 200;
+pub(super) const ALPACA_DEFAULT_HISTORICAL_RPM: u32 =
+    typhoon_engine::broker::alpaca::DEFAULT_BAR_REQUESTS_PER_MINUTE;
 pub(super) const ALPACA_HISTORICAL_RPM_PRESETS: [(&str, u32); 6] = [
     ("Auto (headers/default 200)", 0),
     ("Basic (200/min)", 200),

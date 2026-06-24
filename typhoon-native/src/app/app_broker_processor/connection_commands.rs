@@ -21,7 +21,7 @@ pub(super) async fn handle_connection_command(
                 api_key,
                 secret,
                 paper,
-                bar_requests_per_minute.max(ALPACA_DEFAULT_HISTORICAL_RPM),
+                bar_requests_per_minute.max(typhoon_engine::broker::alpaca::DEFAULT_BAR_REQUESTS_PER_MINUTE),
             );
             match b.get_account().await {
                 Ok(acct) => {
@@ -46,7 +46,7 @@ pub(super) async fn handle_connection_command(
             *alpaca_fetch_permits = Arc::new(tokio::sync::Semaphore::new(fetch_permits.max(1)));
             if let Some(b) = broker.as_ref() {
                 b.set_bar_requests_per_minute_hint(
-                    bar_requests_per_minute.max(ALPACA_DEFAULT_HISTORICAL_RPM),
+                    bar_requests_per_minute.max(typhoon_engine::broker::alpaca::DEFAULT_BAR_REQUESTS_PER_MINUTE),
                 )
                 .await;
             }
