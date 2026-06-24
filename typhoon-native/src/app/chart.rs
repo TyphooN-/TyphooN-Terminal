@@ -8,7 +8,7 @@ pub(crate) use super::chart_sources::chart_source_cache_keys;
 mod auto_fibonacci;
 mod camera_controls;
 mod mtf_overlays;
-pub(crate) use mtf_overlays::mtf_htf_cache_put;
+pub(crate) use mtf_overlays::{ChartMtfOverlays, mtf_htf_cache_put};
 
 // Chart view-model types + indicator palette now live in the typhoon-chart-ui crate
 // (ADR-125 Target 2, slice 5); re-exported so chart.rs + the app glob are unchanged.
@@ -376,6 +376,7 @@ mod load_cache;
 pub(crate) use load_cache::ChartDataLoad;
 
 mod indicator_compute;
+pub(crate) use indicator_compute::ChartIndicatorCompute;
 
 /// Merge equity/ETF bars from multiple providers into one continuous series.
 ///

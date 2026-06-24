@@ -1,11 +1,20 @@
 use super::*;
 
-impl ChartState {
-    pub(crate) fn compute_indicators(&mut self) {
+/// GPU/CPU indicator computation for a chart viewport (ADR-125 Target 2). A native
+/// extension trait, not an inherent impl, because it drives the native `gpu_compute`
+/// (wgpu) pipeline which stays in `typhoon-native`; `ChartState` itself lives in
+/// `typhoon-chart-ui`. Re-exported from `chart` so call sites keep `chart.compute_indicators(…)`.
+pub(crate) trait ChartIndicatorCompute {
+    fn compute_indicators(&mut self);
+    fn compute_indicators_gpu(&mut self, gpu: Option<&mut gpu_compute::GpuCompute>);
+}
+
+impl ChartIndicatorCompute for ChartState {
+    fn compute_indicators(&mut self) {
         self.compute_indicators_gpu(None);
     }
 
-    pub(crate) fn compute_indicators_gpu(&mut self, gpu: Option<&mut gpu_compute::GpuCompute>) {
+    fn compute_indicators_gpu(&mut self, gpu: Option<&mut gpu_compute::GpuCompute>) {
         let n = self.bars.len();
         let forming_bar_dirty_at_entry = self.forming_bar_dirty;
         // Cache reloads replace `bars` with the last persisted candle, which can lag the

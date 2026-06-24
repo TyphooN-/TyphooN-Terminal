@@ -91,7 +91,37 @@ mod mtf_htf_cache_tests {
     }
 }
 
-impl ChartState {
+/// Multi-timeframe overlay computation (HTF MAs/KAMA, previous-candle levels) for a chart
+/// viewport (ADR-125 Target 2). A native extension trait because it calls the native
+/// `ChartIndicatorCompute` GPU path and the module-local HTF bar cache; `ChartState` lives
+/// in `typhoon-chart-ui`. Re-exported from `chart` so call sites keep method syntax.
+pub(crate) trait ChartMtfOverlays {
+    fn load_mtf_htf_bars(
+        &self,
+        cache: &SqliteCache,
+        bare_sym: &str,
+        base_sym: &str,
+        tf_suffix: &str,
+    ) -> Option<Vec<Bar>>;
+    fn mtf_line_scale_ok(bars: &[Bar], projected: &[(usize, f64)]) -> bool;
+    fn htf_source_matches_host_scale(host: &[Bar], htf: &[Bar]) -> bool;
+    fn compute_mtf_sma(&mut self, cache: &SqliteCache);
+    fn ensure_mql_mtf_overlays_for_render(
+        &mut self,
+        cache: &SqliteCache,
+        show_mtf_ma: bool,
+        show_multi_kama: bool,
+    );
+    fn should_ensure_mql_mtf_overlays_for_render(
+        heavy_sync_in_progress: bool,
+        mtf_enabled: bool,
+        is_focused: bool,
+    ) -> bool;
+    fn compute_multi_kama(&mut self, cache: &SqliteCache);
+    fn mtf_base_and_bare_sym(&self) -> (String, String);
+    fn compute_prev_candle_levels_native(&mut self, cache: &SqliteCache);
+}
+impl ChartMtfOverlays for ChartState {
     /// Load higher-timeframe bars for an MTF overlay (MTF_MA / MultiKAMA),
     /// preferring the SAME cache source the chart's candles loaded from so the
     /// overlay never mixes price scales / adjustments with the displayed bars
@@ -196,7 +226,7 @@ impl ChartState {
     /// at the matched bars: a legitimately lagging average has a median near 1,
     /// whereas a mis-scaled feed is persistently many-fold off. Kept when the
     /// median ratio is within `[1/SCALE_TOL, SCALE_TOL]`.
-    pub(crate) fn mtf_line_scale_ok(bars: &[Bar], projected: &[(usize, f64)]) -> bool {
+    fn mtf_line_scale_ok(bars: &[Bar], projected: &[(usize, f64)]) -> bool {
         // Raised from 4.0 to allow legitimate SMA lag on post-crash equities (WOK H1 SMA200 can be 20-100x price).
         // Prevents MTF_MA from being silently dropped while still catching grossly mis-scaled feeds.
         const SCALE_TOL: f64 = 100.0;
@@ -228,7 +258,7 @@ impl ChartState {
     /// higher-TF whose SMA legitimately rides far above a crashed price (a W1/200
     /// over a −90% move — expected lag, not a scale fault) is kept, while a feed that
     /// is genuinely mis-scaled for a sustained block of bars is dropped.
-    pub(crate) fn htf_source_matches_host_scale(host: &[Bar], htf: &[Bar]) -> bool {
+    fn htf_source_matches_host_scale(host: &[Bar], htf: &[Bar]) -> bool {
         const SCALE_TOL: f64 = 4.0;
         const MAX_OFFSCALE_FRAC: f64 = 0.08; // clean sources ~0–1%; mis-scaled eras ≥12%
         if host.len() < 2 {
@@ -264,7 +294,7 @@ impl ChartState {
     /// Compute MTF SMA lines matching MTF_MA.mqh behavior.
     /// Loads HTF bars from cache, computes SMA on them, projects onto current chart.
     /// Lines: H1/200, H4/200, D1/200, W1/200, W1/100, MN1/100
-    pub(crate) fn compute_mtf_sma(&mut self, cache: &SqliteCache) {
+    fn compute_mtf_sma(&mut self, cache: &SqliteCache) {
         self.mtf_sma.clear();
         if self.bars.is_empty() {
             return;
@@ -368,7 +398,7 @@ impl ChartState {
         }
     }
 
-    pub(crate) fn ensure_mql_mtf_overlays_for_render(
+    fn ensure_mql_mtf_overlays_for_render(
         &mut self,
         cache: &SqliteCache,
         show_mtf_ma: bool,
@@ -385,7 +415,7 @@ impl ChartState {
         }
     }
 
-    pub(crate) fn should_ensure_mql_mtf_overlays_for_render(
+    fn should_ensure_mql_mtf_overlays_for_render(
         heavy_sync_in_progress: bool,
         mtf_enabled: bool,
         is_focused: bool,
@@ -393,7 +423,7 @@ impl ChartState {
         !heavy_sync_in_progress || !mtf_enabled || is_focused
     }
 
-    pub(crate) fn compute_multi_kama(&mut self, cache: &SqliteCache) {
+    fn compute_multi_kama(&mut self, cache: &SqliteCache) {
         self.multi_kama.clear();
         if self.bars.is_empty() {
             return;
@@ -565,7 +595,7 @@ impl ChartState {
     /// when its HTF series is present and passes `load_mtf_htf_bars`' scale guards;
     /// otherwise the aggregated value from `compute_indicators` is kept as a
     /// fallback. Cache-bound, so call from the load paths (not per render frame).
-    pub(crate) fn compute_prev_candle_levels_native(&mut self, cache: &SqliteCache) {
+    fn compute_prev_candle_levels_native(&mut self, cache: &SqliteCache) {
         if self.bars.is_empty() {
             return;
         }
