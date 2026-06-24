@@ -1,10 +1,11 @@
-use super::*;
+//! `ChartState` auto-Fibonacci computation (ADR-125 Target 2, slice 6c) — chart-local inherent impl, crate-side.
+use crate::state::ChartState;
 
 impl ChartState {
     /// Compute Auto Fibonacci levels from fractal swing points.
     /// Mirrors AutoFibonacci.mqh: finds most significant recent swing high/low
     /// and computes retracement (0-100%) + extension (127.2-423.6%) levels.
-    pub(crate) fn compute_auto_fibonacci(&mut self) {
+    pub fn compute_auto_fibonacci(&mut self) {
         self.auto_fib_levels.clear();
         self.auto_fib_swing = None;
         if self.bars.len() < 20 {

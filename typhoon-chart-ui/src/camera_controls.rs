@@ -1,7 +1,9 @@
-use super::*;
+//! `ChartState` camera/viewport controls (ADR-125 Target 2, slice 6c) — chart-local inherent impl, crate-side.
+use crate::state::ChartState;
+use crate::models::ChartCamera;
 
 impl ChartState {
-    pub(crate) fn natural_visible_price_view(&self) -> Option<(f64, f64)> {
+    pub fn natural_visible_price_view(&self) -> Option<(f64, f64)> {
         let (si, ei) = self.visible_range();
         if ei <= si {
             return None;
@@ -15,14 +17,14 @@ impl ChartState {
         Some(((min + max) * 0.5, (max - min).max(f64::EPSILON)))
     }
 
-    pub(crate) fn visible_price_range(&self) -> Option<(f64, f64)> {
+    pub fn visible_price_range(&self) -> Option<(f64, f64)> {
         if !self.manual_view_override {
             return None;
         }
         self.camera.explicit_price_range()
     }
 
-    pub(crate) fn sync_camera_to_legacy(&mut self) {
+    pub fn sync_camera_to_legacy(&mut self) {
         let (natural_center, natural_span) =
             self.natural_visible_price_view().unwrap_or((0.0, 1.0));
         self.camera.sync_legacy_fields(
@@ -37,7 +39,7 @@ impl ChartState {
         );
     }
 
-    pub(crate) fn reset_camera_from_legacy(&mut self) {
+    pub fn reset_camera_from_legacy(&mut self) {
         self.camera = ChartCamera::from_legacy(
             self.view_offset,
             self.visible_bars,
@@ -50,7 +52,7 @@ impl ChartState {
         }
     }
 
-    pub(crate) fn begin_chart_camera_pan(&mut self, rect_width: f32, rect_height: f32) {
+    pub fn begin_chart_camera_pan(&mut self, rect_width: f32, rect_height: f32) {
         // Do not rebuild the camera from rounded legacy fields once manual
         // free-look is active. `view_offset` is integer compatibility state;
         // `ChartCamera` is the authoritative fractional bar/price camera.
@@ -67,7 +69,7 @@ impl ChartState {
         self.mark_view_changed();
     }
 
-    pub(crate) fn pan_chart_camera_pixels(
+    pub fn pan_chart_camera_pixels(
         &mut self,
         delta: egui::Vec2,
         rect_width: f32,
@@ -88,7 +90,7 @@ impl ChartState {
         self.mark_view_changed();
     }
 
-    pub(crate) fn zoom_chart_price_by(&mut self, factor: f64) {
+    pub fn zoom_chart_price_by(&mut self, factor: f64) {
         let (natural_center, natural_span) =
             self.natural_visible_price_view().unwrap_or((0.0, 1.0));
         self.camera
@@ -97,13 +99,13 @@ impl ChartState {
         self.mark_view_changed();
     }
 
-    pub(crate) fn zoom_chart_bars_by(&mut self, factor: f64) {
+    pub fn zoom_chart_bars_by(&mut self, factor: f64) {
         self.camera.zoom_bars_by(factor, self.bars.len());
         self.sync_camera_to_legacy();
         self.mark_view_changed();
     }
 
-    pub(crate) fn mark_view_changed(&mut self) {
+    pub fn mark_view_changed(&mut self) {
         // Camera movement changes pixels even when no new bars arrive. The
         // renderer's live-WS early-out keys off `visible_bars_gen`; without
         // invalidating it, drag frames can reuse the old picture and look like
@@ -111,12 +113,12 @@ impl ChartState {
         self.visible_bars_gen = self.visible_bars_gen.wrapping_add(1);
     }
 
-    pub(crate) fn visible_range(&self) -> (usize, usize) {
+    pub fn visible_range(&self) -> (usize, usize) {
         let (start, end, _, _) = self.visible_slot_window();
         (start, end)
     }
 
-    pub(crate) fn visible_slot_window(&self) -> (usize, usize, f32, usize) {
+    pub fn visible_slot_window(&self) -> (usize, usize, f32, usize) {
         if self.bars.is_empty() {
             return (0, 0, 0.0, self.visible_bars.max(1));
         }
