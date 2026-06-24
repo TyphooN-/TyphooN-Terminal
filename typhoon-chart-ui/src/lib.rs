@@ -9,5 +9,6 @@
 //! `TyphooNApp` state graph, and calls into this crate. This crate must never depend
 //! on `typhoon-native`.
 
+pub mod drawing;
 pub mod indicators;
 pub mod types;
