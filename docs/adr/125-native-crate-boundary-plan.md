@@ -1,13 +1,14 @@
 # ADR-125: Native Crate Boundary Plan
 
-**Status:** Target 1 (`typhoon-research-ui`) complete; Target 2 (`typhoon-chart-ui`) Phase 0 done | **Date:** 2026-06-20 |
+**Status:** Targets 1 & 2 complete (`typhoon-research-ui`, `typhoon-chart-ui`); Target 3 evaluation next | **Date:** 2026-06-20 |
 **Last updated:** 2026-06-24 (**Target 1 complete** — `typhoon-research-ui` owns `render` +
-`window_shell` + `format` + the 55-module `packet` section tree + `SymbolResearchContext`,
-acyclic, 2272 workspace tests green; `command_research_windows` assessed as native command
-dispatch and kept in native. **Target 2 Phase 0 done** — chart renderers are already
-`TyphooNApp`-free free functions; slice plan recorded, gated by the `ChartState` orphan-rule
-+ `equity_merge`/`OrderBroker` constraint — see
-[Implementation Progress](#implementation-progress))
+`window_shell` + `format` + the 55-module `packet` section tree; `command_research_windows`
+kept native as command dispatch. **Target 2 complete** — `typhoon-chart-ui` owns `types` +
+`indicators` + `drawing` + `models` + `state` (`ChartState`) + the 10k-line `render` tree
+(~15.5k lines), acyclic, 2272 workspace tests green; the broker/cache/gpu pipeline stays
+native behind extension traits (`ChartDataLoad`/`ChartIndicatorCompute`/`ChartMtfOverlays`/
+`ChartSymbolMatch`). **Target 3 (`typhoon-broker-runtime`) is next to evaluate** per Phase 4
+— see [Implementation Progress](#implementation-progress))
 
 **Related:** ADR-086 (`typhoon-native` module decomposition), ADR-108
 (research module compile-time modularization), ADR-118 (test module
@@ -751,6 +752,40 @@ the crate — the chart analogue of `command_research_windows`.
 6. Leave `chart_ops.rs` + `equity_merge.rs` free fns in native as integration glue; verify
    pan/zoom, axis drag, crosshair, drawing tools, MTF overlays, live forming bars, source
    labels (Phase 3 acceptance checks).
+
+### Target 2 — `typhoon-chart-ui` COMPLETE (2026-06-24)
+
+Done in seven verified, individually-committed slices. The crate now owns the chart-UI
+presentation + state layer (**~15.5k lines**): `types` (`Bar`/`ChartType`/`Timeframe` +
+the `bare_symbol_from_key` cache-key primitive), `indicators` (3.1k-line indicator math),
+`drawing` (egui drawing tools), `models` (`ChartCamera`/`IndicatorFlags` + the full color
+palette), `state` (`ChartState` + camera/auto-fib behavior), and `render` (the 10k-line
+egui rendering tree). Deps: `typhoon-engine` + `egui` + `chrono` — acyclic, never
+`typhoon-native`; full workspace 2272 tests green at every slice.
+
+What stays in `typhoon-native` (~6.9k lines of chart glue): `chart_ops.rs` (the
+`impl TyphooNApp` chart dispatch — the chart analogue of `command_research_windows`),
+`chart_sources.rs`, `chart.rs` (now a thin 166-line glue module: `mod` wiring + the
+`ChartState` re-export), and the `chart/` data pipeline (`equity_merge`, `load_cache`,
+`indicator_compute`, `mtf_overlays`, `market_data_helpers`).
+
+**The orphan-rule pattern that made it work.** `ChartState` had to move (the renderers
+read 130 distinct fields, so a borrow-view was not viable), but several of its inherent
+`impl` blocks call native-only glue — the broker-coupled equity-merge (`OrderBroker`, the
+ADR-126 `MERGE_PRIMARY_BROKER` atomic), the `gpu_compute` (wgpu, 6.3k lines) pipeline, and
+the market-data cache-key normalizer. Since Rust forbids an inherent `impl ChartState` in
+native once `ChartState` is foreign, those blocks became **native extension traits**
+implemented for the (now-crate) type — `ChartDataLoad`, `ChartIndicatorCompute`,
+`ChartMtfOverlays`, `ChartSymbolMatch` — with byte-identical bodies and unchanged
+method-syntax call sites (each trait re-exported through the `chart` → app glob). This kept
+the ADR-126-sensitive merge logic untouched and native, while the data type + pure behavior
+moved. The plan's "convert `equity_merge` impls to free fns" step (3) turned out unnecessary
+— `equity_merge.rs` was already free functions, so it simply stays native as-is.
+
+Notable boundary calls: `gpu_compute` (wgpu) is too heavy/broad to pull into a UI crate, so
+indicator compute stays native behind a trait rather than moving; the base chart palette was
+split out of native `app::common` (UI-button colors + `nav_*` helpers stay native); the pure
+`bare_symbol_from_key` parser moved to `types` since both renderers and native need it.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
