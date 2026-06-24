@@ -295,3 +295,24 @@ pub struct IndicatorFlags {
     pub fvg: bool,
     pub order_blocks: bool,
 }
+
+// ─── base chart palette (ADR-125 Target 2, slice 7; moved from native app::common so the
+// crate renderers own the colors they draw with). Native re-exports these from app::common.
+pub const BG: egui::Color32 = egui::Color32::from_rgb(0, 0, 0);
+pub const GRID: egui::Color32 = egui::Color32::from_rgb(33, 33, 33); // #333 (WebKit dotted grid)
+pub const UP: egui::Color32 = egui::Color32::from_rgb(0, 255, 0); // #00ff00 (bright green — solid fill)
+pub const DOWN: egui::Color32 = egui::Color32::from_rgb(255, 0, 0); // #ff0000 (bright red — solid fill)
+pub const SMA200_COL: egui::Color32 = egui::Color32::from_rgb(255, 255, 0); // #ffff00 yellow
+pub const SMA100_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255); // #64b4ff blue
+pub const KAMA_COL: egui::Color32 = egui::Color32::from_rgb(220, 220, 230); // soft white (KAMA)
+pub const EMA_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 60);
+pub const BB_COL: egui::Color32 = egui::Color32::from_rgb(80, 160, 200);
+pub const BB_FILL: egui::Color32 = egui::Color32::from_rgba_premultiplied(80, 160, 200, 25);
+pub const AXIS_TEXT: egui::Color32 = egui::Color32::from_rgb(140, 140, 160); // #8c8ca0
+pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(76, 175, 80);
+pub const FISHER_POS: egui::Color32 = egui::Color32::from_rgb(0, 255, 0); // #00ff00 (bright green)
+pub const FISHER_NEG: egui::Color32 = egui::Color32::from_rgb(255, 0, 0); // #ff0000 (bright red)
+pub const FISHER_SIG: egui::Color32 = egui::Color32::from_rgb(169, 169, 169); // dark gray (signal)
+pub const RSI_LINE: egui::Color32 = egui::Color32::from_rgb(200, 180, 60); // #c8b43c (mustard yellow)
+pub const MACD_LINE_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255); // #64b4ff
+pub const MACD_SIG_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 48); // #ff8230 (orange)
