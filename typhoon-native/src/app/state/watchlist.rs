@@ -7,41 +7,10 @@ pub(crate) struct KrakenEquityQuoteMeta {
     pub(crate) price: f64,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct WatchlistRow {
-    /// Display symbol name (e.g. "BTCUSD", "SLV", "CC").
-    pub(crate) symbol: String,
-    /// Full cache key for loading.
-    pub(crate) cache_key: String,
-    /// Last close price.
-    pub(crate) last: f64,
-    /// Previous close (for change calculation).
-    pub(crate) prev_close: f64,
-    /// Current-day regular-session close (authoritative daily close, e.g.
-    /// Alpaca `dailyBar.c` / Yahoo `regularMarketPrice`). Timeframe-independent,
-    /// unlike a chart's own last-bar close, which differs between H1/H4/W1.
-    /// `0.0` when unknown. Used to drive the extended-hours "Daily Close" badge.
-    #[serde(default)]
-    pub(crate) regular_close: f64,
-    /// Absolute change.
-    pub(crate) change: f64,
-    /// Percentage change.
-    pub(crate) change_pct: f64,
-    /// Last bar volume.
-    pub(crate) volume: f64,
-    /// Extended hours change % (pre/post market).
-    pub(crate) ext_change_pct: f64,
-    /// Live bid from WS (0.0 when none or stale >30s).
-    #[serde(default, skip)]
-    pub(crate) live_bid: f64,
-    /// Live ask from WS (0.0 when none or stale >30s).
-    #[serde(default, skip)]
-    pub(crate) live_ask: f64,
-    /// When the live quote arrived (for freshness check, same rule as charts).
-    #[serde(default, skip)]
-    pub(crate) live_quote_at: Option<std::time::Instant>,
-}
-
+// `WatchlistRow` now lives in typhoon-engine (ADR-127) so the broker message protocol
+// depends only on engine/std. Re-exported here so the row builders below and the native
+// call sites (via the `state` glob) are unchanged.
+pub(crate) use typhoon_engine::core::watchlist::WatchlistRow;
 pub(crate) fn watchlist_row_from_raw_bars(
     symbol: &str,
     cache_key: &str,
