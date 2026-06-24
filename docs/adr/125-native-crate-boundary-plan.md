@@ -1,6 +1,6 @@
 # ADR-125: Native Crate Boundary Plan
 
-**Status:** Targets 1 & 2 delivered (`typhoon-research-ui`, `typhoon-chart-ui`); ADR-127 cleared Target 3's protocol cycle — Target 3 now scoped as a clean whole-`app_broker_processor` → `typhoon-broker-runtime` cut (2 trivial constants to relocate; no ADR-108 dependency) | **Date:** 2026-06-20 |
+**Status:** Targets 1 & 2 delivered (`typhoon-research-ui`, `typhoon-chart-ui`); ADR-127 cleared Target 3's protocol cycle. Target 3 still gated by a native-helper closure (~17 fetch/sync/watchlist helpers, compiler-verified) that needs relocating first — extraction attempt reverted, accurate closure documented | **Date:** 2026-06-20 |
 **Last updated:** 2026-06-24 (**Target 1 complete** — `typhoon-research-ui` owns `render` +
 `window_shell` + `format` + the 55-module `packet` section tree; `command_research_windows`
 kept native as command dispatch. **Target 2 complete** — `typhoon-chart-ui` owns `types` +
@@ -844,33 +844,52 @@ made engine/std-only; and the protocol moved to **`typhoon_engine::broker::proto
 4-line native re-export shim keeping the ~220/97 call sites unchanged. `cargo tree` confirms the
 engine gained no native dependency.
 
-**So the protocol↔state cycle no longer exists, and a post-ADR-127 scope of the whole
-`app_broker_processor/` (2026-06-24) supersedes the earlier "split `research_compute` to engine
-first" framing.** Measured against engine, the **entire** broker processor — all 77 files /
-~18.6k lines, both the 19 handler families *and* `research_compute` — references only **two**
-genuine native symbols, both trivial constants:
+**So the protocol↔state cycle no longer exists** (the structural blocker is gone), and the
+post-ADR-127 framing supersedes the earlier "split `research_compute` to engine first" idea —
+`research_compute` references engine types as **bare names through `use super::*`** (431 engine
+refs, 0 `TyphooNApp`, 0 egui) and is structurally one of the broker handlers (`BrokerCmd` →
+compute → emit `BrokerMsg`), so it should **stay with its siblings**, not split to engine
+(which also keeps engine free of command-orchestration concerns, the ADR-108 caution).
 
-- `ALPACA_DEFAULT_HISTORICAL_RPM` (a `const u32 = 200` rate-limit in `app/alpaca_sync.rs`), and
-- `TyphooNApp::default_gemini_cli_model()` (a `&'static str` default model name).
+**Correction (an attempted extraction surfaced the real closure).** A first crate-extraction
+attempt was made on the premise — from a grep-based scan — that the whole `app_broker_processor/`
+had only *two* trivial native couplings (`ALPACA_DEFAULT_HISTORICAL_RPM`,
+`TyphooNApp::default_gemini_cli_model()`; both removed in the Target-3-prep commit). **That scan
+was incomplete.** Once those two were gone and the tree was moved to a crate, the compiler
+found **~17 more native symbols** the processor calls that the scan's name-patterns missed — a
+real dependency closure, not constants:
 
-Everything else is engine (`research_compute` alone has **431 engine refs, 0 `TyphooNApp`, 0
-egui**; the protocol/cache/clients are engine; channels are tokio, which engine already
-depends on). `research_compute` references engine types as **bare names through `use super::*`**
-— it is structurally one of the broker handlers (receive `BrokerCmd` → compute → emit
-`BrokerMsg`), so it should **stay with its siblings**, not split to engine. Keeping it native
-also keeps engine free of command-orchestration/runtime concerns (the ADR-108 caution).
+- **fetch-task runners** — `run_alpaca_fetch_task`, `run_alpaca_batch_fetch_task`,
+  `run_kraken_fetch_task`, `run_kraken_futures_fetch_task` (`app/broker_fetch.rs`, ~786 l);
+- **Yahoo fallback fetch** — `fetch_yahoo_chart_bars`, `store_fallback_bars`,
+  `yahoo_chart_provider_no_data_error` (`app/fallback_bars.rs`, ~355 l);
+- **sync permits** — `KRAKEN_PUBLIC_FETCH_PERMITS`, `KRAKEN_EQUITIES_FETCH_PERMITS`
+  (`app/sync_config.rs`);
+- **watchlist builders** — `watchlist_row_from_raw_bars`, `empty_watchlist_row`
+  (`app/state/watchlist.rs`); watchlist/yahoo predicates in `app/state/models.rs`;
+- **misc** — `chart_source_cache_keys` (`app/chart_sources.rs`),
+  `normalize_kraken_equity_symbol_list` (`app/market_data_sync.rs`),
+  `extract_news_symbols_from_market_data_cache` (`app/chart/equity_merge.rs`).
 
-**Revised Target 3 plan: extract the whole `app_broker_processor/` as `typhoon-broker-runtime`,
-depending on `typhoon-engine` + tokio.** Resolve the two trivial constants (relocate to engine
-or the crate), then the bulk of the work is mechanical: replace `use super::*` across the 77
-files with explicit engine imports (the ADR-127 Phase B pattern, repeated), move the tree, and
-have `typhoon-native` call `spawn_broker_message_processor` from the crate. The processor task
-is already channel/cache/runtime-injected (0 `impl TyphooNApp`, 0 `self.` access), so the
-native↔crate seam is a single spawn call. No `research_compute → engine` / ADR-108 dependency
-is required for Target 3 after all.
+The extraction was reverted to a clean state (the prep commit stands). Most of the closure is
+engine-adjacent and movable (`broker_fetch`/`fallback_bars`/`sync_config` are `TyphooNApp`-free),
+but it has **placement problems**, not just mechanics: `chart_source_cache_keys` is cache/chart
+logic (not broker-runtime), one helper lives in `market_data_sync.rs` which *has* `impl
+TyphooNApp`, and several of these files are shared with the native sync subsystem. This is
+exactly the "broker handlers touch fetch/cache/app-level coordination" entanglement the ADR
+flagged as the reason broker extraction is highest-risk.
 
-With Targets 1 & 2 delivered and ADR-127 removing the protocol cycle, Target 3 is now a clean
-(if large — 77-file) extraction with only two trivial constants to relocate first.
+**Revised Target 3 plan: it needs a prerequisite decoupling effort, not a one-shot move.**
+First relocate the helper closure to its right homes — the pure fetch/Yahoo/permit helpers to
+a shared lower layer (engine, or the crate once it exists), the cache-key helper to engine,
+and extract the one helper out of the `impl TyphooNApp` file — re-exporting from native so
+callers are stable (the proven pattern). *Then* the `use super::*` → engine-prelude move of the
+77-file tree is the clean mechanical cut, with a single `spawn_broker_message_processor` seam.
+Scope the closure with the **compiler**, not a grep, before estimating.
+
+With Targets 1 & 2 delivered and ADR-127 removing the protocol cycle, Target 3 is unblocked at
+the protocol layer but still gated by this native-helper closure — a bounded but real
+decoupling slice that must land first.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
