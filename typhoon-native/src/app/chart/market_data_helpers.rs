@@ -4,14 +4,8 @@ use super::*;
 /// `source:SYM:TF`, legacy 2-part `SYM:TF`, or bare `SYM`. Used by load
 /// paths that need to put a canonical symbol into `ChartState::symbol`
 /// so `try_load` and the chart header agree on its shape.
-pub(crate) fn bare_symbol_from_key(key: &str) -> String {
-    let parts: Vec<&str> = key.split(':').collect();
-    match parts.as_slice() {
-        [_src, sym, _tf] => (*sym).to_string(),
-        [sym, _tf] => (*sym).to_string(),
-        _ => key.to_string(),
-    }
-}
+// `bare_symbol_from_key` moved to typhoon-chart-ui (ADR-125 Target 2, slice 7b); re-exported.
+pub(crate) use typhoon_chart_ui::types::bare_symbol_from_key;
 
 pub(crate) fn normalize_market_data_symbol(symbol: &str) -> String {
     let bare = bare_symbol_from_key(symbol).to_uppercase();

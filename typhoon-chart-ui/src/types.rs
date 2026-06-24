@@ -132,3 +132,15 @@ impl Timeframe {
         }
     }
 }
+
+/// Bare ticker from a `source:symbol:timeframe` (or `symbol:timeframe`) cache key
+/// (ADR-125 Target 2, slice 7b). A symbol-key primitive shared by the chart renderers
+/// (axis ticker label, time-axis) and native cache/market-data code; native re-exports it.
+pub fn bare_symbol_from_key(key: &str) -> String {
+    let parts: Vec<&str> = key.split(':').collect();
+    match parts.as_slice() {
+        [_src, sym, _tf] => (*sym).to_string(),
+        [sym, _tf] => (*sym).to_string(),
+        _ => key.to_string(),
+    }
+}

@@ -1,6 +1,6 @@
 use super::*;
 
-pub(in crate::app) fn format_price(p: f64) -> String {
+pub fn format_price(p: f64) -> String {
     if p == 0.0 {
         return "0".into();
     }
@@ -60,7 +60,7 @@ pub(super) fn format_signed_price(p: f64) -> String {
 }
 
 /// Buffer-reusing variant of format_price — writes into caller's String to avoid heap alloc per call.
-pub(in crate::app) fn format_price_buf(p: f64, buf: &mut String) {
+pub fn format_price_buf(p: f64, buf: &mut String) {
     use std::fmt::Write;
     buf.clear();
     if p == 0.0 {
@@ -77,7 +77,7 @@ pub(in crate::app) fn format_price_buf(p: f64, buf: &mut String) {
     }
 }
 
-pub(in crate::app) fn format_ts(ts_ms: i64, tf: Timeframe) -> String {
+pub fn format_ts(ts_ms: i64, tf: Timeframe) -> String {
     let mut buf = String::with_capacity(18);
     format_ts_buf(ts_ms, tf, &mut buf);
     buf
@@ -234,7 +234,7 @@ pub(super) fn format_candle_countdown(remaining_ms: i64) -> String {
 }
 
 /// Buffer-reusing variant of format_ts — writes into caller's String to avoid heap alloc per call.
-pub(in crate::app) fn format_ts_buf(ts_ms: i64, tf: Timeframe, buf: &mut String) {
+pub fn format_ts_buf(ts_ms: i64, tf: Timeframe, buf: &mut String) {
     use chrono::TimeZone;
     buf.clear();
     let dt = chrono::Utc

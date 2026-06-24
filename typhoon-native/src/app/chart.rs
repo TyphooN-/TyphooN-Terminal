@@ -11,13 +11,7 @@ pub(crate) use mtf_overlays::{ChartMtfOverlays, mtf_htf_cache_put};
 // Chart view-model types + indicator palette now live in the typhoon-chart-ui crate
 // (ADR-125 Target 2, slice 5); re-exported so chart.rs + the app glob are unchanged.
 pub(crate) use typhoon_chart_ui::models::{
-    ADX_COL, BVOL_CHURN, BVOL_CLIMAX_DN, BVOL_CLIMAX_UP, BVOL_HIGH, BVOL_LOW, BVOL_NORMAL, CCI_COL,
-    CHART_MIN_MAIN_CHART_H, CHART_RIGHT_MARGIN, CHART_SUB_PANE_H, DI_MINUS_COL,
-    DI_PLUS_COL, EHLERS_CG_COL, EHLERS_CYBER_COL, EHLERS_DEC_COL, EHLERS_EBSW_COL, EHLERS_FAMA_COL,
-    EHLERS_ITL_COL, EHLERS_MAMA_COL, EHLERS_ROOF_COL, EHLERS_SS_COL, HMA_COL, ICHI_CLOUD_BEAR,
-    ICHI_CLOUD_BULL, ICHI_KIJUN, ICHI_SPAN_A, ICHI_SPAN_B, ICHI_TENKAN, IndicatorFlags, MFI_COL,
-    OBV_COL, PPO_LINE_COL, PPO_SIG_COL, SAR_COL, STOCH_D_COL, STOCH_K_COL, TRIX_LINE_COL,
-    TRIX_SIG_COL, ULTOSC_COL, WILLR_COL, WMA_COL, chart_price_pane_height,
+    ADX_COL, CCI_COL, CHART_RIGHT_MARGIN, HMA_COL, IndicatorFlags, MFI_COL, PPO_LINE_COL, SAR_COL, STOCH_K_COL, TRIX_LINE_COL, ULTOSC_COL, WILLR_COL, WMA_COL, chart_price_pane_height,
 };
 // ChartCamera is constructed only by native chart tests now (ChartState owns it in-crate).
 #[cfg(test)]

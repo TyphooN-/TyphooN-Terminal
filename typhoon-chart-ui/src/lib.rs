@@ -14,5 +14,6 @@ pub mod camera_controls;
 pub mod drawing;
 pub mod indicators;
 pub mod models;
+pub mod render;
 pub mod state;
 pub mod types;

@@ -25,8 +25,7 @@ pub fn nav_muted(ui: &mut egui::Ui, text: impl Into<String>) {
 // Base chart palette now lives in typhoon-chart-ui (ADR-125 Target 2, slice 7); re-exported
 // so the ~66 native files using UP/DOWN/AXIS_TEXT/… and the app glob are unchanged.
 pub(crate) use typhoon_chart_ui::models::{
-    ACCENT, AXIS_TEXT, BB_COL, BB_FILL, BG, DOWN, EMA_COL, FISHER_NEG, FISHER_POS, FISHER_SIG,
-    GRID, KAMA_COL, MACD_LINE_COL, MACD_SIG_COL, RSI_LINE, SMA100_COL, SMA200_COL, UP,
+    ACCENT, AXIS_TEXT, BB_COL, BG, DOWN, EMA_COL, FISHER_NEG, FISHER_POS, KAMA_COL, MACD_LINE_COL, RSI_LINE, SMA100_COL, SMA200_COL, UP,
 };
 
 // ─── right panel button colours (exact WebKit CSS values) ────────────────────
