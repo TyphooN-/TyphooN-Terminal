@@ -1,6 +1,7 @@
 pub mod alpaca;
 pub mod kraken;
 pub mod protocol;
+pub mod sync_config;
 
 use alpaca::{AccountInfo, AssetInfo, Bar, OrderInfo, OrderResult, PositionInfo};
 use async_trait::async_trait;

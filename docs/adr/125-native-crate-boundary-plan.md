@@ -891,6 +891,15 @@ With Targets 1 & 2 delivered and ADR-127 removing the protocol cycle, Target 3 i
 the protocol layer but still gated by this native-helper closure — a bounded but real
 decoupling slice that must land first.
 
+**Closure reduction started (2026-06-25).** The first bounded slice moved the two broker
+runtime permit constants (`KRAKEN_PUBLIC_FETCH_PERMITS`, `KRAKEN_EQUITIES_FETCH_PERMITS`) to
+`typhoon_engine::broker::sync_config` with a native compatibility re-export, and moved the
+chart source cache-key generator to `typhoon_chart_ui::cache_keys` with a native shim. This
+removes the broker processor's direct dependency on native `sync_config` and native
+`chart_sources` while preserving call sites. The remaining closure is the fetch/Yahoo task
+runners, watchlist row builders/predicates, Kraken equity symbol normalization, and market-data
+news-symbol extraction.
+
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
 The Phase-1 decoupling work that preceded the crate (deciding the public surface,
