@@ -986,6 +986,10 @@ The next physical processor-child move relocated `kraken_order_ops` into
 `typhoon_broker_runtime::kraken_order_ops`; native now imports that runtime module for Kraken exit
 sync, trade/open-order refresh, order placement, cancellation, and REST resync routing while
 passing Kraken broker handles explicitly.
+The next physical processor-child move relocated `matrix_commands` into
+`typhoon_broker_runtime::matrix_commands`; native now imports that runtime module for Matrix room
+join, message fetch, image send, and text send routing while the runtime crate owns the needed
+Tokio fs feature for screenshot reads.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

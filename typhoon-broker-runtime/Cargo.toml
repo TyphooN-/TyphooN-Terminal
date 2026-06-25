@@ -13,7 +13,7 @@ path = "src/lib.rs"
 typhoon-engine = { workspace = true }
 typhoon-chart-ui = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls"] }
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["fs", "sync", "time"] }
 chrono = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

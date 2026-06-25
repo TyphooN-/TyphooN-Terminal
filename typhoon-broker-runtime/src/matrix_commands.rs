@@ -1,4 +1,4 @@
-use super::prelude::*;
+use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
 
 fn encode_matrix_room_path(room_id: &str, encode_hash: bool) -> String {
     let mut encoded = String::with_capacity(room_id.len());
@@ -13,7 +13,7 @@ fn encode_matrix_room_path(room_id: &str, encode_hash: bool) -> String {
     encoded
 }
 
-pub(super) fn handle_matrix_command(
+pub fn handle_matrix_command(
     cmd: BrokerCmd,
     broker_msg_tx_clone: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
 ) {
