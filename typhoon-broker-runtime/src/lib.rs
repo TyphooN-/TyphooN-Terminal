@@ -8,3 +8,4 @@
 pub mod misc_commands;
 pub mod prelude;
 pub mod resources;
+pub mod symbol_search;

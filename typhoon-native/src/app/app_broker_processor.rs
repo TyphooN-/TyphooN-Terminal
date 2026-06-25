@@ -1,6 +1,7 @@
 use crate::app::*;
 use typhoon_broker_runtime::misc_commands;
 use typhoon_broker_runtime::resources::BrokerRuntimeResources;
+use typhoon_broker_runtime::symbol_search;
 
 mod prelude;
 mod ai_chat;
@@ -19,7 +20,6 @@ mod news;
 mod research_compute;
 mod research_fetch;
 mod storage;
-mod symbol_search;
 mod watchlist_quotes;
 
 pub(super) fn spawn_broker_message_processor(

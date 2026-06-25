@@ -1,6 +1,9 @@
-use super::prelude::*;
+use std::collections::HashSet;
 
-pub(super) async fn handle_symbol_search_command(
+use typhoon_engine::broker::alpaca::AlpacaBroker;
+use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
+
+pub async fn handle_symbol_search_command(
     query: String,
     broker: Option<&AlpacaBroker>,
     broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
@@ -64,4 +67,17 @@ pub(super) async fn handle_symbol_search_command(
     let _ = broker_msg_tx.send(BrokerMsg::JsonResult("Symbol Search".into(), text));
     let suggestions: Vec<(String, String, String)> = all_suggestions.into_iter().take(25).collect();
     let _ = broker_msg_tx.send(BrokerMsg::SymbolSuggestions(suggestions));
+}
+
+pub async fn handle_symbol_search_cmd(
+    cmd: BrokerCmd,
+    broker: Option<&AlpacaBroker>,
+    broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
+) {
+    match cmd {
+        BrokerCmd::SearchSymbols { query } => {
+            handle_symbol_search_command(query, broker, broker_msg_tx).await;
+        }
+        _ => unreachable!("non-symbol-search command routed to symbol search handler"),
+    }
 }

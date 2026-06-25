@@ -959,6 +959,9 @@ The first physical processor-child move relocated `misc_commands` into
 `typhoon_broker_runtime::misc_commands`; native now imports that runtime module for
 `MarkUnresolvable`, `GetQuote`, and `GetMarketClock` routing instead of compiling a local child
 module for those stateless command arms.
+The next physical processor-child move relocated `symbol_search` into
+`typhoon_broker_runtime::symbol_search`; native now imports that runtime module for
+`SearchSymbols` routing instead of compiling a local child module.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
