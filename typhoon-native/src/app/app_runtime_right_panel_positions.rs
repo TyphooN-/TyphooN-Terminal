@@ -1,5 +1,13 @@
 use super::*;
 
+fn alpaca_positions_should_render(
+    _broker_connected: bool,
+    show_alpaca_positions: bool,
+    positions: &[PositionInfo],
+) -> bool {
+    show_alpaca_positions && !positions.is_empty()
+}
+
 #[allow(deprecated)]
 impl TyphooNApp {
     pub(super) fn render_right_panel_positions_section(&mut self, ui: &mut egui::Ui) {
@@ -55,8 +63,11 @@ impl TyphooNApp {
             }
             let mut has_positions = false;
             // Live broker positions from Alpaca.
-            let has_live = self.broker_connected && show_alpaca_positions;
-            if has_live && !self.live_positions.is_empty() {
+            if alpaca_positions_should_render(
+                self.broker_connected,
+                show_alpaca_positions,
+                &self.live_positions,
+            ) {
                 has_positions = true;
                 let mut close_sym: Option<String> = None;
                 let mut lp_action = SymbolAction::None;
@@ -392,5 +403,30 @@ impl TyphooNApp {
             RightPanelSectionId::Positions,
             &positions_section.header_response,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn position(symbol: &str) -> PositionInfo {
+        PositionInfo {
+            symbol: symbol.to_string(),
+            qty: 1.0,
+            side: "long".to_string(),
+            avg_entry_price: 10.0,
+            market_value: 10.0,
+            unrealized_pl: 0.0,
+            asset_class: "us_equity".to_string(),
+            asset_id: format!("asset:{symbol}"),
+        }
+    }
+
+    #[test]
+    fn cached_alpaca_positions_render_even_when_broker_is_temporarily_disconnected() {
+        let positions = vec![position("CC"), position("WEN")];
+
+        assert!(alpaca_positions_should_render(false, true, &positions));
     }
 }
