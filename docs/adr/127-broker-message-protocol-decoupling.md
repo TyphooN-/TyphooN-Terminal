@@ -1,6 +1,7 @@
 # ADR-127: Broker Message Protocol Decoupling (prerequisite for ADR-125 Target 3)
 
-**Status:** IMPLEMENTED (Phases A–C done 2026-06-24) | **Date:** 2026-06-24 |
+**Status:** IMPLEMENTED (Phases A–C done 2026-06-24; ADR-125 Target 3 completed
+2026-06-25) | **Date:** 2026-06-24 |
 **Related:** ADR-125 (native crate boundary plan — this unblocks its Target 3,
 `typhoon-broker-runtime`), ADR-108 (research module compile-time modularization — the
 `research_compute` engine split this depends on), ADR-126 (primary/assist broker selection —
@@ -18,7 +19,8 @@ channel/cache/runtime params, the 19 handler files have **0 `impl TyphooNApp`** 
 
 The actual blocker is a **dependency cycle through the broker message protocol**. The
 protocol — `BrokerCmd` / `BrokerMsg` / `OrderBroker` / `QuickTradePlan` /
-`TradeAccountSnapshot` in `typhoon-native/src/app/state/broker_messages.rs` (~3.7k lines) — is
+`TradeAccountSnapshot`, then a native broker-message module and now
+`typhoon_engine::broker::protocol` — is
 the app-wide message bus (referenced in **220 / 97 files**). Moving it into a native-adjacent
 crate as-is would pull native state across the boundary. Measured coupling:
 
@@ -90,8 +92,9 @@ Create `typhoon_engine::broker::protocol` with `BrokerCmd`/`BrokerMsg`/`OrderBro
 compiles unchanged and the full workspace test suite is green. Confirm acyclic
 (`engine` gains no dependency on `native`).
 
-After Phase C, hand off: ADR-108 picks up `research_compute → engine`; ADR-125 re-opens
-Target 3 for the native broker runtime.
+After Phase C, hand off: ADR-108 can continue tracking any future engine-side research
+compute ownership questions; ADR-125 re-opened and then completed Target 3 for the native
+broker runtime.
 
 ## Guardrails
 
@@ -113,8 +116,9 @@ Target 3 for the native broker runtime.
 Positive:
 - Unblocks ADR-125 Target 3 by removing the only structural blocker (the protocol↔state cycle),
   reduced by measurement to a single relocatable DTO plus import hygiene.
-- Unblocks ADR-108's `research_compute → engine` split: the protocol it emits will live in
-  engine, so the compute can follow without a native back-dependency.
+- Unblocked the broker-runtime move that ADR-125 Target 3 needed. The protocol now lives in
+  engine, while `research_compute` remains with the broker-runtime command handlers that emit
+  protocol messages.
 - Puts the broker data contract where its types already live (99% engine), which is more honest
   than the original ADR-125 sketch that implied the protocol would live in a native
   `typhoon-broker-runtime` crate.
@@ -150,6 +154,6 @@ All three phases landed, each its own commit, full workspace **2272 tests** gree
   gained no `typhoon-native` dependency** (acyclic).
 
 **Outcome:** the broker message protocol is engine-resident and state-independent. ADR-127 is
-done. The two downstream efforts it unblocks are now clean cuts, each tracked by its own ADR:
-`research_compute → engine` (ADR-108) and the native broker runtime → `typhoon-broker-runtime`
-(ADR-125 Target 3).
+done. Its ADR-125 downstream dependency also landed: `research_compute` stayed with the broker
+runtime command handlers, and the native broker runtime moved to `typhoon-broker-runtime` without
+creating an engine→native cycle.

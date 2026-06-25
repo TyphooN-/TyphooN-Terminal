@@ -20,7 +20,8 @@ that unblocks Target 3)
 ## Context
 
 `typhoon-native` has moved past the original `app.rs` monolith described in
-ADR-086, but it is still one large Cargo package. The current workspace is:
+ADR-086 and now delegates the three major native-adjacent seams to workspace
+crates. The current workspace is:
 
 - `typhoon-engine`
 - `typhoon-broker-runtime`
@@ -29,18 +30,22 @@ ADR-086, but it is still one large Cargo package. The current workspace is:
 - `typhoon-chart-ui`
 - `typhoon-transpiler`
 
-The native package now has clear internal seams:
+The native package now has clear internal seams and external crate boundaries:
 
-- `typhoon-native/src/app/floating_windows/`: 117 Rust files, ~61.7k lines.
-- `typhoon-native/src/app/command_research_windows/`: 19 Rust files, ~14.3k
-  lines.
-- `typhoon-native/src/app/symbol_investigation_packet/`: 18 Rust files plus
-  the parent `symbol_investigation_packet.rs`, ~13.0k lines combined.
-- `typhoon-native/src/app/app_broker_processor/`: 77 Rust files, ~18.5k
-  lines.
+- `typhoon-research-ui`: owns research display/window-shell/packet formatter
+  code that is free of `TyphooNApp`.
+- `typhoon-chart-ui`: owns chart-local data types, chart state, indicators,
+  drawing models, and egui chart rendering.
+- `typhoon-broker-runtime`: owns the broker command processor, all former
+  broker-handler children, research compute routing, news hydration, runtime
+  resource setup, and the lower Kraken OHLC WS pipeline.
+- `typhoon-native/src/app/floating_windows/`: 118 Rust files, ~39.1k lines;
+  native integration/window state remains here.
+- `typhoon-native/src/app/command_research_windows/`: 57 Rust files, ~10.6k
+  lines; command dispatch remains native integration glue.
 - Remaining native hotspots include `state.rs` (~3.4k lines),
-  `technical_analysis.rs` (~2.1k lines), and several chart/runtime integration
-  files.
+  chart/runtime integration glue such as `chart_ops.rs` (~1.4k lines), and
+  floating-window app-shell code.
 
 > The per-tree counts above are the 2026-06-20 baseline. Continued semantic and
 > test-module splitting (ADR-118) has since grown several of these trees; current
@@ -130,25 +135,20 @@ This crate should be named `typhoon-chart-ui` while it depends directly on egui.
 Reserve `typhoon-chart` for a future renderer-agnostic chart/domain package, if
 one ever exists.
 
-### Target 3: `typhoon-broker-runtime` or `typhoon-broker-ui`
+### Target 3: `typhoon-broker-runtime`
 
-Third crate candidate, after the first two boundaries prove the pattern.
+Third crate, completed after the first two boundaries proved the pattern.
 
-Owns, once prepared:
+Owns:
 
 - broker command/result routing that is native-runtime-specific;
-- order/account/position reconciliation into native display state;
-- Kraken/Alpaca native runtime handlers that are not engine provider logic.
+- order/account/position routing into native display messages;
+- Kraken/Alpaca runtime handlers that are not native UI state;
+- runtime resource setup and lower async pipelines that can avoid depending on
+  `typhoon-native`.
 
-Name choice depends on the final boundary:
-
-- use `typhoon-broker-runtime` if it owns async message loops and
-  reconciliation;
-- use `typhoon-broker-ui` if it owns only UI projection/render-adjacent broker
-  state.
-
-This split is deliberately later because broker handlers often touch channels,
-cache state, provider types, runtime handles, and app-level coordination.
+Native still owns channels, UI state, and app-shell scheduling; the runtime crate
+owns the async command processor and lower-layer handler families.
 
 ### Optional later: `typhoon-native-state`
 
@@ -259,8 +259,8 @@ Positive:
   boundary preparation before package extraction.
 - Keeps engine research and native research UI separate, avoiding the misleading
   `typhoon-research` dumping-ground problem.
-- Creates a repeatable pattern for chart and broker extraction once research UI
-  proves the dependency direction.
+- Created a repeatable pattern for research, chart, and broker extraction while
+  preserving dependency direction.
 
 Tradeoffs:
 
@@ -270,8 +270,9 @@ Tradeoffs:
   before they can move across crates cleanly.
 - Cross-crate boundaries may improve incremental rebuild locality but can add
   clean-build overhead and API maintenance cost.
-- The plan delays broker extraction because its state/runtime coupling is more
-  likely to create accidental cycles.
+- Broker extraction required an extra protocol/helper-closure pass before the
+  final crate move; that work is now recorded below rather than left as future
+  work.
 
 ## Implementation Progress
 
@@ -793,7 +794,7 @@ indicator compute stays native behind a trait rather than moving; the base chart
 split out of native `app::common` (UI-button colors + `nav_*` helpers stay native); the pure
 `bare_symbol_from_key` parser moved to `types` since both renderers and native need it.
 
-### Target 3 — `typhoon-broker-runtime`: evaluated in depth, DEFERRED (2026-06-24)
+### Target 3 — `typhoon-broker-runtime`: evaluated, unblocked, and completed (2026-06-24 → 2026-06-25)
 
 Phase 4 says *evaluate* the broker split "only after research/chart patterns are proven"
 and promote "only if the crate can avoid depending on `typhoon-native`." Candidate region
@@ -917,14 +918,14 @@ broker handler now also calls engine/chart-ui cache helpers directly (`empty_wat
 shims. The final closure slice moved the fetch-task runners to
 `typhoon_engine::broker::bar_fetch` and Yahoo fallback fetch/store helpers to
 `typhoon_engine::core::fallback_bars`; native now calls those engine modules directly and the
-old native `broker_fetch.rs` / `fallback_bars.rs` files are gone. This closes the helper list
-that blocked a future standalone broker-runtime crate cut; the remaining Target 3 work is the
+old native `broker_fetch.rs` / `fallback_bars.rs` files are gone. This closed the helper list
+that had blocked the standalone broker-runtime crate cut; the following Target 3 work was the
 mechanical crate extraction / processor prelude seam, not more native helper migration. The next
 Target-3 seam slice added `app_broker_processor/prelude.rs` and repointed every direct
 broker-processor child module from `use super::*` to `use super::prelude::*`; nested research
 compute children keep their local parent imports for now. This centralizes the native-facing
 surface in one file (`pub(super) use crate::app::*`) instead of routing through the parent
-module's glob import, so the future broker-runtime crate extraction can turn the prelude into an
+module's glob import, so the broker-runtime crate extraction could turn the prelude into an
 explicit dependency boundary instead of auditing 19 top-level child modules independently. The
 parent `app_broker_processor.rs` now also imports `crate::app::*` directly rather than `super::*`,
 removing the last broker-processor dependency on relative native-parent glob routing.
@@ -1036,6 +1037,11 @@ temporary native `app_broker_processor/prelude.rs` seam was removed.
 The final Target-3 cut moved the broker command processor spawn seam itself into
 `typhoon_broker_runtime::broker_processor`; native now only creates the command/message channels,
 importing flag, runtime handle, and shared cache before calling the runtime crate entrypoint.
+
+**Target 3 is complete.** The earlier defer verdict is preserved above as historical
+decision context only; ADR-127 and the helper-closure slices removed the blockers, and the
+runtime crate now owns the intended broker command/runtime boundary. No ADR-125 future work
+remains.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

@@ -6,7 +6,7 @@ Builds on **ADR-009** (Multi-Broker Architecture), **ADR-111** (broker scope =
 Kraken + Alpaca only), **ADR-112** (demand-depth vs catalog-breadth sync lanes),
 and **ADR-113 / ADR-124** (cross-source equity merge & its symmetric
 scale-protection). Touches `OrderBroker`
-(`typhoon-native/src/app/state/broker_messages.rs`), `resolve_order_broker`
+(`typhoon_engine::broker::protocol`), `resolve_order_broker`
 (`app/trade_ops.rs`), the top-bar switch (`app/app_runtime_menu.rs`), and the
 equity merge ranking (`app/chart/equity_merge.rs`).
 
