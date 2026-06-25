@@ -5,7 +5,7 @@ mod models;
 mod watchlist;
 
 pub(crate) use watchlist::{
-    KrakenEquityQuoteMeta, WatchlistRow, empty_watchlist_row, watchlist_row_from_raw_bars,
+    KrakenEquityQuoteMeta, WatchlistRow, watchlist_row_from_raw_bars,
 };
 
 use super::*;

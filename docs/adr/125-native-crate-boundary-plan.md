@@ -906,7 +906,10 @@ and Yahoo extended-quote freshness predicates to `typhoon_engine::core::watchlis
 watchlist handler now calls those engine helpers directly. The remaining closure is the
 fetch/Yahoo task runners. Market-data cache news-symbol extraction moved to
 `typhoon_engine::core::market_data_symbols`, with native chart wrappers retained for chart
-tests/callers and the broker news handler calling the engine helper directly.
+tests/callers and the broker news handler calling the engine helper directly. The watchlist
+broker handler now also calls engine/chart-ui cache helpers directly (`empty_watchlist_row`,
+`watchlist_row_from_raw_bars`, `chart_source_cache_keys`) instead of reaching through native
+shims.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

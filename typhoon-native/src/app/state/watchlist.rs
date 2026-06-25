@@ -11,5 +11,5 @@ pub(crate) struct KrakenEquityQuoteMeta {
 // Target 3 prep) so broker-runtime code can use them without depending on native.
 // Re-exported here so native call sites via the `state` glob are unchanged.
 pub(crate) use typhoon_engine::core::watchlist::{
-    WatchlistRow, empty_watchlist_row, watchlist_row_from_raw_bars,
+    WatchlistRow, watchlist_row_from_raw_bars,
 };

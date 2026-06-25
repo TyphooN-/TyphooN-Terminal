@@ -12,8 +12,10 @@ pub(super) fn spawn_watchlist_quotes_task(
     // (GetPositions/GetOrders), leaving positions stale. Spawning keeps it
     // concurrent — the same off-loop principle the equities sync already follows.
     tokio::spawn(async move {
-        let mut rows: Vec<WatchlistRow> =
-            symbols.iter().map(|sym| empty_watchlist_row(sym)).collect();
+        let mut rows: Vec<WatchlistRow> = symbols
+            .iter()
+            .map(|sym| typhoon_engine::core::watchlist::empty_watchlist_row(sym))
+            .collect();
 
         let regular_session_open = if let Some(ref b) = broker {
             b.get_market_clock()
@@ -234,12 +236,20 @@ pub(super) fn spawn_watchlist_quotes_task(
                     for source in typhoon_engine::core::watchlist::watchlist_cache_fallback_sources(
                         &row.symbol,
                     ) {
-                        for key in chart_source_cache_keys(source, &row.symbol, tf) {
+                        for key in typhoon_chart_ui::cache_keys::chart_source_cache_keys(
+                            source,
+                            &row.symbol,
+                            tf,
+                        ) {
                             let Ok(Some(raw)) = cache.get_bars_raw(&key) else {
                                 continue;
                             };
                             if let Some(cached) =
-                                watchlist_row_from_raw_bars(&row.symbol, &key, &raw)
+                                typhoon_engine::core::watchlist::watchlist_row_from_raw_bars(
+                                    &row.symbol,
+                                    &key,
+                                    &raw,
+                                )
                             {
                                 *row = cached;
                                 filled = true;
