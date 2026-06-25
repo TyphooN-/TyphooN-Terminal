@@ -1028,6 +1028,9 @@ backpressure, cache flush grouping, and WS-fresh commit reporting now live in th
 With that seam in place, the final direct broker-processor child `kraken_ws_commands` moved into
 `typhoon_broker_runtime`; the native broker processor no longer owns local child modules and the
 temporary native `app_broker_processor/prelude.rs` seam was removed.
+The final Target-3 cut moved the broker command processor spawn seam itself into
+`typhoon_broker_runtime::broker_processor`; native now only creates the command/message channels,
+importing flag, runtime handle, and shared cache before calling the runtime crate entrypoint.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

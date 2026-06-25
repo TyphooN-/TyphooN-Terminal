@@ -23,9 +23,7 @@ use std::sync::Arc;
 
 use chrono::Datelike;
 use tokio::sync::mpsc;
-use typhoon_engine::broker::alpaca::{
-    AccountInfo, AlpacaBroker, Bar as EngineBar, OrderInfo, PositionInfo,
-};
+use typhoon_engine::broker::alpaca::{AccountInfo, Bar as EngineBar, OrderInfo, PositionInfo};
 use typhoon_engine::core::backtest;
 use typhoon_engine::core::cache::SqliteCache;
 use typhoon_engine::core::fundamentals;
@@ -42,7 +40,7 @@ mod ai;
 mod ai_processes;
 mod alpaca_sync;
 mod app_background;
-mod app_broker_processor;
+
 mod app_runtime;
 mod app_runtime_alpaca_account;
 mod app_runtime_bottom;
@@ -162,7 +160,7 @@ impl TyphooNApp {
         // Flag: true while a heavy bulk import is running — background thread skips DB queries
         let importing_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-        app_broker_processor::spawn_broker_message_processor(
+        typhoon_broker_runtime::broker_processor::spawn_broker_message_processor(
             _broker_cmd_rx,
             broker_msg_tx.clone(),
             importing_flag.clone(),
