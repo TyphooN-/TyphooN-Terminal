@@ -12,8 +12,12 @@ use super::*;
 
 pub(crate) use broker_messages::{
     BrokerCmd, BrokerMsg, OrderBroker, QuickTradePlan, TradeAccountSnapshot,
-    format_news_scope_scrape_start, is_fundamentals_provider_coverage_gap,
-    normalize_fundamentals_scrape_symbol, should_emit_fundamentals_scrape_progress,
+    format_news_scope_scrape_start,
+};
+#[cfg(test)]
+pub(crate) use broker_messages::{
+    is_fundamentals_provider_coverage_gap, normalize_fundamentals_scrape_symbol,
+    should_emit_fundamentals_scrape_progress,
 };
 pub(crate) use models::{
     AlpacaRetry, BgData, BookmapWindowState, BottomTab, EventKind, EventRow, EventSource,

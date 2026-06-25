@@ -1005,6 +1005,10 @@ The next physical processor-child move relocated `research_fetch` into
 `typhoon_broker_runtime::research_fetch`; native now imports that runtime module for company profile,
 peers, earnings, IPOs, press, sentiment, transcripts, commodities, ETF/crypto/rates calendars, and
 other research fetch routing.
+The next physical processor-child move relocated `fundamentals_commands` into
+`typhoon_broker_runtime::fundamentals_commands`; native now imports that runtime module for batch and
+single-symbol fundamentals scrape routing while keeping fundamentals helper re-exports test-only in
+native state.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
