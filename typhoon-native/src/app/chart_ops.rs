@@ -184,6 +184,44 @@ pub(super) fn mtf_grid_symbols_with_missing_timeframes(
         .collect()
 }
 
+fn low_timeframe_no_data_reason(reason: &str) -> bool {
+    let reason = reason.to_ascii_lowercase();
+    reason.contains("no data") || reason.contains("no bars")
+}
+
+pub(super) fn low_timeframe_no_data_symbols(
+    pairs: &std::collections::HashMap<String, UnresolvablePair>,
+) -> std::collections::HashSet<String> {
+    let mut seen: std::collections::HashMap<(String, String), (bool, bool)> =
+        std::collections::HashMap::new();
+    for entry in pairs.values() {
+        if !low_timeframe_no_data_reason(&entry.reason) {
+            continue;
+        }
+        let Some(tf) = normalize_sync_timeframe_key(&entry.timeframe) else {
+            continue;
+        };
+        if !matches!(tf, "1Min" | "5Min") {
+            continue;
+        }
+        let symbol = mtf_grid_symbol_key(&entry.symbol).to_ascii_uppercase();
+        if symbol.is_empty() {
+            continue;
+        }
+        let flags = seen
+            .entry((entry.broker.to_ascii_lowercase(), symbol))
+            .or_insert((false, false));
+        match tf {
+            "1Min" => flags.0 = true,
+            "5Min" => flags.1 = true,
+            _ => {}
+        }
+    }
+    seen.into_iter()
+        .filter_map(|((_broker, symbol), (has_m1, has_m5))| (has_m1 && has_m5).then_some(symbol))
+        .collect()
+}
+
 pub(super) fn open_chart_preload_indices(charts: &[ChartState]) -> Vec<usize> {
     charts
         .iter()
@@ -196,6 +234,14 @@ pub(super) fn mtf_visible_chart_groups(
     charts: &[ChartState],
     visible: &[bool],
 ) -> Vec<MtfChartGroup> {
+    mtf_visible_chart_groups_filtered(charts, visible, &std::collections::HashSet::new())
+}
+
+pub(super) fn mtf_visible_chart_groups_filtered(
+    charts: &[ChartState],
+    visible: &[bool],
+    suppressed_symbols: &std::collections::HashSet<String>,
+) -> Vec<MtfChartGroup> {
     let mut groups: Vec<MtfChartGroup> = Vec::new();
     for (idx, chart) in charts.iter().enumerate() {
         if !visible.get(idx).copied().unwrap_or(true)
@@ -204,7 +250,7 @@ pub(super) fn mtf_visible_chart_groups(
             continue;
         }
         let symbol = mtf_grid_symbol_key(&chart.symbol);
-        if symbol.is_empty() {
+        if symbol.is_empty() || suppressed_symbols.contains(&symbol.to_ascii_uppercase()) {
             continue;
         }
         if let Some(group) = groups.iter_mut().find(|group| group.symbol == symbol) {
@@ -216,10 +262,13 @@ pub(super) fn mtf_visible_chart_groups(
             });
         }
     }
+    groups.sort_by(|a, b| a.symbol.cmp(&b.symbol));
     for group in &mut groups {
-        group
-            .indices
-            .sort_by_key(|idx| mtf_timeframe_rank(charts[*idx].timeframe).unwrap_or(usize::MAX));
+        group.indices.sort_by(|&a, &b| {
+            let rank_a = mtf_timeframe_rank(charts[a].timeframe).unwrap_or(usize::MAX);
+            let rank_b = mtf_timeframe_rank(charts[b].timeframe).unwrap_or(usize::MAX);
+            rank_a.cmp(&rank_b).then_with(|| a.cmp(&b))
+        });
     }
     groups
 }
@@ -964,6 +1013,7 @@ impl TyphooNApp {
             )
         }
 
+        let suppressed_symbols = low_timeframe_no_data_symbols(&self.unresolvable_pairs);
         let mut symbols = std::collections::BTreeSet::new();
         for (i, chart) in self.charts.iter().enumerate() {
             if self.mtf_enabled && !self.mtf_visible.get(i).copied().unwrap_or(true) {
@@ -982,7 +1032,10 @@ impl TyphooNApp {
             if let Some(stripped) = symbol.strip_suffix(".EQ") {
                 symbol = stripped.to_string();
             }
-            if !symbol.is_empty() && !is_timeframe_token(&symbol) {
+            if !symbol.is_empty()
+                && !is_timeframe_token(&symbol)
+                && !suppressed_symbols.contains(&symbol.to_ascii_uppercase())
+            {
                 symbols.insert(symbol);
             }
         }
@@ -1000,6 +1053,9 @@ impl TyphooNApp {
             .replace('/', "")
             .trim_end_matches(".EQ")
             .to_ascii_uppercase();
+        if low_timeframe_no_data_symbols(&self.unresolvable_pairs).contains(&symbol_key) {
+            return;
+        }
         let existing_chart_by_tf: std::collections::HashMap<Timeframe, usize> = self
             .charts
             .iter()
@@ -1508,6 +1564,62 @@ mod tests {
         assert_eq!(missing_symbols, vec!["CC".to_string(), "WEN".to_string()]);
         assert!(mtf_grid_missing_timeframes(&charts, &visible, "CC").contains(&Timeframe::M1));
         assert!(mtf_grid_missing_timeframes(&charts, &visible, "CC").contains(&Timeframe::MN1));
+    }
+
+    #[test]
+    fn mtf_grid_suppresses_symbol_when_broker_has_no_m1_or_m5_bars() {
+        let charts = vec![
+            ChartState::new("CC", Timeframe::D1),
+            ChartState::new("CC", Timeframe::H4),
+            ChartState::new("WEN", Timeframe::D1),
+        ];
+        let visible = vec![true; charts.len()];
+        let no_low_tf_symbols = ["CC".to_string()].into_iter().collect();
+
+        let groups = mtf_visible_chart_groups_filtered(&charts, &visible, &no_low_tf_symbols);
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].symbol, "WEN");
+    }
+
+    #[test]
+    fn low_timeframe_no_data_symbols_require_m1_and_m5_from_same_broker() {
+        let mut pairs = std::collections::HashMap::new();
+        pairs.insert(
+            "m1".to_string(),
+            UnresolvablePair {
+                broker: "kraken-equities".to_string(),
+                symbol: "CC".to_string(),
+                timeframe: "1Min".to_string(),
+                reason: "provider returned no bars".to_string(),
+                ts: 1,
+            },
+        );
+        pairs.insert(
+            "m5".to_string(),
+            UnresolvablePair {
+                broker: "kraken-equities".to_string(),
+                symbol: "CC.EQ".to_string(),
+                timeframe: "5Min".to_string(),
+                reason: "provider returned no data".to_string(),
+                ts: 2,
+            },
+        );
+        pairs.insert(
+            "wen_m1".to_string(),
+            UnresolvablePair {
+                broker: "kraken-equities".to_string(),
+                symbol: "WEN".to_string(),
+                timeframe: "1Min".to_string(),
+                reason: "provider returned no bars".to_string(),
+                ts: 3,
+            },
+        );
+
+        let suppressed = low_timeframe_no_data_symbols(&pairs);
+
+        assert!(suppressed.contains("CC"));
+        assert!(!suppressed.contains("WEN"));
     }
 
     #[test]

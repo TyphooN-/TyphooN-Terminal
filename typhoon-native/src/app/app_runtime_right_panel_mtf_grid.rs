@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::chart_ops::{
-    MTF_GRID_TIMEFRAMES, mtf_grid_symbol_key, mtf_grid_symbols_with_missing_timeframes,
-    mtf_visible_chart_groups,
+    MTF_GRID_TIMEFRAMES, low_timeframe_no_data_symbols, mtf_grid_symbol_key,
+    mtf_grid_symbols_with_missing_timeframes, mtf_visible_chart_groups_filtered,
 };
 
 #[allow(deprecated)]
@@ -23,8 +23,12 @@ impl TyphooNApp {
             && self.mtf_grid_rx.is_none()
             && !self.symbol_input.trim().is_empty()
         {
+            let suppressed_mtf_symbols = low_timeframe_no_data_symbols(&self.unresolvable_pairs);
             let missing_symbols = if self.mtf_enabled {
                 mtf_grid_symbols_with_missing_timeframes(&self.charts, &self.mtf_visible)
+                    .into_iter()
+                    .filter(|symbol| !suppressed_mtf_symbols.contains(&symbol.to_ascii_uppercase()))
+                    .collect()
             } else {
                 Vec::new()
             };
@@ -69,7 +73,12 @@ impl TyphooNApp {
             // when MTF mode has >1 symbol, so we no longer render a second one
             // here.
             let mtf_news_symbols = self.mtf_grid_news_symbols();
-            let mtf_groups = mtf_visible_chart_groups(&self.charts, &self.mtf_visible);
+            let suppressed_mtf_symbols = low_timeframe_no_data_symbols(&self.unresolvable_pairs);
+            let mtf_groups = mtf_visible_chart_groups_filtered(
+                &self.charts,
+                &self.mtf_visible,
+                &suppressed_mtf_symbols,
+            );
             ui.label(
                 egui::RichText::new(format!(
                     "{} symbol{} · {} TFs",
@@ -94,7 +103,15 @@ impl TyphooNApp {
                 .iter()
                 .map(|&(tf, close, sma, kama, fisher, fsig)| (tf, (close, sma, kama, fisher, fsig)))
                 .collect();
-            if mtf_groups.is_empty() {
+            let active_sym_key = mtf_grid_symbol_key(&self.symbol_input).to_ascii_uppercase();
+            let active_symbol_suppressed = suppressed_mtf_symbols.contains(&active_sym_key);
+            if mtf_groups.is_empty() && active_symbol_suppressed {
+                ui.label(
+                    egui::RichText::new("No MTF Grid symbols with M1/M5 data")
+                        .color(AXIS_TEXT)
+                        .small(),
+                );
+            } else if mtf_groups.is_empty() {
                 egui::Grid::new("mtf_ma_grid")
                     .spacing(egui::vec2(4.0, 2.0))
                     .show(ui, |ui| {

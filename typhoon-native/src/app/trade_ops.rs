@@ -34,7 +34,7 @@ fn obsolete_nonspot_low_timeframe(broker: &str, timeframe: &str) -> bool {
         Some("1Min" | "5Min")
     ) && matches!(
         broker.to_ascii_lowercase().as_str(),
-        "alpaca" | "kraken-equities" | "yahoo-chart"
+        "alpaca" | "yahoo-chart"
     )
 }
 
@@ -45,6 +45,12 @@ fn stale_kraken_equity_no_data_mark(entry: &UnresolvablePair, now_s: i64) -> boo
     }
     let reason = entry.reason.to_ascii_lowercase();
     if !(reason.contains("no data") || reason.contains("no bars")) {
+        return false;
+    }
+    if matches!(
+        normalize_sync_timeframe_key(&entry.timeframe),
+        Some("1Min" | "5Min")
+    ) {
         return false;
     }
     entry.ts <= 0 || now_s.saturating_sub(entry.ts) > KRAKEN_EQUITY_NO_DATA_TTL_SECS
@@ -1484,7 +1490,11 @@ impl TyphooNApp {
             return None;
         }
         self.kraken_pairs.iter().find_map(|(name, wsname)| {
-            let candidate = if wsname.trim().is_empty() { name } else { wsname };
+            let candidate = if wsname.trim().is_empty() {
+                name
+            } else {
+                wsname
+            };
             (Self::kraken_pair_base_ticker(candidate) == bare).then(|| candidate.clone())
         })
     }
@@ -2521,7 +2531,10 @@ impl TyphooNApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{kraken_equity_quote_meta_candidates, stale_kraken_equity_no_data_mark};
+    use super::{
+        kraken_equity_quote_meta_candidates, obsolete_nonspot_low_timeframe,
+        stale_kraken_equity_no_data_mark,
+    };
     use crate::app::UnresolvablePair;
 
     #[test]
@@ -2557,10 +2570,24 @@ mod tests {
         };
         assert!(!stale_kraken_equity_no_data_mark(&fresh, now));
 
+        let low_timeframe = UnresolvablePair {
+            timeframe: "1Min".to_string(),
+            ..stale.clone()
+        };
+        assert!(!stale_kraken_equity_no_data_mark(&low_timeframe, now));
+
         let alpaca = UnresolvablePair {
             broker: "alpaca".to_string(),
             ..stale
         };
         assert!(!stale_kraken_equity_no_data_mark(&alpaca, now));
+    }
+
+    #[test]
+    fn kraken_equity_low_timeframe_no_data_marks_are_not_obsolete() {
+        assert!(!obsolete_nonspot_low_timeframe("kraken-equities", "1Min"));
+        assert!(!obsolete_nonspot_low_timeframe("kraken-equities", "5Min"));
+        assert!(obsolete_nonspot_low_timeframe("alpaca", "1Min"));
+        assert!(obsolete_nonspot_low_timeframe("yahoo-chart", "5Min"));
     }
 }

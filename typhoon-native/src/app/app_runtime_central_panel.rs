@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::chart_ops::{chart_company_name_catalog, mtf_visible_chart_groups};
+use crate::app::chart_ops::{chart_company_name_catalog, low_timeframe_no_data_symbols, mtf_visible_chart_groups_filtered};
 
 impl TyphooNApp {
     pub(crate) fn render_central_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, pointer_over_floating: bool) {
@@ -611,7 +611,8 @@ impl TyphooNApp {
                 while self.mtf_visible.len() < self.charts.len() {
                     self.mtf_visible.push(true);
                 }
-                let mtf_groups = mtf_visible_chart_groups(&self.charts, &self.mtf_visible);
+                let suppressed_mtf_symbols = low_timeframe_no_data_symbols(&self.unresolvable_pairs);
+                let mtf_groups = mtf_visible_chart_groups_filtered(&self.charts, &self.mtf_visible, &suppressed_mtf_symbols);
                 if mtf_groups.is_empty() {
                     ui.painter().text(
                         available.center(),
