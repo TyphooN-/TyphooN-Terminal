@@ -87,6 +87,50 @@ pub(super) fn mtf_grid_symbol_key(symbol: &str) -> String {
     candidate
 }
 
+pub(super) fn chart_company_name_catalog(
+    alpaca_assets: &[(String, String, String)],
+    kraken_equity_names: &std::collections::HashMap<String, String>,
+    primary_broker: OrderBroker,
+) -> std::collections::HashMap<String, String> {
+    let mut names = std::collections::HashMap::new();
+    let insert_alpaca = |names: &mut std::collections::HashMap<String, String>| {
+        for (symbol, name, class) in alpaca_assets {
+            let symbol = symbol.trim().to_ascii_uppercase();
+            let name = name.trim();
+            if symbol.is_empty() || name.is_empty() {
+                continue;
+            }
+            if class.eq_ignore_ascii_case("us_equity")
+                || class.eq_ignore_ascii_case("stock")
+                || class.eq_ignore_ascii_case("equity")
+            {
+                names.insert(symbol, name.to_string());
+            }
+        }
+    };
+    let insert_kraken = |names: &mut std::collections::HashMap<String, String>| {
+        for (symbol, name) in kraken_equity_names {
+            let symbol = mtf_grid_symbol_key(symbol).to_ascii_uppercase();
+            let name = name.trim();
+            if !symbol.is_empty() && !name.is_empty() {
+                names.insert(symbol, name.to_string());
+            }
+        }
+    };
+
+    match primary_broker {
+        OrderBroker::Alpaca => {
+            insert_kraken(&mut names);
+            insert_alpaca(&mut names);
+        }
+        OrderBroker::Kraken => {
+            insert_alpaca(&mut names);
+            insert_kraken(&mut names);
+        }
+    }
+    names
+}
+
 fn kraken_position_covers_balance_asset(positions: &[PositionInfo], asset: &str) -> bool {
     let display = TyphooNApp::kraken_display_asset(asset);
     let bare_display = display.strip_suffix(".EQ").unwrap_or(display.as_str());
@@ -103,6 +147,41 @@ fn kraken_position_covers_balance_asset(positions: &[PositionInfo], asset: &str)
             || TyphooNApp::kraken_asset_keys_match(&display, &pos_base)
             || TyphooNApp::kraken_asset_keys_match(bare_display, &pos_base)
     })
+}
+
+fn mtf_grid_missing_timeframes(
+    charts: &[ChartState],
+    visible: &[bool],
+    symbol: &str,
+) -> Vec<Timeframe> {
+    let symbol_key = mtf_grid_symbol_key(symbol);
+    let existing: std::collections::HashSet<Timeframe> = charts
+        .iter()
+        .enumerate()
+        .filter(|(idx, chart)| {
+            visible.get(*idx).copied().unwrap_or(true)
+                && mtf_grid_symbol_key(&chart.symbol).eq_ignore_ascii_case(&symbol_key)
+        })
+        .map(|(_, chart)| chart.timeframe)
+        .collect();
+
+    MTF_GRID_TIMEFRAMES
+        .iter()
+        .filter_map(|(_, tf)| (!existing.contains(tf)).then_some(*tf))
+        .collect()
+}
+
+pub(super) fn mtf_grid_symbols_with_missing_timeframes(
+    charts: &[ChartState],
+    visible: &[bool],
+) -> Vec<String> {
+    mtf_visible_chart_groups(charts, visible)
+        .into_iter()
+        .filter_map(|group| {
+            (!mtf_grid_missing_timeframes(charts, visible, &group.symbol).is_empty())
+                .then_some(group.symbol)
+        })
+        .collect()
 }
 
 pub(super) fn mtf_visible_chart_groups(
@@ -1396,6 +1475,55 @@ mod tests {
         assert_eq!(groups[0].indices, vec![4, 2, 0, 5]);
         assert_eq!(groups[1].symbol, "BABYUSD");
         assert_eq!(groups[1].indices, vec![6, 3, 1]);
+    }
+
+    #[test]
+    fn mtf_grid_detects_symbols_missing_supported_timeframes() {
+        let charts = vec![
+            ChartState::new("CC", Timeframe::D1),
+            ChartState::new("CC", Timeframe::H4),
+            ChartState::new("WEN", Timeframe::D1),
+        ];
+        let visible = vec![true; charts.len()];
+
+        let missing_symbols = mtf_grid_symbols_with_missing_timeframes(&charts, &visible);
+
+        assert_eq!(missing_symbols, vec!["CC".to_string(), "WEN".to_string()]);
+        assert!(mtf_grid_missing_timeframes(&charts, &visible, "CC").contains(&Timeframe::M1));
+        assert!(mtf_grid_missing_timeframes(&charts, &visible, "CC").contains(&Timeframe::MN1));
+    }
+
+    #[test]
+    fn company_name_catalog_prefers_primary_broker_names() {
+        let alpaca_assets = vec![
+            (
+                "CC".to_string(),
+                "The Chemours Company".to_string(),
+                "us_equity".to_string(),
+            ),
+            (
+                "BTCUSD".to_string(),
+                "Bitcoin".to_string(),
+                "crypto".to_string(),
+            ),
+        ];
+        let mut kraken_names = std::collections::HashMap::new();
+        kraken_names.insert("CC".to_string(), "Kraken CC Placeholder".to_string());
+
+        let alpaca_primary =
+            chart_company_name_catalog(&alpaca_assets, &kraken_names, OrderBroker::Alpaca);
+        assert_eq!(
+            alpaca_primary.get("CC").map(String::as_str),
+            Some("The Chemours Company")
+        );
+        assert!(!alpaca_primary.contains_key("BTCUSD"));
+
+        let kraken_primary =
+            chart_company_name_catalog(&alpaca_assets, &kraken_names, OrderBroker::Kraken);
+        assert_eq!(
+            kraken_primary.get("CC").map(String::as_str),
+            Some("Kraken CC Placeholder")
+        );
     }
 
     #[test]

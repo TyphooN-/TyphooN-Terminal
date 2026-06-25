@@ -1,5 +1,8 @@
 use super::*;
-use crate::app::chart_ops::{MTF_GRID_TIMEFRAMES, mtf_grid_symbol_key, mtf_visible_chart_groups};
+use crate::app::chart_ops::{
+    MTF_GRID_TIMEFRAMES, mtf_grid_symbol_key, mtf_grid_symbols_with_missing_timeframes,
+    mtf_visible_chart_groups,
+};
 
 #[allow(deprecated)]
 impl TyphooNApp {
@@ -20,6 +23,14 @@ impl TyphooNApp {
             && self.mtf_grid_rx.is_none()
             && !self.symbol_input.trim().is_empty()
         {
+            let missing_symbols = if self.mtf_enabled {
+                mtf_grid_symbols_with_missing_timeframes(&self.charts, &self.mtf_visible)
+            } else {
+                Vec::new()
+            };
+            for symbol in missing_symbols {
+                self.ensure_mtf_grid_for_symbol(&symbol);
+            }
             let symbol_changed = self.mtf_grid_status_symbol != self.symbol_input.trim();
             let open_changed = self.mtf_grid_status_open_sig != self.mtf_open_chart_signature();
             let has_missing = self.mtf_grid_status.len() < MTF_GRID_TIMEFRAMES.len()

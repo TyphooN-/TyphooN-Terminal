@@ -1,9 +1,10 @@
 use super::*;
-use crate::app::chart_ops::mtf_visible_chart_groups;
+use crate::app::chart_ops::{chart_company_name_catalog, mtf_visible_chart_groups};
 
 impl TyphooNApp {
     pub(crate) fn render_central_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, pointer_over_floating: bool) {
             let available = ui.available_rect_before_wrap();
+            let chart_company_names = chart_company_name_catalog(&self.all_broker_assets, &self.kraken_equity_names, self.primary_broker);
 
             // ── Price axis rect (right 70px of chart — TradingView-style scale) ──
             let price_axis_w = 70.0_f32;
@@ -820,7 +821,7 @@ impl TyphooNApp {
                         }
                     }
                     let painter = ui.painter_at(cell_rect);
-                    draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &chart.regulatory_alerts, &self.draw_mode, chart_overlay_company_name(&self.bg.all_fundamentals, &self.kraken_equity_names, &chart.symbol).as_deref());
+                    draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &chart.regulatory_alerts, &self.draw_mode, chart_overlay_company_name(&self.bg.all_fundamentals, &chart_company_names, &chart.symbol).as_deref());
                     // Restore the cached overlay we moved out above.
                     self.charts[vi].cached_trade_overlay = trade_ov;
 
@@ -990,7 +991,7 @@ impl TyphooNApp {
                     }
                     let trade_ov = std::mem::take(&mut chart.cached_trade_overlay);
                     let painter = ui.painter_at(rect);
-                    draw_chart(&painter, chart, rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &chart.regulatory_alerts, &self.draw_mode, chart_overlay_company_name(&self.bg.all_fundamentals, &self.kraken_equity_names, &chart.symbol).as_deref());
+                    draw_chart(&painter, chart, rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_cmo, show_qstick, show_disparity, show_bop, show_stddev, show_mfi, show_trix, show_ppo, show_ultosc, show_stochrsi, show_var_oscillator, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov, &self.alerts, &chart.regulatory_alerts, &self.draw_mode, chart_overlay_company_name(&self.bg.all_fundamentals, &chart_company_names, &chart.symbol).as_deref());
                     chart.cached_trade_overlay = trade_ov;
 
                     // Replay overlay: show bar count and speed

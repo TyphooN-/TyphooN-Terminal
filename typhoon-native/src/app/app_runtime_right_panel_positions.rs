@@ -8,6 +8,34 @@ fn alpaca_positions_should_render(
     show_alpaca_positions && !positions.is_empty()
 }
 
+fn position_unrealized_pl_from_price(pos: &PositionInfo, current_price: Option<f64>) -> f64 {
+    current_price
+        .filter(|price| price.is_finite() && *price > 0.0)
+        .filter(|_| pos.avg_entry_price.is_finite() && pos.avg_entry_price > 0.0)
+        .map(|price| {
+            let dir = if pos.side.eq_ignore_ascii_case("short") {
+                -1.0
+            } else {
+                1.0
+            };
+            (price - pos.avg_entry_price) * pos.qty * dir
+        })
+        .unwrap_or(pos.unrealized_pl)
+}
+
+fn position_unrealized_pl_pct(pos: &PositionInfo, display_pl: f64) -> f64 {
+    let cost_basis = if pos.avg_entry_price.is_finite() && pos.avg_entry_price > 0.0 {
+        pos.avg_entry_price.abs() * pos.qty.abs()
+    } else {
+        (pos.market_value - pos.unrealized_pl).abs()
+    };
+    if cost_basis > f64::EPSILON {
+        display_pl / cost_basis * 100.0
+    } else {
+        0.0
+    }
+}
+
 #[allow(deprecated)]
 impl TyphooNApp {
     pub(super) fn render_right_panel_positions_section(&mut self, ui: &mut egui::Ui) {
@@ -74,13 +102,16 @@ impl TyphooNApp {
                 for pos in &self.live_positions {
                     let side_c = if pos.side == "long" { UP } else { DOWN };
                     let side_label = if pos.side == "long" { "Long" } else { "Short" };
-                    let current_price = self.live_quote_mid_for_symbol(&pos.symbol).or_else(|| {
-                        if pos.qty.abs() > f64::EPSILON {
-                            Some(pos.market_value.abs() / pos.qty.abs())
-                        } else {
-                            None
-                        }
-                    });
+                    let current_price = self
+                        .live_quote_mid_for_symbol(&pos.symbol)
+                        .or_else(|| self.latest_cached_equity_price_for_symbol(&pos.symbol))
+                        .or_else(|| {
+                            if pos.qty.abs() > f64::EPSILON {
+                                Some(pos.market_value.abs() / pos.qty.abs())
+                            } else {
+                                None
+                            }
+                        });
                     ui.horizontal_wrapped(|ui| {
                         let (_, act) = symbol_label_with_menu(
                             ui,
@@ -96,18 +127,13 @@ impl TyphooNApp {
                         ui.label(
                             egui::RichText::new(format!("{:.2}", pos.qty)).small(),
                         );
-                        let pl_c = if pos.unrealized_pl >= 0.0 { UP } else { DOWN };
-                        let pl_pct = if pos.market_value.abs() > 0.01 {
-                            pos.unrealized_pl
-                                / (pos.market_value - pos.unrealized_pl)
-                                * 100.0
-                        } else {
-                            0.0
-                        };
+                        let display_pl = position_unrealized_pl_from_price(pos, current_price);
+                        let pl_c = if display_pl >= 0.0 { UP } else { DOWN };
+                        let pl_pct = position_unrealized_pl_pct(pos, display_pl);
                         ui.label(
                             egui::RichText::new(format!(
                                 "${:.2} ({:+.1}%)",
-                                pos.unrealized_pl, pl_pct
+                                display_pl, pl_pct
                             ))
                             .color(pl_c)
                             .small(),
@@ -428,5 +454,19 @@ mod tests {
         let positions = vec![position("CC"), position("WEN")];
 
         assert!(alpaca_positions_should_render(false, true, &positions));
+    }
+
+    #[test]
+    fn alpaca_position_pl_uses_current_price_when_snapshot_pl_is_stale() {
+        let mut pos = position("CC");
+        pos.qty = 2.0;
+        pos.avg_entry_price = 10.0;
+        pos.market_value = 20.0;
+        pos.unrealized_pl = 0.0;
+
+        let display_pl = position_unrealized_pl_from_price(&pos, Some(12.5));
+
+        assert_eq!(display_pl, 5.0);
+        assert_eq!(position_unrealized_pl_pct(&pos, display_pl), 25.0);
     }
 }

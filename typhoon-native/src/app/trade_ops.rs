@@ -1708,6 +1708,13 @@ impl TyphooNApp {
         })
     }
 
+    fn latest_cached_equity_price_sources(&self) -> [&'static str; 3] {
+        match self.primary_broker {
+            OrderBroker::Alpaca => ["alpaca", "kraken-equities", "default"],
+            OrderBroker::Kraken => ["kraken-equities", "alpaca", "default"],
+        }
+    }
+
     pub(super) fn latest_cached_equity_price_for_symbol(&self, symbol: &str) -> Option<f64> {
         // Prefer the watchlist's equity quote when available. For Kraken Securities
         // this is the professional price path during pre/post-market because the
@@ -1726,7 +1733,7 @@ impl TyphooNApp {
         let timeframes = [
             "quote", "1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day",
         ];
-        let sources = ["kraken-equities", "alpaca", "default"];
+        let sources = self.latest_cached_equity_price_sources();
         let mut symbols = Vec::new();
         let mut push_symbol = |candidate: String| {
             let candidate = candidate.trim().replace('/', "").to_ascii_uppercase();
