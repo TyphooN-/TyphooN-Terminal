@@ -25,9 +25,7 @@ use typhoon_broker_runtime::kraken_ohlc_pipeline::{
 use typhoon_broker_runtime::kraken_ohlc_pipeline::{
     format_xstock_ws_symbol, kraken_ws_bar_cache_target,
 };
-pub(super) use typhoon_broker_runtime::kraken_ohlc_pipeline::{
-    spawn_kraken_ohlc_pipeline, spawn_kraken_ohlc_snapshot_sweep,
-};
+
 #[cfg(test)]
 use typhoon_engine::broker::kraken::KrakenWsOhlcBar;
 use typhoon_engine::broker::kraken::{
