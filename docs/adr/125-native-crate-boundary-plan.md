@@ -978,6 +978,10 @@ mutable broker handles from the native-owned spawn loop.
 The next physical processor-child move relocated `storage` into
 `typhoon_broker_runtime::storage`; native now imports that runtime module for compaction and
 unusual-volume scan routing while still passing the shared cache and importing flag explicitly.
+The next physical processor-child move relocated `bar_fetch_commands` into
+`typhoon_broker_runtime::bar_fetch_commands`; native now imports that runtime module for Alpaca,
+Kraken spot, and Kraken futures bar-fetch/backfill routing while passing broker handles, shared
+cache, permits, and clients explicitly.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
