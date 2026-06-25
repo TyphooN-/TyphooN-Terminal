@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::app_runtime_tabs::tab_bar_chart_indices;
 
 impl TyphooNApp {
     pub(super) fn handle_runtime_input(&mut self, ctx: &egui::Context) -> bool {
@@ -184,8 +185,9 @@ impl TyphooNApp {
                 };
                 if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(key)) {
                     let idx = (digit - 1) as usize;
-                    if idx < self.charts.len() {
-                        self.active_tab = idx;
+                    let tab_indices = tab_bar_chart_indices(&self.charts);
+                    if let Some(chart_idx) = tab_indices.get(idx).copied() {
+                        self.active_tab = chart_idx;
                     }
                 }
             }
@@ -194,14 +196,22 @@ impl TyphooNApp {
             if !self.charts.is_empty()
                 && ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Tab))
             {
-                if ctx.input(|i| i.modifiers.shift) {
-                    self.active_tab = if self.active_tab == 0 {
-                        self.charts.len() - 1
+                let tab_indices = tab_bar_chart_indices(&self.charts);
+                if !tab_indices.is_empty() {
+                    let current_pos = tab_indices
+                        .iter()
+                        .position(|idx| *idx == self.active_tab)
+                        .unwrap_or(0);
+                    let next_pos = if ctx.input(|i| i.modifiers.shift) {
+                        if current_pos == 0 {
+                            tab_indices.len() - 1
+                        } else {
+                            current_pos - 1
+                        }
                     } else {
-                        self.active_tab - 1
+                        (current_pos + 1) % tab_indices.len()
                     };
-                } else {
-                    self.active_tab = (self.active_tab + 1) % self.charts.len();
+                    self.active_tab = tab_indices[next_pos];
                 }
             }
 

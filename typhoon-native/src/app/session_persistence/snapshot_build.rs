@@ -8,10 +8,22 @@ impl TyphooNApp {
     }
 
     pub(super) fn build_session_value(&self) -> serde_json::Value {
+        let persisted_tabs: Vec<_> = self
+            .charts
+            .iter()
+            .filter(|chart| chart.show_in_tab_bar)
+            .collect();
+        let persisted_active_tab = self
+            .charts
+            .iter()
+            .enumerate()
+            .filter(|(_, chart)| chart.show_in_tab_bar)
+            .position(|(idx, _)| idx == self.active_tab)
+            .unwrap_or(0);
         serde_json::json!({
             "symbol": self.symbol_input,
-            "active_tab": self.active_tab,
-            "tabs": self.charts.iter().map(|c| serde_json::json!({
+            "active_tab": persisted_active_tab,
+            "tabs": persisted_tabs.iter().map(|c| serde_json::json!({
                 "symbol": c.symbol,
                 "timeframe": c.timeframe.label(),
                 "chart_type": c.chart_type.label(),

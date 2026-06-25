@@ -1,5 +1,6 @@
 use super::app_runtime_support::kraken_xstocks_session_status_now;
 use super::*;
+use crate::app::app_runtime_tabs::tab_bar_chart_indices;
 
 #[allow(deprecated)]
 impl TyphooNApp {
@@ -280,15 +281,19 @@ impl TyphooNApp {
                         }
 
                         // MTF tab visibility checkboxes (inline, when MTF is on)
-                        if self.mtf_enabled && self.charts.len() > 1 {
+                        let tab_indices = tab_bar_chart_indices(&self.charts);
+                        if self.mtf_enabled && tab_indices.len() > 1 {
                             while self.mtf_visible.len() < self.charts.len() {
                                 self.mtf_visible.push(true);
                             }
                             ui.separator();
-                            for (i, chart) in self.charts.iter().enumerate() {
+                            for i in tab_indices {
                                 if i >= self.mtf_visible.len() {
                                     break;
                                 }
+                                let Some(chart) = self.charts.get(i) else {
+                                    continue;
+                                };
                                 // Second-to-last `:`-separated segment, without allocating a Vec.
                                 let sym_short = {
                                     let mut it = chart.symbol.rsplit(':');
@@ -595,9 +600,11 @@ impl TyphooNApp {
                                                             egui::Label::new(
                                                                 egui::RichText::new(company)
                                                                     .small()
-                                                                    .color(egui::Color32::from_rgb(
-                                                                        180, 180, 190,
-                                                                    )),
+                                                                    .color(
+                                                                        egui::Color32::from_rgb(
+                                                                            180, 180, 190,
+                                                                        ),
+                                                                    ),
                                                             )
                                                             .truncate(),
                                                         );

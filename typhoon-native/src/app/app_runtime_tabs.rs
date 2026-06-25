@@ -1,5 +1,13 @@
 use super::*;
 
+pub(super) fn tab_bar_chart_indices(charts: &[ChartState]) -> Vec<usize> {
+    charts
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, chart)| chart.show_in_tab_bar.then_some(idx))
+        .collect()
+}
+
 #[allow(deprecated)]
 impl TyphooNApp {
     pub(super) fn render_tab_bar(&mut self, ctx: &egui::Context) {
@@ -9,10 +17,10 @@ impl TyphooNApp {
         // (switch / close / drag-start / reorder) is deferred to after the strip
         // is drawn. Overflowed tabs used to be clipped with no way to reach them;
         // the ScrollArea makes the strip scroll (mouse wheel + scrollbar).
-        let tab_snapshots: Vec<(usize, String, bool, bool)> = self
-            .charts
+        let tab_indices = tab_bar_chart_indices(&self.charts);
+        let tab_snapshots: Vec<(usize, String, bool, bool)> = tab_indices
             .iter()
-            .enumerate()
+            .filter_map(|idx| self.charts.get(*idx).map(|c| (*idx, c)))
             .map(|(idx, c)| {
                 (
                     idx,
@@ -22,7 +30,7 @@ impl TyphooNApp {
                 )
             })
             .collect();
-        let n_charts = self.charts.len();
+        let n_tabs = tab_snapshots.len();
         let dragging_tab = self.dragging_tab;
 
         // Detect an active-tab change since last frame so the active tab can be
@@ -47,7 +55,7 @@ impl TyphooNApp {
                     let pointer_released = ctx.input(|i| i.pointer.primary_released());
 
                     // Collect tab rects for drag detection
-                    let mut tab_rects: Vec<egui::Rect> = Vec::new();
+                    let mut tab_rects: Vec<(usize, egui::Rect)> = Vec::new();
 
                     // Reserve room on the right for the always-visible + button and
                     // chart-type indicator; the scrollable tab strip takes the rest.
@@ -96,7 +104,7 @@ impl TyphooNApp {
                                         egui::vec2(tab_w, 24.0),
                                         egui::Sense::click_and_drag(),
                                     );
-                                    tab_rects.push(tab_rect);
+                                    tab_rects.push((idx, tab_rect));
                                     if active && scroll_to_active {
                                         active_rect = Some(tab_rect);
                                     }
@@ -124,10 +132,7 @@ impl TyphooNApp {
                                             egui::pos2(tab_rect.right(), tab_rect.top()),
                                             egui::pos2(tab_rect.right(), tab_rect.bottom()),
                                         ],
-                                        egui::Stroke::new(
-                                            1.0,
-                                            egui::Color32::from_rgb(34, 34, 34),
-                                        ),
+                                        egui::Stroke::new(1.0, egui::Color32::from_rgb(34, 34, 34)),
                                     );
 
                                     // Draw drag indicator (green left/right border when
@@ -169,7 +174,7 @@ impl TyphooNApp {
                                     );
 
                                     // Close button (×) — right side of tab
-                                    if n_charts > 1 {
+                                    if n_tabs > 1 {
                                         let close_rect = egui::Rect::from_min_size(
                                             egui::pos2(
                                                 tab_rect.right() - 14.0,
@@ -202,7 +207,7 @@ impl TyphooNApp {
                                     }
 
                                     // Middle-click to close tab
-                                    if tab_resp.middle_clicked() && n_charts > 1 {
+                                    if tab_resp.middle_clicked() && n_tabs > 1 {
                                         close_tab = Some(idx);
                                     }
 
@@ -263,11 +268,11 @@ impl TyphooNApp {
                     if pointer_released {
                         if let Some(drag_src) = dragging_tab {
                             if let Some(pos) = pointer_pos {
-                                for (idx, rect) in tab_rects.iter().enumerate() {
-                                    if rect.contains(pos) && idx != drag_src {
+                                for (idx, rect) in &tab_rects {
+                                    if rect.contains(pos) && *idx != drag_src {
                                         let mid = rect.center().x;
                                         // Insert before idx if dropping on left half, after if right half
-                                        let insert_at = if pos.x < mid { idx } else { idx + 1 };
+                                        let insert_at = if pos.x < mid { *idx } else { *idx + 1 };
                                         drop_target = Some((drag_src, insert_at));
                                         break;
                                     }
@@ -323,5 +328,20 @@ impl TyphooNApp {
                     }
                 });
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tab_bar_indices_exclude_mtf_backing_charts() {
+        let mut user_chart = ChartState::new("CC", Timeframe::D1);
+        user_chart.show_in_tab_bar = true;
+        let mut backing_chart = ChartState::new("CC", Timeframe::M1);
+        backing_chart.show_in_tab_bar = false;
+
+        assert_eq!(tab_bar_chart_indices(&[user_chart, backing_chart]), vec![0]);
     }
 }

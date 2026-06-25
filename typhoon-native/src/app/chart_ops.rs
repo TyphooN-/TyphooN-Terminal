@@ -1073,6 +1073,7 @@ impl TyphooNApp {
                 idx
             } else {
                 let mut chart = ChartState::new(symbol, tf);
+                chart.show_in_tab_bar = false;
                 if let Some(ref cache) = self.cache.clone() {
                     let mut gpu = self.gpu_indicators.take();
                     if !chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()) {
@@ -1100,7 +1101,12 @@ impl TyphooNApp {
             if let Some(visible) = self.mtf_visible.get_mut(idx) {
                 *visible = true;
             }
-            if label == "D1" {
+            if label == "D1"
+                && self
+                    .charts
+                    .get(idx)
+                    .is_some_and(|chart| chart.show_in_tab_bar)
+            {
                 self.active_tab = idx;
             }
         }

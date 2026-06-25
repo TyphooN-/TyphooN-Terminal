@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::app_runtime_tabs::tab_bar_chart_indices;
 use crate::app::chart_ops::MTF_GRID_TIMEFRAMES;
 
 #[allow(deprecated)]
@@ -19,10 +20,11 @@ impl TyphooNApp {
                             }
                         });
                         ui.menu_button("View", |ui| {
+                            let tab_indices = tab_bar_chart_indices(&self.charts);
                             let mtf_label = if self.mtf_enabled {
                                 "Single Chart".to_string()
                             } else {
-                                format!("MTF Grid ({} charts)", self.charts.len())
+                                format!("MTF Grid ({} charts)", tab_indices.len())
                             };
                             if ui.button(&mtf_label).clicked() {
                                 self.mtf_enabled = !self.mtf_enabled;
@@ -43,7 +45,7 @@ impl TyphooNApp {
                                 }
                             });
                             // MTF tab visibility checkboxes
-                            if self.charts.len() > 1 {
+                            if tab_indices.len() > 1 {
                                 ui.menu_button("MTF Tabs", |ui| {
                                     // Ensure mtf_visible is the right size
                                     while self.mtf_visible.len() < self.charts.len() {
@@ -51,15 +53,28 @@ impl TyphooNApp {
                                     }
                                     ui.horizontal(|ui| {
                                         if ui.small_button("All").clicked() {
-                                            self.mtf_visible.iter_mut().for_each(|v| *v = true);
+                                            for idx in &tab_indices {
+                                                if let Some(visible) = self.mtf_visible.get_mut(*idx) {
+                                                    *visible = true;
+                                                }
+                                            }
                                         }
                                         if ui.small_button("None").clicked() {
-                                            self.mtf_visible.iter_mut().for_each(|v| *v = false);
-                                            self.mtf_visible[0] = true;
+                                            for idx in &tab_indices {
+                                                if let Some(visible) = self.mtf_visible.get_mut(*idx) {
+                                                    *visible = false;
+                                                }
+                                            }
+                                            if let Some(idx) = tab_indices.first().copied() {
+                                                self.mtf_visible[idx] = true;
+                                            }
                                         }
                                     });
                                     ui.separator();
-                                    for (i, chart) in self.charts.iter().enumerate() {
+                                    for i in &tab_indices {
+                                        let Some(chart) = self.charts.get(*i) else {
+                                            continue;
+                                        };
                                         let label = format!(
                                             "{} [{}]",
                                             chart
@@ -70,8 +85,8 @@ impl TyphooNApp {
                                                 .unwrap_or(&chart.symbol),
                                             chart.timeframe.label()
                                         );
-                                        if i < self.mtf_visible.len() {
-                                            ui.checkbox(&mut self.mtf_visible[i], label);
+                                        if *i < self.mtf_visible.len() {
+                                            ui.checkbox(&mut self.mtf_visible[*i], label);
                                         }
                                     }
                                 });

@@ -26,6 +26,10 @@ pub struct ChartState {
     pub regulatory_alerts: Vec<typhoon_engine::core::regulatory_alerts::RegulatoryAlert>,
     /// Chart rendering style.
     pub chart_type: ChartType,
+    /// Whether this chart appears in the user-facing top tab strip. MTF Grid
+    /// backing charts are real chart states for data/indicator computation, but
+    /// they must not pollute normal user-opened tabs.
+    pub show_in_tab_bar: bool,
     /// Logarithmic price scale (vs linear).
     pub log_scale: bool,
     // ── Configurable indicator periods ─────────────────────────────────
@@ -500,6 +504,7 @@ impl ChartState {
             source_override: "",
             regulatory_alerts: Vec::new(),
             chart_type: ChartType::Candle,
+            show_in_tab_bar: true,
             log_scale: false,
             sma_slow_period: 200,
             sma_fast_period: 100,
@@ -710,5 +715,4 @@ impl ChartState {
         self.forming_bar_dirty = false;
         self.last_visible_bar_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
     }
-
 }
