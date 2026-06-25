@@ -968,6 +968,9 @@ economic-calendar, Congress, Fear & Greed, Reddit WSB, and crypto-top-50 externa
 The next physical processor-child move relocated `alpaca_account_data` into
 `typhoon_broker_runtime::alpaca_account_data`; native now imports that runtime module for account,
 position, order-list, activity, top-mover, and asset-list routing.
+The next physical processor-child move relocated `alpaca_order_ops` into
+`typhoon_broker_runtime::alpaca_order_ops`; native now imports that runtime module for Alpaca close,
+market, limit, stop, bracket, OCO, modify, trailing-stop, and sync-exit order routing.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

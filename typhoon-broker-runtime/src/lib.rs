@@ -6,6 +6,7 @@
 //! physically moved behind a single spawn seam.
 
 pub mod alpaca_account_data;
+pub mod alpaca_order_ops;
 pub mod external_feeds;
 pub mod misc_commands;
 pub mod prelude;
