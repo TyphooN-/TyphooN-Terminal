@@ -1,15 +1,15 @@
 # ADR-117: StockTwits Social-Sentiment Ingest into the Research Packet
 
-**Status:** Proposed — not implemented. The current terminal has a separate Finnhub
-Reddit/Twitter social-sentiment lane (`BrokerCmd::FetchSocialSentiment`,
-`SocialSentimentRow`, and the SENTIMENT research window); this ADR specifically tracks a
-StockTwits ingest lane and remains open.
+**Status:** Implemented for the public StockTwits symbol stream. The current terminal also
+has a separate Finnhub Reddit/Twitter social-sentiment lane (`BrokerCmd::FetchSocialSentiment`,
+`SocialSentimentRow`, and the SENTIMENT research window). Optional historical `sentiment-v2`
+and additional social sources remain future work.
 **Date:** 2026-06-12
 **Related:** ADR-078 (multi-source news ingest pipeline), ADR-079 (research packet — snapshot→SQLite→packet pattern), ADR-080 (web-research ingestion / Return Path), ADR-096 (AI return-path auto-ingest), ADR-008 (centralized rate limiter), ADR-098 (per-frame O(1) discipline), ADR-116 (finviz parity target)
 
 ## Context
 
-The research packet (ADR-079) carries fundamentals, ~375 research/indicator surfaces, SEC filings, insider activity, and multi-source **news** (GDELT, Finnhub, Marketaux, Yahoo RSS, NewsAPI, Polygon — ADR-078). Separately, the native research windows can fetch Finnhub Reddit/Twitter social-sentiment rows. There is **no StockTwits social-ingest surface today**; the only active `Stocktwits` source mentions are article-body cleanup heuristics for syndicated news pages, not a sentiment provider/cache/protocol lane.
+The research packet (ADR-079) carries fundamentals, ~375 research/indicator surfaces, SEC filings, insider activity, and multi-source **news** (GDELT, Finnhub, Marketaux, Yahoo RSS, NewsAPI, Polygon — ADR-078). Separately, the native research windows can fetch Finnhub Reddit/Twitter social-sentiment rows. As of 2026-06-25, StockTwits public-stream sentiment is also available as a cache-first local research-packet section.
 
 Finviz itself does **not** show social sentiment, so this is an *exceeds-parity* addition (it complements ADR-116, it is not required by it). StockTwits is the most accessible retail-sentiment source and is the natural first social lane.
 
@@ -25,23 +25,23 @@ Finviz itself does **not** show social sentiment, so this is an *exceeds-parity*
 
 ## Decision
 
-Add a **StockTwits ingest lane** as a new research data source feeding the research packet, mirroring the existing news-ingest pattern (ADR-078) and the standard snapshot pipeline (ADR-079: snapshot struct → SQLite table → `BrokerCmd`/`BrokerMsg` → packet emitter).
+Add a **StockTwits ingest lane** as a new research data source feeding the research packet, mirroring the existing news-ingest pattern (ADR-078) and the standard snapshot pipeline (ADR-079: snapshot struct → SQLite table → `BrokerCmd`/`BrokerMsg` → packet emitter). This now exists for the public symbol stream.
 
-1. **Engine fetcher** in `typhoon-engine/src/core/research/providers.rs` (or a new `research/social.rs`): pull the public symbol stream, parse messages, and reduce to a snapshot:
-   - `StockTwitsSentimentSnapshot { bullish: u32, bearish: u32, neutral: u32, message_count: u32, bull_bear_ratio: f64, velocity_24h: f64, top_messages: Vec<StockTwitsMessage> }` (type in `research/types.rs`).
+1. **Engine fetcher** in `typhoon-engine/src/core/research/providers.rs`: pull the public symbol stream, parse messages, and reduce to a snapshot:
+   - `StockTwitsSentimentSnapshot { bullish: u32, bearish: u32, neutral: u32, message_count: u32, bull_bear_ratio: f64, velocity_24h: u32, top_messages: Vec<StockTwitsMessage> }` (type in `research/transcripts_sentiment.rs`).
    - `velocity_24h` = messages in the trailing 24h (momentum of chatter), computed from `created_at`.
-2. **Storage** via a small storage helper module (`storage_social_sentiment_snapshots.rs`) under the established `mod` + `pub use ::*` convention; cache namespace `stocktwits:{SYMBOL}`, zstd KV, TTL-bounded (e.g. refresh ≤ 1×/15min/symbol).
+2. **Storage** via `research_stocktwits_sentiment` and `upsert_stocktwits_sentiment` / `get_stocktwits_sentiment`; local-cache only, keyed by uppercased symbol.
 3. **Packet section** in the research-packet layer (`typhoon-research-ui::packet`, with the native packet dispatcher gathering app/cache context): `### Social Sentiment — StockTwits ({SYM}, as of {ts})` listing bull/bear/neutral counts, bull:bear ratio, 24h velocity, and a few representative recent messages **with provenance + timestamps** (never presented as the terminal's own view).
-4. **Scheduling** through the existing research/news ingest scheduler with the centralized rate limiter (ADR-008); **opt-in**, **cache-first**, off the render thread (ADR-098 — no per-frame fetch/parse).
-5. **Provider isolation**: put the HTTP/JSON behind a small provider trait so swapping the public stream for the sentiment-v2/partner endpoint later is a localized change.
+4. **Scheduling/trigger** through `BrokerCmd::FetchStockTwitsSentiment` and the `STOCKTWITS` / `STWITS` command; **opt-in**, **cache-first**, off the render thread (ADR-098 — no per-frame fetch/parse).
+5. **Provider isolation**: the HTTP/JSON is isolated behind `fetch_stocktwits_sentiment` / `parse_stocktwits_symbol_stream`, so swapping the public stream for the sentiment-v2/partner endpoint later is localized.
 
 ## Integration points
 
-- `typhoon-engine/src/core/research/types.rs` — snapshot + message structs.
-- `typhoon-engine/src/core/research/providers.rs` (or `social.rs`) — fetch + parse + reduce.
-- `typhoon-engine/src/core/research/storage_social_sentiment_snapshots.rs` — schema/upsert/get, re-exported from `research/mod.rs`.
-- `typhoon_broker_runtime::news_ingest` / `typhoon_broker_runtime::news` — schedule + store handler.
-- `typhoon-research-ui::packet` plus the native packet dispatcher — packet section.
+- `typhoon-engine/src/core/research/transcripts_sentiment.rs` — `StockTwitsMessage` + `StockTwitsSentimentSnapshot`.
+- `typhoon-engine/src/core/research/providers.rs` — `fetch_stocktwits_sentiment` + `parse_stocktwits_symbol_stream`.
+- `typhoon-engine/src/core/research/storage_core.rs` — schema/upsert/get for `research_stocktwits_sentiment`.
+- `typhoon-broker-runtime/src/research_fetch.rs` — `BrokerCmd::FetchStockTwitsSentiment` handler.
+- `typhoon-research-ui::packet::stocktwits_sentiment` plus the native packet dispatcher — packet section.
 
 ## Risks / constraints
 
@@ -50,11 +50,11 @@ Add a **StockTwits ingest lane** as a new research data source feeding the resea
 - **Endpoint stability:** StockTwits has changed APIs repeatedly; the provider trait + a single namespace contains breakage.
 - **Coverage:** crypto/xStock tickers may not map 1:1 to StockTwits symbols; treat empty/404 as a normal no-data tombstone (same convention as Yahoo/news).
 
-## Future TODOs (still open; not covered by the existing Finnhub social lane)
+## Future TODOs
 
-- [ ] Engine fetcher + `StockTwitsSentimentSnapshot` type + storage helper module.
-- [ ] Research-packet `### Social Sentiment — StockTwits` section.
-- [ ] Optional floating **Social Sentiment** window: bull/bear sparkline over time from stored snapshots.
+- [x] Engine fetcher + `StockTwitsSentimentSnapshot` type + storage helper.
+- [x] Research-packet `### Social Sentiment — StockTwits` section.
+- [ ] Optional floating **Social Sentiment** window: bull/bear sparkline over time from stored snapshots. Current implementation logs successful fetches and renders cached data in the research packet.
 - [ ] Optional **sentiment-v2** endpoint for a historical sentiment/volume series (needs access check).
 - [ ] Extend the same social lane to **Reddit** (e.g. r/wallstreetbets, r/stocks) as a second source — closes the Reddit gap noted in ADR-092.
 

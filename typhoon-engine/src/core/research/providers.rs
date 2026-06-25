@@ -1,6 +1,6 @@
 use super::{
-    CompanyProfile, EarningRow, IpoEvent, PressRelease, SocialSentimentRow, Transcript,
-    TranscriptMeta,
+    CompanyProfile, EarningRow, IpoEvent, PressRelease, SocialSentimentRow, StockTwitsMessage,
+    StockTwitsSentimentSnapshot, Transcript, TranscriptMeta,
 };
 
 pub async fn fetch_finnhub_profile(
@@ -259,6 +259,98 @@ pub async fn fetch_finnhub_social(
     Ok(rows)
 }
 
+/// StockTwits public symbol stream — unauthenticated recent messages with optional user sentiment tags.
+pub async fn fetch_stocktwits_sentiment(
+    client: &reqwest::Client,
+    symbol: &str,
+) -> Result<StockTwitsSentimentSnapshot, String> {
+    let symbol = symbol.trim().to_uppercase();
+    if symbol.is_empty() {
+        return Err("StockTwits symbol required".into());
+    }
+    let url = format!(
+        "https://api.stocktwits.com/api/2/streams/symbol/{}.json",
+        symbol
+    );
+    let resp = client
+        .get(&url)
+        .header("User-Agent", "TyphooN-Terminal/0.1")
+        .send()
+        .await
+        .map_err(|e| format!("StockTwits failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("StockTwits: HTTP {}", resp.status()));
+    }
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("StockTwits body: {e}"))?;
+    parse_stocktwits_symbol_stream(&symbol, &text)
+}
+
+pub fn parse_stocktwits_symbol_stream(
+    symbol: &str,
+    payload: &str,
+) -> Result<StockTwitsSentimentSnapshot, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(payload).map_err(|e| format!("StockTwits parse: {e}"))?;
+    let messages = v["messages"]
+        .as_array()
+        .ok_or_else(|| "StockTwits parse: missing messages array".to_string())?;
+    let now = chrono::Utc::now();
+    let mut snapshot = StockTwitsSentimentSnapshot {
+        symbol: symbol.trim().to_uppercase(),
+        fetched_at: now.to_rfc3339(),
+        ..Default::default()
+    };
+    for msg in messages.iter().take(30) {
+        let sentiment = msg
+            .pointer("/entities/sentiment/basic")
+            .and_then(|s| s.as_str())
+            .unwrap_or("Neutral")
+            .to_string();
+        match sentiment.as_str() {
+            "Bullish" => snapshot.bullish += 1,
+            "Bearish" => snapshot.bearish += 1,
+            _ => snapshot.neutral += 1,
+        }
+        let created_at = msg["created_at"].as_str().unwrap_or("").to_string();
+        if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&created_at) {
+            if now.signed_duration_since(ts.with_timezone(&chrono::Utc))
+                <= chrono::Duration::hours(24)
+            {
+                snapshot.velocity_24h += 1;
+            }
+        }
+        snapshot.top_messages.push(StockTwitsMessage {
+            id: msg["id"].as_i64().unwrap_or_default(),
+            created_at,
+            username: msg
+                .pointer("/user/username")
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string(),
+            body: msg["body"].as_str().unwrap_or("").to_string(),
+            sentiment,
+            like_count: msg
+                .pointer("/likes/total")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default(),
+            reshare_count: msg
+                .pointer("/reshares/reshared_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default(),
+        });
+    }
+    snapshot.message_count = snapshot.top_messages.len() as u32;
+    snapshot.bull_bear_ratio = if snapshot.bearish == 0 {
+        snapshot.bullish as f64
+    } else {
+        snapshot.bullish as f64 / snapshot.bearish as f64
+    };
+    Ok(snapshot)
+}
+
 // ── FMP fetchers ───────────────────────────────────────────────────────────
 
 /// FMP /earning_call_transcript/{symbol} list endpoint — returns available [year, quarter, date] triples.
@@ -399,4 +491,55 @@ pub async fn fetch_yahoo_quotes(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_stocktwits_symbol_stream;
+
+    #[test]
+    fn parse_stocktwits_symbol_stream_counts_sentiment_and_preserves_top_messages() {
+        let payload = r#"
+        {
+          "messages": [
+            {
+              "id": 101,
+              "created_at": "2026-06-25T12:00:00Z",
+              "body": "AMC squeeze setup",
+              "user": { "username": "bull" },
+              "likes": { "total": 7 },
+              "reshares": { "reshared_count": 2 },
+              "entities": { "sentiment": { "basic": "Bullish" } }
+            },
+            {
+              "id": 102,
+              "created_at": "2026-06-25T11:00:00Z",
+              "body": "Looks weak",
+              "user": { "username": "bear" },
+              "entities": { "sentiment": { "basic": "Bearish" } }
+            },
+            {
+              "id": 103,
+              "created_at": "2026-06-25T10:30:00Z",
+              "body": "Watching volume",
+              "user": { "username": "neutral" },
+              "entities": { "sentiment": null }
+            }
+          ]
+        }"#;
+
+        let snapshot = parse_stocktwits_symbol_stream("amc", payload).unwrap();
+
+        assert_eq!(snapshot.symbol, "AMC");
+        assert_eq!(snapshot.bullish, 1);
+        assert_eq!(snapshot.bearish, 1);
+        assert_eq!(snapshot.neutral, 1);
+        assert_eq!(snapshot.message_count, 3);
+        assert_eq!(snapshot.bull_bear_ratio, 1.0);
+        assert_eq!(snapshot.top_messages.len(), 3);
+        assert_eq!(snapshot.top_messages[0].sentiment, "Bullish");
+        assert_eq!(snapshot.top_messages[0].username, "bull");
+        assert_eq!(snapshot.top_messages[0].like_count, 7);
+        assert_eq!(snapshot.top_messages[0].reshare_count, 2);
+    }
 }

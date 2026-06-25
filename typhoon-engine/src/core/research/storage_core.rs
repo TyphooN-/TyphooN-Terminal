@@ -42,6 +42,11 @@ pub fn create_research_tables(conn: &Connection) -> Result<(), String> {
             rows_json TEXT NOT NULL DEFAULT '[]',
             updated_at INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS research_stocktwits_sentiment (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
         CREATE TABLE IF NOT EXISTS research_transcript_list (
             symbol TEXT PRIMARY KEY,
             rows_json TEXT NOT NULL DEFAULT '[]',
@@ -367,6 +372,46 @@ pub fn get_sentiment(
     }
 }
 
+pub fn upsert_stocktwits_sentiment(
+    conn: &Connection,
+    symbol: &str,
+    snapshot: &StockTwitsSentimentSnapshot,
+) -> Result<(), String> {
+    let _ = create_research_tables(conn);
+    let mut normalized = snapshot.clone();
+    normalized.symbol = symbol.to_uppercase();
+    let json = serde_json::to_string(&normalized).map_err(|e| format!("stocktwits json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_stocktwits_sentiment(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert stocktwits sentiment: {e}"))?;
+    Ok(())
+}
+
+pub fn get_stocktwits_sentiment(
+    conn: &Connection,
+    symbol: &str,
+) -> Result<Option<StockTwitsSentimentSnapshot>, String> {
+    let _ = create_research_tables(conn);
+    let mut stmt = conn
+        .prepare("SELECT snapshot_json FROM research_stocktwits_sentiment WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_stocktwits_sentiment: {e}"))?;
+    let mut rows = stmt
+        .query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query get_stocktwits_sentiment: {e}"))?;
+    if let Some(row) = rows
+        .next()
+        .map_err(|e| format!("row get_stocktwits_sentiment: {e}"))?
+    {
+        let json: String = row.get(0).unwrap_or_default();
+        let snapshot: StockTwitsSentimentSnapshot = serde_json::from_str(&json).unwrap_or_default();
+        Ok(Some(snapshot))
+    } else {
+        Ok(None)
+    }
+}
+
 // ── transcripts ────────────────────────────────────────────────────────────
 
 pub fn upsert_transcript_list(
@@ -598,5 +643,38 @@ pub fn get_ipo_calendar(conn: &Connection) -> Result<Option<Vec<IpoEvent>>, Stri
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else {
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod stocktwits_storage_tests {
+    use super::*;
+
+    #[test]
+    fn stocktwits_sentiment_roundtrips_by_uppercase_symbol() {
+        let conn = Connection::open_in_memory().unwrap();
+        let snapshot = StockTwitsSentimentSnapshot {
+            symbol: "AMC".to_string(),
+            bullish: 2,
+            bearish: 1,
+            neutral: 1,
+            message_count: 4,
+            bull_bear_ratio: 2.0,
+            top_messages: vec![StockTwitsMessage {
+                id: 7,
+                username: "ape".to_string(),
+                body: "Watching".to_string(),
+                sentiment: "Bullish".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        upsert_stocktwits_sentiment(&conn, "amc", &snapshot).unwrap();
+        let loaded = get_stocktwits_sentiment(&conn, "AMC").unwrap().unwrap();
+
+        assert_eq!(loaded.symbol, "AMC");
+        assert_eq!(loaded.bullish, 2);
+        assert_eq!(loaded.top_messages[0].username, "ape");
     }
 }

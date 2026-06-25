@@ -23,6 +23,21 @@ impl TyphooNApp {
                     });
                 }
             }
+            "STOCKTWITS" | "STWITS" => {
+                let sym = command_chart_symbol(
+                    self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
+                );
+                if !sym.is_empty() {
+                    let sym_u = sym.to_uppercase();
+                    let _ = self.broker_tx.send(BrokerCmd::FetchStockTwitsSentiment {
+                        symbol: sym_u.clone(),
+                    });
+                    self.log.push_back(LogEntry::info(format!(
+                        "StockTwits sentiment fetch queued for {}",
+                        sym_u
+                    )));
+                }
+            }
             "TRANSCRIPTS" | "CALLS" => {
                 let sym = command_chart_symbol(
                     self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),

@@ -91,6 +91,20 @@ impl TyphooNApp {
                     }
                 }
             }
+            BrokerMsg::StockTwitsSentiment(sym, snapshot) => {
+                let sym_u = sym.to_uppercase();
+                if let Some(ref cache) = self.cache {
+                    if let Ok(conn) = cache.connection() {
+                        let _ = typhoon_engine::core::research::upsert_stocktwits_sentiment(
+                            &conn, &sym_u, &snapshot,
+                        );
+                    }
+                }
+                self.log.push_back(LogEntry::info(format!(
+                    "StockTwits sentiment cached for {}: {} bullish / {} bearish / {} neutral",
+                    sym_u, snapshot.bullish, snapshot.bearish, snapshot.neutral
+                )));
+            }
             BrokerMsg::TranscriptList(sym, rows) => {
                 let sym_u = sym.to_uppercase();
                 if self.transcripts_symbol.eq_ignore_ascii_case(&sym_u) {

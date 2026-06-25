@@ -3,9 +3,9 @@
 // `capital_valuation_sections::write_…`) and `SymbolResearchContext` resolve
 // unchanged; the dispatcher itself (gathers app state, builds the context)
 // stays here in native.
+use super::*;
 use typhoon_research_ui::packet::context::SymbolResearchContext;
 use typhoon_research_ui::packet::*;
-use super::*;
 
 impl TyphooNApp {
     pub(super) fn write_symbol_investigation_sections(&self, p: &mut String, syms: &[String]) {
@@ -62,6 +62,10 @@ impl TyphooNApp {
                     let ctx = SymbolResearchContext { conn: &conn };
 
                     cached_research::write_symbol_cached_research_surfaces(&ctx, p, &sym_upper);
+
+                    stocktwits_sentiment::write_symbol_stocktwits_sentiment_section(
+                        &ctx, p, &sym_upper,
+                    );
 
                     ownership_price_history::write_symbol_ownership_price_history_sections(
                         &ctx, p, &sym_upper,

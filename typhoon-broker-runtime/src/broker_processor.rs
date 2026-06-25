@@ -193,6 +193,7 @@ pub fn spawn_broker_message_processor(
                 | BrokerCmd::FetchIpoCalendar { .. }
                 | BrokerCmd::FetchPressReleases { .. }
                 | BrokerCmd::FetchSocialSentiment { .. }
+                | BrokerCmd::FetchStockTwitsSentiment { .. }
                 | BrokerCmd::FetchTranscriptList { .. }
                 | BrokerCmd::FetchTranscriptBody { .. }
                 | BrokerCmd::FetchCommoditiesQuotes

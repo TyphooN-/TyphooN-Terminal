@@ -47,6 +47,7 @@ pub mod rank_drift_sections;
 pub mod rank_drift_vol_perf;
 pub mod rank_drift_yield_short_conc;
 pub mod recent_news;
+pub mod stocktwits_sentiment;
 pub mod talib_dmi_movement;
 pub mod talib_extended_emitters;
 pub mod talib_momentum_range;

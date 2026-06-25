@@ -181,6 +181,7 @@ impl TyphooNApp {
                 | BrokerMsg::IpoCalendar(_)
                 | BrokerMsg::PressReleases(_, _)
                 | BrokerMsg::SocialSentiment(_, _)
+                | BrokerMsg::StockTwitsSentiment(_, _)
                 | BrokerMsg::TranscriptList(_, _)
                 | BrokerMsg::TranscriptBody(_)
                 | BrokerMsg::CommoditiesQuotes(_)

@@ -429,6 +429,10 @@ pub enum BrokerCmd {
         symbol: String,
         finnhub_key: String,
     },
+    /// Fetch StockTwits public symbol stream sentiment snapshot.
+    FetchStockTwitsSentiment {
+        symbol: String,
+    },
     /// Fetch FMP transcript list for a symbol.
     FetchTranscriptList {
         symbol: String,
@@ -2644,6 +2648,8 @@ pub enum BrokerMsg {
         String,
         Vec<crate::core::research::SocialSentimentRow>,
     ),
+    /// StockTwits public-stream sentiment snapshot for a symbol.
+    StockTwitsSentiment(String, crate::core::research::StockTwitsSentimentSnapshot),
     /// FMP transcript metadata list.
     TranscriptList(String, Vec<crate::core::research::TranscriptMeta>),
     /// FMP full transcript body.
