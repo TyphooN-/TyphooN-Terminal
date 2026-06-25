@@ -1,4 +1,4 @@
-use super::*;
+use super::prelude::*;
 
 const KRAKEN_CRYPTO_BASES: &[&str] = &[
     "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "LTC", "LINK", "AVAX", "DOT", "XMR", "ZEC",

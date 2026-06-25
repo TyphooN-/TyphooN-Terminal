@@ -1,4 +1,4 @@
-use super::*;
+use super::prelude::*;
 
 fn encode_matrix_room_path(room_id: &str, encode_hash: bool) -> String {
     let mut encoded = String::with_capacity(room_id.len());

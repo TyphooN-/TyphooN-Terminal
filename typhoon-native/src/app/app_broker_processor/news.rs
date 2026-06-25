@@ -1,4 +1,4 @@
-use super::*;
+use super::prelude::*;
 
 pub(super) fn handle_news_command(
     cmd: BrokerCmd,

@@ -1,4 +1,4 @@
-use super::*;
+use super::prelude::*;
 
 /// Stop the WS v2 book resubscribe loop after this many *consecutive* checksum
 /// mismatches. A deterministically-failing book (e.g. the xStock fixed-precision

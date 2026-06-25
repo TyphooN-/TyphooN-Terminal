@@ -1,4 +1,4 @@
-use super::*;
+use super::prelude::*;
 
 pub(super) fn handle_research_fetch_command(
     cmd: BrokerCmd,
