@@ -16,3 +16,4 @@ reqwest = { workspace = true, features = ["json", "rustls"] }
 tokio = { workspace = true, features = ["sync", "time"] }
 chrono = { workspace = true }
 serde_json = { workspace = true }
+tracing = { workspace = true }

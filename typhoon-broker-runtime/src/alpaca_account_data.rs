@@ -1,6 +1,7 @@
-use super::prelude::*;
+use typhoon_engine::broker::alpaca::AlpacaBroker;
+use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
 
-pub(super) async fn handle_alpaca_account_data_command(
+pub async fn handle_alpaca_account_data_command(
     cmd: BrokerCmd,
     broker: Option<&AlpacaBroker>,
     broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
@@ -59,7 +60,8 @@ pub(super) async fn handle_alpaca_account_data_command(
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                let _ = broker_msg_tx.send(BrokerMsg::JsonResult("Account Activities".into(), text));
+                let _ =
+                    broker_msg_tx.send(BrokerMsg::JsonResult("Account Activities".into(), text));
 
                 // Also send structured fills for chart overlay.
                 let fills: Vec<(String, String, f64, f64, String)> = activities
