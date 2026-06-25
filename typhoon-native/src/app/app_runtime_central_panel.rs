@@ -1,5 +1,8 @@
 use super::*;
-use crate::app::chart_ops::{chart_company_name_catalog, low_timeframe_no_data_symbols, mtf_visible_chart_groups_filtered};
+use crate::app::chart_ops::{
+    chart_company_name_catalog, low_timeframe_no_data_symbols, mtf_canvas_grid_cols,
+    mtf_canvas_grid_rows, mtf_flat_chart_indices, mtf_visible_chart_groups_filtered,
+};
 
 impl TyphooNApp {
     pub(crate) fn render_central_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, pointer_over_floating: bool) {
@@ -605,15 +608,17 @@ impl TyphooNApp {
             .count() as u8;
 
             if self.mtf_enabled {
-                // Filter to visible, supported MTF charts and group them by symbol. Each
-                // symbol gets its own multi-timeframe grid; the supported set is owned by
-                // MTF_GRID_TIMEFRAMES, including M1/M5 where source data is available.
+                // Central MTF is a flat chart stream: exactly two columns, then
+                // additional rows downward as cells become available. The right panel
+                // can group by symbol; the canvas must not allocate a separate vertical
+                // band per symbol because sparse/no-data groups create a waterfall.
                 while self.mtf_visible.len() < self.charts.len() {
                     self.mtf_visible.push(true);
                 }
                 let suppressed_mtf_symbols = low_timeframe_no_data_symbols(&self.unresolvable_pairs);
                 let mtf_groups = mtf_visible_chart_groups_filtered(&self.charts, &self.mtf_visible, &suppressed_mtf_symbols);
-                if mtf_groups.is_empty() {
+                let mtf_indices = mtf_flat_chart_indices(&mtf_groups);
+                if mtf_indices.is_empty() {
                     ui.painter().text(
                         available.center(),
                         egui::Align2::CENTER_CENTER,
@@ -623,23 +628,10 @@ impl TyphooNApp {
                     );
                     return;
                 }
-                let cols = self.mtf_cols.max(1);
-                let header_h = 0.0_f32; // no per-group symbol header — each cell self-labels "SYM [TF]"
-                let row_gap = 4.0_f32;
-                let group_layout: Vec<(usize, usize)> = mtf_groups
-                    .iter()
-                    .map(|group| {
-                        let group_cols = cols.min(group.indices.len().max(1));
-                        let rows = (group.indices.len() + group_cols - 1) / group_cols;
-                        (group_cols, rows.max(1))
-                    })
-                    .collect();
-                let total_chart_rows: usize = group_layout.iter().map(|(_, rows)| *rows).sum();
-                let reserved_h = header_h * mtf_groups.len() as f32
-                    + row_gap * mtf_groups.len().saturating_sub(1) as f32;
-                let chart_row_h = ((available.height() - reserved_h).max(80.0)
-                    / total_chart_rows.max(1) as f32)
-                    .max(80.0);
+                let cols = mtf_canvas_grid_cols(mtf_indices.len());
+                let rows = mtf_canvas_grid_rows(mtf_indices.len()).max(1);
+                let cell_w = available.width() / cols as f32;
+                let cell_h = (available.height().max(80.0) / rows as f32).max(80.0);
 
                 // Detect click on grid cell to focus it
                 let click_pos = if ctx.input(|i| i.pointer.primary_clicked()) {
@@ -652,26 +644,17 @@ impl TyphooNApp {
                 // MTF grids pulled M1/M5/M15 merged rows and recomputed overlays.
                 // `queue_chart_reload` is O(1)-deduped by `deferred_chart_load_set`.
                 let empty_chart_load_now = std::time::Instant::now();
-                for group in &mtf_groups {
-                    for &vi in &group.indices {
-                        if self.should_queue_empty_chart_reload(vi, empty_chart_load_now) {
-                            self.queue_chart_reload(vi);
-                        }
+                for &vi in &mtf_indices {
+                    if self.should_queue_empty_chart_reload(vi, empty_chart_load_now) {
+                        self.queue_chart_reload(vi);
                     }
                 }
 
-                let mut group_top = available.top();
-                for (group_idx, group) in mtf_groups.iter().enumerate() {
-                    let (cols, rows) = group_layout[group_idx];
-                    group_top += header_h;
-                    let cell_w = available.width() / cols as f32;
-                    let cell_h = chart_row_h;
-
-                    for (grid_pos, &vi) in group.indices.iter().enumerate() {
-                        // Rebuild trade overlay every 120 frames (~30s) or on first load.
-                        // During heavy sync, keep the cached overlay: rebuilding every
-                        // restored MTF cell adds avoidable work to already overloaded frames.
-                        let fc = self.frame_count;
+                for (grid_pos, &vi) in mtf_indices.iter().enumerate() {
+                    // Rebuild trade overlay every 120 frames (~30s) or on first load.
+                    // During heavy sync, keep the cached overlay: rebuilding every
+                    // restored MTF cell adds avoidable work to already overloaded frames.
+                    let fc = self.frame_count;
                         if !self.heavy_sync_in_progress
                             && (self.charts[vi].cached_trade_overlay_frame == 0
                                 || fc.wrapping_sub(self.charts[vi].cached_trade_overlay_frame)
@@ -692,7 +675,7 @@ impl TyphooNApp {
                     let cell_rect = egui::Rect::from_min_size(
                         egui::pos2(
                             available.left() + col as f32 * cell_w,
-                            group_top + row as f32 * cell_h,
+                            available.top() + row as f32 * cell_h,
                         ),
                         egui::vec2(cell_w - 2.0, cell_h - 2.0),
                     );
@@ -839,8 +822,6 @@ impl TyphooNApp {
                         egui::Stroke::new(border_width, border_color),
                         egui::StrokeKind::Outside,
                     );
-                    }
-                    group_top += rows as f32 * cell_h + row_gap;
                 }
             } else {
                 // Allocate the visual chart area as hover-only, then create separate

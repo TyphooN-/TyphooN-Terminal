@@ -312,6 +312,22 @@ pub(super) fn mtf_group_timeframe_labels(
         .collect()
 }
 
+pub(super) fn mtf_flat_chart_indices(groups: &[MtfChartGroup]) -> Vec<usize> {
+    groups
+        .iter()
+        .flat_map(|group| group.indices.iter().copied())
+        .collect()
+}
+
+pub(super) fn mtf_canvas_grid_cols(_cell_count: usize) -> usize {
+    2
+}
+
+pub(super) fn mtf_canvas_grid_rows(cell_count: usize) -> usize {
+    let cols = mtf_canvas_grid_cols(cell_count);
+    (cell_count + cols - 1) / cols
+}
+
 /// True iff `raw` becomes `target_upper` after stripping `'/'` and uppercasing
 /// (ASCII). Avoids the per-call `raw.replace('/', "").to_uppercase()` allocation
 /// that build_trade_overlay used to do once per scanned position.
@@ -1649,6 +1665,24 @@ mod tests {
             mtf_group_timeframe_labels(&charts, &groups[0]),
             vec!["M15", "H1"]
         );
+    }
+
+    #[test]
+    fn mtf_chart_canvas_uses_flat_two_column_flow() {
+        let charts = vec![
+            ChartState::new("AMC", Timeframe::M15),
+            ChartState::new("AMC", Timeframe::M30),
+            ChartState::new("AMC", Timeframe::H1),
+            ChartState::new("AVAT", Timeframe::M15),
+            ChartState::new("AVAT", Timeframe::M30),
+        ];
+        let visible = vec![true; charts.len()];
+        let groups = mtf_visible_chart_groups(&charts, &visible);
+
+        assert_eq!(mtf_flat_chart_indices(&groups), vec![0, 1, 2, 3, 4]);
+        assert_eq!(mtf_canvas_grid_cols(1), 2);
+        assert_eq!(mtf_canvas_grid_cols(5), 2);
+        assert_eq!(mtf_canvas_grid_rows(5), 3);
     }
 
     #[test]
