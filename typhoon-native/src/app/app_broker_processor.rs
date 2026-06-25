@@ -1,4 +1,4 @@
-use super::*;
+use crate::app::*;
 
 mod prelude;
 mod ai_chat;

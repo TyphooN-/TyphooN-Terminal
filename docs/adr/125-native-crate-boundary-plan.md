@@ -920,7 +920,9 @@ broker-processor child module from `use super::*` to `use super::prelude::*`; ne
 compute children keep their local parent imports for now. This centralizes the native-facing
 surface in one file (`pub(super) use crate::app::*`) instead of routing through the parent
 module's glob import, so the future broker-runtime crate extraction can turn the prelude into an
-explicit dependency boundary instead of auditing 19 top-level child modules independently.
+explicit dependency boundary instead of auditing 19 top-level child modules independently. The
+parent `app_broker_processor.rs` now also imports `crate::app::*` directly rather than `super::*`,
+removing the last broker-processor dependency on relative native-parent glob routing.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
