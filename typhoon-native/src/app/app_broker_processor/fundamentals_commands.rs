@@ -46,10 +46,12 @@ pub(super) async fn handle_fundamentals_command(
             }
             if use_kraken {
                 let syms: Vec<String> =
-                    normalize_kraken_equity_symbol_list(kraken_equity_symbols.iter())
-                        .into_iter()
-                        .filter_map(|sym| normalize_fundamentals_scrape_symbol(&sym))
-                        .collect();
+                    typhoon_chart_ui::cache_keys::normalize_kraken_equity_symbol_list(
+                        kraken_equity_symbols.iter(),
+                    )
+                    .into_iter()
+                    .filter_map(|sym| normalize_fundamentals_scrape_symbol(&sym))
+                    .collect();
                 if syms.is_empty() {
                     let _ = broker_msg_tx.send(
                         BrokerMsg::FundamentalsProgress(

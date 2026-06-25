@@ -107,6 +107,25 @@ pub fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &str) -> V
     keys
 }
 
+pub fn normalize_kraken_equity_symbol_list<'a, I>(symbols: I) -> Vec<String>
+where
+    I: IntoIterator<Item = &'a String>,
+{
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for source in symbols {
+        let symbol = normalize_market_data_symbol(source)
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .to_ascii_uppercase();
+        if !symbol.is_empty() && seen.insert(symbol.clone()) {
+            out.push(symbol);
+        }
+    }
+    out.sort();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +146,23 @@ mod tests {
         assert!(keys.contains(&"kraken:BTCUSD:1Hour".to_string()));
         assert!(keys.contains(&"kraken-equities:BTCUSD:1Hour".to_string()));
         assert!(keys.contains(&"default:BTCUSD:1Hour".to_string()));
+    }
+
+    #[test]
+    fn kraken_equity_symbol_list_strips_wrappers_and_dedupes() {
+        let raw = vec![
+            "aapl.eq".to_string(),
+            "AAPL".to_string(),
+            "BRK.B".to_string(),
+            "BTC/USD".to_string(),
+        ];
+        assert_eq!(
+            normalize_kraken_equity_symbol_list(raw.iter()),
+            vec![
+                "AAPL".to_string(),
+                "BRK.B".to_string(),
+                "BTCUSD".to_string()
+            ]
+        );
     }
 }

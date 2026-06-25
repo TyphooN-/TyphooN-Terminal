@@ -899,8 +899,10 @@ removes the broker processor's direct dependency on native `sync_config` and nat
 `chart_sources` while preserving call sites. The next slice moved the cache-backed
 watchlist row builders (`watchlist_row_from_raw_bars`, `empty_watchlist_row`) next to
 `WatchlistRow` in `typhoon_engine::core::watchlist`, again leaving a native re-export shim.
-The remaining closure is the fetch/Yahoo task runners, watchlist/Yahoo predicates, Kraken
-equity symbol normalization, and market-data news-symbol extraction.
+The next chart-cache slice moved `normalize_kraken_equity_symbol_list` to
+`typhoon_chart_ui::cache_keys` and updated the broker processor's fundamentals command to call
+the crate helper directly. The remaining closure is the fetch/Yahoo task runners,
+watchlist/Yahoo predicates, and market-data news-symbol extraction.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

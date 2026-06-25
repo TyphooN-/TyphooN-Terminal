@@ -126,19 +126,7 @@ pub(super) fn normalize_kraken_equity_symbol_list<'a, I>(symbols: I) -> Vec<Stri
 where
     I: IntoIterator<Item = &'a String>,
 {
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for source in symbols {
-        let symbol = normalize_market_data_symbol(source)
-            .replace('/', "")
-            .trim_end_matches(".EQ")
-            .to_ascii_uppercase();
-        if !symbol.is_empty() && seen.insert(symbol.clone()) {
-            out.push(symbol);
-        }
-    }
-    out.sort();
-    out
+    typhoon_chart_ui::cache_keys::normalize_kraken_equity_symbol_list(symbols)
 }
 
 pub(super) fn kraken_equity_native_symbols_for_timeframe(
@@ -2160,14 +2148,11 @@ mod tests {
             ("merged:AAPL:1Day".to_string(), 999, 9_999), // untracked source
             ("default:AAPL:1Day".to_string(), 999, 9_999), // untracked source
             ("alpaca:__META__:1Day".to_string(), 1, 9_999), // meta key skipped
-            ("alpaca:BADKEY".to_string(), 1, 9_999),        // no timeframe → skipped
+            ("alpaca:BADKEY".to_string(), 1, 9_999),      // no timeframe → skipped
             ("alpaca:AAPL:1Day:extra".to_string(), 1, 9_999), // extra segment → skipped
         ];
         let bar_ts: std::collections::HashMap<String, (i64, i64, i64)> =
-            std::collections::HashMap::from([(
-                "alpaca:AAPL:1Day".to_string(),
-                (0, 5_000_000, 0),
-            )]);
+            std::collections::HashMap::from([("alpaca:AAPL:1Day".to_string(), (0, 5_000_000, 0))]);
         let maps = build_source_sync_state_maps(&detailed, &bar_ts);
 
         let alpaca = &maps["alpaca:"];
@@ -2179,7 +2164,10 @@ mod tests {
         let aapl = alpaca[&("AAPL".to_string(), "1Day".to_string())];
         assert_eq!(aapl.bar_count, 250, "newest write_ts wins");
         assert_eq!(aapl.write_ts_s, 2_000);
-        assert_eq!(aapl.last_bar_ts_s, 5_000, "last_bar_ts from bar_ts_cache, ms→s");
+        assert_eq!(
+            aapl.last_bar_ts_s, 5_000,
+            "last_bar_ts from bar_ts_cache, ms→s"
+        );
 
         // Every tracked lane buckets under its own prefix; untracked sources don't.
         assert_eq!(maps["kraken:"].len(), 1);
