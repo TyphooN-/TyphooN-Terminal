@@ -1,6 +1,6 @@
-use super::prelude::*;
+use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
 
-pub(super) async fn handle_kraken_order_command(
+pub async fn handle_kraken_order_command(
     cmd: BrokerCmd,
     kraken_broker: Option<&typhoon_engine::broker::kraken::KrakenBroker>,
     broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
@@ -73,7 +73,7 @@ pub(super) async fn handle_kraken_order_command(
     }
 }
 
-pub(super) async fn handle_kraken_account_order_command(
+pub async fn handle_kraken_account_order_command(
     cmd: BrokerCmd,
     kraken_broker: Option<&typhoon_engine::broker::kraken::KrakenBroker>,
     broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,

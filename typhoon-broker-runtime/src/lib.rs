@@ -10,6 +10,7 @@ pub mod alpaca_order_ops;
 pub mod bar_fetch_commands;
 pub mod connection_commands;
 pub mod external_feeds;
+pub mod kraken_order_ops;
 pub mod misc_commands;
 pub mod prelude;
 pub mod resources;

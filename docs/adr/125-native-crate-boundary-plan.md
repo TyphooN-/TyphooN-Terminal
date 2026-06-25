@@ -982,6 +982,10 @@ The next physical processor-child move relocated `bar_fetch_commands` into
 `typhoon_broker_runtime::bar_fetch_commands`; native now imports that runtime module for Alpaca,
 Kraken spot, and Kraken futures bar-fetch/backfill routing while passing broker handles, shared
 cache, permits, and clients explicitly.
+The next physical processor-child move relocated `kraken_order_ops` into
+`typhoon_broker_runtime::kraken_order_ops`; native now imports that runtime module for Kraken exit
+sync, trade/open-order refresh, order placement, cancellation, and REST resync routing while
+passing Kraken broker handles explicitly.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
