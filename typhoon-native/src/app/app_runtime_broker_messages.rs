@@ -107,14 +107,12 @@ impl TyphooNApp {
                     self.handle_alpaca_recent_fills(fills);
                 }
                 BrokerMsg::BarsSynced(changed) => {
-                    // Reload all visible charts to pick up newly-synced bars
+                    // Reload every open chart to pick up newly-synced bars. This is
+                    // intentionally not gated on MTF mode: inactive top tabs should
+                    // precompute too, so switching tabs is never the load trigger.
                     if changed > 0 {
-                        if self.mtf_enabled {
-                            for i in 0..self.charts.len() {
-                                self.queue_chart_reload(i);
-                            }
-                        } else {
-                            self.queue_chart_reload(self.active_tab);
+                        for i in 0..self.charts.len() {
+                            self.queue_chart_reload(i);
                         }
                     }
                 }

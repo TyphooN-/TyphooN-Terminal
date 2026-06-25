@@ -184,6 +184,14 @@ pub(super) fn mtf_grid_symbols_with_missing_timeframes(
         .collect()
 }
 
+pub(super) fn open_chart_preload_indices(charts: &[ChartState]) -> Vec<usize> {
+    charts
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, chart)| chart.bars.is_empty().then_some(idx))
+        .collect()
+}
+
 pub(super) fn mtf_visible_chart_groups(
     charts: &[ChartState],
     visible: &[bool],
@@ -283,6 +291,15 @@ impl TyphooNApp {
         ctx: &egui::Context,
         now_instant: std::time::Instant,
     ) {
+        // Keep every open chart tab warm, not just the active tab or currently
+        // visible MTF cells. Users should be able to switch tabs without that
+        // click being the first time bars/indicators are loaded.
+        for idx in open_chart_preload_indices(&self.charts) {
+            if self.should_queue_empty_chart_reload(idx, now_instant) {
+                self.queue_chart_reload(idx);
+            }
+        }
+
         // ── deferred chart loading: non-blocking, paced attempts ──
         // Uses try_load() which returns false if cache Mutex is contended (compaction, broker sync).
         // Failed loads stay queued. The actual load is still expensive — cache read + GPU
@@ -1491,6 +1508,26 @@ mod tests {
         assert_eq!(missing_symbols, vec!["CC".to_string(), "WEN".to_string()]);
         assert!(mtf_grid_missing_timeframes(&charts, &visible, "CC").contains(&Timeframe::M1));
         assert!(mtf_grid_missing_timeframes(&charts, &visible, "CC").contains(&Timeframe::MN1));
+    }
+
+    #[test]
+    fn open_chart_preload_indices_include_inactive_empty_tabs() {
+        let mut loaded = ChartState::new("CC", Timeframe::D1);
+        loaded.bars.push(Bar {
+            ts_ms: 1,
+            open: 10.0,
+            high: 10.0,
+            low: 10.0,
+            close: 10.0,
+            volume: 1.0,
+        });
+        let charts = vec![
+            loaded,
+            ChartState::new("WEN", Timeframe::D1),
+            ChartState::new("CC", Timeframe::H4),
+        ];
+
+        assert_eq!(open_chart_preload_indices(&charts), vec![1, 2]);
     }
 
     #[test]
