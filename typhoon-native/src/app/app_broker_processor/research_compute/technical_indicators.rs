@@ -1,5 +1,6 @@
 use super::prelude::*;
 
+mod prelude;
 mod adaptive_moving_average;
 mod alligator_gator;
 mod bands_accumulation;

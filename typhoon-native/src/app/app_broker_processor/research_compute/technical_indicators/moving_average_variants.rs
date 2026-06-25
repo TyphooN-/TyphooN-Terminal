@@ -1,4 +1,4 @@
-use super::*;
+use super::prelude::*;
 
 pub(super) fn handle_moving_average_variant_compute(
     cmd: BrokerCmd,

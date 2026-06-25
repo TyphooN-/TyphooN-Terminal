@@ -929,6 +929,10 @@ first-level research compute handlers (`analytics`, `breakout`, `risk`, `squeeze
 `use super::prelude::*`; the prelude forwards the app-surface prelude plus the local sibling
 modules still referenced across handlers. Risk/technical grandchild modules remain on their
 domain-parent imports until those subtrees get their own narrower seams.
+The next subtree seam added `app_broker_processor/research_compute/technical_indicators/prelude.rs`
+and repointed all direct technical-indicator compute handlers from `use super::*` to
+`use super::prelude::*`; that prelude forwards the research-compute prelude and leaves the
+technical router as the only local sibling-dispatch owner.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
