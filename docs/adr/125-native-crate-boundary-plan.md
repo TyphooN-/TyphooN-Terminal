@@ -947,6 +947,10 @@ The next runtime-resource seam moved broker-loop permit/client construction into
 crate for those lower-layer resources. Native still owns the app-shell spawn call and UI/cache
 state, but Kraken/Yahoo/Alpaca runtime resource setup now compiles inside the crate that will own
 the processor after the physical move.
+The next helper-closure slice moved regular US-equities market-clock status formatting into
+`typhoon_engine::core::market_session::us_equities_session_status_at` and routed the broker
+`GetMarketClock` command through the engine helper. The native copy remains test-only while the
+runtime path no longer reaches into `app_runtime_support`.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

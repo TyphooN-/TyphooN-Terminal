@@ -53,12 +53,13 @@ pub(super) async fn handle_misc_command(
                             .ok()
                             .map(|dt| dt.with_timezone(&chrono::Utc));
 
-                        let msg = crate::app::app_runtime_support::us_equities_session_status_at(
-                            chrono::Utc::now(),
-                            is_open,
-                            next_open_utc,
-                            next_close_utc,
-                        );
+                        let msg =
+                            typhoon_engine::core::market_session::us_equities_session_status_at(
+                                chrono::Utc::now(),
+                                is_open,
+                                next_open_utc,
+                                next_close_utc,
+                            );
                         let _ = broker_msg_tx.send(BrokerMsg::MarketClock(msg));
                     }
                     Err(e) => {

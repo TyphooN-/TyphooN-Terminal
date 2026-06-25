@@ -358,6 +358,7 @@ pub(super) fn kraken_xstocks_weekend_closed_now() -> bool {
 /// the pre-market and after-hours overlays come from the fixed ET boundaries.
 /// Fixes the old binary label that read "US equities CLOSED" all through
 /// pre-market.
+#[cfg(test)]
 pub(super) fn us_equities_session_status_at(
     now_utc: chrono::DateTime<chrono::Utc>,
     is_open: bool,
