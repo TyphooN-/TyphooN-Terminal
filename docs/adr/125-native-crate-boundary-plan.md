@@ -971,6 +971,10 @@ position, order-list, activity, top-mover, and asset-list routing.
 The next physical processor-child move relocated `alpaca_order_ops` into
 `typhoon_broker_runtime::alpaca_order_ops`; native now imports that runtime module for Alpaca close,
 market, limit, stop, bracket, OCO, modify, trailing-stop, and sync-exit order routing.
+The next physical processor-child move relocated `connection_commands` into
+`typhoon_broker_runtime::connection_commands`; native now imports that runtime module for Alpaca
+connect/sync configuration and Kraken REST/WebSocket connection routing while still passing the
+mutable broker handles from the native-owned spawn loop.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

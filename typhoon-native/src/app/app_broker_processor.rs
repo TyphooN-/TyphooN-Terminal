@@ -1,6 +1,7 @@
 use crate::app::*;
 use typhoon_broker_runtime::alpaca_account_data;
 use typhoon_broker_runtime::alpaca_order_ops;
+use typhoon_broker_runtime::connection_commands;
 use typhoon_broker_runtime::external_feeds;
 use typhoon_broker_runtime::misc_commands;
 use typhoon_broker_runtime::resources::BrokerRuntimeResources;
@@ -9,7 +10,6 @@ use typhoon_broker_runtime::symbol_search;
 mod prelude;
 mod ai_chat;
 mod bar_fetch_commands;
-mod connection_commands;
 mod fundamentals_commands;
 mod kraken_market_commands;
 mod kraken_order_ops;
