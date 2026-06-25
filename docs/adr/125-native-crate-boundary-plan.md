@@ -1,14 +1,16 @@
 # ADR-125: Native Crate Boundary Plan
 
-**Status:** Targets 1 & 2 delivered (`typhoon-research-ui`, `typhoon-chart-ui`); ADR-127 cleared Target 3's protocol cycle. Target 3 still gated by a native-helper closure (~17 fetch/sync/watchlist helpers, compiler-verified) that needs relocating first — extraction attempt reverted, accurate closure documented | **Date:** 2026-06-20 |
-**Last updated:** 2026-06-24 (**Target 1 complete** — `typhoon-research-ui` owns `render` +
+**Status:** Complete. Targets 1, 2, and 3 have landed as workspace crates:
+`typhoon-research-ui`, `typhoon-chart-ui`, and `typhoon-broker-runtime`. | **Date:** 2026-06-20 |
+**Last updated:** 2026-06-25 (**Target 1 complete** — `typhoon-research-ui` owns `render` +
 `window_shell` + `format` + the 55-module `packet` section tree; `command_research_windows`
 kept native as command dispatch. **Target 2 complete** — `typhoon-chart-ui` owns `types` +
-`indicators` + `drawing` + `models` + `state` (`ChartState`) + the 10k-line `render` tree
-(~15.5k lines), acyclic, 2272 workspace tests green; the broker/cache/gpu pipeline stays
-native behind extension traits (`ChartDataLoad`/`ChartIndicatorCompute`/`ChartMtfOverlays`/
-`ChartSymbolMatch`). **Target 3 (`typhoon-broker-runtime`) is next to evaluate** per Phase 4
-— see [Implementation Progress](#implementation-progress))
+`indicators` + `drawing` + `models` + `state` (`ChartState`) + the chart `render` tree;
+native keeps broker/cache/gpu integration behind extension traits. **Target 3 complete** —
+`typhoon-broker-runtime` owns the broker command processor spawn seam, all former
+`app_broker_processor` command children, the research-compute subtree, news hydration, runtime
+resource setup, and the lower Kraken OHLC WS pipeline; native creates channels/flags/cache and
+calls the runtime entrypoint. See [Implementation Progress](#implementation-progress).)
 
 **Related:** ADR-086 (`typhoon-native` module decomposition), ADR-108
 (research module compile-time modularization), ADR-118 (test module
@@ -21,7 +23,10 @@ that unblocks Target 3)
 ADR-086, but it is still one large Cargo package. The current workspace is:
 
 - `typhoon-engine`
+- `typhoon-broker-runtime`
 - `typhoon-native`
+- `typhoon-research-ui`
+- `typhoon-chart-ui`
 - `typhoon-transpiler`
 
 The native package now has clear internal seams:
@@ -65,9 +70,9 @@ Planned crate direction:
 typhoon-native
   ├── depends on typhoon-engine
   ├── depends on typhoon-transpiler
-  ├── depends on typhoon-research-ui      # future
-  ├── depends on typhoon-chart-ui         # future
-  └── depends on typhoon-broker-runtime   # future, name may narrow
+  ├── depends on typhoon-research-ui
+  ├── depends on typhoon-chart-ui
+  └── depends on typhoon-broker-runtime
 ```
 
 New crates must not depend on `typhoon-native`. `typhoon-native` remains the

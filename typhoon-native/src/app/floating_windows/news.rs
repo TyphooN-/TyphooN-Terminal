@@ -30,7 +30,7 @@ impl TyphooNApp {
 
             // The header's "· N in DB" count is computed broker-side and pushed
             // via BrokerMsg::NewsDbTotal (see the count emits in
-            // app_broker_processor::news on cached-load / fresh-fetch / scrape,
+            // typhoon_broker_runtime::news on cached-load / fresh-fetch / scrape,
             // handled in app_runtime_news_results). The render thread does ZERO
             // SQLite work for it: the old poll here called count_all_articles on
             // the write connection, so it blocked behind the bulk bar-sync
