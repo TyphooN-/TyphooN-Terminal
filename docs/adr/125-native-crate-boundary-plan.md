@@ -993,6 +993,10 @@ Tokio fs feature for screenshot reads.
 The next physical processor-child move relocated `ai_chat` into
 `typhoon_broker_runtime::ai_chat`; native now imports that runtime module for AI chat request
 routing while passing the shared cache explicitly for cross-client AI response caching.
+The next physical processor-child move relocated `kraken_market_commands` into
+`typhoon_broker_runtime::kraken_market_commands`; native now imports that runtime module for Kraken
+equity ticker/history/universe and Yahoo Chart fallback bar routing while passing broker handles,
+shared cache, permits, and HTTP clients explicitly.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

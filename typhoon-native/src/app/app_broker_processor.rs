@@ -5,6 +5,7 @@ use typhoon_broker_runtime::alpaca_order_ops;
 use typhoon_broker_runtime::bar_fetch_commands;
 use typhoon_broker_runtime::connection_commands;
 use typhoon_broker_runtime::external_feeds;
+use typhoon_broker_runtime::kraken_market_commands;
 use typhoon_broker_runtime::kraken_order_ops;
 use typhoon_broker_runtime::matrix_commands;
 use typhoon_broker_runtime::misc_commands;
@@ -14,7 +15,6 @@ use typhoon_broker_runtime::symbol_search;
 
 mod prelude;
 mod fundamentals_commands;
-mod kraken_market_commands;
 mod kraken_ws_commands;
 mod market_data_commands;
 mod news;
