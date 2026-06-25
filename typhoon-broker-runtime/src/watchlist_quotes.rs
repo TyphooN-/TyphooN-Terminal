@@ -1,6 +1,12 @@
-use super::prelude::*;
+use std::sync::Arc;
 
-pub(super) fn spawn_watchlist_quotes_task(
+use typhoon_engine::broker::alpaca::AlpacaBroker;
+use typhoon_engine::broker::protocol::BrokerMsg;
+use typhoon_engine::core::cache::SqliteCache;
+use typhoon_engine::core::fundamentals;
+use typhoon_engine::core::watchlist::WatchlistRow;
+
+pub fn spawn_watchlist_quotes_task(
     symbols: Vec<String>,
     broker: Option<AlpacaBroker>,
     broker_msg_tx: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,

@@ -15,12 +15,12 @@ use typhoon_broker_runtime::research_fetch;
 use typhoon_broker_runtime::resources::BrokerRuntimeResources;
 use typhoon_broker_runtime::storage;
 use typhoon_broker_runtime::symbol_search;
+use typhoon_broker_runtime::watchlist_quotes;
 
 mod prelude;
 mod kraken_ws_commands;
 mod news;
 mod research_compute;
-mod watchlist_quotes;
 
 pub(super) fn spawn_broker_message_processor(
     broker_cmd_rx: tokio::sync::mpsc::UnboundedReceiver<BrokerCmd>,

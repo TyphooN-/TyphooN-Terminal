@@ -1009,6 +1009,10 @@ The next physical processor-child move relocated `fundamentals_commands` into
 `typhoon_broker_runtime::fundamentals_commands`; native now imports that runtime module for batch and
 single-symbol fundamentals scrape routing while keeping fundamentals helper re-exports test-only in
 native state.
+The next physical processor-child move relocated `watchlist_quotes` into
+`typhoon_broker_runtime::watchlist_quotes`; native now imports that runtime module for spawned
+watchlist quote enrichment while passing the optional Alpaca broker, broker message sender, and shared
+cache explicitly.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

@@ -22,3 +22,4 @@ pub mod research_fetch;
 pub mod resources;
 pub mod storage;
 pub mod symbol_search;
+pub mod watchlist_quotes;
