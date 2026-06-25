@@ -5,4 +5,4 @@
 //! their domain-parent imports until those subtrees get their own seams.
 
 pub(super) use super::{breakout, technical_indicators};
-pub(super) use crate::app::app_broker_processor::prelude::*;
+pub(super) use crate::prelude::*;

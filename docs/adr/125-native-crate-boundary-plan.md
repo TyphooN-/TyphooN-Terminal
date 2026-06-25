@@ -1013,6 +1013,11 @@ The next physical processor-child move relocated `watchlist_quotes` into
 `typhoon_broker_runtime::watchlist_quotes`; native now imports that runtime module for spawned
 watchlist quote enrichment while passing the optional Alpaca broker, broker message sender, and shared
 cache explicitly.
+The next physical processor-subtree move relocated `research_compute` into
+`typhoon_broker_runtime::research_compute`; native now imports that runtime module for valuation,
+analytics, volatility, technical-indicator, risk, squeeze, and breakout compute routing, and the
+runtime prelude now exposes only the lower-layer broker protocol, cache, core, chart-key, and `Arc`
+imports needed by the moved subtree.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

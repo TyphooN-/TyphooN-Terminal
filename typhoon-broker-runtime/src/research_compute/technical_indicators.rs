@@ -1,6 +1,5 @@
 use super::prelude::*;
 
-mod prelude;
 mod adaptive_moving_average;
 mod alligator_gator;
 mod bands_accumulation;
@@ -16,6 +15,7 @@ mod momentum_tail;
 mod moving_average_variants;
 mod oscillator_flow;
 mod participation_pressure;
+mod prelude;
 mod price_stat_transforms;
 mod price_trend_transforms;
 mod rate_of_change;

@@ -3,4 +3,4 @@
 //! Direct risk compute handlers import this local prelude instead of reaching
 //! through their parent module.
 
-pub(super) use crate::app::app_broker_processor::research_compute::prelude::*;
+pub(super) use crate::research_compute::prelude::*;

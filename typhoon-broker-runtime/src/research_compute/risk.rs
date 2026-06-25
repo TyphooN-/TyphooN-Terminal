@@ -1,31 +1,31 @@
 use super::prelude::*;
 
-mod prelude;
 mod coverage_relative_event;
 mod dividend_sentiment_ranks;
+mod entropy_dependence;
+mod entropy_stationarity;
 mod factor_rank_core;
+mod fractal_rank_dynamics;
 mod fundamental_risk;
 mod growth_flow_regime;
-mod valuation_quality_risk;
 mod insider_dividend_momentum;
-mod market_liquidity_credit;
-mod price_rank_risk_overlays;
-mod return_distribution_stats;
-mod volatility_stat_tests;
-mod performance_runs_tests;
-mod significance_stationarity;
-mod tail_risk_diagnostics;
-mod entropy_dependence;
-mod upside_drawdown_risk;
-mod entropy_stationarity;
-mod robust_quantile_volatility;
-mod normality_liquidity_tail;
-mod fractal_rank_dynamics;
 mod jump_trend_diagnostics;
+mod market_liquidity_credit;
+mod normality_liquidity_tail;
+mod performance_runs_tests;
+mod prelude;
+mod price_rank_risk_overlays;
+mod quant_validation_tests;
+mod return_distribution_stats;
+mod robust_quantile_volatility;
+mod significance_stationarity;
+mod solvency_quality;
 mod spectral_nonlinear_diagnostics;
 mod structural_break_volatility;
-mod quant_validation_tests;
-mod solvency_quality;
+mod tail_risk_diagnostics;
+mod upside_drawdown_risk;
+mod valuation_quality_risk;
+mod volatility_stat_tests;
 
 pub(super) fn handle_risk_compute(
     cmd: BrokerCmd,
@@ -35,10 +35,10 @@ pub(super) fn handle_risk_compute(
     match cmd {
         // Leverage, accruals, realized-volatility, cash-flow, and short-interest research
         cmd @ (BrokerCmd::ComputeLeverageSnapshot { .. }
-            | BrokerCmd::ComputeAccrualsSnapshot { .. }
-            | BrokerCmd::ComputeRealizedVolSnapshot { .. }
-            | BrokerCmd::ComputeFcfYieldSnapshot { .. }
-            | BrokerCmd::ComputeShortInterestSnapshot { .. }) => {
+        | BrokerCmd::ComputeAccrualsSnapshot { .. }
+        | BrokerCmd::ComputeRealizedVolSnapshot { .. }
+        | BrokerCmd::ComputeFcfYieldSnapshot { .. }
+        | BrokerCmd::ComputeShortInterestSnapshot { .. }) => {
             fundamental_risk::handle_fundamental_risk_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -47,10 +47,10 @@ pub(super) fn handle_risk_compute(
         }
         // Solvency, quality, volatility-estimator, EPS-beat, and price-target research
         cmd @ (BrokerCmd::ComputeAltmanZSnapshot { .. }
-            | BrokerCmd::ComputePiotroskiSnapshot { .. }
-            | BrokerCmd::ComputeOhlcVolSnapshot { .. }
-            | BrokerCmd::ComputeEpsBeatSnapshot { .. }
-            | BrokerCmd::ComputePriceTargetDispersionSnapshot { .. }) => {
+        | BrokerCmd::ComputePiotroskiSnapshot { .. }
+        | BrokerCmd::ComputeOhlcVolSnapshot { .. }
+        | BrokerCmd::ComputeEpsBeatSnapshot { .. }
+        | BrokerCmd::ComputePriceTargetDispersionSnapshot { .. }) => {
             solvency_quality::handle_solvency_quality_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -59,10 +59,10 @@ pub(super) fn handle_risk_compute(
         }
         // Insider, dividend-growth, earnings-revision, sector-rotation, and upgrade/downgrade research
         cmd @ (BrokerCmd::ComputeInsiderActivitySnapshot { .. }
-            | BrokerCmd::ComputeDivgSnapshot { .. }
-            | BrokerCmd::ComputeEarmSnapshot { .. }
-            | BrokerCmd::ComputeSectorRotationSnapshot { .. }
-            | BrokerCmd::ComputeUpdmSnapshot { .. }) => {
+        | BrokerCmd::ComputeDivgSnapshot { .. }
+        | BrokerCmd::ComputeEarmSnapshot { .. }
+        | BrokerCmd::ComputeSectorRotationSnapshot { .. }
+        | BrokerCmd::ComputeUpdmSnapshot { .. }) => {
             insider_dividend_momentum::handle_insider_dividend_momentum_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -71,10 +71,10 @@ pub(super) fn handle_risk_compute(
         }
         // Momentum, liquidity, breakout, cash-cycle, and credit research
         cmd @ (BrokerCmd::ComputeMomentumSnapshot { .. }
-            | BrokerCmd::ComputeLiquiditySnapshot { .. }
-            | BrokerCmd::ComputeBreakoutSnapshot { .. }
-            | BrokerCmd::ComputeCashCycleSnapshot { .. }
-            | BrokerCmd::ComputeCreditSnapshot { .. }) => {
+        | BrokerCmd::ComputeLiquiditySnapshot { .. }
+        | BrokerCmd::ComputeBreakoutSnapshot { .. }
+        | BrokerCmd::ComputeCashCycleSnapshot { .. }
+        | BrokerCmd::ComputeCreditSnapshot { .. }) => {
             market_liquidity_credit::handle_market_liquidity_credit_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -83,8 +83,8 @@ pub(super) fn handle_risk_compute(
         }
         // Growth-momentum, ownership-flow, and market-regime research
         cmd @ (BrokerCmd::ComputeGrowmSnapshot { .. }
-            | BrokerCmd::ComputeFlowSnapshot { .. }
-            | BrokerCmd::ComputeRegimeSnapshot { .. }) => {
+        | BrokerCmd::ComputeFlowSnapshot { .. }
+        | BrokerCmd::ComputeRegimeSnapshot { .. }) => {
             growth_flow_regime::handle_growth_flow_regime_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -93,10 +93,10 @@ pub(super) fn handle_risk_compute(
         }
         // Relative-volume, margin, valuation, quality, and composite-risk research
         cmd @ (BrokerCmd::ComputeRelvolSnapshot { .. }
-            | BrokerCmd::ComputeMarginsSnapshot { .. }
-            | BrokerCmd::ComputeValSnapshot { .. }
-            | BrokerCmd::ComputeQualSnapshot { .. }
-            | BrokerCmd::ComputeRiskSnapshot { .. }) => {
+        | BrokerCmd::ComputeMarginsSnapshot { .. }
+        | BrokerCmd::ComputeValSnapshot { .. }
+        | BrokerCmd::ComputeQualSnapshot { .. }
+        | BrokerCmd::ComputeRiskSnapshot { .. }) => {
             valuation_quality_risk::handle_valuation_quality_risk_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -105,12 +105,12 @@ pub(super) fn handle_risk_compute(
         }
         // Insider-streak, analyst-coverage, relative rank, earnings-growth, and PEAD research
         cmd @ (BrokerCmd::ComputeInsstrkSnapshot { .. }
-            | BrokerCmd::ComputeCovgSnapshot { .. }
-            | BrokerCmd::ComputeVrkSnapshot { .. }
-            | BrokerCmd::ComputeQrkSnapshot { .. }
-            | BrokerCmd::ComputeRrkSnapshot { .. }
-            | BrokerCmd::ComputeRelepsgrSnapshot { .. }
-            | BrokerCmd::ComputePeadSnapshot { .. }) => {
+        | BrokerCmd::ComputeCovgSnapshot { .. }
+        | BrokerCmd::ComputeVrkSnapshot { .. }
+        | BrokerCmd::ComputeQrkSnapshot { .. }
+        | BrokerCmd::ComputeRrkSnapshot { .. }
+        | BrokerCmd::ComputeRelepsgrSnapshot { .. }
+        | BrokerCmd::ComputePeadSnapshot { .. }) => {
             coverage_relative_event::handle_coverage_relative_event_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -119,14 +119,14 @@ pub(super) fn handle_risk_compute(
         }
         // Size, momentum, PEAD, quality, reversal, leverage, operating, and liquidity rank research
         cmd @ (BrokerCmd::ComputeSizefSnapshot { .. }
-            | BrokerCmd::ComputeMomfSnapshot { .. }
-            | BrokerCmd::ComputePeadrankSnapshot { .. }
-            | BrokerCmd::ComputeFqmSnapshot { .. }
-            | BrokerCmd::ComputeRevrankSnapshot { .. }
-            | BrokerCmd::ComputeLevrankSnapshot { .. }
-            | BrokerCmd::ComputeOperankSnapshot { .. }
-            | BrokerCmd::ComputeFqmrankSnapshot { .. }
-            | BrokerCmd::ComputeLiqrankSnapshot { .. }) => {
+        | BrokerCmd::ComputeMomfSnapshot { .. }
+        | BrokerCmd::ComputePeadrankSnapshot { .. }
+        | BrokerCmd::ComputeFqmSnapshot { .. }
+        | BrokerCmd::ComputeRevrankSnapshot { .. }
+        | BrokerCmd::ComputeLevrankSnapshot { .. }
+        | BrokerCmd::ComputeOperankSnapshot { .. }
+        | BrokerCmd::ComputeFqmrankSnapshot { .. }
+        | BrokerCmd::ComputeLiqrankSnapshot { .. }) => {
             factor_rank_core::handle_factor_rank_core_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -135,15 +135,15 @@ pub(super) fn handle_risk_compute(
         }
         // Surprise streak, dividend/earnings/upgrade ranks, yield/short ranks, and insider concentration research
         cmd @ (BrokerCmd::ComputeSurpstkSnapshot { .. }
-            | BrokerCmd::ComputeDvdrankSnapshot { .. }
-            | BrokerCmd::ComputeEarmrankSnapshot { .. }
-            | BrokerCmd::ComputeUpdgrankSnapshot { .. }
-            | BrokerCmd::ComputeGySnapshot { .. }
-            | BrokerCmd::ComputeDesSnapshot { .. }
-            | BrokerCmd::ComputeDvdyieldrankSnapshot { .. }
-            | BrokerCmd::ComputeShrankSnapshot { .. }
-            | BrokerCmd::ComputeShortrankDeltaSnapshot { .. }
-            | BrokerCmd::ComputeInsiderconcSnapshot { .. }) => {
+        | BrokerCmd::ComputeDvdrankSnapshot { .. }
+        | BrokerCmd::ComputeEarmrankSnapshot { .. }
+        | BrokerCmd::ComputeUpdgrankSnapshot { .. }
+        | BrokerCmd::ComputeGySnapshot { .. }
+        | BrokerCmd::ComputeDesSnapshot { .. }
+        | BrokerCmd::ComputeDvdyieldrankSnapshot { .. }
+        | BrokerCmd::ComputeShrankSnapshot { .. }
+        | BrokerCmd::ComputeShortrankDeltaSnapshot { .. }
+        | BrokerCmd::ComputeInsiderconcSnapshot { .. }) => {
             dividend_sentiment_ranks::handle_dividend_sentiment_rank_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -152,21 +152,21 @@ pub(super) fn handle_risk_compute(
         }
         // Price-performance, beta/PEG/range ranks, correlation, accrual, and volatility-risk-premium research
         cmd @ (BrokerCmd::ComputeAtrannSnapshot { .. }
-            | BrokerCmd::ComputeDdhistSnapshot { .. }
-            | BrokerCmd::ComputePriceperfSnapshot { .. }
-            | BrokerCmd::ComputeMomrankMultiSnapshot { .. }
-            | BrokerCmd::ComputeBetarankSnapshot { .. }
-            | BrokerCmd::ComputePegrankSnapshot { .. }
-            | BrokerCmd::ComputeFhighlowSnapshot { .. }
-            | BrokerCmd::ComputeRvconeSnapshot { .. }
-            | BrokerCmd::ComputeCalpbSnapshot { .. }
-            | BrokerCmd::ComputeCorrstkSnapshot { .. }
-            | BrokerCmd::ComputeTlrankSnapshot { .. }
-            | BrokerCmd::ComputeCorrrankSnapshot { .. }
-            | BrokerCmd::ComputeOperankDeltaSnapshot { .. }
-            | BrokerCmd::ComputeDivaccSnapshot { .. }
-            | BrokerCmd::ComputeEpsaccSnapshot { .. }
-            | BrokerCmd::ComputeVrpSnapshot { .. }) => {
+        | BrokerCmd::ComputeDdhistSnapshot { .. }
+        | BrokerCmd::ComputePriceperfSnapshot { .. }
+        | BrokerCmd::ComputeMomrankMultiSnapshot { .. }
+        | BrokerCmd::ComputeBetarankSnapshot { .. }
+        | BrokerCmd::ComputePegrankSnapshot { .. }
+        | BrokerCmd::ComputeFhighlowSnapshot { .. }
+        | BrokerCmd::ComputeRvconeSnapshot { .. }
+        | BrokerCmd::ComputeCalpbSnapshot { .. }
+        | BrokerCmd::ComputeCorrstkSnapshot { .. }
+        | BrokerCmd::ComputeTlrankSnapshot { .. }
+        | BrokerCmd::ComputeCorrrankSnapshot { .. }
+        | BrokerCmd::ComputeOperankDeltaSnapshot { .. }
+        | BrokerCmd::ComputeDivaccSnapshot { .. }
+        | BrokerCmd::ComputeEpsaccSnapshot { .. }
+        | BrokerCmd::ComputeVrpSnapshot { .. }) => {
             price_rank_risk_overlays::handle_price_rank_risk_overlay_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -175,35 +175,35 @@ pub(super) fn handle_risk_compute(
         }
         // Return-distribution, autocorrelation, drawdown, downside, and seasonality research
         cmd @ (BrokerCmd::ComputeRetskewSnapshot { .. }
-            | BrokerCmd::ComputeRetkurtSnapshot { .. }
-            | BrokerCmd::ComputeTailrSnapshot { .. }
-            | BrokerCmd::ComputeRunlenSnapshot { .. }
-            | BrokerCmd::ComputeDayrangeSnapshot { .. }
-            | BrokerCmd::ComputeAutocorSnapshot { .. }
-            | BrokerCmd::ComputeHurstSnapshot { .. }
-            | BrokerCmd::ComputeHitrateSnapshot { .. }
-            | BrokerCmd::ComputeGlasymSnapshot { .. }
-            | BrokerCmd::ComputeVolratioSnapshot { .. }
-            | BrokerCmd::ComputeDrawupSnapshot { .. }
-            | BrokerCmd::ComputeGapstatsSnapshot { .. }
-            | BrokerCmd::ComputeVolclusterSnapshot { .. }
-            | BrokerCmd::ComputeCloseplcSnapshot { .. }
-            | BrokerCmd::ComputeMrhlSnapshot { .. }
-            | BrokerCmd::ComputeDownvolSnapshot { .. }
-            | BrokerCmd::ComputeSharprSnapshot { .. }
-            | BrokerCmd::ComputeEffratioSnapshot { .. }
-            | BrokerCmd::ComputeWickbiasSnapshot { .. }
-            | BrokerCmd::ComputeVolofvolSnapshot { .. }
-            | BrokerCmd::ComputeCalmarSnapshot { .. }
-            | BrokerCmd::ComputeUlcerSnapshot { .. }
-            | BrokerCmd::ComputeVarratioSnapshot { .. }
-            | BrokerCmd::ComputeAmihudSnapshot { .. }
-            | BrokerCmd::ComputeJbnormSnapshot { .. }
-            | BrokerCmd::ComputeOmegaSnapshot { .. }
-            | BrokerCmd::ComputeDfaSnapshot { .. }
-            | BrokerCmd::ComputeBurkeSnapshot { .. }
-            | BrokerCmd::ComputeMonthseasSnapshot { .. }
-            | BrokerCmd::ComputeRollsprdSnapshot { .. }) => {
+        | BrokerCmd::ComputeRetkurtSnapshot { .. }
+        | BrokerCmd::ComputeTailrSnapshot { .. }
+        | BrokerCmd::ComputeRunlenSnapshot { .. }
+        | BrokerCmd::ComputeDayrangeSnapshot { .. }
+        | BrokerCmd::ComputeAutocorSnapshot { .. }
+        | BrokerCmd::ComputeHurstSnapshot { .. }
+        | BrokerCmd::ComputeHitrateSnapshot { .. }
+        | BrokerCmd::ComputeGlasymSnapshot { .. }
+        | BrokerCmd::ComputeVolratioSnapshot { .. }
+        | BrokerCmd::ComputeDrawupSnapshot { .. }
+        | BrokerCmd::ComputeGapstatsSnapshot { .. }
+        | BrokerCmd::ComputeVolclusterSnapshot { .. }
+        | BrokerCmd::ComputeCloseplcSnapshot { .. }
+        | BrokerCmd::ComputeMrhlSnapshot { .. }
+        | BrokerCmd::ComputeDownvolSnapshot { .. }
+        | BrokerCmd::ComputeSharprSnapshot { .. }
+        | BrokerCmd::ComputeEffratioSnapshot { .. }
+        | BrokerCmd::ComputeWickbiasSnapshot { .. }
+        | BrokerCmd::ComputeVolofvolSnapshot { .. }
+        | BrokerCmd::ComputeCalmarSnapshot { .. }
+        | BrokerCmd::ComputeUlcerSnapshot { .. }
+        | BrokerCmd::ComputeVarratioSnapshot { .. }
+        | BrokerCmd::ComputeAmihudSnapshot { .. }
+        | BrokerCmd::ComputeJbnormSnapshot { .. }
+        | BrokerCmd::ComputeOmegaSnapshot { .. }
+        | BrokerCmd::ComputeDfaSnapshot { .. }
+        | BrokerCmd::ComputeBurkeSnapshot { .. }
+        | BrokerCmd::ComputeMonthseasSnapshot { .. }
+        | BrokerCmd::ComputeRollsprdSnapshot { .. }) => {
             return_distribution_stats::handle_return_distribution_stat_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -212,10 +212,10 @@ pub(super) fn handle_risk_compute(
         }
         // Parkinson, Garman-Klass, Rogers-Satchell, CVaR, and day-of-week research
         cmd @ (BrokerCmd::ComputeParkinsonSnapshot { .. }
-            | BrokerCmd::ComputeGkvolSnapshot { .. }
-            | BrokerCmd::ComputeRsvolSnapshot { .. }
-            | BrokerCmd::ComputeCvarSnapshot { .. }
-            | BrokerCmd::ComputeDoweffectSnapshot { .. }) => {
+        | BrokerCmd::ComputeGkvolSnapshot { .. }
+        | BrokerCmd::ComputeRsvolSnapshot { .. }
+        | BrokerCmd::ComputeCvarSnapshot { .. }
+        | BrokerCmd::ComputeDoweffectSnapshot { .. }) => {
             volatility_stat_tests::handle_volatility_stat_test_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -224,10 +224,10 @@ pub(super) fn handle_risk_compute(
         }
         // Sterling, Kelly, Ljung-Box, runs-test, and zero-return research
         cmd @ (BrokerCmd::ComputeSterlingSnapshot { .. }
-            | BrokerCmd::ComputeKellyfSnapshot { .. }
-            | BrokerCmd::ComputeLjungbSnapshot { .. }
-            | BrokerCmd::ComputeRunstestSnapshot { .. }
-            | BrokerCmd::ComputeZeroretSnapshot { .. }) => {
+        | BrokerCmd::ComputeKellyfSnapshot { .. }
+        | BrokerCmd::ComputeLjungbSnapshot { .. }
+        | BrokerCmd::ComputeRunstestSnapshot { .. }
+        | BrokerCmd::ComputeZeroretSnapshot { .. }) => {
             performance_runs_tests::handle_performance_run_test_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -236,10 +236,10 @@ pub(super) fn handle_risk_compute(
         }
         // PSR, ADF, Mann-Kendall, bipower, and drawdown-duration research
         cmd @ (BrokerCmd::ComputePsrSnapshot { .. }
-            | BrokerCmd::ComputeAdfSnapshot { .. }
-            | BrokerCmd::ComputeMnkendallSnapshot { .. }
-            | BrokerCmd::ComputeBipowerSnapshot { .. }
-            | BrokerCmd::ComputeDddurSnapshot { .. }) => {
+        | BrokerCmd::ComputeAdfSnapshot { .. }
+        | BrokerCmd::ComputeMnkendallSnapshot { .. }
+        | BrokerCmd::ComputeBipowerSnapshot { .. }
+        | BrokerCmd::ComputeDddurSnapshot { .. }) => {
             significance_stationarity::handle_significance_stationarity_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -248,10 +248,10 @@ pub(super) fn handle_risk_compute(
         }
         // Hill-tail, ARCH-LM, pain-ratio, CUSUM, and Cornish-Fisher VaR research
         cmd @ (BrokerCmd::ComputeHilltailSnapshot { .. }
-            | BrokerCmd::ComputeArchlmSnapshot { .. }
-            | BrokerCmd::ComputePainratioSnapshot { .. }
-            | BrokerCmd::ComputeCusumSnapshot { .. }
-            | BrokerCmd::ComputeCfvarSnapshot { .. }) => {
+        | BrokerCmd::ComputeArchlmSnapshot { .. }
+        | BrokerCmd::ComputePainratioSnapshot { .. }
+        | BrokerCmd::ComputeCusumSnapshot { .. }
+        | BrokerCmd::ComputeCfvarSnapshot { .. }) => {
             tail_risk_diagnostics::handle_tail_risk_diagnostic_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -260,10 +260,10 @@ pub(super) fn handle_risk_compute(
         }
         // Entropy, Rachev, gain-pain, PACF, and approximate-entropy research
         cmd @ (BrokerCmd::ComputeEntropySnapshot { .. }
-            | BrokerCmd::ComputeRachevSnapshot { .. }
-            | BrokerCmd::ComputeGprSnapshot { .. }
-            | BrokerCmd::ComputePacfSnapshot { .. }
-            | BrokerCmd::ComputeApenSnapshot { .. }) => {
+        | BrokerCmd::ComputeRachevSnapshot { .. }
+        | BrokerCmd::ComputeGprSnapshot { .. }
+        | BrokerCmd::ComputePacfSnapshot { .. }
+        | BrokerCmd::ComputeApenSnapshot { .. }) => {
             entropy_dependence::handle_entropy_dependence_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -272,10 +272,10 @@ pub(super) fn handle_risk_compute(
         }
         // Upside-potential, leverage-effect, drawdown-at-risk, VaR-half-life, and Gini research
         cmd @ (BrokerCmd::ComputeUprSnapshot { .. }
-            | BrokerCmd::ComputeLevereffSnapshot { .. }
-            | BrokerCmd::ComputeDrawdarSnapshot { .. }
-            | BrokerCmd::ComputeVarhalfSnapshot { .. }
-            | BrokerCmd::ComputeGiniSnapshot { .. }) => {
+        | BrokerCmd::ComputeLevereffSnapshot { .. }
+        | BrokerCmd::ComputeDrawdarSnapshot { .. }
+        | BrokerCmd::ComputeVarhalfSnapshot { .. }
+        | BrokerCmd::ComputeGiniSnapshot { .. }) => {
             upside_drawdown_risk::handle_upside_drawdown_risk_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -284,10 +284,10 @@ pub(super) fn handle_risk_compute(
         }
         // Sample-entropy, permutation-entropy, recurrence-factor, KPSS, and spectral-entropy research
         cmd @ (BrokerCmd::ComputeSampenSnapshot { .. }
-            | BrokerCmd::ComputePermenSnapshot { .. }
-            | BrokerCmd::ComputeRecfactSnapshot { .. }
-            | BrokerCmd::ComputeKpssSnapshot { .. }
-            | BrokerCmd::ComputeSpecentSnapshot { .. }) => {
+        | BrokerCmd::ComputePermenSnapshot { .. }
+        | BrokerCmd::ComputeRecfactSnapshot { .. }
+        | BrokerCmd::ComputeKpssSnapshot { .. }
+        | BrokerCmd::ComputeSpecentSnapshot { .. }) => {
             entropy_stationarity::handle_entropy_stationarity_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -296,10 +296,10 @@ pub(super) fn handle_risk_compute(
         }
         // Robust-volatility, Renyi-entropy, return-quantile, market-sentiment, and EWMA-volatility research
         cmd @ (BrokerCmd::ComputeRobvolSnapshot { .. }
-            | BrokerCmd::ComputeRenyientSnapshot { .. }
-            | BrokerCmd::ComputeRetquantSnapshot { .. }
-            | BrokerCmd::ComputeMsentSnapshot { .. }
-            | BrokerCmd::ComputeEwmavolSnapshot { .. }) => {
+        | BrokerCmd::ComputeRenyientSnapshot { .. }
+        | BrokerCmd::ComputeRetquantSnapshot { .. }
+        | BrokerCmd::ComputeMsentSnapshot { .. }
+        | BrokerCmd::ComputeEwmavolSnapshot { .. }) => {
             robust_quantile_volatility::handle_robust_quantile_volatility_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -308,10 +308,10 @@ pub(super) fn handle_risk_compute(
         }
         // KS-normality, Anderson-Darling, L-moment, Kyle-lambda, and peak-over-threshold research
         cmd @ (BrokerCmd::ComputeKsnormSnapshot { .. }
-            | BrokerCmd::ComputeAdtestSnapshot { .. }
-            | BrokerCmd::ComputeLmomSnapshot { .. }
-            | BrokerCmd::ComputeKylelamSnapshot { .. }
-            | BrokerCmd::ComputePeakoverSnapshot { .. }) => {
+        | BrokerCmd::ComputeAdtestSnapshot { .. }
+        | BrokerCmd::ComputeLmomSnapshot { .. }
+        | BrokerCmd::ComputeKylelamSnapshot { .. }
+        | BrokerCmd::ComputePeakoverSnapshot { .. }) => {
             normality_liquidity_tail::handle_normality_liquidity_tail_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -320,10 +320,10 @@ pub(super) fn handle_risk_compute(
         }
         // Higuchi, Pickands, kappa, Lyapunov, and rank-autocorrelation research
         cmd @ (BrokerCmd::ComputeHiguchiSnapshot { .. }
-            | BrokerCmd::ComputePickandsSnapshot { .. }
-            | BrokerCmd::ComputeKappa3Snapshot { .. }
-            | BrokerCmd::ComputeLyapunovSnapshot { .. }
-            | BrokerCmd::ComputeRankacSnapshot { .. }) => {
+        | BrokerCmd::ComputePickandsSnapshot { .. }
+        | BrokerCmd::ComputeKappa3Snapshot { .. }
+        | BrokerCmd::ComputeLyapunovSnapshot { .. }
+        | BrokerCmd::ComputeRankacSnapshot { .. }) => {
             fractal_rank_dynamics::handle_fractal_rank_dynamics_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -332,10 +332,10 @@ pub(super) fn handle_risk_compute(
         }
         // Jump-test, Phillips-Perron, MF-DFA, Hill-KS, and trend-strength research
         cmd @ (BrokerCmd::ComputeBnsjumpSnapshot { .. }
-            | BrokerCmd::ComputePprootSnapshot { .. }
-            | BrokerCmd::ComputeMfdfaSnapshot { .. }
-            | BrokerCmd::ComputeHillksSnapshot { .. }
-            | BrokerCmd::ComputeTsiSnapshot { .. }) => {
+        | BrokerCmd::ComputePprootSnapshot { .. }
+        | BrokerCmd::ComputeMfdfaSnapshot { .. }
+        | BrokerCmd::ComputeHillksSnapshot { .. }
+        | BrokerCmd::ComputeTsiSnapshot { .. }) => {
             jump_trend_diagnostics::handle_jump_trend_diagnostic_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -344,10 +344,10 @@ pub(super) fn handle_risk_compute(
         }
         // GARCH, SADF, correlation-dimension, spectral-skew, and automutual-information research
         cmd @ (BrokerCmd::ComputeGarch11Snapshot { .. }
-            | BrokerCmd::ComputeSadfSnapshot { .. }
-            | BrokerCmd::ComputeCordimSnapshot { .. }
-            | BrokerCmd::ComputeSkspecSnapshot { .. }
-            | BrokerCmd::ComputeAutomiSnapshot { .. }) => {
+        | BrokerCmd::ComputeSadfSnapshot { .. }
+        | BrokerCmd::ComputeCordimSnapshot { .. }
+        | BrokerCmd::ComputeSkspecSnapshot { .. }
+        | BrokerCmd::ComputeAutomiSnapshot { .. }) => {
             spectral_nonlinear_diagnostics::handle_spectral_nonlinear_diagnostic_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -807,10 +807,10 @@ pub(super) fn handle_risk_compute(
         }
         // Modified Sharpe, nonlinear-test, structural-break, and volatility-cluster research
         cmd @ (BrokerCmd::ComputeModSharpeSnapshot { .. }
-            | BrokerCmd::ComputeHsiehTestSnapshot { .. }
-            | BrokerCmd::ComputeChowBreakSnapshot { .. }
-            | BrokerCmd::ComputeDriftBurstSnapshot { .. }
-            | BrokerCmd::ComputeHlvClustSnapshot { .. }) => {
+        | BrokerCmd::ComputeHsiehTestSnapshot { .. }
+        | BrokerCmd::ComputeChowBreakSnapshot { .. }
+        | BrokerCmd::ComputeDriftBurstSnapshot { .. }
+        | BrokerCmd::ComputeHlvClustSnapshot { .. }) => {
             structural_break_volatility::handle_structural_break_volatility_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
@@ -819,10 +819,10 @@ pub(super) fn handle_risk_compute(
         }
         // Quant-statistics validation, break-test, and coverage-test research
         cmd @ (BrokerCmd::ComputeYangZhangSnapshot { .. }
-            | BrokerCmd::ComputeKuiperSnapshot { .. }
-            | BrokerCmd::ComputeDagostinoSnapshot { .. }
-            | BrokerCmd::ComputeBaiPerronSnapshot { .. }
-            | BrokerCmd::ComputeKupiecPofSnapshot { .. }) => {
+        | BrokerCmd::ComputeKuiperSnapshot { .. }
+        | BrokerCmd::ComputeDagostinoSnapshot { .. }
+        | BrokerCmd::ComputeBaiPerronSnapshot { .. }
+        | BrokerCmd::ComputeKupiecPofSnapshot { .. }) => {
             quant_validation_tests::handle_quant_validation_test_compute(
                 cmd,
                 broker_msg_tx_clone.clone(),
