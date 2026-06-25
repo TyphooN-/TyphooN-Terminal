@@ -951,6 +951,10 @@ The next helper-closure slice moved regular US-equities market-clock status form
 `typhoon_engine::core::market_session::us_equities_session_status_at` and routed the broker
 `GetMarketClock` command through the engine helper. The native copy remains test-only while the
 runtime path no longer reaches into `app_runtime_support`.
+The next helper-closure slice moved Kraken crypto symbol-search suggestion construction into
+`typhoon_engine::core::symbol_search::append_kraken_crypto_symbol_suggestions`, removing the
+broker processor's local `KRAKEN_CRYPTO_BASES` table while preserving cross-source de-duplication
+through the caller-owned seen set.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

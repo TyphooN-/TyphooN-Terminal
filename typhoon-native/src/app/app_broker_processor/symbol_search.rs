@@ -1,13 +1,5 @@
 use super::prelude::*;
 
-const KRAKEN_CRYPTO_BASES: &[&str] = &[
-    "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "LTC", "LINK", "AVAX", "DOT", "XMR", "ZEC",
-    "DASH", "UNI", "AAVE", "ATOM", "NEAR", "FIL", "ICP", "XLM", "ALGO", "VET", "HBAR",
-    "FTM", "SAND", "MANA", "AXS", "GRT", "ENJ", "BAT", "COMP", "MKR", "SNX", "CRV",
-    "SUSHI", "YFI", "TRX", "ETC", "EOS", "XTZ", "SHIB", "APE", "ARB", "OP", "THETA",
-    "KAVA", "MATIC", "BCH",
-];
-
 pub(super) async fn handle_symbol_search_command(
     query: String,
     broker: Option<&AlpacaBroker>,
@@ -52,13 +44,12 @@ pub(super) async fn handle_symbol_search_command(
         }
     }
 
-    // Search common Kraken crypto symbols by pattern.
-    for base in KRAKEN_CRYPTO_BASES {
-        let sym = format!("{}USD", base);
-        if (sym.contains(&q) || base.contains(&q_without_usd)) && suggestion_symbols.insert(sym.clone()) {
-            all_suggestions.push((sym, format!("{} (crypto)", base), "Kraken".into()));
-        }
-    }
+    typhoon_engine::core::symbol_search::append_kraken_crypto_symbol_suggestions(
+        &q,
+        q_without_usd,
+        &mut suggestion_symbols,
+        &mut all_suggestions,
+    );
 
     if all_suggestions.is_empty() {
         return;
