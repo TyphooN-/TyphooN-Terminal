@@ -18,7 +18,7 @@ Maintaining dead code that never activates increases cognitive load and binary s
 
 ## Decision
 Completely excise Stooq support:
-- Delete `fetch_stooq_daily_bars`, `stooq_supports_timeframe`, `stooq_symbol` from `typhoon-native/src/app/fallback_bars.rs`.
+- Delete `fetch_stooq_daily_bars`, `stooq_supports_timeframe`, `stooq_symbol` from the fallback-bar helper layer (now `typhoon_engine::core::fallback_bars`; it was native when this ADR was accepted).
 - Remove `BrokerCmd::StooqDailyFetchBars` variant and its handler.
 - Remove `backfill_stooq_daily_enabled` and `stooq_sync_pause_*` fields and all related logic from App struct, settings UI, persistence, sync_status, bar_sync.
 - Strip `"stooq"` from every source list, cache-key builder, and provider enumeration.
@@ -35,5 +35,5 @@ Yahoo Chart remains the sole unkeyed public fallback.
 
 ## References
 - ADR 102 (Kraken equities gap-fill via Alpaca and provider fallback)
-- typhoon-native/src/app/fallback_bars.rs (removed ~60 lines)
+- fallback-bar helper layer, now `typhoon_engine::core::fallback_bars` (removed the old Stooq branch)
 - typhoon-native/src/app.rs (multiple sites)

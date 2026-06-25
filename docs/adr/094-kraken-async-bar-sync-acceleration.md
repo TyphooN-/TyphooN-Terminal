@@ -60,16 +60,18 @@ Kraken public bar sync now follows a fully async, queue-friendly model:
 
 ## Implementation
 
-- `typhoon-native/src/app/sync_config.rs`
-  - `KRAKEN_PUBLIC_FETCH_PERMITS = 16`
+- `typhoon_engine::broker::sync_config` / native `app/sync_config.rs` shim
+  - `KRAKEN_PUBLIC_FETCH_PERMITS = 24`
   - `KRAKEN_SPOT_QUEUE_WINDOW = 160`
   - `KRAKEN_FUTURES_QUEUE_WINDOW = 96`
   - `KRAKEN_SPOT_BACKGROUND_SCAN_LIMIT = 384`
   - `KRAKEN_FUTURES_BACKGROUND_SCAN_LIMIT = 192`
-- `typhoon-native/src/app/broker_fetch.rs`
+- `typhoon_engine::broker::bar_fetch`
   - `run_kraken_fetch_task()` and `run_kraken_futures_fetch_task()`
   - `store_json_bars_in_cache()` for blocking cache merge/write work
   - terminal `FetchSettled` messages and backfill-complete classification
+- `typhoon-broker-runtime/src/bar_fetch_commands.rs`
+  - command routing and handle/cache/permit threading for the engine fetch workers
 - `typhoon-native/src/app/market_data_sync.rs`
   - `queue_kraken_fetch()`, `queue_kraken_futures_fetch()`
   - bounded sector scheduling with normalized pending/unresolvable/backfill keys

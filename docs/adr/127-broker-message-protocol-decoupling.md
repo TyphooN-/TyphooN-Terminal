@@ -88,7 +88,7 @@ protocol module imports nothing from `crate::app`. Verify build + tests.
 **Phase C — move the protocol into `typhoon-engine`.**
 Create `typhoon_engine::broker::protocol` with `BrokerCmd`/`BrokerMsg`/`OrderBroker`/
 `QuickTradePlan`/`TradeAccountSnapshot`. `typhoon-native` re-exports them from
-`app/state/broker_messages` (which becomes a thin shim). Verify the 220/97-file surface
+`app/state/broker_messages.rs`, now a 4-line shim to the engine protocol. Verify the 220/97-file surface
 compiles unchanged and the full workspace test suite is green. Confirm acyclic
 (`engine` gains no dependency on `native`).
 

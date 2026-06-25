@@ -736,12 +736,11 @@ forces a decision per data-pipeline file:
   (244l, engine only), `load_cache.rs` (1325l, engine cache + chrono) — engine-reachable, so
   their `impl ChartState` can move **with** `ChartState` into the crate (crate → engine is
   allowed).
-- `equity_merge.rs` (1338l) **cannot move**: it uses `OrderBroker` (defined in
-  `state/broker_messages.rs`, native) and owns the `MERGE_PRIMARY_BROKER` atomic +
-  `chart_equity_source_rank_for` (ADR-126). A crate dep on it would be a `crate → native`
-  cycle. Its `impl ChartState` methods must be **converted to native free functions** over
-  `&mut ChartState` (the same "glue stays native" pattern as the research dispatchers), since
-  they can't remain inherent impls once `ChartState` is in the crate.
+- `equity_merge.rs` (1338l at the time, ~1.3k now) stays native glue: it owns the
+  `MERGE_PRIMARY_BROKER` atomic + `chart_equity_source_rank_for` (ADR-126) and the
+  ADR-126/ADR-113 cross-source cache merge policy. Its ChartState-facing behavior is
+  implemented as native extension traits/free-function glue rather than moved into
+  `typhoon-chart-ui`.
 
 `chart_ops.rs` (2 `impl TyphooNApp` blocks) is native dispatch glue and stays, calling into
 the crate — the chart analogue of `command_research_windows`.
@@ -798,8 +797,8 @@ split out of native `app::common` (UI-button colors + `nav_*` helpers stay nativ
 
 Phase 4 says *evaluate* the broker split "only after research/chart patterns are proven"
 and promote "only if the crate can avoid depending on `typhoon-native`." Candidate region
-`app/app_broker_processor/` (77 files, ~18.6k lines) + the protocol in
-`app/state/broker_messages.rs` (3.7k lines). The evaluation was taken further than a surface
+the then-native broker processor tree (77 files, ~18.6k lines) + the protocol that later moved to
+`typhoon_engine::broker::protocol` (then ~3.7k lines). The evaluation was taken further than a surface
 inventory; the findings below supersede an earlier draft that leaned on the broker rip-out as
 the blocker.
 

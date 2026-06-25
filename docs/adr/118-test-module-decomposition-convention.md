@@ -84,9 +84,7 @@ Conventions:
 
 ## TODOs / deferred
 
-- `typhoon-native/src/app/technical_analysis.rs` still has a ~220-line **mid-file**
-  `#[cfg(test)] mod tests` (closes at L7542 of 7809). Extracting it barely dents the
-  7.8k-line file, whose real weight is production rendering code — defer until that
-  file gets its production split (ADR-086 next targets) and pull the tests then.
+- The old `technical_analysis.rs` mid-file test block is gone with ADR-125 Target 2;
+  the file is now a 5-line re-export shim to `typhoon-chart-ui::render`.
 - Future large `tests/` slices can be further subdivided by family using the same
   `include!` rule.

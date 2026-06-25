@@ -41,8 +41,9 @@ typhoon-native/src/app/auto_compact.rs     — zstd-22 idle auto-compact gate
                                      and schedule helpers
 typhoon-native/src/app/bar_sync.rs         — bar-sync health aggregates for
                                      Sync Status and Storage Manager
-typhoon-native/src/app/broker_fetch.rs     — async broker bar-fetch workers and
-                                     response normalization
+typhoon_engine::broker::bar_fetch         — async broker bar-fetch workers and
+                                     response normalization, routed by
+                                     typhoon-broker-runtime
 typhoon-native/src/app/settings.rs         — Settings window
 typhoon-native/src/app/storage.rs          — Storage Manager + filtered bulk delete
 typhoon-native/src/app/sync_status.rs      — Sync Status (per-broker % healthy)
@@ -56,10 +57,11 @@ compile-speed and storage/sync passes added `alpaca_sync.rs`,
 longer live as anonymous helper islands inside `app.rs`.
 
 The 2026-05-20 sync/compile pass added `sync_config.rs` for broker sync
-budgets and tastytrade timeframe-window helpers, then moved the async broker
-bar-fetch worker functions into `broker_fetch.rs`. The parent `app.rs` still
-owns state and message routing, but HTTP/DXLink/Kraken response parsing and
-task completion helpers now compile as their own app submodule.
+budgets, then moved the async broker bar-fetch worker functions out of the
+app-shell path. ADR-125 later moved the workers to
+`typhoon_engine::broker::bar_fetch` and the command routing to
+`typhoon-broker-runtime`; the parent `app.rs` owns state and channel setup, not
+HTTP/Kraken/Alpaca response parsing.
 
 Each submodule is a sibling of `app.rs`, declared as `mod` from the parent.
 Window functions take `&mut self` on `TyphooNApp` so state mutation works
@@ -78,9 +80,9 @@ The two-step split was deliberate:
   strategy windows.
 
 The original ~158k-line `app.rs` has since been decomposed far further: as of
-2026-06, `typhoon-native/src/app.rs` is **~3,093 lines**, and the two seams this ADR
+2026-06-25, `typhoon-native/src/app.rs` is **~3.1k lines**, and the two seams this ADR
 flagged have themselves been split into directories — `app/floating_windows/` is
-now **81 files (~61k lines total)** and `command_palette.rs` is **~684 lines**.
+now **118 files (~39.1k lines total)** and `command_palette.rs` is **~684 lines**.
 The renderer/window decomposition this ADR set in motion is essentially complete;
 the remaining native monoliths are production *logic* files, not renderers (see
 the updated seam bullet under Consequences). Peeled-off submodules rebuild in
@@ -104,21 +106,22 @@ isolation when they are the only thing changed.
 - **Future renderers should land in submodules from day one.** The
   precedent is set: a new "X Window" renderer goes into
   `typhoon-native/src/app/x_window.rs` (or a related bundle), not into `app.rs`.
-- **Future broker/sync policy should land in sync modules from day one.**
-  Scheduler budget constants and helper functions belong in
-  `app/sync_config.rs`, selector logic in `app/alpaca_sync.rs` or a broker-
-  specific sync module, and queue/refill orchestration in
+- **Future broker/sync policy should land in sync/runtime modules from day one.**
+  Native scheduler glue belongs in `app/sync_config.rs`, selector logic in
+  `app/alpaca_sync.rs` or broker-specific sync modules, lower fetch workers in
+  `typhoon_engine::broker::bar_fetch`, broker command routing in
+  `typhoon-broker-runtime`, and queue/refill orchestration in
   `app/market_data_sync.rs`; do not add new sync islands to `app.rs`.
 - **The renderer seams this ADR named are done; the remaining monoliths are
-  production logic.** `floating_windows/` (81 files) and `command_palette.rs`
+  production logic.** `floating_windows/` (118 files) and `command_palette.rs`
   (~684 lines) are split. New broker fetch workers still land in
-  `app/broker_fetch.rs`, not `app.rs`. The next targets need *semantic* splits
-  (extract cohesive `impl TyphooNApp` method groups or free-fn families into
-  sibling files — a second `impl TyphooNApp` block in a new file is fine), not
-  renderer moves: `technical_analysis.rs` (~8.0k), `state.rs` (~7.3k),
-  `chart.rs` (~6.4k), `gpu_compute.rs` (~6.1k),
-  `typhoon-broker-runtime/src/research_compute/technical_indicators.rs` (~5.9k),
-  and `typhoon-broker-runtime/src/research_compute/risk.rs` (~830 lines after semantic child splits). For `state.rs`, keep the central
+  `typhoon_engine::broker::bar_fetch` / `typhoon-broker-runtime`, not `app.rs`.
+  The next targets need *semantic* splits (extract cohesive `impl TyphooNApp`
+  method groups or free-fn families into sibling files — a second
+  `impl TyphooNApp` block in a new file is fine), not renderer moves:
+  `state.rs` (~3.5k), `trade_ops.rs` (~2.6k), `market_data_sync.rs` (~2.3k),
+  `app_runtime_central_panel.rs` (~2.1k), `session_persistence.rs` (~1.8k),
+  and `typhoon-broker-runtime/src/research_compute/technical_indicators/candlestick_patterns.rs` (~1.7k). For `state.rs`, keep the central
   state struct in one place (per the consequence above) and split its *methods*,
   not the struct.
 

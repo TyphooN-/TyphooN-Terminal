@@ -53,9 +53,9 @@ The broker sync scheduler is cursor-limited and high-timeframe-first for all bro
 ## Consequences
 
 - Large universes do not require an O(symbols * timeframes) pass per refill; every broad broker path has an explicit scan budget.
-- tastytrade uses the same rotating bounded selector as Alpaca/Kraken instead of the legacy whole-symbol workset scan.
-- Sync budgets and tastytrade timeframe-window helpers now live in `typhoon-native/src/app/sync_config.rs`, keeping policy constants out of `app.rs`.
-- Async broker fetch workers now live in `typhoon-native/src/app/broker_fetch.rs`, keeping network-response parsing and task dispatch out of the parent `app.rs` integration file.
+- Deprecated broker lanes were removed from master; the active rotating selectors are Kraken and Alpaca.
+- Sync budgets live in `typhoon-native/src/app/sync_config.rs`; shared Kraken permit constants moved down to `typhoon_engine::broker::sync_config` for broker-runtime reuse.
+- Async broker fetch workers now live in `typhoon_engine::broker::bar_fetch` and are routed by `typhoon-broker-runtime`, keeping network-response parsing and task dispatch out of the native app-shell integration file.
 - High timeframes obtain broad initial coverage before low-timeframe backfills consume the queue.
 - Manual/foreground and background fetches are deduplicated through the same normalized pending-key sets.
 - Thin-history or provider-exhausted instruments converge instead of being requeued every few seconds after successful bounded responses.

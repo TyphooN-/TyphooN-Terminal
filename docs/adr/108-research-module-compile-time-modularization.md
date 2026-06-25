@@ -127,7 +127,7 @@ the root:
 
 ### Next targets (in order)
 
-1. **Move to native/runtime hotspots.** The main engine compute-model files above are now thin parents; the next high-value compile-time wins are `typhoon-native/src/app/technical_analysis.rs`, `typhoon-native/src/app/chart.rs`, and `typhoon-broker-runtime/src/research_compute/technical_indicators.rs`.
+1. **Move to current native/runtime hotspots.** The earlier chart/render targets moved to `typhoon-chart-ui` under ADR-125. Current high-value compile-time wins are `typhoon-native/src/app/state.rs`, `trade_ops.rs`, `market_data_sync.rs`, `app_runtime_central_panel.rs`, and the larger broker-runtime research-compute children such as `typhoon-broker-runtime/src/research_compute/technical_indicators/candlestick_patterns.rs`.
 2. **Extract residual `mod.rs` storage** into `storage_*` modules if `mod.rs` regrows.
 3. **Keep semantic type modules and re-exports stable.** `types.rs` is now a small root surface; future DTO additions should land in the matching semantic child module, not back in a monolith.
 
