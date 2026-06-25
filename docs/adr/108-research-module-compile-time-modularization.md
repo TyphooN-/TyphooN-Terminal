@@ -127,7 +127,7 @@ the root:
 
 ### Next targets (in order)
 
-1. **Move to native hotspots.** The main engine compute-model files above are now thin parents; the next high-value compile-time wins are `typhoon-native/src/app/technical_analysis.rs`, `typhoon-native/src/app/chart.rs`, and `typhoon-native/src/app/app_broker_processor/research_compute/technical_indicators.rs`.
+1. **Move to native/runtime hotspots.** The main engine compute-model files above are now thin parents; the next high-value compile-time wins are `typhoon-native/src/app/technical_analysis.rs`, `typhoon-native/src/app/chart.rs`, and `typhoon-broker-runtime/src/research_compute/technical_indicators.rs`.
 2. **Extract residual `mod.rs` storage** into `storage_*` modules if `mod.rs` regrows.
 3. **Keep semantic type modules and re-exports stable.** `types.rs` is now a small root surface; future DTO additions should land in the matching semantic child module, not back in a monolith.
 

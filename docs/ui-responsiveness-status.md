@@ -54,7 +54,7 @@ Batch the many small `put_bars` into grouped `put_compressed_batch` transactions
 to cut how often Rust writers collide with BarCacheWriter's lock.
 
 - **Cons (why declined):** The visible bar-write sites each write **one
-  symbol×TF per call** and are **API-rate-limited** (`app_broker_processor.rs:4598`
+  symbol×TF per call** and are **API-rate-limited** (`typhoon-broker-runtime/src/broker_processor.rs`;
   Alpaca `FetchAllBars` is explicitly sequential; kraken-equities is gated by the
   iapi ~6 req/s wall). Sparse, rate-limited writes have **no burst to coalesce**.
   A cross-task queue would also risk **bar-data correctness** (`merge_bars` is a

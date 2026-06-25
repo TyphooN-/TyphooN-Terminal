@@ -117,8 +117,8 @@ isolation when they are the only thing changed.
   sibling files — a second `impl TyphooNApp` block in a new file is fine), not
   renderer moves: `technical_analysis.rs` (~8.0k), `state.rs` (~7.3k),
   `chart.rs` (~6.4k), `gpu_compute.rs` (~6.1k),
-  `app_broker_processor/research_compute/technical_indicators.rs` (~5.9k),
-  and `app_broker_processor/research_compute/risk.rs` (~830 lines after semantic child splits). For `state.rs`, keep the central
+  `typhoon-broker-runtime/src/research_compute/technical_indicators.rs` (~5.9k),
+  and `typhoon-broker-runtime/src/research_compute/risk.rs` (~830 lines after semantic child splits). For `state.rs`, keep the central
   state struct in one place (per the consequence above) and split its *methods*,
   not the struct.
 

@@ -37,7 +37,7 @@ Add a **StockTwits ingest lane** as a new research data source feeding the resea
 - `typhoon-engine/src/core/research/types.rs` — snapshot + message structs.
 - `typhoon-engine/src/core/research/providers.rs` (or `social.rs`) — fetch + parse + reduce.
 - `typhoon-engine/src/core/research/storage_social_sentiment_snapshots.rs` — schema/upsert/get, re-exported from `research/mod.rs`.
-- `typhoon-native/src/app/news_ingest.rs` / `app_broker_processor` — schedule + store handler.
+- `typhoon_broker_runtime::news_ingest` / `typhoon_broker_runtime::news` — schedule + store handler.
 - `typhoon-native/src/app/symbol_investigation_packet.rs` — packet section.
 
 ## Risks / constraints

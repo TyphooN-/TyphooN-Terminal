@@ -76,7 +76,7 @@ Three coupled changes shipped together:
 
 Only absolute `http://` / `https://` URIs are returned (defensive against `javascript:` and relative paths).
 
-The body hydrator (`typhoon-native/src/app/news_ingest.rs`) calls the new path and writes via `upsert_news_body_and_image`, which uses a conditional SQL update so a backfilled image never clobbers an image the source RSS already supplied:
+The body hydrator (`typhoon_broker_runtime::news_ingest`) calls the new path and writes via `upsert_news_body_and_image`, which uses a conditional SQL update so a backfilled image never clobbers an image the source RSS already supplied:
 
 ```sql
 image_url = CASE WHEN image_url = '' AND ?3 <> '' THEN ?3 ELSE image_url END
