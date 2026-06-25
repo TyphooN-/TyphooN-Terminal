@@ -13,6 +13,7 @@ pub mod connection_commands;
 pub mod external_feeds;
 pub mod fundamentals_commands;
 pub mod kraken_market_commands;
+pub mod kraken_ohlc_pipeline;
 pub mod kraken_order_ops;
 pub mod market_data_commands;
 pub mod matrix_commands;

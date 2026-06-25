@@ -1021,6 +1021,10 @@ imports needed by the moved subtree.
 The next physical processor-child move relocated `news` plus its body-hydration helper
 `news_ingest` into `typhoon_broker_runtime`; native now imports runtime news routing and calls the
 runtime hydrator from the app news-result tick while keeping native UI state outside the runtime crate.
+The next seam cut relocated the lower Kraken WS OHLC pipeline into
+`typhoon_broker_runtime::kraken_ohlc_pipeline`; native keeps only the `TyphooNApp` scheduling
+wrappers, xStock sweep selection, and log/state mutation, while streamer spawn, channel
+backpressure, cache flush grouping, and WS-fresh commit reporting now live in the runtime crate.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 
 #[test]
 fn format_ws_symbol_prefers_display_when_already_slashed() {
@@ -205,7 +206,12 @@ fn snapshot_sweep_respects_enabled_sync_timeframe_controls() {
     let catalog = vec!["AAPL".to_string()];
     let fresh = std::collections::HashMap::new();
     let (interval_min, _pairs) = select_kraken_ws_snapshot_sweep_batch_high_first(
-        &catalog, &intervals, &fresh, &std::collections::HashMap::new(), 0, 250,
+        &catalog,
+        &intervals,
+        &fresh,
+        &std::collections::HashMap::new(),
+        0,
+        250,
     )
     .expect("highest enabled interval");
     assert_eq!(interval_min, 1440, "1Day chosen over 15Min");
@@ -321,7 +327,10 @@ fn snapshot_sweep_backs_off_recently_attempted_no_data_pairs() {
         250,
     )
     .expect("backoff elapsed → eligible again");
-    assert_eq!(interval_min, 10080, "retries highest TF first after backoff");
+    assert_eq!(
+        interval_min, 10080,
+        "retries highest TF first after backoff"
+    );
     assert_eq!(pairs, vec!["AAPLx/USD".to_string()]);
 }
 
