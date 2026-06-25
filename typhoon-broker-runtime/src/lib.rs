@@ -5,5 +5,6 @@
 //! cache, and chart-key dependencies live here before the native processor tree is
 //! physically moved behind a single spawn seam.
 
+pub mod misc_commands;
 pub mod prelude;
 pub mod resources;

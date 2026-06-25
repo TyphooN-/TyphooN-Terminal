@@ -955,6 +955,10 @@ The next helper-closure slice moved Kraken crypto symbol-search suggestion const
 `typhoon_engine::core::symbol_search::append_kraken_crypto_symbol_suggestions`, removing the
 broker processor's local `KRAKEN_CRYPTO_BASES` table while preserving cross-source de-duplication
 through the caller-owned seen set.
+The first physical processor-child move relocated `misc_commands` into
+`typhoon_broker_runtime::misc_commands`; native now imports that runtime module for
+`MarkUnresolvable`, `GetQuote`, and `GetMarketClock` routing instead of compiling a local child
+module for those stateless command arms.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

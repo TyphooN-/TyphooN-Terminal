@@ -1,4 +1,5 @@
 use crate::app::*;
+use typhoon_broker_runtime::misc_commands;
 use typhoon_broker_runtime::resources::BrokerRuntimeResources;
 
 mod prelude;
@@ -9,7 +10,6 @@ mod bar_fetch_commands;
 mod connection_commands;
 mod external_feeds;
 mod fundamentals_commands;
-mod misc_commands;
 mod kraken_market_commands;
 mod kraken_order_ops;
 mod kraken_ws_commands;
