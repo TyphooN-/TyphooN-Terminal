@@ -1,5 +1,6 @@
 use super::prelude::*;
 
+mod prelude;
 mod coverage_relative_event;
 mod dividend_sentiment_ranks;
 mod factor_rank_core;

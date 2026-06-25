@@ -933,6 +933,10 @@ The next subtree seam added `app_broker_processor/research_compute/technical_ind
 and repointed all direct technical-indicator compute handlers from `use super::*` to
 `use super::prelude::*`; that prelude forwards the research-compute prelude and leaves the
 technical router as the only local sibling-dispatch owner.
+The next risk subtree seam added `app_broker_processor/research_compute/risk/prelude.rs` and
+repointed all direct risk compute handlers from `use super::*` to `use super::prelude::*`; that
+prelude forwards the research-compute prelude and leaves the risk router as the only local
+sibling-dispatch owner.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
