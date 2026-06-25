@@ -997,6 +997,10 @@ The next physical processor-child move relocated `kraken_market_commands` into
 `typhoon_broker_runtime::kraken_market_commands`; native now imports that runtime module for Kraken
 equity ticker/history/universe and Yahoo Chart fallback bar routing while passing broker handles,
 shared cache, permits, and HTTP clients explicitly.
+The next physical processor-child move relocated `market_data_commands` into
+`typhoon_broker_runtime::market_data_commands`; native now imports that runtime module for
+fundamentals/holders, orderbook, most-active, portfolio history, analyst/price-target/short-interest,
+corporate-actions, watchlist, and options-chain routing while passing broker handles and shared cache explicitly.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
