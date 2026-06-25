@@ -27,7 +27,7 @@ use typhoon_engine::broker::alpaca::{
     AccountInfo, AlpacaBroker, Bar as EngineBar, OrderInfo, PositionInfo,
 };
 use typhoon_engine::core::backtest;
-use typhoon_engine::core::cache::{BgConnection, SqliteCache};
+use typhoon_engine::core::cache::SqliteCache;
 use typhoon_engine::core::fundamentals;
 use typhoon_engine::core::keyring;
 use typhoon_engine::core::margin;

@@ -10,6 +10,7 @@ pub mod keyring;
 pub mod kraken;
 pub mod kraken_futures;
 pub mod margin;
+pub mod market_data_symbols;
 pub mod news;
 pub mod options;
 pub mod position;

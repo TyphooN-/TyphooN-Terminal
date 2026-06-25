@@ -924,49 +924,6 @@ pub(crate) fn chart_forming_bar_allowed(last_bar_ts_ms: i64, now_ms: i64, tf_ms:
     current_bucket > last_bar_ts_ms && current_bucket.saturating_sub(last_bar_ts_ms) <= tf_ms
 }
 
-pub(crate) fn news_symbol_from_market_data_cache_key(key: &str, prefix: &str) -> Option<String> {
-    let rest = key.strip_prefix(prefix)?.strip_prefix(':')?;
-    let (raw_symbol, tf) = rest.rsplit_once(':')?;
-    if raw_symbol.is_empty() || tf.is_empty() || raw_symbol.starts_with("__") {
-        return None;
-    }
-    let mut symbol = normalize_market_data_symbol(raw_symbol)
-        .replace('/', "")
-        .to_uppercase();
-    if let Some(stripped) = symbol.strip_suffix(".EQ") {
-        symbol = stripped.to_string();
-    }
-    if symbol.is_empty() || symbol.starts_with("__") {
-        None
-    } else {
-        Some(symbol)
-    }
-}
-
-pub(crate) fn extract_news_symbols_from_market_data_cache(
-    conn: &BgConnection,
-    prefixes: &[&str],
-) -> Result<Vec<String>, String> {
-    let mut symbols = std::collections::BTreeSet::new();
-    for prefix in prefixes {
-        let like = format!("{}:%", prefix);
-        let mut stmt = conn
-            .prepare("SELECT DISTINCT key FROM bar_cache WHERE key LIKE ?1")
-            .map_err(|e| format!("prepare {prefix} bar-cache news symbols: {e}"))?;
-        let rows = stmt
-            .query_map([like.as_str()], |row| row.get::<_, String>(0))
-            .map_err(|e| format!("query {prefix} bar-cache news symbols: {e}"))?;
-        for row in rows {
-            if let Ok(key) = row {
-                if let Some(symbol) = news_symbol_from_market_data_cache_key(&key, prefix) {
-                    symbols.insert(symbol);
-                }
-            }
-        }
-    }
-    Ok(symbols.into_iter().collect())
-}
-
 pub(crate) const CHART_SOURCE_ORDER: [(&str, &str); 6] = [
     ("kraken", "Kraken"),
     ("kraken-equities", "Kraken Equities"),

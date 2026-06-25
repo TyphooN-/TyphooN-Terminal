@@ -673,7 +673,7 @@ pub(super) async fn handle_news_scrape_all_command(
                         all_tickers.extend(extra_tickers);
                         if use_kraken {
                             if let Ok(conn) = cache.connection() {
-                                match extract_news_symbols_from_market_data_cache(
+                                match typhoon_engine::core::market_data_symbols::extract_news_symbols_from_market_data_cache(
                                     &conn,
                                     &["kraken", "kraken-equities", "kraken-futures"],
                                 ) {

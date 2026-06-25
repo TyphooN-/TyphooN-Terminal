@@ -904,7 +904,9 @@ The next chart-cache slice moved `normalize_kraken_equity_symbol_list` to
 the crate helper directly. The next watchlist slice moved the cache-fallback source selector
 and Yahoo extended-quote freshness predicates to `typhoon_engine::core::watchlist`; the broker
 watchlist handler now calls those engine helpers directly. The remaining closure is the
-fetch/Yahoo task runners and market-data news-symbol extraction.
+fetch/Yahoo task runners. Market-data cache news-symbol extraction moved to
+`typhoon_engine::core::market_data_symbols`, with native chart wrappers retained for chart
+tests/callers and the broker news handler calling the engine helper directly.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

@@ -65,7 +65,7 @@ pub(crate) use equity_merge::{
     chart_load_merged_equity_bars_from_cache, chart_log_merged_cache_load_done,
     chart_log_merged_cache_load_start, chart_materialize_merged_equity_cache,
     chart_merged_equity_cache_key, chart_prefers_fresh_equity_source,
-    extract_news_symbols_from_market_data_cache, set_chart_merge_primary_broker,
+    set_chart_merge_primary_broker,
 };
 
 #[cfg(test)]
