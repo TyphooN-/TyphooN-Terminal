@@ -442,8 +442,12 @@ impl ChartDataLoad for ChartState {
             return key;
         }
 
-        // Default fallback: first source in priority order
-        format!("kraken:{}:{}", sym, tf)
+        // Default fallback: first source in priority order. For equity-like symbols,
+        // keep diagnostics on the active equity source; falling back to `kraken:{symbol}`
+        // makes missing xStock/equity low-timeframe panes look like missing Kraken Spot
+        // pairs and can trigger misleading repeated fetch/log paths (e.g. WEN M1 probing
+        // `kraken:WEN:1Min`).
+        chart_missing_data_cache_key(&sym, tf)
     }
 
     /// Fast cache key without any DB probing. Used by try_load to avoid blocking.

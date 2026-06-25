@@ -167,6 +167,18 @@ fn chart_equity_source_selection_can_prefer_fresher_fallback() {
 }
 
 #[test]
+fn chart_missing_equity_data_key_uses_native_equity_source_not_kraken_spot() {
+    assert_eq!(
+        chart_missing_data_cache_key("WEN", "1Min"),
+        "kraken-equities:WEN:1Min"
+    );
+    assert_eq!(
+        chart_missing_data_cache_key("BTC/USD", "1Min"),
+        "kraken:BTC/USD:1Min"
+    );
+}
+
+#[test]
 fn chart_equity_source_rank_inverts_with_primary_broker() {
     // ADR-126: the primary broker's equity source is the trusted rank-0 scale; the
     // other tradeable broker drops to the rank-2 assist. Yahoo/default are unchanged

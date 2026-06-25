@@ -466,13 +466,6 @@ impl TyphooNApp {
         if !self.sync_timeframe_enabled(tf_key) {
             return false;
         }
-        let kraken_symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
-        if !kraken_symbol.is_empty()
-            && typhoon_engine::core::kraken::to_kraken_pair_lossy(&kraken_symbol).is_some()
-            && self.queue_kraken_fetch(&kraken_symbol, tf_key)
-        {
-            return true;
-        }
         let bare = normalize_market_data_symbol(symbol)
             .replace('/', "")
             .trim_end_matches(".EQ")
@@ -488,6 +481,13 @@ impl TyphooNApp {
             if self.queue_kraken_equity_fetch(&bare, tf_key) {
                 return true;
             }
+        }
+        let kraken_symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
+        if !kraken_symbol.is_empty()
+            && typhoon_engine::core::kraken::to_kraken_pair_lossy(&kraken_symbol).is_some()
+            && self.queue_kraken_fetch(&kraken_symbol, tf_key)
+        {
+            return true;
         }
         self.queue_alpaca_fetch(symbol, tf_key)
     }

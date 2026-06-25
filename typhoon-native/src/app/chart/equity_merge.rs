@@ -953,6 +953,19 @@ pub(crate) fn chart_equity_low_timeframe_requires_native_source(timeframe: &str)
     matches!(timeframe, "1Min" | "5Min")
 }
 
+pub(crate) fn chart_missing_data_cache_key(symbol: &str, timeframe: &str) -> String {
+    let normalized = normalize_market_data_symbol(symbol);
+    let compact = normalized
+        .replace('/', "")
+        .trim_end_matches(".EQ")
+        .to_ascii_uppercase();
+    if chart_prefers_fresh_equity_source(&compact) {
+        format!("{}:{}:{}", chart_equity_native_source_tag(), compact, timeframe)
+    } else {
+        format!("kraken:{}:{}", symbol, timeframe)
+    }
+}
+
 /// Serialize merged bars into the cache JSON payload, or `None` when there is
 /// nothing worth persisting (no bars, or none with a valid timestamp).
 fn chart_merged_bars_to_cache_json(bars: &[Bar]) -> Option<String> {
