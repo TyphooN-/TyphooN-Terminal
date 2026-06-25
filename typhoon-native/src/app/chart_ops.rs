@@ -167,8 +167,33 @@ fn mtf_grid_missing_timeframes(
 
     MTF_GRID_TIMEFRAMES
         .iter()
-        .filter_map(|(_, tf)| (!existing.contains(tf)).then_some(*tf))
+        .filter_map(|(_, tf)| {
+            (!existing.contains(tf)
+                && !mtf_symbol_has_empty_low_timeframe(charts, &symbol_key, *tf))
+            .then_some(*tf)
+        })
         .collect()
+}
+
+fn mtf_low_timeframe(tf: Timeframe) -> bool {
+    matches!(tf, Timeframe::M1 | Timeframe::M5)
+}
+
+fn mtf_empty_low_timeframe_backing_chart(chart: &ChartState) -> bool {
+    !chart.show_in_tab_bar && chart.bars.is_empty() && mtf_low_timeframe(chart.timeframe)
+}
+
+fn mtf_symbol_has_empty_low_timeframe(
+    charts: &[ChartState],
+    symbol_key: &str,
+    tf: Timeframe,
+) -> bool {
+    mtf_low_timeframe(tf)
+        && charts.iter().any(|chart| {
+            chart.timeframe == tf
+                && chart.bars.is_empty()
+                && mtf_grid_symbol_key(&chart.symbol).eq_ignore_ascii_case(symbol_key)
+        })
 }
 
 pub(super) fn mtf_grid_symbols_with_missing_timeframes(
@@ -226,7 +251,9 @@ pub(super) fn open_chart_preload_indices(charts: &[ChartState]) -> Vec<usize> {
     charts
         .iter()
         .enumerate()
-        .filter_map(|(idx, chart)| chart.bars.is_empty().then_some(idx))
+        .filter_map(|(idx, chart)| {
+            (chart.bars.is_empty() && !mtf_empty_low_timeframe_backing_chart(chart)).then_some(idx)
+        })
         .collect()
 }
 
@@ -246,6 +273,7 @@ pub(super) fn mtf_visible_chart_groups_filtered(
     for (idx, chart) in charts.iter().enumerate() {
         if !visible.get(idx).copied().unwrap_or(true)
             || mtf_timeframe_rank(chart.timeframe).is_none()
+            || mtf_empty_low_timeframe_backing_chart(chart)
         {
             continue;
         }
@@ -271,6 +299,17 @@ pub(super) fn mtf_visible_chart_groups_filtered(
         });
     }
     groups
+}
+
+pub(super) fn mtf_group_timeframe_labels(
+    charts: &[ChartState],
+    group: &MtfChartGroup,
+) -> Vec<&'static str> {
+    group
+        .indices
+        .iter()
+        .filter_map(|idx| charts.get(*idx).map(|chart| chart.timeframe.label()))
+        .collect()
 }
 
 /// True iff `raw` becomes `target_upper` after stripping `'/'` and uppercasing
@@ -1068,6 +1107,9 @@ impl TyphooNApp {
                 acc
             });
         for &(label, tf) in &MTF_GRID_TIMEFRAMES {
+            if mtf_symbol_has_empty_low_timeframe(&self.charts, &symbol_key, tf) {
+                continue;
+            }
             let existing_idx = existing_chart_by_tf.get(&tf).copied();
             let idx = if let Some(idx) = existing_idx {
                 idx
@@ -1573,6 +1615,43 @@ mod tests {
     }
 
     #[test]
+    fn mtf_grid_omits_empty_low_timeframe_cells() {
+        let mut m15 = ChartState::new("AMC", Timeframe::M15);
+        m15.bars.push(Bar {
+            ts_ms: 1,
+            open: 1.0,
+            high: 1.0,
+            low: 1.0,
+            close: 1.0,
+            volume: 1.0,
+        });
+        let mut h1 = ChartState::new("AMC", Timeframe::H1);
+        h1.bars.push(Bar {
+            ts_ms: 1,
+            open: 1.0,
+            high: 1.0,
+            low: 1.0,
+            close: 1.0,
+            volume: 1.0,
+        });
+        let mut m1 = ChartState::new("AMC", Timeframe::M1);
+        m1.show_in_tab_bar = false;
+        let mut m5 = ChartState::new("AMC", Timeframe::M5);
+        m5.show_in_tab_bar = false;
+        let charts = vec![m1, m5, m15, h1];
+        let visible = vec![true; charts.len()];
+
+        let groups = mtf_visible_chart_groups(&charts, &visible);
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].indices, vec![2, 3]);
+        assert_eq!(
+            mtf_group_timeframe_labels(&charts, &groups[0]),
+            vec!["M15", "H1"]
+        );
+    }
+
+    #[test]
     fn mtf_grid_suppresses_symbol_when_broker_has_no_m1_or_m5_bars() {
         let charts = vec![
             ChartState::new("CC", Timeframe::D1),
@@ -1639,10 +1718,13 @@ mod tests {
             close: 10.0,
             volume: 1.0,
         });
+        let mut hidden_low_tf_backing = ChartState::new("CC", Timeframe::M1);
+        hidden_low_tf_backing.show_in_tab_bar = false;
         let charts = vec![
             loaded,
             ChartState::new("WEN", Timeframe::D1),
             ChartState::new("CC", Timeframe::H4),
+            hidden_low_tf_backing,
         ];
 
         assert_eq!(open_chart_preload_indices(&charts), vec![1, 2]);

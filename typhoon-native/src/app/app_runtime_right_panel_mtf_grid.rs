@@ -1,7 +1,8 @@
 use super::*;
 use crate::app::chart_ops::{
     MTF_GRID_TIMEFRAMES, low_timeframe_no_data_symbols, mtf_grid_symbol_key,
-    mtf_grid_symbols_with_missing_timeframes, mtf_visible_chart_groups_filtered,
+    mtf_grid_symbols_with_missing_timeframes, mtf_group_timeframe_labels,
+    mtf_visible_chart_groups_filtered,
 };
 
 #[allow(deprecated)]
@@ -84,7 +85,11 @@ impl TyphooNApp {
                     "{} symbol{} · {} TFs",
                     mtf_news_symbols.len(),
                     if mtf_news_symbols.len() == 1 { "" } else { "s" },
-                    tf_labels.len()
+                    mtf_groups
+                        .iter()
+                        .map(|group| mtf_group_timeframe_labels(&self.charts, group).len())
+                        .max()
+                        .unwrap_or(tf_labels.len())
                 ))
                 .color(AXIS_TEXT)
                 .small(),
@@ -160,6 +165,7 @@ impl TyphooNApp {
                 // chart so the grid is not limited to open tabs.
                 let active_sym_key = mtf_grid_symbol_key(&self.symbol_input);
                 for group in mtf_groups {
+                    let group_tf_labels = mtf_group_timeframe_labels(&self.charts, &group);
                     ui.label(
                         egui::RichText::new(&group.symbol)
                             .color(ACCENT)
@@ -198,13 +204,13 @@ impl TyphooNApp {
                         .spacing(egui::vec2(4.0, 2.0))
                         .show(ui, |ui| {
                             ui.label(egui::RichText::new("").small());
-                            for tf in &tf_labels {
+                            for tf in &group_tf_labels {
                                 ui.label(egui::RichText::new(*tf).color(AXIS_TEXT).small());
                             }
                             ui.end_row();
                             for ma in &ma_labels {
                                 ui.label(egui::RichText::new(*ma).color(AXIS_TEXT).small());
-                                for tf in &tf_labels {
+                                for tf in &group_tf_labels {
                                     let status = open_status_by_tf.get(tf).copied().or_else(|| {
                                         // No open chart for this timeframe — fall
                                         // back to the cache-loaded status (active
