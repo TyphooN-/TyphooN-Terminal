@@ -5,6 +5,7 @@ use typhoon_broker_runtime::connection_commands;
 use typhoon_broker_runtime::external_feeds;
 use typhoon_broker_runtime::misc_commands;
 use typhoon_broker_runtime::resources::BrokerRuntimeResources;
+use typhoon_broker_runtime::storage;
 use typhoon_broker_runtime::symbol_search;
 
 mod prelude;
@@ -19,7 +20,6 @@ mod matrix_commands;
 mod news;
 mod research_compute;
 mod research_fetch;
-mod storage;
 mod watchlist_quotes;
 
 pub(super) fn spawn_broker_message_processor(

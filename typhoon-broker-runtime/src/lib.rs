@@ -12,4 +12,5 @@ pub mod external_feeds;
 pub mod misc_commands;
 pub mod prelude;
 pub mod resources;
+pub mod storage;
 pub mod symbol_search;

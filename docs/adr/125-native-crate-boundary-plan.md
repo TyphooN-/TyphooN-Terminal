@@ -975,6 +975,9 @@ The next physical processor-child move relocated `connection_commands` into
 `typhoon_broker_runtime::connection_commands`; native now imports that runtime module for Alpaca
 connect/sync configuration and Kraken REST/WebSocket connection routing while still passing the
 mutable broker handles from the native-owned spawn loop.
+The next physical processor-child move relocated `storage` into
+`typhoon_broker_runtime::storage`; native now imports that runtime module for compaction and
+unusual-volume scan routing while still passing the shared cache and importing flag explicitly.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
