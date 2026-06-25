@@ -130,6 +130,10 @@ pub struct TyphooNApp {
     /// cache reads + indicator/MTF recomputes so restored MTF grids don't monopolize
     /// consecutive UI frames during broad market-data sync.
     pub(crate) deferred_chart_last_load_at: std::time::Instant,
+    /// Last empty deferred load attempt per chart source key. Prevents MTF render
+    /// loops from re-queueing an empty provider/cache row every frame while still
+    /// allowing broker fetch results to explicitly queue an immediate reload.
+    pub(crate) deferred_chart_empty_load_at: std::collections::HashMap<String, std::time::Instant>,
 
     /// Command palette open state.
     pub(crate) command_open: bool,

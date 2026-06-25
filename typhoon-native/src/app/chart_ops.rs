@@ -1,6 +1,26 @@
 use super::*;
 use crate::app::app_runtime_support::deferred_chart_load_interval;
 
+const EMPTY_CHART_RELOAD_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn deferred_chart_load_key(chart: &ChartState) -> String {
+    format!(
+        "{}:{}:{}",
+        chart.symbol,
+        chart.timeframe.cache_suffix(),
+        chart.source_override
+    )
+}
+
+fn empty_chart_load_retry_due(
+    last_attempt: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> bool {
+    last_attempt
+        .map(|last| now.duration_since(last) >= EMPTY_CHART_RELOAD_RETRY_AFTER)
+        .unwrap_or(true)
+}
+
 pub(super) const MTF_GRID_TIMEFRAMES: [(&str, Timeframe); 9] = [
     ("M1", Timeframe::M1),
     ("M5", Timeframe::M5),
@@ -210,6 +230,7 @@ impl TyphooNApp {
                     self.deferred_chart_last_load_at = now_instant;
                     ctx.request_repaint_after(load_interval);
                 } else {
+                    let load_key = self.charts.get(idx).map(deferred_chart_load_key);
                     let mut loaded = false;
                     if let Some(cache) = self.cache.clone() {
                         if let Some(chart) = self.charts.get_mut(idx) {
@@ -221,6 +242,18 @@ impl TyphooNApp {
                         }
                     }
                     if loaded {
+                        if let Some(key) = load_key {
+                            if self
+                                .charts
+                                .get(idx)
+                                .map(|chart| chart.bars.is_empty())
+                                .unwrap_or(false)
+                            {
+                                self.deferred_chart_empty_load_at.insert(key, now_instant);
+                            } else {
+                                self.deferred_chart_empty_load_at.remove(&key);
+                            }
+                        }
                         self.deferred_chart_last_load_at = now_instant;
                         if let Some(done_idx) = self.deferred_chart_loads.pop_front() {
                             self.deferred_chart_load_set.remove(&done_idx);
@@ -581,6 +614,21 @@ impl TyphooNApp {
         if idx < self.charts.len() && self.deferred_chart_load_set.insert(idx) {
             self.deferred_chart_loads.push_back(idx);
         }
+    }
+
+    pub(super) fn should_queue_empty_chart_reload(
+        &self,
+        idx: usize,
+        now: std::time::Instant,
+    ) -> bool {
+        let Some(chart) = self.charts.get(idx) else {
+            return false;
+        };
+        if !chart.bars.is_empty() {
+            return false;
+        }
+        let key = deferred_chart_load_key(chart);
+        empty_chart_load_retry_due(self.deferred_chart_empty_load_at.get(&key).copied(), now)
     }
 
     pub(super) fn normalize_news_ticker_for_chart(raw: &str) -> Option<String> {
@@ -1348,6 +1396,21 @@ mod tests {
         assert_eq!(groups[0].indices, vec![4, 2, 0, 5]);
         assert_eq!(groups[1].symbol, "BABYUSD");
         assert_eq!(groups[1].indices, vec![6, 3, 1]);
+    }
+
+    #[test]
+    fn empty_chart_load_retry_is_backed_off_after_no_data_attempt() {
+        let now = std::time::Instant::now();
+
+        assert!(empty_chart_load_retry_due(None, now));
+        assert!(!empty_chart_load_retry_due(
+            Some(now - EMPTY_CHART_RELOAD_RETRY_AFTER / 2),
+            now
+        ));
+        assert!(empty_chart_load_retry_due(
+            Some(now - EMPTY_CHART_RELOAD_RETRY_AFTER),
+            now
+        ));
     }
 
     fn test_position(symbol: &str, qty: f64, side: &str) -> PositionInfo {

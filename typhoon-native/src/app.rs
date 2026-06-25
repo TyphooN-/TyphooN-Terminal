@@ -202,6 +202,7 @@ impl TyphooNApp {
             deferred_chart_load_set: HashSet::new(),
             deferred_chart_last_load_at: std::time::Instant::now()
                 - std::time::Duration::from_secs(1),
+            deferred_chart_empty_load_at: std::collections::HashMap::new(),
             mtf_focused: None,
             mtf_visible: Vec::new(),
             command_open: false,

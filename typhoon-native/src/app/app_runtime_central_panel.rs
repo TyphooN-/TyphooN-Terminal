@@ -649,9 +649,10 @@ impl TyphooNApp {
                 // this render loop produced multi-second UI stalls while restored
                 // MTF grids pulled M1/M5/M15 merged rows and recomputed overlays.
                 // `queue_chart_reload` is O(1)-deduped by `deferred_chart_load_set`.
+                let empty_chart_load_now = std::time::Instant::now();
                 for group in &mtf_groups {
                     for &vi in &group.indices {
-                        if self.charts[vi].bars.is_empty() {
+                        if self.should_queue_empty_chart_reload(vi, empty_chart_load_now) {
                             self.queue_chart_reload(vi);
                         }
                     }
