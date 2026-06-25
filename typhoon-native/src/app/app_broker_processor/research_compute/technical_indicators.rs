@@ -1,4 +1,4 @@
-use super::*;
+use super::prelude::*;
 
 mod adaptive_moving_average;
 mod alligator_gator;

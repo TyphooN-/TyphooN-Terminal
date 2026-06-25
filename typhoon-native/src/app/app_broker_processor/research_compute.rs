@@ -1,5 +1,6 @@
 use super::prelude::*;
 
+mod prelude;
 mod technical_indicators;
 mod valuation;
 mod analytics;

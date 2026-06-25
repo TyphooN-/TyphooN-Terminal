@@ -1,4 +1,4 @@
-use super::*;
+use super::prelude::*;
 
 mod coverage_relative_event;
 mod dividend_sentiment_ranks;

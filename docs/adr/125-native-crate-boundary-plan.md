@@ -923,6 +923,12 @@ module's glob import, so the future broker-runtime crate extraction can turn the
 explicit dependency boundary instead of auditing 19 top-level child modules independently. The
 parent `app_broker_processor.rs` now also imports `crate::app::*` directly rather than `super::*`,
 removing the last broker-processor dependency on relative native-parent glob routing.
+The next nested seam added `app_broker_processor/research_compute/prelude.rs` and repointed the
+first-level research compute handlers (`analytics`, `breakout`, `risk`, `squeeze`,
+`technical_indicators`, `valuation`, `volatility`) from `use super::*` to
+`use super::prelude::*`; the prelude forwards the app-surface prelude plus the local sibling
+modules still referenced across handlers. Risk/technical grandchild modules remain on their
+domain-parent imports until those subtrees get their own narrower seams.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
