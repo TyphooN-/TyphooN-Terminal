@@ -11,6 +11,7 @@ use typhoon_broker_runtime::kraken_order_ops;
 use typhoon_broker_runtime::matrix_commands;
 use typhoon_broker_runtime::market_data_commands;
 use typhoon_broker_runtime::misc_commands;
+use typhoon_broker_runtime::news;
 use typhoon_broker_runtime::research_compute;
 use typhoon_broker_runtime::research_fetch;
 use typhoon_broker_runtime::resources::BrokerRuntimeResources;
@@ -20,7 +21,6 @@ use typhoon_broker_runtime::watchlist_quotes;
 
 mod prelude;
 mod kraken_ws_commands;
-mod news;
 
 pub(super) fn spawn_broker_message_processor(
     broker_cmd_rx: tokio::sync::mpsc::UnboundedReceiver<BrokerCmd>,

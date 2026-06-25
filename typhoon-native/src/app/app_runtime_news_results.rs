@@ -9,7 +9,7 @@ impl TyphooNApp {
         if self.cache_loaded
             && !self.news_body_hydrate_in_flight
             && now_instant.duration_since(self.news_body_last_hydrate)
-                >= std::time::Duration::from_secs(super::news_ingest::HYDRATE_INTERVAL_SECS)
+                >= std::time::Duration::from_secs(typhoon_broker_runtime::news_ingest::HYDRATE_INTERVAL_SECS)
         {
             if let Some(cache) = self.cache.clone() {
                 self.news_body_last_hydrate = now_instant;
@@ -21,7 +21,7 @@ impl TyphooNApp {
                     .filter(|s| !s.is_empty());
                 let rt = self.rt_handle.clone();
                 rt.spawn(async move {
-                    let _ = super::news_ingest::hydrate_missing_bodies(cache, symbol_hint).await;
+                    let _ = typhoon_broker_runtime::news_ingest::hydrate_missing_bodies(cache, symbol_hint).await;
                     // No callback channel: the next tick simply observes the
                     // `in_flight` flag being reset after the task completes.
                     // We can't poke `self` from here, so the gate is released
@@ -35,7 +35,7 @@ impl TyphooNApp {
         // pick up whatever rows are still empty.
         if self.news_body_hydrate_in_flight
             && now_instant.duration_since(self.news_body_last_hydrate)
-                >= std::time::Duration::from_secs(super::news_ingest::HYDRATE_INTERVAL_SECS * 2)
+                >= std::time::Duration::from_secs(typhoon_broker_runtime::news_ingest::HYDRATE_INTERVAL_SECS * 2)
         {
             self.news_body_hydrate_in_flight = false;
         }

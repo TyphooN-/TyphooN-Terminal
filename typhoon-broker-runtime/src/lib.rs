@@ -17,6 +17,8 @@ pub mod kraken_order_ops;
 pub mod market_data_commands;
 pub mod matrix_commands;
 pub mod misc_commands;
+pub mod news;
+pub mod news_ingest;
 pub mod prelude;
 pub mod research_compute;
 pub mod research_fetch;

@@ -100,7 +100,6 @@ mod floating_windows;
 mod kraken_ohlc_ws;
 mod kraken_sync;
 mod market_data_sync;
-mod news_ingest;
 mod platform;
 mod session_persistence;
 mod settings;

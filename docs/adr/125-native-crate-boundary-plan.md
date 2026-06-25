@@ -1018,6 +1018,9 @@ The next physical processor-subtree move relocated `research_compute` into
 analytics, volatility, technical-indicator, risk, squeeze, and breakout compute routing, and the
 runtime prelude now exposes only the lower-layer broker protocol, cache, core, chart-key, and `Arc`
 imports needed by the moved subtree.
+The next physical processor-child move relocated `news` plus its body-hydration helper
+`news_ingest` into `typhoon_broker_runtime`; native now imports runtime news routing and calls the
+runtime hydrator from the app news-result tick while keeping native UI state outside the runtime crate.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

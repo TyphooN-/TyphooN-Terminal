@@ -1,6 +1,13 @@
-use super::prelude::*;
+use std::sync::Arc;
 
-pub(super) fn handle_news_command(
+use typhoon_engine::broker::alpaca::AlpacaBroker;
+use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg, format_news_scope_scrape_start};
+use typhoon_engine::core::cache::SqliteCache;
+use typhoon_engine::core::sec_filing;
+
+use crate::news_ingest;
+
+pub fn handle_news_command(
     cmd: BrokerCmd,
     broker_msg_tx_clone: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
     shared_cache_broker: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
@@ -617,7 +624,7 @@ pub(super) fn handle_news_command(
     }
 }
 
-pub(super) async fn handle_news_scrape_all_command(
+pub async fn handle_news_scrape_all_command(
     cmd: BrokerCmd,
     broker: Option<&AlpacaBroker>,
     broker_msg_tx_clone: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
@@ -821,7 +828,7 @@ pub(super) async fn handle_news_scrape_all_command(
     }
 }
 
-pub(super) async fn handle_news_maintenance_command(
+pub async fn handle_news_maintenance_command(
     cmd: BrokerCmd,
     broker_msg_tx_clone: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
     shared_cache_broker: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
