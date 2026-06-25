@@ -896,9 +896,11 @@ runtime permit constants (`KRAKEN_PUBLIC_FETCH_PERMITS`, `KRAKEN_EQUITIES_FETCH_
 `typhoon_engine::broker::sync_config` with a native compatibility re-export, and moved the
 chart source cache-key generator to `typhoon_chart_ui::cache_keys` with a native shim. This
 removes the broker processor's direct dependency on native `sync_config` and native
-`chart_sources` while preserving call sites. The remaining closure is the fetch/Yahoo task
-runners, watchlist row builders/predicates, Kraken equity symbol normalization, and market-data
-news-symbol extraction.
+`chart_sources` while preserving call sites. The next slice moved the cache-backed
+watchlist row builders (`watchlist_row_from_raw_bars`, `empty_watchlist_row`) next to
+`WatchlistRow` in `typhoon_engine::core::watchlist`, again leaving a native re-export shim.
+The remaining closure is the fetch/Yahoo task runners, watchlist/Yahoo predicates, Kraken
+equity symbol normalization, and market-data news-symbol extraction.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

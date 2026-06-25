@@ -72,7 +72,7 @@ pub(crate) use equity_merge::{
 pub(crate) use equity_merge::{
     ChartSplit, chart_curated_known_splits, chart_equity_source_rank_for,
     chart_merge_equity_raw_bars, chart_merge_equity_raw_bars_with_primary,
-    chart_persist_merged_equity_bars_to_cache, news_symbol_from_market_data_cache_key,
+    chart_persist_merged_equity_bars_to_cache,
 };
 
 // `ChartState` + its chart-local view/behavior, camera controls, and auto-fibonacci now
