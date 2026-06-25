@@ -918,7 +918,8 @@ mechanical crate extraction / processor prelude seam, not more native helper mig
 Target-3 seam slice added `app_broker_processor/prelude.rs` and repointed every direct
 broker-processor child module from `use super::*` to `use super::prelude::*`; nested research
 compute children keep their local parent imports for now. This centralizes the native-facing
-surface in one file so the future broker-runtime crate extraction can turn the prelude into an
+surface in one file (`pub(super) use crate::app::*`) instead of routing through the parent
+module's glob import, so the future broker-runtime crate extraction can turn the prelude into an
 explicit dependency boundary instead of auditing 19 top-level child modules independently.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
