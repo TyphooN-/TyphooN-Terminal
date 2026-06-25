@@ -12,7 +12,8 @@ pub(super) fn spawn_watchlist_quotes_task(
     // (GetPositions/GetOrders), leaving positions stale. Spawning keeps it
     // concurrent — the same off-loop principle the equities sync already follows.
     tokio::spawn(async move {
-        let mut rows: Vec<WatchlistRow> = symbols.iter().map(|sym| empty_watchlist_row(sym)).collect();
+        let mut rows: Vec<WatchlistRow> =
+            symbols.iter().map(|sym| empty_watchlist_row(sym)).collect();
 
         let regular_session_open = if let Some(ref b) = broker {
             b.get_market_clock()
@@ -28,8 +29,8 @@ pub(super) fn spawn_watchlist_quotes_task(
             for row in &mut rows {
                 let api_sym = {
                     let crypto_bases = [
-                        "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "LTC", "LINK", "AVAX",
-                        "DOT", "XMR", "ZEC", "DASH",
+                        "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "LTC", "LINK", "AVAX", "DOT",
+                        "XMR", "ZEC", "DASH",
                     ];
                     let su = row.symbol.to_uppercase();
                     crypto_bases
@@ -103,7 +104,9 @@ pub(super) fn spawn_watchlist_quotes_task(
 
         let equity_syms: Vec<String> = rows
             .iter()
-            .filter(|r| !r.symbol.contains('/') && !(r.symbol.ends_with("USD") && r.symbol.len() > 5))
+            .filter(|r| {
+                !r.symbol.contains('/') && !(r.symbol.ends_with("USD") && r.symbol.len() > 5)
+            })
             .map(|r| r.symbol.clone())
             .collect();
         if !equity_syms.is_empty() {
@@ -123,7 +126,11 @@ pub(super) fn spawn_watchlist_quotes_task(
                 );
                 if let Ok(Ok(resp)) = tokio::time::timeout(
                     std::time::Duration::from_secs(5),
-                    session.client().get(&url).header("Accept", "application/json").send(),
+                    session
+                        .client()
+                        .get(&url)
+                        .header("Accept", "application/json")
+                        .send(),
                 )
                 .await
                 {
@@ -136,7 +143,8 @@ pub(super) fn spawn_watchlist_quotes_task(
                                 };
                                 let row = &mut rows[row_idx];
                                 let reg_price = q["regularMarketPrice"].as_f64().unwrap_or(0.0);
-                                let reg_prev = q["regularMarketPreviousClose"].as_f64().unwrap_or(0.0);
+                                let reg_prev =
+                                    q["regularMarketPreviousClose"].as_f64().unwrap_or(0.0);
 
                                 let yah_vol = q["regularMarketVolume"]
                                     .as_f64()
@@ -163,20 +171,19 @@ pub(super) fn spawn_watchlist_quotes_task(
                                 // TNDM exposed the failure mode: marketState=POST, regular price was
                                 // current, but postMarketPrice was still yesterday's stale after-hours tick.
                                 let market_state = q["marketState"].as_str().unwrap_or("");
-                                let allow_ext_quote =
-                                    yahoo_market_state_allows_extended_quote(market_state);
+                                let allow_ext_quote = typhoon_engine::core::watchlist::yahoo_market_state_allows_extended_quote(market_state);
                                 let regular_time = q["regularMarketTime"].as_i64().unwrap_or(0);
                                 let pre_time = q["preMarketTime"].as_i64().unwrap_or(0);
                                 let post_time = q["postMarketTime"].as_i64().unwrap_or(0);
                                 let pre_price = if allow_ext_quote
-                                    && yahoo_extended_quote_time_is_fresh(pre_time, regular_time)
+                                    && typhoon_engine::core::watchlist::yahoo_extended_quote_time_is_fresh(pre_time, regular_time)
                                 {
                                     q["preMarketPrice"].as_f64().unwrap_or(0.0)
                                 } else {
                                     0.0
                                 };
                                 let post_price = if allow_ext_quote
-                                    && yahoo_extended_quote_time_is_fresh(post_time, regular_time)
+                                    && typhoon_engine::core::watchlist::yahoo_extended_quote_time_is_fresh(post_time, regular_time)
                                 {
                                     q["postMarketPrice"].as_f64().unwrap_or(0.0)
                                 } else {
@@ -224,12 +231,16 @@ pub(super) fn spawn_watchlist_quotes_task(
                 }
                 let mut filled = false;
                 'cache_fallback: for tf in ["quote", "1Day", "4Hour", "1Hour", "30Min", "15Min"] {
-                    for source in watchlist_cache_fallback_sources(&row.symbol) {
+                    for source in typhoon_engine::core::watchlist::watchlist_cache_fallback_sources(
+                        &row.symbol,
+                    ) {
                         for key in chart_source_cache_keys(source, &row.symbol, tf) {
                             let Ok(Some(raw)) = cache.get_bars_raw(&key) else {
                                 continue;
                             };
-                            if let Some(cached) = watchlist_row_from_raw_bars(&row.symbol, &key, &raw) {
+                            if let Some(cached) =
+                                watchlist_row_from_raw_bars(&row.symbol, &key, &raw)
+                            {
                                 *row = cached;
                                 filled = true;
                                 break 'cache_fallback;

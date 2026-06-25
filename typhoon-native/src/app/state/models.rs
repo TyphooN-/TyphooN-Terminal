@@ -2,30 +2,6 @@ use super::*;
 
 // ─── application state ───────────────────────────────────────────────────────
 
-pub(crate) fn watchlist_cache_fallback_sources(symbol: &str) -> &'static [&'static str] {
-    let symbol = symbol.trim().replace('/', "").to_ascii_uppercase();
-    let equity_like = !symbol.contains('/')
-        && !(symbol.ends_with("USD") && symbol.len() > 5)
-        && !symbol.ends_with("USDT")
-        && !symbol.ends_with("USDC");
-    if equity_like {
-        &["kraken-equities", "alpaca", "default"]
-    } else {
-        &["kraken", "kraken-futures", "default"]
-    }
-}
-
-pub(crate) fn yahoo_market_state_allows_extended_quote(market_state: &str) -> bool {
-    matches!(
-        market_state.trim().to_ascii_uppercase().as_str(),
-        "PRE" | "PREPRE" | "POST" | "POSTPOST"
-    )
-}
-
-pub(crate) fn yahoo_extended_quote_time_is_fresh(ext_time: i64, regular_time: i64) -> bool {
-    ext_time > 0 && (regular_time <= 0 || ext_time >= regular_time)
-}
-
 /// Upcoming event source filter for the Event Calendar window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum EventSource {

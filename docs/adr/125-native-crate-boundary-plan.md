@@ -901,8 +901,10 @@ watchlist row builders (`watchlist_row_from_raw_bars`, `empty_watchlist_row`) ne
 `WatchlistRow` in `typhoon_engine::core::watchlist`, again leaving a native re-export shim.
 The next chart-cache slice moved `normalize_kraken_equity_symbol_list` to
 `typhoon_chart_ui::cache_keys` and updated the broker processor's fundamentals command to call
-the crate helper directly. The remaining closure is the fetch/Yahoo task runners,
-watchlist/Yahoo predicates, and market-data news-symbol extraction.
+the crate helper directly. The next watchlist slice moved the cache-fallback source selector
+and Yahoo extended-quote freshness predicates to `typhoon_engine::core::watchlist`; the broker
+watchlist handler now calls those engine helpers directly. The remaining closure is the
+fetch/Yahoo task runners and market-data news-symbol extraction.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

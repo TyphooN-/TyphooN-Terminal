@@ -19,6 +19,9 @@ pub(crate) use models::{
     AlpacaRetry, BgData, BookmapWindowState, BottomTab, EventKind, EventRow, EventSource,
     FinancialsPeriod, FinancialsView, ImportedResearchArtifact, KRAKEN_TRADE_HISTORY_CAP,
     PacketTreeNode, RightPanelSectionId, RightTab, RiskMode, SortState,
+};
+#[cfg(test)]
+pub(crate) use typhoon_engine::core::watchlist::{
     watchlist_cache_fallback_sources, yahoo_extended_quote_time_is_fresh,
     yahoo_market_state_allows_extended_quote,
 };

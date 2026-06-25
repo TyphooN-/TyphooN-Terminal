@@ -3,8 +3,9 @@
 //! `WatchlistRow` is the per-symbol quote row shown in the watchlist panel and carried
 //! by the broker message protocol (`BrokerMsg::WatchlistQuotes`). It lives in the engine
 //! (ADR-127) so the protocol depends only on engine/std — a pure `serde` data type, no UI
-//! or runtime coupling. The row builders live here too so broker-runtime code can build
-//! cache-backed watchlist rows without depending on `typhoon-native`.
+//! or runtime coupling. The row builders and quote/fallback predicates live here too so
+//! broker-runtime code can build cache-backed watchlist rows without depending on
+//! `typhoon-native`.
 
 use serde::{Deserialize, Serialize};
 
@@ -103,6 +104,30 @@ pub fn empty_watchlist_row(symbol: &str) -> WatchlistRow {
     }
 }
 
+pub fn watchlist_cache_fallback_sources(symbol: &str) -> &'static [&'static str] {
+    let symbol = symbol.trim().replace('/', "").to_ascii_uppercase();
+    let equity_like = !symbol.contains('/')
+        && !(symbol.ends_with("USD") && symbol.len() > 5)
+        && !symbol.ends_with("USDT")
+        && !symbol.ends_with("USDC");
+    if equity_like {
+        &["kraken-equities", "alpaca", "default"]
+    } else {
+        &["kraken", "kraken-futures", "default"]
+    }
+}
+
+pub fn yahoo_market_state_allows_extended_quote(market_state: &str) -> bool {
+    matches!(
+        market_state.trim().to_ascii_uppercase().as_str(),
+        "PRE" | "PREPRE" | "POST" | "POSTPOST"
+    )
+}
+
+pub fn yahoo_extended_quote_time_is_fresh(ext_time: i64, regular_time: i64) -> bool {
+    ext_time > 0 && (regular_time <= 0 || ext_time >= regular_time)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +155,30 @@ mod tests {
         assert_eq!(row.last, 0.0);
         assert_eq!(row.live_bid, 0.0);
         assert!(row.live_quote_at.is_none());
+    }
+
+    #[test]
+    fn watchlist_fallback_sources_split_equity_and_crypto() {
+        assert_eq!(
+            watchlist_cache_fallback_sources("AAPL"),
+            &["kraken-equities", "alpaca", "default"]
+        );
+        assert_eq!(
+            watchlist_cache_fallback_sources("BTC/USD"),
+            &["kraken", "kraken-futures", "default"]
+        );
+        assert_eq!(
+            watchlist_cache_fallback_sources("BTCUSD"),
+            &["kraken", "kraken-futures", "default"]
+        );
+    }
+
+    #[test]
+    fn yahoo_extended_quote_rules_are_session_aware() {
+        assert!(yahoo_market_state_allows_extended_quote("PRE"));
+        assert!(yahoo_market_state_allows_extended_quote("postpost"));
+        assert!(!yahoo_market_state_allows_extended_quote("REGULAR"));
+        assert!(yahoo_extended_quote_time_is_fresh(20, 10));
+        assert!(!yahoo_extended_quote_time_is_fresh(5, 10));
     }
 }
