@@ -17,6 +17,7 @@ pub mod market_data_commands;
 pub mod matrix_commands;
 pub mod misc_commands;
 pub mod prelude;
+pub mod research_fetch;
 pub mod resources;
 pub mod storage;
 pub mod symbol_search;

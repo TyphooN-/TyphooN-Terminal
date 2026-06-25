@@ -10,6 +10,7 @@ use typhoon_broker_runtime::kraken_order_ops;
 use typhoon_broker_runtime::matrix_commands;
 use typhoon_broker_runtime::market_data_commands;
 use typhoon_broker_runtime::misc_commands;
+use typhoon_broker_runtime::research_fetch;
 use typhoon_broker_runtime::resources::BrokerRuntimeResources;
 use typhoon_broker_runtime::storage;
 use typhoon_broker_runtime::symbol_search;
@@ -19,7 +20,6 @@ mod fundamentals_commands;
 mod kraken_ws_commands;
 mod news;
 mod research_compute;
-mod research_fetch;
 mod watchlist_quotes;
 
 pub(super) fn spawn_broker_message_processor(

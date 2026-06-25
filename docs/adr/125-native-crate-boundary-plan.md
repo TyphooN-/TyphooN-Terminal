@@ -1001,6 +1001,10 @@ The next physical processor-child move relocated `market_data_commands` into
 `typhoon_broker_runtime::market_data_commands`; native now imports that runtime module for
 fundamentals/holders, orderbook, most-active, portfolio history, analyst/price-target/short-interest,
 corporate-actions, watchlist, and options-chain routing while passing broker handles and shared cache explicitly.
+The next physical processor-child move relocated `research_fetch` into
+`typhoon_broker_runtime::research_fetch`; native now imports that runtime module for company profile,
+peers, earnings, IPOs, press, sentiment, transcripts, commodities, ETF/crypto/rates calendars, and
+other research fetch routing.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

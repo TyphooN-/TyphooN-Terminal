@@ -1,6 +1,6 @@
-use super::prelude::*;
+use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
 
-pub(super) fn handle_research_fetch_command(
+pub fn handle_research_fetch_command(
     cmd: BrokerCmd,
     broker_msg_tx_clone: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
 ) {
