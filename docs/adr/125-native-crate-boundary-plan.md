@@ -942,6 +942,11 @@ small lower-layer prelude (`typhoon_engine::{broker, core}` and `typhoon_chart_u
 No native processor files have been moved into it yet; the point of this slice is to make the
 future physical move target compile independently before threading the native spawn seam through
 the new crate.
+The next runtime-resource seam moved broker-loop permit/client construction into
+`typhoon_broker_runtime::resources::BrokerRuntimeResources` and wired native to depend on the new
+crate for those lower-layer resources. Native still owns the app-shell spawn call and UI/cache
+state, but Kraken/Yahoo/Alpaca runtime resource setup now compiles inside the crate that will own
+the processor after the physical move.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

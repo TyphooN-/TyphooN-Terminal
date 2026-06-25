@@ -6,3 +6,4 @@
 //! physically moved behind a single spawn seam.
 
 pub mod prelude;
+pub mod resources;

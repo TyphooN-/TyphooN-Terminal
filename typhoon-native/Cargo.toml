@@ -15,6 +15,8 @@ typhoon-engine = { workspace = true }
 typhoon-research-ui = { workspace = true }
 # Chart-UI view + chart-local state layer (ADR-125 Target 2)
 typhoon-chart-ui = { workspace = true }
+# Broker command runtime seam (ADR-125 Target 3)
+typhoon-broker-runtime = { workspace = true }
 
 # multi-language indicator transpiler (indicator compilation + execution)
 typhoon-transpiler = { workspace = true }

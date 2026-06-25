@@ -3,9 +3,8 @@
 //! Kept out of `app.rs` so scheduler policy has a small, compile-checkable home
 //! instead of adding more constants and helper code to the main application unit.
 
-pub(super) use typhoon_engine::broker::sync_config::{
-    KRAKEN_EQUITIES_FETCH_PERMITS, KRAKEN_PUBLIC_FETCH_PERMITS,
-};
+#[cfg(test)]
+pub(super) use typhoon_engine::broker::sync_config::KRAKEN_PUBLIC_FETCH_PERMITS;
 pub(super) const KRAKEN_SPOT_QUEUE_WINDOW: usize = 240;
 pub(super) const KRAKEN_FUTURES_QUEUE_WINDOW: usize = 144;
 pub(super) const ALPACA_BACKGROUND_SCAN_LIMIT: usize = 768;
@@ -31,9 +30,8 @@ pub(super) const KRAKEN_EQUITIES_FULL_TILT_BATCH_SIZE: usize = 192;
 // `pre_broker_ms` stalls during startup catch-up. Keep each scheduler tick
 // bounded and let the cursor advance across ticks instead of stealing frames.
 pub(super) const KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2048;
-// `KRAKEN_EQUITIES_FETCH_PERMITS` lives in engine broker sync_config so the
-// broker processor can move without depending on native. It remains re-exported
-// here for native schedulers and tests.
+// Kraken Securities/iapi permit limits live behind the broker-runtime resource
+// seam now so the broker processor can move without depending on native.
 // Per-call iapi spacing (was KRAKEN_EQUITIES_HISTORY_MIN_INTERVAL_MS) and the
 // flat post-429 pause (was KRAKEN_EQUITIES_HISTORY_429_BACKOFF_SECS) are now
 // owned by the engine-side `iapi_limiter` (token bucket + escalating

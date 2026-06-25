@@ -1,4 +1,5 @@
 use crate::app::*;
+use typhoon_broker_runtime::resources::BrokerRuntimeResources;
 
 mod prelude;
 mod ai_chat;
@@ -42,26 +43,16 @@ pub(super) fn spawn_broker_message_processor(
         // shared across all iapi endpoints). The handler below just
         // delegates to it instead of maintaining its own gate state.
         let importing_flag = importing_flag_broker;
-        let mut alpaca_fetch_permits = Arc::new(tokio::sync::Semaphore::new(4));
-        let yahoo_chart_fetch_permits = Arc::new(tokio::sync::Semaphore::new(4));
-        let kraken_fetch_permits =
-            Arc::new(tokio::sync::Semaphore::new(KRAKEN_PUBLIC_FETCH_PERMITS));
+        let runtime_resources = BrokerRuntimeResources::new();
+        let mut alpaca_fetch_permits = runtime_resources.alpaca_fetch_permits;
+        let yahoo_chart_fetch_permits = runtime_resources.yahoo_chart_fetch_permits;
+        let kraken_fetch_permits = runtime_resources.kraken_fetch_permits;
         // Kraken Securities/iapi history is slower and can include synchronous cache work.
         // Keep it off the broker command loop and cap it separately so broad equities
         // sync cannot starve UI-visible broker messages (SEC scanner, order state, etc.).
-        let kraken_equity_fetch_permits =
-            Arc::new(tokio::sync::Semaphore::new(KRAKEN_EQUITIES_FETCH_PERMITS));
-        let kraken_public_client = reqwest::Client::builder()
-            .user_agent("TyphooN-Terminal/1.0")
-            .pool_max_idle_per_host(KRAKEN_PUBLIC_FETCH_PERMITS * 2)
-            .build()
-            .unwrap_or_default();
-        let fallback_bar_client = reqwest::Client::builder()
-            .user_agent("TyphooN-Terminal/1.0")
-            .pool_max_idle_per_host(8)
-            .timeout(std::time::Duration::from_secs(20))
-            .build()
-            .unwrap_or_default();
+        let kraken_equity_fetch_permits = runtime_resources.kraken_equity_fetch_permits;
+        let kraken_public_client = runtime_resources.kraken_public_client;
+        let fallback_bar_client = runtime_resources.fallback_bar_client;
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 cmd @ (
