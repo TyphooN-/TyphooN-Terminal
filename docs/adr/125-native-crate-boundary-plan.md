@@ -962,6 +962,9 @@ module for those stateless command arms.
 The next physical processor-child move relocated `symbol_search` into
 `typhoon_broker_runtime::symbol_search`; native now imports that runtime module for
 `SearchSymbols` routing instead of compiling a local child module.
+The next physical processor-child move relocated `external_feeds` into
+`typhoon_broker_runtime::external_feeds`; native now imports that runtime module for FRED,
+economic-calendar, Congress, Fear & Greed, Reddit WSB, and crypto-top-50 external feed routing.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
