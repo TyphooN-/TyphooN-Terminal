@@ -147,10 +147,15 @@ pub(super) async fn handle_kraken_market_command(
                     return;
                 };
                 let result = async {
-                    let bars = fetch_yahoo_chart_bars(&client, &symbol, &timeframe).await?;
+                    let bars = typhoon_engine::core::fallback_bars::fetch_yahoo_chart_bars(
+                        &client, &symbol, &timeframe,
+                    )
+                    .await?;
                     let count =
                         if let Some(cache) = shared_cache.read().ok().and_then(|g| g.clone()) {
-                            store_fallback_bars(&cache, &source, &symbol, &timeframe, &bars)?
+                            typhoon_engine::core::fallback_bars::store_fallback_bars(
+                                &cache, &source, &symbol, &timeframe, &bars,
+                            )?
                         } else {
                             return Err("cache unavailable".to_string());
                         };
@@ -175,7 +180,10 @@ pub(super) async fn handle_kraken_market_command(
                         });
                     }
                     Err(error) => {
-                        let provider_no_data = yahoo_chart_provider_no_data_error(&error);
+                        let provider_no_data =
+                            typhoon_engine::core::fallback_bars::yahoo_chart_provider_no_data_error(
+                                &error,
+                            );
                         if provider_no_data {
                             let _ = msg_tx.send(BrokerMsg::Unresolvable {
                                 broker: source.clone(),

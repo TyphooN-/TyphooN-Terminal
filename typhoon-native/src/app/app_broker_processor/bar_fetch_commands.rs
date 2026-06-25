@@ -30,7 +30,7 @@ pub(super) async fn handle_bar_fetch_command(
                         });
                         return;
                     };
-                    run_alpaca_fetch_task(
+                    typhoon_engine::broker::bar_fetch::run_alpaca_fetch_task(
                         broker,
                         shared_cache,
                         msg_tx,
@@ -68,8 +68,14 @@ pub(super) async fn handle_bar_fetch_command(
                         }
                         return;
                     };
-                    run_alpaca_batch_fetch_task(broker, shared_cache, msg_tx, symbols, timeframe)
-                        .await;
+                    typhoon_engine::broker::bar_fetch::run_alpaca_batch_fetch_task(
+                        broker,
+                        shared_cache,
+                        msg_tx,
+                        symbols,
+                        timeframe,
+                    )
+                    .await;
                 });
             } else {
                 let _ = broker_msg_tx.send(BrokerMsg::Error(
@@ -174,7 +180,7 @@ pub(super) async fn handle_bar_fetch_command(
                         let _ = msg_tx.send(BrokerMsg::KrakenFetchSettled { symbol, timeframe });
                         return;
                     };
-                    run_kraken_fetch_task(
+                    typhoon_engine::broker::bar_fetch::run_kraken_fetch_task(
                         shared_cache,
                         msg_tx,
                         client,
@@ -207,7 +213,7 @@ pub(super) async fn handle_bar_fetch_command(
                             msg_tx.send(BrokerMsg::KrakenFuturesFetchSettled { symbol, timeframe });
                         return;
                     };
-                    run_kraken_futures_fetch_task(
+                    typhoon_engine::broker::bar_fetch::run_kraken_futures_fetch_task(
                         shared_cache,
                         msg_tx,
                         client,

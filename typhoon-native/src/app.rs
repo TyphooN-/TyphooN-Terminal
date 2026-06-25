@@ -87,7 +87,6 @@ mod app_runtime_watchlist_quotes;
 mod app_startup;
 mod auto_compact;
 mod bar_sync;
-mod broker_fetch;
 mod chart;
 mod chart_ops;
 mod chart_sources;
@@ -97,7 +96,6 @@ mod commands;
 mod common;
 mod drawing;
 mod export_nav;
-mod fallback_bars;
 mod floating_windows;
 mod kraken_ohlc_ws;
 mod kraken_sync;
@@ -133,8 +131,6 @@ pub(crate) use self::types::*;
 
 use self::alpaca_sync::*;
 use self::bar_sync::*;
-use self::broker_fetch::*;
-use self::fallback_bars::*;
 use self::kraken_sync::*;
 
 use self::sync_config::*;

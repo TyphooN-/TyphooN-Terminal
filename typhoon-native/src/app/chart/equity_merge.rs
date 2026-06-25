@@ -979,6 +979,7 @@ fn chart_merged_bars_to_cache_json(bars: &[Bar]) -> Option<String> {
     serde_json::to_string(&json).ok()
 }
 
+#[cfg(test)]
 pub(crate) fn chart_persist_merged_equity_bars_to_cache(
     cache: &SqliteCache,
     symbol: &str,
@@ -1009,6 +1010,7 @@ fn chart_persist_merged_equity_bars_best_effort(
     let _ = cache.put_bars_if_uncontended(&key, &json);
 }
 
+#[cfg(test)]
 pub(crate) fn chart_materialize_merged_equity_cache(
     cache: &SqliteCache,
     symbol: &str,

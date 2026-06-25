@@ -1,4 +1,5 @@
 pub mod alpaca;
+pub mod bar_fetch;
 pub mod kraken;
 pub mod protocol;
 pub mod sync_config;

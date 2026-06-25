@@ -4,10 +4,54 @@
 //! (`yahoo-chart:`). They never overwrite Kraken/Alpaca bars and
 //! are only queued by explicit Settings → Backfill providers toggles.
 
-use super::*;
+use crate::core::cache::SqliteCache;
+
+const STANDARD_SYNC_TIMEFRAMES: [(&str, &str); 9] = [
+    ("M1", "1Min"),
+    ("M5", "5Min"),
+    ("M15", "15Min"),
+    ("M30", "30Min"),
+    ("H1", "1Hour"),
+    ("H4", "4Hour"),
+    ("D1", "1Day"),
+    ("W1", "1Week"),
+    ("MN1", "1Month"),
+];
+
+fn bare_symbol_from_key(key: &str) -> String {
+    let parts: Vec<&str> = key.split(':').collect();
+    match parts.as_slice() {
+        [_src, sym, _tf] => (*sym).to_string(),
+        [sym, _tf] => (*sym).to_string(),
+        _ => key.to_string(),
+    }
+}
+
+fn normalize_market_data_symbol(symbol: &str) -> String {
+    let bare = bare_symbol_from_key(symbol).to_uppercase();
+    match bare.rsplit_once('.') {
+        Some((head, suffix))
+            if (2..=4).contains(&suffix.len())
+                && suffix.chars().all(|c| c.is_ascii_uppercase()) =>
+        {
+            head.to_string()
+        }
+        _ => bare,
+    }
+}
+
+fn normalize_sync_timeframe_key(tf: &str) -> Option<&'static str> {
+    STANDARD_SYNC_TIMEFRAMES.iter().find_map(|(short, cache)| {
+        if tf.eq_ignore_ascii_case(short) || tf.eq_ignore_ascii_case(cache) {
+            Some(*cache)
+        } else {
+            None
+        }
+    })
+}
 
 #[derive(Debug, Clone)]
-pub(super) struct FallbackBar {
+pub struct FallbackBar {
     pub ts_ms: i64,
     pub open: f64,
     pub high: f64,
@@ -49,7 +93,7 @@ fn fallback_bars_to_cache_json(bars: &[FallbackBar]) -> Result<String, String> {
     serde_json::to_string(&json_bars).map_err(|e| format!("serialize fallback bars: {e}"))
 }
 
-pub(super) fn yahoo_chart_supports_timeframe(timeframe: &str) -> bool {
+pub fn yahoo_chart_supports_timeframe(timeframe: &str) -> bool {
     matches!(
         normalize_sync_timeframe_key(timeframe),
         Some("15Min" | "30Min" | "1Hour" | "1Day" | "1Week" | "1Month")
@@ -115,7 +159,7 @@ fn yahoo_expected_granularity(timeframe: &str) -> Option<&'static str> {
     }
 }
 
-pub(super) fn yahoo_chart_provider_no_data_error(error: &str) -> bool {
+pub fn yahoo_chart_provider_no_data_error(error: &str) -> bool {
     error.contains("HTTP 400")
         || error.contains("HTTP 404")
         || error.contains("empty result")
@@ -248,7 +292,7 @@ async fn _fetch_yahoo_chart_bars_internal(
     Ok(bars)
 }
 
-pub(super) async fn fetch_yahoo_chart_bars(
+pub async fn fetch_yahoo_chart_bars(
     client: &reqwest::Client,
     symbol: &str,
     timeframe: &str,
@@ -269,7 +313,7 @@ pub(super) async fn fetch_yahoo_chart_bars(
     result
 }
 
-pub(super) fn store_fallback_bars(
+pub fn store_fallback_bars(
     cache: &SqliteCache,
     source: &str,
     symbol: &str,
@@ -289,14 +333,6 @@ pub(super) fn store_fallback_bars(
     cache
         .put_bars(&cache_key, &json)
         .map_err(|e| format!("{source} cache write failed for {symbol} {tf}: {e}"))?;
-    if valid_count > 0
-        && matches!(
-            source,
-            "kraken-equities" | "alpaca" | "yahoo-chart" | "default"
-        )
-    {
-        let _ = chart_materialize_merged_equity_cache(cache, &symbol, tf);
-    }
     Ok(valid_count)
 }
 

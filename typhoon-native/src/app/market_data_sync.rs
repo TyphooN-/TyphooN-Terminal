@@ -1,4 +1,5 @@
 use super::*;
+use typhoon_engine::core::fallback_bars::yahoo_chart_supports_timeframe;
 
 const ALPACA_BATCH_FETCH_MAX_SYMBOLS: usize = 50;
 const ALPACA_BATCH_FETCH_INTRADAY_SYMBOLS: usize = 16;

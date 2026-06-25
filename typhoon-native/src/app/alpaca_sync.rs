@@ -5,7 +5,9 @@
 //! live in [`super::sync_workset`].
 
 use super::normalize_market_data_symbol;
-use super::sync_workset::{alpaca_sync_period_secs, normalize_sync_timeframe_key};
+#[cfg(test)]
+use super::sync_workset::alpaca_sync_period_secs;
+use super::sync_workset::normalize_sync_timeframe_key;
 use std::collections::HashMap;
 
 pub(super) const ALPACA_DEFAULT_HISTORICAL_RPM: u32 =
@@ -106,7 +108,8 @@ pub(super) fn alpaca_sync_target_bars(tf: &str) -> Option<u32> {
     }
 }
 
-pub(super) fn alpaca_incremental_fetch_limit_at(
+#[cfg(test)]
+fn alpaca_incremental_fetch_limit_at(
     now_s: i64,
     timeframe: &str,
     after_timestamp: Option<&str>,

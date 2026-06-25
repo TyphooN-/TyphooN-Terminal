@@ -11,7 +11,8 @@ pub(crate) use mtf_overlays::{ChartMtfOverlays, mtf_htf_cache_put};
 // Chart view-model types + indicator palette now live in the typhoon-chart-ui crate
 // (ADR-125 Target 2, slice 5); re-exported so chart.rs + the app glob are unchanged.
 pub(crate) use typhoon_chart_ui::models::{
-    ADX_COL, CCI_COL, CHART_RIGHT_MARGIN, HMA_COL, IndicatorFlags, MFI_COL, PPO_LINE_COL, SAR_COL, STOCH_K_COL, TRIX_LINE_COL, ULTOSC_COL, WILLR_COL, WMA_COL, chart_price_pane_height,
+    ADX_COL, CCI_COL, CHART_RIGHT_MARGIN, HMA_COL, IndicatorFlags, MFI_COL, PPO_LINE_COL, SAR_COL,
+    STOCH_K_COL, TRIX_LINE_COL, ULTOSC_COL, WILLR_COL, WMA_COL, chart_price_pane_height,
 };
 // ChartCamera is constructed only by native chart tests now (ChartState owns it in-crate).
 #[cfg(test)]
@@ -63,16 +64,15 @@ pub(crate) use equity_merge::{
     CHART_SOURCE_ORDER, cache_source_label, chart_equity_low_timeframe_requires_native_source,
     chart_equity_native_source_tag, chart_equity_source_rank, chart_forming_bar_allowed,
     chart_load_merged_equity_bars_from_cache, chart_log_merged_cache_load_done,
-    chart_log_merged_cache_load_start, chart_materialize_merged_equity_cache,
-    chart_merged_equity_cache_key, chart_prefers_fresh_equity_source,
-    set_chart_merge_primary_broker,
+    chart_log_merged_cache_load_start, chart_merged_equity_cache_key,
+    chart_prefers_fresh_equity_source, set_chart_merge_primary_broker,
 };
 
 #[cfg(test)]
 pub(crate) use equity_merge::{
     ChartSplit, chart_curated_known_splits, chart_equity_source_rank_for,
-    chart_merge_equity_raw_bars, chart_merge_equity_raw_bars_with_primary,
-    chart_persist_merged_equity_bars_to_cache,
+    chart_materialize_merged_equity_cache, chart_merge_equity_raw_bars,
+    chart_merge_equity_raw_bars_with_primary, chart_persist_merged_equity_bars_to_cache,
 };
 
 // `ChartState` + its chart-local view/behavior, camera controls, and auto-fibonacci now

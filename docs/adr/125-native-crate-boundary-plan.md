@@ -909,7 +909,12 @@ fetch/Yahoo task runners. Market-data cache news-symbol extraction moved to
 tests/callers and the broker news handler calling the engine helper directly. The watchlist
 broker handler now also calls engine/chart-ui cache helpers directly (`empty_watchlist_row`,
 `watchlist_row_from_raw_bars`, `chart_source_cache_keys`) instead of reaching through native
-shims.
+shims. The final closure slice moved the fetch-task runners to
+`typhoon_engine::broker::bar_fetch` and Yahoo fallback fetch/store helpers to
+`typhoon_engine::core::fallback_bars`; native now calls those engine modules directly and the
+old native `broker_fetch.rs` / `fallback_bars.rs` files are gone. This closes the helper list
+that blocked a future standalone broker-runtime crate cut; the remaining Target 3 work is the
+mechanical crate extraction / processor prelude seam, not more native helper migration.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

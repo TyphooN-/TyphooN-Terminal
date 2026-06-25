@@ -2,6 +2,7 @@ use super::market_data_sync::{
     kraken_equity_native_symbols_for_timeframe, kraken_equity_symbols_for_timeframe,
 };
 use super::*;
+use typhoon_engine::core::fallback_bars::yahoo_chart_supports_timeframe;
 
 const BAR_SYNC_STATS_VISIBLE_REFRESH: std::time::Duration = std::time::Duration::from_secs(1);
 const BAR_SYNC_STATS_HIDDEN_REFRESH: std::time::Duration = std::time::Duration::from_secs(15);
@@ -95,8 +96,16 @@ impl TyphooNApp {
             backfill_alpaca_kraken_equities_enabled: self.backfill_alpaca_kraken_equities_enabled,
             backfill_yahoo_chart_enabled: self.backfill_yahoo_chart_enabled,
             kraken_ws_fresh_until: self.kraken_ws_fresh_until.clone(),
-            alpaca_backfill_keys: self.alpaca_backfill_complete_pairs.keys().cloned().collect(),
-            kraken_backfill_keys: self.kraken_backfill_complete_pairs.keys().cloned().collect(),
+            alpaca_backfill_keys: self
+                .alpaca_backfill_complete_pairs
+                .keys()
+                .cloned()
+                .collect(),
+            kraken_backfill_keys: self
+                .kraken_backfill_complete_pairs
+                .keys()
+                .cloned()
+                .collect(),
             kraken_futures_backfill_keys: self
                 .kraken_futures_backfill_complete_pairs
                 .keys()
@@ -605,9 +614,7 @@ impl BarSyncInputs {
 
     fn add_expected_kraken_sync_rows(&self, rows: &mut Vec<SyncStatsRow>) {
         let timeframes = self.timeframes.clone();
-        if timeframes.is_empty()
-            || (!self.cache_stats_present && self.detailed_stats.is_empty())
-        {
+        if timeframes.is_empty() || (!self.cache_stats_present && self.detailed_stats.is_empty()) {
             return;
         }
         let existing: std::collections::HashSet<String> = self

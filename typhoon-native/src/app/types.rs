@@ -10,13 +10,6 @@ use super::*;
 // `super::*` glob) resolve unchanged.
 pub(crate) use typhoon_chart_ui::types::{Bar, ChartType, Timeframe};
 
-pub(crate) fn alpaca_incremental_fetch_limit(
-    timeframe: &str,
-    after_timestamp: Option<&str>,
-) -> u32 {
-    alpaca_incremental_fetch_limit_at(chrono::Utc::now().timestamp(), timeframe, after_timestamp)
-}
-
 /// Log severity level.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum LogLevel {

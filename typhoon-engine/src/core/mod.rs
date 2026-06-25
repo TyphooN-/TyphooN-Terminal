@@ -4,6 +4,7 @@ pub mod backtest;
 pub mod cache;
 pub mod data_source;
 pub mod econ_calendar;
+pub mod fallback_bars;
 pub mod fred;
 pub mod fundamentals;
 pub mod keyring;

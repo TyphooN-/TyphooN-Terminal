@@ -1,20 +1,130 @@
-use super::*;
+use std::sync::Arc;
 
-fn alpaca_batch_missing_symbol_retry_reason(
-    outcome: typhoon_engine::broker::alpaca::FetchOutcome,
-) -> Option<&'static str> {
-    match outcome {
-        typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedPartial => {
-            Some("batch_rate_limited_partial")
-        }
-        typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedEmpty => {
-            Some("batch_rate_limited_empty")
-        }
-        typhoon_engine::broker::alpaca::FetchOutcome::Complete => None,
+use crate::broker::alpaca::AlpacaBroker;
+use crate::broker::protocol::BrokerMsg;
+use crate::core::cache::SqliteCache;
+
+const KRAKEN_SPOT_PROVIDER_WINDOW_BARS: u32 = 720;
+const STANDARD_SYNC_TIMEFRAMES: [(&str, &str); 9] = [
+    ("M1", "1Min"),
+    ("M5", "5Min"),
+    ("M15", "15Min"),
+    ("M30", "30Min"),
+    ("H1", "1Hour"),
+    ("H4", "4Hour"),
+    ("D1", "1Day"),
+    ("W1", "1Week"),
+    ("MN1", "1Month"),
+];
+
+fn bare_symbol_from_key(key: &str) -> String {
+    let parts: Vec<&str> = key.split(':').collect();
+    match parts.as_slice() {
+        [_src, sym, _tf] => (*sym).to_string(),
+        [sym, _tf] => (*sym).to_string(),
+        _ => key.to_string(),
     }
 }
 
-pub(super) async fn run_alpaca_batch_fetch_task(
+fn normalize_market_data_symbol(symbol: &str) -> String {
+    let bare = bare_symbol_from_key(symbol).to_uppercase();
+    match bare.rsplit_once('.') {
+        Some((head, suffix))
+            if (2..=4).contains(&suffix.len())
+                && suffix.chars().all(|c| c.is_ascii_uppercase()) =>
+        {
+            head.to_string()
+        }
+        _ => bare,
+    }
+}
+
+fn normalize_sync_timeframe_key(tf: &str) -> Option<&'static str> {
+    STANDARD_SYNC_TIMEFRAMES.iter().find_map(|(short, cache)| {
+        if tf.eq_ignore_ascii_case(short) || tf.eq_ignore_ascii_case(cache) {
+            Some(*cache)
+        } else {
+            None
+        }
+    })
+}
+
+fn sync_timeframe_period_secs(tf: &str) -> Option<i64> {
+    match normalize_sync_timeframe_key(tf)? {
+        "1Min" => Some(60),
+        "5Min" => Some(5 * 60),
+        "15Min" => Some(15 * 60),
+        "30Min" => Some(30 * 60),
+        "1Hour" => Some(60 * 60),
+        "4Hour" => Some(4 * 60 * 60),
+        "1Day" => Some(24 * 60 * 60),
+        "1Week" => Some(7 * 24 * 60 * 60),
+        "1Month" => Some(30 * 24 * 60 * 60),
+        _ => None,
+    }
+}
+
+fn alpaca_sync_target_bars(tf: &str) -> Option<u32> {
+    match normalize_sync_timeframe_key(tf)? {
+        "1Min" | "5Min" => None,
+        _ => Some(u32::MAX),
+    }
+}
+
+fn alpaca_incremental_fetch_limit_at(
+    now_s: i64,
+    timeframe: &str,
+    after_timestamp: Option<&str>,
+) -> u32 {
+    let Some(after_ts) = after_timestamp else {
+        return 1000;
+    };
+    let Some(period_s) = sync_timeframe_period_secs(timeframe) else {
+        return 1000;
+    };
+    let parsed = match chrono::DateTime::parse_from_rfc3339(after_ts) {
+        Ok(dt) => dt.with_timezone(&chrono::Utc),
+        Err(_) => return 1000,
+    };
+    let age_s = now_s.saturating_sub(parsed.timestamp()).max(0);
+    let gap_bars = ((age_s + period_s - 1) / period_s).max(1) as u32;
+    let headroom = (gap_bars / 2).max(8);
+    gap_bars.saturating_add(headroom).clamp(32, 1000)
+}
+
+fn alpaca_incremental_fetch_limit(timeframe: &str, after_timestamp: Option<&str>) -> u32 {
+    alpaca_incremental_fetch_limit_at(chrono::Utc::now().timestamp(), timeframe, after_timestamp)
+}
+
+fn kraken_spot_native_timeframe(tf: &str) -> bool {
+    matches!(
+        tf,
+        "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week"
+    )
+}
+
+fn kraken_sync_target_bars(tf: &str) -> Option<u32> {
+    let tf = normalize_sync_timeframe_key(tf)?;
+    kraken_spot_native_timeframe(tf).then_some(KRAKEN_SPOT_PROVIDER_WINDOW_BARS)
+}
+
+fn kraken_futures_sync_target_bars(tf: &str) -> Option<u32> {
+    normalize_sync_timeframe_key(tf).map(|_| u32::MAX)
+}
+
+fn alpaca_batch_missing_symbol_retry_reason(
+    outcome: crate::broker::alpaca::FetchOutcome,
+) -> Option<&'static str> {
+    match outcome {
+        crate::broker::alpaca::FetchOutcome::RateLimitedPartial => {
+            Some("batch_rate_limited_partial")
+        }
+        crate::broker::alpaca::FetchOutcome::RateLimitedEmpty => Some("batch_rate_limited_empty"),
+        crate::broker::alpaca::FetchOutcome::Complete => None,
+    }
+}
+
+pub async fn run_alpaca_batch_fetch_task(
     broker: AlpacaBroker,
     shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
     broker_msg_tx: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
@@ -55,7 +165,7 @@ pub(super) async fn run_alpaca_batch_fetch_task(
         Ok((mut bars_by_symbol, outcome)) => {
             if matches!(
                 outcome,
-                typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedEmpty
+                crate::broker::alpaca::FetchOutcome::RateLimitedEmpty
             ) {
                 for symbol in symbols {
                     let _ = broker_msg_tx.send(BrokerMsg::AlpacaRetryEnqueue {
@@ -107,10 +217,7 @@ pub(super) async fn run_alpaca_batch_fetch_task(
                 .await
                 {
                     Ok(count) if count > 0 => {
-                        if matches!(
-                            outcome,
-                            typhoon_engine::broker::alpaca::FetchOutcome::Complete
-                        ) {
+                        if matches!(outcome, crate::broker::alpaca::FetchOutcome::Complete) {
                             let _ = broker_msg_tx.send(BrokerMsg::AlpacaBackfillComplete {
                                 symbol: symbol.clone(),
                                 timeframe: timeframe.clone(),
@@ -135,7 +242,7 @@ pub(super) async fn run_alpaca_batch_fetch_task(
                 }
                 if matches!(
                     outcome,
-                    typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedPartial
+                    crate::broker::alpaca::FetchOutcome::RateLimitedPartial
                 ) {
                     let _ = broker_msg_tx.send(BrokerMsg::AlpacaRetryEnqueue {
                         symbol: symbol.clone(),
@@ -146,10 +253,7 @@ pub(super) async fn run_alpaca_batch_fetch_task(
                 let _ = broker_msg_tx.send(BrokerMsg::AlpacaFetchSettled {
                     symbol: symbol.clone(),
                     timeframe: timeframe.clone(),
-                    success: matches!(
-                        outcome,
-                        typhoon_engine::broker::alpaca::FetchOutcome::Complete
-                    ),
+                    success: matches!(outcome, crate::broker::alpaca::FetchOutcome::Complete),
                 });
             }
         }
@@ -178,7 +282,7 @@ pub(super) async fn run_alpaca_batch_fetch_task(
     }
 }
 
-pub(super) async fn run_alpaca_fetch_task(
+pub async fn run_alpaca_fetch_task(
     broker: AlpacaBroker,
     shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
     broker_msg_tx: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
@@ -279,16 +383,10 @@ pub(super) async fn run_alpaca_fetch_task(
 
         match result {
             Ok((new_bars, outcome)) => {
-                success = matches!(
-                    outcome,
-                    typhoon_engine::broker::alpaca::FetchOutcome::Complete
-                );
+                success = matches!(outcome, crate::broker::alpaca::FetchOutcome::Complete);
                 if new_bars.is_empty()
                     && after_ts.is_some()
-                    && matches!(
-                        outcome,
-                        typhoon_engine::broker::alpaca::FetchOutcome::Complete
-                    )
+                    && matches!(outcome, crate::broker::alpaca::FetchOutcome::Complete)
                 {
                     let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
                         "{} {} already up to date",
@@ -309,10 +407,7 @@ pub(super) async fn run_alpaca_fetch_task(
                     {
                         Ok(count) if count > 0 => {
                             if after_ts.is_none()
-                                && matches!(
-                                    outcome,
-                                    typhoon_engine::broker::alpaca::FetchOutcome::Complete
-                                )
+                                && matches!(outcome, crate::broker::alpaca::FetchOutcome::Complete)
                             {
                                 let _ = broker_msg_tx.send(BrokerMsg::AlpacaBackfillComplete {
                                     symbol: symbol.clone(),
@@ -344,21 +439,21 @@ pub(super) async fn run_alpaca_fetch_task(
                 }
 
                 match outcome {
-                    typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedPartial => {
+                    crate::broker::alpaca::FetchOutcome::RateLimitedPartial => {
                         let _ = broker_msg_tx.send(BrokerMsg::AlpacaRetryEnqueue {
                             symbol: symbol.clone(),
                             timeframe: timeframe.clone(),
                             reason: "rate_limited_partial".into(),
                         });
                     }
-                    typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedEmpty => {
+                    crate::broker::alpaca::FetchOutcome::RateLimitedEmpty => {
                         let _ = broker_msg_tx.send(BrokerMsg::AlpacaRetryEnqueue {
                             symbol: symbol.clone(),
                             timeframe: timeframe.clone(),
                             reason: "rate_limited_empty".into(),
                         });
                     }
-                    typhoon_engine::broker::alpaca::FetchOutcome::Complete => {}
+                    crate::broker::alpaca::FetchOutcome::Complete => {}
                 }
             }
             Err(e) => {
@@ -469,7 +564,7 @@ async fn store_json_bars_in_cache(
     .map_err(|e| format!("cache write task failed: {e}"))?
 }
 
-pub(super) async fn run_kraken_fetch_task(
+pub async fn run_kraken_fetch_task(
     shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
     broker_msg_tx: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
     client: reqwest::Client,
@@ -477,7 +572,7 @@ pub(super) async fn run_kraken_fetch_task(
     timeframe: String,
     backfill_already_complete: bool,
 ) {
-    let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(&symbol);
+    let symbol = crate::core::kraken::normalize_pair_symbol(&symbol);
     let timeframe = normalize_sync_timeframe_key(&timeframe)
         .unwrap_or(timeframe.as_str())
         .to_string();
@@ -532,10 +627,8 @@ pub(super) async fn run_kraken_fetch_task(
         format!("Kraken {} {}: fetching recent window...", symbol, timeframe)
     };
     let _ = broker_msg_tx.send(BrokerMsg::OrderResult(log_msg));
-    match typhoon_engine::core::kraken::fetch_binance_klines(
-        &client, &symbol, &timeframe, start_ms, now_ms,
-    )
-    .await
+    match crate::core::kraken::fetch_binance_klines(&client, &symbol, &timeframe, start_ms, now_ms)
+        .await
     {
         Ok(new_bars) => {
             if new_bars.is_empty() && after_ts.is_some() {
@@ -610,7 +703,7 @@ pub(super) async fn run_kraken_fetch_task(
     let _ = broker_msg_tx.send(BrokerMsg::KrakenFetchSettled { symbol, timeframe });
 }
 
-pub(super) async fn run_kraken_futures_fetch_task(
+pub async fn run_kraken_futures_fetch_task(
     shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
     broker_msg_tx: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
     client: reqwest::Client,
@@ -618,7 +711,7 @@ pub(super) async fn run_kraken_futures_fetch_task(
     timeframe: String,
     backfill_already_complete: bool,
 ) {
-    let symbol = typhoon_engine::core::kraken_futures::normalize_futures_symbol(&symbol);
+    let symbol = crate::core::kraken_futures::normalize_futures_symbol(&symbol);
     let timeframe = normalize_sync_timeframe_key(&timeframe)
         .unwrap_or(timeframe.as_str())
         .to_string();
@@ -672,10 +765,8 @@ pub(super) async fn run_kraken_futures_fetch_task(
         )
     };
     let _ = broker_msg_tx.send(BrokerMsg::OrderResult(log_msg));
-    match typhoon_engine::core::kraken_futures::fetch_candles(
-        &client, &symbol, &timeframe, start_ms, now_ms,
-    )
-    .await
+    match crate::core::kraken_futures::fetch_candles(&client, &symbol, &timeframe, start_ms, now_ms)
+        .await
     {
         Ok(new_bars) => {
             if new_bars.is_empty() && after_ts.is_some() {
@@ -765,20 +856,18 @@ mod tests {
     #[test]
     fn successful_batch_omissions_do_not_spawn_targeted_retry_storms() {
         assert_eq!(
-            alpaca_batch_missing_symbol_retry_reason(
-                typhoon_engine::broker::alpaca::FetchOutcome::Complete
-            ),
+            alpaca_batch_missing_symbol_retry_reason(crate::broker::alpaca::FetchOutcome::Complete),
             None
         );
         assert_eq!(
             alpaca_batch_missing_symbol_retry_reason(
-                typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedPartial
+                crate::broker::alpaca::FetchOutcome::RateLimitedPartial
             ),
             Some("batch_rate_limited_partial")
         );
         assert_eq!(
             alpaca_batch_missing_symbol_retry_reason(
-                typhoon_engine::broker::alpaca::FetchOutcome::RateLimitedEmpty
+                crate::broker::alpaca::FetchOutcome::RateLimitedEmpty
             ),
             Some("batch_rate_limited_empty")
         );
