@@ -1025,6 +1025,9 @@ The next seam cut relocated the lower Kraken WS OHLC pipeline into
 `typhoon_broker_runtime::kraken_ohlc_pipeline`; native keeps only the `TyphooNApp` scheduling
 wrappers, xStock sweep selection, and log/state mutation, while streamer spawn, channel
 backpressure, cache flush grouping, and WS-fresh commit reporting now live in the runtime crate.
+With that seam in place, the final direct broker-processor child `kraken_ws_commands` moved into
+`typhoon_broker_runtime`; the native broker processor no longer owns local child modules and the
+temporary native `app_broker_processor/prelude.rs` seam was removed.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

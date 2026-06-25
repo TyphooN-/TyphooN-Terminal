@@ -8,8 +8,9 @@ use typhoon_broker_runtime::external_feeds;
 use typhoon_broker_runtime::fundamentals_commands;
 use typhoon_broker_runtime::kraken_market_commands;
 use typhoon_broker_runtime::kraken_order_ops;
-use typhoon_broker_runtime::matrix_commands;
+use typhoon_broker_runtime::kraken_ws_commands;
 use typhoon_broker_runtime::market_data_commands;
+use typhoon_broker_runtime::matrix_commands;
 use typhoon_broker_runtime::misc_commands;
 use typhoon_broker_runtime::news;
 use typhoon_broker_runtime::research_compute;
@@ -18,9 +19,6 @@ use typhoon_broker_runtime::resources::BrokerRuntimeResources;
 use typhoon_broker_runtime::storage;
 use typhoon_broker_runtime::symbol_search;
 use typhoon_broker_runtime::watchlist_quotes;
-
-mod prelude;
-mod kraken_ws_commands;
 
 pub(super) fn spawn_broker_message_processor(
     broker_cmd_rx: tokio::sync::mpsc::UnboundedReceiver<BrokerCmd>,
@@ -55,10 +53,7 @@ pub(super) fn spawn_broker_message_processor(
         let fallback_bar_client = runtime_resources.fallback_bar_client;
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
-                cmd @ (
-                    BrokerCmd::Connect { .. }
-                    | BrokerCmd::ConfigureAlpacaSync { .. }
-                ) => {
+                cmd @ (BrokerCmd::Connect { .. } | BrokerCmd::ConfigureAlpacaSync { .. }) => {
                     connection_commands::handle_connection_command(
                         cmd,
                         &mut broker,
@@ -70,12 +65,8 @@ pub(super) fn spawn_broker_message_processor(
                     .await;
                 }
                 cmd @ BrokerCmd::MarkUnresolvable { .. } => {
-                    misc_commands::handle_misc_command(
-                        cmd,
-                        broker.as_ref(),
-                        &broker_msg_tx_clone,
-                    )
-                    .await;
+                    misc_commands::handle_misc_command(cmd, broker.as_ref(), &broker_msg_tx_clone)
+                        .await;
                 }
                 cmd @ (BrokerCmd::GetAccount
                 | BrokerCmd::GetPositions
@@ -104,12 +95,8 @@ pub(super) fn spawn_broker_message_processor(
                     );
                 }
                 cmd @ BrokerCmd::GetQuote { .. } => {
-                    misc_commands::handle_misc_command(
-                        cmd,
-                        broker.as_ref(),
-                        &broker_msg_tx_clone,
-                    )
-                    .await;
+                    misc_commands::handle_misc_command(cmd, broker.as_ref(), &broker_msg_tx_clone)
+                        .await;
                 }
                 BrokerCmd::GetWatchlistQuotes { symbols } => {
                     watchlist_quotes::spawn_watchlist_quotes_task(
@@ -120,12 +107,8 @@ pub(super) fn spawn_broker_message_processor(
                     );
                 }
                 cmd @ BrokerCmd::GetMarketClock => {
-                    misc_commands::handle_misc_command(
-                        cmd,
-                        broker.as_ref(),
-                        &broker_msg_tx_clone,
-                    )
-                    .await;
+                    misc_commands::handle_misc_command(cmd, broker.as_ref(), &broker_msg_tx_clone)
+                        .await;
                 }
                 cmd @ (BrokerCmd::GetActivities { .. }
                 | BrokerCmd::GetTopMovers
@@ -211,468 +194,459 @@ pub(super) fn spawn_broker_message_processor(
                     external_feeds::handle_external_feed_command(cmd, broker_msg_tx_clone.clone())
                         .await;
                 }
-                cmd @ (
-                    BrokerCmd::FetchCompanyProfile { .. }
-                    | BrokerCmd::FetchStockPeers { .. }
-                    | BrokerCmd::FetchEarningsHistory { .. }
-                    | BrokerCmd::FetchIpoCalendar { .. }
-                    | BrokerCmd::FetchPressReleases { .. }
-                    | BrokerCmd::FetchSocialSentiment { .. }
-                    | BrokerCmd::FetchTranscriptList { .. }
-                    | BrokerCmd::FetchTranscriptBody { .. }
-                    | BrokerCmd::FetchCommoditiesQuotes
-                    | BrokerCmd::FetchDividendHistory { .. }
-                    | BrokerCmd::FetchEarningsEstimates { .. }
-                    | BrokerCmd::FetchRatingChanges { .. }
-                    | BrokerCmd::FetchTreasuryYields
-                    | BrokerCmd::FetchFinancialStatements { .. }
-                    | BrokerCmd::FetchExecutives { .. }
-                    | BrokerCmd::FetchCotReports
-                    | BrokerCmd::FetchStockSplits { .. }
-                    | BrokerCmd::FetchEtfHoldings { .. }
-                    | BrokerCmd::FetchAnalystRecs { .. }
-                    | BrokerCmd::FetchPriceTarget { .. }
-                    | BrokerCmd::FetchEsgScores { .. }
-                    | BrokerCmd::FetchIndexMembers { .. }
-                    | BrokerCmd::FetchInsiderTrades { .. }
-                    | BrokerCmd::FetchInstitutionalHolders { .. }
-                    | BrokerCmd::FetchSharesFloat { .. }
-                    | BrokerCmd::FetchHistoricalPrice { .. }
-                    | BrokerCmd::FetchEarningsSurprises { .. }
-                    | BrokerCmd::FetchWorldIndices
-                    | BrokerCmd::FetchMarketMovers { .. }
-                    | BrokerCmd::FetchSectorPerformance { .. }
-                    | BrokerCmd::FetchWaccSnapshot { .. }
-                    | BrokerCmd::FetchCurrencyRates
-                    | BrokerCmd::FetchBetaSnapshot { .. }
-                ) => {
-                    research_fetch::handle_research_fetch_command(
-                        cmd,
-                        broker_msg_tx_clone.clone(),
-                    );
+                cmd @ (BrokerCmd::FetchCompanyProfile { .. }
+                | BrokerCmd::FetchStockPeers { .. }
+                | BrokerCmd::FetchEarningsHistory { .. }
+                | BrokerCmd::FetchIpoCalendar { .. }
+                | BrokerCmd::FetchPressReleases { .. }
+                | BrokerCmd::FetchSocialSentiment { .. }
+                | BrokerCmd::FetchTranscriptList { .. }
+                | BrokerCmd::FetchTranscriptBody { .. }
+                | BrokerCmd::FetchCommoditiesQuotes
+                | BrokerCmd::FetchDividendHistory { .. }
+                | BrokerCmd::FetchEarningsEstimates { .. }
+                | BrokerCmd::FetchRatingChanges { .. }
+                | BrokerCmd::FetchTreasuryYields
+                | BrokerCmd::FetchFinancialStatements { .. }
+                | BrokerCmd::FetchExecutives { .. }
+                | BrokerCmd::FetchCotReports
+                | BrokerCmd::FetchStockSplits { .. }
+                | BrokerCmd::FetchEtfHoldings { .. }
+                | BrokerCmd::FetchAnalystRecs { .. }
+                | BrokerCmd::FetchPriceTarget { .. }
+                | BrokerCmd::FetchEsgScores { .. }
+                | BrokerCmd::FetchIndexMembers { .. }
+                | BrokerCmd::FetchInsiderTrades { .. }
+                | BrokerCmd::FetchInstitutionalHolders { .. }
+                | BrokerCmd::FetchSharesFloat { .. }
+                | BrokerCmd::FetchHistoricalPrice { .. }
+                | BrokerCmd::FetchEarningsSurprises { .. }
+                | BrokerCmd::FetchWorldIndices
+                | BrokerCmd::FetchMarketMovers { .. }
+                | BrokerCmd::FetchSectorPerformance { .. }
+                | BrokerCmd::FetchWaccSnapshot { .. }
+                | BrokerCmd::FetchCurrencyRates
+                | BrokerCmd::FetchBetaSnapshot { .. }) => {
+                    research_fetch::handle_research_fetch_command(cmd, broker_msg_tx_clone.clone());
                 }
-                cmd @ (
-                    BrokerCmd::ComputeDdmSnapshot { .. }
-                    | BrokerCmd::ComputeRelativeValuation { .. }
-                    | BrokerCmd::FetchFigiIdentifiers { .. }
-                    | BrokerCmd::FetchHraSnapshot { .. }
-                    | BrokerCmd::ComputeDcfSnapshot { .. }
-                    | BrokerCmd::ComputeSvmSnapshot { .. }
-                    | BrokerCmd::FetchOptionsChain { .. }
-                    | BrokerCmd::ComputeIvolSnapshot { .. }
-                    | BrokerCmd::ComputeSeasonalitySnapshot { .. }
-                    | BrokerCmd::ComputeCorrelationMatrix { .. }
-                    | BrokerCmd::ComputeTotalReturnSnapshot { .. }
-                    | BrokerCmd::ComputeTechnicalsSnapshot { .. }
-                    | BrokerCmd::ComputeVolSkewSnapshot { .. }
-                    | BrokerCmd::ComputeLeverageSnapshot { .. }
-                    | BrokerCmd::ComputeAccrualsSnapshot { .. }
-                    | BrokerCmd::ComputeRealizedVolSnapshot { .. }
-                    | BrokerCmd::ComputeFcfYieldSnapshot { .. }
-                    | BrokerCmd::ComputeShortInterestSnapshot { .. }
-                    | BrokerCmd::ComputeAltmanZSnapshot { .. }
-                    | BrokerCmd::ComputePiotroskiSnapshot { .. }
-                    | BrokerCmd::ComputeOhlcVolSnapshot { .. }
-                    | BrokerCmd::ComputeEpsBeatSnapshot { .. }
-                    | BrokerCmd::ComputePriceTargetDispersionSnapshot { .. }
-                    | BrokerCmd::ComputeInsiderActivitySnapshot { .. }
-                    | BrokerCmd::ComputeDivgSnapshot { .. }
-                    | BrokerCmd::ComputeEarmSnapshot { .. }
-                    | BrokerCmd::ComputeSectorRotationSnapshot { .. }
-                    | BrokerCmd::ComputeUpdmSnapshot { .. }
-                    | BrokerCmd::ComputeMomentumSnapshot { .. }
-                    | BrokerCmd::ComputeLiquiditySnapshot { .. }
-                    | BrokerCmd::ComputeBreakoutSnapshot { .. }
-                    | BrokerCmd::ComputeCashCycleSnapshot { .. }
-                    | BrokerCmd::ComputeCreditSnapshot { .. }
-                    | BrokerCmd::ComputeGrowmSnapshot { .. }
-                    | BrokerCmd::ComputeFlowSnapshot { .. }
-                    | BrokerCmd::ComputeRegimeSnapshot { .. }
-                    | BrokerCmd::ComputeRelvolSnapshot { .. }
-                    | BrokerCmd::ComputeMarginsSnapshot { .. }
-                    | BrokerCmd::ComputeValSnapshot { .. }
-                    | BrokerCmd::ComputeQualSnapshot { .. }
-                    | BrokerCmd::ComputeRiskSnapshot { .. }
-                    | BrokerCmd::ComputeInsstrkSnapshot { .. }
-                    | BrokerCmd::ComputeCovgSnapshot { .. }
-                    | BrokerCmd::ComputeVrkSnapshot { .. }
-                    | BrokerCmd::ComputeQrkSnapshot { .. }
-                    | BrokerCmd::ComputeRrkSnapshot { .. }
-                    | BrokerCmd::ComputeRelepsgrSnapshot { .. }
-                    | BrokerCmd::ComputePeadSnapshot { .. }
-                    | BrokerCmd::ComputeSizefSnapshot { .. }
-                    | BrokerCmd::ComputeMomfSnapshot { .. }
-                    | BrokerCmd::ComputePeadrankSnapshot { .. }
-                    | BrokerCmd::ComputeFqmSnapshot { .. }
-                    | BrokerCmd::ComputeRevrankSnapshot { .. }
-                    | BrokerCmd::ComputeLevrankSnapshot { .. }
-                    | BrokerCmd::ComputeOperankSnapshot { .. }
-                    | BrokerCmd::ComputeFqmrankSnapshot { .. }
-                    | BrokerCmd::ComputeLiqrankSnapshot { .. }
-                    | BrokerCmd::ComputeSurpstkSnapshot { .. }
-                    | BrokerCmd::ComputeDvdrankSnapshot { .. }
-                    | BrokerCmd::ComputeEarmrankSnapshot { .. }
-                    | BrokerCmd::ComputeUpdgrankSnapshot { .. }
-                    | BrokerCmd::ComputeGySnapshot { .. }
-                    | BrokerCmd::ComputeDesSnapshot { .. }
-                    | BrokerCmd::ComputeDvdyieldrankSnapshot { .. }
-                    | BrokerCmd::ComputeShrankSnapshot { .. }
-                    | BrokerCmd::ComputeShortrankDeltaSnapshot { .. }
-                    | BrokerCmd::ComputeInsiderconcSnapshot { .. }
-                    | BrokerCmd::ComputeAtrannSnapshot { .. }
-                    | BrokerCmd::ComputeDdhistSnapshot { .. }
-                    | BrokerCmd::ComputePriceperfSnapshot { .. }
-                    | BrokerCmd::ComputeMomrankMultiSnapshot { .. }
-                    | BrokerCmd::ComputeBetarankSnapshot { .. }
-                    | BrokerCmd::ComputePegrankSnapshot { .. }
-                    | BrokerCmd::ComputeFhighlowSnapshot { .. }
-                    | BrokerCmd::ComputeRvconeSnapshot { .. }
-                    | BrokerCmd::ComputeCalpbSnapshot { .. }
-                    | BrokerCmd::ComputeCorrstkSnapshot { .. }
-                    | BrokerCmd::ComputeTlrankSnapshot { .. }
-                    | BrokerCmd::ComputeCorrrankSnapshot { .. }
-                    | BrokerCmd::ComputeOperankDeltaSnapshot { .. }
-                    | BrokerCmd::ComputeDivaccSnapshot { .. }
-                    | BrokerCmd::ComputeEpsaccSnapshot { .. }
-                    | BrokerCmd::ComputeVrpSnapshot { .. }
-                    | BrokerCmd::ComputeRetskewSnapshot { .. }
-                    | BrokerCmd::ComputeRetkurtSnapshot { .. }
-                    | BrokerCmd::ComputeTailrSnapshot { .. }
-                    | BrokerCmd::ComputeRunlenSnapshot { .. }
-                    | BrokerCmd::ComputeDayrangeSnapshot { .. }
-                    | BrokerCmd::ComputeAutocorSnapshot { .. }
-                    | BrokerCmd::ComputeHurstSnapshot { .. }
-                    | BrokerCmd::ComputeHitrateSnapshot { .. }
-                    | BrokerCmd::ComputeGlasymSnapshot { .. }
-                    | BrokerCmd::ComputeVolratioSnapshot { .. }
-                    | BrokerCmd::ComputeDrawupSnapshot { .. }
-                    | BrokerCmd::ComputeGapstatsSnapshot { .. }
-                    | BrokerCmd::ComputeVolclusterSnapshot { .. }
-                    | BrokerCmd::ComputeCloseplcSnapshot { .. }
-                    | BrokerCmd::ComputeMrhlSnapshot { .. }
-                    | BrokerCmd::ComputeDownvolSnapshot { .. }
-                    | BrokerCmd::ComputeSharprSnapshot { .. }
-                    | BrokerCmd::ComputeEffratioSnapshot { .. }
-                    | BrokerCmd::ComputeWickbiasSnapshot { .. }
-                    | BrokerCmd::ComputeVolofvolSnapshot { .. }
-                    | BrokerCmd::ComputeCalmarSnapshot { .. }
-                    | BrokerCmd::ComputeUlcerSnapshot { .. }
-                    | BrokerCmd::ComputeVarratioSnapshot { .. }
-                    | BrokerCmd::ComputeAmihudSnapshot { .. }
-                    | BrokerCmd::ComputeJbnormSnapshot { .. }
-                    | BrokerCmd::ComputeOmegaSnapshot { .. }
-                    | BrokerCmd::ComputeDfaSnapshot { .. }
-                    | BrokerCmd::ComputeBurkeSnapshot { .. }
-                    | BrokerCmd::ComputeMonthseasSnapshot { .. }
-                    | BrokerCmd::ComputeRollsprdSnapshot { .. }
-                    | BrokerCmd::ComputeParkinsonSnapshot { .. }
-                    | BrokerCmd::ComputeGkvolSnapshot { .. }
-                    | BrokerCmd::ComputeRsvolSnapshot { .. }
-                    | BrokerCmd::ComputeCvarSnapshot { .. }
-                    | BrokerCmd::ComputeDoweffectSnapshot { .. }
-                    | BrokerCmd::ComputeSterlingSnapshot { .. }
-                    | BrokerCmd::ComputeKellyfSnapshot { .. }
-                    | BrokerCmd::ComputeLjungbSnapshot { .. }
-                    | BrokerCmd::ComputeRunstestSnapshot { .. }
-                    | BrokerCmd::ComputeZeroretSnapshot { .. }
-                    | BrokerCmd::ComputePsrSnapshot { .. }
-                    | BrokerCmd::ComputeAdfSnapshot { .. }
-                    | BrokerCmd::ComputeMnkendallSnapshot { .. }
-                    | BrokerCmd::ComputeBipowerSnapshot { .. }
-                    | BrokerCmd::ComputeDddurSnapshot { .. }
-                    | BrokerCmd::ComputeHilltailSnapshot { .. }
-                    | BrokerCmd::ComputeArchlmSnapshot { .. }
-                    | BrokerCmd::ComputePainratioSnapshot { .. }
-                    | BrokerCmd::ComputeCusumSnapshot { .. }
-                    | BrokerCmd::ComputeCfvarSnapshot { .. }
-                    | BrokerCmd::ComputeEntropySnapshot { .. }
-                    | BrokerCmd::ComputeRachevSnapshot { .. }
-                    | BrokerCmd::ComputeGprSnapshot { .. }
-                    | BrokerCmd::ComputePacfSnapshot { .. }
-                    | BrokerCmd::ComputeApenSnapshot { .. }
-                    | BrokerCmd::ComputeUprSnapshot { .. }
-                    | BrokerCmd::ComputeLevereffSnapshot { .. }
-                    | BrokerCmd::ComputeDrawdarSnapshot { .. }
-                    | BrokerCmd::ComputeVarhalfSnapshot { .. }
-                    | BrokerCmd::ComputeGiniSnapshot { .. }
-                    | BrokerCmd::ComputeSampenSnapshot { .. }
-                    | BrokerCmd::ComputePermenSnapshot { .. }
-                    | BrokerCmd::ComputeRecfactSnapshot { .. }
-                    | BrokerCmd::ComputeKpssSnapshot { .. }
-                    | BrokerCmd::ComputeSpecentSnapshot { .. }
-                    | BrokerCmd::ComputeRobvolSnapshot { .. }
-                    | BrokerCmd::ComputeRenyientSnapshot { .. }
-                    | BrokerCmd::ComputeRetquantSnapshot { .. }
-                    | BrokerCmd::ComputeMsentSnapshot { .. }
-                    | BrokerCmd::ComputeEwmavolSnapshot { .. }
-                    | BrokerCmd::ComputeKsnormSnapshot { .. }
-                    | BrokerCmd::ComputeAdtestSnapshot { .. }
-                    | BrokerCmd::ComputeLmomSnapshot { .. }
-                    | BrokerCmd::ComputeKylelamSnapshot { .. }
-                    | BrokerCmd::ComputePeakoverSnapshot { .. }
-                    | BrokerCmd::ComputeHiguchiSnapshot { .. }
-                    | BrokerCmd::ComputePickandsSnapshot { .. }
-                    | BrokerCmd::ComputeKappa3Snapshot { .. }
-                    | BrokerCmd::ComputeLyapunovSnapshot { .. }
-                    | BrokerCmd::ComputeRankacSnapshot { .. }
-                    | BrokerCmd::ComputeBnsjumpSnapshot { .. }
-                    | BrokerCmd::ComputePprootSnapshot { .. }
-                    | BrokerCmd::ComputeMfdfaSnapshot { .. }
-                    | BrokerCmd::ComputeHillksSnapshot { .. }
-                    | BrokerCmd::ComputeTsiSnapshot { .. }
-                    | BrokerCmd::ComputeGarch11Snapshot { .. }
-                    | BrokerCmd::ComputeSadfSnapshot { .. }
-                    | BrokerCmd::ComputeCordimSnapshot { .. }
-                    | BrokerCmd::ComputeSkspecSnapshot { .. }
-                    | BrokerCmd::ComputeAutomiSnapshot { .. }
-                    | BrokerCmd::ComputeDurbinWatsonSnapshot { .. }
-                    | BrokerCmd::ComputeBdsTestSnapshot { .. }
-                    | BrokerCmd::ComputeBreuschPaganSnapshot { .. }
-                    | BrokerCmd::ComputeTurnPtsSnapshot { .. }
-                    | BrokerCmd::ComputePeriodogramSnapshot { .. }
-                    | BrokerCmd::ComputeMcLeodLiSnapshot { .. }
-                    | BrokerCmd::ComputeOuFitSnapshot { .. }
-                    | BrokerCmd::ComputeGphSnapshot { .. }
-                    | BrokerCmd::ComputeBurgSpecSnapshot { .. }
-                    | BrokerCmd::ComputeKendallTauSnapshot { .. }
-                    | BrokerCmd::ComputeSqueezeSnapshot { .. }
-                    | BrokerCmd::ComputeSqueezeRankSnapshot { .. }
-                    | BrokerCmd::RefreshSqueezeWatchlist { .. }
-                    | BrokerCmd::ComputeBbsqueezeSnapshot { .. }
-                    | BrokerCmd::ComputeDonchianSnapshot { .. }
-                    | BrokerCmd::ComputeKamaSnapshot { .. }
-                    | BrokerCmd::ComputeIchimokuSnapshot { .. }
-                    | BrokerCmd::ComputeSupertrendSnapshot { .. }
-                    | BrokerCmd::ComputeKeltnerSnapshot { .. }
-                    | BrokerCmd::ComputeFisherSnapshot { .. }
-                    | BrokerCmd::ComputeAroonSnapshot { .. }
-                    | BrokerCmd::ComputeAdxSnapshot { .. }
-                    | BrokerCmd::ComputeCciSnapshot { .. }
-                    | BrokerCmd::ComputeCmfSnapshot { .. }
-                    | BrokerCmd::ComputeMfiSnapshot { .. }
-                    | BrokerCmd::ComputePsarSnapshot { .. }
-                    | BrokerCmd::ComputeVortexSnapshot { .. }
-                    | BrokerCmd::ComputeChopSnapshot { .. }
-                    | BrokerCmd::ComputeObvSnapshot { .. }
-                    | BrokerCmd::ComputeTrixSnapshot { .. }
-                    | BrokerCmd::ComputeHmaSnapshot { .. }
-                    | BrokerCmd::ComputePpoSnapshot { .. }
-                    | BrokerCmd::ComputeDpoSnapshot { .. }
-                    | BrokerCmd::ComputeKstSnapshot { .. }
-                    | BrokerCmd::ComputeUltoscSnapshot { .. }
-                    | BrokerCmd::ComputeWillrSnapshot { .. }
-                    | BrokerCmd::ComputeMassSnapshot { .. }
-                    | BrokerCmd::ComputeChaikoscSnapshot { .. }
-                    | BrokerCmd::ComputeKlingerSnapshot { .. }
-                    | BrokerCmd::ComputeStochRsiSnapshot { .. }
-                    | BrokerCmd::ComputeAwesomeSnapshot { .. }
-                    | BrokerCmd::ComputeEfiSnapshot { .. }
-                    | BrokerCmd::ComputeEmvSnapshot { .. }
-                    | BrokerCmd::ComputeNviSnapshot { .. }
-                    | BrokerCmd::ComputePviSnapshot { .. }
-                    | BrokerCmd::ComputeCoppockSnapshot { .. }
-                    | BrokerCmd::ComputeCmoSnapshot { .. }
-                    | BrokerCmd::ComputeQstickSnapshot { .. }
-                    | BrokerCmd::ComputeDisparitySnapshot { .. }
-                    | BrokerCmd::ComputeBopSnapshot { .. }
-                    | BrokerCmd::ComputeSchaffSnapshot { .. }
-                    | BrokerCmd::ComputeStochSnapshot { .. }
-                    | BrokerCmd::ComputeMacdSnapshot { .. }
-                    | BrokerCmd::ComputeVwapSnapshot { .. }
-                    | BrokerCmd::ComputeMcgdSnapshot { .. }
-                    | BrokerCmd::ComputeRwiSnapshot { .. }
-                    | BrokerCmd::ComputeDemaSnapshot { .. }
-                    | BrokerCmd::ComputeTemaSnapshot { .. }
-                    | BrokerCmd::ComputeLinregSnapshot { .. }
-                    | BrokerCmd::ComputePivotsSnapshot { .. }
-                    | BrokerCmd::ComputeHeikinSnapshot { .. }
-                    | BrokerCmd::ComputeAlmaSnapshot { .. }
-                    | BrokerCmd::ComputeZlemaSnapshot { .. }
-                    | BrokerCmd::ComputeElderRaySnapshot { .. }
-                    | BrokerCmd::ComputeTsfSnapshot { .. }
-                    | BrokerCmd::ComputeRviSnapshot { .. }
-                    | BrokerCmd::ComputeTrimaSnapshot { .. }
-                    | BrokerCmd::ComputeT3Snapshot { .. }
-                    | BrokerCmd::ComputeVidyaSnapshot { .. }
-                    | BrokerCmd::ComputeSmiSnapshot { .. }
-                    | BrokerCmd::ComputePvtSnapshot { .. }
-                    | BrokerCmd::ComputeAcSnapshot { .. }
-                    | BrokerCmd::ComputeChvolSnapshot { .. }
-                    | BrokerCmd::ComputeBbwidthSnapshot { .. }
-                    | BrokerCmd::ComputeElderImpSnapshot { .. }
-                    | BrokerCmd::ComputeRmiSnapshot { .. }
-                    | BrokerCmd::ComputeSymbolExpirations { .. }
-                    | BrokerCmd::ComputeSmmaSnapshot { .. }
-                    | BrokerCmd::ComputeAlligatorSnapshot { .. }
-                    | BrokerCmd::ComputeCrsiSnapshot { .. }
-                    | BrokerCmd::ComputeSebSnapshot { .. }
-                    | BrokerCmd::ComputeImiSnapshot { .. }
-                    | BrokerCmd::ComputeGmmaSnapshot { .. }
-                    | BrokerCmd::ComputeMaenvSnapshot { .. }
-                    | BrokerCmd::ComputeAdlSnapshot { .. }
-                    | BrokerCmd::ComputeVhfSnapshot { .. }
-                    | BrokerCmd::ComputeVrocSnapshot { .. }
-                    | BrokerCmd::ComputeKdjSnapshot { .. }
-                    | BrokerCmd::ComputeQqeSnapshot { .. }
-                    | BrokerCmd::ComputePmoSnapshot { .. }
-                    | BrokerCmd::ComputeCfoSnapshot { .. }
-                    | BrokerCmd::ComputeTmfSnapshot { .. }
-                    | BrokerCmd::ComputeFractalsSnapshot { .. }
-                    | BrokerCmd::ComputeIftRsiSnapshot { .. }
-                    | BrokerCmd::ComputeMamaSnapshot { .. }
-                    | BrokerCmd::ComputeCogSnapshot { .. }
-                    | BrokerCmd::ComputeDidiSnapshot { .. }
-                    | BrokerCmd::ComputeDemarkerSnapshot { .. }
-                    | BrokerCmd::ComputeGatorSnapshot { .. }
-                    | BrokerCmd::ComputeBwMfiSnapshot { .. }
-                    | BrokerCmd::ComputeVwmaSnapshot { .. }
-                    | BrokerCmd::ComputeStddevSnapshot { .. }
-                    | BrokerCmd::ComputeWmaSnapshot { .. }
-                    | BrokerCmd::ComputeRainbowSnapshot { .. }
-                    | BrokerCmd::ComputeMesaSineSnapshot { .. }
-                    | BrokerCmd::ComputeFramaSnapshot { .. }
-                    | BrokerCmd::ComputeIbsSnapshot { .. }
-                    | BrokerCmd::ComputeLaguerreRsiSnapshot { .. }
-                    | BrokerCmd::ComputeZigzagSnapshot { .. }
-                    | BrokerCmd::ComputePgoSnapshot { .. }
-                    | BrokerCmd::ComputeHtTrendlineSnapshot { .. }
-                    | BrokerCmd::ComputeMidpointSnapshot { .. }
-                    | BrokerCmd::ComputeMassIndexSnapshot { .. }
-                    | BrokerCmd::ComputeNatrSnapshot { .. }
-                    | BrokerCmd::ComputeTtmSqueezeSnapshot { .. }
-                    | BrokerCmd::ComputeForceIndexSnapshot { .. }
-                    | BrokerCmd::ComputeTrangeSnapshot { .. }
-                    | BrokerCmd::ComputeLinearregSlopeSnapshot { .. }
-                    | BrokerCmd::ComputeHtDcperiodSnapshot { .. }
-                    | BrokerCmd::ComputeHtTrendmodeSnapshot { .. }
-                    | BrokerCmd::ComputeAccbandsSnapshot { .. }
-                    | BrokerCmd::ComputeStochfSnapshot { .. }
-                    | BrokerCmd::ComputeLinearregSnapshot { .. }
-                    | BrokerCmd::ComputeLinearregAngleSnapshot { .. }
-                    | BrokerCmd::ComputeHtDcphaseSnapshot { .. }
-                    | BrokerCmd::ComputeHtSineSnapshot { .. }
-                    | BrokerCmd::ComputeHtPhasorSnapshot { .. }
-                    | BrokerCmd::ComputeMidpriceSnapshot { .. }
-                    | BrokerCmd::ComputeApoSnapshot { .. }
-                    | BrokerCmd::ComputeMomSnapshot { .. }
-                    | BrokerCmd::ComputeSarextSnapshot { .. }
-                    | BrokerCmd::ComputeAdxrSnapshot { .. }
-                    | BrokerCmd::ComputeAvgpriceSnapshot { .. }
-                    | BrokerCmd::ComputeMedpriceSnapshot { .. }
-                    | BrokerCmd::ComputeTypPriceSnapshot { .. }
-                    | BrokerCmd::ComputeWclPriceSnapshot { .. }
-                    | BrokerCmd::ComputeVarianceSnapshot { .. }
-                    | BrokerCmd::ComputePlusDiSnapshot { .. }
-                    | BrokerCmd::ComputeMinusDiSnapshot { .. }
-                    | BrokerCmd::ComputePlusDmSnapshot { .. }
-                    | BrokerCmd::ComputeMinusDmSnapshot { .. }
-                    | BrokerCmd::ComputeDxSnapshot { .. }
-                    | BrokerCmd::ComputeRocSnapshot { .. }
-                    | BrokerCmd::ComputeRocpSnapshot { .. }
-                    | BrokerCmd::ComputeRocrSnapshot { .. }
-                    | BrokerCmd::ComputeRocr100Snapshot { .. }
-                    | BrokerCmd::ComputeCorrelSnapshot { .. }
-                    | BrokerCmd::ComputeMinSnapshot { .. }
-                    | BrokerCmd::ComputeMaxSnapshot { .. }
-                    | BrokerCmd::ComputeMinMaxSnapshot { .. }
-                    | BrokerCmd::ComputeMinIndexSnapshot { .. }
-                    | BrokerCmd::ComputeMaxIndexSnapshot { .. }
-                    | BrokerCmd::ComputeBbandsSnapshot { .. }
-                    | BrokerCmd::ComputeAdSnapshot { .. }
-                    | BrokerCmd::ComputeAdoscSnapshot { .. }
-                    | BrokerCmd::ComputeSumSnapshot { .. }
-                    | BrokerCmd::ComputeLinearRegInterceptSnapshot { .. }
-                    | BrokerCmd::ComputeAroonoscSnapshot { .. }
-                    | BrokerCmd::ComputeMinMaxIndexSnapshot { .. }
-                    | BrokerCmd::ComputeMacdextSnapshot { .. }
-                    | BrokerCmd::ComputeMacdfixSnapshot { .. }
-                    | BrokerCmd::ComputeMavpSnapshot { .. }
-                    | BrokerCmd::ComputeCdlDojiSnapshot { .. }
-                    | BrokerCmd::ComputeCdlHammerSnapshot { .. }
-                    | BrokerCmd::ComputeCdlShootingStarSnapshot { .. }
-                    | BrokerCmd::ComputeCdlEngulfingSnapshot { .. }
-                    | BrokerCmd::ComputeCdlHaramiSnapshot { .. }
-                    | BrokerCmd::ComputeCdlMorningStarSnapshot { .. }
-                    | BrokerCmd::ComputeCdlEveningStarSnapshot { .. }
-                    | BrokerCmd::ComputeCdlThreeBlackCrowsSnapshot { .. }
-                    | BrokerCmd::ComputeCdlThreeWhiteSoldiersSnapshot { .. }
-                    | BrokerCmd::ComputeCdlDarkCloudCoverSnapshot { .. }
-                    | BrokerCmd::ComputeCdlPiercingSnapshot { .. }
-                    | BrokerCmd::ComputeCdlDragonflyDojiSnapshot { .. }
-                    | BrokerCmd::ComputeCdlGravestoneDojiSnapshot { .. }
-                    | BrokerCmd::ComputeCdlHangingManSnapshot { .. }
-                    | BrokerCmd::ComputeCdlInvertedHammerSnapshot { .. }
-                    | BrokerCmd::ComputeCdlHaramiCrossSnapshot { .. }
-                    | BrokerCmd::ComputeCdlLongLeggedDojiSnapshot { .. }
-                    | BrokerCmd::ComputeCdlMarubozuSnapshot { .. }
-                    | BrokerCmd::ComputeCdlSpinningTopSnapshot { .. }
-                    | BrokerCmd::ComputeCdlTristarSnapshot { .. }
-                    | BrokerCmd::ComputeCdlDojiStarSnapshot { .. }
-                    | BrokerCmd::ComputeCdlMorningDojiStarSnapshot { .. }
-                    | BrokerCmd::ComputeCdlEveningDojiStarSnapshot { .. }
-                    | BrokerCmd::ComputeCdlAbandonedBabySnapshot { .. }
-                    | BrokerCmd::ComputeCdlThreeInsideSnapshot { .. }
-                    | BrokerCmd::ComputeCdlBeltHoldSnapshot { .. }
-                    | BrokerCmd::ComputeCdlClosingMarubozuSnapshot { .. }
-                    | BrokerCmd::ComputeCdlHighWaveSnapshot { .. }
-                    | BrokerCmd::ComputeCdlLongLineSnapshot { .. }
-                    | BrokerCmd::ComputeCdlShortLineSnapshot { .. }
-                    | BrokerCmd::ComputeCdlCounterattackSnapshot { .. }
-                    | BrokerCmd::ComputeCdlHomingPigeonSnapshot { .. }
-                    | BrokerCmd::ComputeCdlInNeckSnapshot { .. }
-                    | BrokerCmd::ComputeCdlOnNeckSnapshot { .. }
-                    | BrokerCmd::ComputeCdlThrustingSnapshot { .. }
-                    | BrokerCmd::ComputeCdlTwoCrowsSnapshot { .. }
-                    | BrokerCmd::ComputeCdlThreeLineStrikeSnapshot { .. }
-                    | BrokerCmd::ComputeCdlThreeOutsideSnapshot { .. }
-                    | BrokerCmd::ComputeCdlMatchingLowSnapshot { .. }
-                    | BrokerCmd::ComputeCdlSeparatingLinesSnapshot { .. }
-                    | BrokerCmd::ComputeCdlStickSandwichSnapshot { .. }
-                    | BrokerCmd::ComputeCdlRickshawManSnapshot { .. }
-                    | BrokerCmd::ComputeCdlTakuriSnapshot { .. }
-                    | BrokerCmd::ComputeCdlThreeStarsInSouthSnapshot { .. }
-                    | BrokerCmd::ComputeCdlIdenticalThreeCrowsSnapshot { .. }
-                    | BrokerCmd::ComputeCdlKickingSnapshot { .. }
-                    | BrokerCmd::ComputeCdlKickingByLengthSnapshot { .. }
-                    | BrokerCmd::ComputeCdlLadderBottomSnapshot { .. }
-                    | BrokerCmd::ComputeCdlUniqueThreeRiverSnapshot { .. }
-                    | BrokerCmd::ComputeCdlAdvanceBlockSnapshot { .. }
-                    | BrokerCmd::ComputeCdlBreakawaySnapshot { .. }
-                    | BrokerCmd::ComputeCdlGapSideSideWhiteSnapshot { .. }
-                    | BrokerCmd::ComputeCdlUpsideGapTwoCrowsSnapshot { .. }
-                    | BrokerCmd::ComputeCdlXSideGapThreeMethodsSnapshot { .. }
-                    | BrokerCmd::ComputeCdlConcealBabySwallowSnapshot { .. }
-                    | BrokerCmd::ComputeCdlHikkakeSnapshot { .. }
-                    | BrokerCmd::ComputeCdlHikkakeModSnapshot { .. }
-                    | BrokerCmd::ComputeCdlMatHoldSnapshot { .. }
-                    | BrokerCmd::ComputeCdlRiseFallThreeMethodsSnapshot { .. }
-                    | BrokerCmd::ComputeCdlStalledPatternSnapshot { .. }
-                    | BrokerCmd::ComputeCdlTasukiGapSnapshot { .. }
-                    | BrokerCmd::ComputeModSharpeSnapshot { .. }
-                    | BrokerCmd::ComputeHsiehTestSnapshot { .. }
-                    | BrokerCmd::ComputeChowBreakSnapshot { .. }
-                    | BrokerCmd::ComputeDriftBurstSnapshot { .. }
-                    | BrokerCmd::ComputeHlvClustSnapshot { .. }
-                    | BrokerCmd::ComputeYangZhangSnapshot { .. }
-                    | BrokerCmd::ComputeKuiperSnapshot { .. }
-                    | BrokerCmd::ComputeDagostinoSnapshot { .. }
-                    | BrokerCmd::ComputeBaiPerronSnapshot { .. }
-                    | BrokerCmd::ComputeKupiecPofSnapshot { .. }
-                ) => {
+                cmd @ (BrokerCmd::ComputeDdmSnapshot { .. }
+                | BrokerCmd::ComputeRelativeValuation { .. }
+                | BrokerCmd::FetchFigiIdentifiers { .. }
+                | BrokerCmd::FetchHraSnapshot { .. }
+                | BrokerCmd::ComputeDcfSnapshot { .. }
+                | BrokerCmd::ComputeSvmSnapshot { .. }
+                | BrokerCmd::FetchOptionsChain { .. }
+                | BrokerCmd::ComputeIvolSnapshot { .. }
+                | BrokerCmd::ComputeSeasonalitySnapshot { .. }
+                | BrokerCmd::ComputeCorrelationMatrix { .. }
+                | BrokerCmd::ComputeTotalReturnSnapshot { .. }
+                | BrokerCmd::ComputeTechnicalsSnapshot { .. }
+                | BrokerCmd::ComputeVolSkewSnapshot { .. }
+                | BrokerCmd::ComputeLeverageSnapshot { .. }
+                | BrokerCmd::ComputeAccrualsSnapshot { .. }
+                | BrokerCmd::ComputeRealizedVolSnapshot { .. }
+                | BrokerCmd::ComputeFcfYieldSnapshot { .. }
+                | BrokerCmd::ComputeShortInterestSnapshot { .. }
+                | BrokerCmd::ComputeAltmanZSnapshot { .. }
+                | BrokerCmd::ComputePiotroskiSnapshot { .. }
+                | BrokerCmd::ComputeOhlcVolSnapshot { .. }
+                | BrokerCmd::ComputeEpsBeatSnapshot { .. }
+                | BrokerCmd::ComputePriceTargetDispersionSnapshot { .. }
+                | BrokerCmd::ComputeInsiderActivitySnapshot { .. }
+                | BrokerCmd::ComputeDivgSnapshot { .. }
+                | BrokerCmd::ComputeEarmSnapshot { .. }
+                | BrokerCmd::ComputeSectorRotationSnapshot { .. }
+                | BrokerCmd::ComputeUpdmSnapshot { .. }
+                | BrokerCmd::ComputeMomentumSnapshot { .. }
+                | BrokerCmd::ComputeLiquiditySnapshot { .. }
+                | BrokerCmd::ComputeBreakoutSnapshot { .. }
+                | BrokerCmd::ComputeCashCycleSnapshot { .. }
+                | BrokerCmd::ComputeCreditSnapshot { .. }
+                | BrokerCmd::ComputeGrowmSnapshot { .. }
+                | BrokerCmd::ComputeFlowSnapshot { .. }
+                | BrokerCmd::ComputeRegimeSnapshot { .. }
+                | BrokerCmd::ComputeRelvolSnapshot { .. }
+                | BrokerCmd::ComputeMarginsSnapshot { .. }
+                | BrokerCmd::ComputeValSnapshot { .. }
+                | BrokerCmd::ComputeQualSnapshot { .. }
+                | BrokerCmd::ComputeRiskSnapshot { .. }
+                | BrokerCmd::ComputeInsstrkSnapshot { .. }
+                | BrokerCmd::ComputeCovgSnapshot { .. }
+                | BrokerCmd::ComputeVrkSnapshot { .. }
+                | BrokerCmd::ComputeQrkSnapshot { .. }
+                | BrokerCmd::ComputeRrkSnapshot { .. }
+                | BrokerCmd::ComputeRelepsgrSnapshot { .. }
+                | BrokerCmd::ComputePeadSnapshot { .. }
+                | BrokerCmd::ComputeSizefSnapshot { .. }
+                | BrokerCmd::ComputeMomfSnapshot { .. }
+                | BrokerCmd::ComputePeadrankSnapshot { .. }
+                | BrokerCmd::ComputeFqmSnapshot { .. }
+                | BrokerCmd::ComputeRevrankSnapshot { .. }
+                | BrokerCmd::ComputeLevrankSnapshot { .. }
+                | BrokerCmd::ComputeOperankSnapshot { .. }
+                | BrokerCmd::ComputeFqmrankSnapshot { .. }
+                | BrokerCmd::ComputeLiqrankSnapshot { .. }
+                | BrokerCmd::ComputeSurpstkSnapshot { .. }
+                | BrokerCmd::ComputeDvdrankSnapshot { .. }
+                | BrokerCmd::ComputeEarmrankSnapshot { .. }
+                | BrokerCmd::ComputeUpdgrankSnapshot { .. }
+                | BrokerCmd::ComputeGySnapshot { .. }
+                | BrokerCmd::ComputeDesSnapshot { .. }
+                | BrokerCmd::ComputeDvdyieldrankSnapshot { .. }
+                | BrokerCmd::ComputeShrankSnapshot { .. }
+                | BrokerCmd::ComputeShortrankDeltaSnapshot { .. }
+                | BrokerCmd::ComputeInsiderconcSnapshot { .. }
+                | BrokerCmd::ComputeAtrannSnapshot { .. }
+                | BrokerCmd::ComputeDdhistSnapshot { .. }
+                | BrokerCmd::ComputePriceperfSnapshot { .. }
+                | BrokerCmd::ComputeMomrankMultiSnapshot { .. }
+                | BrokerCmd::ComputeBetarankSnapshot { .. }
+                | BrokerCmd::ComputePegrankSnapshot { .. }
+                | BrokerCmd::ComputeFhighlowSnapshot { .. }
+                | BrokerCmd::ComputeRvconeSnapshot { .. }
+                | BrokerCmd::ComputeCalpbSnapshot { .. }
+                | BrokerCmd::ComputeCorrstkSnapshot { .. }
+                | BrokerCmd::ComputeTlrankSnapshot { .. }
+                | BrokerCmd::ComputeCorrrankSnapshot { .. }
+                | BrokerCmd::ComputeOperankDeltaSnapshot { .. }
+                | BrokerCmd::ComputeDivaccSnapshot { .. }
+                | BrokerCmd::ComputeEpsaccSnapshot { .. }
+                | BrokerCmd::ComputeVrpSnapshot { .. }
+                | BrokerCmd::ComputeRetskewSnapshot { .. }
+                | BrokerCmd::ComputeRetkurtSnapshot { .. }
+                | BrokerCmd::ComputeTailrSnapshot { .. }
+                | BrokerCmd::ComputeRunlenSnapshot { .. }
+                | BrokerCmd::ComputeDayrangeSnapshot { .. }
+                | BrokerCmd::ComputeAutocorSnapshot { .. }
+                | BrokerCmd::ComputeHurstSnapshot { .. }
+                | BrokerCmd::ComputeHitrateSnapshot { .. }
+                | BrokerCmd::ComputeGlasymSnapshot { .. }
+                | BrokerCmd::ComputeVolratioSnapshot { .. }
+                | BrokerCmd::ComputeDrawupSnapshot { .. }
+                | BrokerCmd::ComputeGapstatsSnapshot { .. }
+                | BrokerCmd::ComputeVolclusterSnapshot { .. }
+                | BrokerCmd::ComputeCloseplcSnapshot { .. }
+                | BrokerCmd::ComputeMrhlSnapshot { .. }
+                | BrokerCmd::ComputeDownvolSnapshot { .. }
+                | BrokerCmd::ComputeSharprSnapshot { .. }
+                | BrokerCmd::ComputeEffratioSnapshot { .. }
+                | BrokerCmd::ComputeWickbiasSnapshot { .. }
+                | BrokerCmd::ComputeVolofvolSnapshot { .. }
+                | BrokerCmd::ComputeCalmarSnapshot { .. }
+                | BrokerCmd::ComputeUlcerSnapshot { .. }
+                | BrokerCmd::ComputeVarratioSnapshot { .. }
+                | BrokerCmd::ComputeAmihudSnapshot { .. }
+                | BrokerCmd::ComputeJbnormSnapshot { .. }
+                | BrokerCmd::ComputeOmegaSnapshot { .. }
+                | BrokerCmd::ComputeDfaSnapshot { .. }
+                | BrokerCmd::ComputeBurkeSnapshot { .. }
+                | BrokerCmd::ComputeMonthseasSnapshot { .. }
+                | BrokerCmd::ComputeRollsprdSnapshot { .. }
+                | BrokerCmd::ComputeParkinsonSnapshot { .. }
+                | BrokerCmd::ComputeGkvolSnapshot { .. }
+                | BrokerCmd::ComputeRsvolSnapshot { .. }
+                | BrokerCmd::ComputeCvarSnapshot { .. }
+                | BrokerCmd::ComputeDoweffectSnapshot { .. }
+                | BrokerCmd::ComputeSterlingSnapshot { .. }
+                | BrokerCmd::ComputeKellyfSnapshot { .. }
+                | BrokerCmd::ComputeLjungbSnapshot { .. }
+                | BrokerCmd::ComputeRunstestSnapshot { .. }
+                | BrokerCmd::ComputeZeroretSnapshot { .. }
+                | BrokerCmd::ComputePsrSnapshot { .. }
+                | BrokerCmd::ComputeAdfSnapshot { .. }
+                | BrokerCmd::ComputeMnkendallSnapshot { .. }
+                | BrokerCmd::ComputeBipowerSnapshot { .. }
+                | BrokerCmd::ComputeDddurSnapshot { .. }
+                | BrokerCmd::ComputeHilltailSnapshot { .. }
+                | BrokerCmd::ComputeArchlmSnapshot { .. }
+                | BrokerCmd::ComputePainratioSnapshot { .. }
+                | BrokerCmd::ComputeCusumSnapshot { .. }
+                | BrokerCmd::ComputeCfvarSnapshot { .. }
+                | BrokerCmd::ComputeEntropySnapshot { .. }
+                | BrokerCmd::ComputeRachevSnapshot { .. }
+                | BrokerCmd::ComputeGprSnapshot { .. }
+                | BrokerCmd::ComputePacfSnapshot { .. }
+                | BrokerCmd::ComputeApenSnapshot { .. }
+                | BrokerCmd::ComputeUprSnapshot { .. }
+                | BrokerCmd::ComputeLevereffSnapshot { .. }
+                | BrokerCmd::ComputeDrawdarSnapshot { .. }
+                | BrokerCmd::ComputeVarhalfSnapshot { .. }
+                | BrokerCmd::ComputeGiniSnapshot { .. }
+                | BrokerCmd::ComputeSampenSnapshot { .. }
+                | BrokerCmd::ComputePermenSnapshot { .. }
+                | BrokerCmd::ComputeRecfactSnapshot { .. }
+                | BrokerCmd::ComputeKpssSnapshot { .. }
+                | BrokerCmd::ComputeSpecentSnapshot { .. }
+                | BrokerCmd::ComputeRobvolSnapshot { .. }
+                | BrokerCmd::ComputeRenyientSnapshot { .. }
+                | BrokerCmd::ComputeRetquantSnapshot { .. }
+                | BrokerCmd::ComputeMsentSnapshot { .. }
+                | BrokerCmd::ComputeEwmavolSnapshot { .. }
+                | BrokerCmd::ComputeKsnormSnapshot { .. }
+                | BrokerCmd::ComputeAdtestSnapshot { .. }
+                | BrokerCmd::ComputeLmomSnapshot { .. }
+                | BrokerCmd::ComputeKylelamSnapshot { .. }
+                | BrokerCmd::ComputePeakoverSnapshot { .. }
+                | BrokerCmd::ComputeHiguchiSnapshot { .. }
+                | BrokerCmd::ComputePickandsSnapshot { .. }
+                | BrokerCmd::ComputeKappa3Snapshot { .. }
+                | BrokerCmd::ComputeLyapunovSnapshot { .. }
+                | BrokerCmd::ComputeRankacSnapshot { .. }
+                | BrokerCmd::ComputeBnsjumpSnapshot { .. }
+                | BrokerCmd::ComputePprootSnapshot { .. }
+                | BrokerCmd::ComputeMfdfaSnapshot { .. }
+                | BrokerCmd::ComputeHillksSnapshot { .. }
+                | BrokerCmd::ComputeTsiSnapshot { .. }
+                | BrokerCmd::ComputeGarch11Snapshot { .. }
+                | BrokerCmd::ComputeSadfSnapshot { .. }
+                | BrokerCmd::ComputeCordimSnapshot { .. }
+                | BrokerCmd::ComputeSkspecSnapshot { .. }
+                | BrokerCmd::ComputeAutomiSnapshot { .. }
+                | BrokerCmd::ComputeDurbinWatsonSnapshot { .. }
+                | BrokerCmd::ComputeBdsTestSnapshot { .. }
+                | BrokerCmd::ComputeBreuschPaganSnapshot { .. }
+                | BrokerCmd::ComputeTurnPtsSnapshot { .. }
+                | BrokerCmd::ComputePeriodogramSnapshot { .. }
+                | BrokerCmd::ComputeMcLeodLiSnapshot { .. }
+                | BrokerCmd::ComputeOuFitSnapshot { .. }
+                | BrokerCmd::ComputeGphSnapshot { .. }
+                | BrokerCmd::ComputeBurgSpecSnapshot { .. }
+                | BrokerCmd::ComputeKendallTauSnapshot { .. }
+                | BrokerCmd::ComputeSqueezeSnapshot { .. }
+                | BrokerCmd::ComputeSqueezeRankSnapshot { .. }
+                | BrokerCmd::RefreshSqueezeWatchlist { .. }
+                | BrokerCmd::ComputeBbsqueezeSnapshot { .. }
+                | BrokerCmd::ComputeDonchianSnapshot { .. }
+                | BrokerCmd::ComputeKamaSnapshot { .. }
+                | BrokerCmd::ComputeIchimokuSnapshot { .. }
+                | BrokerCmd::ComputeSupertrendSnapshot { .. }
+                | BrokerCmd::ComputeKeltnerSnapshot { .. }
+                | BrokerCmd::ComputeFisherSnapshot { .. }
+                | BrokerCmd::ComputeAroonSnapshot { .. }
+                | BrokerCmd::ComputeAdxSnapshot { .. }
+                | BrokerCmd::ComputeCciSnapshot { .. }
+                | BrokerCmd::ComputeCmfSnapshot { .. }
+                | BrokerCmd::ComputeMfiSnapshot { .. }
+                | BrokerCmd::ComputePsarSnapshot { .. }
+                | BrokerCmd::ComputeVortexSnapshot { .. }
+                | BrokerCmd::ComputeChopSnapshot { .. }
+                | BrokerCmd::ComputeObvSnapshot { .. }
+                | BrokerCmd::ComputeTrixSnapshot { .. }
+                | BrokerCmd::ComputeHmaSnapshot { .. }
+                | BrokerCmd::ComputePpoSnapshot { .. }
+                | BrokerCmd::ComputeDpoSnapshot { .. }
+                | BrokerCmd::ComputeKstSnapshot { .. }
+                | BrokerCmd::ComputeUltoscSnapshot { .. }
+                | BrokerCmd::ComputeWillrSnapshot { .. }
+                | BrokerCmd::ComputeMassSnapshot { .. }
+                | BrokerCmd::ComputeChaikoscSnapshot { .. }
+                | BrokerCmd::ComputeKlingerSnapshot { .. }
+                | BrokerCmd::ComputeStochRsiSnapshot { .. }
+                | BrokerCmd::ComputeAwesomeSnapshot { .. }
+                | BrokerCmd::ComputeEfiSnapshot { .. }
+                | BrokerCmd::ComputeEmvSnapshot { .. }
+                | BrokerCmd::ComputeNviSnapshot { .. }
+                | BrokerCmd::ComputePviSnapshot { .. }
+                | BrokerCmd::ComputeCoppockSnapshot { .. }
+                | BrokerCmd::ComputeCmoSnapshot { .. }
+                | BrokerCmd::ComputeQstickSnapshot { .. }
+                | BrokerCmd::ComputeDisparitySnapshot { .. }
+                | BrokerCmd::ComputeBopSnapshot { .. }
+                | BrokerCmd::ComputeSchaffSnapshot { .. }
+                | BrokerCmd::ComputeStochSnapshot { .. }
+                | BrokerCmd::ComputeMacdSnapshot { .. }
+                | BrokerCmd::ComputeVwapSnapshot { .. }
+                | BrokerCmd::ComputeMcgdSnapshot { .. }
+                | BrokerCmd::ComputeRwiSnapshot { .. }
+                | BrokerCmd::ComputeDemaSnapshot { .. }
+                | BrokerCmd::ComputeTemaSnapshot { .. }
+                | BrokerCmd::ComputeLinregSnapshot { .. }
+                | BrokerCmd::ComputePivotsSnapshot { .. }
+                | BrokerCmd::ComputeHeikinSnapshot { .. }
+                | BrokerCmd::ComputeAlmaSnapshot { .. }
+                | BrokerCmd::ComputeZlemaSnapshot { .. }
+                | BrokerCmd::ComputeElderRaySnapshot { .. }
+                | BrokerCmd::ComputeTsfSnapshot { .. }
+                | BrokerCmd::ComputeRviSnapshot { .. }
+                | BrokerCmd::ComputeTrimaSnapshot { .. }
+                | BrokerCmd::ComputeT3Snapshot { .. }
+                | BrokerCmd::ComputeVidyaSnapshot { .. }
+                | BrokerCmd::ComputeSmiSnapshot { .. }
+                | BrokerCmd::ComputePvtSnapshot { .. }
+                | BrokerCmd::ComputeAcSnapshot { .. }
+                | BrokerCmd::ComputeChvolSnapshot { .. }
+                | BrokerCmd::ComputeBbwidthSnapshot { .. }
+                | BrokerCmd::ComputeElderImpSnapshot { .. }
+                | BrokerCmd::ComputeRmiSnapshot { .. }
+                | BrokerCmd::ComputeSymbolExpirations { .. }
+                | BrokerCmd::ComputeSmmaSnapshot { .. }
+                | BrokerCmd::ComputeAlligatorSnapshot { .. }
+                | BrokerCmd::ComputeCrsiSnapshot { .. }
+                | BrokerCmd::ComputeSebSnapshot { .. }
+                | BrokerCmd::ComputeImiSnapshot { .. }
+                | BrokerCmd::ComputeGmmaSnapshot { .. }
+                | BrokerCmd::ComputeMaenvSnapshot { .. }
+                | BrokerCmd::ComputeAdlSnapshot { .. }
+                | BrokerCmd::ComputeVhfSnapshot { .. }
+                | BrokerCmd::ComputeVrocSnapshot { .. }
+                | BrokerCmd::ComputeKdjSnapshot { .. }
+                | BrokerCmd::ComputeQqeSnapshot { .. }
+                | BrokerCmd::ComputePmoSnapshot { .. }
+                | BrokerCmd::ComputeCfoSnapshot { .. }
+                | BrokerCmd::ComputeTmfSnapshot { .. }
+                | BrokerCmd::ComputeFractalsSnapshot { .. }
+                | BrokerCmd::ComputeIftRsiSnapshot { .. }
+                | BrokerCmd::ComputeMamaSnapshot { .. }
+                | BrokerCmd::ComputeCogSnapshot { .. }
+                | BrokerCmd::ComputeDidiSnapshot { .. }
+                | BrokerCmd::ComputeDemarkerSnapshot { .. }
+                | BrokerCmd::ComputeGatorSnapshot { .. }
+                | BrokerCmd::ComputeBwMfiSnapshot { .. }
+                | BrokerCmd::ComputeVwmaSnapshot { .. }
+                | BrokerCmd::ComputeStddevSnapshot { .. }
+                | BrokerCmd::ComputeWmaSnapshot { .. }
+                | BrokerCmd::ComputeRainbowSnapshot { .. }
+                | BrokerCmd::ComputeMesaSineSnapshot { .. }
+                | BrokerCmd::ComputeFramaSnapshot { .. }
+                | BrokerCmd::ComputeIbsSnapshot { .. }
+                | BrokerCmd::ComputeLaguerreRsiSnapshot { .. }
+                | BrokerCmd::ComputeZigzagSnapshot { .. }
+                | BrokerCmd::ComputePgoSnapshot { .. }
+                | BrokerCmd::ComputeHtTrendlineSnapshot { .. }
+                | BrokerCmd::ComputeMidpointSnapshot { .. }
+                | BrokerCmd::ComputeMassIndexSnapshot { .. }
+                | BrokerCmd::ComputeNatrSnapshot { .. }
+                | BrokerCmd::ComputeTtmSqueezeSnapshot { .. }
+                | BrokerCmd::ComputeForceIndexSnapshot { .. }
+                | BrokerCmd::ComputeTrangeSnapshot { .. }
+                | BrokerCmd::ComputeLinearregSlopeSnapshot { .. }
+                | BrokerCmd::ComputeHtDcperiodSnapshot { .. }
+                | BrokerCmd::ComputeHtTrendmodeSnapshot { .. }
+                | BrokerCmd::ComputeAccbandsSnapshot { .. }
+                | BrokerCmd::ComputeStochfSnapshot { .. }
+                | BrokerCmd::ComputeLinearregSnapshot { .. }
+                | BrokerCmd::ComputeLinearregAngleSnapshot { .. }
+                | BrokerCmd::ComputeHtDcphaseSnapshot { .. }
+                | BrokerCmd::ComputeHtSineSnapshot { .. }
+                | BrokerCmd::ComputeHtPhasorSnapshot { .. }
+                | BrokerCmd::ComputeMidpriceSnapshot { .. }
+                | BrokerCmd::ComputeApoSnapshot { .. }
+                | BrokerCmd::ComputeMomSnapshot { .. }
+                | BrokerCmd::ComputeSarextSnapshot { .. }
+                | BrokerCmd::ComputeAdxrSnapshot { .. }
+                | BrokerCmd::ComputeAvgpriceSnapshot { .. }
+                | BrokerCmd::ComputeMedpriceSnapshot { .. }
+                | BrokerCmd::ComputeTypPriceSnapshot { .. }
+                | BrokerCmd::ComputeWclPriceSnapshot { .. }
+                | BrokerCmd::ComputeVarianceSnapshot { .. }
+                | BrokerCmd::ComputePlusDiSnapshot { .. }
+                | BrokerCmd::ComputeMinusDiSnapshot { .. }
+                | BrokerCmd::ComputePlusDmSnapshot { .. }
+                | BrokerCmd::ComputeMinusDmSnapshot { .. }
+                | BrokerCmd::ComputeDxSnapshot { .. }
+                | BrokerCmd::ComputeRocSnapshot { .. }
+                | BrokerCmd::ComputeRocpSnapshot { .. }
+                | BrokerCmd::ComputeRocrSnapshot { .. }
+                | BrokerCmd::ComputeRocr100Snapshot { .. }
+                | BrokerCmd::ComputeCorrelSnapshot { .. }
+                | BrokerCmd::ComputeMinSnapshot { .. }
+                | BrokerCmd::ComputeMaxSnapshot { .. }
+                | BrokerCmd::ComputeMinMaxSnapshot { .. }
+                | BrokerCmd::ComputeMinIndexSnapshot { .. }
+                | BrokerCmd::ComputeMaxIndexSnapshot { .. }
+                | BrokerCmd::ComputeBbandsSnapshot { .. }
+                | BrokerCmd::ComputeAdSnapshot { .. }
+                | BrokerCmd::ComputeAdoscSnapshot { .. }
+                | BrokerCmd::ComputeSumSnapshot { .. }
+                | BrokerCmd::ComputeLinearRegInterceptSnapshot { .. }
+                | BrokerCmd::ComputeAroonoscSnapshot { .. }
+                | BrokerCmd::ComputeMinMaxIndexSnapshot { .. }
+                | BrokerCmd::ComputeMacdextSnapshot { .. }
+                | BrokerCmd::ComputeMacdfixSnapshot { .. }
+                | BrokerCmd::ComputeMavpSnapshot { .. }
+                | BrokerCmd::ComputeCdlDojiSnapshot { .. }
+                | BrokerCmd::ComputeCdlHammerSnapshot { .. }
+                | BrokerCmd::ComputeCdlShootingStarSnapshot { .. }
+                | BrokerCmd::ComputeCdlEngulfingSnapshot { .. }
+                | BrokerCmd::ComputeCdlHaramiSnapshot { .. }
+                | BrokerCmd::ComputeCdlMorningStarSnapshot { .. }
+                | BrokerCmd::ComputeCdlEveningStarSnapshot { .. }
+                | BrokerCmd::ComputeCdlThreeBlackCrowsSnapshot { .. }
+                | BrokerCmd::ComputeCdlThreeWhiteSoldiersSnapshot { .. }
+                | BrokerCmd::ComputeCdlDarkCloudCoverSnapshot { .. }
+                | BrokerCmd::ComputeCdlPiercingSnapshot { .. }
+                | BrokerCmd::ComputeCdlDragonflyDojiSnapshot { .. }
+                | BrokerCmd::ComputeCdlGravestoneDojiSnapshot { .. }
+                | BrokerCmd::ComputeCdlHangingManSnapshot { .. }
+                | BrokerCmd::ComputeCdlInvertedHammerSnapshot { .. }
+                | BrokerCmd::ComputeCdlHaramiCrossSnapshot { .. }
+                | BrokerCmd::ComputeCdlLongLeggedDojiSnapshot { .. }
+                | BrokerCmd::ComputeCdlMarubozuSnapshot { .. }
+                | BrokerCmd::ComputeCdlSpinningTopSnapshot { .. }
+                | BrokerCmd::ComputeCdlTristarSnapshot { .. }
+                | BrokerCmd::ComputeCdlDojiStarSnapshot { .. }
+                | BrokerCmd::ComputeCdlMorningDojiStarSnapshot { .. }
+                | BrokerCmd::ComputeCdlEveningDojiStarSnapshot { .. }
+                | BrokerCmd::ComputeCdlAbandonedBabySnapshot { .. }
+                | BrokerCmd::ComputeCdlThreeInsideSnapshot { .. }
+                | BrokerCmd::ComputeCdlBeltHoldSnapshot { .. }
+                | BrokerCmd::ComputeCdlClosingMarubozuSnapshot { .. }
+                | BrokerCmd::ComputeCdlHighWaveSnapshot { .. }
+                | BrokerCmd::ComputeCdlLongLineSnapshot { .. }
+                | BrokerCmd::ComputeCdlShortLineSnapshot { .. }
+                | BrokerCmd::ComputeCdlCounterattackSnapshot { .. }
+                | BrokerCmd::ComputeCdlHomingPigeonSnapshot { .. }
+                | BrokerCmd::ComputeCdlInNeckSnapshot { .. }
+                | BrokerCmd::ComputeCdlOnNeckSnapshot { .. }
+                | BrokerCmd::ComputeCdlThrustingSnapshot { .. }
+                | BrokerCmd::ComputeCdlTwoCrowsSnapshot { .. }
+                | BrokerCmd::ComputeCdlThreeLineStrikeSnapshot { .. }
+                | BrokerCmd::ComputeCdlThreeOutsideSnapshot { .. }
+                | BrokerCmd::ComputeCdlMatchingLowSnapshot { .. }
+                | BrokerCmd::ComputeCdlSeparatingLinesSnapshot { .. }
+                | BrokerCmd::ComputeCdlStickSandwichSnapshot { .. }
+                | BrokerCmd::ComputeCdlRickshawManSnapshot { .. }
+                | BrokerCmd::ComputeCdlTakuriSnapshot { .. }
+                | BrokerCmd::ComputeCdlThreeStarsInSouthSnapshot { .. }
+                | BrokerCmd::ComputeCdlIdenticalThreeCrowsSnapshot { .. }
+                | BrokerCmd::ComputeCdlKickingSnapshot { .. }
+                | BrokerCmd::ComputeCdlKickingByLengthSnapshot { .. }
+                | BrokerCmd::ComputeCdlLadderBottomSnapshot { .. }
+                | BrokerCmd::ComputeCdlUniqueThreeRiverSnapshot { .. }
+                | BrokerCmd::ComputeCdlAdvanceBlockSnapshot { .. }
+                | BrokerCmd::ComputeCdlBreakawaySnapshot { .. }
+                | BrokerCmd::ComputeCdlGapSideSideWhiteSnapshot { .. }
+                | BrokerCmd::ComputeCdlUpsideGapTwoCrowsSnapshot { .. }
+                | BrokerCmd::ComputeCdlXSideGapThreeMethodsSnapshot { .. }
+                | BrokerCmd::ComputeCdlConcealBabySwallowSnapshot { .. }
+                | BrokerCmd::ComputeCdlHikkakeSnapshot { .. }
+                | BrokerCmd::ComputeCdlHikkakeModSnapshot { .. }
+                | BrokerCmd::ComputeCdlMatHoldSnapshot { .. }
+                | BrokerCmd::ComputeCdlRiseFallThreeMethodsSnapshot { .. }
+                | BrokerCmd::ComputeCdlStalledPatternSnapshot { .. }
+                | BrokerCmd::ComputeCdlTasukiGapSnapshot { .. }
+                | BrokerCmd::ComputeModSharpeSnapshot { .. }
+                | BrokerCmd::ComputeHsiehTestSnapshot { .. }
+                | BrokerCmd::ComputeChowBreakSnapshot { .. }
+                | BrokerCmd::ComputeDriftBurstSnapshot { .. }
+                | BrokerCmd::ComputeHlvClustSnapshot { .. }
+                | BrokerCmd::ComputeYangZhangSnapshot { .. }
+                | BrokerCmd::ComputeKuiperSnapshot { .. }
+                | BrokerCmd::ComputeDagostinoSnapshot { .. }
+                | BrokerCmd::ComputeBaiPerronSnapshot { .. }
+                | BrokerCmd::ComputeKupiecPofSnapshot { .. }) => {
                     research_compute::handle_research_compute_command(
                         cmd,
                         broker_msg_tx_clone.clone(),
                         shared_cache_broker.clone(),
                     );
                 }
-                cmd @ (
-                    BrokerCmd::IngestResearchArticles { .. }
-                    | BrokerCmd::FetchNewsMulti { .. }
-                    | BrokerCmd::LoadCachedNews { .. }
-                    | BrokerCmd::HydrateNewsArticle { .. }
-                    | BrokerCmd::SearchNews { .. }
-                    | BrokerCmd::NewsScrapeSymbols { .. }
-                ) => {
+                cmd @ (BrokerCmd::IngestResearchArticles { .. }
+                | BrokerCmd::FetchNewsMulti { .. }
+                | BrokerCmd::LoadCachedNews { .. }
+                | BrokerCmd::HydrateNewsArticle { .. }
+                | BrokerCmd::SearchNews { .. }
+                | BrokerCmd::NewsScrapeSymbols { .. }) => {
                     news::handle_news_command(
                         cmd,
                         broker_msg_tx_clone.clone(),
@@ -699,17 +673,15 @@ pub(super) fn spawn_broker_message_processor(
                     )
                     .await;
                 }
-                cmd @ (
-                    BrokerCmd::KrakenGetBalance
-                    | BrokerCmd::KrakenGetPositions
-                    | BrokerCmd::KrakenPlaceOrder { .. }
-                    | BrokerCmd::KrakenPlaceOrderAdvanced { .. }
-                    | BrokerCmd::KrakenClosePosition { .. }
-                    | BrokerCmd::KrakenCancelOrder { .. }
-                    | BrokerCmd::KrakenCancelAll
-                    | BrokerCmd::KrakenFetchTrades
-                    | BrokerCmd::KrakenFetchOpenOrders
-                ) => {
+                cmd @ (BrokerCmd::KrakenGetBalance
+                | BrokerCmd::KrakenGetPositions
+                | BrokerCmd::KrakenPlaceOrder { .. }
+                | BrokerCmd::KrakenPlaceOrderAdvanced { .. }
+                | BrokerCmd::KrakenClosePosition { .. }
+                | BrokerCmd::KrakenCancelOrder { .. }
+                | BrokerCmd::KrakenCancelAll
+                | BrokerCmd::KrakenFetchTrades
+                | BrokerCmd::KrakenFetchOpenOrders) => {
                     kraken_order_ops::handle_kraken_account_order_command(
                         cmd,
                         kraken_broker.as_ref(),
@@ -717,12 +689,10 @@ pub(super) fn spawn_broker_message_processor(
                     )
                     .await;
                 }
-                cmd @ (
-                    BrokerCmd::KrakenFetchEquityTicker { .. }
-                    | BrokerCmd::KrakenFetchEquityHistory { .. }
-                    | BrokerCmd::YahooChartFetchBars { .. }
-                    | BrokerCmd::KrakenFetchEquityUniverse
-                ) => {
+                cmd @ (BrokerCmd::KrakenFetchEquityTicker { .. }
+                | BrokerCmd::KrakenFetchEquityHistory { .. }
+                | BrokerCmd::YahooChartFetchBars { .. }
+                | BrokerCmd::KrakenFetchEquityUniverse) => {
                     kraken_market_commands::handle_kraken_market_command(
                         cmd,
                         kraken_broker.as_ref(),
@@ -735,12 +705,10 @@ pub(super) fn spawn_broker_message_processor(
                     )
                     .await;
                 }
-                cmd @ (
-                    BrokerCmd::KrakenStartPrivateWs
-                    | BrokerCmd::KrakenStartOhlcStreamers { .. }
-                    | BrokerCmd::KrakenOhlcSnapshotSweep { .. }
-                    | BrokerCmd::KrakenStartOrderbookWs { .. }
-                ) => {
+                cmd @ (BrokerCmd::KrakenStartPrivateWs
+                | BrokerCmd::KrakenStartOhlcStreamers { .. }
+                | BrokerCmd::KrakenOhlcSnapshotSweep { .. }
+                | BrokerCmd::KrakenStartOrderbookWs { .. }) => {
                     kraken_ws_commands::handle_kraken_ws_command(
                         cmd,
                         kraken_broker.as_ref(),
@@ -772,11 +740,9 @@ pub(super) fn spawn_broker_message_processor(
                     )
                     .await;
                 }
-                cmd @ (
-                    BrokerCmd::FundamentalsScrape { .. }
-                    | BrokerCmd::FundamentalsScrapeOne { .. }
-                    | BrokerCmd::ResearchScrape { .. }
-                ) => {
+                cmd @ (BrokerCmd::FundamentalsScrape { .. }
+                | BrokerCmd::FundamentalsScrapeOne { .. }
+                | BrokerCmd::ResearchScrape { .. }) => {
                     fundamentals_commands::handle_fundamentals_command(
                         cmd,
                         broker.as_ref(),
@@ -785,10 +751,7 @@ pub(super) fn spawn_broker_message_processor(
                     )
                     .await;
                 }
-                cmd @ (
-                    BrokerCmd::CompactStorage { .. }
-                    | BrokerCmd::ScanUnusualVolume { .. }
-                ) => {
+                cmd @ (BrokerCmd::CompactStorage { .. } | BrokerCmd::ScanUnusualVolume { .. }) => {
                     storage::handle_storage_command(
                         cmd,
                         broker_msg_tx_clone.clone(),
@@ -796,13 +759,11 @@ pub(super) fn spawn_broker_message_processor(
                         shared_cache_broker.clone(),
                     );
                 }
-                cmd @ (
-                    BrokerCmd::AlpacaFetchBars { .. }
-                    | BrokerCmd::AlpacaFetchBarsBatch { .. }
-                    | BrokerCmd::FetchAllBars { .. }
-                    | BrokerCmd::KrakenBackfill { .. }
-                    | BrokerCmd::KrakenFuturesBackfill { .. }
-                ) => {
+                cmd @ (BrokerCmd::AlpacaFetchBars { .. }
+                | BrokerCmd::AlpacaFetchBarsBatch { .. }
+                | BrokerCmd::FetchAllBars { .. }
+                | BrokerCmd::KrakenBackfill { .. }
+                | BrokerCmd::KrakenFuturesBackfill { .. }) => {
                     bar_fetch_commands::handle_bar_fetch_command(
                         cmd,
                         broker.as_ref(),
@@ -823,12 +784,10 @@ pub(super) fn spawn_broker_message_processor(
                     )
                     .await;
                 }
-                cmd @ (
-                    BrokerCmd::FredFetch { .. }
-                    | BrokerCmd::FetchEconCalendar { .. }
-                    | BrokerCmd::FetchCongressTrades
-                    | BrokerCmd::SendNotification { .. }
-                ) => {
+                cmd @ (BrokerCmd::FredFetch { .. }
+                | BrokerCmd::FetchEconCalendar { .. }
+                | BrokerCmd::FetchCongressTrades
+                | BrokerCmd::SendNotification { .. }) => {
                     external_feeds::handle_external_feed_command(cmd, broker_msg_tx_clone.clone())
                         .await;
                 }

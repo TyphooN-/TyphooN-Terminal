@@ -1,4 +1,9 @@
-use super::prelude::*;
+use std::sync::Arc;
+
+use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
+use typhoon_engine::core::cache::SqliteCache;
+
+use crate::kraken_ohlc_pipeline;
 
 /// Stop the WS v2 book resubscribe loop after this many *consecutive* checksum
 /// mismatches. A deterministically-failing book (e.g. the xStock fixed-precision
@@ -77,7 +82,7 @@ fn resolve_kraken_chart_book_ws_symbol(symbol: &str) -> Option<String> {
     Some(format!("{bare}x/USD"))
 }
 
-pub(super) async fn handle_kraken_ws_command(
+pub async fn handle_kraken_ws_command(
     cmd: BrokerCmd,
     kraken_broker: Option<&typhoon_engine::broker::kraken::KrakenBroker>,
     kraken_ws_broker: Option<&typhoon_engine::broker::kraken::KrakenBroker>,
@@ -231,7 +236,7 @@ pub(super) async fn handle_kraken_ws_command(
                         });
                     }
                 });
-                kraken_ohlc_ws::spawn_kraken_ohlc_pipeline(
+                kraken_ohlc_pipeline::spawn_kraken_ohlc_pipeline(
                     shared_cache_broker.clone(),
                     pairs,
                     intervals_min.clone(),
@@ -316,7 +321,7 @@ pub(super) async fn handle_kraken_ws_command(
                         }
                     }
                 });
-                kraken_ohlc_ws::spawn_kraken_ohlc_snapshot_sweep(
+                kraken_ohlc_pipeline::spawn_kraken_ohlc_snapshot_sweep(
                     shared_cache_broker.clone(),
                     interval_min,
                     pairs,
