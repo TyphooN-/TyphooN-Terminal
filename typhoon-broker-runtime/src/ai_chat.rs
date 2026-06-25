@@ -1,6 +1,9 @@
-use super::prelude::*;
+use std::sync::Arc;
 
-pub(super) fn handle_ai_chat_command(
+use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
+use typhoon_engine::core::cache::SqliteCache;
+
+pub fn handle_ai_chat_command(
     cmd: BrokerCmd,
     broker_msg_tx_clone: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
     shared_cache_broker: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,

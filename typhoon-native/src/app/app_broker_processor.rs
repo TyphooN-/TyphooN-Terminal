@@ -1,4 +1,5 @@
 use crate::app::*;
+use typhoon_broker_runtime::ai_chat;
 use typhoon_broker_runtime::alpaca_account_data;
 use typhoon_broker_runtime::alpaca_order_ops;
 use typhoon_broker_runtime::bar_fetch_commands;
@@ -12,7 +13,6 @@ use typhoon_broker_runtime::storage;
 use typhoon_broker_runtime::symbol_search;
 
 mod prelude;
-mod ai_chat;
 mod fundamentals_commands;
 mod kraken_market_commands;
 mod kraken_ws_commands;

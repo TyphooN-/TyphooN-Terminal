@@ -5,6 +5,7 @@
 //! cache, and chart-key dependencies live here before the native processor tree is
 //! physically moved behind a single spawn seam.
 
+pub mod ai_chat;
 pub mod alpaca_account_data;
 pub mod alpaca_order_ops;
 pub mod bar_fetch_commands;

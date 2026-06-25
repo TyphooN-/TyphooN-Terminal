@@ -990,6 +990,9 @@ The next physical processor-child move relocated `matrix_commands` into
 `typhoon_broker_runtime::matrix_commands`; native now imports that runtime module for Matrix room
 join, message fetch, image send, and text send routing while the runtime crate owns the needed
 Tokio fs feature for screenshot reads.
+The next physical processor-child move relocated `ai_chat` into
+`typhoon_broker_runtime::ai_chat`; native now imports that runtime module for AI chat request
+routing while passing the shared cache explicitly for cross-client AI response caching.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 
