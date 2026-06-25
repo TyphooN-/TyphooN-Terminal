@@ -937,6 +937,11 @@ The next risk subtree seam added `app_broker_processor/research_compute/risk/pre
 repointed all direct risk compute handlers from `use super::*` to `use super::prelude::*`; that
 prelude forwards the research-compute prelude and leaves the risk router as the only local
 sibling-dispatch owner.
+The next crate-shell slice added the workspace member `typhoon-broker-runtime` with a deliberately
+small lower-layer prelude (`typhoon_engine::{broker, core}` and `typhoon_chart_ui::cache_keys`).
+No native processor files have been moved into it yet; the point of this slice is to make the
+future physical move target compile independently before threading the native spawn seam through
+the new crate.
 
 ### Earlier notes — Phase 1 → Phase 2 readiness (superseded)
 

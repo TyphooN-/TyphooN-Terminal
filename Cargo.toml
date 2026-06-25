@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "typhoon-engine",
+    "typhoon-broker-runtime",
     "typhoon-native",
     "typhoon-research-ui",
     "typhoon-chart-ui",
@@ -26,6 +27,7 @@ pbkdf2 = "0.13"
 base64 = "0.22"
 typhoon-transpiler = { path = "typhoon-transpiler" }
 typhoon-engine = { path = "typhoon-engine" }
+typhoon-broker-runtime = { path = "typhoon-broker-runtime" }
 typhoon-research-ui = { path = "typhoon-research-ui" }
 typhoon-chart-ui = { path = "typhoon-chart-ui" }
 

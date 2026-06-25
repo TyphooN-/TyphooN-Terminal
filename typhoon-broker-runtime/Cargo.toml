@@ -1,0 +1,14 @@
+[package]
+name = "typhoon-broker-runtime"
+version = "0.1.0"
+edition = "2024"
+description = "TyphooN Terminal broker command runtime seam"
+license = "BUSL-1.1"
+
+[lib]
+name = "typhoon_broker_runtime"
+path = "src/lib.rs"
+
+[dependencies]
+typhoon-engine = { workspace = true }
+typhoon-chart-ui = { workspace = true }
