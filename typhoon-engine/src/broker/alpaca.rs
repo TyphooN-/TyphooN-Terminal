@@ -203,6 +203,12 @@ fn alpaca_error_message(json: &serde_json::Value) -> Option<String> {
         .map(|msg| msg.to_string())
 }
 
+fn alpaca_error_message_from_text(text: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|json| alpaca_error_message(&json))
+}
+
 fn string_or_number(value: &serde_json::Value, default: &str) -> String {
     value
         .as_str()
@@ -3560,6 +3566,7 @@ impl AlpacaBroker {
     /// For stocks/ETFs: uses snapshot endpoint which includes pre/post-market data.
     /// For crypto: uses latest quotes endpoint (24/7).
     pub async fn get_latest_quote(&self, symbol: &str) -> Result<LatestQuote, String> {
+        Self::require_symbol(symbol, "Latest quote")?;
         self.rate_limiter.wait().await;
         let is_crypto = symbol.contains('/');
 
@@ -3573,13 +3580,7 @@ impl AlpacaBroker {
                 .send()
                 .await
                 .map_err(|e| format!("Quote request failed: {e}"))?;
-            if !resp.status().is_success() {
-                return Err(format!("Quote request failed: HTTP {}", resp.status()));
-            }
-            let json: serde_json::Value = resp
-                .json()
-                .await
-                .map_err(|e| format!("Quote parse failed: {e}"))?;
+            let json = Self::json_or_error(resp, "Quote").await?;
             Self::parse_crypto_latest_quote(symbol, &json)
         } else {
             // Stocks/ETFs: use snapshot endpoint for quote + trade fallback.
@@ -3604,7 +3605,9 @@ impl AlpacaBroker {
                         last_error = format!("SIP snapshot unavailable: HTTP {status}");
                         continue;
                     }
-                    return Err(format!("Snapshot request failed: HTTP {status}"));
+                    let detail = alpaca_error_message_from_text(&text)
+                        .unwrap_or_else(|| format!("HTTP {status}"));
+                    return Err(format!("Snapshot request failed: {detail}"));
                 }
                 let json: serde_json::Value = serde_json::from_str(&text)
                     .map_err(|e| format!("Snapshot parse failed: {e}"))?;
@@ -3623,6 +3626,7 @@ impl AlpacaBroker {
     /// Fetch snapshot for a symbol: last price, prev close, daily volume.
     /// Works for both stocks (v2/stocks snapshot) and crypto (v1beta3 snapshots).
     pub async fn get_snapshot(&self, symbol: &str) -> Result<SnapshotData, String> {
+        Self::require_symbol(symbol, "Snapshot")?;
         self.rate_limiter.wait().await;
         let is_crypto = symbol.contains('/');
 
@@ -3637,13 +3641,7 @@ impl AlpacaBroker {
                 .send()
                 .await
                 .map_err(|e| format!("Crypto snapshot failed: {e}"))?;
-            if !resp.status().is_success() {
-                return Err(format!("Crypto snapshot HTTP {}", resp.status()));
-            }
-            let json: serde_json::Value = resp
-                .json()
-                .await
-                .map_err(|e| format!("Crypto snapshot parse: {e}"))?;
+            let json = Self::json_or_error(resp, "Crypto snapshot").await?;
             Self::parse_crypto_snapshot_data(symbol, &json)
         } else {
             // Stock/ETF snapshot. Prefer SIP for extended-hours trades when
@@ -3667,7 +3665,9 @@ impl AlpacaBroker {
                         last_error = format!("SIP snapshot unavailable: HTTP {status}");
                         continue;
                     }
-                    return Err(format!("Snapshot HTTP {status}"));
+                    let detail = alpaca_error_message_from_text(&text)
+                        .unwrap_or_else(|| format!("HTTP {status}"));
+                    return Err(format!("Snapshot failed: {detail}"));
                 }
                 let json: serde_json::Value =
                     serde_json::from_str(&text).map_err(|e| format!("Snapshot parse: {e}"))?;

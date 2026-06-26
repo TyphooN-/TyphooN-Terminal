@@ -441,6 +441,24 @@ fn parse_crypto_latest_quote_accepts_string_numbers_and_missing_symbol_errors() 
 }
 
 #[test]
+fn snapshot_quote_policy_validates_inputs_and_extracts_api_errors() {
+    assert!(AlpacaBroker::require_symbol(" ", "Latest quote").is_err());
+    assert!(AlpacaBroker::require_symbol(" ", "Snapshot").is_err());
+    assert_eq!(
+        alpaca_error_message_from_text(
+            r#"{"message":"subscription does not permit querying SIP data"}"#
+        )
+        .as_deref(),
+        Some("subscription does not permit querying SIP data")
+    );
+    assert_eq!(
+        alpaca_error_message_from_text(r#"{"error":"invalid symbol"}"#).as_deref(),
+        Some("invalid symbol")
+    );
+    assert!(alpaca_error_message_from_text("not json").is_none());
+}
+
+#[test]
 fn parse_snapshot_data_uses_trade_price_for_last() {
     let snap = AlpacaBroker::parse_snapshot_data(
         "AAPL",
