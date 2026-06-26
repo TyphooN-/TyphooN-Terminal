@@ -157,6 +157,66 @@ fn parse_option_symbol_too_short() {
 }
 
 #[test]
+fn apply_option_snapshots_accepts_strings_numbers_and_missing_snapshots() {
+    let mut contracts = vec![OptionContract {
+        symbol: "AAPL240119C00150000".to_string(),
+        underlying: "AAPL".to_string(),
+        strike: 150.0,
+        expiry: "2024-01-19".to_string(),
+        option_type: "call".to_string(),
+        bid: 0.0,
+        ask: 0.0,
+        last_price: 0.0,
+        volume: 0,
+        open_interest: 0,
+        implied_volatility: 0.0,
+        delta: 0.0,
+        gamma: 0.0,
+        theta: 0.0,
+        vega: 0.0,
+        rho: 0.0,
+    }];
+
+    AlpacaBroker::apply_option_snapshots(
+        &mut contracts,
+        &json!({
+            "snapshots": {
+                "AAPL240119C00150000": {
+                    "latestQuote": {"bp": "1.25", "ap": 1.35},
+                    "latestTrade": {"p": "1.30"},
+                    "dailyBar": {"v": "42"},
+                    "openInterest": "120",
+                    "greeks": {
+                        "impliedVolatility": "0.21",
+                        "delta": 0.51,
+                        "gamma": "0.02",
+                        "theta": "-0.03",
+                        "vega": 0.12,
+                        "rho": "0.01"
+                    }
+                }
+            }
+        }),
+    );
+
+    let contract = &contracts[0];
+    assert_eq!(contract.bid, 1.25);
+    assert_eq!(contract.ask, 1.35);
+    assert_eq!(contract.last_price, 1.30);
+    assert_eq!(contract.volume, 42);
+    assert_eq!(contract.open_interest, 120);
+    assert_eq!(contract.implied_volatility, 0.21);
+    assert_eq!(contract.delta, 0.51);
+    assert_eq!(contract.gamma, 0.02);
+    assert_eq!(contract.theta, -0.03);
+    assert_eq!(contract.vega, 0.12);
+    assert_eq!(contract.rho, 0.01);
+
+    AlpacaBroker::apply_option_snapshots(&mut contracts, &json!({"message": "no snapshots"}));
+    assert_eq!(contracts[0].bid, 1.25);
+}
+
+#[test]
 fn parse_order_result_accepts_numeric_qty() {
     let order = AlpacaBroker::parse_order_result(&json!({
         "id": "order-1",

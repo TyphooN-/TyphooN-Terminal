@@ -2959,6 +2959,8 @@ impl AlpacaBroker {
         underlying_symbol: &str,
         expiry: &str,
     ) -> Result<Vec<OptionContract>, String> {
+        Self::require_symbol(underlying_symbol, "Options chain")?;
+        Self::require_nonblank(expiry, "Options chain", "expiration_date")?;
         self.rate_limiter.wait().await;
 
         let contracts = self
@@ -2993,15 +2995,34 @@ impl AlpacaBroker {
             return Ok(contracts);
         }
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Options parse failed: {e}"))?;
+        let json: serde_json::Value = match resp.json().await {
+            Ok(json) => json,
+            Err(e) => {
+                tracing::warn!(
+                    "Alpaca option snapshot enrichment parse failed for {} {}: {}",
+                    underlying_symbol,
+                    expiry,
+                    e
+                );
+                return Ok(contracts);
+            }
+        };
 
         let mut contracts = contracts;
+        Self::apply_option_snapshots(&mut contracts, &json);
 
+        // Sort by strike price
+        contracts.sort_by(|a, b| {
+            a.strike
+                .partial_cmp(&b.strike)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Ok(contracts)
+    }
+
+    fn apply_option_snapshots(contracts: &mut [OptionContract], json: &serde_json::Value) {
         if let Some(snapshots) = json["snapshots"].as_object() {
-            for contract in &mut contracts {
+            for contract in contracts {
                 if let Some(snap) = snapshots.get(&contract.symbol) {
                     let latest_quote = &snap["latestQuote"];
                     let greeks = &snap["greeks"];
@@ -3021,14 +3042,6 @@ impl AlpacaBroker {
                 }
             }
         }
-
-        // Sort by strike price
-        contracts.sort_by(|a, b| {
-            a.strike
-                .partial_cmp(&b.strike)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        Ok(contracts)
     }
 
     async fn fetch_option_contracts(
@@ -3036,6 +3049,8 @@ impl AlpacaBroker {
         underlying_symbol: &str,
         expiry: &str,
     ) -> Result<Vec<OptionContract>, String> {
+        Self::require_symbol(underlying_symbol, "Options contracts")?;
+        Self::require_nonblank(expiry, "Options contracts", "expiration_date")?;
         let resp = self
             .client
             .get(format!("{}/v2/options/contracts", self.base_url))
@@ -3051,7 +3066,9 @@ impl AlpacaBroker {
             .map_err(|e| format!("Options contracts request failed: {e}"))?;
         let json = Self::json_or_error(resp, "Options contracts").await?;
         let Some(rows) = json["option_contracts"].as_array() else {
-            return Ok(Vec::new());
+            return Err(format!(
+                "Options contracts failed: expected option_contracts array response, got {json}"
+            ));
         };
         Ok(rows
             .iter()
