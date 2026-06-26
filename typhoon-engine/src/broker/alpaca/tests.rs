@@ -330,6 +330,37 @@ fn portfolio_and_corporate_actions_validate_inputs_and_shapes() {
 }
 
 #[test]
+fn parse_assets_response_filters_tradable_and_accepts_numeric_fields() {
+    let assets = AlpacaBroker::parse_assets_response(&json!([
+        {
+            "symbol": "BTC/USD",
+            "name": "Bitcoin / US Dollar",
+            "class": "crypto",
+            "tradable": true,
+            "marginable": false,
+            "shortable": false,
+            "fractionable": true,
+            "min_order_size": 0.0001,
+            "min_trade_increment": "0.00000001",
+            "price_increment": 0.01
+        },
+        {
+            "symbol": "HALTED",
+            "name": "Halted Asset",
+            "class": "us_equity",
+            "tradable": false
+        }
+    ]))
+    .unwrap();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0].symbol, "BTC/USD");
+    assert_eq!(assets[0].min_order_size, Some(0.0001));
+    assert_eq!(assets[0].min_trade_increment, Some(0.00000001));
+    assert_eq!(assets[0].price_increment, Some(0.01));
+    assert!(AlpacaBroker::parse_assets_response(&json!({"message": "bad"})).is_err());
+}
+
+#[test]
 fn parse_asset_info_accepts_numeric_increment_fields() {
     let asset = AlpacaBroker::parse_asset_info(&json!({
         "symbol": "BTC/USD",

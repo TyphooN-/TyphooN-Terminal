@@ -2134,6 +2134,19 @@ fn extract_latest_fact(gaap: &serde_json::Value, concept: &str) -> serde_json::V
 impl AlpacaBroker {
     // ── Symbol List ────────────────────────────────────────────────
 
+    fn parse_assets_response(json: &serde_json::Value) -> Result<Vec<AssetInfo>, String> {
+        let Some(rows) = json.as_array() else {
+            return Err(format!(
+                "Assets parse failed: expected array response, got {json}"
+            ));
+        };
+        Ok(rows
+            .iter()
+            .filter(|a| a["tradable"].as_bool().unwrap_or(false))
+            .map(Self::parse_asset_info)
+            .collect())
+    }
+
     pub async fn get_all_assets(&self) -> Result<Vec<AssetInfo>, String> {
         let resp = self
             .client
@@ -2144,30 +2157,8 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Assets request failed: {e}"))?;
 
-        let json = Self::json_or_error(resp, "Assets")
-            .await?
-            .as_array()
-            .cloned()
-            .ok_or_else(|| "Assets parse failed: expected array".to_string())?;
-
-        Ok(json
-            .iter()
-            .filter(|a| a["tradable"].as_bool().unwrap_or(false))
-            .map(|a| AssetInfo {
-                symbol: a["symbol"].as_str().unwrap_or("").to_string(),
-                name: a["name"].as_str().unwrap_or("").to_string(),
-                asset_class: a["class"].as_str().unwrap_or("").to_string(),
-                tradable: true,
-                marginable: a["marginable"].as_bool().unwrap_or(false),
-                shortable: a["shortable"].as_bool().unwrap_or(false),
-                fractionable: a["fractionable"].as_bool().unwrap_or(false),
-                min_order_size: a["min_order_size"].as_str().and_then(|s| s.parse().ok()),
-                min_trade_increment: a["min_trade_increment"]
-                    .as_str()
-                    .and_then(|s| s.parse().ok()),
-                price_increment: a["price_increment"].as_str().and_then(|s| s.parse().ok()),
-            })
-            .collect())
+        let json = Self::json_or_error(resp, "Assets").await?;
+        Self::parse_assets_response(&json)
     }
 
     // ── Historical Data ──────────────────────────────────────────────
