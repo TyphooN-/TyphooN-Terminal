@@ -500,6 +500,22 @@ fn parse_bars_stock_valid() {
 }
 
 #[test]
+fn parse_bars_accepts_string_numeric_ohlcv_fields() {
+    let json = json!({
+        "bars": [
+            {"t": "2024-01-02T05:00:00Z", "o": "100.5", "h": "105.25", "l": "99.75", "c": "103.125", "v": "50000.5"},
+        ]
+    });
+    let bars = AlpacaBroker::parse_bars(&json, "AAPL", false);
+    assert_eq!(bars.len(), 1);
+    assert_eq!(bars[0].open, 100.5);
+    assert_eq!(bars[0].high, 105.25);
+    assert_eq!(bars[0].low, 99.75);
+    assert_eq!(bars[0].close, 103.125);
+    assert_eq!(bars[0].volume, 50000.5);
+}
+
+#[test]
 fn parse_bars_crypto_nested_by_symbol() {
     let json = json!({
         "bars": {
@@ -511,6 +527,33 @@ fn parse_bars_crypto_nested_by_symbol() {
     let bars = AlpacaBroker::parse_bars(&json, "BTC/USD", true);
     assert_eq!(bars.len(), 1);
     assert_eq!(bars[0].open, 42000.0);
+}
+
+#[test]
+fn parse_crypto_orderbook_snapshot_accepts_string_numeric_levels() {
+    let orderbook = AlpacaBroker::parse_crypto_orderbook_snapshot(
+        "BTC/USD",
+        &json!({
+            "orderbooks": {
+                "BTC/USD": {
+                    "t": "book-ts",
+                    "b": [{"p": "43000.50", "s": "0.25"}],
+                    "a": [{"p": 43001.25, "s": 0.5}]
+                }
+            }
+        }),
+    )
+    .unwrap();
+    assert_eq!(orderbook["symbol"], "BTC/USD");
+    assert_eq!(orderbook["timestamp"], "book-ts");
+    assert_eq!(orderbook["bids"][0]["price"], 43000.50);
+    assert_eq!(orderbook["bids"][0]["size"], 0.25);
+    assert_eq!(orderbook["asks"][0]["price"], 43001.25);
+    assert_eq!(orderbook["asks"][0]["size"], 0.5);
+    assert!(
+        AlpacaBroker::parse_crypto_orderbook_snapshot("ETH/USD", &json!({"orderbooks": {}}))
+            .is_err()
+    );
 }
 
 #[test]

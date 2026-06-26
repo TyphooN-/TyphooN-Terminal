@@ -2878,11 +2878,11 @@ impl AlpacaBroker {
                 arr.iter()
                     .filter_map(|b| {
                         let ts = b["t"].as_str().unwrap_or("");
-                        let o = b["o"].as_f64().unwrap_or(0.0);
-                        let h = b["h"].as_f64().unwrap_or(0.0);
-                        let l = b["l"].as_f64().unwrap_or(0.0);
-                        let c = b["c"].as_f64().unwrap_or(0.0);
-                        let v = b["v"].as_f64().unwrap_or(0.0);
+                        let o = parse_f64_value(&b["o"]);
+                        let h = parse_f64_value(&b["h"]);
+                        let l = parse_f64_value(&b["l"]);
+                        let c = parse_f64_value(&b["c"]);
+                        let v = parse_f64_value(&b["v"]);
                         // Reject bars with missing timestamp or zero/NaN prices
                         if ts.is_empty() || o <= 0.0 || c <= 0.0 || !o.is_finite() || !c.is_finite()
                         {
@@ -3381,7 +3381,13 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Orderbook parse failed: {e}"))?;
 
-        // Extract the orderbook for the requested symbol and structure it
+        Self::parse_crypto_orderbook_snapshot(symbol, &json)
+    }
+
+    fn parse_crypto_orderbook_snapshot(
+        symbol: &str,
+        json: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         let orderbook = &json["orderbooks"][symbol];
         if orderbook.is_null() {
             return Err(format!("No orderbook data for {symbol}"));
@@ -3389,8 +3395,8 @@ impl AlpacaBroker {
 
         let parse_level = |entry: &serde_json::Value| -> serde_json::Value {
             serde_json::json!({
-                "price": entry["p"].as_f64().unwrap_or(0.0),
-                "size": entry["s"].as_f64().unwrap_or(0.0),
+                "price": parse_f64_value(&entry["p"]),
+                "size": parse_f64_value(&entry["s"]),
             })
         };
 
