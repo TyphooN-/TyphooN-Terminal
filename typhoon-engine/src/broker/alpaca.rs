@@ -12,6 +12,12 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
+const CRYPTO_BAR_FEEDS: &[Option<&str>] = &[None];
+const STOCK_BAR_FEEDS_IEX_ONLY: &[Option<&str>] = &[Some("iex")];
+const STOCK_BAR_FEEDS_IEX_THEN_SIP: &[Option<&str>] = &[Some("iex"), Some("sip")];
+const STOCK_SNAPSHOT_FEEDS_IEX_ONLY: &[Option<&str>] = &[Some("iex")];
+const STOCK_SNAPSHOT_FEEDS_SIP_THEN_IEX: &[Option<&str>] = &[Some("sip"), Some("iex")];
+
 /// Shared HTTP client for SEC EDGAR requests (reuses TCP connections).
 fn sec_client() -> &'static Client {
     static CLIENT: OnceLock<Client> = OnceLock::new();
@@ -1069,11 +1075,11 @@ impl AlpacaBroker {
         limit.clamp(1, 500)
     }
 
-    fn stock_bar_feeds(&self) -> Vec<Option<&'static str>> {
+    fn stock_bar_feeds(&self) -> &'static [Option<&'static str>] {
         if self.sip_bar_feed_unavailable.load(Ordering::Relaxed) {
-            vec![Some("iex")]
+            STOCK_BAR_FEEDS_IEX_ONLY
         } else {
-            vec![Some("iex"), Some("sip")]
+            STOCK_BAR_FEEDS_IEX_THEN_SIP
         }
     }
 
@@ -2301,8 +2307,8 @@ impl AlpacaBroker {
             alpaca_stock_bars_url(symbol)?
         };
 
-        let feeds: Vec<Option<&str>> = if is_crypto {
-            vec![None]
+        let feeds: &[Option<&str>] = if is_crypto {
+            CRYPTO_BAR_FEEDS
         } else {
             self.stock_bar_feeds()
         };
@@ -2315,7 +2321,8 @@ impl AlpacaBroker {
         };
         let mut last_error = String::new();
 
-        for feed in &feeds {
+        for feed in feeds {
+            let feed = *feed;
             let mut all_bars: Vec<Bar> = Vec::new();
             let mut next_page_token: Option<String> = None;
             let mut chunk_count = 0u32;
@@ -2679,8 +2686,8 @@ impl AlpacaBroker {
 
         // Try multiple feeds in order: sip (paid) → iex (free) for stocks
         // Crypto uses a different endpoint and doesn't need a feed param
-        let feeds: Vec<Option<&str>> = if is_crypto {
-            vec![None] // crypto endpoint doesn't use feed param
+        let feeds: &[Option<&str>] = if is_crypto {
+            CRYPTO_BAR_FEEDS // crypto endpoint doesn't use feed param
         } else {
             self.stock_bar_feeds() // try free tier first
         };
@@ -2715,7 +2722,8 @@ impl AlpacaBroker {
 
         let mut last_error = String::new();
 
-        for feed in &feeds {
+        for feed in feeds {
+            let feed = *feed;
             let mut all_bars: Vec<Bar> = Vec::new();
             // Use Alpaca's native page_token pagination for efficient chunk fetching.
             // Fetch oldest→newest so page_token works correctly, then trim to most recent.
@@ -2912,7 +2920,7 @@ impl AlpacaBroker {
                     all_bars.drain(..skip);
                 }
                 let feed_label = match feed {
-                    Some(f) => *f,
+                    Some(f) => f,
                     None => "crypto",
                 };
                 let elapsed_secs = fetch_start.elapsed().as_secs();
@@ -3545,11 +3553,11 @@ impl AlpacaBroker {
         }))
     }
 
-    fn stock_snapshot_feeds(&self) -> Vec<Option<&'static str>> {
+    fn stock_snapshot_feeds(&self) -> &'static [Option<&'static str>] {
         if self.sip_bar_feed_unavailable.load(Ordering::Relaxed) {
-            vec![Some("iex")]
+            STOCK_SNAPSHOT_FEEDS_IEX_ONLY
         } else {
-            vec![Some("sip"), Some("iex")]
+            STOCK_SNAPSHOT_FEEDS_SIP_THEN_IEX
         }
     }
 
@@ -3681,6 +3689,7 @@ impl AlpacaBroker {
             let url = alpaca_stock_snapshot_url(symbol)?;
             let mut last_error = String::new();
             for feed in self.stock_snapshot_feeds() {
+                let feed = *feed;
                 let mut req = self.client.get(&url).headers(self.headers());
                 if let Some(feed) = feed {
                     req = req.query(&[("feed", feed)]);
@@ -3741,6 +3750,7 @@ impl AlpacaBroker {
             let url = alpaca_stock_snapshot_url(symbol)?;
             let mut last_error = String::new();
             for feed in self.stock_snapshot_feeds() {
+                let feed = *feed;
                 let mut req = self.client.get(&url).headers(self.headers());
                 if let Some(feed) = feed {
                     req = req.query(&[("feed", feed)]);

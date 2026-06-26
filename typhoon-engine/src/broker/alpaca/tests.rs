@@ -743,6 +743,23 @@ fn ignores_non_entitlement_bar_failures() {
     ));
 }
 
+#[test]
+fn feed_fallback_policies_use_static_slices_without_allocating() {
+    let broker = AlpacaBroker::new("key".to_string(), "secret".to_string(), true, 200);
+
+    assert_eq!(broker.stock_bar_feeds(), STOCK_BAR_FEEDS_IEX_THEN_SIP);
+    assert_eq!(
+        broker.stock_snapshot_feeds(),
+        STOCK_SNAPSHOT_FEEDS_SIP_THEN_IEX
+    );
+
+    broker
+        .sip_bar_feed_unavailable
+        .store(true, Ordering::Relaxed);
+    assert_eq!(broker.stock_bar_feeds(), STOCK_BAR_FEEDS_IEX_ONLY);
+    assert_eq!(broker.stock_snapshot_feeds(), STOCK_SNAPSHOT_FEEDS_IEX_ONLY);
+}
+
 // ── parse_bars (mock JSON) ──────────────────────────────────────
 
 #[test]
