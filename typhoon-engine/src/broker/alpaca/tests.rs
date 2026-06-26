@@ -566,6 +566,15 @@ fn alpaca_path_segment_percent_encodes_symbols_and_ids() {
 }
 
 #[test]
+fn fmp_grade_url_trims_valid_symbols_and_encodes_path_segments() {
+    assert_eq!(
+        fmp_grade_url(" BRK/B ").unwrap(),
+        "https://financialmodelingprep.com/api/v3/grade/BRK%2FB"
+    );
+    assert!(fmp_grade_url(" ").is_err());
+}
+
+#[test]
 fn limit_order_body_validates_qty_side_price_and_tif() {
     let body = AlpacaBroker::limit_order_body("AAPL", 2.0, "SELL", 191.234, "DAY").unwrap();
     assert_eq!(body["side"], "sell");

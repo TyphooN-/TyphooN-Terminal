@@ -230,6 +230,14 @@ fn alpaca_path_segment(value: &str) -> String {
     encoded
 }
 
+fn fmp_grade_url(symbol: &str) -> Result<String, String> {
+    AlpacaBroker::require_symbol(symbol, "FMP ratings")?;
+    Ok(format!(
+        "https://financialmodelingprep.com/api/v3/grade/{}",
+        alpaca_path_segment(symbol.trim())
+    ))
+}
+
 fn optional_string_or_number(value: &serde_json::Value) -> Option<String> {
     value
         .as_str()
@@ -1689,11 +1697,12 @@ impl AlpacaBroker {
         symbol: &str,
         finnhub_key: &str,
     ) -> Result<Vec<serde_json::Value>, String> {
-        if finnhub_key.is_empty() {
+        if finnhub_key.trim().is_empty() {
             return Ok(vec![]);
         }
+        Self::require_symbol(symbol, "Finnhub news")?;
         // Strip /USD for crypto symbols (Finnhub uses BINANCE:BTCUSDT format for crypto)
-        let clean_sym = symbol.replace("/USD", "").replace("/", "");
+        let clean_sym = symbol.trim().replace("/USD", "").replace("/", "");
 
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let week_ago = (chrono::Utc::now() - chrono::Duration::days(7))
@@ -1706,7 +1715,7 @@ impl AlpacaBroker {
                 ("symbol", clean_sym.as_str()),
                 ("from", week_ago.as_str()),
                 ("to", today.as_str()),
-                ("token", finnhub_key),
+                ("token", finnhub_key.trim()),
             ])
             .send()
             .await
@@ -1743,15 +1752,14 @@ impl AlpacaBroker {
         symbol: &str,
         av_key: &str,
     ) -> Result<serde_json::Value, String> {
-        if av_key.is_empty() {
-            return Err("Alpha Vantage API key required".into());
-        }
+        Self::require_symbol(symbol, "AV earnings")?;
+        Self::require_nonblank(av_key, "AV earnings", "API key")?;
         let resp = sec_client()
             .get("https://www.alphavantage.co/query")
             .query(&[
                 ("function", "EARNINGS"),
-                ("symbol", symbol),
-                ("apikey", av_key),
+                ("symbol", symbol.trim()),
+                ("apikey", av_key.trim()),
             ])
             .send()
             .await
@@ -1771,15 +1779,11 @@ impl AlpacaBroker {
         symbol: &str,
         fmp_key: &str,
     ) -> Result<Vec<serde_json::Value>, String> {
-        if fmp_key.is_empty() {
-            return Err("FMP API key required".into());
-        }
+        Self::require_nonblank(fmp_key, "FMP ratings", "API key")?;
+        let url = fmp_grade_url(symbol)?;
         let resp = sec_client()
-            .get(format!(
-                "https://financialmodelingprep.com/api/v3/grade/{}",
-                symbol
-            ))
-            .query(&[("apikey", fmp_key), ("limit", "20")])
+            .get(url)
+            .query(&[("apikey", fmp_key.trim()), ("limit", "20")])
             .send()
             .await
             .map_err(|e| format!("FMP ratings failed: {e}"))?;
@@ -1874,12 +1878,11 @@ impl AlpacaBroker {
         symbol: &str,
         finnhub_key: &str,
     ) -> Result<Vec<serde_json::Value>, String> {
-        if finnhub_key.is_empty() {
-            return Err("Finnhub API key required".into());
-        }
+        Self::require_symbol(symbol, "Finnhub recommendations")?;
+        Self::require_nonblank(finnhub_key, "Finnhub recommendations", "API key")?;
         let resp = sec_client()
             .get("https://finnhub.io/api/v1/stock/recommendation")
-            .query(&[("symbol", symbol), ("token", finnhub_key)])
+            .query(&[("symbol", symbol.trim()), ("token", finnhub_key.trim())])
             .send()
             .await
             .map_err(|e| format!("Finnhub recommendations failed: {e}"))?;
@@ -1899,12 +1902,11 @@ impl AlpacaBroker {
         symbol: &str,
         finnhub_key: &str,
     ) -> Result<serde_json::Value, String> {
-        if finnhub_key.is_empty() {
-            return Err("Finnhub API key required".into());
-        }
+        Self::require_symbol(symbol, "Finnhub price target")?;
+        Self::require_nonblank(finnhub_key, "Finnhub price target", "API key")?;
         let resp = sec_client()
             .get("https://finnhub.io/api/v1/stock/price-target")
-            .query(&[("symbol", symbol), ("token", finnhub_key)])
+            .query(&[("symbol", symbol.trim()), ("token", finnhub_key.trim())])
             .send()
             .await
             .map_err(|e| format!("Finnhub price target failed: {e}"))?;
@@ -1924,14 +1926,13 @@ impl AlpacaBroker {
         symbol: &str,
         finnhub_key: &str,
     ) -> Result<serde_json::Value, String> {
-        if finnhub_key.is_empty() {
-            return Err("Finnhub API key required".into());
-        }
+        Self::require_symbol(symbol, "Finnhub insider sentiment")?;
+        Self::require_nonblank(finnhub_key, "Finnhub insider sentiment", "API key")?;
         let resp = sec_client()
             .get("https://finnhub.io/api/v1/stock/insider-sentiment")
             .query(&[
-                ("symbol", symbol),
-                ("token", finnhub_key),
+                ("symbol", symbol.trim()),
+                ("token", finnhub_key.trim()),
                 ("from", "2024-01-01"),
             ])
             .send()
