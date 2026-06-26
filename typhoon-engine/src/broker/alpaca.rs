@@ -3880,19 +3880,29 @@ impl AlpacaBroker {
     // ── Finnhub Short Interest ────────────────────────────────────
 
     /// Fetch FINRA short interest data from Finnhub (bi-weekly reports).
+    fn parse_finnhub_short_interest_response(
+        body: &serde_json::Value,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let Some(arr) = body.get("data").and_then(|d| d.as_array()) else {
+            return Err(format!(
+                "Finnhub short interest failed: expected data array response, got {body}"
+            ));
+        };
+        Ok(arr.clone())
+    }
+
     pub async fn get_finnhub_short_interest(
         &self,
         symbol: &str,
         finnhub_key: &str,
     ) -> Result<Vec<serde_json::Value>, String> {
-        if finnhub_key.is_empty() {
-            return Err("Finnhub API key required".into());
-        }
+        Self::require_symbol(symbol, "Finnhub short interest")?;
+        Self::require_nonblank(finnhub_key, "Finnhub short interest", "API key")?;
         let resp = sec_client()
             .get("https://finnhub.io/api/v1/stock/short-interest")
             .query(&[
-                ("symbol", symbol),
-                ("token", finnhub_key),
+                ("symbol", symbol.trim()),
+                ("token", finnhub_key.trim()),
                 ("from", "2025-01-01"),
                 ("to", "2026-12-31"),
             ])
@@ -3908,10 +3918,7 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Finnhub short interest parse failed: {e}"))?;
         // Finnhub returns { "data": [...], "symbol": "..." }
-        match body.get("data").and_then(|d| d.as_array()) {
-            Some(arr) => Ok(arr.clone()),
-            None => Ok(vec![body]),
-        }
+        Self::parse_finnhub_short_interest_response(&body)
     }
 
     // ── Alpaca Watchlists ────────────────────────────────────────────

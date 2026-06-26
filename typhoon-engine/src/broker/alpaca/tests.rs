@@ -952,6 +952,23 @@ fn parse_order_info_with_bracket_legs() {
 }
 
 #[test]
+fn parse_finnhub_short_interest_response_requires_data_array() {
+    let body = json!({
+        "symbol": "AAPL",
+        "data": [
+            {"settlementDate": "2025-01-15", "shortInterest": 12345},
+            {"settlementDate": "2025-01-31", "shortInterest": 23456},
+        ]
+    });
+    let rows = AlpacaBroker::parse_finnhub_short_interest_response(&body).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["shortInterest"], 12345);
+
+    let malformed = json!({"symbol": "AAPL", "data": {"shortInterest": 12345}});
+    assert!(AlpacaBroker::parse_finnhub_short_interest_response(&malformed).is_err());
+}
+
+#[test]
 fn collect_cancellable_order_ids_for_symbol_skips_filled_parent_and_keeps_open_legs() {
     let parent = OrderInfo {
         id: "parent-1".to_string(),
