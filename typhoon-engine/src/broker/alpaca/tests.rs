@@ -952,6 +952,25 @@ fn aggregate_weekly_to_monthly_empty() {
     assert!(monthly.is_empty());
 }
 
+#[test]
+fn watchlist_bodies_trim_and_validate_inputs_before_http() {
+    let symbols = vec![
+        " AAPL ".to_string(),
+        "".to_string(),
+        " BTC/USD ".to_string(),
+    ];
+    let create = AlpacaBroker::create_watchlist_body("  Core  ", &symbols).unwrap();
+    assert_eq!(create["name"], "Core");
+    assert_eq!(create["symbols"], json!(["AAPL", "BTC/USD"]));
+
+    let update = AlpacaBroker::update_watchlist_body(&symbols).unwrap();
+    assert_eq!(update["symbols"], json!(["AAPL", "BTC/USD"]));
+
+    assert!(AlpacaBroker::create_watchlist_body(" ", &symbols).is_err());
+    assert!(AlpacaBroker::create_watchlist_body("Core", &[]).is_err());
+    assert!(AlpacaBroker::update_watchlist_body(&[" ".to_string()]).is_err());
+}
+
 // ── OCO order body construction ──
 
 #[test]

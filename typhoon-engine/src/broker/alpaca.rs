@@ -3867,6 +3867,43 @@ impl AlpacaBroker {
 
     // ── Alpaca Watchlists ────────────────────────────────────────────
 
+    fn normalize_watchlist_symbols(
+        symbols: &[String],
+        context: &str,
+    ) -> Result<Vec<String>, String> {
+        let out: Vec<String> = symbols
+            .iter()
+            .map(|symbol| symbol.trim())
+            .filter(|symbol| !symbol.is_empty())
+            .map(|symbol| symbol.to_string())
+            .collect();
+        if out.is_empty() {
+            return Err(format!(
+                "{context} rejected: at least one symbol is required"
+            ));
+        }
+        Ok(out)
+    }
+
+    fn create_watchlist_body(name: &str, symbols: &[String]) -> Result<serde_json::Value, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("Create watchlist rejected: name is required".into());
+        }
+        let symbols = Self::normalize_watchlist_symbols(symbols, "Create watchlist")?;
+        Ok(serde_json::json!({
+            "name": name,
+            "symbols": symbols,
+        }))
+    }
+
+    fn update_watchlist_body(symbols: &[String]) -> Result<serde_json::Value, String> {
+        let symbols = Self::normalize_watchlist_symbols(symbols, "Update watchlist")?;
+        Ok(serde_json::json!({
+            "symbols": symbols,
+        }))
+    }
+
     /// Fetch all watchlists from Alpaca.
     pub async fn get_watchlists(&self) -> Result<Vec<serde_json::Value>, String> {
         self.rate_limiter.wait().await;
@@ -3878,15 +3915,17 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Get watchlists failed: {e}"))?;
 
-        if resp.status().as_u16() == 429 {
+        let status = resp.status();
+        if status.as_u16() == 429 {
             self.rate_limiter.trigger_cooldown().await;
         }
-        if !resp.status().is_success() {
-            return Err(format!("Get watchlists: HTTP {}", resp.status()));
-        }
-        resp.json()
-            .await
-            .map_err(|e| format!("Watchlists parse failed: {e}"))
+        let json = Self::json_or_error(resp, "Get watchlists").await?;
+        let Some(arr) = json.as_array() else {
+            return Err(format!(
+                "Get watchlists failed: expected array response, got {json}"
+            ));
+        };
+        Ok(arr.clone())
     }
 
     /// Create a new watchlist on Alpaca.
@@ -3896,10 +3935,7 @@ impl AlpacaBroker {
         symbols: &[String],
     ) -> Result<serde_json::Value, String> {
         self.rate_limiter.wait().await;
-        let body = serde_json::json!({
-            "name": name,
-            "symbols": symbols,
-        });
+        let body = Self::create_watchlist_body(name, symbols)?;
         let resp = self
             .client
             .post(format!("{}/v2/watchlists", self.base_url))
@@ -3909,17 +3945,11 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Create watchlist failed: {e}"))?;
 
-        if resp.status().as_u16() == 429 {
+        let status = resp.status();
+        if status.as_u16() == 429 {
             self.rate_limiter.trigger_cooldown().await;
         }
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(format!("Create watchlist: HTTP {status} — {text}"));
-        }
-        resp.json()
-            .await
-            .map_err(|e| format!("Create watchlist parse failed: {e}"))
+        Self::json_or_error(resp, "Create watchlist").await
     }
 
     /// Update an existing watchlist on Alpaca (replace symbols).
@@ -3928,30 +3958,25 @@ impl AlpacaBroker {
         id: &str,
         symbols: &[String],
     ) -> Result<serde_json::Value, String> {
+        if id.trim().is_empty() {
+            return Err("Update watchlist rejected: id is required".into());
+        }
         self.rate_limiter.wait().await;
-        let body = serde_json::json!({
-            "symbols": symbols,
-        });
+        let body = Self::update_watchlist_body(symbols)?;
         let resp = self
             .client
-            .put(format!("{}/v2/watchlists/{}", self.base_url, id))
+            .put(format!("{}/v2/watchlists/{}", self.base_url, id.trim()))
             .headers(self.headers())
             .json(&body)
             .send()
             .await
             .map_err(|e| format!("Update watchlist failed: {e}"))?;
 
-        if resp.status().as_u16() == 429 {
+        let status = resp.status();
+        if status.as_u16() == 429 {
             self.rate_limiter.trigger_cooldown().await;
         }
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(format!("Update watchlist: HTTP {status} — {text}"));
-        }
-        resp.json()
-            .await
-            .map_err(|e| format!("Update watchlist parse failed: {e}"))
+        Self::json_or_error(resp, "Update watchlist").await
     }
 }
 
