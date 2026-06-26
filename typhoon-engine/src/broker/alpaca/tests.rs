@@ -750,7 +750,8 @@ fn parse_stock_bars_by_symbol_batch_valid() {
     let json = json!({
         "bars": {
             "AAPL": [{"t":"2024-01-02T00:00:00Z","o":100.0,"h":110.0,"l":99.0,"c":105.0,"v":1000.0}],
-            "MSFT": [{"t":"2024-01-02T00:00:00Z","o":200.0,"h":220.0,"l":190.0,"c":210.0,"v":2000.0}]
+            "MSFT": [{"t":"2024-01-02T00:00:00Z","o":200.0,"h":220.0,"l":190.0,"c":210.0,"v":2000.0}],
+            "UNREQUESTED": [{"t":"2024-01-02T00:00:00Z","o":1.0,"h":2.0,"l":1.0,"c":2.0,"v":1.0}]
         }
     });
     let symbols = vec![
@@ -763,6 +764,23 @@ fn parse_stock_bars_by_symbol_batch_valid() {
     assert_eq!(bars["AAPL"][0].close, 105.0);
     assert_eq!(bars["MSFT"].len(), 1);
     assert!(!bars.contains_key("MISSING"));
+    assert!(!bars.contains_key("UNREQUESTED"));
+}
+
+#[test]
+fn normalize_stock_batch_symbols_dedupes_with_constant_time_membership() {
+    let symbols = vec![
+        " aapl ".to_string(),
+        "MSFT".to_string(),
+        "AAPL".to_string(),
+        "BTC/USD".to_string(),
+        " ".to_string(),
+        "msft".to_string(),
+    ];
+    assert_eq!(
+        normalize_stock_batch_symbols(&symbols),
+        vec!["AAPL".to_string(), "MSFT".to_string()]
+    );
 }
 
 #[test]

@@ -323,6 +323,21 @@ fn normalize_account_activities_page_size(limit: u32) -> String {
     limit.clamp(1, 100).to_string()
 }
 
+fn normalize_stock_batch_symbols(symbols: &[String]) -> Vec<String> {
+    let mut seen = HashSet::with_capacity(symbols.len());
+    let mut out = Vec::with_capacity(symbols.len());
+    for symbol in symbols {
+        let symbol = symbol.trim().to_ascii_uppercase();
+        if symbol.is_empty() || symbol.contains('/') {
+            continue;
+        }
+        if seen.insert(symbol.clone()) {
+            out.push(symbol);
+        }
+    }
+    out
+}
+
 fn optional_string_or_number(value: &serde_json::Value) -> Option<String> {
     value
         .as_str()
@@ -2467,13 +2482,7 @@ impl AlpacaBroker {
     ) -> Result<(HashMap<String, Vec<Bar>>, FetchOutcome), String> {
         Self::require_nonblank(timeframe, "Batch bars", "timeframe")?;
         let actual_limit = Self::normalize_bar_limit(limit);
-        let mut symbols: Vec<String> = symbols
-            .iter()
-            .map(|symbol| symbol.trim().to_ascii_uppercase())
-            .filter(|symbol| !symbol.is_empty() && !symbol.contains('/'))
-            .collect();
-        symbols.sort();
-        symbols.dedup();
+        let symbols = normalize_stock_batch_symbols(symbols);
         if symbols.is_empty() {
             return Ok((HashMap::new(), FetchOutcome::Complete));
         }
@@ -3042,8 +3051,9 @@ impl AlpacaBroker {
         let Some(bars_by_symbol) = json["bars"].as_object() else {
             return out;
         };
-        for symbol in symbols {
-            if let Some(bars) = bars_by_symbol.get(symbol) {
+        let requested: HashSet<&str> = symbols.iter().map(String::as_str).collect();
+        for (symbol, bars) in bars_by_symbol {
+            if requested.contains(symbol.as_str()) {
                 let wrapped = serde_json::json!({ "bars": bars });
                 out.insert(symbol.clone(), Self::parse_bars(&wrapped, symbol, false));
             }
