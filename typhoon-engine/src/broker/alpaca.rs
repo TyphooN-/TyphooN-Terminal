@@ -269,6 +269,32 @@ fn alpaca_stock_snapshot_url(symbol: &str) -> Result<String, String> {
     ))
 }
 
+fn alpaca_options_snapshots_url(underlying_symbol: &str) -> Result<String, String> {
+    AlpacaBroker::require_symbol(underlying_symbol, "Options snapshots")?;
+    Ok(format!(
+        "{}/v1beta1/options/snapshots/{}",
+        DATA_BASE,
+        alpaca_path_segment(underlying_symbol.trim())
+    ))
+}
+
+fn normalize_option_expiration_date(expiry: &str) -> Result<String, String> {
+    let expiry = expiry.trim();
+    let valid = expiry.len() == 10
+        && expiry.as_bytes().get(4) == Some(&b'-')
+        && expiry.as_bytes().get(7) == Some(&b'-')
+        && expiry
+            .chars()
+            .enumerate()
+            .all(|(i, c)| matches!(i, 4 | 7) || c.is_ascii_digit());
+    if !valid {
+        return Err("Options chain rejected: expiration_date must be YYYY-MM-DD".to_string());
+    }
+    chrono::NaiveDate::parse_from_str(expiry, "%Y-%m-%d")
+        .map_err(|_| "Options chain rejected: expiration_date must be a valid date".to_string())?;
+    Ok(expiry.to_string())
+}
+
 fn normalize_account_activity_types_path_segment(
     activity_types: &str,
 ) -> Result<Option<String>, String> {
@@ -3038,11 +3064,11 @@ impl AlpacaBroker {
         expiry: &str,
     ) -> Result<Vec<OptionContract>, String> {
         Self::require_symbol(underlying_symbol, "Options chain")?;
-        Self::require_nonblank(expiry, "Options chain", "expiration_date")?;
+        let expiry = normalize_option_expiration_date(expiry)?;
         self.rate_limiter.wait().await;
 
         let contracts = self
-            .fetch_option_contracts(underlying_symbol, expiry)
+            .fetch_option_contracts(underlying_symbol, &expiry)
             .await?;
         if contracts.is_empty() {
             return Ok(contracts);
@@ -3050,12 +3076,9 @@ impl AlpacaBroker {
 
         let resp = self
             .client
-            .get(format!(
-                "{}/v1beta1/options/snapshots/{}",
-                DATA_BASE, underlying_symbol
-            ))
+            .get(alpaca_options_snapshots_url(underlying_symbol)?)
             .headers(self.headers())
-            .query(&[("feed", "indicative"), ("expiration_date", expiry)])
+            .query(&[("feed", "indicative"), ("expiration_date", expiry.as_str())])
             .send()
             .await
             .map_err(|e| format!("Options request failed: {e}"))?;
@@ -3128,7 +3151,7 @@ impl AlpacaBroker {
         expiry: &str,
     ) -> Result<Vec<OptionContract>, String> {
         Self::require_symbol(underlying_symbol, "Options contracts")?;
-        Self::require_nonblank(expiry, "Options contracts", "expiration_date")?;
+        let expiry = normalize_option_expiration_date(expiry)?;
         let resp = self
             .client
             .get(format!("{}/v2/options/contracts", self.base_url))
@@ -3136,7 +3159,7 @@ impl AlpacaBroker {
             .query(&[
                 ("underlying_symbols", underlying_symbol),
                 ("status", "active"),
-                ("expiration_date", expiry),
+                ("expiration_date", expiry.as_str()),
                 ("show_deliverables", "true"),
             ])
             .send()

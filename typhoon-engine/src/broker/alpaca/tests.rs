@@ -166,6 +166,21 @@ fn parse_option_symbol_too_short() {
 }
 
 #[test]
+fn options_request_policy_validates_expiry_and_encodes_underlying_path() {
+    assert_eq!(
+        normalize_option_expiration_date(" 2026-01-16 ").unwrap(),
+        "2026-01-16"
+    );
+    assert!(normalize_option_expiration_date("2026-02-30").is_err());
+    assert!(normalize_option_expiration_date("20260116").is_err());
+    assert_eq!(
+        alpaca_options_snapshots_url(" BRK/B ").unwrap(),
+        "https://data.alpaca.markets/v1beta1/options/snapshots/BRK%2FB"
+    );
+    assert!(alpaca_options_snapshots_url(" ").is_err());
+}
+
+#[test]
 fn apply_option_snapshots_accepts_strings_numbers_and_missing_snapshots() {
     let mut contracts = vec![OptionContract {
         symbol: "AAPL240119C00150000".to_string(),
