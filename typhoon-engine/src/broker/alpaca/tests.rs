@@ -553,6 +553,19 @@ fn modify_order_body_rejects_empty_or_invalid_changes() {
 }
 
 #[test]
+fn alpaca_path_segment_percent_encodes_symbols_and_ids() {
+    assert_eq!(alpaca_path_segment("BTC/USD"), "BTC%2FUSD");
+    assert_eq!(
+        alpaca_path_segment(" id with spaces "),
+        "%20id%20with%20spaces%20"
+    );
+    assert_eq!(
+        alpaca_path_segment("AAPL-240119C00190000"),
+        "AAPL-240119C00190000"
+    );
+}
+
+#[test]
 fn limit_order_body_validates_qty_side_price_and_tif() {
     let body = AlpacaBroker::limit_order_body("AAPL", 2.0, "SELL", 191.234, "DAY").unwrap();
     assert_eq!(body["side"], "sell");

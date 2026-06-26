@@ -217,6 +217,19 @@ fn string_or_number(value: &serde_json::Value, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+fn alpaca_path_segment(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(*byte as char);
+            }
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
+    encoded
+}
+
 fn optional_string_or_number(value: &serde_json::Value) -> Option<String> {
     value
         .as_str()
@@ -1226,11 +1239,12 @@ impl AlpacaBroker {
         if order_id.trim().is_empty() {
             return Err("Modify order rejected: order_id is required".into());
         }
+        let encoded_order_id = alpaca_path_segment(order_id.trim());
         let body = Self::modify_order_body(qty, limit_price, stop_price, trail)?;
 
         let resp = self
             .client
-            .patch(format!("{}/v2/orders/{}", self.base_url, order_id))
+            .patch(format!("{}/v2/orders/{}", self.base_url, encoded_order_id))
             .headers(self.headers())
             .json(&body)
             .send()
@@ -1245,9 +1259,10 @@ impl AlpacaBroker {
         if order_id.trim().is_empty() {
             return Err("Cancel order rejected: order_id is required".into());
         }
+        let encoded_order_id = alpaca_path_segment(order_id.trim());
         let resp = self
             .client
-            .delete(format!("{}/v2/orders/{}", self.base_url, order_id))
+            .delete(format!("{}/v2/orders/{}", self.base_url, encoded_order_id))
             .headers(self.headers())
             .send()
             .await
@@ -1478,7 +1493,7 @@ impl AlpacaBroker {
 
         // Alpaca close-position endpoint: DELETE /v2/positions/{symbol_or_asset_id}
         // with optional query `qty` OR `percentage` (mutually exclusive).
-        let encoded_symbol = symbol.replace('/', "%2F");
+        let encoded_symbol = alpaca_path_segment(symbol.trim());
         let url = format!("{}/v2/positions/{}", self.base_url, encoded_symbol);
         let mut req = self.client.delete(&url).headers(self.headers());
         let qty_query;
@@ -1594,7 +1609,7 @@ impl AlpacaBroker {
 
     pub async fn get_asset(&self, symbol: &str) -> Result<AssetInfo, String> {
         Self::require_symbol(symbol, "Asset")?;
-        let encoded_symbol = symbol.replace('/', "%2F");
+        let encoded_symbol = alpaca_path_segment(symbol.trim());
         let resp = self
             .client
             .get(format!("{}/v2/assets/{}", self.base_url, encoded_symbol))
