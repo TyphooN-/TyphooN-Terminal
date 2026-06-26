@@ -198,11 +198,17 @@ fn ws_ohlc_interval_plan_respects_enabled_sync_timeframe_controls() {
 
 #[test]
 fn snapshot_sweep_respects_enabled_sync_timeframe_controls() {
-    // Disabled TFs are excluded from the interval list, so the highest ENABLED
-    // interval with missing pairs is chosen.
-    let enabled = BTreeSet::from(["1Day".to_string(), "15Min".to_string()]);
+    // xStock WS snapshot breadth is intentionally M1/M5-only: Kraken does not
+    // reliably serve catalog OHLC snapshots for the higher intervals, and those
+    // no-data probes burn WS/API cycles every cadence.
+    let enabled = BTreeSet::from([
+        "1Day".to_string(),
+        "15Min".to_string(),
+        "5Min".to_string(),
+        "1Min".to_string(),
+    ]);
     let intervals = enabled_kraken_ws_ohlc_snapshot_sweep_intervals(&enabled);
-    assert_eq!(intervals, vec![1440, 15]);
+    assert_eq!(intervals, vec![5, 1]);
     let catalog = vec!["AAPL".to_string()];
     let fresh = std::collections::HashMap::new();
     let (interval_min, _pairs) = select_kraken_ws_snapshot_sweep_batch_high_first(
@@ -213,8 +219,8 @@ fn snapshot_sweep_respects_enabled_sync_timeframe_controls() {
         0,
         250,
     )
-    .expect("highest enabled interval");
-    assert_eq!(interval_min, 1440, "1Day chosen over 15Min");
+    .expect("highest enabled xStock-native interval");
+    assert_eq!(interval_min, 5, "5Min chosen before 1Min");
 }
 
 #[test]
@@ -232,7 +238,7 @@ fn snapshot_sweep_picks_highest_timeframe_with_missing_pairs() {
         250,
     )
     .expect("a batch when pairs are missing");
-    assert_eq!(interval_min, 10080, "1Week (highest) swept first");
+    assert_eq!(interval_min, 5, "5Min swept before 1Min");
     assert_eq!(
         pairs,
         vec!["AAPLx/USD".to_string(), "MSFTx/USD".to_string()]
@@ -240,10 +246,9 @@ fn snapshot_sweep_picks_highest_timeframe_with_missing_pairs() {
 }
 
 #[test]
-fn snapshot_sweep_skips_fresh_high_timeframes_to_the_lowest_gap() {
-    // AAPL is WS-fresh for every interval except 1Min → the selector skips the
-    // fresh high TFs and sweeps the one remaining gap instead of re-pulling
-    // already-fresh high-TF bars.
+fn snapshot_sweep_skips_fresh_m5_to_the_m1_gap() {
+    // AAPL is WS-fresh for 5Min but missing 1Min → the selector skips the
+    // fresh M5 row and sweeps the one remaining low-TF gap.
     let now_ms = 10_000_000_000i64;
     let mut fresh = std::collections::HashMap::new();
     for &interval_min in &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST {
@@ -316,7 +321,7 @@ fn snapshot_sweep_backs_off_recently_attempted_no_data_pairs() {
         "every interval just attempted → backed off → no sweep"
     );
 
-    // Once the backoff window elapses, the pair is eligible again (highest TF first).
+    // Once the backoff window elapses, the pair is eligible again (M5 before M1).
     let later = now_ms + KRAKEN_WS_SNAPSHOT_SWEEP_RETRY_BACKOFF_MS;
     let (interval_min, pairs) = select_kraken_ws_snapshot_sweep_batch_high_first(
         &catalog,
@@ -327,10 +332,7 @@ fn snapshot_sweep_backs_off_recently_attempted_no_data_pairs() {
         250,
     )
     .expect("backoff elapsed → eligible again");
-    assert_eq!(
-        interval_min, 10080,
-        "retries highest TF first after backoff"
-    );
+    assert_eq!(interval_min, 5, "retries M5 before M1 after backoff");
     assert_eq!(pairs, vec!["AAPLx/USD".to_string()]);
 }
 
@@ -347,7 +349,7 @@ fn snapshot_sweep_caps_batch_size_within_the_chosen_timeframe() {
         2,
     )
     .expect("a capped batch");
-    assert_eq!(interval_min, 10080);
+    assert_eq!(interval_min, 5);
     assert_eq!(
         pairs,
         vec!["AAPLx/USD".to_string(), "MSFTx/USD".to_string()],
@@ -356,8 +358,8 @@ fn snapshot_sweep_caps_batch_size_within_the_chosen_timeframe() {
 }
 
 #[test]
-fn snapshot_sweep_caps_low_timeframe_batch_smaller_than_high() {
-    // Force selection of the 1Min gap (all higher TFs fresh) over a large
+fn snapshot_sweep_caps_m1_batch_smaller_than_m5() {
+    // Force selection of the 1Min gap (M5 fresh) over a large
     // catalog: the 1Min batch is capped at the small low-TF size, not the full
     // 250, so the breadth lands spread across ticks rather than one burst.
     let now_ms = 10_000_000_000i64;

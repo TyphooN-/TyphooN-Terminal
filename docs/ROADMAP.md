@@ -4,7 +4,7 @@
 
 The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the history below that cover these subsystems are kept for the record but no longer ship:
 
-- **Brokers/data:** MT5/Darwinex (DARWIN portfolio + BarCacheWriter bridge), tastytrade, CryptoCompare, and the Stooq fallback — see [ADR-111](adr/111-broker-scope-reduction-kraken-alpaca-only.md), [ADR-106](adr/106-remove-stooq-daily-fallback.md). Code preserved on `deprecated/*` branches.
+- **Brokers/data:** MT5/Darwinex (DARWIN portfolio + BarCacheWriter bridge), tastytrade, CryptoCompare, and removed fallback lanes — see [ADR-111](adr/111-broker-scope-reduction-kraken-alpaca-only.md). Code preserved on `deprecated/*` branches.
 - **LAN sync + WASM/web phone client:** removed; native-desktop only.
 - **Live martingale trading:** deprecated — see [ADR-114](adr/114-deprecate-martingale-live-trading.md).
 - **MQL5 export pipeline:** removed (the `typhoon-transpiler` language-tooling crate is retained).

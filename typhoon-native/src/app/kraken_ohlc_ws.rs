@@ -130,12 +130,11 @@ impl TyphooNApp {
         if intervals_min.is_empty() {
             return false;
         }
-        // High-timeframe-FIRST coverage: sweep the highest enabled interval that
-        // still has MISSING (non-WS-fresh) pairs. W1/D1 finish before the low-TF
-        // breadth (1Min/5Min) is touched; already-fresh high TFs fall through, so
-        // low TFs still refresh on their short fresh windows once covered. A pair
-        // re-arms automatically once its newest bar ages past the WS-fresh window,
-        // and a fully-fresh catalog yields no batch (the sweep stays idle).
+        // xStock WS OHLC breadth is M1/M5-only. Higher xStock intervals have
+        // repeatedly returned no bars, so do not sweep them just to re-discover
+        // permanent holes every cadence. A pair re-arms automatically once its
+        // newest low-TF bar ages past the WS-fresh window, and a fully-fresh
+        // catalog yields no batch (the sweep stays idle).
         let now_ms = chrono::Utc::now().timestamp_millis();
         let Some((interval_min, pairs)) = select_kraken_ws_snapshot_sweep_batch_high_first(
             &catalog,
@@ -163,7 +162,7 @@ impl TyphooNApp {
             pairs,
         });
         self.log.push_back(LogEntry::info(format!(
-            "Kraken WS OHLC snapshot sweep: queued {pair_count} missing xStocks for {tf} (high-TF-first)"
+            "Kraken WS OHLC snapshot sweep: queued {pair_count} missing xStocks for {tf} (M1/M5 native-only)"
         )));
         true
     }
@@ -209,15 +208,9 @@ pub(super) fn build_kraken_ws_subscribe_symbols_for_app(
     out.into_iter().collect()
 }
 
-const KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST: [u32; 8] = [
-    10080, // 1Week
-    1440,  // 1Day
-    240,   // 4Hour
-    60,    // 1Hour
-    30,    // 30Min
-    15,    // 15Min
-    5,     // 5Min
-    1,     // 1Min
+const KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST: [u32; 2] = [
+    5, // 5Min
+    1, // 1Min
 ];
 
 const KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE: usize = 250;
@@ -261,16 +254,15 @@ fn enabled_kraken_ws_ohlc_snapshot_sweep_intervals(
         .collect()
 }
 
-/// Pick the snapshot-sweep batch high-timeframe-FIRST: the highest enabled
-/// interval that still has missing (non-WS-fresh) xStock pairs, capped at
-/// `batch_size`. `None` when every interval is fully fresh.
+/// Pick the snapshot-sweep batch for xStock WS-native M1/M5 breadth: the
+/// highest enabled native low timeframe that still has missing (non-WS-fresh)
+/// xStock pairs, capped at `batch_size`. `None` when every interval is fully
+/// fresh.
 ///
-/// This finishes high-TF coverage (W1/D1) before spending sweep ticks on the
-/// low-TF breadth (1Min/5Min) that dominates the snapshot cost and produced the
-/// multi-second stalls in the overnight log. Once a high TF is fully fresh it
-/// falls through to the next; high-TF fresh windows are long (days), so after
-/// initial coverage the low TFs — which re-arm on their short fresh windows —
-/// get serviced, just at lower priority than any high-TF gap.
+/// This deliberately excludes higher xStock intervals (15Min and above), which
+/// have been observed to stay empty and churn repeated no-data snapshot sweeps.
+/// Higher equity candles are handled by merged/assist lanes; Kraken WS snapshot
+/// breadth is reserved for native low-TF rows that the chart path can use.
 fn select_kraken_ws_snapshot_sweep_batch_high_first(
     catalog_symbols: &[String],
     intervals_high_first: &[u32],
@@ -308,7 +300,7 @@ fn select_kraken_ws_snapshot_sweep_batch_high_first(
                         TyphooNApp::kraken_ws_pair_is_fresh_at(fresh_until, &symbol, tf, now_ms);
                     // Swept recently but still not fresh → Kraken serves no bars for
                     // this pair/interval. Back off instead of re-arming it every
-                    // cadence (which wedges high-TF-first on no-data pairs).
+                    // cadence (which wastes WS/API cycles on no-data pairs).
                     let backed_off =
                         attempt
                             .get(&(symbol.clone(), tf.to_string()))

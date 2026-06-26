@@ -37,7 +37,6 @@ Use a layered provider model:
 
 2. **Zero-key best-effort lane**
    - Yahoo Chart for intraday/daily bars where available.
-   - Stooq for daily history only where reachable.
    - SEC/NasdaqTrader/reference feeds for metadata, not OHLC.
    - This lane must be optional, rate-limited, cached, and honestly labeled as
      unofficial/best-effort where applicable.
@@ -132,15 +131,13 @@ requires a broker account.
 | Provider | Cost | Key/account | Useful for | Freshness/depth | Pros | Cons / risk |
 |---|---:|---|---|---|---|---|
 | Yahoo Chart | $0 | No key | Intraday + daily bars | Observed: `1m` up to ~7-8d, `5m/15m/30m` ~60d, `1h` ~730d, daily long range | Best zero-key UX; broad coverage; already implemented as `yahoo-chart:*` | Unofficial for this use, ToS/rate-limit risk, can change/break, not guaranteed realtime, no redistribution confidence |
-| Stooq | $0 | No key | Daily OHLCV | Daily history; endpoint availability can vary by network/IP | Lightweight CSV; good deep daily fallback | Daily only; current reachability can fail; licensing/redistribution unclear |
 | IEX HIST | $0 | No retail API key for downloads | Official IEX exchange historical feed | T+1, IEX-only, feed/PCAP-oriented | Legally cleaner; official exchange-specific history | Not consolidated, not realtime, not ready-made chart bars, requires feed processing |
 | SEC EDGAR | $0 | User-Agent | Filings/fundamentals/events | Realtime-ish filings, not prices | Official and free | Not OHLC/quote market data |
 | NasdaqTrader files | $0 | No key | Symbol/reference/regulatory metadata | Daily/current files | Official symbol/ref data | Not chart bars or live quotes |
 
-Conclusion: Yahoo Chart + Stooq is the only practical zero-key chart fallback pair,
-but it must be presented as best-effort/unofficial and disabled/kill-switchable if
-it starts failing. It is useful for low-resource users, but it is not a licensed
-market-data foundation.
+Yahoo Chart must be presented as best-effort/unofficial and disabled/kill-switchable
+if it starts failing. It is useful for low-resource users, but it is not a
+licensed market-data foundation.
 
 ### User-key free / cheap developer options
 
@@ -173,7 +170,6 @@ Yes, but not with all desired properties.
 
 - Yahoo Chart: free/no-key, useful intraday/daily bars, but unofficial and legally
   fragile for a packaged app.
-- Stooq: free/no-key daily history, but daily-only and availability/licensing
   needs caution.
 - IEX HIST: free official historical IEX exchange data, but T+1 feed files, not a
   realtime chart API.
@@ -191,7 +187,6 @@ Yes, but not with all desired properties.
 
 For a low-resource user base, the honest baseline is:
 
-1. ship Yahoo Chart + Stooq as optional best-effort fallbacks;
 2. support user-supplied free broker/API keys;
 3. add one or two cheap paid lanes for users who want reliability;
 4. never require a paid provider for core charting.
@@ -200,11 +195,9 @@ For a low-resource user base, the honest baseline is:
 
 The implemented baseline is intentionally narrower than the full provider matrix:
 
-- Yahoo Chart and Stooq are the zero-key fallback lanes currently wired. Yahoo stores bars under `yahoo-chart:SYMBOL:TF`; Stooq stores daily-only bars under `stooq:SYMBOL:1Day`. Stooq is not weekly/monthly coverage unless a separate aggregation/provenance pass lands.
 - Alpaca remains the implemented user-key broker/data lane. The current settings split broad Alpaca universe sync from Kraken-equities assist, so connecting Alpaca for Kraken help does not automatically pull the full Alpaca asset universe.
 - Kraken-equities Sync Status shows native Kraken, fallback provider, and derived `Merged` rows separately. `Merged` is chart-usable coverage, not a cache source and not raw provider workload.
 - Provider fallback is opt-in and scheduler-bounded. Broad fallback starts at `15Min`+ where provider cost/depth is plausible; `1Min`/`5Min` stay demand/focus scoped until a provider proves broad low-timeframe viability.
-- Live quote/depth overlays are still independent from historical candle source. A chart may use Yahoo/Alpaca/Stooq bars while order-entry still needs a fresh broker/native quote and stale/delayed warnings.
 
 The rest of this ADR is retained as the provider-lane contract and evaluation map for future optional lanes. Do not treat every provider below as an active implementation item.
 
@@ -219,16 +212,12 @@ The rest of this ADR is retained as the provider-lane contract and evaluation ma
    - 429/403 circuit breaker;
    - conservative global rate limit;
    - latest-timestamp freshness scoring.
-2. Keep Stooq daily-only:
-   - `stooq:SYMBOL:1Day` namespace;
-   - provider availability check;
-   - pause lane on network/provider failure.
-3. Add merge metadata:
+2. Add merge metadata:
    - source per span;
    - percent of visible window from fallback;
    - latest source timestamp;
    - stale/fresh badge.
-4. Paint live quote overlays separately from bars:
+3. Paint live quote overlays separately from bars:
    - bid/ask lines;
    - spread badge;
    - last quote age;
@@ -264,7 +253,6 @@ Add a provider capability registry:
 
 ```text
 ProviderCapability {
-  provider: YahooChart | Stooq | Alpaca | Tiingo | MarketDataApp | Polygon | ...
   asset_classes: Equity | ETF | Crypto | FX | ...
   intervals: [1Min, 5Min, 15Min, 30Min, 1Hour, 4Hour, 1Day, ...]
   max_history_by_interval: duration/unknown
@@ -338,8 +326,6 @@ from best-effort to preferred:
 - Yahoo Chart endpoint: `https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1d&interval=1m`
 - Yahoo Developer API Terms: `https://legal.yahoo.com/us/en/yahoo/terms/product-atos/apiforydn/index.html`
 - Yahoo Terms: `https://legal.yahoo.com/us/en/yahoo/terms/otos/index.html`
-- Stooq endpoint pattern: `https://stooq.com/q/d/l/?s=aapl.us&i=d`
-- pandas-datareader Stooq docs: `https://pandas-datareader.readthedocs.io/en/latest/readers/stooq.html`
 - IEX market data/connectivity: `https://www.iex.io/products/equities/market-data-connectivity`
 - IEX legacy market data/HIST notes: `https://iextrading.com/trading/market-data/`
 - SEC EDGAR APIs: `https://www.sec.gov/search-filings/edgar-application-programming-interfaces`

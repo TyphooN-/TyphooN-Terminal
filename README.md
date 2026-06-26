@@ -291,7 +291,6 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [103](docs/adr/103-dedicated-market-data-provider-lanes.md) | Dedicated Market-Data Provider Lanes for Deep/Fresh Bars |
 | [104](docs/adr/104-async-multi-output-indicator-dispatch.md) | Async Multi-Output Indicator Dispatch |
 | [105](docs/adr/105-performance-optimization-plan.md) | Performance Optimization Plan _(→ merged into ADR-098)_ |
-| [106](docs/adr/106-remove-stooq-daily-fallback.md) | Remove Stooq Daily Fallback |
 | [107](docs/adr/107-no-user-interacting-sync-throttle.md) | No `user_interacting` Sync Throttle |
 | [108](docs/adr/108-research-module-compile-time-modularization.md) | Research Module Compile-Time Modularization |
 | [109](docs/adr/109-kraken-websocket-v2-market-depth-completion.md) | Kraken WebSocket v2 Market Depth Completion |

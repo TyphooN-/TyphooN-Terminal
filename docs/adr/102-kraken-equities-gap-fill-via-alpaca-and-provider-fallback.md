@@ -70,12 +70,6 @@ universe toggles:
   coverage. Dotted class-share symbols are requested using Yahoo's hyphen form
   (`BH.A` -> `BH-A`), but provider 404s for unresolved/SPAC/unit symbols are
   expected coverage gaps and are tombstoned rather than retried as app errors.
-- `Stooq daily fallback` — unkeyed daily equity fallback stored under
-  `stooq:SYMBOL:1Day`. It is daily-only by design; it must not fabricate
-  intraday coverage. Stooq availability is local-network/IP dependent: a third-
-  party status page may show Stooq up while this machine cannot browse or fetch
-  `stooq.com`. On transport/provider failure, the app pauses the optional Stooq
-  assist lane instead of logging one failure per Kraken equity symbol.
 
 Alpaca fallback must also have an explicit **assist-only mode**. Connecting Alpaca
 for Kraken gap fill must not automatically enable the normal broad Alpaca
@@ -100,7 +94,6 @@ For `kraken-equities:*` chart loads:
 3. Store fallback bars under separate source namespaces:
    - `alpaca:SYMBOL:TF`
    - `yahoo-chart:SYMBOL:TF`
-   - `stooq:SYMBOL:1Day`
 4. Build the chart series by loading the selected/authoritative source first,
    then gap-filling missing timestamps from alternate fallback namespaces.
 5. Preserve a provenance mask/span list so UI, indicators, exports, and research
@@ -139,10 +132,6 @@ Provider capabilities:
   catalog: many Kraken Securities symbols, especially SPAC/unit style tickers
   such as `.U`, may return HTTP 404 from Yahoo and must be treated as provider
   no-data.
-- Stooq is `1Day` only. Do not use it for `1Week`/`1Month` unless a separate
-  aggregation/provenance step is added, and never use it for intraday. Treat
-  connection failures as provider unavailable from this machine; pause the Stooq
-  lane and show degraded assist state instead of continuing a broad retry storm.
 - Kraken equities should not fetch `M1`/`M5` from iapi unless Kraken exposes a
   trustworthy lane for them. `M1`/`M5` chart usability should come from explicit
   fallback providers with provenance and timestamp freshness checks.
@@ -176,7 +165,7 @@ normalizer:
 3. Normalize to an uppercase bare ticker.
 4. Validate against the fallback provider before queueing:
    - Alpaca: asset exists and is data-eligible for the account/feed tier.
-   - Optional future providers: Polygon, Stooq, Yahoo chart, Nasdaq Data Link, or
+   - Optional future providers: Polygon, Yahoo chart, Nasdaq Data Link, or
      a paid equities feed, each with explicit coverage/rate-limit rules.
 5. Persist failed mappings/no-data results as tombstones with expiry so the broad
    scheduler does not hammer symbols the provider cannot serve.
@@ -216,9 +205,6 @@ Implementation gates:
   requests symbols produced by the Kraken equities scheduler.
 - Yahoo fallback queue checks `backfill_yahoo_chart_enabled`, stores only under
   `yahoo-chart:*`, and uses independent pending/cooldown/tombstone state.
-- Stooq fallback queue checks `backfill_stooq_daily_enabled`, only accepts
-  `1Day`, stores only under `stooq:*`, and uses independent pending/cooldown/
-  tombstone state.
 - If multiple fallback toggles are enabled, they may fetch the same
   symbol/timeframe in tandem. This is intentional for deep-history fill: dedup is
   done at chart merge time by timestamp while source provenance remains intact.
@@ -250,7 +236,7 @@ Provider-assist throughput policy:
 
 - Yahoo Chart uses the shared fallback HTTP client but is no longer executed
   inline in the broker command loop. Each Yahoo Chart request is spawned behind
-  a small semaphore so a slow Yahoo response cannot block Kraken/Alpaca/Stooq
+  a small semaphore so a slow Yahoo response cannot block Kraken/Alpaca
   command handling, while the semaphore prevents unbounded full-catalog fanout.
 - Alpaca broad stock assist should prefer `/v2/stocks/bars?symbols=...` batches
   for non-focused `15Min`, `30Min`, `1Hour`, `4Hour`, `1Day`, and `1Week`
@@ -275,13 +261,13 @@ Users need to see that the chart is partially synthetic/fallback-filled.
 Required indicators:
 
 - Sync Status separates native Kraken coverage from fallback provider coverage.
-  Alpaca, Yahoo, and Stooq appear as their own rows/totals when their assist
+  Alpaca and Yahoo appear as their own rows/totals when their assist
   toggles are enabled or when their cache namespaces contain bars. They must not
   be folded into the Kraken native percentage.
 - Sync Status also shows `Merged` Kraken-equity rows/totals. `Merged` is the
   chart-usable coverage number: a symbol/timeframe is Healthy if any eligible
   source namespace has a healthy bar window (`kraken-equities`, Alpaca assist,
-  Yahoo Chart, or Stooq daily). It is a derived coverage view, not a cache source,
+  Yahoo Chart). It is a derived coverage view, not a cache source,
   and is excluded from the auto-full-tilt native provider aggregate to avoid
   double-counting.
 - The denominator is timeframe-specific and must stay explicit:
@@ -367,7 +353,7 @@ Gap-fill work via Alpaca and other providers is now also subject to the three-ti
 
 - The current implementation covers the native full-catalog denominator, Sync
   Status separation, bounded-concurrent Yahoo Chart fetches, Alpaca multi-symbol
-  stock batches for broad non-focused assist work, Yahoo/Stooq fallback fetchers,
+  stock batches for broad non-focused assist work, Yahoo fallback fetchers,
   and assist-only controls. Reopen this ADR for code work when adding a new
   fallback provider, provenance-span rendering, strategy/backtest policy hooks,
   or the full depth/freshness merge policy described above. Any future change
@@ -426,16 +412,13 @@ Regression checks added here:
 
 Resolved policy:
 
-- Broad Kraken-equities assist is opt-in. New sessions default Alpaca/Yahoo/Stooq
+- Broad Kraken-equities assist is opt-in. New sessions default Alpaca/Yahoo
   assist toggles off; enabling `Alpaca for all Kraken equities` applies to the
   Kraken equities scheduler workset without starting broad Alpaca universe sync.
 - Yahoo Chart is the first non-Alpaca unkeyed fallback for equities/ETFs where
   Yahoo can resolve the symbol and timeframe. Dotted class shares use Yahoo's
   hyphenated request symbol; unresolved Yahoo 404/empty-result responses are
   durable provider no-data tombstones, not user-visible sync failures.
-- Stooq is the second fallback for daily equity history only. It must not be
-  counted as weekly/monthly coverage until a separate aggregation/provenance pass
-  exists.
 
 Provider-gated questions:
 
