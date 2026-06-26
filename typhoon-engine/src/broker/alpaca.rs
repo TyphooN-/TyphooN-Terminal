@@ -204,6 +204,17 @@ fn parse_f64_value(value: &serde_json::Value) -> f64 {
         .unwrap_or(0.0)
 }
 
+fn parse_required_f64_value(value: &serde_json::Value, context: &str) -> Result<f64, String> {
+    let parsed = value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+        .ok_or_else(|| format!("{context} rejected: expected numeric value"))?;
+    if !parsed.is_finite() {
+        return Err(format!("{context} rejected: expected finite numeric value"));
+    }
+    Ok(parsed)
+}
+
 fn format_order_price(price: f64) -> String {
     if price >= 1.0 {
         format!("{:.2}", price) // $1+ → 2 decimals (e.g., 15.68)
@@ -3528,22 +3539,8 @@ impl AlpacaBroker {
             return Err(format!("No orderbook data for {symbol}"));
         }
 
-        let parse_level = |entry: &serde_json::Value| -> serde_json::Value {
-            serde_json::json!({
-                "price": parse_f64_value(&entry["p"]),
-                "size": parse_f64_value(&entry["s"]),
-            })
-        };
-
-        let bids: Vec<serde_json::Value> = orderbook["b"]
-            .as_array()
-            .map(|arr| arr.iter().map(parse_level).collect())
-            .unwrap_or_default();
-
-        let asks: Vec<serde_json::Value> = orderbook["a"]
-            .as_array()
-            .map(|arr| arr.iter().map(parse_level).collect())
-            .unwrap_or_default();
+        let bids = Self::parse_crypto_orderbook_side(&orderbook["b"], "bid")?;
+        let asks = Self::parse_crypto_orderbook_side(&orderbook["a"], "ask")?;
 
         Ok(serde_json::json!({
             "symbol": symbol,
@@ -3551,6 +3548,36 @@ impl AlpacaBroker {
             "bids": bids,
             "asks": asks,
         }))
+    }
+
+    fn parse_crypto_orderbook_side(
+        side: &serde_json::Value,
+        label: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let levels = side
+            .as_array()
+            .ok_or_else(|| format!("Crypto orderbook rejected: {label} levels must be an array"))?;
+        let mut out = Vec::with_capacity(levels.len());
+        for (idx, entry) in levels.iter().enumerate() {
+            let price = parse_required_f64_value(
+                &entry["p"],
+                &format!("Crypto orderbook {label} level {idx} price"),
+            )?;
+            let size = parse_required_f64_value(
+                &entry["s"],
+                &format!("Crypto orderbook {label} level {idx} size"),
+            )?;
+            if price <= 0.0 || size < 0.0 {
+                return Err(format!(
+                    "Crypto orderbook rejected: {label} level {idx} has invalid price/size"
+                ));
+            }
+            out.push(serde_json::json!({
+                "price": price,
+                "size": size,
+            }));
+        }
+        Ok(out)
     }
 
     fn stock_snapshot_feeds(&self) -> &'static [Option<&'static str>] {

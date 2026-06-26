@@ -899,6 +899,28 @@ fn parse_crypto_orderbook_snapshot_accepts_string_numeric_levels() {
         AlpacaBroker::parse_crypto_orderbook_snapshot("ETH/USD", &json!({"orderbooks": {}}))
             .is_err()
     );
+    assert!(
+        AlpacaBroker::parse_crypto_orderbook_snapshot(
+            "BTC/USD",
+            &json!({
+                "orderbooks": {
+                    "BTC/USD": {"t": "book-ts", "b": {}, "a": []}
+                }
+            }),
+        )
+        .is_err()
+    );
+    assert!(
+        AlpacaBroker::parse_crypto_orderbook_snapshot(
+            "BTC/USD",
+            &json!({
+                "orderbooks": {
+                    "BTC/USD": {"t": "book-ts", "b": [{"p": "bad", "s": "0.25"}], "a": []}
+                }
+            }),
+        )
+        .is_err()
+    );
 }
 
 #[test]
