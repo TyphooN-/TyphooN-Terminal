@@ -375,19 +375,26 @@ impl TyphooNApp {
                             // spill to the next line — but the L/P&L/chip group stays
                             // together when there's space.
                             ui.horizontal_wrapped(|ui| {
-                                let active_pl = active_pos.map(|pos| {
-                                    let cost_basis = if pos.avg_entry_price > 0.0 {
-                                        pos.avg_entry_price.abs() * pos.qty.abs()
-                                    } else {
-                                        (pos.market_value - pos.unrealized_pl).abs()
-                                    };
-                                    let pl_pct = if cost_basis > f64::EPSILON {
-                                        pos.unrealized_pl / cost_basis * 100.0
-                                    } else {
-                                        0.0
-                                    };
-                                    (pos.unrealized_pl, pl_pct)
-                                });
+                                let alpaca_account_pl = if self.live_positions.is_empty() {
+                                    None
+                                } else {
+                                    let mut total_pl = 0.0;
+                                    let mut total_basis = 0.0;
+                                    for pos in &self.live_positions {
+                                        let current_price = self
+                                            .live_quote_mid_for_symbol(&pos.symbol)
+                                            .or_else(|| self.latest_cached_equity_price_for_symbol(&pos.symbol))
+                                            .or_else(|| {
+                                                (pos.qty.abs() > f64::EPSILON)
+                                                    .then_some(pos.market_value.abs() / pos.qty.abs())
+                                            });
+                                        let display_pl = super::app_runtime_right_panel_positions::position_unrealized_pl_from_price(pos, current_price);
+                                        total_pl += display_pl;
+                                        total_basis += super::app_runtime_right_panel_positions::position_cost_basis(pos);
+                                    }
+                                    (total_basis > f64::EPSILON)
+                                        .then_some((total_pl, total_pl / total_basis * 100.0))
+                                };
                                 for snap in &account_snaps {
                                     let is_alpaca = snap.broker == "Alpaca";
                                     let is_kraken = snap.broker == "Kraken";
@@ -419,7 +426,7 @@ impl TyphooNApp {
                                         (total_basis > f64::EPSILON)
                                             .then_some((total_pl, total_pl / total_basis * 100.0))
                                     } else {
-                                        active_pl
+                                        alpaca_account_pl
                                     };
                                     let is_live = !is_alpaca || !self.broker_paper;
                                     let mode = if is_alpaca && self.broker_paper {
@@ -442,7 +449,7 @@ impl TyphooNApp {
                                     let pl_c = if pl >= 0.0 { UP } else { DOWN };
                                     ui.label(
                                         egui::RichText::new(format!(
-                                            "P&L: ${:+.2} ({:+.2}%)",
+                                            "Open P&L: ${:+.2} ({:+.2}%)",
                                             pl, pl_pct
                                         ))
                                         .color(pl_c)

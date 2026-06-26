@@ -1411,15 +1411,18 @@ impl TyphooNApp {
     pub(super) fn alpaca_trade_account_snapshot(&self) -> Option<TradeAccountSnapshot> {
         self.live_account.as_ref().map(|acct| TradeAccountSnapshot {
             broker: "Alpaca",
-            balance: if acct.balance > 0.0 {
-                acct.balance
-            } else {
-                acct.cash
-            },
+            // Alpaca `last_equity` is yesterday's equity, not a current trade
+            // balance. Use current equity as the risk basis; cash and margin are
+            // displayed separately in the Risk & Account panel.
+            balance: Self::alpaca_current_risk_balance(acct),
             equity: acct.equity,
             buying_power: acct.buying_power,
             margin_used: acct.initial_margin,
         })
+    }
+
+    pub(super) fn alpaca_current_risk_balance(acct: &AccountInfo) -> f64 {
+        acct.equity
     }
 
     pub(super) fn kraken_display_asset(asset: &str) -> String {

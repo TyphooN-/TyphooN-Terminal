@@ -510,11 +510,13 @@ fn parse_account_json_string_fields() {
         currency: j["currency"].as_str().unwrap_or("USD").to_string(),
         pattern_day_trader: j["pattern_day_trader"].as_bool().unwrap_or(false),
         trading_blocked: j["trading_blocked"].as_bool().unwrap_or(false),
+        last_equity: parse_f64_field(&j, "last_equity"),
         balance: parse_f64_field(&j, "last_equity"),
     };
     assert!((info.equity - 100_000.0).abs() < 1e-10);
     assert!((info.cash - 50_000.0).abs() < 1e-10);
     assert!((info.buying_power - 200_000.0).abs() < 1e-10);
+    assert!((info.last_equity - 99_500.0).abs() < 1e-10);
     assert!((info.balance - 99_500.0).abs() < 1e-10);
     assert_eq!(info.currency, "USD");
     assert!(!info.pattern_day_trader);

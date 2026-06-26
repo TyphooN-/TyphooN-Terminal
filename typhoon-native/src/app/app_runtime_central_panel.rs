@@ -191,7 +191,10 @@ impl TyphooNApp {
             // Skip drag in MTF mode — individual cells handle their own interaction
             if !self.mtf_enabled {
             let mut sync_trade_inputs = false;
-            for chart in &mut self.charts {
+            for (chart_idx, chart) in self.charts.iter_mut().enumerate() {
+                if chart_idx != self.active_tab {
+                    continue;
+                }
                 if pointer.primary_pressed() {
                     let press_pos = pointer.press_origin().unwrap_or_default();
                     // Price-axis scaling is handled by the dedicated widget below
@@ -892,14 +895,21 @@ impl TyphooNApp {
                         chart.reset_camera_from_legacy();
                     }
 
+                    let sl_tp_line_drag_active = self.dragging_sl || self.dragging_tp;
                     let body_started = resp.is_pointer_button_down_on()
                         && self.draw_mode == DrawMode::None
-                        && !scale_press;
+                        && !scale_press
+                        && !sl_tp_line_drag_active;
                     let body_press = (body_started
                         || (chart.is_dragging && ctx.input(|i| i.pointer.primary_down())))
                         && self.draw_mode == DrawMode::None
-                        && !scale_press;
-                    if resp.hovered() && self.draw_mode == DrawMode::None && !scale_press {
+                        && !scale_press
+                        && !sl_tp_line_drag_active;
+                    if sl_tp_line_drag_active {
+                        chart.is_dragging = false;
+                        chart.drag_start = None;
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeVertical);
+                    } else if resp.hovered() && self.draw_mode == DrawMode::None && !scale_press {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
                     }
                     if body_started && !chart.is_dragging {

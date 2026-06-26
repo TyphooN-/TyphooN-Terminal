@@ -8,7 +8,10 @@ fn alpaca_positions_should_render(
     show_alpaca_positions && !positions.is_empty()
 }
 
-fn position_unrealized_pl_from_price(pos: &PositionInfo, current_price: Option<f64>) -> f64 {
+pub(super) fn position_unrealized_pl_from_price(
+    pos: &PositionInfo,
+    current_price: Option<f64>,
+) -> f64 {
     current_price
         .filter(|price| price.is_finite() && *price > 0.0)
         .filter(|_| pos.avg_entry_price.is_finite() && pos.avg_entry_price > 0.0)
@@ -23,12 +26,16 @@ fn position_unrealized_pl_from_price(pos: &PositionInfo, current_price: Option<f
         .unwrap_or(pos.unrealized_pl)
 }
 
-fn position_unrealized_pl_pct(pos: &PositionInfo, display_pl: f64) -> f64 {
-    let cost_basis = if pos.avg_entry_price.is_finite() && pos.avg_entry_price > 0.0 {
+pub(super) fn position_cost_basis(pos: &PositionInfo) -> f64 {
+    if pos.avg_entry_price.is_finite() && pos.avg_entry_price > 0.0 {
         pos.avg_entry_price.abs() * pos.qty.abs()
     } else {
         (pos.market_value - pos.unrealized_pl).abs()
-    };
+    }
+}
+
+fn position_unrealized_pl_pct(pos: &PositionInfo, display_pl: f64) -> f64 {
+    let cost_basis = position_cost_basis(pos);
     if cost_basis > f64::EPSILON {
         display_pl / cost_basis * 100.0
     } else {

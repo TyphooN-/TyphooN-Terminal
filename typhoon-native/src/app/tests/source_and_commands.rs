@@ -1446,6 +1446,65 @@ fn kraken_pair_base_ticker_peels_tokenized_and_eq_markers() {
     assert_eq!(TyphooNApp::kraken_pair_base_ticker("XBT/USD"), "XBT");
 }
 
+#[test]
+fn alpaca_risk_balance_uses_current_equity_not_previous_equity() {
+    let acct = AccountInfo {
+        equity: 102_500.0,
+        cash: 40_000.0,
+        buying_power: 205_000.0,
+        portfolio_value: 102_500.0,
+        initial_margin: 25_000.0,
+        maintenance_margin: 12_500.0,
+        currency: "USD".to_string(),
+        pattern_day_trader: false,
+        trading_blocked: false,
+        last_equity: 99_500.0,
+        balance: 99_500.0,
+    };
+
+    assert_eq!(TyphooNApp::alpaca_current_risk_balance(&acct), 102_500.0);
+}
+
+#[test]
+fn alpaca_account_pl_matches_sum_of_position_panel_pl() {
+    let lumn = PositionInfo {
+        symbol: "LUMN".to_string(),
+        qty: 100.0,
+        side: "long".to_string(),
+        avg_entry_price: 5.00,
+        market_value: 550.0,
+        unrealized_pl: 50.0,
+        asset_class: "stock".to_string(),
+        asset_id: "lumn".to_string(),
+    };
+    let wen = PositionInfo {
+        symbol: "WEN".to_string(),
+        qty: 50.0,
+        side: "long".to_string(),
+        avg_entry_price: 10.00,
+        market_value: 450.0,
+        unrealized_pl: -50.0,
+        asset_class: "stock".to_string(),
+        asset_id: "wen".to_string(),
+    };
+
+    let lumn_pl = super::app_runtime_right_panel_positions::position_unrealized_pl_from_price(
+        &lumn,
+        Some(5.50),
+    );
+    let wen_pl = super::app_runtime_right_panel_positions::position_unrealized_pl_from_price(
+        &wen,
+        Some(9.00),
+    );
+    let total_basis = super::app_runtime_right_panel_positions::position_cost_basis(&lumn)
+        + super::app_runtime_right_panel_positions::position_cost_basis(&wen);
+
+    assert_eq!(lumn_pl, 50.0);
+    assert_eq!(wen_pl, -50.0);
+    assert_eq!(lumn_pl + wen_pl, 0.0);
+    assert_eq!(total_basis, 1_000.0);
+}
+
 // ── parse_ask_args (ASKAI/ASKCLAUDE/ASKGEMINI argument parser) ───────────
 
 // Note: handle_command() has already uppercased the input by the time

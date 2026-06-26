@@ -371,6 +371,11 @@ pub struct AccountInfo {
     pub currency: String,
     pub pattern_day_trader: bool,
     pub trading_blocked: bool,
+    /// Alpaca's previous/last close equity (`last_equity`). This is stale by
+    /// design during the current session; use it for day-change display only,
+    /// not as current balance/risk capital.
+    pub last_equity: f64,
+    /// Legacy alias for `last_equity`; kept for cached account JSON compatibility.
     pub balance: f64,
 }
 
@@ -572,6 +577,7 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Account parse failed: {e}"))?;
 
+        let last_equity = parse_f64_field(&json, "last_equity");
         Ok(AccountInfo {
             equity: parse_f64_field(&json, "equity"),
             cash: parse_f64_field(&json, "cash"),
@@ -582,7 +588,8 @@ impl AlpacaBroker {
             currency: json["currency"].as_str().unwrap_or("USD").to_string(),
             pattern_day_trader: json["pattern_day_trader"].as_bool().unwrap_or(false),
             trading_blocked: json["trading_blocked"].as_bool().unwrap_or(false),
-            balance: parse_f64_field(&json, "last_equity"),
+            last_equity,
+            balance: last_equity,
         })
     }
 
