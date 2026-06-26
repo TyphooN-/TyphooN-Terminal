@@ -61,6 +61,22 @@ fn string_or_number_handles_alpaca_numeric_and_string_fields() {
     assert_eq!(string_or_number(&json!(null), "0"), "0");
 }
 
+#[test]
+fn optional_numeric_helpers_accept_strings_and_numbers() {
+    assert_eq!(
+        optional_string_or_number(&json!("1.25")),
+        Some("1.25".to_string())
+    );
+    assert_eq!(
+        optional_string_or_number(&json!(1.25)),
+        Some("1.25".to_string())
+    );
+    assert_eq!(optional_string_or_number(&json!(null)), None);
+    assert_eq!(optional_f64_value(&json!("0.0001")), Some(0.0001));
+    assert_eq!(optional_f64_value(&json!(0.01)), Some(0.01));
+    assert_eq!(optional_f64_value(&json!(null)), None);
+}
+
 // ── format_order_price ─────────────────────────────────────────────────
 
 #[test]
@@ -217,6 +233,53 @@ fn parse_order_info_accepts_numeric_qty_and_filled_qty() {
     assert_eq!(order.qty, "2.5");
     assert_eq!(order.filled_qty, "1.25");
     assert_eq!(order.symbol, "MSFT");
+}
+
+#[test]
+fn parse_asset_info_accepts_numeric_increment_fields() {
+    let asset = AlpacaBroker::parse_asset_info(&json!({
+        "symbol": "BTC/USD",
+        "name": "Bitcoin / US Dollar",
+        "class": "crypto",
+        "tradable": true,
+        "marginable": false,
+        "shortable": false,
+        "fractionable": true,
+        "min_order_size": 0.0001,
+        "min_trade_increment": "0.00000001",
+        "price_increment": 0.01,
+    }));
+    assert_eq!(asset.symbol, "BTC/USD");
+    assert_eq!(asset.asset_class, "crypto");
+    assert_eq!(asset.min_order_size, Some(0.0001));
+    assert_eq!(asset.min_trade_increment, Some(0.00000001));
+    assert_eq!(asset.price_increment, Some(0.01));
+}
+
+#[test]
+fn parse_account_activity_accepts_numeric_amount_fields() {
+    let fill = AlpacaBroker::parse_account_activity(&json!({
+        "id": "fill-1",
+        "activity_type": "FILL",
+        "symbol": "AAPL",
+        "side": "buy",
+        "qty": 1.25,
+        "price": 189.75,
+        "transaction_time": "2024-01-02T15:30:00Z",
+    }));
+    assert_eq!(fill.qty.as_deref(), Some("1.25"));
+    assert_eq!(fill.price.as_deref(), Some("189.75"));
+    assert_eq!(fill.description, "buy 1.25 AAPL @ 189.75");
+
+    let dividend = AlpacaBroker::parse_account_activity(&json!({
+        "id": "div-1",
+        "activity_type": "DIV",
+        "symbol": "MSFT",
+        "net_amount": 4.2,
+        "date": "2024-01-03",
+    }));
+    assert_eq!(dividend.net_amount.as_deref(), Some("4.2"));
+    assert_eq!(dividend.description, "Dividend MSFT $4.2");
 }
 
 #[test]

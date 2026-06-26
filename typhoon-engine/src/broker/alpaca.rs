@@ -211,6 +211,19 @@ fn string_or_number(value: &serde_json::Value, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+fn optional_string_or_number(value: &serde_json::Value) -> Option<String> {
+    value
+        .as_str()
+        .map(|s| s.to_string())
+        .or_else(|| value.as_f64().map(|n| n.to_string()))
+}
+
+fn optional_f64_value(value: &serde_json::Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+}
+
 fn rpm_to_interval_ms(rpm: u32) -> u64 {
     let rpm = rpm.max(1) as f64;
     ((60_000.0 / rpm) * 1.05).ceil() as u64
@@ -1567,6 +1580,7 @@ impl AlpacaBroker {
     // ── Asset Info ───────────────────────────────────────────────────
 
     pub async fn get_asset(&self, symbol: &str) -> Result<AssetInfo, String> {
+        Self::require_symbol(symbol, "Asset")?;
         let encoded_symbol = symbol.replace('/', "%2F");
         let resp = self
             .client
@@ -1577,8 +1591,11 @@ impl AlpacaBroker {
             .map_err(|e| format!("Asset request failed: {e}"))?;
 
         let json = Self::json_or_error(resp, "Asset").await?;
+        Ok(Self::parse_asset_info(&json))
+    }
 
-        Ok(AssetInfo {
+    fn parse_asset_info(json: &serde_json::Value) -> AssetInfo {
+        AssetInfo {
             symbol: json["symbol"].as_str().unwrap_or("").to_string(),
             name: json["name"].as_str().unwrap_or("").to_string(),
             asset_class: json["class"].as_str().unwrap_or("").to_string(),
@@ -1586,14 +1603,10 @@ impl AlpacaBroker {
             marginable: json["marginable"].as_bool().unwrap_or(false),
             shortable: json["shortable"].as_bool().unwrap_or(false),
             fractionable: json["fractionable"].as_bool().unwrap_or(false),
-            min_order_size: json["min_order_size"].as_str().and_then(|s| s.parse().ok()),
-            min_trade_increment: json["min_trade_increment"]
-                .as_str()
-                .and_then(|s| s.parse().ok()),
-            price_increment: json["price_increment"]
-                .as_str()
-                .and_then(|s| s.parse().ok()),
-        })
+            min_order_size: optional_f64_value(&json["min_order_size"]),
+            min_trade_increment: optional_f64_value(&json["min_trade_increment"]),
+            price_increment: optional_f64_value(&json["price_increment"]),
+        }
     }
 
     // ── News ─────────────────────────────────────────────────────
@@ -3683,55 +3696,53 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Activities request failed: {e}"))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let _ = resp.text().await;
-            return Err(format!("Activities request failed: HTTP {}", status));
+        let json = Self::json_or_error(resp, "Activities").await?;
+        let Some(json) = json.as_array() else {
+            return Err(format!(
+                "Activities failed: expected array response, got {json}"
+            ));
+        };
+
+        Ok(json.iter().map(Self::parse_account_activity).collect())
+    }
+
+    fn parse_account_activity(a: &serde_json::Value) -> AccountActivity {
+        let activity_type = a["activity_type"].as_str().unwrap_or("").to_string();
+        let qty = optional_string_or_number(&a["qty"]);
+        let price = optional_string_or_number(&a["price"]);
+        let net_amount = optional_string_or_number(&a["net_amount"]);
+        let description = match activity_type.as_str() {
+            "FILL" => format!(
+                "{} {} {} @ {}",
+                a["side"].as_str().unwrap_or(""),
+                qty.as_deref().unwrap_or("0"),
+                a["symbol"].as_str().unwrap_or(""),
+                price.as_deref().unwrap_or("?")
+            ),
+            "DIV" | "DIVCGL" | "DIVCGS" | "DIVNRA" | "DIVROC" | "DIVTXEX" => format!(
+                "Dividend {} ${}",
+                a["symbol"].as_str().unwrap_or(""),
+                net_amount.as_deref().unwrap_or("0")
+            ),
+            "CSD" => format!("Deposit ${}", net_amount.as_deref().unwrap_or("0")),
+            "CSW" => format!("Withdrawal ${}", net_amount.as_deref().unwrap_or("0")),
+            _ => format!("{} {}", activity_type, a["symbol"].as_str().unwrap_or("")),
+        };
+        AccountActivity {
+            id: a["id"].as_str().unwrap_or("").to_string(),
+            activity_type,
+            symbol: a["symbol"].as_str().map(|s| s.to_string()),
+            side: a["side"].as_str().map(|s| s.to_string()),
+            qty,
+            price,
+            net_amount,
+            date: a["transaction_time"]
+                .as_str()
+                .or_else(|| a["date"].as_str())
+                .unwrap_or("")
+                .to_string(),
+            description,
         }
-
-        let json: Vec<serde_json::Value> = resp
-            .json()
-            .await
-            .map_err(|e| format!("Activities parse failed: {e}"))?;
-
-        Ok(json
-            .iter()
-            .map(|a| {
-                let activity_type = a["activity_type"].as_str().unwrap_or("").to_string();
-                let description = match activity_type.as_str() {
-                    "FILL" => format!(
-                        "{} {} {} @ {}",
-                        a["side"].as_str().unwrap_or(""),
-                        a["qty"].as_str().unwrap_or("0"),
-                        a["symbol"].as_str().unwrap_or(""),
-                        a["price"].as_str().unwrap_or("?")
-                    ),
-                    "DIV" | "DIVCGL" | "DIVCGS" | "DIVNRA" | "DIVROC" | "DIVTXEX" => format!(
-                        "Dividend {} ${}",
-                        a["symbol"].as_str().unwrap_or(""),
-                        a["net_amount"].as_str().unwrap_or("0")
-                    ),
-                    "CSD" => format!("Deposit ${}", a["net_amount"].as_str().unwrap_or("0")),
-                    "CSW" => format!("Withdrawal ${}", a["net_amount"].as_str().unwrap_or("0")),
-                    _ => format!("{} {}", activity_type, a["symbol"].as_str().unwrap_or("")),
-                };
-                AccountActivity {
-                    id: a["id"].as_str().unwrap_or("").to_string(),
-                    activity_type,
-                    symbol: a["symbol"].as_str().map(|s| s.to_string()),
-                    side: a["side"].as_str().map(|s| s.to_string()),
-                    qty: a["qty"].as_str().map(|s| s.to_string()),
-                    price: a["price"].as_str().map(|s| s.to_string()),
-                    net_amount: a["net_amount"].as_str().map(|s| s.to_string()),
-                    date: a["transaction_time"]
-                        .as_str()
-                        .or_else(|| a["date"].as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    description,
-                }
-            })
-            .collect())
     }
 
     // ── Insider Trading (SEC Form 4) ─────────────────────────────────
