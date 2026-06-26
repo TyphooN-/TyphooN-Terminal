@@ -251,6 +251,25 @@ fn parse_news_policy_clamps_limit_and_requires_news_array() {
 }
 
 #[test]
+fn portfolio_and_corporate_actions_validate_inputs_and_shapes() {
+    assert!(AlpacaBroker::require_nonblank("", "Portfolio history", "period").is_err());
+    assert!(AlpacaBroker::require_nonblank("1M", "Portfolio history", "period").is_ok());
+
+    let actions = AlpacaBroker::parse_corporate_actions_response(&json!([
+        {"symbol": "AAPL", "type": "dividend"}
+    ]))
+    .unwrap();
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0]["symbol"], "AAPL");
+    assert!(
+        AlpacaBroker::parse_corporate_actions_response(&json!({
+            "message": "bad request"
+        }))
+        .is_err()
+    );
+}
+
+#[test]
 fn parse_asset_info_accepts_numeric_increment_fields() {
     let asset = AlpacaBroker::parse_asset_info(&json!({
         "symbol": "BTC/USD",

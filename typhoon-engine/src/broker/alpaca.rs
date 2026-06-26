@@ -608,6 +608,13 @@ impl AlpacaBroker {
         Ok(())
     }
 
+    fn require_nonblank(value: &str, context: &str, field: &str) -> Result<(), String> {
+        if value.trim().is_empty() {
+            return Err(format!("{context} rejected: {field} is required"));
+        }
+        Ok(())
+    }
+
     fn require_positive_qty(qty: f64, context: &str) -> Result<(), String> {
         if !qty.is_finite() || qty <= 0.0 {
             return Err(format!("{context} rejected: qty must be positive"));
@@ -1764,6 +1771,8 @@ impl AlpacaBroker {
         period: &str,
         timeframe: &str,
     ) -> Result<serde_json::Value, String> {
+        Self::require_nonblank(period, "Portfolio history", "period")?;
+        Self::require_nonblank(timeframe, "Portfolio history", "timeframe")?;
         self.rate_limiter.wait().await;
         let resp = self
             .client
@@ -1774,12 +1783,7 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Portfolio history request failed: {e}"))?;
 
-        if !resp.status().is_success() {
-            return Err(format!("Portfolio history: HTTP {}", resp.status()));
-        }
-        resp.json()
-            .await
-            .map_err(|e| format!("Portfolio history parse failed: {e}"))
+        Self::json_or_error(resp, "Portfolio history").await
     }
 
     // ── Market Clock ─────────────────────────────────────────────
@@ -1794,20 +1798,27 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Market clock request failed: {e}"))?;
 
-        if !resp.status().is_success() {
-            return Err(format!("Market clock: HTTP {}", resp.status()));
-        }
-        resp.json()
-            .await
-            .map_err(|e| format!("Market clock parse failed: {e}"))
+        Self::json_or_error(resp, "Market clock").await
     }
 
     // ── Corporate Actions (Earnings/Dividends) ──────────────────
+
+    fn parse_corporate_actions_response(
+        json: &serde_json::Value,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let Some(actions) = json.as_array() else {
+            return Err(format!(
+                "Corporate actions failed: expected array response, got {json}"
+            ));
+        };
+        Ok(actions.clone())
+    }
 
     pub async fn get_corporate_actions(
         &self,
         symbol: &str,
     ) -> Result<Vec<serde_json::Value>, String> {
+        Self::require_symbol(symbol, "Corporate actions")?;
         self.rate_limiter.wait().await;
         let resp = self
             .client
@@ -1821,14 +1832,10 @@ impl AlpacaBroker {
             .await;
 
         match resp {
-            Ok(r) if r.status().is_success() => {
-                let json: serde_json::Value = r
-                    .json()
-                    .await
-                    .map_err(|e| format!("Corporate actions parse failed: {e}"))?;
-                Ok(json.as_array().cloned().unwrap_or_default())
+            Ok(r) => {
+                let json = Self::json_or_error(r, "Corporate actions").await?;
+                Self::parse_corporate_actions_response(&json)
             }
-            Ok(r) => Err(format!("Corporate actions: HTTP {}", r.status())),
             Err(e) => Err(format!("Corporate actions request failed: {e}")),
         }
     }
