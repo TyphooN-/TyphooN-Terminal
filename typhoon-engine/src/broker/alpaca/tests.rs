@@ -236,6 +236,21 @@ fn parse_order_info_accepts_numeric_qty_and_filled_qty() {
 }
 
 #[test]
+fn parse_news_policy_clamps_limit_and_requires_news_array() {
+    assert_eq!(AlpacaBroker::normalize_news_limit(0), 1);
+    assert_eq!(AlpacaBroker::normalize_news_limit(25), 25);
+    assert_eq!(AlpacaBroker::normalize_news_limit(999), 50);
+
+    let news = AlpacaBroker::parse_news_response(&json!({
+        "news": [{"headline": "AAPL moves", "symbols": ["AAPL"]}]
+    }))
+    .unwrap();
+    assert_eq!(news.len(), 1);
+    assert_eq!(news[0]["headline"], "AAPL moves");
+    assert!(AlpacaBroker::parse_news_response(&json!({"message": "nope"})).is_err());
+}
+
+#[test]
 fn parse_asset_info_accepts_numeric_increment_fields() {
     let asset = AlpacaBroker::parse_asset_info(&json!({
         "symbol": "BTC/USD",

@@ -1611,37 +1611,42 @@ impl AlpacaBroker {
 
     // ── News ─────────────────────────────────────────────────────
 
+    fn normalize_news_limit(limit: u32) -> u32 {
+        limit.clamp(1, 50)
+    }
+
+    fn parse_news_response(json: &serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
+        let Some(news) = json["news"].as_array() else {
+            return Err(format!(
+                "News failed: expected news array response, got {json}"
+            ));
+        };
+        Ok(news.clone())
+    }
+
     pub async fn get_news(
         &self,
         symbol: &str,
         limit: u32,
     ) -> Result<Vec<serde_json::Value>, String> {
+        Self::require_symbol(symbol, "News")?;
         self.rate_limiter.wait().await;
+        let limit = Self::normalize_news_limit(limit).to_string();
         let resp = self
             .client
             .get(format!("{}/v1beta1/news", DATA_BASE))
             .headers(self.headers())
             .query(&[
                 ("symbols", symbol),
-                ("limit", &limit.to_string()),
+                ("limit", limit.as_str()),
                 ("sort", "desc"),
             ])
             .send()
             .await
             .map_err(|e| format!("News request failed: {e}"))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let _ = resp.text().await; // consume body without exposing it
-            return Err(format!("News request failed: HTTP {}", status));
-        }
-
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("News parse failed: {e}"))?;
-
-        Ok(json["news"].as_array().cloned().unwrap_or_default())
+        let json = Self::json_or_error(resp, "News").await?;
+        Self::parse_news_response(&json)
     }
 
     // ── Finnhub News (secondary source, free API key) ──────────────
