@@ -2173,6 +2173,8 @@ impl AlpacaBroker {
         timeframe: &str,
         progress: Option<&tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> Result<(Vec<Bar>, FetchOutcome), String> {
+        Self::require_symbol(symbol, "All bars")?;
+        Self::require_nonblank(timeframe, "All bars", "timeframe")?;
         let is_crypto = symbol.contains('/');
 
         // Alpaca's stock bars API documents native Month aggregations
@@ -2362,11 +2364,15 @@ impl AlpacaBroker {
         timeframe: &str,
         limit: u32,
     ) -> Result<(HashMap<String, Vec<Bar>>, FetchOutcome), String> {
-        let symbols: Vec<String> = symbols
+        Self::require_nonblank(timeframe, "Batch bars", "timeframe")?;
+        let actual_limit = Self::normalize_bar_limit(limit);
+        let mut symbols: Vec<String> = symbols
             .iter()
             .map(|symbol| symbol.trim().to_ascii_uppercase())
             .filter(|symbol| !symbol.is_empty() && !symbol.contains('/'))
             .collect();
+        symbols.sort();
+        symbols.dedup();
         if symbols.is_empty() {
             return Ok((HashMap::new(), FetchOutcome::Complete));
         }
@@ -2374,7 +2380,7 @@ impl AlpacaBroker {
             - chrono::Duration::days(lookback_days_for_request(
                 false,
                 timeframe,
-                limit,
+                actual_limit,
                 BarsLookbackMode::Targeted,
             ));
         let symbol_csv = symbols.join(",");
@@ -2389,7 +2395,7 @@ impl AlpacaBroker {
                 let mut params = vec![
                     ("symbols", symbol_csv.clone()),
                     ("timeframe", timeframe.to_string()),
-                    ("limit", limit.min(10_000).max(1).to_string()),
+                    ("limit", actual_limit.to_string()),
                     ("sort", "asc".to_string()),
                     ("adjustment", "all".to_string()),
                 ];
