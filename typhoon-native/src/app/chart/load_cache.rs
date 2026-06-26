@@ -297,28 +297,7 @@ impl ChartDataLoad for ChartState {
         dsm: &typhoon_engine::core::data_source::DataSourceManager,
     ) -> String {
         let tf = self.timeframe.cache_suffix();
-        let sym = {
-            let parts: Vec<&str> = self.symbol.split(':').collect();
-            let is_tf = matches!(
-                parts.last().copied(),
-                Some(
-                    "1Min"
-                        | "5Min"
-                        | "15Min"
-                        | "30Min"
-                        | "1Hour"
-                        | "4Hour"
-                        | "1Day"
-                        | "1Week"
-                        | "1Month"
-                )
-            );
-            if is_tf && parts.len() > 1 {
-                parts[..parts.len() - 1].join(":")
-            } else {
-                self.symbol.clone()
-            }
-        };
+        let sym = bare_symbol_from_key(&self.symbol);
         let sym_norm = normalize_market_data_symbol(&sym);
 
         // Normalize crypto: try both with and without slash
@@ -462,29 +441,11 @@ impl ChartDataLoad for ChartState {
         gpu: Option<&mut gpu_compute::GpuCompute>,
     ) -> bool {
         // Data priority mirrors DataSourceManager's default order:
-        // Kraken spot/xStocks → Kraken Futures → Alpaca fallback.
-        let sym = {
-            let parts: Vec<&str> = self.symbol.split(':').collect();
-            let is_tf = matches!(
-                parts.last().copied(),
-                Some(
-                    "1Min"
-                        | "5Min"
-                        | "15Min"
-                        | "30Min"
-                        | "1Hour"
-                        | "4Hour"
-                        | "1Day"
-                        | "1Week"
-                        | "1Month"
-                )
-            );
-            if is_tf && parts.len() > 1 {
-                parts[..parts.len() - 1].join(":")
-            } else {
-                self.symbol.clone()
-            }
-        };
+        // Kraken spot/xStocks → Kraken Futures → Alpaca fallback. Restored charts
+        // can persist a full cache key (`alpaca:AVAT:1Min`); strip it to the bare
+        // symbol before resolving candidates so low-TF equity panes do not keep
+        // probing unsupported Alpaca/Yahoo assist rows.
+        let sym = bare_symbol_from_key(&self.symbol);
         let sym_norm = normalize_market_data_symbol(&sym);
         let tf = self.timeframe.cache_suffix();
         let old_bars_empty = self.bars.is_empty();
@@ -595,7 +556,9 @@ impl ChartDataLoad for ChartState {
             }
             return true;
         }
-        if chart_prefers_fresh_equity_source(&sym_norm) {
+        if chart_prefers_fresh_equity_source(&sym_norm)
+            && !chart_equity_low_timeframe_requires_native_source(tf)
+        {
             let (load_started_at, load_rss_before) = chart_log_merged_cache_load_start(
                 log,
                 "fresh_equity_auto",
@@ -1018,7 +981,9 @@ impl ChartDataLoad for ChartState {
             r.split(':').last().unwrap_or(r).replace('/', "")
         };
 
-        if chart_prefers_fresh_equity_source(&bare_sym) {
+        if chart_prefers_fresh_equity_source(&bare_sym)
+            && !chart_equity_low_timeframe_requires_native_source(tf)
+        {
             let (load_started_at, load_rss_before) = chart_log_merged_cache_load_start(
                 log,
                 "restored_cache",

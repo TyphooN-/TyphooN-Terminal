@@ -179,6 +179,41 @@ fn chart_missing_equity_data_key_uses_native_equity_source_not_kraken_spot() {
 }
 
 #[test]
+fn restored_low_tf_equity_cache_key_does_not_probe_alpaca_assist() {
+    let db_path = std::env::temp_dir().join(format!(
+        "typhoon-low-tf-restored-cache-key-test-{}-{}.db",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let dsm = typhoon_engine::core::data_source::DataSourceManager::default();
+
+    let mut chart = ChartState::new("alpaca:AVAT:1Min", Timeframe::M1);
+    assert_eq!(
+        chart.find_cache_key(&cache, &dsm),
+        "kraken-equities:AVAT:1Min"
+    );
+
+    let mut log = std::collections::VecDeque::new();
+    chart.load(&cache, &mut log, None, &dsm);
+    let messages: Vec<String> = log.iter().map(|entry| entry.msg.clone()).collect();
+    assert!(
+        messages
+            .iter()
+            .any(|msg| msg.contains("No chart data found for key 'kraken-equities:AVAT:1Min'")),
+        "logs should point at the native low-TF source: {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .all(|msg| !msg.contains("Merged cache load") && !msg.contains("alpaca:AVAT:1Min")),
+        "restored M1 equity load must not spam merged/alpaca probes: {messages:?}"
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn chart_equity_source_rank_inverts_with_primary_broker() {
     // ADR-126: the primary broker's equity source is the trusted rank-0 scale; the
     // other tradeable broker drops to the rank-2 assist. Yahoo/default are unchanged
