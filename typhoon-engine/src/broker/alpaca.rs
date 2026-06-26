@@ -24,6 +24,19 @@ fn sec_client() -> &'static Client {
     })
 }
 
+fn sec_ticker_for_lookup(ticker: &str) -> Result<String, String> {
+    let ticker = ticker.trim();
+    if ticker.is_empty()
+        || ticker.len() > 10
+        || !ticker
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err("Invalid ticker for SEC lookup".to_string());
+    }
+    Ok(ticker.to_ascii_uppercase())
+}
+
 /// Cached SEC ticker→CIK map. Fetched once (~8MB), reused for all lookups.
 static SEC_TICKER_MAP: tokio::sync::OnceCell<serde_json::Value> =
     tokio::sync::OnceCell::const_new();
@@ -51,7 +64,7 @@ async fn get_sec_ticker_map() -> Result<&'static serde_json::Value, String> {
 /// Look up CIK number for a ticker symbol from cached SEC ticker map.
 async fn lookup_cik(ticker: &str) -> Result<u64, String> {
     let tickers = get_sec_ticker_map().await?;
-    let upper_ticker = ticker.to_uppercase();
+    let upper_ticker = sec_ticker_for_lookup(ticker)?;
     if let Some(obj) = tickers.as_object() {
         for (_, v) in obj {
             if v["ticker"].as_str() == Some(&upper_ticker) {
@@ -1957,14 +1970,7 @@ impl AlpacaBroker {
         filing_type: &str,
         _limit: u32,
     ) -> Result<serde_json::Value, String> {
-        if ticker.is_empty()
-            || ticker.len() > 10
-            || !ticker
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '/')
-        {
-            return Err("Invalid ticker for SEC lookup".to_string());
-        }
+        let ticker = sec_ticker_for_lookup(ticker)?;
         if !matches!(
             filing_type,
             "10-K" | "10-Q" | "8-K" | "S-1" | "DEF 14A" | "13F" | "4" | "SC 13D" | "SC 13G"
@@ -2091,14 +2097,9 @@ impl AlpacaBroker {
     /// Hardened: timeout, validated ticker, generic error messages.
     /// Uses cached ticker map and shared HTTP client.
     pub async fn get_sec_company_facts(ticker: &str) -> Result<serde_json::Value, String> {
-        if ticker.is_empty()
-            || ticker.len() > 10
-            || !ticker.chars().all(|c| c.is_ascii_alphanumeric())
-        {
-            return Err("Invalid ticker for SEC lookup".to_string());
-        }
+        let ticker = sec_ticker_for_lookup(ticker)?;
         let client = sec_client();
-        let cik = lookup_cik(ticker).await?;
+        let cik = lookup_cik(&ticker).await?;
         let cik_padded = format!("CIK{:010}", cik);
 
         let facts_resp = client
@@ -3172,14 +3173,9 @@ impl AlpacaBroker {
     /// Returns income statement, balance sheet, and cash flow data.
     /// Uses cached ticker map and shared HTTP client.
     pub async fn get_financial_analysis(ticker: &str) -> Result<serde_json::Value, String> {
-        if ticker.is_empty()
-            || ticker.len() > 10
-            || !ticker.chars().all(|c| c.is_ascii_alphanumeric())
-        {
-            return Err("Invalid ticker for SEC lookup".to_string());
-        }
+        let ticker = sec_ticker_for_lookup(ticker)?;
         let client = sec_client();
-        let cik = lookup_cik(ticker).await?;
+        let cik = lookup_cik(&ticker).await?;
         let cik_padded = format!("CIK{:010}", cik);
 
         let facts_resp = client
@@ -3267,14 +3263,9 @@ impl AlpacaBroker {
     /// Looks for 13F filings in the company's filing history.
     /// Uses cached ticker map and shared HTTP client.
     pub async fn get_institutional_holders(ticker: &str) -> Result<serde_json::Value, String> {
-        if ticker.is_empty()
-            || ticker.len() > 10
-            || !ticker.chars().all(|c| c.is_ascii_alphanumeric())
-        {
-            return Err("Invalid ticker for SEC lookup".to_string());
-        }
+        let ticker = sec_ticker_for_lookup(ticker)?;
         let client = sec_client();
-        let cik = lookup_cik(ticker).await?;
+        let cik = lookup_cik(&ticker).await?;
         let cik_padded = format!("{:010}", cik);
 
         let subs_resp = client
@@ -3788,14 +3779,9 @@ impl AlpacaBroker {
     /// Fetch insider trades for a ticker via SEC EDGAR (Form 4 filings).
     /// Uses cached ticker map and shared HTTP client.
     pub async fn get_insider_trades(ticker: &str) -> Result<Vec<InsiderTrade>, String> {
-        if ticker.is_empty()
-            || ticker.len() > 10
-            || !ticker.chars().all(|c| c.is_ascii_alphanumeric())
-        {
-            return Err("Invalid ticker for SEC lookup".to_string());
-        }
+        let ticker = sec_ticker_for_lookup(ticker)?;
         let client = sec_client();
-        let cik = lookup_cik(ticker).await?;
+        let cik = lookup_cik(&ticker).await?;
         let cik_padded = format!("{:010}", cik);
 
         let subs_resp = client

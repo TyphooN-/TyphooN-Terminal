@@ -2,6 +2,15 @@ use super::*;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::json;
 
+#[test]
+fn sec_ticker_for_lookup_trims_uppercases_and_rejects_bad_symbols() {
+    assert_eq!(sec_ticker_for_lookup(" aapl ").unwrap(), "AAPL");
+    assert_eq!(sec_ticker_for_lookup("brk-b").unwrap(), "BRK-B");
+    assert!(sec_ticker_for_lookup("").is_err());
+    assert!(sec_ticker_for_lookup("BTC/USD").is_err());
+    assert!(sec_ticker_for_lookup("TOO-LONG-TICKER").is_err());
+}
+
 // ── parse_f64_field ─────────────────────────────────────────────
 
 #[test]
