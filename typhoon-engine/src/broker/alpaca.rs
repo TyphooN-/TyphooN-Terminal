@@ -1319,10 +1319,16 @@ impl AlpacaBroker {
     }
 
     fn order_status_is_cancellable(status: &str) -> bool {
-        !matches!(
-            status.to_ascii_lowercase().as_str(),
-            "filled" | "canceled" | "cancelled" | "expired" | "rejected"
-        )
+        let status = status.trim().to_ascii_lowercase();
+        !status.is_empty()
+            && !matches!(
+                status.as_str(),
+                "filled" | "canceled" | "cancelled" | "expired" | "rejected"
+            )
+    }
+
+    fn order_has_cancellable_identity(order: &OrderInfo) -> bool {
+        !order.id.trim().is_empty() && Self::order_status_is_cancellable(&order.status)
     }
 
     fn collect_cancellable_order_ids_for_symbol(orders: &[OrderInfo], symbol: &str) -> Vec<String> {
@@ -1333,7 +1339,7 @@ impl AlpacaBroker {
             seen: &mut HashSet<String>,
         ) {
             if AlpacaBroker::normalize_order_symbol(&order.symbol) == target_symbol
-                && AlpacaBroker::order_status_is_cancellable(&order.status)
+                && AlpacaBroker::order_has_cancellable_identity(order)
                 && seen.insert(order.id.clone())
             {
                 ids.push(order.id.clone());
@@ -1368,7 +1374,7 @@ impl AlpacaBroker {
         ) {
             if AlpacaBroker::normalize_order_symbol(&order.symbol) == target_symbol
                 && order.side.eq_ignore_ascii_case(exit_side)
-                && AlpacaBroker::order_status_is_cancellable(&order.status)
+                && AlpacaBroker::order_has_cancellable_identity(order)
                 && seen.insert(order.id.clone())
             {
                 ids.push(order.id.clone());

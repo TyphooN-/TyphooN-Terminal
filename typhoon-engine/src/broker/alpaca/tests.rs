@@ -1030,6 +1030,23 @@ fn collect_cancellable_order_ids_for_symbol_normalizes_crypto_symbol() {
 }
 
 #[test]
+fn collect_cancellable_order_ids_skips_blank_ids_and_statuses() {
+    let orders = [
+        json!({"id":"", "symbol":"SPY", "status":"new"}),
+        json!({"id":"missing-status", "symbol":"SPY"}),
+        json!({"id":"blank-status", "symbol":"SPY", "status":" "}),
+        json!({"id":"valid-open", "symbol":"SPY", "status":"accepted"}),
+        json!({"id":"filled", "symbol":"SPY", "status":"filled"}),
+    ]
+    .into_iter()
+    .map(|order| AlpacaBroker::parse_order_info(&order))
+    .collect::<Vec<_>>();
+
+    let ids = AlpacaBroker::collect_cancellable_order_ids_for_symbol(&orders, "SPY");
+    assert_eq!(ids, vec!["valid-open".to_string()]);
+}
+
+#[test]
 fn collect_cancellable_exit_order_ids_for_symbol_filters_by_exit_side() {
     let sell_exit = OrderInfo {
         id: "sell-exit".to_string(),
