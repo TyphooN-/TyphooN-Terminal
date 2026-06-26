@@ -251,6 +251,52 @@ fn fmp_grade_url(symbol: &str) -> Result<String, String> {
     ))
 }
 
+fn alpaca_stock_bars_url(symbol: &str) -> Result<String, String> {
+    AlpacaBroker::require_symbol(symbol, "Stock bars")?;
+    Ok(format!(
+        "{}/v2/stocks/{}/bars",
+        DATA_BASE,
+        alpaca_path_segment(symbol.trim())
+    ))
+}
+
+fn alpaca_stock_snapshot_url(symbol: &str) -> Result<String, String> {
+    AlpacaBroker::require_symbol(symbol, "Stock snapshot")?;
+    Ok(format!(
+        "{}/v2/stocks/{}/snapshot",
+        DATA_BASE,
+        alpaca_path_segment(symbol.trim())
+    ))
+}
+
+fn normalize_account_activity_types_path_segment(
+    activity_types: &str,
+) -> Result<Option<String>, String> {
+    let trimmed = activity_types.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let mut types = Vec::new();
+    for activity_type in trimmed.split(',') {
+        let activity_type = activity_type.trim();
+        if activity_type.is_empty() {
+            return Err("Invalid activity type: empty component".to_string());
+        }
+        if !activity_type
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return Err("Invalid activity type characters".to_string());
+        }
+        types.push(activity_type.to_ascii_uppercase());
+    }
+    Ok(Some(alpaca_path_segment(&types.join(","))))
+}
+
+fn normalize_account_activities_page_size(limit: u32) -> String {
+    limit.clamp(1, 100).to_string()
+}
+
 fn optional_string_or_number(value: &serde_json::Value) -> Option<String> {
     value
         .as_str()
@@ -2211,7 +2257,7 @@ impl AlpacaBroker {
         let base = if is_crypto {
             format!("{}/v1beta3/crypto/us/bars", DATA_BASE)
         } else {
-            format!("{}/v2/stocks/{}/bars", DATA_BASE, symbol)
+            alpaca_stock_bars_url(symbol)?
         };
 
         let feeds: Vec<Option<&str>> = if is_crypto {
@@ -2607,7 +2653,7 @@ impl AlpacaBroker {
         let base = if is_crypto {
             format!("{}/v1beta3/crypto/us/bars", DATA_BASE)
         } else {
-            format!("{}/v2/stocks/{}/bars", DATA_BASE, symbol)
+            alpaca_stock_bars_url(symbol)?
         };
         let lookback_days =
             lookback_days_for_request(is_crypto, actual_tf, actual_limit, lookback_mode);
@@ -3599,7 +3645,7 @@ impl AlpacaBroker {
             // Stocks/ETFs: use snapshot endpoint for quote + trade fallback.
             // Prefer SIP when entitled, but fall back to IEX instead of failing
             // watchlist/position UI on free-tier accounts.
-            let url = format!("{}/v2/stocks/{}/snapshot", DATA_BASE, symbol);
+            let url = alpaca_stock_snapshot_url(symbol)?;
             let mut last_error = String::new();
             for feed in self.stock_snapshot_feeds() {
                 let mut req = self.client.get(&url).headers(self.headers());
@@ -3659,7 +3705,7 @@ impl AlpacaBroker {
         } else {
             // Stock/ETF snapshot. Prefer SIP for extended-hours trades when
             // entitled, but degrade to IEX for free-tier accounts.
-            let url = format!("{}/v2/stocks/{}/snapshot", DATA_BASE, symbol);
+            let url = alpaca_stock_snapshot_url(symbol)?;
             let mut last_error = String::new();
             for feed in self.stock_snapshot_feeds() {
                 let mut req = self.client.get(&url).headers(self.headers());
@@ -3702,25 +3748,19 @@ impl AlpacaBroker {
         activity_types: &str,
         limit: u32,
     ) -> Result<Vec<AccountActivity>, String> {
-        // Validate activity_types: alphanumeric + comma only (prevent path traversal)
-        if !activity_types.is_empty()
-            && !activity_types
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == ',' || c == '_')
-        {
-            return Err("Invalid activity type characters".to_string());
-        }
-        let url = if activity_types.is_empty() {
-            format!("{}/v2/account/activities", self.base_url)
-        } else {
+        let activity_types = normalize_account_activity_types_path_segment(activity_types)?;
+        let page_size = normalize_account_activities_page_size(limit);
+        let url = if let Some(activity_types) = activity_types {
             format!("{}/v2/account/activities/{}", self.base_url, activity_types)
+        } else {
+            format!("{}/v2/account/activities", self.base_url)
         };
 
         let resp = self
             .client
             .get(&url)
             .headers(self.headers())
-            .query(&[("direction", "desc"), ("page_size", &limit.to_string())])
+            .query(&[("direction", "desc"), ("page_size", page_size.as_str())])
             .send()
             .await
             .map_err(|e| format!("Activities request failed: {e}"))?;
@@ -4007,7 +4047,11 @@ impl AlpacaBroker {
         let body = Self::update_watchlist_body(symbols)?;
         let resp = self
             .client
-            .put(format!("{}/v2/watchlists/{}", self.base_url, id.trim()))
+            .put(format!(
+                "{}/v2/watchlists/{}",
+                self.base_url,
+                alpaca_path_segment(id.trim())
+            ))
             .headers(self.headers())
             .json(&body)
             .send()

@@ -584,6 +584,37 @@ fn fmp_grade_url_trims_valid_symbols_and_encodes_path_segments() {
 }
 
 #[test]
+fn alpaca_market_data_urls_encode_stock_path_symbols() {
+    assert_eq!(
+        alpaca_stock_bars_url(" BRK.B ").unwrap(),
+        "https://data.alpaca.markets/v2/stocks/BRK.B/bars"
+    );
+    assert_eq!(
+        alpaca_stock_snapshot_url(" odd symbol ").unwrap(),
+        "https://data.alpaca.markets/v2/stocks/odd%20symbol/snapshot"
+    );
+    assert!(alpaca_stock_bars_url(" ").is_err());
+    assert!(alpaca_stock_snapshot_url(" ").is_err());
+}
+
+#[test]
+fn account_activity_path_and_page_size_policy_normalizes_inputs() {
+    assert_eq!(
+        normalize_account_activity_types_path_segment(" fill, div_cgl ").unwrap(),
+        Some("FILL%2CDIV_CGL".to_string())
+    );
+    assert_eq!(
+        normalize_account_activity_types_path_segment(" ").unwrap(),
+        None
+    );
+    assert!(normalize_account_activity_types_path_segment("FILL,,DIV").is_err());
+    assert!(normalize_account_activity_types_path_segment("FILL/../../ORDERS").is_err());
+    assert_eq!(normalize_account_activities_page_size(0), "1");
+    assert_eq!(normalize_account_activities_page_size(50), "50");
+    assert_eq!(normalize_account_activities_page_size(999), "100");
+}
+
+#[test]
 fn limit_order_body_validates_qty_side_price_and_tif() {
     let body = AlpacaBroker::limit_order_body("AAPL", 2.0, "SELL", 191.234, "DAY").unwrap();
     assert_eq!(body["side"], "sell");
