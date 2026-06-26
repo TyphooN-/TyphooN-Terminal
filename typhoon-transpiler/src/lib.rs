@@ -36,7 +36,7 @@ pub mod thinkscript;
 pub mod transpile;
 pub mod wgsl_codegen;
 
-/// Compilation result returned to Tauri frontend.
+/// Compilation result returned to the native/runtime caller.
 #[derive(serde::Serialize)]
 pub struct CompileResult {
     /// Compiled WASM binary (None if errors)

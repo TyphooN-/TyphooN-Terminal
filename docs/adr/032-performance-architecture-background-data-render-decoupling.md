@@ -7,9 +7,9 @@
 
 egui is immediate-mode: every widget must render every frame. SQLite queries running in the render loop caused chart performance to degrade from 60 FPS to <10 FPS when DARWIN/SEC floating windows were open.
 
-The old WebKit/Tauri didn't have this problem because:
+The old retained web UI didn't have this problem because:
 - React is retained-mode (DOM only updates on state change)
-- Tauri IPC is async (invoke() returns Promise, doesn't block render)
+- UI/backend IPC was async (invoke-style calls returned without blocking render)
 - Browser compositor handles scrolling independently of JS
 
 ## Decision
