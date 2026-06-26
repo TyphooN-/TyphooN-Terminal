@@ -3453,6 +3453,27 @@ impl AlpacaBroker {
         }
     }
 
+    fn parse_crypto_latest_quote(
+        symbol: &str,
+        json: &serde_json::Value,
+    ) -> Result<LatestQuote, String> {
+        let q = &json["quotes"][symbol];
+        if q.is_null() {
+            return Err(format!("Quote rejected: no quote returned for {symbol}"));
+        }
+        let bid = parse_f64_value(&q["bp"]);
+        let ask = parse_f64_value(&q["ap"]);
+        Ok(LatestQuote {
+            symbol: symbol.to_string(),
+            bid,
+            ask,
+            bid_size: parse_f64_value(&q["bs"]),
+            ask_size: parse_f64_value(&q["as"]),
+            spread: ask - bid,
+            timestamp: q["t"].as_str().unwrap_or("").to_string(),
+        })
+    }
+
     fn parse_snapshot_data(symbol: &str, json: &serde_json::Value) -> SnapshotData {
         let trade_price = parse_f64_value(&json["latestTrade"]["p"]);
         let daily_volume = parse_f64_value(&json["dailyBar"]["v"]);
@@ -3470,6 +3491,32 @@ impl AlpacaBroker {
             daily_volume,
             regular_close,
         }
+    }
+
+    fn parse_crypto_snapshot_data(
+        symbol: &str,
+        json: &serde_json::Value,
+    ) -> Result<SnapshotData, String> {
+        let snap = &json["snapshots"][symbol];
+        if snap.is_null() {
+            return Err(format!(
+                "Crypto snapshot rejected: no snapshot returned for {symbol}"
+            ));
+        }
+        let trade_price = parse_f64_value(&snap["latestTrade"]["p"]);
+        let regular_close = parse_f64_value(&snap["dailyBar"]["c"]);
+        let last = if trade_price > 0.0 {
+            trade_price
+        } else {
+            regular_close
+        };
+        Ok(SnapshotData {
+            symbol: symbol.to_string(),
+            last,
+            prev_close: parse_f64_value(&snap["prevDailyBar"]["c"]),
+            daily_volume: parse_f64_value(&snap["dailyBar"]["v"]),
+            regular_close,
+        })
     }
 
     // ── Latest Quote ────────────────────────────────────────────────
@@ -3498,18 +3545,7 @@ impl AlpacaBroker {
                 .json()
                 .await
                 .map_err(|e| format!("Quote parse failed: {e}"))?;
-            let q = json["quotes"][symbol].clone();
-            let bid = q["bp"].as_f64().unwrap_or(0.0);
-            let ask = q["ap"].as_f64().unwrap_or(0.0);
-            Ok(LatestQuote {
-                symbol: symbol.to_string(),
-                bid,
-                ask,
-                bid_size: q["bs"].as_f64().unwrap_or(0.0),
-                ask_size: q["as"].as_f64().unwrap_or(0.0),
-                spread: ask - bid,
-                timestamp: q["t"].as_str().unwrap_or("").to_string(),
-            })
+            Self::parse_crypto_latest_quote(symbol, &json)
         } else {
             // Stocks/ETFs: use snapshot endpoint for quote + trade fallback.
             // Prefer SIP when entitled, but fall back to IEX instead of failing
@@ -3573,18 +3609,7 @@ impl AlpacaBroker {
                 .json()
                 .await
                 .map_err(|e| format!("Crypto snapshot parse: {e}"))?;
-            let snap = &json["snapshots"][symbol];
-            let last = snap["latestTrade"]["p"].as_f64().unwrap_or(0.0);
-            let daily_volume = snap["dailyBar"]["v"].as_f64().unwrap_or(0.0);
-            let regular_close = snap["dailyBar"]["c"].as_f64().unwrap_or(0.0);
-            let prev_close = snap["prevDailyBar"]["c"].as_f64().unwrap_or(0.0);
-            Ok(SnapshotData {
-                symbol: symbol.to_string(),
-                last,
-                prev_close,
-                daily_volume,
-                regular_close,
-            })
+            Self::parse_crypto_snapshot_data(symbol, &json)
         } else {
             // Stock/ETF snapshot. Prefer SIP for extended-hours trades when
             // entitled, but degrade to IEX for free-tier accounts.

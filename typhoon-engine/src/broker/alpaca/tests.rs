@@ -235,6 +235,24 @@ fn parse_latest_quote_from_snapshot_uses_trade_when_quote_missing() {
 }
 
 #[test]
+fn parse_crypto_latest_quote_accepts_string_numbers_and_missing_symbol_errors() {
+    let quote = AlpacaBroker::parse_crypto_latest_quote(
+        "BTC/USD",
+        &json!({
+            "quotes": {
+                "BTC/USD": {"bp": "43000.50", "ap": "43001.25", "bs": "0.5", "as": "0.25", "t": "quote-ts"}
+            }
+        }),
+    )
+    .unwrap();
+    assert_eq!(quote.bid, 43000.50);
+    assert_eq!(quote.ask, 43001.25);
+    assert_eq!(quote.bid_size, 0.5);
+    assert_eq!(quote.ask_size, 0.25);
+    assert!(AlpacaBroker::parse_crypto_latest_quote("ETH/USD", &json!({"quotes": {}})).is_err());
+}
+
+#[test]
 fn parse_snapshot_data_uses_trade_price_for_last() {
     let snap = AlpacaBroker::parse_snapshot_data(
         "AAPL",
@@ -248,6 +266,30 @@ fn parse_snapshot_data_uses_trade_price_for_last() {
     assert_eq!(snap.regular_close, 188.0);
     assert_eq!(snap.prev_close, 187.5);
     assert_eq!(snap.daily_volume, 12345.0);
+}
+
+#[test]
+fn parse_crypto_snapshot_data_accepts_string_numbers_and_missing_symbol_errors() {
+    let snap = AlpacaBroker::parse_crypto_snapshot_data(
+        "BTC/USD",
+        &json!({
+            "snapshots": {
+                "BTC/USD": {
+                    "latestTrade": {"p": "43010.25"},
+                    "dailyBar": {"v": "12.5", "c": "42900.00"},
+                    "prevDailyBar": {"c": "42000.50"}
+                }
+            }
+        }),
+    )
+    .unwrap();
+    assert_eq!(snap.last, 43010.25);
+    assert_eq!(snap.regular_close, 42900.0);
+    assert_eq!(snap.prev_close, 42000.5);
+    assert_eq!(snap.daily_volume, 12.5);
+    assert!(
+        AlpacaBroker::parse_crypto_snapshot_data("ETH/USD", &json!({"snapshots": {}})).is_err()
+    );
 }
 
 #[test]
