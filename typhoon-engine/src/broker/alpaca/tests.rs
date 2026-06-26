@@ -704,6 +704,15 @@ fn parse_bars_accepts_string_numeric_ohlcv_fields() {
 }
 
 #[test]
+fn bar_request_policy_validates_inputs_and_clamps_limit() {
+    assert_eq!(AlpacaBroker::normalize_bar_limit(0), 1);
+    assert_eq!(AlpacaBroker::normalize_bar_limit(500), 500);
+    assert_eq!(AlpacaBroker::normalize_bar_limit(20_000), 10_000);
+    assert!(AlpacaBroker::require_symbol(" ", "Bars").is_err());
+    assert!(AlpacaBroker::require_nonblank(" ", "Bars", "timeframe").is_err());
+}
+
+#[test]
 fn parse_bars_crypto_nested_by_symbol() {
     let json = json!({
         "bars": {

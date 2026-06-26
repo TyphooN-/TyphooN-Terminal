@@ -2492,6 +2492,10 @@ impl AlpacaBroker {
         .map(|(bars, _)| bars)
     }
 
+    fn normalize_bar_limit(limit: u32) -> u32 {
+        limit.clamp(1, 10_000)
+    }
+
     /// Fetch up to `limit` bars using a wider lookback window sized for the
     /// terminal's automated sync target. This is deeper than the incremental
     /// freshness path, but still bounded unlike `get_all_bars()`.
@@ -2542,6 +2546,8 @@ impl AlpacaBroker {
         lookback_mode: BarsLookbackMode,
         display_timeframe: Option<&str>,
     ) -> Result<(Vec<Bar>, FetchOutcome), String> {
+        Self::require_symbol(symbol, "Bars")?;
+        Self::require_nonblank(timeframe, "Bars", "timeframe")?;
         let is_crypto = symbol.contains('/');
 
         // Alpaca supports native Month bars; keep 1Month provider caches native
@@ -2553,7 +2559,7 @@ impl AlpacaBroker {
         } else {
             ""
         };
-        let actual_limit = limit;
+        let actual_limit = Self::normalize_bar_limit(limit);
 
         // Try multiple feeds in order: sip (paid) → iex (free) for stocks
         // Crypto uses a different endpoint and doesn't need a feed param
