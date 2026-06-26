@@ -687,6 +687,22 @@ fn parse_bars_crypto_nested_by_symbol() {
 }
 
 #[test]
+fn screener_policy_normalizes_top_and_market_type() {
+    assert_eq!(AlpacaBroker::normalize_screener_top(0), 1);
+    assert_eq!(AlpacaBroker::normalize_screener_top(10), 10);
+    assert_eq!(AlpacaBroker::normalize_screener_top(999), 50);
+    assert_eq!(
+        AlpacaBroker::normalize_screener_market_type(" STOCKS ").unwrap(),
+        "stocks"
+    );
+    assert_eq!(
+        AlpacaBroker::normalize_screener_market_type("crypto").unwrap(),
+        "crypto"
+    );
+    assert!(AlpacaBroker::normalize_screener_market_type("options").is_err());
+}
+
+#[test]
 fn parse_crypto_orderbook_snapshot_accepts_string_numeric_levels() {
     let orderbook = AlpacaBroker::parse_crypto_orderbook_snapshot(
         "BTC/USD",

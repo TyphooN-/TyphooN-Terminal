@@ -3326,9 +3326,24 @@ impl AlpacaBroker {
 
     // ── Most Active / Top Movers (Alpaca Screener API) ────────────────
 
+    fn normalize_screener_top(top: u32) -> u32 {
+        top.clamp(1, 50)
+    }
+
+    fn normalize_screener_market_type(market_type: &str) -> Result<&'static str, String> {
+        match market_type.trim().to_ascii_lowercase().as_str() {
+            "stocks" => Ok("stocks"),
+            "crypto" => Ok("crypto"),
+            other => Err(format!(
+                "Screener rejected: market_type must be 'stocks' or 'crypto', got '{other}'"
+            )),
+        }
+    }
+
     /// Fetch most active stocks by volume/trade count from Alpaca screener API.
     pub async fn get_most_active(&self, top: u32) -> Result<serde_json::Value, String> {
         self.rate_limiter.wait().await;
+        let top = Self::normalize_screener_top(top).to_string();
 
         let resp = self
             .client
@@ -3337,23 +3352,12 @@ impl AlpacaBroker {
                 DATA_BASE
             ))
             .headers(self.headers())
-            .query(&[("top", top.to_string())])
+            .query(&[("top", top.as_str())])
             .send()
             .await
             .map_err(|e| format!("Most actives request failed: {e}"))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let _ = resp.text().await;
-            return Err(format!("Most actives request failed: HTTP {status}"));
-        }
-
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Most actives parse failed: {e}"))?;
-
-        Ok(json)
+        Self::json_or_error(resp, "Most actives").await
     }
 
     /// Fetch top movers (gainers/losers) from Alpaca screener API.
@@ -3363,9 +3367,8 @@ impl AlpacaBroker {
         market_type: &str,
         top: u32,
     ) -> Result<serde_json::Value, String> {
-        if !matches!(market_type, "stocks" | "crypto") {
-            return Err("market_type must be 'stocks' or 'crypto'".to_string());
-        }
+        let market_type = Self::normalize_screener_market_type(market_type)?;
+        let top = Self::normalize_screener_top(top).to_string();
         self.rate_limiter.wait().await;
 
         let resp = self
@@ -3375,29 +3378,19 @@ impl AlpacaBroker {
                 DATA_BASE, market_type
             ))
             .headers(self.headers())
-            .query(&[("top", top.to_string())])
+            .query(&[("top", top.as_str())])
             .send()
             .await
             .map_err(|e| format!("Top movers request failed: {e}"))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let _ = resp.text().await;
-            return Err(format!("Top movers request failed: HTTP {status}"));
-        }
-
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Top movers parse failed: {e}"))?;
-
-        Ok(json)
+        Self::json_or_error(resp, "Top movers").await
     }
 
     // ── DOM / Level 2 (Crypto Orderbook) ──────────────────────────────
 
     /// Fetch crypto orderbook snapshot from Alpaca.
     pub async fn get_orderbook(&self, symbol: &str) -> Result<serde_json::Value, String> {
+        Self::require_symbol(symbol, "Orderbook")?;
         self.rate_limiter.wait().await;
 
         let resp = self
@@ -3412,16 +3405,7 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Orderbook request failed: {e}"))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let _ = resp.text().await;
-            return Err(format!("Orderbook request failed: HTTP {status}"));
-        }
-
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Orderbook parse failed: {e}"))?;
+        let json = Self::json_or_error(resp, "Orderbook").await?;
 
         Self::parse_crypto_orderbook_snapshot(symbol, &json)
     }
