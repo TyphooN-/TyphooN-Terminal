@@ -5,7 +5,8 @@ impl TyphooNApp {
         match cmd_upper {
             "TEMPLATES" | "LIST_TEMPLATES" => {
                 let builtins = ["NNFX", "CLEAN", "FULL"];
-                let builtins_set: std::collections::HashSet<&str> = builtins.iter().copied().collect();
+                let builtins_set: std::collections::HashSet<&str> =
+                    builtins.iter().copied().collect();
                 let mut names: Vec<String> = builtins
                     .iter()
                     .map(|s| format!("{} (built-in)", s))

@@ -562,11 +562,27 @@ pub struct PositionLine {
     pub line_type: u8, // 0=entry, 1=SL, 2=TP
 }
 
+/// Open limit/stop order line for chart overlay.
+#[derive(Clone, Debug)]
+pub struct OrderLine {
+    pub price: f64,
+    pub qty: f64,
+    pub is_buy: bool,
+    pub source: String,
+    /// Signed cash impact at the order price. Buys consume cash (-), sells add cash (+).
+    pub notional_delta: f64,
+    /// Signed percent of the relevant broker account balance/equity.
+    pub account_pct_delta: Option<f64>,
+    /// Signed distance from current chart price in ticks/pips.
+    pub pips_from_current: Option<f64>,
+}
+
 /// Trade overlay data passed to draw_chart for broker position rendering.
 #[derive(Clone, Debug, Default)]
 pub struct TradeOverlay {
     pub markers: Vec<TradeMarker>,
     pub position_lines: Vec<PositionLine>,
+    pub order_lines: Vec<OrderLine>,
 }
 
 /// Drawing interaction mode.

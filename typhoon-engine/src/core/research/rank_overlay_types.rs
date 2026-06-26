@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use super::FactorComponent;
+use serde::{Deserialize, Serialize};
 
 // Size, momentum, drift, operating-quality, revenue-growth, sentiment, ownership, and surprise-rank research types
 

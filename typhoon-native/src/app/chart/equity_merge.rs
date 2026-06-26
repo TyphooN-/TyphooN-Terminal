@@ -960,7 +960,12 @@ pub(crate) fn chart_missing_data_cache_key(symbol: &str, timeframe: &str) -> Str
         .trim_end_matches(".EQ")
         .to_ascii_uppercase();
     if chart_prefers_fresh_equity_source(&compact) {
-        format!("{}:{}:{}", chart_equity_native_source_tag(), compact, timeframe)
+        format!(
+            "{}:{}:{}",
+            chart_equity_native_source_tag(),
+            compact,
+            timeframe
+        )
     } else {
         format!("kraken:{}:{}", symbol, timeframe)
     }

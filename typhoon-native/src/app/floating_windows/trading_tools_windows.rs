@@ -28,8 +28,13 @@ impl TyphooNApp {
                         .unwrap_or_default();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("Order Flow: {}", sym)).strong());
-                        let l2_supported = kraken_bookmap_stream_supported(&sym, &self.kraken_pairs);
-                        if ui.add_enabled(l2_supported, egui::Button::new("Fetch L2")).clicked() && !sym.is_empty() {
+                        let l2_supported =
+                            kraken_bookmap_stream_supported(&sym, &self.kraken_pairs);
+                        if ui
+                            .add_enabled(l2_supported, egui::Button::new("Fetch L2"))
+                            .clicked()
+                            && !sym.is_empty()
+                        {
                             let _ = self.broker_tx.send(BrokerCmd::GetOrderbook {
                                 symbol: sym.clone(),
                             });
@@ -133,11 +138,13 @@ impl TyphooNApp {
                             ui.horizontal(|ui| {
                                 ui.label(egui::RichText::new("Footprint Summary").small().strong());
                                 if ui.small_button("−").clicked() {
-                                    self.order_flow_footprint_bars = (self.order_flow_footprint_bars.saturating_sub(10)).max(10);
+                                    self.order_flow_footprint_bars =
+                                        (self.order_flow_footprint_bars.saturating_sub(10)).max(10);
                                 }
                                 ui.label(format!("last {} bars", self.order_flow_footprint_bars));
                                 if ui.small_button("+").clicked() {
-                                    self.order_flow_footprint_bars = (self.order_flow_footprint_bars + 10).min(200);
+                                    self.order_flow_footprint_bars =
+                                        (self.order_flow_footprint_bars + 10).min(200);
                                 }
                             });
                             let footprint_bars = self.order_flow_footprint_bars;

@@ -145,10 +145,7 @@ pub fn write_symbol_price_behavior_sections(
             let _ = writeln!(
                 p,
                 "- Bars {} · pain index (mean |dd|) {:.3}% · annualized return {:+.3}% · pain ratio {:+.3}",
-                pr.bars_used,
-                pr.pain_index_pct,
-                pr.annualized_return_pct,
-                pr.pain_ratio
+                pr.bars_used, pr.pain_index_pct, pr.annualized_return_pct, pr.pain_ratio
             );
             let _ = writeln!(
                 p,

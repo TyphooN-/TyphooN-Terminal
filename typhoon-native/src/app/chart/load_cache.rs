@@ -13,8 +13,15 @@ pub(crate) trait ChartDataLoad {
     fn latest_quote_bar_from_cache(cache: &SqliteCache, symbol: &str) -> Option<Bar>;
     fn chart_timeframe_ms(&self) -> i64;
     fn aggregate_daily_raw_to_monthly(raw: Vec<(i64, f64, f64, f64, f64, f64)>) -> Vec<Bar>;
-    fn aggregate_bars_to_timeframe(raw: Vec<(i64, f64, f64, f64, f64, f64)>, tf_ms: i64) -> Vec<Bar>;
-    fn rebuild_from_lower_timeframe_if_dislocated(&mut self, cache: &SqliteCache, symbol: &str) -> bool;
+    fn aggregate_bars_to_timeframe(
+        raw: Vec<(i64, f64, f64, f64, f64, f64)>,
+        tf_ms: i64,
+    ) -> Vec<Bar>;
+    fn rebuild_from_lower_timeframe_if_dislocated(
+        &mut self,
+        cache: &SqliteCache,
+        symbol: &str,
+    ) -> bool;
     fn apply_quote_cache_overlay(&mut self, cache: &SqliteCache, symbol: &str) -> bool;
     fn find_cache_key(
         &self,
@@ -36,14 +43,8 @@ pub(crate) trait ChartDataLoad {
     );
 }
 
-
 impl ChartDataLoad for ChartState {
-    fn should_reload_for_bar_fetch(
-        &self,
-        symbol: &str,
-        timeframe: &str,
-        source: &str,
-    ) -> bool {
+    fn should_reload_for_bar_fetch(&self, symbol: &str, timeframe: &str, source: &str) -> bool {
         if !self.symbol_matches(symbol)
             || !self
                 .timeframe
@@ -94,9 +95,7 @@ impl ChartDataLoad for ChartState {
         (self.timeframe.minutes().max(1) as i64) * 60_000
     }
 
-    fn aggregate_daily_raw_to_monthly(
-        raw: Vec<(i64, f64, f64, f64, f64, f64)>,
-    ) -> Vec<Bar> {
+    fn aggregate_daily_raw_to_monthly(raw: Vec<(i64, f64, f64, f64, f64, f64)>) -> Vec<Bar> {
         use chrono::{Datelike, TimeZone};
         let mut monthly: std::collections::BTreeMap<(i32, u32), Bar> =
             std::collections::BTreeMap::new();

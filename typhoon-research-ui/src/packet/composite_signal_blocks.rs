@@ -2,11 +2,7 @@ use super::context::SymbolResearchContext;
 use crate::format;
 use typhoon_engine::core::research as rx;
 
-pub fn write_composite_signal_blocks(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_composite_signal_blocks(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     // Gather each composite snapshot and delegate to its pure formatter
     // (ADR-125 Phase 1 step 2); the emit guards live in the formatters.
     if let Ok(Some(gw)) = rx::get_growm(ctx.conn, &sym_upper) {

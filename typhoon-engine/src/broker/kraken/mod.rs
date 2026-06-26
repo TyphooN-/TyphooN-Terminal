@@ -1061,6 +1061,7 @@ impl KrakenBroker {
                 Some(crate::broker::alpaca::PositionInfo {
                     symbol: Self::display_pair(pair),
                     qty: open_volume,
+                    qty_available: open_volume,
                     side: side.to_string(),
                     avg_entry_price: avg_entry,
                     market_value: if value > 0.0 { value } else { cost + net },
@@ -1104,6 +1105,7 @@ impl KrakenBroker {
                 Some(crate::broker::alpaca::PositionInfo {
                     symbol: ticker,
                     qty: *qty,
+                    qty_available: *qty,
                     side: "long".to_string(),
                     avg_entry_price: 0.0,
                     market_value: 0.0,

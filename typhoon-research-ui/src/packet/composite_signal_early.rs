@@ -2,11 +2,7 @@ use super::context::SymbolResearchContext;
 use std::fmt::Write as _;
 use typhoon_engine::core::research as rx;
 
-pub fn write_composite_signal_early(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_composite_signal_early(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     // MNGR insider activity bias
     if let Ok(Some(ia)) = rx::get_insider_activity(ctx.conn, &sym_upper) {
         if ia.total_trades > 0 {

@@ -2,11 +2,7 @@ use super::context::SymbolResearchContext;
 use std::fmt::Write as _;
 use typhoon_engine::core::research as rx;
 
-pub fn write_talib_dmi_movement(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_talib_dmi_movement(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     // ── (DMI family) ──
     if let Ok(Some(pd)) = rx::get_plus_di(ctx.conn, &sym_upper) {
         if pd.plus_di_label != "INSUFFICIENT_DATA" && !pd.plus_di_label.is_empty() {

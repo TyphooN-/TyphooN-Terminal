@@ -2,11 +2,7 @@ use super::context::SymbolResearchContext;
 use std::fmt::Write as _;
 use typhoon_engine::core::research as rx;
 
-pub fn write_talib_price_ohlc_stats(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_talib_price_ohlc_stats(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     // ── Research section ──
     if let Ok(Some(ap)) = rx::get_avgprice(ctx.conn, &sym_upper) {
         if ap.avgprice_label != "INSUFFICIENT_DATA" && !ap.avgprice_label.is_empty() {

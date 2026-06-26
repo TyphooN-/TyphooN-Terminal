@@ -30,6 +30,19 @@ pub async fn handle_alpaca_order_command(
                 let _ = broker_msg_tx.send(BrokerMsg::Error(e));
             }
         },
+        BrokerCmd::AlpacaClosePositionPercent { symbol, percentage } => {
+            match b.close_position_percent(&symbol, percentage).await {
+                Ok(r) => {
+                    let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                        "Closed {:.0}% of {}: {}",
+                        percentage, symbol, r.status
+                    )));
+                }
+                Err(e) => {
+                    let _ = broker_msg_tx.send(BrokerMsg::Error(e));
+                }
+            }
+        }
         BrokerCmd::AlpacaMarketOrder { symbol, qty, side } => {
             match b.market_order(&symbol, qty, &side).await {
                 Ok(r) => {
@@ -43,6 +56,21 @@ pub async fn handle_alpaca_order_command(
                 }
             }
         }
+        BrokerCmd::AlpacaMarketOrderNotional {
+            symbol,
+            notional,
+            side,
+        } => match b.market_order_notional(&symbol, notional, &side).await {
+            Ok(r) => {
+                let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                    "{} ${:.2} {} @ market: {}",
+                    side, notional, symbol, r.status
+                )));
+            }
+            Err(e) => {
+                let _ = broker_msg_tx.send(BrokerMsg::Error(format!("Order failed: {}", e)));
+            }
+        },
         BrokerCmd::AlpacaLimitOrder {
             symbol,
             qty,

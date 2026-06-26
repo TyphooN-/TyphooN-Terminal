@@ -10,6 +10,7 @@ pub(crate) fn draw_broker_trade_overlays(
     start_idx: usize,
     end_idx: usize,
     price_to_y: impl Fn(f64) -> f32,
+    format_price: impl Fn(f64) -> String,
 ) {
     // ── Broker trade markers (buy/sell arrows + position lines) ────────
     // Position entry/SL/TP lines
@@ -64,6 +65,66 @@ pub(crate) fn draw_broker_trade_overlays(
                 color,
             );
         }
+    }
+
+    // Open working order lines (limit/stop-limit legs): show signed notional,
+    // account %, and pips from current price directly on the chart.
+    for ol in &trade_overlay.order_lines {
+        let y = price_to_y(ol.price);
+        if y < chart_rect.top() || y > chart_rect.bottom() {
+            continue;
+        }
+        let color = if ol.is_buy {
+            egui::Color32::from_rgb(40, 180, 255)
+        } else {
+            egui::Color32::from_rgb(255, 145, 60)
+        };
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(chart_rect.left(), y - 4.0),
+                egui::pos2(chart_rect.right(), y + 4.0),
+            ),
+            0.0,
+            egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 28),
+        );
+        let mut fx = chart_rect.left();
+        while fx < chart_rect.right() {
+            let end = (fx + 10.0).min(chart_rect.right());
+            painter.line_segment(
+                [egui::pos2(fx, y), egui::pos2(end, y)],
+                egui::Stroke::new(1.5, color),
+            );
+            fx += 15.0;
+        }
+
+        let label = order_line_label(ol, &format_price);
+        let galley =
+            painter.layout_no_wrap(label, egui::FontId::monospace(9.0), egui::Color32::BLACK);
+        let pad_x = 5.0_f32;
+        let pad_y = 2.0_f32;
+        let rect_h = galley.rect.height() + pad_y * 2.0;
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(
+                chart_rect.left() + 4.0,
+                (y - rect_h * 0.5).clamp(chart_rect.top(), chart_rect.bottom() - rect_h),
+            ),
+            egui::vec2(galley.rect.width() + pad_x * 2.0, rect_h),
+        );
+        painter.rect_filled(rect, 3.0, color);
+        painter.rect_stroke(
+            rect,
+            3.0,
+            egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(0, 0, 0, 180)),
+            egui::StrokeKind::Outside,
+        );
+        painter.galley(
+            egui::pos2(
+                rect.left() + pad_x,
+                rect.center().y - galley.rect.height() * 0.5,
+            ),
+            galley,
+            egui::Color32::BLACK,
+        );
     }
     // Trade arrows (buy = green up-arrow, sell = red down-arrow).
     // PERF: markers are sorted by bar_idx (see build_trade_overlay). Binary-search
@@ -241,6 +302,85 @@ pub(crate) fn draw_broker_trade_overlays(
             &label,
             egui::FontId::monospace(8.0),
             color,
+        );
+    }
+}
+
+fn signed_money(value: f64) -> String {
+    if value >= 0.0 {
+        format!("+${:.2}", value.abs())
+    } else {
+        format!("-${:.2}", value.abs())
+    }
+}
+
+fn signed_pct(value: f64) -> String {
+    if value >= 0.0 {
+        format!("+{:.2}%", value.abs())
+    } else {
+        format!("-{:.2}%", value.abs())
+    }
+}
+
+fn signed_pips(value: f64) -> String {
+    if value >= 0.0 {
+        format!("+{:.0}p", value.abs())
+    } else {
+        format!("-{:.0}p", value.abs())
+    }
+}
+
+pub(crate) fn order_line_label(order: &OrderLine, format_price: &impl Fn(f64) -> String) -> String {
+    let side = if order.is_buy { "BUY LMT" } else { "SELL LMT" };
+    let mut label = format!(
+        "{} {} {} @ {} {}",
+        order.source,
+        side,
+        trim_qty(order.qty),
+        format_price(order.price),
+        signed_money(order.notional_delta)
+    );
+    if let Some(pct) = order.account_pct_delta {
+        label.push(' ');
+        label.push_str(&signed_pct(pct));
+    }
+    if let Some(pips) = order.pips_from_current {
+        label.push(' ');
+        label.push_str(&signed_pips(pips));
+    }
+    label
+}
+
+fn trim_qty(qty: f64) -> String {
+    if qty.fract().abs() < 1e-9 {
+        format!("{:.0}", qty)
+    } else {
+        format!("{:.8}", qty)
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn order_line_label_includes_signed_notional_pct_and_pips() {
+        let line = OrderLine {
+            price: 9.95,
+            qty: 12.5,
+            is_buy: true,
+            source: "Alpaca".to_string(),
+            notional_delta: -124.375,
+            account_pct_delta: Some(-1.244),
+            pips_from_current: Some(-5.0),
+        };
+
+        assert_eq!(
+            order_line_label(&line, &|p| format!("{p:.2}")),
+            "Alpaca BUY LMT 12.5 @ 9.95 -$124.38 -1.24% -5p"
         );
     }
 }

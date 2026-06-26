@@ -1669,6 +1669,7 @@ pub fn draw_chart(
         start_idx,
         end_idx,
         price_to_y,
+        format_price,
     );
 
     // ── alert price lines (extracted) ─────────────────────────────────────────

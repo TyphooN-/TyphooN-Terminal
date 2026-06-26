@@ -4,9 +4,7 @@ mod broker_messages;
 mod models;
 mod watchlist;
 
-pub(crate) use watchlist::{
-    KrakenEquityQuoteMeta, WatchlistRow, watchlist_row_from_raw_bars,
-};
+pub(crate) use watchlist::{KrakenEquityQuoteMeta, WatchlistRow, watchlist_row_from_raw_bars};
 
 use super::*;
 

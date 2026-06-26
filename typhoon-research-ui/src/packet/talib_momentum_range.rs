@@ -2,11 +2,7 @@ use super::context::SymbolResearchContext;
 use std::fmt::Write as _;
 use typhoon_engine::core::research as rx;
 
-pub fn write_talib_momentum_range(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_talib_momentum_range(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     // ── Research section ──
     if let Ok(Some(rc)) = rx::get_roc(ctx.conn, &sym_upper) {
         if rc.roc_label != "INSUFFICIENT_DATA" && !rc.roc_label.is_empty() {

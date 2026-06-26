@@ -20,7 +20,15 @@ impl TyphooNApp {
             let last_part = parts.next().unwrap_or(chart_sym.as_str());
             let chart_bare = if matches!(
                 last_part,
-                "1MIN" | "5MIN" | "15MIN" | "30MIN" | "1HOUR" | "4HOUR" | "1DAY" | "1WEEK" | "1MONTH"
+                "1MIN"
+                    | "5MIN"
+                    | "15MIN"
+                    | "30MIN"
+                    | "1HOUR"
+                    | "4HOUR"
+                    | "1DAY"
+                    | "1WEEK"
+                    | "1MONTH"
             ) {
                 parts.next().unwrap_or(chart_sym.as_str())
             } else {

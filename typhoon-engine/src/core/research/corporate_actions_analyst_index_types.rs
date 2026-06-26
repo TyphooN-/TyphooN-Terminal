@@ -66,5 +66,4 @@ pub struct IndexMember {
     pub date_added: String, // YYYY-MM-DD when admitted to index
 }
 
-
 // World index, market mover, sector performance, and WACC research types

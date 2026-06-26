@@ -1470,6 +1470,7 @@ fn alpaca_account_pl_matches_sum_of_position_panel_pl() {
     let lumn = PositionInfo {
         symbol: "LUMN".to_string(),
         qty: 100.0,
+        qty_available: 100.0,
         side: "long".to_string(),
         avg_entry_price: 5.00,
         market_value: 550.0,
@@ -1480,6 +1481,7 @@ fn alpaca_account_pl_matches_sum_of_position_panel_pl() {
     let wen = PositionInfo {
         symbol: "WEN".to_string(),
         qty: 50.0,
+        qty_available: 50.0,
         side: "long".to_string(),
         avg_entry_price: 10.00,
         market_value: 450.0,

@@ -36,12 +36,7 @@ pub fn compute_ema(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
 }
 
 /// Kaufman Adaptive Moving Average — O(n) with rolling volatility sum.
-pub fn compute_kama(
-    bars: &[Bar],
-    er_period: usize,
-    fast: usize,
-    slow: usize,
-) -> Vec<Option<f64>> {
+pub fn compute_kama(bars: &[Bar], er_period: usize, fast: usize, slow: usize) -> Vec<Option<f64>> {
     let n = bars.len();
     let mut out = vec![None; n];
     if n <= er_period {
@@ -238,10 +233,7 @@ pub fn compute_supertrend(
 }
 
 /// Donchian Channels: highest high / lowest low over N bars. O(n) with deques.
-pub fn compute_donchian(
-    bars: &[Bar],
-    period: usize,
-) -> (Vec<Option<f64>>, Vec<Option<f64>>) {
+pub fn compute_donchian(bars: &[Bar], period: usize) -> (Vec<Option<f64>>, Vec<Option<f64>>) {
     let n = bars.len();
     let mut upper = vec![None; n];
     let mut lower = vec![None; n];
@@ -1251,7 +1243,13 @@ fn month_key(ts_ms: i64) -> i64 {
 #[allow(clippy::type_complexity)]
 pub fn compute_prev_candle_levels(bars: &[Bar]) -> (HiLo, HiLo, HiLo, HiLo, HiLo) {
     if bars.len() < 2 {
-        return ((None, None), (None, None), (None, None), (None, None), (None, None));
+        return (
+            (None, None),
+            (None, None),
+            (None, None),
+            (None, None),
+            (None, None),
+        );
     }
     let h1 = group_levels_by(bars, hour_key).0;
     let h4 = group_levels_by(bars, four_hour_key).0;
@@ -3052,11 +3050,7 @@ pub fn ehlers_cg_oscillator(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
     out
 }
 
-pub fn ehlers_roofing_filter(
-    bars: &[Bar],
-    lp_period: usize,
-    hp_period: usize,
-) -> Vec<Option<f64>> {
+pub fn ehlers_roofing_filter(bars: &[Bar], lp_period: usize, hp_period: usize) -> Vec<Option<f64>> {
     let n = bars.len();
     let mut out = vec![None; n];
     if n < 3 {

@@ -425,11 +425,17 @@ pub fn compute_book_checksum_with_precision(
 ) -> u32 {
     let mut payload = String::new();
     for level in asks.iter().take(10) {
-        payload.push_str(&checksum_fixed_precision_component(level.price, price_decimals));
+        payload.push_str(&checksum_fixed_precision_component(
+            level.price,
+            price_decimals,
+        ));
         payload.push_str(&checksum_fixed_precision_component(level.qty, qty_decimals));
     }
     for level in bids.iter().take(10) {
-        payload.push_str(&checksum_fixed_precision_component(level.price, price_decimals));
+        payload.push_str(&checksum_fixed_precision_component(
+            level.price,
+            price_decimals,
+        ));
         payload.push_str(&checksum_fixed_precision_component(level.qty, qty_decimals));
     }
     crc32fast::hash(payload.as_bytes())
@@ -656,8 +662,18 @@ mod tests {
         let state = KrakenWsBookState::new("TESTx/USD", 10);
         let delta = KrakenWsBookDelta {
             symbol: "TESTx/USD".into(),
-            bids: vec![KrakenWsBookLevel::from_wire(189.0, 3.0, "189".into(), "3".into())],
-            asks: vec![KrakenWsBookLevel::from_wire(190.0, 5.0, "190".into(), "5".into())],
+            bids: vec![KrakenWsBookLevel::from_wire(
+                189.0,
+                3.0,
+                "189".into(),
+                "3".into(),
+            )],
+            asks: vec![KrakenWsBookLevel::from_wire(
+                190.0,
+                5.0,
+                "190".into(),
+                "5".into(),
+            )],
             checksum: None,
             ts_ms: None,
             is_snapshot: true,

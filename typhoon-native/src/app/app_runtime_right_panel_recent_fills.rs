@@ -13,7 +13,12 @@ impl TyphooNApp {
             let equity = self.kraken_usd_equivalent_balance();
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Kraken Equity").small().strong());
-                ui.label(egui::RichText::new(format!("${:.2}", equity)).color(UP).small().strong());
+                ui.label(
+                    egui::RichText::new(format!("${:.2}", equity))
+                        .color(UP)
+                        .small()
+                        .strong(),
+                );
             });
             ui.separator();
 

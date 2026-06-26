@@ -10,7 +10,7 @@
 //! (e.g. "only when WACC > 0"), so a default/empty snapshot emits nothing.
 
 use std::fmt::Write as _;
-use typhoon_engine::core::fundamentals::{format_large_number, Fundamentals};
+use typhoon_engine::core::fundamentals::{Fundamentals, format_large_number};
 use typhoon_engine::core::research::{
     BetaSnapshot, DcfSnapshot, DdmSnapshot, EfficiencyRatioSnapshot, FigiSnapshot, FlowSnapshot,
     GrowmSnapshot, HraSnapshot, IvolSnapshot, MarginsSnapshot, MomentumRankSnapshot,
@@ -949,11 +949,7 @@ pub fn write_momf(p: &mut String, mf: &MomentumRankSnapshot) {
 /// Sector peer comparison: this symbol's metrics vs the median of its sector
 /// peers. Pure over the symbol's [`Fundamentals`] and the resolved peer slice
 /// (the caller filters `all_fundamentals` by sector). Emits only with ≥3 peers.
-pub fn write_sector_peer_comparison(
-    p: &mut String,
-    f: &Fundamentals,
-    peers: &[&Fundamentals],
-) {
+pub fn write_sector_peer_comparison(p: &mut String, f: &Fundamentals, peers: &[&Fundamentals]) {
     if peers.len() >= 3 {
         let median = |mut v: Vec<f64>| -> Option<f64> {
             if v.is_empty() {

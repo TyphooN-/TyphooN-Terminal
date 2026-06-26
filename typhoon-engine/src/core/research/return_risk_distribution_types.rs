@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use super::DivgAnnualRow;
+use serde::{Deserialize, Serialize};
 
 // Yield, short-interest, historical-volatility, drawdown, return-distribution, and behavior-stat research types
 

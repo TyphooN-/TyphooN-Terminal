@@ -207,7 +207,6 @@ impl eframe::App for TyphooNApp {
             self.render_central_panel(ctx, ui, pointer_over_floating);
         });
 
-
         // ── Console (egui::Window for proper focus/interaction on Wayland) ────
         if self.command_open {
             // ADR-092: When filter is empty, show recent commands first
@@ -597,7 +596,8 @@ impl eframe::App for TyphooNApp {
                     .iter()
                     .map(|s| s.to_string())
                     .collect();
-                    let mut crypto_set: std::collections::HashSet<String> = crypto_syms.iter().cloned().collect();
+                    let mut crypto_set: std::collections::HashSet<String> =
+                        crypto_syms.iter().cloned().collect();
                     for chart in &self.charts {
                         let bare = bare_symbol_from_key(&chart.symbol).to_uppercase();
                         if Self::demand_is_crypto(&bare) && !crypto_set.contains(&bare) {

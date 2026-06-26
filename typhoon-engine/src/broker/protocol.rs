@@ -2,9 +2,9 @@
 // `use super::*` native-state glob), so it can move to engine in Phase C. Everything else
 // it carries is referenced by fully-qualified `crate::…` path; these are the only
 // bare-name types its variants use.
-use std::path::PathBuf;
 use crate::broker::alpaca::{AccountInfo, OrderInfo, PositionInfo};
 use crate::core::watchlist::WatchlistRow;
+use std::path::PathBuf;
 
 /// Broker identity. Doubles as the order-routing target and the primary/assist
 /// role selector (see `primary_broker`). New brokers are added here and to the
@@ -107,6 +107,10 @@ pub enum BrokerCmd {
     ClosePosition {
         symbol: String,
         qty: Option<f64>,
+    },
+    AlpacaClosePositionPercent {
+        symbol: String,
+        percentage: f64,
     },
     /// Scrape SEC EDGAR filings for all portfolio symbols.
     SecScrape {
@@ -285,6 +289,13 @@ pub enum BrokerCmd {
     AlpacaMarketOrder {
         symbol: String,
         qty: f64,
+        side: String,
+    },
+    /// Place market order via Alpaca using dollar notional instead of quantity.
+    /// Alpaca documents notional as market/day only and mutually exclusive with qty.
+    AlpacaMarketOrderNotional {
+        symbol: String,
+        notional: f64,
         side: String,
     },
     /// Place limit order via Alpaca.
@@ -2605,10 +2616,7 @@ pub enum BrokerMsg {
     /// Batch watchlist quote data.
     WatchlistQuotes(Vec<WatchlistRow>),
     /// FRED economic data results.
-    FredData(
-        Vec<crate::core::fred::FredSeries>,
-        Vec<(String, f64)>,
-    ),
+    FredData(Vec<crate::core::fred::FredSeries>, Vec<(String, f64)>),
     /// Economic calendar events (date, country, event, impact, actual).
     EconCalendarData(Vec<(String, String, String, String, String)>),
     /// Congressional stock trades (date, rep, ticker, type, amount, party).
@@ -2644,10 +2652,7 @@ pub enum BrokerMsg {
     /// Finnhub press releases for a symbol.
     PressReleases(String, Vec<crate::core::research::PressRelease>),
     /// Finnhub social sentiment rows for a symbol.
-    SocialSentiment(
-        String,
-        Vec<crate::core::research::SocialSentimentRow>,
-    ),
+    SocialSentiment(String, Vec<crate::core::research::SocialSentimentRow>),
     /// StockTwits public-stream sentiment snapshot for a symbol.
     StockTwitsSentiment(String, crate::core::research::StockTwitsSentimentSnapshot),
     /// FMP transcript metadata list.
@@ -2660,10 +2665,7 @@ pub enum BrokerMsg {
     /// Dividend payment history for a symbol.
     DividendHistory(String, Vec<crate::core::research::DividendRecord>),
     /// Forward earnings estimates for a symbol.
-    EarningsEstimates(
-        String,
-        Vec<crate::core::research::EarningsEstimate>,
-    ),
+    EarningsEstimates(String, Vec<crate::core::research::EarningsEstimate>),
     /// Analyst rating change feed for a symbol.
     RatingChanges(String, Vec<crate::core::research::RatingChange>),
     /// Treasury yield curve snapshot.
@@ -2681,10 +2683,7 @@ pub enum BrokerMsg {
     /// ETF holdings (constituents) for an ETF ticker.
     EtfHoldingsMsg(String, Vec<crate::core::research::EtfHolding>),
     /// Analyst recommendation buckets (monthly trend) for a symbol.
-    AnalystRecsMsg(
-        String,
-        Vec<crate::core::research::AnalystRecommendation>,
-    ),
+    AnalystRecsMsg(String, Vec<crate::core::research::AnalystRecommendation>),
     /// Consensus price target snapshot for a symbol.
     PriceTargetMsg(String, crate::core::research::PriceTarget),
     /// ESG score history for a symbol.
@@ -2695,22 +2694,13 @@ pub enum BrokerMsg {
     /// Insider trade filings (Form 4) for a symbol.
     InsiderTradesMsg(String, Vec<crate::core::research::InsiderTrade>),
     /// Institutional holders (13F-derived) for a symbol.
-    InstitutionalHoldersMsg(
-        String,
-        Vec<crate::core::research::InstitutionalHolder>,
-    ),
+    InstitutionalHoldersMsg(String, Vec<crate::core::research::InstitutionalHolder>),
     /// Shares float + outstanding snapshot for a symbol.
     SharesFloatMsg(String, crate::core::research::SharesFloat),
     /// Historical price table (daily OHLCV rows) for a symbol.
-    HistoricalPriceMsg(
-        String,
-        Vec<crate::core::research::HistoricalPriceRow>,
-    ),
+    HistoricalPriceMsg(String, Vec<crate::core::research::HistoricalPriceRow>),
     /// Earnings surprise rows (quarterly EPS actual vs estimate) for a symbol.
-    EarningsSurpriseMsg(
-        String,
-        Vec<crate::core::research::EarningsSurprise>,
-    ),
+    EarningsSurpriseMsg(String, Vec<crate::core::research::EarningsSurprise>),
     // ── ──
     /// World equity index quotes (global WEI dashboard).
     WorldIndicesMsg(Vec<crate::core::research::WorldIndex>),
@@ -2763,10 +2753,7 @@ pub enum BrokerMsg {
     /// FCFY — FCF yield / payout / dividend sustainability snapshot for a symbol.
     FcfYieldSnapshotMsg(String, crate::core::research::FcfYieldSnapshot),
     /// SHRT — short interest / days-to-cover snapshot for a symbol.
-    ShortInterestSnapshotMsg(
-        String,
-        crate::core::research::ShortInterestSnapshot,
-    ),
+    ShortInterestSnapshotMsg(String, crate::core::research::ShortInterestSnapshot),
     // ── ──
     /// ALTZ — Altman Z-score snapshot for a symbol.
     AltmanZSnapshotMsg(String, crate::core::research::AltmanZSnapshot),
@@ -2777,25 +2764,16 @@ pub enum BrokerMsg {
     /// EPSB — EPS beat streak snapshot for a symbol.
     EpsBeatSnapshotMsg(String, crate::core::research::EpsBeatSnapshot),
     /// PTD — Price target dispersion snapshot for a symbol.
-    PriceTargetDispersionSnapshotMsg(
-        String,
-        crate::core::research::PriceTargetDispersion,
-    ),
+    PriceTargetDispersionSnapshotMsg(String, crate::core::research::PriceTargetDispersion),
     // ── ──
     /// MNGR — Insider activity bias snapshot for a symbol.
-    InsiderActivitySnapshotMsg(
-        String,
-        crate::core::research::InsiderActivitySnapshot,
-    ),
+    InsiderActivitySnapshotMsg(String, crate::core::research::InsiderActivitySnapshot),
     /// DIVG — Dividend growth analysis snapshot for a symbol.
     DivgSnapshotMsg(String, crate::core::research::DivgSnapshot),
     /// EARM — Earnings momentum trend snapshot for a symbol.
     EarmSnapshotMsg(String, crate::core::research::EarmSnapshot),
     /// SECTR — Sector rotation strength snapshot for a symbol.
-    SectorRotationSnapshotMsg(
-        String,
-        crate::core::research::SectorRotationSnapshot,
-    ),
+    SectorRotationSnapshotMsg(String, crate::core::research::SectorRotationSnapshot),
     /// UPDM — Upgrade/downgrade momentum snapshot for a symbol.
     UpdmSnapshotMsg(String, crate::core::research::UpdmSnapshot),
     // ── ──
@@ -2828,10 +2806,7 @@ pub enum BrokerMsg {
     /// RISK — Risk-factor composite snapshot for a symbol.
     RiskSnapshotMsg(String, crate::core::research::RiskSnapshot),
     /// INSSTRK — Insider streak detector snapshot for a symbol.
-    InsstrkSnapshotMsg(
-        String,
-        crate::core::research::InsiderStreakSnapshot,
-    ),
+    InsstrkSnapshotMsg(String, crate::core::research::InsiderStreakSnapshot),
     /// COVG — Analyst coverage breadth + churn snapshot for a symbol.
     CovgSnapshotMsg(String, crate::core::research::CoverageSnapshot),
     // ── ──
@@ -2842,10 +2817,7 @@ pub enum BrokerMsg {
     /// RRK — Risk Rank vs sector peers snapshot for a symbol.
     RrkSnapshotMsg(String, crate::core::research::RiskRankSnapshot),
     /// RELEPSGR — Relative 3y EPS CAGR vs sector median snapshot for a symbol.
-    RelepsgrSnapshotMsg(
-        String,
-        crate::core::research::RelativeEpsGrowthSnapshot,
-    ),
+    RelepsgrSnapshotMsg(String, crate::core::research::RelativeEpsGrowthSnapshot),
     /// PEAD — Post-earnings-announcement drift snapshot for a symbol.
     PeadSnapshotMsg(String, crate::core::research::PeadSnapshot),
     // ── ──
@@ -2861,25 +2833,16 @@ pub enum BrokerMsg {
         crate::core::research::FundamentalQualityMeterSnapshot,
     ),
     /// REVRANK — Relative 3y revenue CAGR snapshot for a symbol.
-    RevrankSnapshotMsg(
-        String,
-        crate::core::research::RevenueGrowthRankSnapshot,
-    ),
+    RevrankSnapshotMsg(String, crate::core::research::RevenueGrowthRankSnapshot),
     // ── ──
     /// LEVRANK — Leverage rank vs sector peers snapshot for a symbol.
     LevrankSnapshotMsg(String, crate::core::research::LeverageRankSnapshot),
     /// OPERANK — Operating quality rank vs sector peers snapshot for a symbol.
-    OperankSnapshotMsg(
-        String,
-        crate::core::research::OperatingQualityRankSnapshot,
-    ),
+    OperankSnapshotMsg(String, crate::core::research::OperatingQualityRankSnapshot),
     /// FQMRANK — FQM rank vs sector peers snapshot for a symbol.
     FqmrankSnapshotMsg(String, crate::core::research::FqmRankSnapshot),
     /// LIQRANK — Liquidity rank vs sector peers snapshot for a symbol.
-    LiqrankSnapshotMsg(
-        String,
-        crate::core::research::LiquidityRankSnapshot,
-    ),
+    LiqrankSnapshotMsg(String, crate::core::research::LiquidityRankSnapshot),
     /// SURPSTK — Earnings surprise streak stat for a symbol.
     SurpstkSnapshotMsg(
         String,
@@ -2887,83 +2850,44 @@ pub enum BrokerMsg {
     ),
     // ── ──
     /// DVDRANK — Dividend growth rank vs sector peers snapshot for a symbol.
-    DvdrankSnapshotMsg(
-        String,
-        crate::core::research::DividendGrowthRankSnapshot,
-    ),
+    DvdrankSnapshotMsg(String, crate::core::research::DividendGrowthRankSnapshot),
     /// EARMRANK — Earnings momentum rank vs sector peers snapshot for a symbol.
-    EarmrankSnapshotMsg(
-        String,
-        crate::core::research::EarningsMomentumRankSnapshot,
-    ),
+    EarmrankSnapshotMsg(String, crate::core::research::EarningsMomentumRankSnapshot),
     /// UPDGRANK — Upgrade/downgrade rank vs sector peers snapshot for a symbol.
-    UpdgrankSnapshotMsg(
-        String,
-        crate::core::research::UpgradeDowngradeRankSnapshot,
-    ),
+    UpdgrankSnapshotMsg(String, crate::core::research::UpgradeDowngradeRankSnapshot),
     /// GY — Gap yearly stat for a symbol.
     GySnapshotMsg(String, crate::core::research::GapYearlySnapshot),
     /// DES — Daily event streak stat for a symbol.
-    DesSnapshotMsg(
-        String,
-        crate::core::research::DailyEventStreakSnapshot,
-    ),
+    DesSnapshotMsg(String, crate::core::research::DailyEventStreakSnapshot),
     // ── ──
     /// DVDYIELDRANK — Dividend yield rank vs sector peers snapshot for a symbol.
-    DvdyieldrankSnapshotMsg(
-        String,
-        crate::core::research::DividendYieldRankSnapshot,
-    ),
+    DvdyieldrankSnapshotMsg(String, crate::core::research::DividendYieldRankSnapshot),
     /// SHRANK — Short interest rank vs sector peers snapshot for a symbol.
-    ShrankSnapshotMsg(
-        String,
-        crate::core::research::ShortInterestRankSnapshot,
-    ),
+    ShrankSnapshotMsg(String, crate::core::research::ShortInterestRankSnapshot),
     /// SHORTRANK_DELTA — short-interest trend rank snapshot for a symbol.
     ShortrankDeltaSnapshotMsg(
         String,
         crate::core::research::ShortInterestDeltaRankSnapshot,
     ),
     /// INSIDERCONC — insider ownership concentration snapshot for a symbol.
-    InsiderconcSnapshotMsg(
-        String,
-        crate::core::research::InsiderConcentrationSnapshot,
-    ),
+    InsiderconcSnapshotMsg(String, crate::core::research::InsiderConcentrationSnapshot),
     /// ATRANN — Annualized ATR volatility regime snapshot for a symbol.
-    AtrannSnapshotMsg(
-        String,
-        crate::core::research::AnnualizedAtrSnapshot,
-    ),
+    AtrannSnapshotMsg(String, crate::core::research::AnnualizedAtrSnapshot),
     /// DDHIST — Drawdown history snapshot for a symbol.
-    DdhistSnapshotMsg(
-        String,
-        crate::core::research::DrawdownHistorySnapshot,
-    ),
+    DdhistSnapshotMsg(String, crate::core::research::DrawdownHistorySnapshot),
     /// PRICEPERF — Multi-horizon price performance snapshot for a symbol.
-    PriceperfSnapshotMsg(
-        String,
-        crate::core::research::PricePerformanceSnapshot,
-    ),
+    PriceperfSnapshotMsg(String, crate::core::research::PricePerformanceSnapshot),
     /// MOMRANK_MULTI — sector-relative PRICEPERF rank snapshot for a symbol.
-    MomrankMultiSnapshotMsg(
-        String,
-        crate::core::research::MomentumRankMultiSnapshot,
-    ),
+    MomrankMultiSnapshotMsg(String, crate::core::research::MomentumRankMultiSnapshot),
     // ── ──
     /// BETARANK — Beta rank vs sector peers snapshot for a symbol.
     BetarankSnapshotMsg(String, crate::core::research::BetaRankSnapshot),
     /// PEGRANK — PEG ratio rank vs sector peers snapshot for a symbol.
     PegrankSnapshotMsg(String, crate::core::research::PegRankSnapshot),
     /// FHIGHLOW — 52-week high/low distance snapshot for a symbol.
-    FhighlowSnapshotMsg(
-        String,
-        crate::core::research::FiftyTwoWeekHighLowSnapshot,
-    ),
+    FhighlowSnapshotMsg(String, crate::core::research::FiftyTwoWeekHighLowSnapshot),
     /// RVCONE — Multi-horizon realized vol cone snapshot for a symbol.
-    RvconeSnapshotMsg(
-        String,
-        crate::core::research::RealizedVolConeSnapshot,
-    ),
+    RvconeSnapshotMsg(String, crate::core::research::RealizedVolConeSnapshot),
     /// CALPB — Calendar period breakdown snapshot for a symbol.
     CalpbSnapshotMsg(
         String,
@@ -2977,41 +2901,23 @@ pub enum BrokerMsg {
         crate::core::research::ThirtyDayLiquidityRankSnapshot,
     ),
     /// CORRRANK — benchmark linkage rank snapshot for a symbol.
-    CorrrankSnapshotMsg(
-        String,
-        crate::core::research::CorrelationRankSnapshot,
-    ),
+    CorrrankSnapshotMsg(String, crate::core::research::CorrelationRankSnapshot),
     /// OPERANK_DELTA — operating-margin trend rank snapshot for a symbol.
     OperankDeltaSnapshotMsg(
         String,
         crate::core::research::OperatingMarginDeltaRankSnapshot,
     ),
     /// DIVACC — dividend growth acceleration snapshot for a symbol.
-    DivaccSnapshotMsg(
-        String,
-        crate::core::research::DividendAccelerationSnapshot,
-    ),
+    DivaccSnapshotMsg(String, crate::core::research::DividendAccelerationSnapshot),
     /// EPSACC — EPS acceleration snapshot for a symbol.
-    EpsaccSnapshotMsg(
-        String,
-        crate::core::research::EpsAccelerationSnapshot,
-    ),
+    EpsaccSnapshotMsg(String, crate::core::research::EpsAccelerationSnapshot),
     /// VRP — implied-vs-realized volatility premium snapshot for a symbol.
-    VrpSnapshotMsg(
-        String,
-        crate::core::research::VolRiskPremiumSnapshot,
-    ),
+    VrpSnapshotMsg(String, crate::core::research::VolRiskPremiumSnapshot),
     // ── ──
     /// RETSKEW — Return distribution skewness snapshot for a symbol.
-    RetskewSnapshotMsg(
-        String,
-        crate::core::research::ReturnSkewnessSnapshot,
-    ),
+    RetskewSnapshotMsg(String, crate::core::research::ReturnSkewnessSnapshot),
     /// RETKURT — Return distribution excess kurtosis snapshot for a symbol.
-    RetkurtSnapshotMsg(
-        String,
-        crate::core::research::ReturnKurtosisSnapshot,
-    ),
+    RetkurtSnapshotMsg(String, crate::core::research::ReturnKurtosisSnapshot),
     /// TAILR — Tail ratio snapshot for a symbol.
     TailrSnapshotMsg(String, crate::core::research::TailRatioSnapshot),
     /// RUNLEN — Up/down day run length snapshot for a symbol.
@@ -3020,51 +2926,33 @@ pub enum BrokerMsg {
     DayrangeSnapshotMsg(String, crate::core::research::DailyRangeSnapshot),
     // ── ──
     /// AUTOCOR — Autocorrelation snapshot for a symbol.
-    AutocorSnapshotMsg(
-        String,
-        crate::core::research::AutocorrelationSnapshot,
-    ),
+    AutocorSnapshotMsg(String, crate::core::research::AutocorrelationSnapshot),
     /// HURST — Hurst exponent snapshot for a symbol.
     HurstSnapshotMsg(String, crate::core::research::HurstSnapshot),
     /// HITRATE — Multi-horizon hit rate snapshot for a symbol.
     HitrateSnapshotMsg(String, crate::core::research::HitRateSnapshot),
     /// GLASYM — Gain/loss asymmetry snapshot for a symbol.
-    GlasymSnapshotMsg(
-        String,
-        crate::core::research::GainLossAsymmetrySnapshot,
-    ),
+    GlasymSnapshotMsg(String, crate::core::research::GainLossAsymmetrySnapshot),
     /// VOLRATIO — Up/down volume ratio snapshot for a symbol.
     VolratioSnapshotMsg(String, crate::core::research::VolumeRatioSnapshot),
     // ── ──
     /// DRAWUP — Rally history snapshot for a symbol.
-    DrawupSnapshotMsg(
-        String,
-        crate::core::research::DrawupHistorySnapshot,
-    ),
+    DrawupSnapshotMsg(String, crate::core::research::DrawupHistorySnapshot),
     /// GAPSTATS — Overnight gap statistics snapshot for a symbol.
     GapstatsSnapshotMsg(String, crate::core::research::GapStatsSnapshot),
     /// VOLCLUSTER — Volatility clustering snapshot for a symbol.
     VolclusterSnapshotMsg(String, crate::core::research::VolClusterSnapshot),
     /// CLOSEPLC — Close placement snapshot for a symbol.
-    CloseplcSnapshotMsg(
-        String,
-        crate::core::research::ClosePlacementSnapshot,
-    ),
+    CloseplcSnapshotMsg(String, crate::core::research::ClosePlacementSnapshot),
     /// MRHL — Mean-reversion half-life snapshot for a symbol.
-    MrhlSnapshotMsg(
-        String,
-        crate::core::research::MeanReversionHalfLifeSnapshot,
-    ),
+    MrhlSnapshotMsg(String, crate::core::research::MeanReversionHalfLifeSnapshot),
     // ── ──
     /// DOWNVOL — Downside deviation + Sortino snapshot for a symbol.
     DownvolSnapshotMsg(String, crate::core::research::DownsideVolSnapshot),
     /// SHARPR — Sharpe ratio snapshot for a symbol.
     SharprSnapshotMsg(String, crate::core::research::SharpeRatioSnapshot),
     /// EFFRATIO — Kaufman efficiency ratio snapshot for a symbol.
-    EffratioSnapshotMsg(
-        String,
-        crate::core::research::EfficiencyRatioSnapshot,
-    ),
+    EffratioSnapshotMsg(String, crate::core::research::EfficiencyRatioSnapshot),
     /// WICKBIAS — Upper vs lower wick asymmetry snapshot for a symbol.
     WickbiasSnapshotMsg(String, crate::core::research::WickBiasSnapshot),
     /// VOLOFVOL — Vol of rolling 20d realized vol snapshot for a symbol.
@@ -3072,75 +2960,39 @@ pub enum BrokerMsg {
     // ── Research section ──
     CalmarSnapshotMsg(String, crate::core::research::CalmarRatioSnapshot),
     UlcerSnapshotMsg(String, crate::core::research::UlcerIndexSnapshot),
-    VarratioSnapshotMsg(
-        String,
-        crate::core::research::VarianceRatioSnapshot,
-    ),
+    VarratioSnapshotMsg(String, crate::core::research::VarianceRatioSnapshot),
     AmihudSnapshotMsg(String, crate::core::research::AmihudIlliqSnapshot),
     JbnormSnapshotMsg(String, crate::core::research::JarqueBeraSnapshot),
     // ── Research section ──
     OmegaSnapshotMsg(String, crate::core::research::OmegaRatioSnapshot),
-    DfaSnapshotMsg(
-        String,
-        crate::core::research::DetrendedFluctuationSnapshot,
-    ),
+    DfaSnapshotMsg(String, crate::core::research::DetrendedFluctuationSnapshot),
     BurkeSnapshotMsg(String, crate::core::research::BurkeRatioSnapshot),
-    MonthseasSnapshotMsg(
-        String,
-        crate::core::research::MonthlySeasonalitySnapshot,
-    ),
+    MonthseasSnapshotMsg(String, crate::core::research::MonthlySeasonalitySnapshot),
     RollsprdSnapshotMsg(String, crate::core::research::RollSpreadSnapshot),
     // ── Research section ──
     ParkinsonSnapshotMsg(String, crate::core::research::ParkinsonVolSnapshot),
-    GkvolSnapshotMsg(
-        String,
-        crate::core::research::GarmanKlassVolSnapshot,
-    ),
-    RsvolSnapshotMsg(
-        String,
-        crate::core::research::RogersSatchellVolSnapshot,
-    ),
+    GkvolSnapshotMsg(String, crate::core::research::GarmanKlassVolSnapshot),
+    RsvolSnapshotMsg(String, crate::core::research::RogersSatchellVolSnapshot),
     CvarSnapshotMsg(String, crate::core::research::CVaRSnapshot),
-    DoweffectSnapshotMsg(
-        String,
-        crate::core::research::DayOfWeekEffectSnapshot,
-    ),
+    DoweffectSnapshotMsg(String, crate::core::research::DayOfWeekEffectSnapshot),
     // ── Research section ──
-    SterlingSnapshotMsg(
-        String,
-        crate::core::research::SterlingRatioSnapshot,
-    ),
-    KellyfSnapshotMsg(
-        String,
-        crate::core::research::KellyFractionSnapshot,
-    ),
+    SterlingSnapshotMsg(String, crate::core::research::SterlingRatioSnapshot),
+    KellyfSnapshotMsg(String, crate::core::research::KellyFractionSnapshot),
     LjungbSnapshotMsg(String, crate::core::research::LjungBoxSnapshot),
     RunstestSnapshotMsg(String, crate::core::research::RunsTestSnapshot),
     ZeroretSnapshotMsg(String, crate::core::research::ZeroReturnSnapshot),
     // ── Research section ──
-    PsrSnapshotMsg(
-        String,
-        crate::core::research::ProbabilisticSharpeSnapshot,
-    ),
+    PsrSnapshotMsg(String, crate::core::research::ProbabilisticSharpeSnapshot),
     AdfSnapshotMsg(String, crate::core::research::DickeyFullerSnapshot),
     MnkendallSnapshotMsg(String, crate::core::research::MannKendallSnapshot),
-    BipowerSnapshotMsg(
-        String,
-        crate::core::research::BipowerVariationSnapshot,
-    ),
-    DddurSnapshotMsg(
-        String,
-        crate::core::research::DrawdownDurationSnapshot,
-    ),
+    BipowerSnapshotMsg(String, crate::core::research::BipowerVariationSnapshot),
+    DddurSnapshotMsg(String, crate::core::research::DrawdownDurationSnapshot),
     // ── Research section ──
     HilltailSnapshotMsg(String, crate::core::research::HillTailSnapshot),
     ArchlmSnapshotMsg(String, crate::core::research::ArchLmSnapshot),
     PainratioSnapshotMsg(String, crate::core::research::PainRatioSnapshot),
     CusumSnapshotMsg(String, crate::core::research::CusumBreakSnapshot),
-    CfvarSnapshotMsg(
-        String,
-        crate::core::research::CornishFisherSnapshot,
-    ),
+    CfvarSnapshotMsg(String, crate::core::research::CornishFisherSnapshot),
     // ── Research section ──
     EntropySnapshotMsg(String, crate::core::research::EntropySnapshot),
     RachevSnapshotMsg(String, crate::core::research::RachevSnapshot),
@@ -3281,10 +3133,7 @@ pub enum BrokerMsg {
     ElderImpSnapshotMsg(String, crate::core::research::ElderImpulseSnapshot),
     RmiSnapshotMsg(String, crate::core::research::RmiSnapshot),
     // ── ──
-    SymbolExpirationsMsg(
-        String,
-        crate::core::research::SymbolExpirationsSnapshot,
-    ),
+    SymbolExpirationsMsg(String, crate::core::research::SymbolExpirationsSnapshot),
     // ── Research section ──
     SmmaSnapshotMsg(String, crate::core::research::SmmaSnapshot),
     AlligatorSnapshotMsg(String, crate::core::research::AlligatorSnapshot),
@@ -3334,20 +3183,14 @@ pub enum BrokerMsg {
     ForceIndexSnapshotMsg(String, crate::core::research::ForceIndexSnapshot),
     TrangeSnapshotMsg(String, crate::core::research::TrangeSnapshot),
     // ── Research section ──
-    LinearregSlopeSnapshotMsg(
-        String,
-        crate::core::research::LinearregSlopeSnapshot,
-    ),
+    LinearregSlopeSnapshotMsg(String, crate::core::research::LinearregSlopeSnapshot),
     HtDcperiodSnapshotMsg(String, crate::core::research::HtDcperiodSnapshot),
     HtTrendmodeSnapshotMsg(String, crate::core::research::HtTrendmodeSnapshot),
     AccbandsSnapshotMsg(String, crate::core::research::AccbandsSnapshot),
     StochfSnapshotMsg(String, crate::core::research::StochfSnapshot),
     // ── Research section ──
     LinearregSnapshotMsg(String, crate::core::research::LinearregSnapshot),
-    LinearregAngleSnapshotMsg(
-        String,
-        crate::core::research::LinearregAngleSnapshot,
-    ),
+    LinearregAngleSnapshotMsg(String, crate::core::research::LinearregAngleSnapshot),
     HtDcphaseSnapshotMsg(String, crate::core::research::HtDcphaseSnapshot),
     HtSineSnapshotMsg(String, crate::core::research::HtSineSnapshot),
     HtPhasorSnapshotMsg(String, crate::core::research::HtPhasorSnapshot),
@@ -3386,10 +3229,7 @@ pub enum BrokerMsg {
     AdSnapshotMsg(String, crate::core::research::AdSnapshot),
     AdoscSnapshotMsg(String, crate::core::research::AdoscSnapshot),
     SumSnapshotMsg(String, crate::core::research::SumSnapshot),
-    LinearRegInterceptSnapshotMsg(
-        String,
-        crate::core::research::LinearRegInterceptSnapshot,
-    ),
+    LinearRegInterceptSnapshotMsg(String, crate::core::research::LinearRegInterceptSnapshot),
     // ── Research section ──
     AroonoscSnapshotMsg(String, crate::core::research::AroonoscSnapshot),
     MinMaxIndexSnapshotMsg(String, crate::core::research::MinMaxIndexSnapshot),
@@ -3399,192 +3239,84 @@ pub enum BrokerMsg {
     // ── Research section ──
     CdlDojiSnapshotMsg(String, crate::core::research::CdlDojiSnapshot),
     CdlHammerSnapshotMsg(String, crate::core::research::CdlHammerSnapshot),
-    CdlShootingStarSnapshotMsg(
-        String,
-        crate::core::research::CdlShootingStarSnapshot,
-    ),
+    CdlShootingStarSnapshotMsg(String, crate::core::research::CdlShootingStarSnapshot),
     CdlEngulfingSnapshotMsg(String, crate::core::research::CdlEngulfingSnapshot),
     CdlHaramiSnapshotMsg(String, crate::core::research::CdlHaramiSnapshot),
     // ── Research section ──
-    CdlMorningStarSnapshotMsg(
-        String,
-        crate::core::research::CdlMorningStarSnapshot,
-    ),
-    CdlEveningStarSnapshotMsg(
-        String,
-        crate::core::research::CdlEveningStarSnapshot,
-    ),
-    CdlThreeBlackCrowsSnapshotMsg(
-        String,
-        crate::core::research::CdlThreeBlackCrowsSnapshot,
-    ),
-    CdlThreeWhiteSoldiersSnapshotMsg(
-        String,
-        crate::core::research::CdlThreeWhiteSoldiersSnapshot,
-    ),
-    CdlDarkCloudCoverSnapshotMsg(
-        String,
-        crate::core::research::CdlDarkCloudCoverSnapshot,
-    ),
+    CdlMorningStarSnapshotMsg(String, crate::core::research::CdlMorningStarSnapshot),
+    CdlEveningStarSnapshotMsg(String, crate::core::research::CdlEveningStarSnapshot),
+    CdlThreeBlackCrowsSnapshotMsg(String, crate::core::research::CdlThreeBlackCrowsSnapshot),
+    CdlThreeWhiteSoldiersSnapshotMsg(String, crate::core::research::CdlThreeWhiteSoldiersSnapshot),
+    CdlDarkCloudCoverSnapshotMsg(String, crate::core::research::CdlDarkCloudCoverSnapshot),
     // ── Research section ──
     CdlPiercingSnapshotMsg(String, crate::core::research::CdlPiercingSnapshot),
-    CdlDragonflyDojiSnapshotMsg(
-        String,
-        crate::core::research::CdlDragonflyDojiSnapshot,
-    ),
-    CdlGravestoneDojiSnapshotMsg(
-        String,
-        crate::core::research::CdlGravestoneDojiSnapshot,
-    ),
-    CdlHangingManSnapshotMsg(
-        String,
-        crate::core::research::CdlHangingManSnapshot,
-    ),
-    CdlInvertedHammerSnapshotMsg(
-        String,
-        crate::core::research::CdlInvertedHammerSnapshot,
-    ),
+    CdlDragonflyDojiSnapshotMsg(String, crate::core::research::CdlDragonflyDojiSnapshot),
+    CdlGravestoneDojiSnapshotMsg(String, crate::core::research::CdlGravestoneDojiSnapshot),
+    CdlHangingManSnapshotMsg(String, crate::core::research::CdlHangingManSnapshot),
+    CdlInvertedHammerSnapshotMsg(String, crate::core::research::CdlInvertedHammerSnapshot),
     // ── Research section ──
-    CdlHaramiCrossSnapshotMsg(
-        String,
-        crate::core::research::CdlHaramiCrossSnapshot,
-    ),
-    CdlLongLeggedDojiSnapshotMsg(
-        String,
-        crate::core::research::CdlLongLeggedDojiSnapshot,
-    ),
+    CdlHaramiCrossSnapshotMsg(String, crate::core::research::CdlHaramiCrossSnapshot),
+    CdlLongLeggedDojiSnapshotMsg(String, crate::core::research::CdlLongLeggedDojiSnapshot),
     CdlMarubozuSnapshotMsg(String, crate::core::research::CdlMarubozuSnapshot),
-    CdlSpinningTopSnapshotMsg(
-        String,
-        crate::core::research::CdlSpinningTopSnapshot,
-    ),
+    CdlSpinningTopSnapshotMsg(String, crate::core::research::CdlSpinningTopSnapshot),
     CdlTristarSnapshotMsg(String, crate::core::research::CdlTristarSnapshot),
     // ── Research section ──
     CdlDojiStarSnapshotMsg(String, crate::core::research::CdlDojiStarSnapshot),
-    CdlMorningDojiStarSnapshotMsg(
-        String,
-        crate::core::research::CdlMorningDojiStarSnapshot,
-    ),
-    CdlEveningDojiStarSnapshotMsg(
-        String,
-        crate::core::research::CdlEveningDojiStarSnapshot,
-    ),
-    CdlAbandonedBabySnapshotMsg(
-        String,
-        crate::core::research::CdlAbandonedBabySnapshot,
-    ),
-    CdlThreeInsideSnapshotMsg(
-        String,
-        crate::core::research::CdlThreeInsideSnapshot,
-    ),
+    CdlMorningDojiStarSnapshotMsg(String, crate::core::research::CdlMorningDojiStarSnapshot),
+    CdlEveningDojiStarSnapshotMsg(String, crate::core::research::CdlEveningDojiStarSnapshot),
+    CdlAbandonedBabySnapshotMsg(String, crate::core::research::CdlAbandonedBabySnapshot),
+    CdlThreeInsideSnapshotMsg(String, crate::core::research::CdlThreeInsideSnapshot),
     // ── Research section ──
     CdlBeltHoldSnapshotMsg(String, crate::core::research::CdlBeltHoldSnapshot),
-    CdlClosingMarubozuSnapshotMsg(
-        String,
-        crate::core::research::CdlClosingMarubozuSnapshot,
-    ),
+    CdlClosingMarubozuSnapshotMsg(String, crate::core::research::CdlClosingMarubozuSnapshot),
     CdlHighWaveSnapshotMsg(String, crate::core::research::CdlHighWaveSnapshot),
     CdlLongLineSnapshotMsg(String, crate::core::research::CdlLongLineSnapshot),
     CdlShortLineSnapshotMsg(String, crate::core::research::CdlShortLineSnapshot),
     // ── Research section ──
-    CdlCounterattackSnapshotMsg(
-        String,
-        crate::core::research::CdlCounterattackSnapshot,
-    ),
-    CdlHomingPigeonSnapshotMsg(
-        String,
-        crate::core::research::CdlHomingPigeonSnapshot,
-    ),
+    CdlCounterattackSnapshotMsg(String, crate::core::research::CdlCounterattackSnapshot),
+    CdlHomingPigeonSnapshotMsg(String, crate::core::research::CdlHomingPigeonSnapshot),
     CdlInNeckSnapshotMsg(String, crate::core::research::CdlInNeckSnapshot),
     CdlOnNeckSnapshotMsg(String, crate::core::research::CdlOnNeckSnapshot),
     CdlThrustingSnapshotMsg(String, crate::core::research::CdlThrustingSnapshot),
     // ── Research section ──
     CdlTwoCrowsSnapshotMsg(String, crate::core::research::CdlTwoCrowsSnapshot),
-    CdlThreeLineStrikeSnapshotMsg(
-        String,
-        crate::core::research::CdlThreeLineStrikeSnapshot,
-    ),
-    CdlThreeOutsideSnapshotMsg(
-        String,
-        crate::core::research::CdlThreeOutsideSnapshot,
-    ),
-    CdlMatchingLowSnapshotMsg(
-        String,
-        crate::core::research::CdlMatchingLowSnapshot,
-    ),
-    CdlSeparatingLinesSnapshotMsg(
-        String,
-        crate::core::research::CdlSeparatingLinesSnapshot,
-    ),
-    CdlStickSandwichSnapshotMsg(
-        String,
-        crate::core::research::CdlStickSandwichSnapshot,
-    ),
-    CdlRickshawManSnapshotMsg(
-        String,
-        crate::core::research::CdlRickshawManSnapshot,
-    ),
+    CdlThreeLineStrikeSnapshotMsg(String, crate::core::research::CdlThreeLineStrikeSnapshot),
+    CdlThreeOutsideSnapshotMsg(String, crate::core::research::CdlThreeOutsideSnapshot),
+    CdlMatchingLowSnapshotMsg(String, crate::core::research::CdlMatchingLowSnapshot),
+    CdlSeparatingLinesSnapshotMsg(String, crate::core::research::CdlSeparatingLinesSnapshot),
+    CdlStickSandwichSnapshotMsg(String, crate::core::research::CdlStickSandwichSnapshot),
+    CdlRickshawManSnapshotMsg(String, crate::core::research::CdlRickshawManSnapshot),
     CdlTakuriSnapshotMsg(String, crate::core::research::CdlTakuriSnapshot),
     // ── Research section ──
-    CdlThreeStarsInSouthSnapshotMsg(
-        String,
-        crate::core::research::CdlThreeStarsInSouthSnapshot,
-    ),
+    CdlThreeStarsInSouthSnapshotMsg(String, crate::core::research::CdlThreeStarsInSouthSnapshot),
     CdlIdenticalThreeCrowsSnapshotMsg(
         String,
         crate::core::research::CdlIdenticalThreeCrowsSnapshot,
     ),
     CdlKickingSnapshotMsg(String, crate::core::research::CdlKickingSnapshot),
-    CdlKickingByLengthSnapshotMsg(
-        String,
-        crate::core::research::CdlKickingByLengthSnapshot,
-    ),
-    CdlLadderBottomSnapshotMsg(
-        String,
-        crate::core::research::CdlLadderBottomSnapshot,
-    ),
-    CdlUniqueThreeRiverSnapshotMsg(
-        String,
-        crate::core::research::CdlUniqueThreeRiverSnapshot,
-    ),
+    CdlKickingByLengthSnapshotMsg(String, crate::core::research::CdlKickingByLengthSnapshot),
+    CdlLadderBottomSnapshotMsg(String, crate::core::research::CdlLadderBottomSnapshot),
+    CdlUniqueThreeRiverSnapshotMsg(String, crate::core::research::CdlUniqueThreeRiverSnapshot),
     // ── Research section ──
-    CdlAdvanceBlockSnapshotMsg(
-        String,
-        crate::core::research::CdlAdvanceBlockSnapshot,
-    ),
+    CdlAdvanceBlockSnapshotMsg(String, crate::core::research::CdlAdvanceBlockSnapshot),
     CdlBreakawaySnapshotMsg(String, crate::core::research::CdlBreakawaySnapshot),
-    CdlGapSideSideWhiteSnapshotMsg(
-        String,
-        crate::core::research::CdlGapSideSideWhiteSnapshot,
-    ),
-    CdlUpsideGapTwoCrowsSnapshotMsg(
-        String,
-        crate::core::research::CdlUpsideGapTwoCrowsSnapshot,
-    ),
+    CdlGapSideSideWhiteSnapshotMsg(String, crate::core::research::CdlGapSideSideWhiteSnapshot),
+    CdlUpsideGapTwoCrowsSnapshotMsg(String, crate::core::research::CdlUpsideGapTwoCrowsSnapshot),
     CdlXSideGapThreeMethodsSnapshotMsg(
         String,
         crate::core::research::CdlXSideGapThreeMethodsSnapshot,
     ),
-    CdlConcealBabySwallowSnapshotMsg(
-        String,
-        crate::core::research::CdlConcealBabySwallowSnapshot,
-    ),
+    CdlConcealBabySwallowSnapshotMsg(String, crate::core::research::CdlConcealBabySwallowSnapshot),
     // ── Research section ──
     CdlHikkakeSnapshotMsg(String, crate::core::research::CdlHikkakeSnapshot),
-    CdlHikkakeModSnapshotMsg(
-        String,
-        crate::core::research::CdlHikkakeModSnapshot,
-    ),
+    CdlHikkakeModSnapshotMsg(String, crate::core::research::CdlHikkakeModSnapshot),
     CdlMatHoldSnapshotMsg(String, crate::core::research::CdlMatHoldSnapshot),
     CdlRiseFallThreeMethodsSnapshotMsg(
         String,
         crate::core::research::CdlRiseFallThreeMethodsSnapshot,
     ),
     // ── Research section ──
-    CdlStalledPatternSnapshotMsg(
-        String,
-        crate::core::research::CdlStalledPatternSnapshot,
-    ),
+    CdlStalledPatternSnapshotMsg(String, crate::core::research::CdlStalledPatternSnapshot),
     CdlTasukiGapSnapshotMsg(String, crate::core::research::CdlTasukiGapSnapshot),
     // ── (Quant Stats) ──
     ModSharpeSnapshotMsg(String, crate::core::research::ModSharpeSnapshot),

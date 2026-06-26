@@ -11,9 +11,8 @@ impl TyphooNApp {
         &mut self,
         ctx: &egui::Context,
     ) {
-        let chart_sym_research = research_chart_symbol(
-            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
-        );
+        let chart_sym_research =
+            research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         // ── popup windows ──
         self.render_cdl_reversal_early_windows(ctx, &chart_sym_research);

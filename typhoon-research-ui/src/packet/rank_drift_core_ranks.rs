@@ -2,11 +2,7 @@ use super::context::SymbolResearchContext;
 use std::fmt::Write as _;
 use typhoon_engine::core::research as rx;
 
-pub fn write_rank_drift_core_ranks(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_rank_drift_core_ranks(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     // ── rank & drift surfaces ──────────────
     if let Ok(Some(vr)) = rx::get_vrk(ctx.conn, &sym_upper) {
         if vr.rank_label != "NO_DATA" && !vr.rank_label.is_empty() {

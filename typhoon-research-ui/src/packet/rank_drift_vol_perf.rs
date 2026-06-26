@@ -2,11 +2,7 @@ use super::context::SymbolResearchContext;
 use std::fmt::Write as _;
 use typhoon_engine::core::research as rx;
 
-pub fn write_rank_drift_vol_perf(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_rank_drift_vol_perf(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     if let Ok(Some(at)) = rx::get_atrann(ctx.conn, &sym_upper) {
         if at.regime_label != "INSUFFICIENT_DATA" && !at.regime_label.is_empty() {
             let _ = writeln!(

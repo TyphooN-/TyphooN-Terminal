@@ -1081,6 +1081,7 @@ mod tests {
             PositionInfo {
                 symbol: "WOK".to_string(),
                 qty: 1.0,
+                qty_available: 1.0,
                 side: "long".to_string(),
                 avg_entry_price: 0.0,
                 market_value: 0.0,
@@ -1091,6 +1092,7 @@ mod tests {
             PositionInfo {
                 symbol: "BTC/USD".to_string(),
                 qty: 1.0,
+                qty_available: 1.0,
                 side: "long".to_string(),
                 avg_entry_price: 0.0,
                 market_value: 0.0,
@@ -1109,11 +1111,7 @@ mod tests {
 
         assert_eq!(
             kraken_sec_scrape_scope_symbols(&positions, &catalog, &spot_pairs, &futures),
-            vec![
-                "AAPL".to_string(),
-                "HRTX".to_string(),
-                "WOK".to_string(),
-            ]
+            vec!["AAPL".to_string(), "HRTX".to_string(), "WOK".to_string(),]
         );
     }
 

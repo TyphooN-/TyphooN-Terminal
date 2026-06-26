@@ -291,11 +291,21 @@ impl TyphooNApp {
                     // When panel is narrow, use more compact layout so symbol column stays usable
                     if avail_w < 260.0 {
                         (
-                            avail_w * 0.22, avail_w * 0.38, avail_w * 0.52, 0.0, 0.0, avail_w * 0.76,
+                            avail_w * 0.22,
+                            avail_w * 0.38,
+                            avail_w * 0.52,
+                            0.0,
+                            0.0,
+                            avail_w * 0.76,
                         )
                     } else {
                         (
-                            avail_w * 0.25, avail_w * 0.42, avail_w * 0.55, 0.0, 0.0, avail_w * 0.78,
+                            avail_w * 0.25,
+                            avail_w * 0.42,
+                            avail_w * 0.55,
+                            0.0,
+                            0.0,
+                            avail_w * 0.78,
                         )
                     }
                 };
@@ -418,9 +428,10 @@ impl TyphooNApp {
                     // (.EQ/`/` stripped, upper-cased) so xStock/equity ticker
                     // variants resolve to the same key the map is built with — a
                     // plain to_ascii_uppercase() missed any suffixed symbol.
-                    let has_regulatory_alert = self.bg.regulatory_alerts_by_symbol.contains_key(
-                        &regulatory_alerts::normalize_regulatory_symbol(&wl.symbol),
-                    );
+                    let has_regulatory_alert = self
+                        .bg
+                        .regulatory_alerts_by_symbol
+                        .contains_key(&regulatory_alerts::normalize_regulatory_symbol(&wl.symbol));
                     let is_selected = self
                         .charts
                         .get(self.active_tab)

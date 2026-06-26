@@ -2,11 +2,7 @@ use super::context::SymbolResearchContext;
 use std::fmt::Write as _;
 use typhoon_engine::core::research as rx;
 
-pub fn write_talib_extended_emitters(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_talib_extended_emitters(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     // ── emitters ──
     if let Ok(Some(ao)) = rx::get_aroonosc(ctx.conn, &sym_upper) {
         if ao.aroonosc_label != "INSUFFICIENT_DATA" && !ao.aroonosc_label.is_empty() {

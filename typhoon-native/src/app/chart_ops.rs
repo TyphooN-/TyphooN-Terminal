@@ -21,6 +21,152 @@ fn empty_chart_load_retry_due(
         .unwrap_or(true)
 }
 
+fn parse_order_qty(value: &str) -> f64 {
+    value.trim().parse::<f64>().unwrap_or(0.0).max(0.0)
+}
+
+fn alpaca_order_is_working(status: &str) -> bool {
+    !matches!(
+        status.to_ascii_lowercase().as_str(),
+        "filled" | "canceled" | "cancelled" | "expired" | "rejected"
+    )
+}
+
+fn collect_alpaca_order_lines_for_symbol(
+    orders: &[OrderInfo],
+    bare_upper: &str,
+    current_price: f64,
+    tick_size: f64,
+    account_balance: Option<f64>,
+    out: &mut Vec<OrderLine>,
+) {
+    fn walk(
+        order: &OrderInfo,
+        bare_upper: &str,
+        current_price: f64,
+        tick_size: f64,
+        account_balance: Option<f64>,
+        out: &mut Vec<OrderLine>,
+    ) {
+        let order_sym = order.symbol.replace('/', "").to_ascii_uppercase();
+        if !order_sym.is_empty()
+            && (symbol_matches_no_alloc(&order_sym, bare_upper)
+                || order_sym.contains(bare_upper)
+                || bare_upper.contains(&order_sym))
+            && alpaca_order_is_working(&order.status)
+        {
+            let price = order
+                .limit_price
+                .as_deref()
+                .or(order.stop_price.as_deref())
+                .and_then(|price| price.parse::<f64>().ok())
+                .filter(|price| price.is_finite() && *price > 0.0);
+            if let Some(price) = price {
+                let qty =
+                    (parse_order_qty(&order.qty) - parse_order_qty(&order.filled_qty)).max(0.0);
+                if qty > 0.0 && qty.is_finite() {
+                    let is_buy = order.side.eq_ignore_ascii_case("buy");
+                    let notional = qty * price;
+                    let signed_notional = if is_buy { -notional } else { notional };
+                    out.push(OrderLine {
+                        price,
+                        qty,
+                        is_buy,
+                        source: "Alpaca".to_string(),
+                        notional_delta: signed_notional,
+                        account_pct_delta: account_balance
+                            .filter(|balance| *balance > f64::EPSILON)
+                            .map(|balance| signed_notional / balance * 100.0),
+                        pips_from_current: (tick_size > f64::EPSILON
+                            && current_price.is_finite()
+                            && current_price > 0.0)
+                            .then_some((price - current_price) / tick_size),
+                    });
+                }
+            }
+        }
+        if let Some(legs) = &order.legs {
+            for leg in legs {
+                walk(
+                    leg,
+                    bare_upper,
+                    current_price,
+                    tick_size,
+                    account_balance,
+                    out,
+                );
+            }
+        }
+    }
+
+    for order in orders {
+        walk(
+            order,
+            bare_upper,
+            current_price,
+            tick_size,
+            account_balance,
+            out,
+        );
+    }
+}
+
+fn collect_kraken_order_lines_for_symbol(
+    orders: &[typhoon_engine::broker::kraken::KrakenOrder],
+    bare_upper: &str,
+    current_price: f64,
+    tick_size: f64,
+    account_balance: Option<f64>,
+    out: &mut Vec<OrderLine>,
+) {
+    for order in orders {
+        if !alpaca_order_is_working(&order.status) {
+            continue;
+        }
+        let pair_norm = typhoon_engine::core::kraken::normalize_pair_symbol(&order.pair)
+            .replace('/', "")
+            .to_ascii_uppercase();
+        let base = TyphooNApp::kraken_pair_base_ticker(&order.pair);
+        if !(symbol_matches_no_alloc(&pair_norm, bare_upper)
+            || symbol_matches_no_alloc(&base, bare_upper)
+            || pair_norm.contains(bare_upper)
+            || bare_upper.contains(&pair_norm))
+        {
+            continue;
+        }
+        let price = if order.price > 0.0 {
+            order.price
+        } else if let Some(limit_price) = order.limitprice.filter(|price| *price > 0.0) {
+            limit_price
+        } else if let Some(stop_price) = order.stopprice.filter(|price| *price > 0.0) {
+            stop_price
+        } else {
+            continue;
+        };
+        let qty = (order.vol - order.vol_exec).max(0.0);
+        if !(qty > 0.0 && qty.is_finite()) {
+            continue;
+        }
+        let is_buy = order.r#type.eq_ignore_ascii_case("buy");
+        let notional = qty * price;
+        let signed_notional = if is_buy { -notional } else { notional };
+        out.push(OrderLine {
+            price,
+            qty,
+            is_buy,
+            source: "Kraken".to_string(),
+            notional_delta: signed_notional,
+            account_pct_delta: account_balance
+                .filter(|balance| *balance > f64::EPSILON)
+                .map(|balance| signed_notional / balance * 100.0),
+            pips_from_current: (tick_size > f64::EPSILON
+                && current_price.is_finite()
+                && current_price > 0.0)
+                .then_some((price - current_price) / tick_size),
+        });
+    }
+}
+
 pub(super) const MTF_GRID_TIMEFRAMES: [(&str, Timeframe); 9] = [
     ("M1", Timeframe::M1),
     ("M5", Timeframe::M5),
@@ -495,9 +641,9 @@ impl TyphooNApp {
                 let half_qty = pos.qty.abs() / 2.0;
                 if half_qty > 0.0 {
                     let remaining_qty = (pos.qty.abs() - half_qty).max(0.0);
-                    let _ = self.broker_tx.send(BrokerCmd::ClosePosition {
+                    let _ = self.broker_tx.send(BrokerCmd::AlpacaClosePositionPercent {
                         symbol: symbol.clone(),
-                        qty: Some(half_qty),
+                        percentage: 50.0,
                     });
                     if remaining_qty > 0.0 && (sl.is_some() || tp.is_some()) {
                         let _ = self.broker_tx.send(BrokerCmd::AlpacaSyncExits {
@@ -1385,6 +1531,50 @@ impl TyphooNApp {
         }
         overlay.markers.sort_by_key(|m| m.bar_idx);
 
+        // Live Alpaca working order lines. Alpaca `nested=true` includes
+        // bracket/OCO child legs; flatten them so fixed-price exits show too.
+        // Market/trailing orders have no fixed chart price and are skipped.
+        if self.show_alpaca_positions {
+            let current_price = chart
+                .fresh_live_quote_mid()
+                .or_else(|| chart.bars.last().map(|bar| bar.close))
+                .unwrap_or(0.0);
+            let tick_size = self.trade_symbol_spec(&bare_upper, current_price).tick_size;
+            let account_balance = self
+                .live_account
+                .as_ref()
+                .map(Self::alpaca_current_risk_balance)
+                .filter(|balance| balance.is_finite() && *balance > 0.0);
+            collect_alpaca_order_lines_for_symbol(
+                &self.live_orders,
+                &bare_upper,
+                current_price,
+                tick_size,
+                account_balance,
+                &mut overlay.order_lines,
+            );
+        }
+
+        if self.show_kr_positions {
+            let current_price = chart
+                .fresh_live_quote_mid()
+                .or_else(|| chart.bars.last().map(|bar| bar.close))
+                .unwrap_or(0.0);
+            let tick_size = self.trade_symbol_spec(&bare_upper, current_price).tick_size;
+            let account_balance = self
+                .kraken_trade_account_snapshot()
+                .map(|snap| snap.balance)
+                .filter(|balance| balance.is_finite() && *balance > 0.0);
+            collect_kraken_order_lines_for_symbol(
+                &self.kraken_open_orders,
+                &bare_upper,
+                current_price,
+                tick_size,
+                account_balance,
+                &mut overlay.order_lines,
+            );
+        }
+
         // Live broker position lines (Alpaca + Kraken).
         // Kraken spot crypto balances are inventory rather than broker
         // `PositionInfo` rows, but the chart still needs a visible holding
@@ -1545,6 +1735,87 @@ impl TyphooNApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_order(
+        symbol: &str,
+        side: &str,
+        qty: &str,
+        filled: &str,
+        limit: Option<&str>,
+        status: &str,
+    ) -> OrderInfo {
+        OrderInfo {
+            id: format!("{symbol}-{side}"),
+            symbol: symbol.to_string(),
+            qty: qty.to_string(),
+            filled_qty: filled.to_string(),
+            side: side.to_string(),
+            order_type: "limit".to_string(),
+            order_class: None,
+            status: status.to_string(),
+            limit_price: limit.map(str::to_string),
+            stop_price: None,
+            trail_price: None,
+            trail_percent: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            filled_at: None,
+            filled_avg_price: None,
+            legs: None,
+        }
+    }
+
+    #[test]
+    fn alpaca_order_lines_use_open_qty_signed_notional_pct_and_pips() {
+        let orders = vec![test_order("AAPL", "buy", "10", "2", Some("99.50"), "new")];
+        let mut lines = Vec::new();
+
+        collect_alpaca_order_lines_for_symbol(
+            &orders,
+            "AAPL",
+            100.0,
+            0.01,
+            Some(10_000.0),
+            &mut lines,
+        );
+
+        assert_eq!(lines.len(), 1);
+        let line = &lines[0];
+        assert!(line.is_buy);
+        assert_eq!(line.qty, 8.0);
+        assert_eq!(line.price, 99.50);
+        assert!((line.notional_delta + 796.0).abs() < 1e-9);
+        assert!((line.account_pct_delta.unwrap() + 7.96).abs() < 1e-9);
+        assert!((line.pips_from_current.unwrap() + 50.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn alpaca_order_lines_flatten_nested_working_legs_and_skip_filled_parent() {
+        let mut parent = test_order("SPY", "buy", "1", "1", Some("470"), "filled");
+        parent.legs = Some(vec![test_order(
+            "SPY",
+            "sell",
+            "1",
+            "0",
+            Some("480"),
+            "new",
+        )]);
+        let mut lines = Vec::new();
+
+        collect_alpaca_order_lines_for_symbol(
+            &[parent],
+            "SPY",
+            475.0,
+            0.01,
+            Some(20_000.0),
+            &mut lines,
+        );
+
+        assert_eq!(lines.len(), 1);
+        assert!(!lines[0].is_buy);
+        assert_eq!(lines[0].price, 480.0);
+        assert!((lines[0].notional_delta - 480.0).abs() < 1e-9);
+        assert!((lines[0].pips_from_current.unwrap() - 500.0).abs() < 1e-9);
+    }
 
     #[test]
     fn news_article_tickers_normalizes_and_deduplicates_symbols() {
@@ -1816,6 +2087,7 @@ mod tests {
         PositionInfo {
             symbol: symbol.to_string(),
             qty,
+            qty_available: qty,
             side: side.to_string(),
             avg_entry_price: 1.0,
             market_value: qty,

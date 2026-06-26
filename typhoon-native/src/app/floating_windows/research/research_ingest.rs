@@ -6,82 +6,82 @@ impl TyphooNApp {
         if self.show_ingest_research {
             let mut open = self.show_ingest_research;
             egui::Window::new("INGEST — AI Agent Web Research Ingest")
-                        .open(&mut open)
-                        .resizable(true)
-                        .default_size([700.0, 520.0])
-                        .show(ctx, |ui| {
-                            ui.label(
-                                egui::RichText::new(
-                                    "Paste the full reply from an AI agent (Claude, Gemini, ChatGPT, …). \
+                .open(&mut open)
+                .resizable(true)
+                .default_size([700.0, 520.0])
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new(
+                            "Paste the full reply from an AI agent (Claude, Gemini, ChatGPT, …). \
                                  Any ===TYPHOON_INGEST=== block will be parsed and merged into the \
                                  per-symbol web-article cache.",
-                                )
-                                .color(AXIS_TEXT)
-                                .small(),
+                        )
+                        .color(AXIS_TEXT)
+                        .small(),
+                    );
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Default agent tag:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.ingest_research_agent)
+                                .desired_width(120.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(
+                                "(used when an article's 'agent' field is missing)",
+                            )
+                            .color(AXIS_TEXT)
+                            .small(),
+                        );
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .id_salt("ingest_research_scroll")
+                        .max_height(360.0)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.ingest_research_text)
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(20)
+                                    .font(egui::TextStyle::Monospace)
+                                    .hint_text("Paste agent reply here…"),
                             );
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                ui.label("Default agent tag:");
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.ingest_research_agent)
-                                        .desired_width(120.0),
-                                );
-                                ui.label(
-                                    egui::RichText::new(
-                                        "(used when an article's 'agent' field is missing)",
-                                    )
-                                    .color(AXIS_TEXT)
-                                    .small(),
-                                );
-                            });
-                            ui.separator();
-                            egui::ScrollArea::vertical()
-                                .id_salt("ingest_research_scroll")
-                                .max_height(360.0)
-                                .show(ui, |ui| {
-                                    ui.add(
-                                        egui::TextEdit::multiline(&mut self.ingest_research_text)
-                                            .desired_width(f32::INFINITY)
-                                            .desired_rows(20)
-                                            .font(egui::TextStyle::Monospace)
-                                            .hint_text("Paste agent reply here…"),
-                                    );
-                                });
-                            ui.separator();
-                            ui.horizontal(|ui| {
-                                let can_ingest = !self.ingest_research_busy
-                                    && !self.ingest_research_text.trim().is_empty();
-                                if ui
-                                    .add_enabled(can_ingest, egui::Button::new("Ingest").fill(BTN_MG))
-                                    .clicked()
-                                {
-                                    self.ingest_research_busy = true;
-                                    self.ingest_research_status = "Parsing…".into();
-                                    let _ = self.broker_tx.send(BrokerCmd::IngestResearchArticles {
-                                        text: self.ingest_research_text.clone(),
-                                        agent_override: self.ingest_research_agent.clone(),
-                                    });
-                                }
-                                if ui.button("Clear").clicked() {
-                                    self.ingest_research_text.clear();
-                                    self.ingest_research_status.clear();
-                                }
-                                if ui.button("Import .md/.txt…").clicked() {
-                                    self.import_research_artifact_file();
-                                }
-                                if self.ingest_research_busy {
-                                    ui.label(egui::RichText::new("Working…").color(AXIS_TEXT).small());
-                                }
-                            });
-                            if !self.ingest_research_status.is_empty() {
-                                ui.separator();
-                                ui.label(
-                                    egui::RichText::new(&self.ingest_research_status)
-                                        .color(UP)
-                                        .small(),
-                                );
-                            }
                         });
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        let can_ingest = !self.ingest_research_busy
+                            && !self.ingest_research_text.trim().is_empty();
+                        if ui
+                            .add_enabled(can_ingest, egui::Button::new("Ingest").fill(BTN_MG))
+                            .clicked()
+                        {
+                            self.ingest_research_busy = true;
+                            self.ingest_research_status = "Parsing…".into();
+                            let _ = self.broker_tx.send(BrokerCmd::IngestResearchArticles {
+                                text: self.ingest_research_text.clone(),
+                                agent_override: self.ingest_research_agent.clone(),
+                            });
+                        }
+                        if ui.button("Clear").clicked() {
+                            self.ingest_research_text.clear();
+                            self.ingest_research_status.clear();
+                        }
+                        if ui.button("Import .md/.txt…").clicked() {
+                            self.import_research_artifact_file();
+                        }
+                        if self.ingest_research_busy {
+                            ui.label(egui::RichText::new("Working…").color(AXIS_TEXT).small());
+                        }
+                    });
+                    if !self.ingest_research_status.is_empty() {
+                        ui.separator();
+                        ui.label(
+                            egui::RichText::new(&self.ingest_research_status)
+                                .color(UP)
+                                .small(),
+                        );
+                    }
+                });
             self.show_ingest_research = open;
         }
 

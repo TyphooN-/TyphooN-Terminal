@@ -369,12 +369,7 @@ pub fn write_symbol_moving_average_research_sections(
             let _ = writeln!(
                 p,
                 "- Bars {} · PVT {:.2} (prev {:.2}) · PVT EMA20 {:.2} · 20-bar slope {:+.2} · close {:.4}",
-                pv.bars_used,
-                pv.pvt_value,
-                pv.pvt_prev,
-                pv.pvt_ema,
-                pv.pvt_slope,
-                pv.last_close
+                pv.bars_used, pv.pvt_value, pv.pvt_prev, pv.pvt_ema, pv.pvt_slope, pv.last_close
             );
             if !pv.note.is_empty() {
                 let _ = writeln!(p, "- Note: {}", pv.note);

@@ -130,8 +130,9 @@ impl TyphooNApp {
                 .saturating_add(1);
             self.kraken_ws_ohlc_snapshot_sweep_consecutive_failures = failures;
             // 30s, 60s, 120s, 240s, 480s, then capped at 600s.
-            let backoff_secs =
-                30u64.saturating_mul(1u64 << failures.saturating_sub(1).min(6)).min(600);
+            let backoff_secs = 30u64
+                .saturating_mul(1u64 << failures.saturating_sub(1).min(6))
+                .min(600);
             self.kraken_ws_ohlc_snapshot_sweep_backoff_until =
                 Some(std::time::Instant::now() + std::time::Duration::from_secs(backoff_secs));
             // Throttle: a sustained 429 wall must not fill the log.

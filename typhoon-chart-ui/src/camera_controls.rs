@@ -1,6 +1,6 @@
 //! `ChartState` camera/viewport controls (ADR-125 Target 2, slice 6c) — chart-local inherent impl, crate-side.
-use crate::state::ChartState;
 use crate::models::ChartCamera;
+use crate::state::ChartState;
 
 impl ChartState {
     pub fn natural_visible_price_view(&self) -> Option<(f64, f64)> {

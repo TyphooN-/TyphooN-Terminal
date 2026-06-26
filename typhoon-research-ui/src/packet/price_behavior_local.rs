@@ -2,11 +2,7 @@ use super::context::SymbolResearchContext;
 use std::fmt::Write as _;
 use typhoon_engine::core::research as rx;
 
-pub fn write_price_behavior_local(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_price_behavior_local(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     if let Ok(Some(rln)) = rx::get_runlen(ctx.conn, &sym_upper) {
         if rln.trend_label != "INSUFFICIENT_DATA" && !rln.trend_label.is_empty() {
             let _ = writeln!(

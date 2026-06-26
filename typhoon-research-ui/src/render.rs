@@ -22124,10 +22124,7 @@ pub fn render_zeroret_snapshot(ui: &mut egui::Ui, snap: &ZeroReturnSnapshot) {
     }
 }
 
-pub fn render_cdl_closing_marubozu_snapshot(
-    ui: &mut egui::Ui,
-    snap: &CdlClosingMarubozuSnapshot,
-) {
+pub fn render_cdl_closing_marubozu_snapshot(ui: &mut egui::Ui, snap: &CdlClosingMarubozuSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.cdl_closing_marubozu_label == "INSUFFICIENT_DATA" {
         ui.label(
@@ -22309,10 +22306,7 @@ pub fn render_momentum_snapshot(ui: &mut egui::Ui, snap: &MomentumSnapshot) {
     }
 }
 
-pub fn render_shortrank_delta_snapshot(
-    ui: &mut egui::Ui,
-    snap: &ShortInterestDeltaRankSnapshot,
-) {
+pub fn render_shortrank_delta_snapshot(ui: &mut egui::Ui, snap: &ShortInterestDeltaRankSnapshot) {
     ui.separator();
     if snap.symbol.is_empty()
         || snap.rank_label == "NO_DATA"

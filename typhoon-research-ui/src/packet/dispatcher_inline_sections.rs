@@ -13,11 +13,7 @@ use typhoon_engine::core::research as rx;
 use typhoon_engine::core::sec_filing::{InsiderTrade, SecFiling};
 
 /// Options Expiration Calendar (EXPCAL).
-pub fn write_expiration_calendar(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_expiration_calendar(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     if let Ok(Some(se)) = rx::get_symbol_expirations(ctx.conn, &sym_upper) {
         if !se.expirations.is_empty() {
             let _ = writeln!(
@@ -62,11 +58,7 @@ pub fn write_expiration_calendar(
 }
 
 /// Candlestick patterns (CDL*) and the statistical-test / drift snapshots.
-pub fn write_candlestick_and_stats(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_candlestick_and_stats(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     // Candlestick pattern storage/helpers
     if let Ok(Some(cd)) = rx::get_cdl_doji(ctx.conn, &sym_upper) {
         if cd.cdl_doji_label != "INSUFFICIENT_DATA" && !cd.cdl_doji_label.is_empty() {

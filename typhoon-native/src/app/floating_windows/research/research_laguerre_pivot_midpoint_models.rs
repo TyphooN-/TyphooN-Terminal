@@ -85,8 +85,7 @@ impl TyphooNApp {
         if let Some(cmd) = window_shell::render_compute_window(
             ctx,
             window_shell::ComputeWindow {
-                title:
-                    "HT_TRENDLINE — Hilbert Instantaneous Trendline (Ehlers, period-adaptive WMA)",
+                title: "HT_TRENDLINE — Hilbert Instantaneous Trendline (Ehlers, period-adaptive WMA)",
                 default_size: [560.0, 260.0],
                 max_size: None,
                 chart_symbol: &chart_sym_research,

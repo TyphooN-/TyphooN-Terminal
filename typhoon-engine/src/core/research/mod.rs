@@ -21,28 +21,48 @@ mod types;
 pub use types::*;
 
 mod corporate_actions_analyst_index_types;
-pub use corporate_actions_analyst_index_types::{StockSplit, EtfHolding, AnalystRecommendation, PriceTarget, EsgScore, IndexMember};
+pub use corporate_actions_analyst_index_types::{
+    AnalystRecommendation, EsgScore, EtfHolding, IndexMember, PriceTarget, StockSplit,
+};
 
 mod exec_cot;
-pub use exec_cot::{Executive, CotReport};
+pub use exec_cot::{CotReport, Executive};
 
 mod ownership_price_history_types;
-pub use ownership_price_history_types::{InsiderTrade, InstitutionalHolder, SharesFloat, HistoricalPriceRow, EarningsSurprise};
+pub use ownership_price_history_types::{
+    EarningsSurprise, HistoricalPriceRow, InsiderTrade, InstitutionalHolder, SharesFloat,
+};
 
 mod dividends_ratings_treasury_types;
-pub use dividends_ratings_treasury_types::{DividendRecord, EarningsEstimate, RatingChange, TreasuryYield, TREASURY_TENORS};
+pub use dividends_ratings_treasury_types::{
+    DividendRecord, EarningsEstimate, RatingChange, TREASURY_TENORS, TreasuryYield,
+};
 
 mod fx_beta_valuation_identifier_types;
-pub use fx_beta_valuation_identifier_types::{CurrencyRate, BetaWindow, BetaSnapshot, DdmSnapshot, RvMetricRow, RelativeValuation, FigiIdentifier, FigiSnapshot, FX_MAJORS_UNIVERSE, COMMODITIES_UNIVERSE};
+pub use fx_beta_valuation_identifier_types::{
+    BetaSnapshot, BetaWindow, COMMODITIES_UNIVERSE, CurrencyRate, DdmSnapshot, FX_MAJORS_UNIVERSE,
+    FigiIdentifier, FigiSnapshot, RelativeValuation, RvMetricRow,
+};
 
 mod advanced_valuation_derivatives_types;
-pub use advanced_valuation_derivatives_types::{HraWindow, HraSnapshot, DcfYear, DcfSnapshot, SvmModelRow, SvmSnapshot, OptionContract, OptionExpiry, OptionsChainSnapshot, IvolObservation, IvolSnapshot};
+pub use advanced_valuation_derivatives_types::{
+    DcfSnapshot, DcfYear, HraSnapshot, HraWindow, IvolObservation, IvolSnapshot, OptionContract,
+    OptionExpiry, OptionsChainSnapshot, SvmModelRow, SvmSnapshot,
+};
 
 mod market_statistics_types;
-pub use market_statistics_types::{SeasonalityMonth, SeasonalityDow, SeasonalitySnapshot, CorrelationCell, CorrelationMatrix, TotalReturnWindow, TotalReturnSnapshot, TechnicalIndicator, TechnicalSnapshot, SkewPoint, SkewExpiry, VolatilitySkew};
+pub use market_statistics_types::{
+    CorrelationCell, CorrelationMatrix, SeasonalityDow, SeasonalityMonth, SeasonalitySnapshot,
+    SkewExpiry, SkewPoint, TechnicalIndicator, TechnicalSnapshot, TotalReturnSnapshot,
+    TotalReturnWindow, VolatilitySkew,
+};
 
 mod fundamental_risk_types;
-pub use fundamental_risk_types::{LeverageRatio, LeverageSnapshot, AccrualPeriod, AccrualsSnapshot, RealizedVolWindow, RealizedVolSnapshot, FcfYieldPeriod, FcfYieldSnapshot, ShortInterestSnapshot, ShortInterestHistoryPoint};
+pub use fundamental_risk_types::{
+    AccrualPeriod, AccrualsSnapshot, FcfYieldPeriod, FcfYieldSnapshot, LeverageRatio,
+    LeverageSnapshot, RealizedVolSnapshot, RealizedVolWindow, ShortInterestHistoryPoint,
+    ShortInterestSnapshot,
+};
 
 mod transcripts_sentiment;
 pub use transcripts_sentiment::{
@@ -51,7 +71,7 @@ pub use transcripts_sentiment::{
 };
 
 mod financials;
-pub use financials::{IncomeStatement, BalanceSheet, CashFlowStatement, FinancialStatements};
+pub use financials::{BalanceSheet, CashFlowStatement, FinancialStatements, IncomeStatement};
 mod technical;
 pub use technical::compute_technical_indicators;
 mod providers;

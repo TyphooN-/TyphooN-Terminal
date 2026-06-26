@@ -9,9 +9,8 @@ impl TyphooNApp {
         &mut self,
         ctx: &egui::Context,
     ) {
-        let chart_sym_research = research_chart_symbol(
-            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
-        );
+        let chart_sym_research =
+            research_chart_symbol(self.charts.get(self.active_tab).map(|c| c.symbol.as_str()));
 
         self.render_rate_of_change_windows(ctx, &chart_sym_research);
 

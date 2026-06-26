@@ -18,12 +18,7 @@ pub fn write_price_transform_linear_hilbert(
             let _ = writeln!(
                 p,
                 "- Bars {} · length {} · slope {:+.6} (prev {:+.6}) · slope_pct {:+.3}% · close {:.4}",
-                ls.bars_used,
-                ls.length,
-                ls.slope,
-                ls.slope_prev,
-                ls.slope_pct,
-                ls.last_close
+                ls.bars_used, ls.length, ls.slope, ls.slope_prev, ls.slope_pct, ls.last_close
             );
             if !ls.note.is_empty() {
                 let _ = writeln!(p, "- Note: {}", ls.note);

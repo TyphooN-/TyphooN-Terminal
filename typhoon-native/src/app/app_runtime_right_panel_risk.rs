@@ -64,9 +64,8 @@ impl TyphooNApp {
                                 .unwrap_or(snap.margin_used);
                             let maintenance_margin =
                                 acct.map(|acct| acct.maintenance_margin).unwrap_or(0.0);
-                            let portfolio_value = acct
-                                .map(|acct| acct.portfolio_value)
-                                .unwrap_or(snap.equity);
+                            let portfolio_value =
+                                acct.map(|acct| acct.portfolio_value).unwrap_or(snap.equity);
                             let previous_equity = acct.map(|acct| acct.last_equity).unwrap_or(0.0);
                             let day_change =
                                 (previous_equity > 0.0).then_some(snap.equity - previous_equity);

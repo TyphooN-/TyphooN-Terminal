@@ -57,7 +57,6 @@ pub struct IpoEvent {
     pub status: String,
 }
 
-
 /// Commodity futures quote row.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommodityQuote {
@@ -68,9 +67,7 @@ pub struct CommodityQuote {
     pub change_pct: f64,
 }
 
-
 // Additional corporate action and market reference types
-
 
 /// WEI — one global equity index quote row.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -162,4 +159,3 @@ pub const WORLD_INDICES_UNIVERSE: &[(&str, &str, &str)] = &[
 
 /// Default equity risk premium used in the WACC CAPM calc (Damodaran-style).
 pub const DEFAULT_EQUITY_RISK_PREMIUM_PCT: f64 = 5.0;
-

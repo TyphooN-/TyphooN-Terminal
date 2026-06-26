@@ -11,9 +11,18 @@ fn clean_article_body_strips_ad_and_loading_cruft() {
     let raw = "First paragraph. Advertisement|Remove ads. Second paragraph. \
                Loading...Loading...Loading... Third paragraph.";
     let cleaned = clean_article_body(raw);
-    assert!(!cleaned.contains("Advertisement"), "ad marker survived: {cleaned}");
-    assert!(!cleaned.contains("Remove ads"), "remove-ads survived: {cleaned}");
-    assert!(!cleaned.contains("Loading..."), "loader survived: {cleaned}");
+    assert!(
+        !cleaned.contains("Advertisement"),
+        "ad marker survived: {cleaned}"
+    );
+    assert!(
+        !cleaned.contains("Remove ads"),
+        "remove-ads survived: {cleaned}"
+    );
+    assert!(
+        !cleaned.contains("Loading..."),
+        "loader survived: {cleaned}"
+    );
     assert!(cleaned.contains("First paragraph."));
     assert!(cleaned.contains("Third paragraph."));
     // Ad marker became a paragraph break between the first two paragraphs.
@@ -25,7 +34,10 @@ fn clean_article_body_delineates_reader_comments() {
     let raw = "The company reported earnings. \
                One user said, \"to the moon\". Another user said, \"sell now\".";
     let cleaned = clean_article_body(raw);
-    assert!(cleaned.contains("**Reader comments**"), "no comments header: {cleaned}");
+    assert!(
+        cleaned.contains("**Reader comments**"),
+        "no comments header: {cleaned}"
+    );
     // Article copy is kept above the comments section.
     let header_at = cleaned.find("**Reader comments**").unwrap();
     assert!(cleaned[..header_at].contains("The company reported earnings."));
@@ -39,7 +51,10 @@ fn clean_article_body_does_not_split_on_said_in_article_copy() {
     // "said" in normal article copy (no comment marker) must not trigger a split.
     let raw = "The CEO said the merger closes in Q3 and guidance is unchanged.";
     let cleaned = clean_article_body(raw);
-    assert!(!cleaned.contains("Reader comments"), "false comment split: {cleaned}");
+    assert!(
+        !cleaned.contains("Reader comments"),
+        "false comment split: {cleaned}"
+    );
     assert!(cleaned.contains("The CEO said the merger closes in Q3"));
 }
 
@@ -639,12 +654,10 @@ fn enforce_max_rows_keeps_newest_and_syncs_fts() {
     let remaining = get_news_by_symbol(&conn, "AAPL", 100).unwrap();
     let mut times: Vec<i64> = remaining.iter().map(|a| a.published_at).collect();
     times.sort_unstable();
-    assert_eq!(times, vec![
-        1_700_000_002,
-        1_700_000_003,
-        1_700_000_004,
-        1_700_000_005
-    ]);
+    assert_eq!(
+        times,
+        vec![1_700_000_002, 1_700_000_003, 1_700_000_004, 1_700_000_005]
+    );
     // The FTS mirror is kept in sync: the row count in research_news_fts must
     // match the base table after the cap (no orphaned index entries).
     let fts_rows: i64 = conn

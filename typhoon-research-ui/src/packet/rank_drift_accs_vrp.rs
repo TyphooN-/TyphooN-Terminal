@@ -2,11 +2,7 @@ use super::context::SymbolResearchContext;
 use std::fmt::Write as _;
 use typhoon_engine::core::research as rx;
 
-pub fn write_rank_drift_accs_vrp(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_rank_drift_accs_vrp(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     if let Ok(Some(od)) = rx::get_operank_delta(ctx.conn, &sym_upper) {
         if od.rank_label != "NO_DATA"
             && od.rank_label != "INSUFFICIENT_DATA"

@@ -8,10 +8,8 @@ pub const ICHI_TENKAN: egui::Color32 = egui::Color32::from_rgb(0, 180, 230);
 pub const ICHI_KIJUN: egui::Color32 = egui::Color32::from_rgb(200, 50, 50);
 pub const ICHI_SPAN_A: egui::Color32 = egui::Color32::from_rgb(80, 200, 80);
 pub const ICHI_SPAN_B: egui::Color32 = egui::Color32::from_rgb(200, 80, 80);
-pub const ICHI_CLOUD_BULL: egui::Color32 =
-    egui::Color32::from_rgba_premultiplied(80, 200, 80, 20);
-pub const ICHI_CLOUD_BEAR: egui::Color32 =
-    egui::Color32::from_rgba_premultiplied(200, 80, 80, 20);
+pub const ICHI_CLOUD_BULL: egui::Color32 = egui::Color32::from_rgba_premultiplied(80, 200, 80, 20);
+pub const ICHI_CLOUD_BEAR: egui::Color32 = egui::Color32::from_rgba_premultiplied(200, 80, 80, 20);
 
 pub const STOCH_K_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255);
 pub const STOCH_D_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 60);

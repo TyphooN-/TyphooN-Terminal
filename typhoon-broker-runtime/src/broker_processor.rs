@@ -72,7 +72,9 @@ pub fn spawn_broker_message_processor(
                     )
                     .await;
                 }
-                cmd @ (BrokerCmd::CloseAll | BrokerCmd::ClosePosition { .. }) => {
+                cmd @ (BrokerCmd::CloseAll
+                | BrokerCmd::ClosePosition { .. }
+                | BrokerCmd::AlpacaClosePositionPercent { .. }) => {
                     alpaca_order_ops::handle_alpaca_order_command(
                         cmd,
                         broker.as_ref(),
@@ -144,6 +146,7 @@ pub fn spawn_broker_message_processor(
                     .await;
                 }
                 cmd @ (BrokerCmd::AlpacaMarketOrder { .. }
+                | BrokerCmd::AlpacaMarketOrderNotional { .. }
                 | BrokerCmd::AlpacaLimitOrder { .. }
                 | BrokerCmd::AlpacaStopOrder { .. }
                 | BrokerCmd::AlpacaBracketOrder { .. }

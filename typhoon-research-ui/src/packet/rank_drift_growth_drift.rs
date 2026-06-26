@@ -2,11 +2,7 @@ use super::context::SymbolResearchContext;
 use crate::format;
 use typhoon_engine::core::research as rx;
 
-pub fn write_rank_drift_growth_drift(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_rank_drift_growth_drift(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     // Gather each rank/drift snapshot and delegate to its pure formatter
     // (ADR-125 Phase 1 step 2); the NO_DATA / INSUFFICIENT_DATA guards
     // live in the formatters.

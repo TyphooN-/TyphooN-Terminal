@@ -326,9 +326,7 @@ pub fn halt_reason_description(code: &str) -> &'static str {
         "H10" => "SEC trading suspension",
         "H11" => "Regulatory concern",
         "IPO1" | "IPOQ" | "IPOE" => "IPO not yet trading",
-        "M1" | "M2" | "MWC0" | "MWC1" | "MWC2" | "MWC3" | "MWCQ" => {
-            "Market-wide circuit breaker"
-        }
+        "M1" | "M2" | "MWC0" | "MWC1" | "MWC2" | "MWC3" | "MWCQ" => "Market-wide circuit breaker",
         "D" => "Security deletion / delisting",
         _ => "Trading halt",
     }
@@ -531,7 +529,9 @@ mod tests {
         assert_eq!(alerts[0].kind, "trade_halt");
         assert_eq!(alerts[0].label, "!! HALT !!");
         assert!(
-            alerts[0].details.contains("Volatility trading pause (LULD)"),
+            alerts[0]
+                .details
+                .contains("Volatility trading pause (LULD)"),
             "details carry the decoded reason: {}",
             alerts[0].details
         );
@@ -549,7 +549,10 @@ mod tests {
 
     #[test]
     fn halt_reason_descriptions_cover_common_codes() {
-        assert_eq!(halt_reason_description("LUDP"), "Volatility trading pause (LULD)");
+        assert_eq!(
+            halt_reason_description("LUDP"),
+            "Volatility trading pause (LULD)"
+        );
         assert_eq!(halt_reason_description("t1"), "News pending");
         assert_eq!(halt_reason_description("H10"), "SEC trading suspension");
         assert_eq!(halt_reason_description("ZZ9"), "Trading halt"); // unknown fallback

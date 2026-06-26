@@ -10,8 +10,8 @@
 //! on `typhoon-native`.
 
 pub mod auto_fibonacci;
-pub mod camera_controls;
 pub mod cache_keys;
+pub mod camera_controls;
 pub mod drawing;
 pub mod indicators;
 pub mod models;

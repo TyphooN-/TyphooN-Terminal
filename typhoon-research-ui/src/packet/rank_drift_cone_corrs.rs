@@ -2,11 +2,7 @@ use super::context::SymbolResearchContext;
 use std::fmt::Write as _;
 use typhoon_engine::core::research as rx;
 
-pub fn write_rank_drift_cone_corrs(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_rank_drift_cone_corrs(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     if let Ok(Some(rvc)) = rx::get_rvcone(ctx.conn, &sym_upper) {
         if rvc.cone_label != "INSUFFICIENT_DATA" && !rvc.cone_label.is_empty() {
             let _ = writeln!(

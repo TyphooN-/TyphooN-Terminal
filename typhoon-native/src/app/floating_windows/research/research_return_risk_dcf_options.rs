@@ -175,19 +175,11 @@ impl TyphooNApp {
                             .unwrap_or_default();
                     let ttm_eps: Option<f64> = {
                         let s: f64 = quarters.iter().take(4).filter_map(|q| q.eps).sum();
-                        if s > 0.0 {
-                            Some(s)
-                        } else {
-                            None
-                        }
+                        if s > 0.0 { Some(s) } else { None }
                     };
                     let ttm_ebitda: Option<f64> = {
                         let s: f64 = quarters.iter().take(4).filter_map(|q| q.ebitda).sum();
-                        if s > 0.0 {
-                            Some(s)
-                        } else {
-                            None
-                        }
+                        if s > 0.0 { Some(s) } else { None }
                     };
                     let peer_syms = typhoon_engine::core::research::get_peers(&conn, &sym)
                         .unwrap_or(None)

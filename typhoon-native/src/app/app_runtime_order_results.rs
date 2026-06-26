@@ -45,19 +45,16 @@ impl TyphooNApp {
         // Only refresh positions after actual trade operations (not every log message).
         // OrderResult is used for many non-trade messages (backfill, etc.)
         // that would spam GetPositions → HTTP 429 Too Many Requests.
-        let is_trade = msg.contains("filled")
-            || msg.contains("order")
-            || msg.contains("closed")
-            || msg.contains("cancelled");
+        let msg_lc = msg.to_ascii_lowercase();
+        let is_trade = msg_lc.contains("filled")
+            || msg_lc.contains("order")
+            || msg_lc.contains("closed")
+            || msg_lc.contains("cancelled");
         if is_trade && self.alpaca_enabled && self.broker_connected {
             let _ = self.broker_tx.send(BrokerCmd::GetPositions);
             let _ = self.broker_tx.send(BrokerCmd::GetOrders);
         }
-        if is_trade
-            && self.kraken_enabled
-            && self.kraken_connected
-            && msg.to_ascii_lowercase().contains("kraken")
-        {
+        if is_trade && self.kraken_enabled && self.kraken_connected && msg_lc.contains("kraken") {
             let _ = self.broker_tx.send(BrokerCmd::KrakenGetPositions);
             let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
         }

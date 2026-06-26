@@ -34,6 +34,33 @@ fn parse_f64_field_bad_string_returns_zero() {
     assert_eq!(parse_f64_field(&j, "equity"), 0.0);
 }
 
+#[test]
+fn parse_f64_value_accepts_strings_and_numbers() {
+    assert_eq!(parse_f64_value(&json!("42.5")), 42.5);
+    assert_eq!(parse_f64_value(&json!(42.5)), 42.5);
+    assert_eq!(parse_f64_value(&json!(null)), 0.0);
+}
+
+#[test]
+fn alpaca_error_message_prefers_message_then_error() {
+    assert_eq!(
+        alpaca_error_message(&json!({"message": "qty is not available"})),
+        Some("qty is not available".to_string())
+    );
+    assert_eq!(
+        alpaca_error_message(&json!({"error": "invalid order"})),
+        Some("invalid order".to_string())
+    );
+    assert_eq!(alpaca_error_message(&json!({"message": ""})), None);
+}
+
+#[test]
+fn string_or_number_handles_alpaca_numeric_and_string_fields() {
+    assert_eq!(string_or_number(&json!("1.25"), "0"), "1.25");
+    assert_eq!(string_or_number(&json!(1.25), "0"), "1.25");
+    assert_eq!(string_or_number(&json!(null), "0"), "0");
+}
+
 // ── format_order_price ─────────────────────────────────────────────────
 
 #[test]
@@ -111,6 +138,241 @@ fn parse_option_symbol_too_short() {
     assert_eq!(strike, 0.0);
     assert_eq!(opt_type, "unknown");
     assert!(expiry.is_empty());
+}
+
+#[test]
+fn parse_order_result_accepts_numeric_qty() {
+    let order = AlpacaBroker::parse_order_result(&json!({
+        "id": "order-1",
+        "symbol": "AAPL",
+        "qty": 1.25,
+        "side": "buy",
+        "status": "accepted",
+    }));
+    assert_eq!(order.id, "order-1");
+    assert_eq!(order.symbol, "AAPL");
+    assert_eq!(order.qty, "1.25");
+    assert_eq!(order.side, "buy");
+    assert_eq!(order.status, "accepted");
+}
+
+#[test]
+fn parse_order_result_defaults_missing_qty_to_zero() {
+    let order = AlpacaBroker::parse_order_result(&json!({
+        "id": "order-1",
+        "symbol": "AAPL",
+        "side": "buy",
+        "status": "accepted",
+    }));
+    assert_eq!(order.qty, "0");
+}
+
+#[test]
+fn close_all_positions_failures_extracts_multistatus_errors() {
+    let failures = AlpacaBroker::close_all_positions_failures(&json!([
+        {"symbol": "AAPL", "status": 200, "body": {"id": "ok"}},
+        {"symbol": "TSLA", "status": 500, "body": {"message": "insufficient qty available"}},
+        {"body": {"symbol": "MSFT", "error": "position is already closed"}, "status": 422}
+    ]));
+    assert_eq!(failures.len(), 2);
+    assert!(failures[0].contains("TSLA: insufficient qty available"));
+    assert!(failures[1].contains("MSFT: position is already closed"));
+}
+
+#[test]
+fn order_query_policy_matches_alpaca_status_and_limit_docs() {
+    assert_eq!(
+        AlpacaBroker::normalize_order_query_status("").unwrap(),
+        "open"
+    );
+    assert_eq!(
+        AlpacaBroker::normalize_order_query_status(" OPEN ").unwrap(),
+        "open"
+    );
+    assert_eq!(
+        AlpacaBroker::normalize_order_query_status("closed").unwrap(),
+        "closed"
+    );
+    assert_eq!(
+        AlpacaBroker::normalize_order_query_status("all").unwrap(),
+        "all"
+    );
+    assert!(AlpacaBroker::normalize_order_query_status("pending").is_err());
+    assert_eq!(AlpacaBroker::normalize_order_query_limit(0), 1);
+    assert_eq!(AlpacaBroker::normalize_order_query_limit(50), 50);
+    assert_eq!(AlpacaBroker::normalize_order_query_limit(999), 500);
+}
+
+#[test]
+fn parse_order_info_accepts_numeric_qty_and_filled_qty() {
+    let order = AlpacaBroker::parse_order_info(&json!({
+        "id": "order-2",
+        "symbol": "MSFT",
+        "qty": 2.5,
+        "filled_qty": 1.25,
+        "side": "sell",
+        "type": "limit",
+        "status": "partially_filled",
+    }));
+    assert_eq!(order.qty, "2.5");
+    assert_eq!(order.filled_qty, "1.25");
+    assert_eq!(order.symbol, "MSFT");
+}
+
+#[test]
+fn parse_latest_quote_from_snapshot_uses_trade_when_quote_missing() {
+    let quote = AlpacaBroker::parse_latest_quote_from_snapshot(
+        "AAPL",
+        &json!({
+            "latestQuote": {"bp": 0.0, "ap": 0.0, "bs": "0", "as": "0", "t": "quote-ts"},
+            "latestTrade": {"p": "189.12", "t": "trade-ts"},
+        }),
+    );
+    assert_eq!(quote.bid, 189.12);
+    assert_eq!(quote.ask, 189.12);
+    assert_eq!(quote.spread, 0.0);
+    assert_eq!(quote.timestamp, "trade-ts");
+}
+
+#[test]
+fn parse_snapshot_data_uses_trade_price_for_last() {
+    let snap = AlpacaBroker::parse_snapshot_data(
+        "AAPL",
+        &json!({
+            "latestTrade": {"p": "190.25"},
+            "dailyBar": {"v": "12345", "c": "188.00"},
+            "prevDailyBar": {"c": "187.50"},
+        }),
+    );
+    assert_eq!(snap.last, 190.25);
+    assert_eq!(snap.regular_close, 188.0);
+    assert_eq!(snap.prev_close, 187.5);
+    assert_eq!(snap.daily_volume, 12345.0);
+}
+
+#[test]
+fn market_order_body_uses_day_tif_for_equity_market_orders() {
+    let body = AlpacaBroker::market_order_body("AAPL", 1.5, "BUY").unwrap();
+    assert_eq!(body["symbol"], "AAPL");
+    assert_eq!(body["qty"], "1.5");
+    assert_eq!(body["side"], "buy");
+    assert_eq!(body["type"], "market");
+    assert_eq!(body["time_in_force"], "day");
+}
+
+#[test]
+fn market_order_body_keeps_gtc_for_crypto_market_orders() {
+    let body = AlpacaBroker::market_order_body("BTC/USD", 0.01, "sell").unwrap();
+    assert_eq!(body["symbol"], "BTC/USD");
+    assert_eq!(body["side"], "sell");
+    assert_eq!(body["time_in_force"], "gtc");
+}
+
+#[test]
+fn market_order_body_rejects_invalid_qty_and_side_before_http() {
+    assert!(AlpacaBroker::market_order_body("AAPL", 0.0, "buy").is_err());
+    assert!(AlpacaBroker::market_order_body("AAPL", f64::NAN, "buy").is_err());
+    assert!(AlpacaBroker::market_order_body("AAPL", 1.0, "hold").is_err());
+    assert!(AlpacaBroker::market_order_body(" ", 1.0, "buy").is_err());
+}
+
+#[test]
+fn market_notional_order_body_is_day_only_and_validates_inputs() {
+    let body = AlpacaBroker::market_notional_order_body("AAPL", 123.456, "BUY").unwrap();
+    assert_eq!(body["symbol"], "AAPL");
+    assert_eq!(body["notional"], "123.46");
+    assert_eq!(body["side"], "buy");
+    assert_eq!(body["type"], "market");
+    assert_eq!(body["time_in_force"], "day");
+
+    assert!(AlpacaBroker::market_notional_order_body(" ", 10.0, "buy").is_err());
+    assert!(AlpacaBroker::market_notional_order_body("AAPL", 0.0, "buy").is_err());
+    assert!(AlpacaBroker::market_notional_order_body("AAPL", f64::NAN, "buy").is_err());
+    assert!(AlpacaBroker::market_notional_order_body("AAPL", 10.0, "hold").is_err());
+}
+
+#[test]
+fn modify_order_body_rejects_empty_or_invalid_changes() {
+    let body = AlpacaBroker::modify_order_body(Some(2.0), Some(191.234), None, None).unwrap();
+    assert_eq!(body["qty"], "2");
+    assert_eq!(body["limit_price"], "191.23");
+
+    assert!(AlpacaBroker::modify_order_body(None, None, None, None).is_err());
+    assert!(AlpacaBroker::modify_order_body(Some(0.0), None, None, None).is_err());
+    assert!(AlpacaBroker::modify_order_body(None, Some(f64::NAN), None, None).is_err());
+    assert!(AlpacaBroker::modify_order_body(None, None, Some(0.0), None).is_err());
+    assert!(AlpacaBroker::modify_order_body(None, None, None, Some(0.0)).is_err());
+}
+
+#[test]
+fn limit_order_body_validates_qty_side_price_and_tif() {
+    let body = AlpacaBroker::limit_order_body("AAPL", 2.0, "SELL", 191.234, "DAY").unwrap();
+    assert_eq!(body["side"], "sell");
+    assert_eq!(body["time_in_force"], "day");
+    assert_eq!(body["limit_price"], "191.23");
+    assert!(AlpacaBroker::limit_order_body("AAPL", 0.0, "sell", 191.0, "day").is_err());
+    assert!(AlpacaBroker::limit_order_body("AAPL", 1.0, "hold", 191.0, "day").is_err());
+    assert!(AlpacaBroker::limit_order_body("AAPL", 1.0, "sell", 0.0, "day").is_err());
+    assert!(AlpacaBroker::limit_order_body("AAPL", 1.0, "sell", 191.0, "bad").is_err());
+}
+
+#[test]
+fn stop_limit_order_body_validates_both_prices() {
+    let body =
+        AlpacaBroker::stop_limit_order_body("AAPL", 1.0, "sell", 180.0, 179.5, "gtc").unwrap();
+    assert_eq!(body["stop_price"], "180.00");
+    assert_eq!(body["limit_price"], "179.50");
+    assert!(AlpacaBroker::stop_limit_order_body("AAPL", 1.0, "sell", 0.0, 179.5, "gtc").is_err());
+    assert!(
+        AlpacaBroker::stop_limit_order_body("AAPL", 1.0, "sell", 180.0, f64::NAN, "gtc").is_err()
+    );
+}
+
+#[test]
+fn trailing_stop_order_body_requires_exactly_one_positive_trail() {
+    let body = AlpacaBroker::trailing_stop_order_body("AAPL", 1.0, "sell", None, Some(2.5), "gtc")
+        .unwrap();
+    assert_eq!(body["trail_percent"], "2.50");
+    assert!(
+        AlpacaBroker::trailing_stop_order_body("AAPL", 1.0, "sell", None, None, "gtc").is_err()
+    );
+    assert!(
+        AlpacaBroker::trailing_stop_order_body("AAPL", 1.0, "sell", Some(1.0), Some(2.0), "gtc")
+            .is_err()
+    );
+    assert!(
+        AlpacaBroker::trailing_stop_order_body("AAPL", 1.0, "sell", Some(0.0), None, "gtc")
+            .is_err()
+    );
+}
+
+#[test]
+fn bracket_order_body_validates_side_qty_prices_and_uses_doc_gtc_tif() {
+    let body = AlpacaBroker::bracket_order_body("AAPL", 1.0, "BUY", 110.0, 95.0).unwrap();
+    assert_eq!(body["side"], "buy");
+    assert_eq!(body["time_in_force"], "gtc");
+    assert_eq!(body["order_class"], "bracket");
+    assert_eq!(body["take_profit"]["limit_price"], "110.00");
+    assert_eq!(body["stop_loss"]["stop_price"], "95.00");
+
+    assert!(AlpacaBroker::bracket_order_body("AAPL", 0.0, "buy", 110.0, 95.0).is_err());
+    assert!(AlpacaBroker::bracket_order_body("AAPL", 1.0, "hold", 110.0, 95.0).is_err());
+    assert!(AlpacaBroker::bracket_order_body("AAPL", 1.0, "buy", 90.0, 95.0).is_err());
+}
+
+#[test]
+fn oco_order_body_validates_exit_price_relationship_and_stop_limit() {
+    let body = AlpacaBroker::oco_order_body("AAPL", 1.0, "sell", 110.0, 95.0, Some(94.5)).unwrap();
+    assert_eq!(body["side"], "sell");
+    assert_eq!(body["time_in_force"], "gtc");
+    assert_eq!(body["order_class"], "oco");
+    assert_eq!(body["take_profit"]["limit_price"], "110.00");
+    assert_eq!(body["stop_loss"]["stop_price"], "95.00");
+    assert_eq!(body["stop_loss"]["limit_price"], "94.50");
+
+    assert!(AlpacaBroker::oco_order_body("AAPL", 1.0, "sell", 90.0, 95.0, None).is_err());
+    assert!(AlpacaBroker::oco_order_body("AAPL", 1.0, "buy", 110.0, 95.0, None).is_err());
+    assert!(AlpacaBroker::oco_order_body("AAPL", 1.0, "sell", 110.0, 95.0, Some(0.0)).is_err());
 }
 
 #[test]

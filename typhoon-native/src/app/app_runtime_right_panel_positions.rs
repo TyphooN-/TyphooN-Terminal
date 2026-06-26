@@ -105,6 +105,7 @@ impl TyphooNApp {
             ) {
                 has_positions = true;
                 let mut close_sym: Option<String> = None;
+                let mut close_percent: Option<(String, f64)> = None;
                 let mut lp_action = SymbolAction::None;
                 for pos in &self.live_positions {
                     let side_c = if pos.side == "long" { UP } else { DOWN };
@@ -131,9 +132,15 @@ impl TyphooNApp {
                         ui.label(
                             egui::RichText::new(side_label).color(side_c).small(),
                         );
-                        ui.label(
-                            egui::RichText::new(format!("{:.2}", pos.qty)).small(),
-                        );
+                        ui.label(egui::RichText::new(format!("{:.2}", pos.qty)).small())
+                            .on_hover_text(format!(
+                                "Alpaca qty available for closing: {:.9}",
+                                if pos.qty_available > 0.0 {
+                                    pos.qty_available
+                                } else {
+                                    pos.qty.abs()
+                                }
+                            ));
                         let display_pl = position_unrealized_pl_from_price(pos, current_price);
                         let pl_c = if display_pl >= 0.0 { UP } else { DOWN };
                         let pl_pct = position_unrealized_pl_pct(pos, display_pl);
@@ -157,9 +164,21 @@ impl TyphooNApp {
                             .small(),
                         );
                         if self.broker_connected {
+                            for pct in [25.0, 50.0, 75.0] {
+                                if ui
+                                    .small_button(format!("{}%", pct as i32))
+                                    .on_hover_text(format!(
+                                        "Close {}% of {} via Alpaca percentage close",
+                                        pct as i32, pos.symbol
+                                    ))
+                                    .clicked()
+                                {
+                                    close_percent = Some((pos.symbol.clone(), pct));
+                                }
+                            }
                             if ui
-                                .small_button(egui::RichText::new("x").color(DOWN))
-                                .on_hover_text("Close position")
+                                .small_button(egui::RichText::new("100%").color(DOWN))
+                                .on_hover_text("Close entire Alpaca position")
                                 .clicked()
                             {
                                 close_sym = Some(pos.symbol.clone());
@@ -172,6 +191,16 @@ impl TyphooNApp {
                     let _ = self
                         .broker_tx
                         .send(BrokerCmd::ClosePosition { symbol: sym, qty: None });
+                }
+                if let Some((sym, percentage)) = close_percent {
+                    let _ = self.broker_tx.send(BrokerCmd::AlpacaClosePositionPercent {
+                        symbol: sym.clone(),
+                        percentage,
+                    });
+                    self.log.push_back(LogEntry::info(format!(
+                        "Alpaca: closing {:.0}% of {} at market",
+                        percentage, sym
+                    )));
                 }
                 if !matches!(lp_action, SymbolAction::None) {
                     self.deferred_symbol_action = lp_action;
@@ -447,6 +476,7 @@ mod tests {
         PositionInfo {
             symbol: symbol.to_string(),
             qty: 1.0,
+            qty_available: 1.0,
             side: "long".to_string(),
             avg_entry_price: 10.0,
             market_value: 10.0,

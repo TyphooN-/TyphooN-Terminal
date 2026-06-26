@@ -2,11 +2,7 @@ use super::context::SymbolResearchContext;
 use crate::format;
 use typhoon_engine::core::research as rx;
 
-pub fn write_price_behavior_ratios(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_price_behavior_ratios(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     // Gather each snapshot from the research DB and hand it to the pure
     // formatter (ADR-125 Phase 1 step 2). The INSUFFICIENT_DATA guards
     // live inside the formatters.

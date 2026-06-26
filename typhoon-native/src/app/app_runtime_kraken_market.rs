@@ -523,6 +523,7 @@ mod tests {
         PositionInfo {
             symbol: symbol.to_string(),
             qty,
+            qty_available: qty,
             side: "long".to_string(),
             avg_entry_price: 0.0,
             market_value: 0.0,

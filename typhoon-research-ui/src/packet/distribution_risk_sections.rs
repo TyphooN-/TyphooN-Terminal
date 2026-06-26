@@ -203,12 +203,7 @@ pub fn write_symbol_distribution_risk_sections(
             let _ = writeln!(
                 p,
                 "- Returns {} · vol obs {} · AR(1) β {:.4} · α {:.6} · R² {:.4} · half-life {:.1} days",
-                vh.bars_used,
-                vh.vol_obs,
-                vh.ar1_beta,
-                vh.ar1_alpha,
-                vh.ar1_r2,
-                vh.half_life_days
+                vh.bars_used, vh.vol_obs, vh.ar1_beta, vh.ar1_alpha, vh.ar1_r2, vh.half_life_days
             );
             if !vh.note.is_empty() {
                 let _ = writeln!(p, "- Note: {}", vh.note);

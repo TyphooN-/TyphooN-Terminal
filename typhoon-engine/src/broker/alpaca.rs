@@ -1,7 +1,8 @@
 //! Alpaca broker interface.
 //!
 //! Wraps Alpaca REST API.
-//! Provides the same operations as MQL5 CTrade: open, close, partial close, modify, account info.
+//! Provides Alpaca REST trading operations: open, close, partial close by
+//! quantity/percentage where the API supports it, modify, and account info.
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -177,6 +178,13 @@ fn parse_f64_field(json: &serde_json::Value, field: &str) -> f64 {
     0.0
 }
 
+fn parse_f64_value(value: &serde_json::Value) -> f64 {
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+        .unwrap_or(0.0)
+}
+
 fn format_order_price(price: f64) -> String {
     if price >= 1.0 {
         format!("{:.2}", price) // $1+ → 2 decimals (e.g., 15.68)
@@ -185,6 +193,22 @@ fn format_order_price(price: f64) -> String {
     } else {
         format!("{:.8}", price) // sub-penny / crypto → 8 decimals
     }
+}
+
+fn alpaca_error_message(json: &serde_json::Value) -> Option<String> {
+    json["message"]
+        .as_str()
+        .or_else(|| json["error"].as_str())
+        .filter(|msg| !msg.trim().is_empty())
+        .map(|msg| msg.to_string())
+}
+
+fn string_or_number(value: &serde_json::Value, default: &str) -> String {
+    value
+        .as_str()
+        .map(|s| s.to_string())
+        .or_else(|| value.as_f64().map(|n| n.to_string()))
+        .unwrap_or_else(|| default.to_string())
 }
 
 fn rpm_to_interval_ms(rpm: u32) -> u64 {
@@ -383,6 +407,10 @@ pub struct AccountInfo {
 pub struct PositionInfo {
     pub symbol: String,
     pub qty: f64,
+    /// Alpaca `qty_available`: position quantity not locked by open orders.
+    /// Older cached position snapshots do not have this field.
+    #[serde(default)]
+    pub qty_available: f64,
     pub side: String,
     pub avg_entry_price: f64,
     pub market_value: f64,
@@ -508,6 +536,392 @@ impl AlpacaBroker {
         headers
     }
 
+    async fn json_or_error(
+        resp: reqwest::Response,
+        context: &str,
+    ) -> Result<serde_json::Value, String> {
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| format!("{context} body read failed: {e}"))?;
+        let json: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(json) => json,
+            Err(e) if !status.is_success() => {
+                let snippet: String = text.chars().take(240).collect();
+                return Err(format!("{context} failed: HTTP {status}: {snippet}"));
+            }
+            Err(e) => return Err(format!("{context} parse failed: {e}")),
+        };
+        if !status.is_success() {
+            if let Some(msg) = alpaca_error_message(&json) {
+                return Err(format!("{context} rejected: {msg}"));
+            }
+            return Err(format!("{context} failed: HTTP {status}"));
+        }
+        if let Some(msg) = alpaca_error_message(&json) {
+            return Err(format!("{context} rejected: {msg}"));
+        }
+        Ok(json)
+    }
+
+    async fn order_response(resp: reqwest::Response, context: &str) -> Result<OrderResult, String> {
+        let json = Self::json_or_error(resp, context).await?;
+        Ok(Self::parse_order_result(&json))
+    }
+
+    fn parse_order_result(json: &serde_json::Value) -> OrderResult {
+        OrderResult {
+            id: json["id"].as_str().unwrap_or("").to_string(),
+            symbol: json["symbol"].as_str().unwrap_or("").to_string(),
+            qty: string_or_number(&json["qty"], "0"),
+            side: json["side"].as_str().unwrap_or("").to_string(),
+            status: json["status"].as_str().unwrap_or("").to_string(),
+        }
+    }
+
+    fn normalize_order_side(side: &str) -> Result<&'static str, String> {
+        match side.trim().to_ascii_lowercase().as_str() {
+            "buy" => Ok("buy"),
+            "sell" => Ok("sell"),
+            other => Err(format!("Order rejected: invalid side '{other}'")),
+        }
+    }
+
+    fn require_symbol(symbol: &str, context: &str) -> Result<(), String> {
+        if symbol.trim().is_empty() {
+            return Err(format!("{context} rejected: symbol is required"));
+        }
+        Ok(())
+    }
+
+    fn require_positive_qty(qty: f64, context: &str) -> Result<(), String> {
+        if !qty.is_finite() || qty <= 0.0 {
+            return Err(format!("{context} rejected: qty must be positive"));
+        }
+        Ok(())
+    }
+
+    fn require_positive_price(price: f64, context: &str, field: &str) -> Result<(), String> {
+        if !price.is_finite() || price <= 0.0 {
+            return Err(format!("{context} rejected: {field} must be positive"));
+        }
+        Ok(())
+    }
+
+    fn normalize_time_in_force(tif: &str) -> Result<&'static str, String> {
+        match tif.trim().to_ascii_lowercase().as_str() {
+            "day" => Ok("day"),
+            "gtc" => Ok("gtc"),
+            "opg" => Ok("opg"),
+            "cls" => Ok("cls"),
+            "ioc" => Ok("ioc"),
+            "fok" => Ok("fok"),
+            other => Err(format!("Order rejected: invalid time_in_force '{other}'")),
+        }
+    }
+
+    fn market_order_time_in_force(symbol: &str) -> &'static str {
+        if symbol.contains('/') { "gtc" } else { "day" }
+    }
+
+    fn advanced_order_time_in_force(_symbol: &str) -> &'static str {
+        // Alpaca's bracket/OCO docs allow day/gtc and examples use GTC.
+        // Prefer GTC for persistent risk-management order groups.
+        "gtc"
+    }
+
+    fn market_order_body(symbol: &str, qty: f64, side: &str) -> Result<serde_json::Value, String> {
+        Self::require_symbol(symbol, "Market order")?;
+        Self::require_positive_qty(qty, "Market order")?;
+        let side = Self::normalize_order_side(side)?;
+        Ok(serde_json::json!({
+            "symbol": symbol,
+            "qty": qty.to_string(),
+            "side": side,
+            "type": "market",
+            "time_in_force": Self::market_order_time_in_force(symbol),
+        }))
+    }
+
+    fn market_notional_order_body(
+        symbol: &str,
+        notional: f64,
+        side: &str,
+    ) -> Result<serde_json::Value, String> {
+        Self::require_symbol(symbol, "Market notional order")?;
+        if !notional.is_finite() || notional <= 0.0 {
+            return Err("Market notional order rejected: notional must be positive".into());
+        }
+        let side = Self::normalize_order_side(side)?;
+        Ok(serde_json::json!({
+            "symbol": symbol,
+            "notional": format_order_price(notional),
+            "side": side,
+            "type": "market",
+            "time_in_force": "day",
+        }))
+    }
+
+    fn limit_order_body(
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        limit_price: f64,
+        tif: &str,
+    ) -> Result<serde_json::Value, String> {
+        Self::require_symbol(symbol, "Limit order")?;
+        Self::require_positive_qty(qty, "Limit order")?;
+        Self::require_positive_price(limit_price, "Limit order", "limit_price")?;
+        let side = Self::normalize_order_side(side)?;
+        let tif = Self::normalize_time_in_force(tif)?;
+        Ok(serde_json::json!({
+            "symbol": symbol,
+            "qty": qty.to_string(),
+            "side": side,
+            "type": "limit",
+            "limit_price": format_order_price(limit_price),
+            "time_in_force": tif,
+        }))
+    }
+
+    fn stop_order_body(
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        stop_price: f64,
+        tif: &str,
+    ) -> Result<serde_json::Value, String> {
+        Self::require_symbol(symbol, "Stop order")?;
+        Self::require_positive_qty(qty, "Stop order")?;
+        Self::require_positive_price(stop_price, "Stop order", "stop_price")?;
+        let side = Self::normalize_order_side(side)?;
+        let tif = Self::normalize_time_in_force(tif)?;
+        Ok(serde_json::json!({
+            "symbol": symbol,
+            "qty": qty.to_string(),
+            "side": side,
+            "type": "stop",
+            "stop_price": format_order_price(stop_price),
+            "time_in_force": tif,
+        }))
+    }
+
+    fn stop_limit_order_body(
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        stop_price: f64,
+        limit_price: f64,
+        tif: &str,
+    ) -> Result<serde_json::Value, String> {
+        Self::require_symbol(symbol, "Stop-limit order")?;
+        Self::require_positive_qty(qty, "Stop-limit order")?;
+        Self::require_positive_price(stop_price, "Stop-limit order", "stop_price")?;
+        Self::require_positive_price(limit_price, "Stop-limit order", "limit_price")?;
+        let side = Self::normalize_order_side(side)?;
+        let tif = Self::normalize_time_in_force(tif)?;
+        Ok(serde_json::json!({
+            "symbol": symbol,
+            "qty": qty.to_string(),
+            "side": side,
+            "type": "stop_limit",
+            "stop_price": format_order_price(stop_price),
+            "limit_price": format_order_price(limit_price),
+            "time_in_force": tif,
+        }))
+    }
+
+    fn trailing_stop_order_body(
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        trail_price: Option<f64>,
+        trail_percent: Option<f64>,
+        tif: &str,
+    ) -> Result<serde_json::Value, String> {
+        Self::require_symbol(symbol, "Trailing stop order")?;
+        Self::require_positive_qty(qty, "Trailing stop order")?;
+        let side = Self::normalize_order_side(side)?;
+        let tif = Self::normalize_time_in_force(tif)?;
+        let mut body = serde_json::json!({
+            "symbol": symbol,
+            "qty": qty.to_string(),
+            "side": side,
+            "type": "trailing_stop",
+            "time_in_force": tif,
+        });
+        match (trail_price, trail_percent) {
+            (Some(_), Some(_)) => {
+                return Err(
+                    "Trailing stop order rejected: choose trail_price or trail_percent, not both"
+                        .into(),
+                );
+            }
+            (None, None) => {
+                return Err(
+                    "Trailing stop order rejected: trail_price or trail_percent is required".into(),
+                );
+            }
+            (Some(price), None) => {
+                Self::require_positive_price(price, "Trailing stop order", "trail_price")?;
+                body["trail_price"] = serde_json::json!(format_order_price(price));
+            }
+            (None, Some(percent)) => {
+                Self::require_positive_price(percent, "Trailing stop order", "trail_percent")?;
+                body["trail_percent"] = serde_json::json!(format_order_price(percent));
+            }
+        }
+        Ok(body)
+    }
+
+    fn validate_exit_price_relationship(
+        side: &str,
+        tp_price: f64,
+        sl_price: f64,
+        context: &str,
+    ) -> Result<(), String> {
+        let valid = if side == "buy" {
+            tp_price < sl_price
+        } else {
+            tp_price > sl_price
+        };
+        if !valid {
+            return Err(format!(
+                "{context} rejected: take-profit must be {} stop-loss for {side} exits",
+                if side == "buy" { "below" } else { "above" }
+            ));
+        }
+        Ok(())
+    }
+
+    fn bracket_order_body(
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        tp_price: f64,
+        sl_price: f64,
+    ) -> Result<serde_json::Value, String> {
+        Self::require_symbol(symbol, "Bracket order")?;
+        Self::require_positive_qty(qty, "Bracket order")?;
+        Self::require_positive_price(tp_price, "Bracket order", "take_profit.limit_price")?;
+        Self::require_positive_price(sl_price, "Bracket order", "stop_loss.stop_price")?;
+        let side = Self::normalize_order_side(side)?;
+        let exit_side = if side == "buy" { "sell" } else { "buy" };
+        Self::validate_exit_price_relationship(exit_side, tp_price, sl_price, "Bracket order")?;
+        Ok(serde_json::json!({
+            "symbol": symbol,
+            "qty": qty.to_string(),
+            "side": side,
+            "type": "market",
+            "time_in_force": Self::advanced_order_time_in_force(symbol),
+            "order_class": "bracket",
+            "take_profit": { "limit_price": format_order_price(tp_price) },
+            "stop_loss": { "stop_price": format_order_price(sl_price) },
+        }))
+    }
+
+    fn oco_order_body(
+        symbol: &str,
+        qty: f64,
+        side: &str,
+        tp_price: f64,
+        sl_price: f64,
+        sl_limit: Option<f64>,
+    ) -> Result<serde_json::Value, String> {
+        Self::require_symbol(symbol, "OCO order")?;
+        Self::require_positive_qty(qty, "OCO order")?;
+        Self::require_positive_price(tp_price, "OCO order", "take_profit.limit_price")?;
+        Self::require_positive_price(sl_price, "OCO order", "stop_loss.stop_price")?;
+        let side = Self::normalize_order_side(side)?;
+        Self::validate_exit_price_relationship(side, tp_price, sl_price, "OCO order")?;
+        let mut body = serde_json::json!({
+            "symbol": symbol,
+            "qty": qty.to_string(),
+            "side": side,
+            "type": "limit",
+            "time_in_force": "gtc",
+            "order_class": "oco",
+            "take_profit": { "limit_price": format_order_price(tp_price) },
+            "stop_loss": { "stop_price": format_order_price(sl_price) },
+        });
+        if let Some(sl_lim) = sl_limit {
+            Self::require_positive_price(sl_lim, "OCO order", "stop_loss.limit_price")?;
+            body["stop_loss"]["limit_price"] = serde_json::json!(format_order_price(sl_lim));
+        }
+        Ok(body)
+    }
+
+    fn modify_order_body(
+        qty: Option<f64>,
+        limit_price: Option<f64>,
+        stop_price: Option<f64>,
+        trail: Option<f64>,
+    ) -> Result<serde_json::Value, String> {
+        let mut body = serde_json::Map::new();
+        if let Some(q) = qty {
+            Self::require_positive_qty(q, "Modify order")?;
+            body.insert("qty".into(), serde_json::json!(q.to_string()));
+        }
+        if let Some(lp) = limit_price {
+            Self::require_positive_price(lp, "Modify order", "limit_price")?;
+            body.insert(
+                "limit_price".into(),
+                serde_json::json!(format_order_price(lp)),
+            );
+        }
+        if let Some(sp) = stop_price {
+            Self::require_positive_price(sp, "Modify order", "stop_price")?;
+            body.insert(
+                "stop_price".into(),
+                serde_json::json!(format_order_price(sp)),
+            );
+        }
+        if let Some(t) = trail {
+            Self::require_positive_price(t, "Modify order", "trail")?;
+            body.insert("trail".into(), serde_json::json!(t.to_string()));
+        }
+        if body.is_empty() {
+            return Err("Modify order rejected: no changes provided".into());
+        }
+        Ok(serde_json::Value::Object(body))
+    }
+
+    fn close_all_positions_failures(json: &serde_json::Value) -> Vec<String> {
+        let Some(rows) = json.as_array() else {
+            return Vec::new();
+        };
+        rows.iter()
+            .filter_map(|row| {
+                let status = row["status"].as_u64().unwrap_or(0);
+                if status < 400 {
+                    return None;
+                }
+                let symbol = row["symbol"]
+                    .as_str()
+                    .or_else(|| row["body"]["symbol"].as_str())
+                    .unwrap_or("unknown");
+                let message = alpaca_error_message(&row["body"])
+                    .or_else(|| alpaca_error_message(row))
+                    .unwrap_or_else(|| format!("HTTP {status}"));
+                Some(format!("{symbol}: {message}"))
+            })
+            .collect()
+    }
+
+    fn normalize_order_query_status(status: &str) -> Result<&'static str, String> {
+        match status.trim().to_ascii_lowercase().as_str() {
+            "" | "open" => Ok("open"),
+            "closed" => Ok("closed"),
+            "all" => Ok("all"),
+            other => Err(format!("Orders rejected: invalid status '{other}'")),
+        }
+    }
+
+    fn normalize_order_query_limit(limit: u32) -> u32 {
+        limit.clamp(1, 500)
+    }
+
     fn stock_bar_feeds(&self) -> Vec<Option<&'static str>> {
         if self.sip_bar_feed_unavailable.load(Ordering::Relaxed) {
             vec![Some("iex")]
@@ -572,10 +986,7 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Account request failed: {e}"))?;
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Account parse failed: {e}"))?;
+        let json = Self::json_or_error(resp, "Account").await?;
 
         let last_equity = parse_f64_field(&json, "last_equity");
         Ok(AccountInfo {
@@ -604,21 +1015,18 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Positions request failed: {e}"))?;
 
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(format!("Positions request failed: HTTP {status}"));
-        }
-
-        let json: Vec<serde_json::Value> = resp
-            .json()
-            .await
-            .map_err(|e| format!("Positions parse failed: {e}"))?;
+        let json = Self::json_or_error(resp, "Positions")
+            .await?
+            .as_array()
+            .cloned()
+            .ok_or_else(|| "Positions parse failed: expected array".to_string())?;
 
         Ok(json
             .iter()
             .map(|p| PositionInfo {
                 symbol: p["symbol"].as_str().unwrap_or("").to_string(),
                 qty: parse_f64_field(p, "qty"),
+                qty_available: parse_f64_field(p, "qty_available"),
                 side: p["side"].as_str().unwrap_or("").to_string(),
                 avg_entry_price: parse_f64_field(p, "avg_entry_price"),
                 market_value: parse_f64_field(p, "market_value"),
@@ -637,34 +1045,20 @@ impl AlpacaBroker {
         qty: f64,
         side: &str,
     ) -> Result<OrderResult, String> {
-        let mut body = HashMap::new();
-        body.insert("symbol", symbol.to_string());
-        body.insert("qty", qty.to_string());
-        body.insert("side", side.to_string());
-        body.insert("type", "market".to_string());
-        body.insert("time_in_force", "gtc".to_string());
+        let body = Self::market_order_body(symbol, qty, side)?;
+        self.submit_order(&body).await
+    }
 
-        let resp = self
-            .client
-            .post(format!("{}/v2/orders", self.base_url))
-            .headers(self.headers())
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("Order request failed: {e}"))?;
-
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Order parse failed: {e}"))?;
-
-        Ok(OrderResult {
-            id: json["id"].as_str().unwrap_or("").to_string(),
-            symbol: json["symbol"].as_str().unwrap_or("").to_string(),
-            qty: json["qty"].as_str().unwrap_or("0").to_string(),
-            side: json["side"].as_str().unwrap_or("").to_string(),
-            status: json["status"].as_str().unwrap_or("").to_string(),
-        })
+    /// Place a market order by dollar notional. Alpaca documents `notional` as
+    /// mutually exclusive with `qty`, and limited to market/day orders.
+    pub async fn market_order_notional(
+        &self,
+        symbol: &str,
+        notional: f64,
+        side: &str,
+    ) -> Result<OrderResult, String> {
+        let body = Self::market_notional_order_body(symbol, notional, side)?;
+        self.submit_order(&body).await
     }
 
     /// Place a limit order.
@@ -676,14 +1070,7 @@ impl AlpacaBroker {
         limit_price: f64,
         tif: &str,
     ) -> Result<OrderResult, String> {
-        let body = serde_json::json!({
-            "symbol": symbol,
-            "qty": qty.to_string(),
-            "side": side,
-            "type": "limit",
-            "limit_price": format_order_price(limit_price),
-            "time_in_force": tif,
-        });
+        let body = Self::limit_order_body(symbol, qty, side, limit_price, tif)?;
         self.submit_order(&body).await
     }
 
@@ -696,14 +1083,7 @@ impl AlpacaBroker {
         stop_price: f64,
         tif: &str,
     ) -> Result<OrderResult, String> {
-        let body = serde_json::json!({
-            "symbol": symbol,
-            "qty": qty.to_string(),
-            "side": side,
-            "type": "stop",
-            "stop_price": format_order_price(stop_price),
-            "time_in_force": tif,
-        });
+        let body = Self::stop_order_body(symbol, qty, side, stop_price, tif)?;
         self.submit_order(&body).await
     }
 
@@ -717,15 +1097,7 @@ impl AlpacaBroker {
         limit_price: f64,
         tif: &str,
     ) -> Result<OrderResult, String> {
-        let body = serde_json::json!({
-            "symbol": symbol,
-            "qty": qty.to_string(),
-            "side": side,
-            "type": "stop_limit",
-            "stop_price": format_order_price(stop_price),
-            "limit_price": format_order_price(limit_price),
-            "time_in_force": tif,
-        });
+        let body = Self::stop_limit_order_body(symbol, qty, side, stop_price, limit_price, tif)?;
         self.submit_order(&body).await
     }
 
@@ -739,19 +1111,8 @@ impl AlpacaBroker {
         trail_percent: Option<f64>,
         tif: &str,
     ) -> Result<OrderResult, String> {
-        let mut body = serde_json::json!({
-            "symbol": symbol,
-            "qty": qty.to_string(),
-            "side": side,
-            "type": "trailing_stop",
-            "time_in_force": tif,
-        });
-        if let Some(tp) = trail_price {
-            body["trail_price"] = serde_json::json!(format_order_price(tp));
-        }
-        if let Some(tp) = trail_percent {
-            body["trail_percent"] = serde_json::json!(format_order_price(tp));
-        }
+        let body =
+            Self::trailing_stop_order_body(symbol, qty, side, trail_price, trail_percent, tif)?;
         self.submit_order(&body).await
     }
 
@@ -764,19 +1125,7 @@ impl AlpacaBroker {
         tp_price: f64,
         sl_price: f64,
     ) -> Result<OrderResult, String> {
-        // Round prices to valid increments (Alpaca rejects sub-penny for stocks > $1)
-        let tp_rounded = format_order_price(tp_price);
-        let sl_rounded = format_order_price(sl_price);
-        let body = serde_json::json!({
-            "symbol": symbol,
-            "qty": qty.to_string(),
-            "side": side,
-            "type": "market",
-            "time_in_force": "gtc",
-            "order_class": "bracket",
-            "take_profit": { "limit_price": tp_rounded },
-            "stop_loss": { "stop_price": sl_rounded },
-        });
+        let body = Self::bracket_order_body(symbol, qty, side, tp_price, sl_price)?;
         self.submit_order(&body).await
     }
 
@@ -791,19 +1140,7 @@ impl AlpacaBroker {
         sl_price: f64,
         sl_limit: Option<f64>,
     ) -> Result<OrderResult, String> {
-        let mut body = serde_json::json!({
-            "symbol": symbol,
-            "qty": qty.to_string(),
-            "side": side,
-            "type": "limit",
-            "time_in_force": "gtc",
-            "order_class": "oco",
-            "take_profit": { "limit_price": format_order_price(tp_price) },
-            "stop_loss": { "stop_price": format_order_price(sl_price) },
-        });
-        if let Some(sl_lim) = sl_limit {
-            body["stop_loss"]["limit_price"] = serde_json::json!(format_order_price(sl_lim));
-        }
+        let body = Self::oco_order_body(symbol, qty, side, tp_price, sl_price, sl_limit)?;
         self.submit_order(&body).await
     }
 
@@ -818,35 +1155,20 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Order request failed: {e}"))?;
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Order parse failed: {e}"))?;
-
-        if let Some(msg) = json["message"].as_str() {
-            if !msg.is_empty() {
-                return Err(format!("Order rejected: {msg}"));
-            }
-        }
-
-        Ok(OrderResult {
-            id: json["id"].as_str().unwrap_or("").to_string(),
-            symbol: json["symbol"].as_str().unwrap_or("").to_string(),
-            qty: json["qty"].as_str().unwrap_or("0").to_string(),
-            side: json["side"].as_str().unwrap_or("").to_string(),
-            status: json["status"].as_str().unwrap_or("").to_string(),
-        })
+        Self::order_response(resp, "Order").await
     }
 
     /// Get orders by status (open, closed, all).
     pub async fn get_orders(&self, status: &str, limit: u32) -> Result<Vec<OrderInfo>, String> {
+        let status = Self::normalize_order_query_status(status)?;
+        let limit = Self::normalize_order_query_limit(limit).to_string();
         let resp = self
             .client
             .get(format!("{}/v2/orders", self.base_url))
             .headers(self.headers())
             .query(&[
                 ("status", status),
-                ("limit", &limit.to_string()),
+                ("limit", limit.as_str()),
                 ("direction", "desc"),
                 ("nested", "true"), // include bracket legs (SL/TP child orders)
             ])
@@ -854,27 +1176,16 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Orders request failed: {e}"))?;
 
-        if !resp.status().is_success() {
-            let status_code = resp.status();
-            let _ = resp.text().await;
-            return Err(format!("Orders request failed: HTTP {status_code}"));
-        }
+        // Parse as generic Value first — Alpaca returns arrays for success and
+        // JSON objects with message/error for rejections.
+        let json = Self::json_or_error(resp, "Orders").await?;
 
-        // Parse as generic Value first — handle both array and error responses
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Orders parse failed: {e}"))?;
-
-        let orders = match json.as_array() {
-            Some(arr) => arr.iter().map(Self::parse_order_info).collect(),
-            None => {
-                // Alpaca might return an object with a message on error
-                tracing::warn!("Orders response was not an array: {}", json);
-                vec![]
-            }
+        let Some(arr) = json.as_array() else {
+            return Err(format!(
+                "Orders failed: expected array response, got {json}"
+            ));
         };
-        Ok(orders)
+        Ok(arr.iter().map(Self::parse_order_info).collect())
     }
 
     /// Modify a pending order.
@@ -886,57 +1197,48 @@ impl AlpacaBroker {
         stop_price: Option<f64>,
         trail: Option<f64>,
     ) -> Result<OrderResult, String> {
-        let mut body = serde_json::Map::new();
-        if let Some(q) = qty {
-            body.insert("qty".into(), serde_json::json!(q.to_string()));
+        if order_id.trim().is_empty() {
+            return Err("Modify order rejected: order_id is required".into());
         }
-        if let Some(lp) = limit_price {
-            body.insert(
-                "limit_price".into(),
-                serde_json::json!(format_order_price(lp)),
-            );
-        }
-        if let Some(sp) = stop_price {
-            body.insert(
-                "stop_price".into(),
-                serde_json::json!(format_order_price(sp)),
-            );
-        }
-        if let Some(t) = trail {
-            body.insert("trail".into(), serde_json::json!(t.to_string()));
-        }
+        let body = Self::modify_order_body(qty, limit_price, stop_price, trail)?;
 
         let resp = self
             .client
             .patch(format!("{}/v2/orders/{}", self.base_url, order_id))
             .headers(self.headers())
-            .json(&serde_json::Value::Object(body))
+            .json(&body)
             .send()
             .await
             .map_err(|e| format!("Modify order failed: {e}"))?;
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Modify parse failed: {e}"))?;
-
-        Ok(OrderResult {
-            id: json["id"].as_str().unwrap_or("").to_string(),
-            symbol: json["symbol"].as_str().unwrap_or("").to_string(),
-            qty: json["qty"].as_str().unwrap_or("0").to_string(),
-            side: json["side"].as_str().unwrap_or("").to_string(),
-            status: json["status"].as_str().unwrap_or("").to_string(),
-        })
+        Self::order_response(resp, "Modify order").await
     }
 
     /// Cancel a pending order.
     pub async fn cancel_order(&self, order_id: &str) -> Result<(), String> {
-        self.client
+        if order_id.trim().is_empty() {
+            return Err("Cancel order rejected: order_id is required".into());
+        }
+        let resp = self
+            .client
             .delete(format!("{}/v2/orders/{}", self.base_url, order_id))
             .headers(self.headers())
             .send()
             .await
             .map_err(|e| format!("Cancel order failed: {e}"))?;
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        if status.as_u16() == 404 {
+            return Ok(());
+        }
+        if !status.is_success() {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(msg) = alpaca_error_message(&json) {
+                    return Err(format!("Cancel order rejected: {msg}"));
+                }
+            }
+            return Err(format!("Cancel order failed: HTTP {status}"));
+        }
         Ok(())
     }
 
@@ -954,14 +1256,8 @@ impl AlpacaBroker {
         OrderInfo {
             id: o["id"].as_str().unwrap_or("").to_string(),
             symbol: o["symbol"].as_str().unwrap_or("").to_string(),
-            qty: o["qty"]
-                .as_str()
-                .unwrap_or_else(|| {
-                    // qty may be numeric in some API responses
-                    "0"
-                })
-                .to_string(),
-            filled_qty: o["filled_qty"].as_str().unwrap_or("0").to_string(),
+            qty: string_or_number(&o["qty"], "0"),
+            filled_qty: string_or_number(&o["filled_qty"], "0"),
             side: o["side"].as_str().unwrap_or("").to_string(),
             order_type: o["type"].as_str().unwrap_or("").to_string(),
             order_class: o["order_class"].as_str().map(|s| s.to_string()),
@@ -1135,54 +1431,70 @@ impl AlpacaBroker {
         &self,
         symbol: &str,
         qty: Option<f64>,
+        percentage: Option<f64>,
     ) -> Result<OrderResult, String> {
-        // Alpaca position endpoint uses symbol without slash (BTC/USD → BTCUSD)
-        let encoded_symbol = symbol.replace('/', "%2F");
-        let url = if let Some(q) = qty {
-            format!(
-                "{}/v2/positions/{}?qty={}",
-                self.base_url, encoded_symbol, q
-            )
-        } else {
-            format!("{}/v2/positions/{}", self.base_url, encoded_symbol)
-        };
+        Self::require_symbol(symbol, "Close position")?;
+        if qty.is_some() && percentage.is_some() {
+            return Err(
+                "Close position rejected: Alpaca accepts qty or percentage, not both".into(),
+            );
+        }
+        if let Some(q) = qty {
+            if !q.is_finite() || q <= 0.0 {
+                return Err("Close position rejected: qty must be positive".into());
+            }
+        }
+        if let Some(pct) = percentage {
+            if !pct.is_finite() || pct <= 0.0 || pct > 100.0 {
+                return Err("Close position rejected: percentage must be > 0 and <= 100".into());
+            }
+        }
 
-        let resp = self
-            .client
-            .delete(&url)
-            .headers(self.headers())
+        // Alpaca close-position endpoint: DELETE /v2/positions/{symbol_or_asset_id}
+        // with optional query `qty` OR `percentage` (mutually exclusive).
+        let encoded_symbol = symbol.replace('/', "%2F");
+        let url = format!("{}/v2/positions/{}", self.base_url, encoded_symbol);
+        let mut req = self.client.delete(&url).headers(self.headers());
+        let qty_query;
+        let pct_query;
+        if let Some(q) = qty {
+            qty_query = format!("{q:.9}");
+            req = req.query(&[("qty", qty_query.as_str())]);
+        } else if let Some(pct) = percentage {
+            pct_query = format!("{pct:.9}");
+            req = req.query(&[("percentage", pct_query.as_str())]);
+        }
+
+        let resp = req
             .send()
             .await
             .map_err(|e| format!("Close position failed: {e}"))?;
 
-        let status_code = resp.status();
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Close parse failed: {e}"))?;
-
-        if let Some(msg) = json["message"].as_str() {
-            if !msg.is_empty() {
-                return Err(format!("Close position rejected: {msg}"));
-            }
-        }
-        if !status_code.is_success() {
-            return Err(format!("Close position failed: HTTP {status_code}"));
-        }
-
-        Ok(OrderResult {
-            id: json["id"].as_str().unwrap_or("").to_string(),
-            symbol: json["symbol"].as_str().unwrap_or("").to_string(),
-            qty: json["qty"].as_str().unwrap_or("0").to_string(),
-            side: json["side"].as_str().unwrap_or("").to_string(),
-            status: json["status"].as_str().unwrap_or("").to_string(),
-        })
+        Self::order_response(resp, "Close position").await
     }
 
     pub async fn close_position(
         &self,
         symbol: &str,
         qty: Option<f64>,
+    ) -> Result<OrderResult, String> {
+        self.close_position_by_amount(symbol, qty, None).await
+    }
+
+    pub async fn close_position_percent(
+        &self,
+        symbol: &str,
+        percentage: f64,
+    ) -> Result<OrderResult, String> {
+        self.close_position_by_amount(symbol, None, Some(percentage))
+            .await
+    }
+
+    async fn close_position_by_amount(
+        &self,
+        symbol: &str,
+        qty: Option<f64>,
+        percentage: Option<f64>,
     ) -> Result<OrderResult, String> {
         let cancelled_orders = match self.cancel_open_orders_for_symbol(symbol).await {
             Ok(count) => count,
@@ -1199,11 +1511,11 @@ impl AlpacaBroker {
             tokio::time::sleep(std::time::Duration::from_millis(350)).await;
         }
 
-        match self.close_position_once(symbol, qty).await {
+        match self.close_position_once(symbol, qty, percentage).await {
             Ok(result) => Ok(result),
             Err(e) if cancelled_orders > 0 && Self::is_insufficient_qty_close_reject(&e) => {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                self.close_position_once(symbol, qty)
+                self.close_position_once(symbol, qty, percentage)
                     .await
                     .map_err(|retry_err| {
                         format!(
@@ -1225,20 +1537,29 @@ impl AlpacaBroker {
             .client
             .delete(format!("{}/v2/positions", self.base_url))
             .headers(self.headers())
+            .query(&[("cancel_orders", "true")])
             .send()
             .await
             .map_err(|e| format!("Close all failed: {e}"))?;
-        if !resp.status().is_success() {
-            let status_code = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
-                if let Some(msg) = json["message"].as_str() {
-                    if !msg.is_empty() {
-                        return Err(format!("Close all rejected: {msg}"));
-                    }
+        let status_code = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let json = serde_json::from_str::<serde_json::Value>(&body).ok();
+        if !status_code.is_success() {
+            if let Some(json) = json.as_ref() {
+                if let Some(msg) = alpaca_error_message(json) {
+                    return Err(format!("Close all rejected: {msg}"));
                 }
             }
             return Err(format!("Close all failed: HTTP {status_code}"));
+        }
+        if let Some(json) = json.as_ref() {
+            let failures = Self::close_all_positions_failures(json);
+            if !failures.is_empty() {
+                return Err(format!(
+                    "Close all partially failed: {}",
+                    failures.join("; ")
+                ));
+            }
         }
         Ok(())
     }
@@ -1255,10 +1576,7 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Asset request failed: {e}"))?;
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Asset parse failed: {e}"))?;
+        let json = Self::json_or_error(resp, "Asset").await?;
 
         Ok(AssetInfo {
             symbol: json["symbol"].as_str().unwrap_or("").to_string(),
@@ -1801,10 +2119,11 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Assets request failed: {e}"))?;
 
-        let json: Vec<serde_json::Value> = resp
-            .json()
-            .await
-            .map_err(|e| format!("Assets parse failed: {e}"))?;
+        let json = Self::json_or_error(resp, "Assets")
+            .await?
+            .as_array()
+            .cloned()
+            .ok_or_else(|| "Assets parse failed: expected array".to_string())?;
 
         Ok(json
             .iter()
@@ -2605,13 +2924,24 @@ impl AlpacaBroker {
 
     // ── Options Chain ───────────────────────────────────────────────
 
-    /// Fetch options chain from Alpaca options API.
+    /// Fetch options chain from Alpaca options APIs.
+    ///
+    /// Trading API docs expose `/v2/options/contracts` as the authoritative
+    /// contract list. Market-data snapshots are best-effort enrichment for
+    /// quotes/greeks and may be missing depending on entitlements/feed.
     pub async fn get_options_chain(
         &self,
         underlying_symbol: &str,
         expiry: &str,
     ) -> Result<Vec<OptionContract>, String> {
         self.rate_limiter.wait().await;
+
+        let contracts = self
+            .fetch_option_contracts(underlying_symbol, expiry)
+            .await?;
+        if contracts.is_empty() {
+            return Ok(contracts);
+        }
 
         let resp = self
             .client
@@ -2627,8 +2957,15 @@ impl AlpacaBroker {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let _ = resp.text().await;
-            return Err(format!("Options request failed: HTTP {status}"));
+            let text = resp.text().await.unwrap_or_default();
+            tracing::warn!(
+                "Alpaca option snapshot enrichment failed for {} {}: HTTP {} {}",
+                underlying_symbol,
+                expiry,
+                status,
+                text
+            );
+            return Ok(contracts);
         }
 
         let json: serde_json::Value = resp
@@ -2636,35 +2973,27 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Options parse failed: {e}"))?;
 
-        let mut contracts = Vec::new();
+        let mut contracts = contracts;
 
         if let Some(snapshots) = json["snapshots"].as_object() {
-            for (symbol, snap) in snapshots {
-                let latest_quote = &snap["latestQuote"];
-                let greeks = &snap["greeks"];
-
-                // Parse option symbol to extract strike, type, expiry
-                // Alpaca option symbols: AAPL240119C00150000 (symbol + YYMMDD + C/P + strike*1000)
-                let (strike, option_type, parsed_expiry) = Self::parse_option_symbol(symbol);
-
-                contracts.push(OptionContract {
-                    symbol: symbol.clone(),
-                    underlying: underlying_symbol.to_string(),
-                    strike,
-                    expiry: parsed_expiry,
-                    option_type,
-                    bid: latest_quote["bp"].as_f64().unwrap_or(0.0),
-                    ask: latest_quote["ap"].as_f64().unwrap_or(0.0),
-                    last_price: snap["latestTrade"]["p"].as_f64().unwrap_or(0.0),
-                    volume: snap["dailyBar"]["v"].as_f64().unwrap_or(0.0) as u64,
-                    open_interest: snap["openInterest"].as_u64().unwrap_or(0),
-                    implied_volatility: greeks["impliedVolatility"].as_f64().unwrap_or(0.0),
-                    delta: greeks["delta"].as_f64().unwrap_or(0.0),
-                    gamma: greeks["gamma"].as_f64().unwrap_or(0.0),
-                    theta: greeks["theta"].as_f64().unwrap_or(0.0),
-                    vega: greeks["vega"].as_f64().unwrap_or(0.0),
-                    rho: greeks["rho"].as_f64().unwrap_or(0.0),
-                });
+            for contract in &mut contracts {
+                if let Some(snap) = snapshots.get(&contract.symbol) {
+                    let latest_quote = &snap["latestQuote"];
+                    let greeks = &snap["greeks"];
+                    contract.bid = parse_f64_value(&latest_quote["bp"]);
+                    contract.ask = parse_f64_value(&latest_quote["ap"]);
+                    contract.last_price = parse_f64_value(&snap["latestTrade"]["p"]);
+                    contract.volume = parse_f64_value(&snap["dailyBar"]["v"]) as u64;
+                    contract.open_interest = snap["openInterest"]
+                        .as_u64()
+                        .unwrap_or_else(|| parse_f64_value(&snap["openInterest"]) as u64);
+                    contract.implied_volatility = parse_f64_value(&greeks["impliedVolatility"]);
+                    contract.delta = parse_f64_value(&greeks["delta"]);
+                    contract.gamma = parse_f64_value(&greeks["gamma"]);
+                    contract.theta = parse_f64_value(&greeks["theta"]);
+                    contract.vega = parse_f64_value(&greeks["vega"]);
+                    contract.rho = parse_f64_value(&greeks["rho"]);
+                }
             }
         }
 
@@ -2675,6 +3004,62 @@ impl AlpacaBroker {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         Ok(contracts)
+    }
+
+    async fn fetch_option_contracts(
+        &self,
+        underlying_symbol: &str,
+        expiry: &str,
+    ) -> Result<Vec<OptionContract>, String> {
+        let resp = self
+            .client
+            .get(format!("{}/v2/options/contracts", self.base_url))
+            .headers(self.headers())
+            .query(&[
+                ("underlying_symbols", underlying_symbol),
+                ("status", "active"),
+                ("expiration_date", expiry),
+                ("show_deliverables", "true"),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("Options contracts request failed: {e}"))?;
+        let json = Self::json_or_error(resp, "Options contracts").await?;
+        let Some(rows) = json["option_contracts"].as_array() else {
+            return Ok(Vec::new());
+        };
+        Ok(rows
+            .iter()
+            .map(|c| {
+                let symbol = c["symbol"].as_str().unwrap_or("").to_string();
+                let (parsed_strike, parsed_type, parsed_expiry) =
+                    Self::parse_option_symbol(&symbol);
+                OptionContract {
+                    symbol,
+                    underlying: c["underlying_symbol"]
+                        .as_str()
+                        .unwrap_or(underlying_symbol)
+                        .to_string(),
+                    strike: parse_f64_value(&c["strike_price"]).max(parsed_strike),
+                    expiry: c["expiration_date"]
+                        .as_str()
+                        .unwrap_or(&parsed_expiry)
+                        .to_string(),
+                    option_type: c["type"].as_str().unwrap_or(&parsed_type).to_string(),
+                    bid: 0.0,
+                    ask: 0.0,
+                    last_price: 0.0,
+                    volume: 0,
+                    open_interest: parse_f64_value(&c["open_interest"]) as u64,
+                    implied_volatility: 0.0,
+                    delta: 0.0,
+                    gamma: 0.0,
+                    theta: 0.0,
+                    vega: 0.0,
+                    rho: 0.0,
+                }
+            })
+            .collect())
     }
 
     /// Parse an OCC option symbol like "AAPL240119C00150000" into (strike, type, expiry).
@@ -3027,6 +3412,66 @@ impl AlpacaBroker {
         }))
     }
 
+    fn stock_snapshot_feeds(&self) -> Vec<Option<&'static str>> {
+        if self.sip_bar_feed_unavailable.load(Ordering::Relaxed) {
+            vec![Some("iex")]
+        } else {
+            vec![Some("sip"), Some("iex")]
+        }
+    }
+
+    fn parse_latest_quote_from_snapshot(symbol: &str, json: &serde_json::Value) -> LatestQuote {
+        let q = &json["latestQuote"];
+        let bid = parse_f64_value(&q["bp"]);
+        let ask = parse_f64_value(&q["ap"]);
+
+        // Latest trade can be the only useful price outside regular hours.
+        let t = &json["latestTrade"];
+        let trade_price = parse_f64_value(&t["p"]);
+        let trade_ts = t["t"].as_str().unwrap_or("");
+
+        let (final_bid, final_ask) = if bid > 0.0 && ask > 0.0 {
+            (bid, ask)
+        } else if trade_price > 0.0 {
+            (trade_price, trade_price)
+        } else {
+            (0.0, 0.0)
+        };
+
+        LatestQuote {
+            symbol: symbol.to_string(),
+            bid: final_bid,
+            ask: final_ask,
+            bid_size: parse_f64_value(&q["bs"]),
+            ask_size: parse_f64_value(&q["as"]),
+            spread: final_ask - final_bid,
+            timestamp: if trade_ts.is_empty() {
+                q["t"].as_str().unwrap_or("").to_string()
+            } else {
+                trade_ts.to_string()
+            },
+        }
+    }
+
+    fn parse_snapshot_data(symbol: &str, json: &serde_json::Value) -> SnapshotData {
+        let trade_price = parse_f64_value(&json["latestTrade"]["p"]);
+        let daily_volume = parse_f64_value(&json["dailyBar"]["v"]);
+        let prev_close = parse_f64_value(&json["prevDailyBar"]["c"]);
+        let regular_close = parse_f64_value(&json["dailyBar"]["c"]);
+        let last = if trade_price > 0.0 {
+            trade_price
+        } else {
+            regular_close
+        };
+        SnapshotData {
+            symbol: symbol.to_string(),
+            last,
+            prev_close,
+            daily_volume,
+            regular_close,
+        }
+    }
+
     // ── Latest Quote ────────────────────────────────────────────────
 
     /// Fetch the latest bid/ask quote for a symbol.
@@ -3066,57 +3511,38 @@ impl AlpacaBroker {
                 timestamp: q["t"].as_str().unwrap_or("").to_string(),
             })
         } else {
-            // Stocks/ETFs: use snapshot endpoint for pre/post-market data
-            // Snapshot returns: { latestTrade, latestQuote, minuteBar, dailyBar, prevDailyBar }
+            // Stocks/ETFs: use snapshot endpoint for quote + trade fallback.
+            // Prefer SIP when entitled, but fall back to IEX instead of failing
+            // watchlist/position UI on free-tier accounts.
             let url = format!("{}/v2/stocks/{}/snapshot", DATA_BASE, symbol);
-            let resp = self
-                .client
-                .get(&url)
-                .headers(self.headers())
-                .query(&[("feed", "iex")])
-                .send()
-                .await
-                .map_err(|e| format!("Snapshot request failed: {e}"))?;
-            if !resp.status().is_success() {
-                return Err(format!("Snapshot request failed: HTTP {}", resp.status()));
+            let mut last_error = String::new();
+            for feed in self.stock_snapshot_feeds() {
+                let mut req = self.client.get(&url).headers(self.headers());
+                if let Some(feed) = feed {
+                    req = req.query(&[("feed", feed)]);
+                }
+                let resp = req
+                    .send()
+                    .await
+                    .map_err(|e| format!("Snapshot request failed: {e}"))?;
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                if !status.is_success() {
+                    if feed == Some("sip") && Self::is_sip_bar_entitlement_failure(status, &text) {
+                        self.sip_bar_feed_unavailable.store(true, Ordering::Relaxed);
+                        last_error = format!("SIP snapshot unavailable: HTTP {status}");
+                        continue;
+                    }
+                    return Err(format!("Snapshot request failed: HTTP {status}"));
+                }
+                let json: serde_json::Value = serde_json::from_str(&text)
+                    .map_err(|e| format!("Snapshot parse failed: {e}"))?;
+                return Ok(Self::parse_latest_quote_from_snapshot(symbol, &json));
             }
-            let json: serde_json::Value = resp
-                .json()
-                .await
-                .map_err(|e| format!("Snapshot parse failed: {e}"))?;
-
-            // Latest quote (may be regular hours only on IEX)
-            let q = &json["latestQuote"];
-            let bid = q["bp"].as_f64().unwrap_or(0.0);
-            let ask = q["ap"].as_f64().unwrap_or(0.0);
-
-            // Latest trade includes pre/post-market on IEX
-            let t = &json["latestTrade"];
-            let trade_price = t["p"].as_f64().unwrap_or(0.0);
-            let trade_ts = t["t"].as_str().unwrap_or("");
-
-            // Use trade price as mid if quote is stale (outside market hours)
-            let (final_bid, final_ask) = if bid > 0.0 && ask > 0.0 {
-                (bid, ask)
-            } else if trade_price > 0.0 {
-                // No live quote (pre/post market) — use last trade as both bid and ask
-                (trade_price, trade_price)
+            Err(if last_error.is_empty() {
+                "Snapshot request failed: no feed attempted".to_string()
             } else {
-                (0.0, 0.0)
-            };
-
-            Ok(LatestQuote {
-                symbol: symbol.to_string(),
-                bid: final_bid,
-                ask: final_ask,
-                bid_size: q["bs"].as_f64().unwrap_or(0.0),
-                ask_size: q["as"].as_f64().unwrap_or(0.0),
-                spread: final_ask - final_bid,
-                timestamp: if trade_ts.is_empty() {
-                    q["t"].as_str().unwrap_or("").to_string()
-                } else {
-                    trade_ts.to_string()
-                },
+                last_error
             })
         }
     }
@@ -3160,44 +3586,37 @@ impl AlpacaBroker {
                 regular_close,
             })
         } else {
-            // Stock/ETF: v2/stocks/{symbol}/snapshot
+            // Stock/ETF snapshot. Prefer SIP for extended-hours trades when
+            // entitled, but degrade to IEX for free-tier accounts.
             let url = format!("{}/v2/stocks/{}/snapshot", DATA_BASE, symbol);
-            // Use SIP feed for snapshots — includes extended hours (pre/post market) trades.
-            // IEX feed only reports regular session trades, missing pre/post market entirely.
-            let resp = self
-                .client
-                .get(&url)
-                .headers(self.headers())
-                .query(&[("feed", "sip")])
-                .send()
-                .await
-                .map_err(|e| format!("Snapshot failed: {e}"))?;
-            if !resp.status().is_success() {
-                return Err(format!("Snapshot HTTP {}", resp.status()));
+            let mut last_error = String::new();
+            for feed in self.stock_snapshot_feeds() {
+                let mut req = self.client.get(&url).headers(self.headers());
+                if let Some(feed) = feed {
+                    req = req.query(&[("feed", feed)]);
+                }
+                let resp = req
+                    .send()
+                    .await
+                    .map_err(|e| format!("Snapshot failed: {e}"))?;
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                if !status.is_success() {
+                    if feed == Some("sip") && Self::is_sip_bar_entitlement_failure(status, &text) {
+                        self.sip_bar_feed_unavailable.store(true, Ordering::Relaxed);
+                        last_error = format!("SIP snapshot unavailable: HTTP {status}");
+                        continue;
+                    }
+                    return Err(format!("Snapshot HTTP {status}"));
+                }
+                let json: serde_json::Value =
+                    serde_json::from_str(&text).map_err(|e| format!("Snapshot parse: {e}"))?;
+                return Ok(Self::parse_snapshot_data(symbol, &json));
             }
-            let json: serde_json::Value = resp
-                .json()
-                .await
-                .map_err(|e| format!("Snapshot parse: {e}"))?;
-            // latestTrade.p = last trade price
-            let trade_price = json["latestTrade"]["p"].as_f64().unwrap_or(0.0);
-            // dailyBar.v = today's volume, dailyBar.c = today's last bar close
-            let daily_volume = json["dailyBar"]["v"].as_f64().unwrap_or(0.0);
-            // prevDailyBar.c = yesterday's close
-            let prev_close = json["prevDailyBar"]["c"].as_f64().unwrap_or(0.0);
-            // Use trade price for "last" (includes pre/post market)
-            let regular_close = json["dailyBar"]["c"].as_f64().unwrap_or(0.0);
-            let last = if trade_price > 0.0 {
-                trade_price
+            Err(if last_error.is_empty() {
+                "Snapshot failed: no feed attempted".to_string()
             } else {
-                regular_close
-            };
-            Ok(SnapshotData {
-                symbol: symbol.to_string(),
-                last,
-                prev_close,
-                daily_volume,
-                regular_close,
+                last_error
             })
         }
     }

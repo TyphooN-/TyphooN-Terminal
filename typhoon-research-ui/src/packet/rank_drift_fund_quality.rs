@@ -2,11 +2,7 @@ use super::context::SymbolResearchContext;
 use std::fmt::Write as _;
 use typhoon_engine::core::research as rx;
 
-pub fn write_rank_drift_fund_quality(
-    ctx: &SymbolResearchContext,
-    p: &mut String,
-    sym_upper: &str,
-) {
+pub fn write_rank_drift_fund_quality(ctx: &SymbolResearchContext, p: &mut String, sym_upper: &str) {
     if let Ok(Some(pr)) = rx::get_peadrank(ctx.conn, &sym_upper) {
         if pr.rank_label != "NO_DATA"
             && pr.rank_label != "INSUFFICIENT_DATA"

@@ -37,13 +37,7 @@ pub fn write_symbol_fractal_tail_stationarity_sections(
             let _ = writeln!(
                 p,
                 "- Returns {} · k={} · γ̂={:+.4} · tail α={:.3} · x_k={:.5} · x_2k={:.5} · x_4k={:.5}",
-                pk.bars_used,
-                pk.k_index,
-                pk.gamma_hat,
-                pk.tail_index,
-                pk.x_k,
-                pk.x_2k,
-                pk.x_4k
+                pk.bars_used, pk.k_index, pk.gamma_hat, pk.tail_index, pk.x_k, pk.x_2k, pk.x_4k
             );
             if !pk.note.is_empty() {
                 let _ = writeln!(p, "- Note: {}", pk.note);
@@ -506,13 +500,7 @@ pub fn write_symbol_fractal_tail_stationarity_sections(
             let _ = writeln!(
                 p,
                 "- Bars {} · θ={:.5} · μ={:.4} · σ={:.5} · half-life={} · resid sd={:.5} · R²={:.3}",
-                ou.bars_used,
-                ou.theta,
-                ou.mu,
-                ou.sigma,
-                hl_s,
-                ou.residual_sd,
-                ou.r_squared
+                ou.bars_used, ou.theta, ou.mu, ou.sigma, hl_s, ou.residual_sd, ou.r_squared
             );
             if !ou.note.is_empty() {
                 let _ = writeln!(p, "- Note: {}", ou.note);
