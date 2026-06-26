@@ -3986,12 +3986,17 @@ impl AlpacaBroker {
         symbols: &[String],
         context: &str,
     ) -> Result<Vec<String>, String> {
-        let out: Vec<String> = symbols
-            .iter()
-            .map(|symbol| symbol.trim())
-            .filter(|symbol| !symbol.is_empty())
-            .map(|symbol| symbol.to_string())
-            .collect();
+        let mut seen = HashSet::with_capacity(symbols.len());
+        let mut out = Vec::with_capacity(symbols.len());
+        for symbol in symbols {
+            let symbol = symbol.trim().to_ascii_uppercase();
+            if symbol.is_empty() {
+                continue;
+            }
+            if seen.insert(symbol.clone()) {
+                out.push(symbol);
+            }
+        }
         if out.is_empty() {
             return Err(format!(
                 "{context} rejected: at least one symbol is required"

@@ -1317,9 +1317,11 @@ fn aggregate_weekly_to_monthly_empty() {
 #[test]
 fn watchlist_bodies_trim_and_validate_inputs_before_http() {
     let symbols = vec![
-        " AAPL ".to_string(),
+        " aapl ".to_string(),
+        "AAPL".to_string(),
         "".to_string(),
-        " BTC/USD ".to_string(),
+        " btc/usd ".to_string(),
+        "BTC/USD".to_string(),
     ];
     let create = AlpacaBroker::create_watchlist_body("  Core  ", &symbols).unwrap();
     assert_eq!(create["name"], "Core");
