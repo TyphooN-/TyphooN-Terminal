@@ -64,7 +64,8 @@ pub(crate) use equity_merge::{
     CHART_SOURCE_ORDER, cache_source_label, chart_equity_low_timeframe_requires_native_source,
     chart_equity_native_source_tag, chart_equity_source_rank, chart_forming_bar_allowed,
     chart_load_merged_equity_bars_from_cache, chart_log_merged_cache_load_done,
-    chart_log_merged_cache_load_start, chart_merged_equity_cache_key, chart_missing_data_cache_key,
+    chart_log_merged_cache_load_start, chart_merged_equity_cache_key,
+    chart_merged_source_bar_counts, chart_missing_data_cache_key,
     chart_prefers_fresh_equity_source, set_chart_merge_primary_broker,
 };
 

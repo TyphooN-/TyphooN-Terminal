@@ -940,6 +940,37 @@ pub(crate) fn cache_source_label(source: &str) -> &'static str {
         .unwrap_or("Source")
 }
 
+pub(crate) fn chart_merged_source_bar_counts(
+    cache: &SqliteCache,
+    symbol: &str,
+    timeframe: &str,
+) -> Vec<(&'static str, usize)> {
+    let low_tf_native: [&'static str; 1] = [chart_equity_native_source_tag()];
+    let broad_sources: [&'static str; 4] = ["yahoo-chart", "alpaca", "kraken-equities", "default"];
+    let sources: &[&'static str] = if chart_equity_low_timeframe_requires_native_source(timeframe) {
+        &low_tf_native
+    } else {
+        &broad_sources
+    };
+
+    sources
+        .iter()
+        .filter_map(|source| {
+            chart_source_cache_keys(source, symbol, timeframe)
+                .into_iter()
+                .find_map(|key| {
+                    let raw = cache.get_bars_raw(&key).ok().flatten()?;
+                    if raw.is_empty() || !chart_source_bars_match_timeframe(source, timeframe, &raw)
+                    {
+                        None
+                    } else {
+                        Some((*source, raw.len()))
+                    }
+                })
+        })
+        .collect()
+}
+
 // Source / cache key helpers (O(1) dedup, candidate for chart_sources.rs submodule extraction)
 pub(crate) fn chart_merged_equity_cache_key(symbol: &str, timeframe: &str) -> String {
     let symbol = normalize_market_data_symbol(symbol)

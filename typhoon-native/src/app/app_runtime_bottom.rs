@@ -1,5 +1,50 @@
 use super::*;
 
+fn merged_source_counts_suffix(
+    cache: Option<&SqliteCache>,
+    symbol: &str,
+    timeframe: Timeframe,
+) -> String {
+    let Some(cache) = cache else {
+        return String::new();
+    };
+    let counts = chart_merged_source_bar_counts(cache, symbol, timeframe.cache_suffix());
+    if counts.is_empty() {
+        return String::new();
+    }
+    let parts: Vec<String> = counts
+        .into_iter()
+        .map(|(source, count)| format!("{} {}", cache_source_label(source), count))
+        .collect();
+    format!(" [inputs: {}]", parts.join(" | "))
+}
+
+fn chart_data_source_status_label(chart: &ChartState, cache: Option<&SqliteCache>) -> String {
+    if chart.primary_source.is_empty() {
+        return "Data: unresolved".to_string();
+    }
+
+    let effective = if chart.primary_source == "merged" {
+        "Merged"
+    } else {
+        cache_source_label(chart.primary_source)
+    };
+    let mode = if chart.source_override.is_empty() {
+        "Auto"
+    } else {
+        "Forced"
+    };
+    let mut label = format!("Data: {mode} → {effective}");
+    if chart.primary_source == "merged" {
+        label.push_str(&merged_source_counts_suffix(
+            cache,
+            &chart.symbol,
+            chart.timeframe,
+        ));
+    }
+    label
+}
+
 #[allow(deprecated)]
 impl TyphooNApp {
     pub(super) fn render_bottom_panels(&mut self, ctx: &egui::Context) {
@@ -268,13 +313,7 @@ impl TyphooNApp {
                     let data_source = self
                         .charts
                         .get(self.mtf_focused.unwrap_or(self.active_tab))
-                        .map(|c| {
-                            if c.primary_source.is_empty() {
-                                "Data: unresolved".to_string()
-                            } else {
-                                format!("Data: Auto → {}", cache_source_label(c.primary_source))
-                            }
-                        })
+                        .map(|c| chart_data_source_status_label(c, self.cache.as_deref()))
                         .unwrap_or_else(|| "Data: unresolved".to_string());
                     ui.label(
                         egui::RichText::new("TyphooN Terminal")

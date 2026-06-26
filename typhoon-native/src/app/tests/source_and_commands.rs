@@ -762,6 +762,39 @@ fn chart_persists_merged_equity_bars_under_merged_cache_key() {
 }
 
 #[test]
+fn chart_merged_source_bar_counts_reports_available_input_sources() {
+    let db_path = std::env::temp_dir().join(format!(
+        "typhoon-merged-source-counts-test-{}-{}.db",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let cache = SqliteCache::open(&db_path).unwrap();
+    cache
+        .put_bars(
+            "yahoo-chart:WOK:1Day",
+            r#"[
+                {"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10.0},
+                {"timestamp":"2024-01-02T00:00:00+00:00","open":2.0,"high":3.0,"low":1.5,"close":2.5,"volume":20.0},
+                {"timestamp":"2024-01-03T00:00:00+00:00","open":3.0,"high":4.0,"low":2.5,"close":3.5,"volume":30.0}
+            ]"#,
+        )
+        .unwrap();
+    cache
+        .put_bars(
+            "alpaca:WOK:1Day",
+            r#"[
+                {"timestamp":"2024-01-02T00:00:00+00:00","open":2.1,"high":3.1,"low":1.6,"close":2.6,"volume":21.0},
+                {"timestamp":"2024-01-03T00:00:00+00:00","open":3.1,"high":4.1,"low":2.6,"close":3.6,"volume":31.0}
+            ]"#,
+        )
+        .unwrap();
+
+    let counts = chart_merged_source_bar_counts(&cache, "WOK.EQ", "1Day");
+    assert_eq!(counts, vec![("yahoo-chart", 3), ("alpaca", 2)]);
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn chart_source_override_loads_requested_provider_rows() {
     let db_path = std::env::temp_dir().join(format!(
         "typhoon-source-override-test-{}-{}.db",
