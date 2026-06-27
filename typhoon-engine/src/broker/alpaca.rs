@@ -319,6 +319,7 @@ fn normalize_account_activity_types_path_segment(
     if trimmed.is_empty() {
         return Ok(None);
     }
+    let mut seen = HashSet::new();
     let mut types = Vec::new();
     for activity_type in trimmed.split(',') {
         let activity_type = activity_type.trim();
@@ -331,7 +332,10 @@ fn normalize_account_activity_types_path_segment(
         {
             return Err("Invalid activity type characters".to_string());
         }
-        types.push(activity_type.to_ascii_uppercase());
+        let activity_type = activity_type.to_ascii_uppercase();
+        if seen.insert(activity_type.clone()) {
+            types.push(activity_type);
+        }
     }
     Ok(Some(alpaca_path_segment(&types.join(","))))
 }

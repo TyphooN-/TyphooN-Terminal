@@ -619,6 +619,11 @@ fn account_activity_path_and_page_size_policy_normalizes_inputs() {
         Some("FILL%2CDIV_CGL".to_string())
     );
     assert_eq!(
+        normalize_account_activity_types_path_segment("fill,FILL, div_cgl, Div_Cgl").unwrap(),
+        Some("FILL%2CDIV_CGL".to_string()),
+        "activity path components are deduped with expected O(1) membership while preserving first-seen order"
+    );
+    assert_eq!(
         normalize_account_activity_types_path_segment(" ").unwrap(),
         None
     );
