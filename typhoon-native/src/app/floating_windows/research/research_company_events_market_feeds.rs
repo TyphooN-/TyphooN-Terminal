@@ -20,7 +20,6 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([780.0, 560.0])
-                .max_size([780.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -253,7 +252,6 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([760.0, 480.0])
-                .max_size([760.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         if ui
@@ -415,7 +413,6 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([700.0, 460.0])
-                .max_size([700.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -600,7 +597,6 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([520.0, 420.0])
-                .max_size([520.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -692,7 +688,6 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([820.0, 520.0])
-                .max_size([820.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -782,7 +777,6 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([720.0, 460.0])
-                .max_size([720.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -939,7 +933,6 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([960.0, 620.0])
-                .max_size([960.0, 640.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -1073,7 +1066,6 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([680.0, 560.0])
-                .max_size([680.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         if ui.add_enabled(!self.commodities_loading, egui::Button::new("Refresh").fill(BTN_BLUE)).clicked() {
@@ -1129,7 +1121,6 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([520.0, 620.0])
-                .max_size([520.0, 640.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));

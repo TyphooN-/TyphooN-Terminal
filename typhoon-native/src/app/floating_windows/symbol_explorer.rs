@@ -37,7 +37,6 @@ impl TyphooNApp {
                 .open(&mut show_symbols)
                 .resizable(true)
                 .default_size([680.0, 650.0])
-                .max_size([680.0, 640.0])
                 .show(ctx, |ui| {
                     let sym_green = egui::Color32::from_rgb(46, 204, 113);
                     let sym_blue = egui::Color32::from_rgb(52, 152, 219);

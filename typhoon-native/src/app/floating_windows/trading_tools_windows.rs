@@ -488,7 +488,6 @@ impl TyphooNApp {
                 .open(&mut self.show_indicator_compiler)
                 .resizable(true)
                 .default_size([650.0, 550.0])
-                .max_size([650.0, 560.0])
                 .show(ctx, |ui| {
                     let cc_green = egui::Color32::from_rgb(46, 204, 113);
                     let cc_red = egui::Color32::from_rgb(231, 76, 60);

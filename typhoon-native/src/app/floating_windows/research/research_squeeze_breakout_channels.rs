@@ -63,7 +63,6 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([720.0, 480.0])
-                .max_size([720.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         if ui

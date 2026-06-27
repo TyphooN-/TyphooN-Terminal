@@ -344,7 +344,6 @@ impl TyphooNApp {
                         .open(&mut self.show_fundamentals)
                         .resizable(true)
                         .default_size([520.0, 480.0])
-                        .max_size([900.0, 640.0])
                         .show(ctx, |ui| {
                             let tickers = fund_tickers.clone();
 
@@ -1225,7 +1224,6 @@ impl TyphooNApp {
                 .open(&mut self.show_earnings_calendar)
                 .resizable(true)
                 .default_size([500.0, 400.0])
-                .max_size([500.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(

@@ -92,7 +92,6 @@ impl TyphooNApp {
                         .open(&mut open)
                         .resizable(true)
                         .default_size([980.0, 680.0])
-                        .max_size([980.0, 640.0])
                         .show(ctx, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label("Symbols:");

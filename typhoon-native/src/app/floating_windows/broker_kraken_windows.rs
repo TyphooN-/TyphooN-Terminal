@@ -73,7 +73,6 @@ impl TyphooNApp {
             egui::Window::new("Kraken Open Orders")
                 .open(&mut self.show_kraken_open_orders)
                 .default_size([1000.0, 420.0])
-                .max_size([1000.0, 560.0])
                 .resizable(true)
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {

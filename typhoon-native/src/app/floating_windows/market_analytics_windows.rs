@@ -14,7 +14,6 @@ impl TyphooNApp {
                 .open(&mut self.show_dividend_calendar)
                 .resizable(true)
                 .default_size([500.0, 400.0])
-                .max_size([500.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
@@ -85,7 +84,6 @@ impl TyphooNApp {
                 .open(&mut self.show_analyst)
                 .resizable(true)
                 .default_size([480.0, 340.0])
-                .max_size([480.0, 560.0])
                 .show(ctx, |ui| {
                     let sym = self
                         .charts
@@ -794,7 +792,6 @@ impl TyphooNApp {
                 .open(&mut self.show_sector_heatmap)
                 .resizable(true)
                 .default_size([500.0, 400.0])
-                .max_size([500.0, 560.0])
                 .show(ctx, |ui| {
                     let sectors = typhoon_engine::core::screener::compute_sector_heatmap(&scoped);
                     ui.label(
@@ -853,7 +850,6 @@ impl TyphooNApp {
                 .open(&mut self.show_dividends)
                 .resizable(true)
                 .default_size([700.0, 400.0])
-                .max_size([700.0, 560.0])
                 .show(ctx, |ui| {
                     let divs = typhoon_engine::core::screener::screen_dividend_stocks(&scoped);
                     ui.label(
@@ -1155,7 +1151,6 @@ impl TyphooNApp {
             egui::Window::new("Statistical Arbitrage Pairs")
                         .open(&mut self.show_stat_arb)
                         .resizable(true).default_size([600.0, 400.0])
-        .max_size([600.0, 560.0])
                         .show(ctx, |ui| {
                             ui.label(egui::RichText::new("Correlated Pairs — Spread Z-Score").strong());
                             ui.separator();

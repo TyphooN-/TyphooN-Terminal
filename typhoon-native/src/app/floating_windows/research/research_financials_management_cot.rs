@@ -20,7 +20,6 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([960.0, 580.0])
-                .max_size([960.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -287,7 +286,6 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([920.0, 560.0])
-                .max_size([920.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         if ui.add(egui::Button::new("Fetch").fill(BTN_MG)).clicked() {

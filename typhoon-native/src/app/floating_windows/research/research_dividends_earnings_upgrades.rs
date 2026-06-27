@@ -86,7 +86,6 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([720.0, 440.0])
-                .max_size([720.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
@@ -155,7 +154,6 @@ impl TyphooNApp {
                 .open(&mut open)
                 .resizable(true)
                 .default_size([720.0, 500.0])
-                .max_size([720.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));

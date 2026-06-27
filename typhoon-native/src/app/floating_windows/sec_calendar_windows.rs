@@ -825,7 +825,6 @@ impl TyphooNApp {
                 .open(&mut self.show_unusual_volume)
                 .resizable(true)
                 .default_size([500.0, 400.0])
-                .max_size([500.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
@@ -1412,7 +1411,6 @@ impl TyphooNApp {
                 .open(&mut self.show_congress)
                 .resizable(true)
                 .default_size([750.0, 450.0])
-                .max_size([750.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(

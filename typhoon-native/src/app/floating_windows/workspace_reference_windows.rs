@@ -432,7 +432,6 @@ impl TyphooNApp {
                 .open(&mut self.show_help)
                 .resizable(true)
                 .default_size([720.0, 560.0])
-                .max_size([720.0, 560.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.heading("Help");

@@ -16,7 +16,6 @@ impl TyphooNApp {
             .open(&mut self.show_company_info_window)
             .resizable(true)
             .default_size([520.0, 420.0])
-            .max_size([720.0, 680.0])
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])

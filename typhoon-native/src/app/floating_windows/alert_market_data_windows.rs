@@ -222,7 +222,6 @@ impl TyphooNApp {
                 .open(&mut self.show_world_indices)
                 .resizable(true)
                 .default_size([620.0, 480.0])
-                .max_size([620.0, 560.0])
                 .show(ctx, |ui| {
                     ui.label(egui::RichText::new("World Stock Indices & ETFs").strong());
                     if ui.small_button("Refresh").clicked() {
@@ -359,7 +358,6 @@ impl TyphooNApp {
                 .open(&mut self.show_crypto_top50)
                 .resizable(true)
                 .default_size([700.0, 550.0])
-                .max_size([700.0, 560.0])
                 .show(ctx, |ui| {
                     ui.label(egui::RichText::new("Top 50 Cryptocurrencies by Market Cap").strong());
                     if ui.small_button("Refresh").clicked() {
@@ -465,7 +463,6 @@ impl TyphooNApp {
                 .open(&mut self.show_forex_matrix)
                 .resizable(true)
                 .default_size([550.0, 380.0])
-                .max_size([550.0, 560.0])
                 .show(ctx, |ui| {
                     ui.label(egui::RichText::new("Major Forex Pairs").strong());
                     if ui.small_button("Refresh").clicked() {

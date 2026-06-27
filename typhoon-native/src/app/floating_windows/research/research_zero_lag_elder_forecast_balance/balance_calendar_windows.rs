@@ -258,7 +258,6 @@ impl TyphooNApp {
             .open(&mut open)
             .resizable(true)
             .default_size([780.0, 480.0])
-            .max_size([780.0, 560.0])
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.expcal_win_tab, 0, "Market calendar");
