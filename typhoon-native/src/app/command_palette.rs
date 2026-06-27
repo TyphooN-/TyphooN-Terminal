@@ -78,18 +78,6 @@ impl TyphooNApp {
                 self.log
                     .push_back(LogEntry::info(format!("MTF grid: {}", self.mtf_enabled)));
             }
-            "MTF_2X2" => {
-                self.setup_mtf_grid(2, 4);
-            }
-            "MTF_3X3" => {
-                self.setup_mtf_grid(3, 9);
-            }
-            "MTF_4X4" => {
-                self.setup_mtf_grid(4, 16);
-            }
-            "MTF_4X3" => {
-                self.setup_mtf_grid(4, 12);
-            }
             "RELOAD" => {
                 if let Some(ref cache) = self.cache.clone() {
                     let mut retry_first_chart = false;

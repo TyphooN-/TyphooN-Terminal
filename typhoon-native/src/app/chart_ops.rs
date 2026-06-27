@@ -353,6 +353,7 @@ pub(super) fn open_chart_preload_indices(charts: &[ChartState]) -> Vec<usize> {
         .collect()
 }
 
+#[cfg(test)]
 pub(super) fn mtf_visible_chart_groups(
     charts: &[ChartState],
     visible: &[bool],
@@ -1319,21 +1320,6 @@ impl TyphooNApp {
         }
     }
 
-    /// Set up MTF grid with N columns. Creates one chart per supported MTF timeframe
-    /// for the current symbol; the legacy `target` is ignored except for menu compatibility.
-    pub(super) fn setup_mtf_grid(&mut self, cols: usize, _target: usize) {
-        let sym = self.symbol_input.trim().to_string();
-        self.ensure_mtf_grid_for_symbol(&sym, true);
-        self.mtf_cols = cols;
-        self.mtf_enabled = true;
-        let symbol_count = mtf_visible_chart_groups(&self.charts, &self.mtf_visible).len();
-        self.log.push_back(LogEntry::info(format!(
-            "MTF grid: {} col(s), {} symbol grid(s), {} supported TFs per symbol",
-            cols,
-            symbol_count,
-            MTF_GRID_TIMEFRAMES.len()
-        )));
-    }
 
     /// Build trade overlay for a chart: broker fills as arrows + open position lines.
     /// Aggregates same-price entries at same bar into single markers.

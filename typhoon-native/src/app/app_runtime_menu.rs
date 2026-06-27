@@ -1,6 +1,5 @@
 use super::*;
 use crate::app::app_runtime_tabs::tab_bar_chart_indices;
-use crate::app::chart_ops::MTF_GRID_TIMEFRAMES;
 
 #[allow(deprecated)]
 impl TyphooNApp {
@@ -30,20 +29,6 @@ impl TyphooNApp {
                                 self.mtf_enabled = !self.mtf_enabled;
                                 ui.close();
                             }
-                            ui.menu_button("Grid Layout", |ui| {
-                                if ui.button("2 columns per symbol").clicked() {
-                                    self.setup_mtf_grid(2, MTF_GRID_TIMEFRAMES.len());
-                                    ui.close();
-                                }
-                                if ui.button("3 columns per symbol").clicked() {
-                                    self.setup_mtf_grid(3, MTF_GRID_TIMEFRAMES.len());
-                                    ui.close();
-                                }
-                                if ui.button("4 columns per symbol").clicked() {
-                                    self.setup_mtf_grid(4, MTF_GRID_TIMEFRAMES.len());
-                                    ui.close();
-                                }
-                            });
                             // MTF tab visibility checkboxes
                             if tab_indices.len() > 1 {
                                 ui.menu_button("MTF Tabs", |ui| {

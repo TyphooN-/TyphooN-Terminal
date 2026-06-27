@@ -338,6 +338,11 @@ impl TyphooNApp {
                     }
                     if let Some(idx) = switch_to {
                         self.active_tab = idx;
+                        // Left-clicking a tab focuses that chart as a single chart — the
+                        // same as double-clicking its cell in the MTF grid. Right-click
+                        // curates grid inclusion; left-click navigates. (No-op when
+                        // already in single-chart mode.)
+                        self.mtf_enabled = false;
                         // Sync symbol_input to the clicked tab's symbol.
                         // Without this, clicking a timeframe button after switching tabs
                         // reloads the OLD symbol (from the text box) instead of the tab's symbol.

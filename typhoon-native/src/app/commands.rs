@@ -64,22 +64,6 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "Toggle multi-timeframe grid",
     },
     Command {
-        name: "MTF_2X2",
-        desc: "2×2 grid (4 charts)",
-    },
-    Command {
-        name: "MTF_3X3",
-        desc: "3×3 grid (9 charts)",
-    },
-    Command {
-        name: "MTF_4X4",
-        desc: "4×4 grid (16 charts)",
-    },
-    Command {
-        name: "MTF_4X3",
-        desc: "4×3 grid (12 charts)",
-    },
-    Command {
         name: "INDICATORS",
         desc: "Toggle indicator settings panel",
     },
