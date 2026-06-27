@@ -312,12 +312,10 @@ fn normalize_option_expiration_date(expiry: &str) -> Result<String, String> {
     Ok(expiry.to_string())
 }
 
-fn normalize_account_activity_types_path_segment(
-    activity_types: &str,
-) -> Result<Option<String>, String> {
+fn normalize_account_activity_types(activity_types: &str) -> Result<Vec<String>, String> {
     let trimmed = activity_types.trim();
     if trimmed.is_empty() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let mut seen = HashSet::new();
     let mut types = Vec::new();
@@ -337,7 +335,24 @@ fn normalize_account_activity_types_path_segment(
             types.push(activity_type);
         }
     }
-    Ok(Some(alpaca_path_segment(&types.join(","))))
+    Ok(types)
+}
+
+fn account_activity_request_target(
+    activity_types: &str,
+) -> Result<(Option<String>, Vec<(&'static str, String)>), String> {
+    let activity_types = normalize_account_activity_types(activity_types)?;
+    let path_activity_type = if activity_types.len() == 1 {
+        Some(alpaca_path_segment(&activity_types[0]))
+    } else {
+        None
+    };
+    let query = if activity_types.len() > 1 {
+        vec![("activity_types", activity_types.join(","))]
+    } else {
+        Vec::new()
+    };
+    Ok((path_activity_type, query))
 }
 
 fn normalize_account_activities_page_size(limit: u32) -> String {
@@ -3822,10 +3837,12 @@ impl AlpacaBroker {
         activity_types: &str,
         limit: u32,
     ) -> Result<Vec<AccountActivity>, String> {
-        let activity_types = normalize_account_activity_types_path_segment(activity_types)?;
+        let (path_activity_type, mut query) = account_activity_request_target(activity_types)?;
         let page_size = normalize_account_activities_page_size(limit);
-        let url = if let Some(activity_types) = activity_types {
-            format!("{}/v2/account/activities/{}", self.base_url, activity_types)
+        query.push(("direction", "desc".to_string()));
+        query.push(("page_size", page_size));
+        let url = if let Some(activity_type) = path_activity_type {
+            format!("{}/v2/account/activities/{}", self.base_url, activity_type)
         } else {
             format!("{}/v2/account/activities", self.base_url)
         };
@@ -3834,7 +3851,7 @@ impl AlpacaBroker {
             .client
             .get(&url)
             .headers(self.headers())
-            .query(&[("direction", "desc"), ("page_size", page_size.as_str())])
+            .query(&query)
             .send()
             .await
             .map_err(|e| format!("Activities request failed: {e}"))?;

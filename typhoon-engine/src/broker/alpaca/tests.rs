@@ -613,22 +613,30 @@ fn alpaca_market_data_urls_encode_stock_path_symbols() {
 }
 
 #[test]
-fn account_activity_path_and_page_size_policy_normalizes_inputs() {
+fn account_activity_target_and_page_size_policy_normalizes_inputs() {
     assert_eq!(
-        normalize_account_activity_types_path_segment(" fill, div_cgl ").unwrap(),
-        Some("FILL%2CDIV_CGL".to_string())
+        normalize_account_activity_types("fill,FILL, div_cgl, Div_Cgl").unwrap(),
+        vec!["FILL".to_string(), "DIV_CGL".to_string()],
+        "activity types are deduped with expected O(1) membership while preserving first-seen order"
     );
+
+    let (single_path, single_query) = account_activity_request_target(" fill ").unwrap();
+    assert_eq!(single_path, Some("FILL".to_string()));
+    assert!(single_query.is_empty());
+
+    let (multi_path, multi_query) = account_activity_request_target(" fill, div_cgl ").unwrap();
+    assert_eq!(multi_path, None);
     assert_eq!(
-        normalize_account_activity_types_path_segment("fill,FILL, div_cgl, Div_Cgl").unwrap(),
-        Some("FILL%2CDIV_CGL".to_string()),
-        "activity path components are deduped with expected O(1) membership while preserving first-seen order"
+        multi_query,
+        vec![("activity_types", "FILL,DIV_CGL".to_string())]
     );
-    assert_eq!(
-        normalize_account_activity_types_path_segment(" ").unwrap(),
-        None
-    );
-    assert!(normalize_account_activity_types_path_segment("FILL,,DIV").is_err());
-    assert!(normalize_account_activity_types_path_segment("FILL/../../ORDERS").is_err());
+
+    let (all_path, all_query) = account_activity_request_target(" ").unwrap();
+    assert_eq!(all_path, None);
+    assert!(all_query.is_empty());
+
+    assert!(account_activity_request_target("FILL,,DIV").is_err());
+    assert!(account_activity_request_target("FILL/../../ORDERS").is_err());
     assert_eq!(normalize_account_activities_page_size(0), "1");
     assert_eq!(normalize_account_activities_page_size(50), "50");
     assert_eq!(normalize_account_activities_page_size(999), "100");
