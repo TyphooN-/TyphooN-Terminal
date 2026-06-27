@@ -19,10 +19,10 @@ impl TyphooNApp {
         // the ScrollArea makes the strip scroll (mouse wheel + scrollbar).
         let tab_indices = tab_bar_chart_indices(&self.charts);
         // In MTF mode the tab strip doubles as the grid selector: each tab is
-        // highlighted by whether it's included in the grid (`mtf_visible`), clicking a
-        // tab toggles that inclusion instead of switching, and tabs can't be closed
-        // (that's what the central grid + right-panel dots render). `in_grid` rides in
-        // the snapshot so the draw loop needs no `self` borrow.
+        // highlighted by whether it's included in the grid (`mtf_visible`). Left-click
+        // still switches to the chart (and × closes it); right-click toggles grid
+        // inclusion. `in_grid` rides in the snapshot so the draw loop needs no `self`
+        // borrow.
         let mtf_on = self.mtf_enabled;
         let tab_snapshots: Vec<(usize, String, bool, bool, bool)> = tab_indices
             .iter()
@@ -202,16 +202,15 @@ impl TyphooNApp {
                                         tab_text,
                                     );
 
-                                    // Click handling. In MTF mode the strip is the grid
-                                    // selector — click toggles this tab's inclusion and
-                                    // no close button is drawn (tabs are locked until
-                                    // MTF is turned off). Otherwise it's the normal
-                                    // switch / close behaviour.
-                                    if mtf_on {
-                                        if tab_resp.clicked() {
-                                            toggle_grid = Some(idx);
-                                        }
-                                    } else if n_tabs > 1 {
+                                    // Left-click switches to the chart and the × closes
+                                    // it, exactly as in single-chart mode. In MTF mode a
+                                    // right-click toggles whether the tab is included in
+                                    // the grid (the accent outline above reflects it) —
+                                    // navigate with left, curate the grid with right.
+                                    if mtf_on && tab_resp.secondary_clicked() {
+                                        toggle_grid = Some(idx);
+                                    }
+                                    if n_tabs > 1 {
                                         let close_rect = egui::Rect::from_min_size(
                                             egui::pos2(
                                                 tab_rect.right() - 14.0,
@@ -243,8 +242,8 @@ impl TyphooNApp {
                                         switch_to = Some(idx);
                                     }
 
-                                    // Middle-click to close tab (locked in MTF mode).
-                                    if tab_resp.middle_clicked() && n_tabs > 1 && !mtf_on {
+                                    // Middle-click to close tab.
+                                    if tab_resp.middle_clicked() && n_tabs > 1 {
                                         close_tab = Some(idx);
                                     }
 
