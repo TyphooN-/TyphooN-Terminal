@@ -95,10 +95,7 @@ pub(crate) fn kraken_xstock_fundamental_symbol(
 }
 
 pub(crate) fn cache_source_from_key(key: &str) -> &'static str {
-    if key.starts_with("alpaca:")
-        || key.starts_with("paper_TyphooN:")
-        || key.starts_with("alpaca_paper_TyphooN:")
-    {
+    if key.starts_with("alpaca:") {
         "alpaca"
     } else if key.starts_with("kraken-equities:") {
         "kraken-equities"

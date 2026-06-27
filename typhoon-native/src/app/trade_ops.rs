@@ -1769,22 +1769,16 @@ impl TyphooNApp {
         for tf in timeframes {
             for source in sources {
                 for candidate in &symbols {
-                    let mut keys = vec![format!("{source}:{candidate}:{tf}")];
-                    if source == "alpaca" {
-                        keys.push(format!("paper_TyphooN:{candidate}:{tf}"));
-                        keys.push(format!("alpaca_paper_TyphooN:{candidate}:{tf}"));
-                    }
-                    for key in keys {
-                        let Ok(Some(raw)) = cache.get_bars_raw(&key) else {
-                            continue;
-                        };
-                        if let Some((_, _, _, _, close, _)) =
-                            raw.iter().rev().find(|(ts, _, _, _, close, _)| {
-                                *ts > 0 && *close > 0.0 && close.is_finite()
-                            })
-                        {
-                            return Some(*close);
-                        }
+                    let key = format!("{source}:{candidate}:{tf}");
+                    let Ok(Some(raw)) = cache.get_bars_raw(&key) else {
+                        continue;
+                    };
+                    if let Some((_, _, _, _, close, _)) =
+                        raw.iter().rev().find(|(ts, _, _, _, close, _)| {
+                            *ts > 0 && *close > 0.0 && close.is_finite()
+                        })
+                    {
+                        return Some(*close);
                     }
                 }
             }

@@ -328,21 +328,8 @@ impl ChartDataLoad for ChartState {
         if sym_norm != sym {
             candidates.extend(dsm.resolve_candidates(&sym_norm, tf));
         }
-        // Also add legacy key variants for backward compatibility
-        candidates.push(format!("paper_TyphooN:{}:{}", sym.to_uppercase(), tf));
-        candidates.push(format!(
-            "alpaca_paper_TyphooN:{}:{}",
-            sym.to_uppercase(),
-            tf
-        ));
         candidates.push(format!("default:{}:{}", sym.to_uppercase(), tf));
         if sym_norm != sym {
-            candidates.push(format!("paper_TyphooN:{}:{}", sym_norm.to_uppercase(), tf));
-            candidates.push(format!(
-                "alpaca_paper_TyphooN:{}:{}",
-                sym_norm.to_uppercase(),
-                tf
-            ));
             candidates.push(format!("default:{}:{}", sym_norm.to_uppercase(), tf));
         }
         // Crypto slash/no-slash variants
@@ -968,8 +955,6 @@ impl ChartDataLoad for ChartState {
                 "kraken:",
                 "alpaca:",
                 "yahoo-chart:",
-                "paper_TyphooN:",
-                "alpaca_paper_TyphooN:",
             ];
             let mut r = s;
             for pfx in &known {

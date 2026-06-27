@@ -144,8 +144,6 @@ pub fn bare_symbol_from_key(key: &str) -> String {
         "kraken-futures",
         "alpaca",
         "yahoo-chart",
-        "paper_TyphooN",
-        "alpaca_paper_TyphooN",
     ];
     const KNOWN_TIMEFRAMES: &[&str] = &[
         "1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week", "1Month", "M1", "M5",

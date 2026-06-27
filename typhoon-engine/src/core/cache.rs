@@ -1256,8 +1256,6 @@ impl SqliteCache {
             "alpaca",
             "yahoo-chart",
             "default",
-            "paper_TyphooN",
-            "alpaca_paper_TyphooN",
         ];
 
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;

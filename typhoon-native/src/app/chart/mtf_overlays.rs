@@ -195,8 +195,6 @@ impl ChartMtfOverlays for ChartState {
             "kraken-futures:",
             "alpaca:",
             "yahoo-chart:",
-            "paper_TyphooN:",
-            "alpaca_paper_TyphooN:",
             "",
         ];
         for prefix in &prefixes {
@@ -342,8 +340,6 @@ impl ChartMtfOverlays for ChartState {
                 "kraken:",
                 "alpaca:",
                 "yahoo-chart:",
-                "paper_TyphooN:",
-                "alpaca_paper_TyphooN:",
             ];
             let mut s = base_sym.as_str();
             for pfx in &known_prefixes {
@@ -470,8 +466,6 @@ impl ChartMtfOverlays for ChartState {
                 "kraken:",
                 "alpaca:",
                 "yahoo-chart:",
-                "paper_TyphooN:",
-                "alpaca_paper_TyphooN:",
             ];
             let mut s = base_sym.as_str();
             for pfx in &known_prefixes {
@@ -561,8 +555,6 @@ impl ChartMtfOverlays for ChartState {
                 "kraken:",
                 "alpaca:",
                 "yahoo-chart:",
-                "paper_TyphooN:",
-                "alpaca_paper_TyphooN:",
             ];
             let mut s = base_sym.as_str();
             for pfx in &known_prefixes {

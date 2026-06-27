@@ -74,8 +74,6 @@ pub fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &str) -> V
         };
         let key = match source {
             "default" => format!("default:{source_variant}:{timeframe}"),
-            "alpaca-legacy-paper" => format!("paper_TyphooN:{source_variant}:{timeframe}"),
-            "alpaca-legacy-named" => format!("alpaca_paper_TyphooN:{source_variant}:{timeframe}"),
             _ => format!("{source}:{source_variant}:{timeframe}"),
         };
         let key_u = key.to_ascii_uppercase();
@@ -84,16 +82,7 @@ pub fn chart_source_cache_keys(source: &str, symbol: &str, timeframe: &str) -> V
         }
     }
 
-    if source == "alpaca" {
-        for legacy_source in ["alpaca-legacy-paper", "alpaca-legacy-named"] {
-            for key in chart_source_cache_keys(legacy_source, symbol, timeframe) {
-                let key_u = key.to_ascii_uppercase();
-                if seen.insert(key_u) {
-                    keys.push(key);
-                }
-            }
-        }
-    } else if source == "kraken" {
+    if source == "kraken" {
         for fallback_source in ["kraken-equities", "alpaca", "default"] {
             for key in chart_source_cache_keys(fallback_source, symbol, timeframe) {
                 let key_u = key.to_ascii_uppercase();
@@ -131,11 +120,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn alpaca_keys_include_legacy_fallbacks_without_duplicates() {
+    fn alpaca_keys_use_alpaca_source_without_duplicates() {
         let keys = chart_source_cache_keys("alpaca", "AAPL.US", "1Day");
         assert!(keys.contains(&"alpaca:AAPL:1Day".to_string()));
-        assert!(keys.contains(&"paper_TyphooN:AAPL:1Day".to_string()));
-        assert!(keys.contains(&"alpaca_paper_TyphooN:AAPL:1Day".to_string()));
         let unique: HashSet<_> = keys.iter().map(|key| key.to_ascii_uppercase()).collect();
         assert_eq!(unique.len(), keys.len());
     }
