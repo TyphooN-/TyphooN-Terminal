@@ -193,7 +193,6 @@ impl TyphooNApp {
             enabled_sync_timeframes: default_sync_timeframe_set(),
             alpaca_historical_rpm_hint: 0,
             alpaca_historical_rpm_observed: 0,
-            mtf_grid_status: Vec::new(),
             mtf_grid_rx: None,
             mtf_grid_status_symbol: String::new(),
             mtf_grid_status_open_sig: 0,

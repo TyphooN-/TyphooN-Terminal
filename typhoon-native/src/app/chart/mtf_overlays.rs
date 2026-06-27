@@ -59,6 +59,204 @@ pub(crate) fn mtf_htf_cache_put(
     }
 }
 
+// ─── Shared MTF higher-timeframe computed-indicator memo ─────────────────────
+// compute_mtf_sma / compute_multi_kama recompute the SAME higher-timeframe MA for
+// every host chart of a symbol — MT5 parity draws all HTF lines on every host TF,
+// so a symbol with K open timeframe tabs computes each HTF SMA/KAMA K times, and
+// again on every reopen. The HTF *bars* are already shared via mtf_htf_cache; this
+// memoizes the *computed series* keyed by (symbol_key, tf_suffix, spec) so each
+// HTF line is computed once per refresh window instead of once per host chart. A
+// cheap bars fingerprint guards correctness: a cached series is reused only when
+// the caller's HTF bars still match the bars it was computed from, so a refreshed
+// or different-source series recomputes rather than serving a stale line.
+struct MtfIndicatorMemoEntry {
+    fingerprint: (usize, i64, u64),
+    series: std::sync::Arc<Vec<Option<f64>>>,
+    written_ms: i64,
+}
+
+#[allow(clippy::type_complexity)]
+fn mtf_indicator_memo() -> &'static std::sync::RwLock<
+    std::collections::HashMap<(String, String, String), MtfIndicatorMemoEntry>,
+> {
+    static MEMO: std::sync::OnceLock<
+        std::sync::RwLock<
+            std::collections::HashMap<(String, String, String), MtfIndicatorMemoEntry>,
+        >,
+    > = std::sync::OnceLock::new();
+    MEMO.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
+/// Identity of a higher-timeframe bar series for memo invalidation: `(len, last_ts,
+/// last_close_bits)`. Changes whenever a bar is appended or the forming bar is
+/// revised, which is exactly when a derived MA must be recomputed.
+fn htf_bars_fingerprint(bars: &[Bar]) -> (usize, i64, u64) {
+    (
+        bars.len(),
+        bars.last().map(|b| b.ts_ms).unwrap_or(0),
+        bars.last().map(|b| b.close.to_bits()).unwrap_or(0),
+    )
+}
+
+/// Memoized higher-timeframe indicator series. Returns the cached series when a
+/// fresh (within-TTL) entry computed from bars with the same fingerprint exists;
+/// otherwise runs `compute`, stores it, and returns it. Shares `MTF_HTF_CACHE_TTL_MS`
+/// with the bar cache so the series and the bars it derives from age together.
+fn mtf_cached_htf_series(
+    symbol_key: &str,
+    tf_suffix: &str,
+    spec: &str,
+    htf: &[Bar],
+    now_ms: i64,
+    compute: impl FnOnce(&[Bar]) -> Vec<Option<f64>>,
+) -> std::sync::Arc<Vec<Option<f64>>> {
+    let key = (
+        symbol_key.to_string(),
+        tf_suffix.to_string(),
+        spec.to_string(),
+    );
+    let fingerprint = htf_bars_fingerprint(htf);
+    if let Ok(guard) = mtf_indicator_memo().read() {
+        if let Some(entry) = guard.get(&key) {
+            if entry.fingerprint == fingerprint
+                && now_ms.saturating_sub(entry.written_ms) < MTF_HTF_CACHE_TTL_MS
+            {
+                return std::sync::Arc::clone(&entry.series);
+            }
+        }
+    }
+    let series = std::sync::Arc::new(compute(htf));
+    if let Ok(mut guard) = mtf_indicator_memo().write() {
+        guard.retain(|_, e| now_ms.saturating_sub(e.written_ms) < MTF_HTF_CACHE_TTL_MS);
+        guard.insert(
+            key,
+            MtfIndicatorMemoEntry {
+                fingerprint,
+                series: std::sync::Arc::clone(&series),
+                written_ms: now_ms,
+            },
+        );
+    }
+    series
+}
+
+// ─── Per-(symbol,timeframe) loaded-bars cache (chart reopen) ──────────────────
+// The cached `bars` let a reopen restore from memory instead of re-querying +
+// zstd-decompressing SQLite (get_bars_raw has no in-memory layer and its read lock
+// contends with bar-sync writers); indicators then recompute on the GPU. Written by
+// every chart that finishes an auto-source load and by the background grid fill,
+// pruned by the short 90s TTL — short on purpose, because stale bars must not
+// silently back a reopen. Auto-source only: a source_override load never touches it.
+pub(crate) struct ChartResultEntry {
+    pub bars: std::sync::Arc<Vec<Bar>>,
+    pub primary_source: &'static str,
+    written_ms: i64,
+}
+
+#[allow(clippy::type_complexity)]
+fn chart_result_cache()
+-> &'static std::sync::RwLock<std::collections::HashMap<(String, String), std::sync::Arc<ChartResultEntry>>>
+{
+    static CACHE: std::sync::OnceLock<
+        std::sync::RwLock<
+            std::collections::HashMap<(String, String), std::sync::Arc<ChartResultEntry>>,
+        >,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
+/// Read a (symbol_key, tf_suffix) bars entry when a fresh (within-TTL) one exists.
+/// The returned `Arc` shares the cached bars — no copy until a caller clones them.
+pub(crate) fn chart_result_cache_get(
+    symbol_key: &str,
+    tf_suffix: &str,
+    now_ms: i64,
+) -> Option<std::sync::Arc<ChartResultEntry>> {
+    let guard = chart_result_cache().read().ok()?;
+    let entry = guard.get(&(symbol_key.to_string(), tf_suffix.to_string()))?;
+    (now_ms.saturating_sub(entry.written_ms) < MTF_HTF_CACHE_TTL_MS)
+        .then(|| std::sync::Arc::clone(entry))
+}
+
+/// Publish a chart's freshly-loaded bars. Opportunistically prunes stale entries to
+/// bound growth; the map only holds recently-loaded (symbol, timeframe) pairs.
+pub(crate) fn chart_result_cache_put(
+    symbol_key: &str,
+    tf_suffix: &str,
+    bars: std::sync::Arc<Vec<Bar>>,
+    primary_source: &'static str,
+    now_ms: i64,
+) {
+    if let Ok(mut guard) = chart_result_cache().write() {
+        guard.retain(|_, e| now_ms.saturating_sub(e.written_ms) < MTF_HTF_CACHE_TTL_MS);
+        guard.insert(
+            (symbol_key.to_string(), tf_suffix.to_string()),
+            std::sync::Arc::new(ChartResultEntry {
+                bars,
+                primary_source,
+                written_ms: now_ms,
+            }),
+        );
+    }
+}
+
+// ─── Sticky MTF Grid value store (the dots) ──────────────────────────────────
+// Separate from the bars cache because the grid dots must NOT blink to grey when the
+// bars cache's short TTL lapses: under load the background fill can't reload every
+// cell within 90s, so the values get their own long TTL and the navbar keeps showing
+// the last computed value until a fresh one replaces it. Each entry is five Options,
+// so a long retention window is cheap. Written by the fill and by open-tab loads;
+// read by the navbar. `(close, sma200, kama, fisher, fisher_signal)`.
+type MtfGridCellValues = (Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>);
+
+struct MtfGridValueEntry {
+    values: MtfGridCellValues,
+    written_ms: i64,
+}
+
+const MTF_GRID_VALUE_TTL_MS: i64 = 3_600_000; // 1h — sticky vs the 90s bars TTL
+
+#[allow(clippy::type_complexity)]
+fn mtf_grid_value_store()
+-> &'static std::sync::RwLock<std::collections::HashMap<(String, String), MtfGridValueEntry>> {
+    static STORE: std::sync::OnceLock<
+        std::sync::RwLock<std::collections::HashMap<(String, String), MtfGridValueEntry>>,
+    > = std::sync::OnceLock::new();
+    STORE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
+/// The last computed MTF Grid values for a cell, kept until the long TTL lapses so
+/// the dot stays lit through bars-cache expiry and slow refills.
+pub(crate) fn mtf_grid_value_get(
+    symbol_key: &str,
+    tf_suffix: &str,
+    now_ms: i64,
+) -> Option<(Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)> {
+    let guard = mtf_grid_value_store().read().ok()?;
+    let entry = guard.get(&(symbol_key.to_string(), tf_suffix.to_string()))?;
+    (now_ms.saturating_sub(entry.written_ms) < MTF_GRID_VALUE_TTL_MS).then_some(entry.values)
+}
+
+/// Publish a cell's freshly-computed MTF Grid values. Prunes entries past the long
+/// TTL to bound growth.
+pub(crate) fn mtf_grid_value_put(
+    symbol_key: &str,
+    tf_suffix: &str,
+    values: (Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>),
+    now_ms: i64,
+) {
+    if let Ok(mut guard) = mtf_grid_value_store().write() {
+        guard.retain(|_, e| now_ms.saturating_sub(e.written_ms) < MTF_GRID_VALUE_TTL_MS);
+        guard.insert(
+            (symbol_key.to_string(), tf_suffix.to_string()),
+            MtfGridValueEntry {
+                values,
+                written_ms: now_ms,
+            },
+        );
+    }
+}
+
 #[cfg(test)]
 mod mtf_htf_cache_tests {
     use super::*;
@@ -87,6 +285,101 @@ mod mtf_htf_cache_tests {
         assert!(
             mtf_htf_cache_get("ZZSHAREDTEST", "1Day", now).is_none(),
             "a different timeframe suffix is a miss"
+        );
+    }
+
+    #[test]
+    fn htf_indicator_memo_reuses_within_ttl_and_recomputes_on_bar_change() {
+        let bar = |ts: i64, close: f64| Bar {
+            ts_ms: ts,
+            open: close,
+            high: close,
+            low: close,
+            close,
+            volume: 1.0,
+        };
+        let bars = vec![bar(1, 1.0), bar(2, 2.0), bar(3, 3.0)];
+        let now = 2_000_000_000_000i64;
+        // Unique symbol so the process-global memo can't collide with other tests.
+        let calls = std::cell::Cell::new(0);
+        let compute = |b: &[Bar]| {
+            calls.set(calls.get() + 1);
+            b.iter().map(|bar| Some(bar.close)).collect()
+        };
+
+        let first = mtf_cached_htf_series("ZZMEMOTEST", "1Day", "sma3", &bars, now, compute);
+        assert_eq!(calls.get(), 1, "first call computes");
+        // Same bars within TTL → served from memo, no recompute.
+        let second = mtf_cached_htf_series("ZZMEMOTEST", "1Day", "sma3", &bars, now + 1, compute);
+        assert_eq!(calls.get(), 1, "second call reuses the memoized series");
+        assert!(std::sync::Arc::ptr_eq(&first, &second), "same Arc returned");
+
+        // Appending a bar changes the fingerprint → recompute even within TTL.
+        let mut grown = bars.clone();
+        grown.push(bar(4, 4.0));
+        let _ = mtf_cached_htf_series("ZZMEMOTEST", "1Day", "sma3", &grown, now + 2, compute);
+        assert_eq!(calls.get(), 2, "changed bars recompute");
+
+        // Past the TTL → recompute even for identical bars.
+        let _ = mtf_cached_htf_series(
+            "ZZMEMOTEST",
+            "1Day",
+            "sma3",
+            &grown,
+            now + 2 + MTF_HTF_CACHE_TTL_MS,
+            compute,
+        );
+        assert_eq!(calls.get(), 3, "expired entry recomputes");
+    }
+
+    #[test]
+    fn result_cache_round_trips_bars_within_ttl_then_expires() {
+        let bars = std::sync::Arc::new(vec![Bar {
+            ts_ms: 7,
+            open: 2.0,
+            high: 2.0,
+            low: 2.0,
+            close: 2.0,
+            volume: 1.0,
+        }]);
+        let now = 3_000_000_000_000i64;
+        chart_result_cache_put(
+            "ZZRESULTTEST",
+            "1Hour",
+            std::sync::Arc::clone(&bars),
+            "merged",
+            now,
+        );
+        let hit = chart_result_cache_get("ZZRESULTTEST", "1Hour", now + 1).expect("fresh hit");
+        assert_eq!(hit.primary_source, "merged");
+        assert_eq!(hit.bars.len(), 1);
+        assert!(
+            chart_result_cache_get("ZZRESULTTEST", "1Hour", now + MTF_HTF_CACHE_TTL_MS).is_none(),
+            "entry expires at/after the TTL"
+        );
+        assert!(
+            chart_result_cache_get("ZZRESULTTEST", "1Day", now).is_none(),
+            "a different timeframe is a miss"
+        );
+    }
+
+    #[test]
+    fn grid_value_store_stays_sticky_past_bars_ttl_then_expires() {
+        let now = 4_000_000_000_000i64;
+        mtf_grid_value_put(
+            "ZZVALUETEST",
+            "1Day",
+            (Some(2.0), Some(1.5), Some(1.6), Some(0.1), Some(0.0)),
+            now,
+        );
+        // Still readable long after the *bars* TTL — the dots must not blink to grey.
+        let hit = mtf_grid_value_get("ZZVALUETEST", "1Day", now + MTF_HTF_CACHE_TTL_MS + 1)
+            .expect("value sticks past the bars TTL");
+        assert_eq!(hit.0, Some(2.0));
+        assert_eq!(hit.1, Some(1.5));
+        assert!(
+            mtf_grid_value_get("ZZVALUETEST", "1Day", now + MTF_GRID_VALUE_TTL_MS).is_none(),
+            "value expires at/after its own long TTL"
         );
     }
 }
@@ -298,6 +591,12 @@ impl ChartMtfOverlays for ChartState {
             return;
         }
 
+        // Memo identity for the shared HTF indicator cache (see mtf_cached_htf_series):
+        // the projected line still rebuilds per host chart, but the expensive HTF SMA
+        // is computed once per symbol/timeframe/period across all hosts and reopens.
+        let memo_sym_key = super::chart_ops::mtf_grid_symbol_key(&self.symbol);
+        let memo_now_ms = chrono::Utc::now().timestamp_millis();
+
         let base_sym = {
             let parts: Vec<&str> = self.symbol.split(':').collect();
             let is_tf = matches!(
@@ -370,7 +669,15 @@ impl ChartMtfOverlays for ChartState {
                 if htf.len() < period {
                     continue;
                 }
-                let sma_vals = compute_sma(&htf, period);
+                let sma_arc = mtf_cached_htf_series(
+                    &memo_sym_key,
+                    tf_suffix,
+                    &format!("sma{period}"),
+                    &htf,
+                    memo_now_ms,
+                    |b| compute_sma(b, period),
+                );
+                let sma_vals = sma_arc.as_slice();
 
                 // Project HTF SMA onto current chart bars via timestamp matching
                 let mut projected: Vec<(usize, f64)> = Vec::new();
@@ -424,6 +731,10 @@ impl ChartMtfOverlays for ChartState {
         if self.bars.is_empty() {
             return;
         }
+
+        // Shared HTF indicator memo identity — see compute_mtf_sma / mtf_cached_htf_series.
+        let memo_sym_key = super::chart_ops::mtf_grid_symbol_key(&self.symbol);
+        let memo_now_ms = chrono::Utc::now().timestamp_millis();
 
         // Extract base symbol (strip timeframe suffix from symbol)
         let base_sym = {
@@ -496,8 +807,16 @@ impl ChartMtfOverlays for ChartState {
                 if htf.len() < 12 {
                     continue;
                 }
-                // Compute KAMA(10,2,30) on higher TF bars
-                let kama_vals = compute_kama(&htf, 10, 2, 30);
+                // Compute KAMA(10,2,30) on higher TF bars (memoized across hosts/reopens)
+                let kama_arc = mtf_cached_htf_series(
+                    &memo_sym_key,
+                    tf_suffix,
+                    "kama_10_2_30",
+                    &htf,
+                    memo_now_ms,
+                    |b| compute_kama(b, 10, 2, 30),
+                );
+                let kama_vals = kama_arc.as_slice();
 
                 // Map higher TF KAMA values onto this chart's bar indices by timestamp
                 // For each of our bars, find the most recent HTF bar that's <= our timestamp

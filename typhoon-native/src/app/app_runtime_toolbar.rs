@@ -1,6 +1,5 @@
 use super::app_runtime_support::kraken_xstocks_session_status_now;
 use super::*;
-use crate::app::app_runtime_tabs::tab_bar_chart_indices;
 
 #[allow(deprecated)]
 impl TyphooNApp {
@@ -279,49 +278,9 @@ impl TyphooNApp {
                         if ui.small_button(mtf_txt).clicked() {
                             self.mtf_enabled = !self.mtf_enabled;
                         }
-
-                        // MTF tab visibility checkboxes (inline, when MTF is on)
-                        let tab_indices = tab_bar_chart_indices(&self.charts);
-                        if self.mtf_enabled && tab_indices.len() > 1 {
-                            while self.mtf_visible.len() < self.charts.len() {
-                                self.mtf_visible.push(true);
-                            }
-                            ui.separator();
-                            for i in tab_indices {
-                                if i >= self.mtf_visible.len() {
-                                    break;
-                                }
-                                let Some(chart) = self.charts.get(i) else {
-                                    continue;
-                                };
-                                // Second-to-last `:`-separated segment, without allocating a Vec.
-                                let sym_short = {
-                                    let mut it = chart.symbol.rsplit(':');
-                                    let _last = it.next();
-                                    let s = it.next().unwrap_or(chart.symbol.as_str());
-                                    if s.len() > 8 { &s[..8] } else { s }
-                                };
-                                let label = format!("{} {}", sym_short, chart.timeframe.label());
-                                let color = if self.mtf_visible[i] {
-                                    ACCENT
-                                } else {
-                                    AXIS_TEXT
-                                };
-                                if ui
-                                    .add(egui::SelectableLabel::new(
-                                        self.mtf_visible[i],
-                                        egui::RichText::new(&label).color(color).small().monospace(),
-                                    ))
-                                    .clicked()
-                                {
-                                    self.mtf_visible[i] = !self.mtf_visible[i];
-                                    // Ensure at least one is visible
-                                    if self.mtf_visible.iter().all(|v| !v) {
-                                        self.mtf_visible[i] = true;
-                                    }
-                                }
-                            }
-                        }
+                        // The per-tab grid-visibility toggles moved onto the tab strip
+                        // itself (click a tab in MTF mode to include/exclude it), so the
+                        // inline checkboxes that used to crowd the toolbar are gone.
 
                         ui.separator();
 

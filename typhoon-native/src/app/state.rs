@@ -82,43 +82,20 @@ pub struct TyphooNApp {
     pub(crate) mtf_focused: Option<usize>,
     /// Which tabs are visible in MTF grid (true = shown, per chart index).
     pub(crate) mtf_visible: Vec<bool>,
-    /// MTF Grid indicator status: (tf_label, close, sma200, kama, fisher, fisher_signal) per TF.
-    /// Computed on symbol load for the MTF Grid panel. Lightweight — no full ChartState needed.
-    pub(crate) mtf_grid_status: Vec<(
-        &'static str,
-        Option<f64>,
-        Option<f64>,
-        Option<f64>,
-        Option<f64>,
-        Option<f64>,
-    )>,
-    /// Receiver for async MTF grid status results (computed in background thread).
-    pub(crate) mtf_grid_rx: Option<
-        std::sync::mpsc::Receiver<
-            Vec<(
-                &'static str,
-                Option<f64>,
-                Option<f64>,
-                Option<f64>,
-                Option<f64>,
-                Option<f64>,
-            )>,
-        >,
-    >,
-    /// Symbol that `mtf_grid_status` was last computed for. Lets the grid panel
-    /// keep the cache-loaded all-timeframe status in sync with the active symbol
-    /// so non-open timeframes still render their values (grid is not limited to
-    /// whichever chart tabs happen to be open).
+    /// In-flight guard for the MTF Grid background fill (`compute_mtf_grid_status`).
+    /// The worker writes the unified result cache directly and sends `()` on
+    /// completion; `Some` means a pass is running, so the render path never spawns a
+    /// second one or back-fills the same cells twice.
+    pub(crate) mtf_grid_rx: Option<std::sync::mpsc::Receiver<()>>,
+    /// Active symbol at the last fill — a change retriggers the fill so the focused
+    /// symbol's cells refresh immediately.
     pub(crate) mtf_grid_status_symbol: String,
-    /// Signature of the open-chart (symbol, timeframe) set at the last
-    /// `compute_mtf_grid_status`. The grid prefers live open-chart values and
-    /// falls back to the cache-loaded status for the rest; opening or closing a
-    /// chart must recompute that fallback or a just-closed timeframe would drop
-    /// to a stale/empty cell. `0` = never computed.
+    /// Signature of the open-chart (symbol, timeframe) set at the last fill. Opening
+    /// or closing a chart changes it and retriggers the fill so a just-closed
+    /// timeframe's cell repopulates from the cache. `0` = never computed.
     pub(crate) mtf_grid_status_open_sig: u64,
-    /// When `mtf_grid_status` was last (re)computed. Drives a self-terminating
-    /// throttled refresh so timeframes the async all-TF sync fills into the cache
-    /// after the first compute still appear without needing the symbol to change.
+    /// When the fill last ran. Drives a self-terminating throttled refresh that keeps
+    /// back-filling navbar cells until the cache is warm, then idles.
     pub(crate) mtf_grid_status_at: Option<std::time::Instant>,
     /// Deferred chart loads: indices of charts to load, one per frame (avoids startup freeze).
     pub(crate) deferred_chart_loads: VecDeque<usize>,

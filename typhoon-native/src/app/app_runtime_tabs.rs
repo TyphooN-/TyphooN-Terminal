@@ -18,7 +18,13 @@ impl TyphooNApp {
         // is drawn. Overflowed tabs used to be clipped with no way to reach them;
         // the ScrollArea makes the strip scroll (mouse wheel + scrollbar).
         let tab_indices = tab_bar_chart_indices(&self.charts);
-        let tab_snapshots: Vec<(usize, String, bool, bool)> = tab_indices
+        // In MTF mode the tab strip doubles as the grid selector: each tab is
+        // highlighted by whether it's included in the grid (`mtf_visible`), clicking a
+        // tab toggles that inclusion instead of switching, and tabs can't be closed
+        // (that's what the central grid + right-panel dots render). `in_grid` rides in
+        // the snapshot so the draw loop needs no `self` borrow.
+        let mtf_on = self.mtf_enabled;
+        let tab_snapshots: Vec<(usize, String, bool, bool, bool)> = tab_indices
             .iter()
             .filter_map(|idx| self.charts.get(*idx).map(|c| (*idx, c)))
             .map(|(idx, c)| {
@@ -27,6 +33,7 @@ impl TyphooNApp {
                     format!("{} [{}]", c.symbol, c.timeframe.label()),
                     idx == self.active_tab,
                     self.dragging_tab == Some(idx),
+                    self.mtf_visible.get(idx).copied().unwrap_or(true),
                 )
             })
             .collect();
@@ -48,6 +55,7 @@ impl TyphooNApp {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     let mut switch_to: Option<usize> = None;
                     let mut close_tab: Option<usize> = None;
+                    let mut toggle_grid: Option<usize> = None; // MTF mode: toggle grid inclusion
                     let mut drop_target: Option<(usize, usize)> = None; // (drag_src, insert_at)
                     let mut start_drag: Option<usize> = None;
                     let mut active_rect: Option<egui::Rect> = None;
@@ -78,20 +86,30 @@ impl TyphooNApp {
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 0.0;
-                                for (idx, label, active, is_dragging_this) in &tab_snapshots {
+                                for (idx, label, active, is_dragging_this, in_grid) in
+                                    &tab_snapshots
+                                {
                                     let idx = *idx;
                                     let active = *active;
                                     let is_dragging_this = *is_dragging_this;
+                                    let in_grid = *in_grid;
+                                    // MTF mode dims tabs excluded from the grid so the
+                                    // included ones (outlined below) read as selected.
+                                    let excluded = mtf_on && !in_grid;
 
                                     // Tab colours
                                     let tab_bg = if is_dragging_this {
                                         egui::Color32::from_rgb(20, 50, 80)
+                                    } else if excluded {
+                                        egui::Color32::from_rgb(8, 8, 8)
                                     } else if active {
                                         BG_BUTTON
                                     } else {
                                         egui::Color32::from_rgb(10, 10, 10)
                                     };
-                                    let tab_text = if active {
+                                    let tab_text = if excluded {
+                                        egui::Color32::from_rgb(70, 70, 70)
+                                    } else if active {
                                         egui::Color32::WHITE
                                     } else {
                                         egui::Color32::from_rgb(136, 136, 136)
@@ -123,6 +141,17 @@ impl TyphooNApp {
                                                 2.0,
                                                 egui::Color32::from_rgb(76, 175, 80),
                                             ),
+                                        );
+                                    }
+
+                                    // MTF mode: accent outline around tabs included in
+                                    // the grid — the "highlight to select" selector.
+                                    if mtf_on && in_grid {
+                                        ui.painter().rect_stroke(
+                                            tab_rect.shrink(1.0),
+                                            0.0,
+                                            egui::Stroke::new(1.5, ACCENT),
+                                            egui::StrokeKind::Inside,
                                         );
                                     }
 
@@ -173,8 +202,16 @@ impl TyphooNApp {
                                         tab_text,
                                     );
 
-                                    // Close button (×) — right side of tab
-                                    if n_tabs > 1 {
+                                    // Click handling. In MTF mode the strip is the grid
+                                    // selector — click toggles this tab's inclusion and
+                                    // no close button is drawn (tabs are locked until
+                                    // MTF is turned off). Otherwise it's the normal
+                                    // switch / close behaviour.
+                                    if mtf_on {
+                                        if tab_resp.clicked() {
+                                            toggle_grid = Some(idx);
+                                        }
+                                    } else if n_tabs > 1 {
                                         let close_rect = egui::Rect::from_min_size(
                                             egui::pos2(
                                                 tab_rect.right() - 14.0,
@@ -206,8 +243,8 @@ impl TyphooNApp {
                                         switch_to = Some(idx);
                                     }
 
-                                    // Middle-click to close tab
-                                    if tab_resp.middle_clicked() && n_tabs > 1 {
+                                    // Middle-click to close tab (locked in MTF mode).
+                                    if tab_resp.middle_clicked() && n_tabs > 1 && !mtf_on {
                                         close_tab = Some(idx);
                                     }
 
@@ -283,6 +320,20 @@ impl TyphooNApp {
                     }
 
                     // Apply deferred actions
+                    if let Some(idx) = toggle_grid {
+                        while self.mtf_visible.len() < self.charts.len() {
+                            self.mtf_visible.push(true);
+                        }
+                        if let Some(v) = self.mtf_visible.get_mut(idx) {
+                            *v = !*v;
+                        }
+                        // Keep at least one tab in the grid so it never renders empty.
+                        if self.mtf_visible.iter().all(|v| !v) {
+                            if let Some(v) = self.mtf_visible.get_mut(idx) {
+                                *v = true;
+                            }
+                        }
+                    }
                     if let Some(idx) = start_drag {
                         self.dragging_tab = Some(idx);
                     }

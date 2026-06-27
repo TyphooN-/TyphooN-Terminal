@@ -824,9 +824,24 @@ impl TyphooNApp {
                 self.mtf_visible.push(true);
             }
             let suppressed_mtf_symbols = low_timeframe_no_data_symbols(&self.unresolvable_pairs);
+            // The central MTF grid tiles ONLY the user's open tabs — never the
+            // hidden per-timeframe backing charts that the right-panel MTF Grid
+            // indicator dots load. Those backing charts (`show_in_tab_bar == false`)
+            // stay invisible here, so clicking MTF shows exactly the symbols and
+            // timeframes the user has tabbed while the dot panel keeps its full
+            // multi-timeframe coverage. AND-in `mtf_visible` so the per-tab
+            // visibility checkboxes still hide individual cells.
+            let tabbed_mtf_visible: Vec<bool> = self
+                .charts
+                .iter()
+                .enumerate()
+                .map(|(i, chart)| {
+                    chart.show_in_tab_bar && self.mtf_visible.get(i).copied().unwrap_or(true)
+                })
+                .collect();
             let mtf_groups = mtf_visible_chart_groups_filtered(
                 &self.charts,
-                &self.mtf_visible,
+                &tabbed_mtf_visible,
                 &suppressed_mtf_symbols,
             );
             let mtf_indices = mtf_flat_chart_indices(&mtf_groups);

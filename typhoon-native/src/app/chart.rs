@@ -6,7 +6,10 @@ use super::*;
 pub(crate) use super::chart_sources::chart_source_cache_keys;
 
 mod mtf_overlays;
-pub(crate) use mtf_overlays::{ChartMtfOverlays, mtf_htf_cache_put};
+pub(crate) use mtf_overlays::{
+    ChartMtfOverlays, chart_result_cache_get, chart_result_cache_put, mtf_grid_value_get,
+    mtf_grid_value_put, mtf_htf_cache_put,
+};
 
 // Chart view-model types + indicator palette now live in the typhoon-chart-ui crate
 // (ADR-125 Target 2, slice 5); re-exported so chart.rs + the app glob are unchanged.

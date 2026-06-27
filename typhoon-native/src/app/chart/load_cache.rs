@@ -41,9 +41,87 @@ pub(crate) trait ChartDataLoad {
         gpu: Option<&mut gpu_compute::GpuCompute>,
         dsm: &typhoon_engine::core::data_source::DataSourceManager,
     );
+    fn publish_result_to_cache(&self);
+    fn restore_from_result_cache(
+        &mut self,
+        cache: &SqliteCache,
+        gpu: Option<&mut gpu_compute::GpuCompute>,
+    ) -> bool;
 }
 
 impl ChartDataLoad for ChartState {
+    /// Publish this chart's freshly-loaded bars (reopen cache) and last indicator
+    /// values (sticky MTF Grid store) so a later reopen restores instantly and the
+    /// grid reads the values without a backing chart. Auto-source loads only (a
+    /// `source_override` load must not poison the canonical entry).
+    fn publish_result_to_cache(&self) {
+        if !self.source_override.is_empty() || self.bars.is_empty() {
+            return;
+        }
+        let symbol_key = super::chart_ops::mtf_grid_symbol_key(&self.symbol);
+        let tf_suffix = self.timeframe.cache_suffix();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        super::chart_result_cache_put(
+            &symbol_key,
+            tf_suffix,
+            std::sync::Arc::new(self.bars.clone()),
+            self.primary_source,
+            now_ms,
+        );
+        let close = self
+            .fresh_live_quote_mid()
+            .or_else(|| self.bars.last().map(|b| b.close));
+        super::mtf_grid_value_put(
+            &symbol_key,
+            tf_suffix,
+            (
+                close,
+                self.sma200.last().and_then(|v| *v),
+                self.kama.last().and_then(|v| *v),
+                self.fisher.last().and_then(|v| *v),
+                self.fisher_signal.last().and_then(|v| *v),
+            ),
+            now_ms,
+        );
+    }
+
+    /// Fast reopen: restore bars + indicators from the unified result cache instead
+    /// of re-querying and zstd-decompressing SQLite (whose read lock also contends
+    /// with bar-sync writers). Only for a fresh (empty-bars) auto-source load;
+    /// returns false on a miss so the caller falls back to `try_load`. Indicators
+    /// recompute on the GPU from the cached bars and the HTF overlays reuse their
+    /// memo at render time, so the only thing skipped is the SQLite round-trip. A
+    /// later market-data update reloads from SQLite, bounding staleness to one TTL.
+    fn restore_from_result_cache(
+        &mut self,
+        cache: &SqliteCache,
+        gpu: Option<&mut gpu_compute::GpuCompute>,
+    ) -> bool {
+        if !self.source_override.is_empty() || !self.bars.is_empty() {
+            return false;
+        }
+        let symbol_key = super::chart_ops::mtf_grid_symbol_key(&self.symbol);
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let Some(entry) =
+            super::chart_result_cache_get(&symbol_key, self.timeframe.cache_suffix(), now_ms)
+        else {
+            return false;
+        };
+        if entry.bars.is_empty() {
+            return false;
+        }
+        self.gap_fill_timestamps.clear();
+        self.bars = (*entry.bars).clone();
+        self.primary_source = entry.primary_source;
+        self.primary_first_ts = self.bars.first().map(|b| b.ts_ms).unwrap_or(0);
+        self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+        self.manual_view_override = false;
+        self.reset_camera_from_legacy();
+        self.compute_indicators_gpu(gpu);
+        self.compute_prev_candle_levels_native(cache);
+        true
+    }
+
     fn should_reload_for_bar_fetch(&self, symbol: &str, timeframe: &str, source: &str) -> bool {
         if !self.symbol_matches(symbol)
             || !self

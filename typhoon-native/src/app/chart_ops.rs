@@ -179,10 +179,14 @@ pub(super) const MTF_GRID_TIMEFRAMES: [(&str, Timeframe); 9] = [
     ("MN1", Timeframe::MN1),
 ];
 
-/// One MTF grid cell snapshot: `(tf_label, close, sma200, kama, fisher, fisher_signal)`.
-/// `None` for an indicator means "no value" (not loaded / insufficient history).
-pub(super) type MtfStatusRow = (
-    &'static str,
+/// Max (symbol, timeframe) cells the MTF Grid background fill loads per pass. Active
+/// symbol's cells are filled first; the rest spill to the next throttled pass so one
+/// pass can't flood the runtime with blocking loads.
+const MTF_GRID_FILL_PER_BATCH: usize = 32;
+
+/// The MTF Grid's per-cell indicator values: `(close, sma200, kama, fisher,
+/// fisher_signal)`. `None` means "no value" (not loaded / insufficient history).
+pub(super) type MtfCellValues = (
     Option<f64>,
     Option<f64>,
     Option<f64>,
@@ -207,21 +211,6 @@ fn mtf_timeframe_rank(tf: Timeframe) -> Option<usize> {
         Timeframe::D1 => Some(6),
         Timeframe::W1 => Some(7),
         Timeframe::MN1 => Some(8),
-    }
-}
-
-fn mtf_label_rank(label: &str) -> usize {
-    match label {
-        "M1" => 0,
-        "M5" => 1,
-        "M15" => 2,
-        "M30" => 3,
-        "H1" => 4,
-        "H4" => 5,
-        "D1" => 6,
-        "W1" => 7,
-        "MN1" => 8,
-        _ => usize::MAX,
     }
 }
 
@@ -295,32 +284,6 @@ fn kraken_position_covers_balance_asset(positions: &[PositionInfo], asset: &str)
     })
 }
 
-fn mtf_grid_missing_timeframes(
-    charts: &[ChartState],
-    visible: &[bool],
-    symbol: &str,
-) -> Vec<Timeframe> {
-    let symbol_key = mtf_grid_symbol_key(symbol);
-    let existing: std::collections::HashSet<Timeframe> = charts
-        .iter()
-        .enumerate()
-        .filter(|(idx, chart)| {
-            visible.get(*idx).copied().unwrap_or(true)
-                && mtf_grid_symbol_key(&chart.symbol).eq_ignore_ascii_case(&symbol_key)
-        })
-        .map(|(_, chart)| chart.timeframe)
-        .collect();
-
-    MTF_GRID_TIMEFRAMES
-        .iter()
-        .filter_map(|(_, tf)| {
-            (!existing.contains(tf)
-                && !mtf_symbol_has_empty_low_timeframe(charts, &symbol_key, *tf))
-            .then_some(*tf)
-        })
-        .collect()
-}
-
 fn mtf_low_timeframe(tf: Timeframe) -> bool {
     matches!(tf, Timeframe::M1 | Timeframe::M5)
 }
@@ -340,19 +303,6 @@ fn mtf_symbol_has_empty_low_timeframe(
                 && chart.bars.is_empty()
                 && mtf_grid_symbol_key(&chart.symbol).eq_ignore_ascii_case(symbol_key)
         })
-}
-
-pub(super) fn mtf_grid_symbols_with_missing_timeframes(
-    charts: &[ChartState],
-    visible: &[bool],
-) -> Vec<String> {
-    mtf_visible_chart_groups(charts, visible)
-        .into_iter()
-        .filter_map(|group| {
-            (!mtf_grid_missing_timeframes(charts, visible, &group.symbol).is_empty())
-                .then_some(group.symbol)
-        })
-        .collect()
 }
 
 fn low_timeframe_no_data_reason(reason: &str) -> bool {
@@ -447,17 +397,6 @@ pub(super) fn mtf_visible_chart_groups_filtered(
     groups
 }
 
-pub(super) fn mtf_group_timeframe_labels(
-    charts: &[ChartState],
-    group: &MtfChartGroup,
-) -> Vec<&'static str> {
-    group
-        .indices
-        .iter()
-        .filter_map(|idx| charts.get(*idx).map(|chart| chart.timeframe.label()))
-        .collect()
-}
-
 pub(super) fn mtf_flat_chart_indices(groups: &[MtfChartGroup]) -> Vec<usize> {
     groups
         .iter()
@@ -494,14 +433,17 @@ fn symbol_matches_no_alloc(raw: &str, target_upper: &str) -> bool {
 
 impl TyphooNApp {
     pub(crate) fn tick_chart_background_results(&mut self) {
-        // ── receive MTF grid status from background thread (non-blocking) ──
-        // Take the results out first so the immutable borrow of `mtf_grid_rx`
-        // ends before the mutable upsert. Cache loads are non-authoritative:
-        // they fill missing cells without clobbering live open-chart values.
-        let mtf_grid_results = self.mtf_grid_rx.as_ref().and_then(|rx| rx.try_recv().ok());
-        if let Some(results) = mtf_grid_results {
-            self.mtf_grid_rx = None; // done
-            self.mtf_grid_status_upsert(results, false);
+        // ── MTF Grid background fill: clear the in-flight guard when the worker
+        // finishes (it writes the unified result cache directly, so there are no
+        // results to marshal here). Disconnected = worker dropped/panicked; clear
+        // too so the throttled refresh can spawn the next pass.
+        if let Some(rx) = self.mtf_grid_rx.as_ref() {
+            match rx.try_recv() {
+                Ok(()) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.mtf_grid_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
         }
 
         // ── receive Reg SHO cached prices from background thread (non-blocking) ──
@@ -579,13 +521,17 @@ impl TyphooNApp {
                     let load_key = self.charts.get(idx).map(deferred_chart_load_key);
                     let mut loaded = false;
                     if let Some(cache) = self.cache.clone() {
+                        let mut gpu = self.gpu_indicators.take();
                         if let Some(chart) = self.charts.get_mut(idx) {
-                            let mut gpu = self.gpu_indicators.take();
-                            loaded = chart.try_load(&cache, &mut self.log, gpu.as_mut());
-                            self.gpu_indicators = gpu;
+                            // Fast reopen: restore cached bars + GPU-recomputed
+                            // indicators from the unified result cache before falling
+                            // back to the full SQLite load (read + zstd decompress).
+                            loaded = chart.restore_from_result_cache(&cache, gpu.as_mut())
+                                || chart.try_load(&cache, &mut self.log, gpu.as_mut());
                         } else {
                             loaded = true; // invalid index, skip
                         }
+                        self.gpu_indicators = gpu;
                     }
                     if loaded {
                         if let Some(key) = load_key {
@@ -598,6 +544,11 @@ impl TyphooNApp {
                                 self.deferred_chart_empty_load_at.insert(key, now_instant);
                             } else {
                                 self.deferred_chart_empty_load_at.remove(&key);
+                                // Populate the unified result cache from this freshly
+                                // loaded chart so reopens and the MTF Grid reuse it.
+                                if let Some(chart) = self.charts.get(idx) {
+                                    chart.publish_result_to_cache();
+                                }
                             }
                         }
                         self.deferred_chart_last_load_at = now_instant;
@@ -1018,7 +969,9 @@ impl TyphooNApp {
             return false;
         };
 
-        self.ensure_mtf_grid_for_symbol(&symbol);
+        // `false`: the explicit focus below selects the D1 tab itself (and works
+        // for hidden backing charts too), so ensure must not also move active_tab.
+        self.ensure_mtf_grid_for_symbol(&symbol, false);
         if let Some(existing_idx) = self.charts.iter().position(|chart| {
             chart.timeframe == Timeframe::D1
                 && mtf_grid_symbol_key(&chart.symbol).eq_ignore_ascii_case(
@@ -1060,131 +1013,175 @@ impl TyphooNApp {
         acc
     }
 
-    /// Merge MTF grid rows in place, keeping them in timeframe order. `authoritative`
-    /// rows (live open charts) always overwrite. Non-authoritative rows (cache /
-    /// background loads) fill empty or missing cells but never clobber an existing
-    /// concrete value with an all-`None` miss — that no-clobber rule is what stops
-    /// already-filled cells from flickering back to grey on a throttled refresh.
-    pub(super) fn mtf_grid_status_upsert(&mut self, rows: Vec<MtfStatusRow>, authoritative: bool) {
-        let has_data = |r: &MtfStatusRow| {
-            r.1.is_some() || r.2.is_some() || r.3.is_some() || r.4.is_some() || r.5.is_some()
-        };
-        for row in rows {
-            match self.mtf_grid_status.iter_mut().find(|s| s.0 == row.0) {
-                Some(slot) => {
-                    if authoritative || has_data(&row) || !has_data(slot) {
-                        *slot = row;
-                    }
-                }
-                None => self.mtf_grid_status.push(row),
+    /// The symbols shown in the MTF Grid navbar: one per distinct open **tab**
+    /// (`show_in_tab_bar`), sorted, with the supported-timeframe and low-TF-no-data
+    /// filters applied. Drives the grid off the user's actual open tabs — no hidden
+    /// backing charts — so the dot rows match the tab strip.
+    pub(super) fn mtf_grid_navbar_symbols(&self) -> Vec<String> {
+        let suppressed = low_timeframe_no_data_symbols(&self.unresolvable_pairs);
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for chart in &self.charts {
+            if !chart.show_in_tab_bar || mtf_timeframe_rank(chart.timeframe).is_none() {
+                continue;
             }
+            let key = mtf_grid_symbol_key(&chart.symbol);
+            if key.is_empty() || suppressed.contains(&key.to_ascii_uppercase()) {
+                continue;
+            }
+            seen.insert(key);
         }
-        self.mtf_grid_status.sort_by_key(|r| mtf_label_rank(r.0));
+        seen.into_iter().collect()
     }
 
+    /// Per-timeframe MTF Grid values for one symbol, in timeframe order, for the
+    /// timeframes that have data. Each cell prefers a live open tab (always current)
+    /// and otherwise reads the unified result cache, which the background fill
+    /// (`compute_mtf_grid_status`) keeps warm for cells with no open tab. A timeframe
+    /// with neither source is omitted — so M1/M5 only appear when a provider actually
+    /// has them, and an as-yet-unfilled cell is simply absent rather than grey-forced.
+    pub(super) fn mtf_grid_symbol_values(
+        &self,
+        symbol_key: &str,
+    ) -> Vec<(&'static str, MtfCellValues)> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        // One pass over the charts: collect this symbol's live open-tab values by
+        // timeframe (avoids re-scanning per timeframe).
+        let mut live: std::collections::HashMap<Timeframe, MtfCellValues> =
+            std::collections::HashMap::new();
+        for c in &self.charts {
+            if c.show_in_tab_bar
+                && !c.bars.is_empty()
+                && mtf_grid_symbol_key(&c.symbol).eq_ignore_ascii_case(symbol_key)
+            {
+                live.entry(c.timeframe).or_insert((
+                    c.fresh_live_quote_mid()
+                        .or_else(|| c.bars.last().map(|b| b.close)),
+                    c.sma200.last().and_then(|v| *v),
+                    c.kama.last().and_then(|v| *v),
+                    c.fisher.last().and_then(|v| *v),
+                    c.fisher_signal.last().and_then(|v| *v),
+                ));
+            }
+        }
+        let mut out: Vec<(&'static str, MtfCellValues)> = Vec::new();
+        for &(label, tf) in &MTF_GRID_TIMEFRAMES {
+            // Only timeframes enabled in Sync are shown — a disabled TF (e.g. M1/M5)
+            // is never loaded, so it never appears as a column.
+            if !self.enabled_sync_timeframes.contains(tf.cache_suffix()) {
+                continue;
+            }
+            // Prefer a live open tab (always current); otherwise the sticky value
+            // store, which the fill keeps warm and which outlives the bars TTL so the
+            // dot doesn't blink to grey while a slow refill is in flight.
+            let vals = live
+                .get(&tf)
+                .copied()
+                .or_else(|| super::chart::mtf_grid_value_get(symbol_key, tf.cache_suffix(), now_ms));
+            if let Some(v) = vals {
+                out.push((label, v));
+            }
+        }
+        out
+    }
+
+    /// Background fill for the MTF Grid's unified result cache. For every navbar
+    /// symbol's timeframe with neither an open tab nor a fresh cache entry, this
+    /// loads the bars off the render thread (a throttled, capped batch) and writes
+    /// the last indicator values + bars into the result cache, where the grid render
+    /// and chart reopens read them. Replaces the old hidden backing charts with the
+    /// same data, cached + TTL-pruned instead of held in persistent ChartStates the
+    /// sync loop had to maintain. Deferred while a heavy full-universe sync runs.
+    /// (Name kept for its call sites; `mtf_grid_status_*` are now throttle bookkeeping
+    /// read by the navbar pre-block.)
     pub(super) fn compute_mtf_grid_status(&mut self) {
         let cache = match &self.cache {
             Some(c) => Arc::clone(c),
             None => return,
         };
-        let sym = self.symbol_input.trim().to_string();
-        if sym.is_empty() {
-            return;
-        }
-        // A symbol change invalidates the whole snapshot (old symbol's values are
-        // meaningless); an open/close or throttled cache-fill refresh keeps prior
-        // values and only upserts, so filled cells never flicker.
-        if self.mtf_grid_status_symbol != sym {
-            self.mtf_grid_status.clear();
-        }
-        self.mtf_grid_status_symbol = sym.clone();
+        self.mtf_grid_status_symbol = self.symbol_input.trim().to_string();
         self.mtf_grid_status_open_sig = self.mtf_open_chart_signature();
         self.mtf_grid_status_at = Some(std::time::Instant::now());
-        let sym_key = mtf_grid_symbol_key(&sym);
-        let all_tfs: &[(&'static str, Timeframe)] = &MTF_GRID_TIMEFRAMES;
-
-        // Collect results from already-loaded charts (no thread needed)
-        let mut preloaded: Vec<MtfStatusRow> = Vec::new();
-        let mut need_load: Vec<(&'static str, Timeframe)> = Vec::new();
-        let open_chart_by_tf: std::collections::HashMap<Timeframe, &ChartState> = self
-            .charts
-            .iter()
-            .filter(|chart| {
-                !chart.bars.is_empty()
-                    && mtf_grid_symbol_key(&chart.symbol).eq_ignore_ascii_case(&sym_key)
-            })
-            .fold(std::collections::HashMap::new(), |mut acc, chart| {
-                acc.entry(chart.timeframe).or_insert(chart);
-                acc
-            });
-
-        for &(label, tf) in all_tfs {
-            if let Some(c) = open_chart_by_tf.get(&tf).copied() {
-                let close = c
-                    .fresh_live_quote_mid()
-                    .or_else(|| c.bars.last().map(|b| b.close));
-                let sma = c.sma200.last().and_then(|v| *v);
-                let kama = c.kama.last().and_then(|v| *v);
-                let fisher = c.fisher.last().and_then(|v| *v);
-                let fsig = c.fisher_signal.last().and_then(|v| *v);
-                preloaded.push((label, close, sma, kama, fisher, fsig));
-            } else {
-                need_load.push((label, tf));
+        if self.heavy_sync_in_progress {
+            // Don't add cache/indicator loads while full-universe sync saturates the
+            // machine; the throttled refresh retries once sync pressure relaxes.
+            return;
+        }
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let active_key = mtf_grid_symbol_key(&self.symbol_input).to_ascii_uppercase();
+        // (symbol, tf) cells with no open tab and no fresh cache entry.
+        let mut cells: Vec<(String, Timeframe)> = Vec::new();
+        for symbol in self.mtf_grid_navbar_symbols() {
+            let key = mtf_grid_symbol_key(&symbol);
+            for &(_label, tf) in &MTF_GRID_TIMEFRAMES {
+                // Never load a timeframe that's disabled in Sync (e.g. M1/M5) — that
+                // was the source of the "No chart data found for …:1Min" spam and the
+                // wasted probes for data that does not exist.
+                if !self.enabled_sync_timeframes.contains(tf.cache_suffix()) {
+                    continue;
+                }
+                let has_tab = self.charts.iter().any(|c| {
+                    c.show_in_tab_bar
+                        && !c.bars.is_empty()
+                        && c.timeframe == tf
+                        && mtf_grid_symbol_key(&c.symbol).eq_ignore_ascii_case(&key)
+                });
+                // Skip cells with a live tab (read live in the render) and cells whose
+                // bars are still fresh; the bars TTL paces the refresh while the value
+                // store keeps the dot lit between refreshes.
+                if has_tab
+                    || super::chart::chart_result_cache_get(&key, tf.cache_suffix(), now_ms)
+                        .is_some()
+                {
+                    continue;
+                }
+                cells.push((symbol.clone(), tf));
             }
         }
-
-        // Open-chart values are authoritative — always overwrite the snapshot.
-        self.mtf_grid_status_upsert(preloaded, true);
-
-        if need_load.is_empty() {
-            // All TFs came from open charts — nothing else to load.
-        } else if self.heavy_sync_in_progress {
-            // Don't kick off background cache/indicator loads for missing MTF
-            // cells while full-universe sync is saturating the machine. Seed any
-            // not-yet-present cell as grey (no-clobber keeps prior good values);
-            // the throttled refresh retries once sync pressure relaxes.
-            let placeholders: Vec<MtfStatusRow> = need_load
-                .iter()
-                .map(|(label, _)| (*label, None, None, None, None, None))
-                .collect();
-            self.mtf_grid_status_upsert(placeholders, false);
-        } else {
-            // Spawn background thread for TFs that need cache loading — don't block UI
-            let (tx, rx) = std::sync::mpsc::channel();
-            let need_load_owned: Vec<(&'static str, Timeframe)> = need_load;
-            let rt_handle = self.rt_handle.clone();
-            rt_handle.spawn_blocking(move || {
-                let mut results: Vec<MtfStatusRow> = Vec::new();
-                for (label, tf) in need_load_owned {
-                    let mut temp = ChartState::new(&sym, tf);
-                    let dsm = typhoon_engine::core::data_source::DataSourceManager::default();
-                    temp.load(&cache, &mut std::collections::VecDeque::new(), None, &dsm);
-                    if temp.bars.is_empty() {
-                        results.push((label, None, None, None, None, None));
-                    } else {
-                        let close = temp.bars.last().map(|b| b.close);
-                        let sma = temp.sma200.last().and_then(|v| *v);
-                        let kama = temp.kama.last().and_then(|v| *v);
-                        let fisher = temp.fisher.last().and_then(|v| *v);
-                        let fsig = temp.fisher_signal.last().and_then(|v| *v);
-                        results.push((label, close, sma, kama, fisher, fsig));
-                        // Publish the canonical bars to the shared MTF cache so this
-                        // symbol's MTF_MA / MultiKAMA chart overlay reuses them rather
-                        // than re-reading SQLite (the same-cache unification). Moves
-                        // the Vec out of `temp` (dropped next) — no clone.
-                        let now_ms = chrono::Utc::now().timestamp_millis();
-                        super::chart::mtf_htf_cache_put(
-                            &mtf_grid_symbol_key(&sym),
-                            tf.cache_suffix(),
-                            std::sync::Arc::new(std::mem::take(&mut temp.bars)),
-                            now_ms,
-                        );
-                    }
-                }
-                let _ = tx.send(results);
-            });
-            self.mtf_grid_rx = Some(rx);
+        if cells.is_empty() {
+            return;
         }
+        // Active symbol's cells first so the focused row fills immediately; cap the
+        // batch so one pass can't flood the runtime (remaining cells fill next pass).
+        cells.sort_by_key(|(s, _)| mtf_grid_symbol_key(s).to_ascii_uppercase() != active_key);
+        cells.truncate(MTF_GRID_FILL_PER_BATCH);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let rt_handle = self.rt_handle.clone();
+        rt_handle.spawn_blocking(move || {
+            for (symbol, tf) in cells {
+                let mut temp = ChartState::new(&symbol, tf);
+                let dsm = typhoon_engine::core::data_source::DataSourceManager::default();
+                temp.load(&cache, &mut std::collections::VecDeque::new(), None, &dsm);
+                if temp.bars.is_empty() {
+                    continue;
+                }
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let key = mtf_grid_symbol_key(&symbol);
+                let close = temp.bars.last().map(|b| b.close);
+                let sma = temp.sma200.last().and_then(|v| *v);
+                let kama = temp.kama.last().and_then(|v| *v);
+                let fisher = temp.fisher.last().and_then(|v| *v);
+                let fsig = temp.fisher_signal.last().and_then(|v| *v);
+                let source = temp.primary_source;
+                let bars = std::sync::Arc::new(std::mem::take(&mut temp.bars));
+                // Bars → shared HTF cache (overlays reuse them) and the reopen cache;
+                // values → the sticky grid store the navbar reads.
+                super::chart::mtf_htf_cache_put(
+                    &key,
+                    tf.cache_suffix(),
+                    std::sync::Arc::clone(&bars),
+                    now_ms,
+                );
+                super::chart::chart_result_cache_put(&key, tf.cache_suffix(), bars, source, now_ms);
+                super::chart::mtf_grid_value_put(
+                    &key,
+                    tf.cache_suffix(),
+                    (close, sma, kama, fisher, fsig),
+                    now_ms,
+                );
+            }
+            let _ = tx.send(());
+        });
+        self.mtf_grid_rx = Some(rx);
     }
 
     /// Return the unique news tickers represented by the current MTF grid charts.
@@ -1245,7 +1242,12 @@ impl TyphooNApp {
 
     /// Ensure this symbol has one MTF chart per supported MTF Grid timeframe.
     /// M1/M5 stay visible for native Kraken Spot and Kraken Equities; unsupported/missing assist providers render as empty/grey panes.
-    pub(super) fn ensure_mtf_grid_for_symbol(&mut self, symbol: &str) {
+    ///
+    /// `focus_active_d1` moves the active tab to this symbol's D1 chart (used when
+    /// the user explicitly enters the MTF grid). Passive callers — the navbar
+    /// pre-population sweep that runs in every charting mode — pass `false` so
+    /// back-filling a symbol's hidden timeframes never hijacks the focused tab.
+    pub(super) fn ensure_mtf_grid_for_symbol(&mut self, symbol: &str, focus_active_d1: bool) {
         let symbol = symbol.trim();
         if symbol.is_empty() {
             return;
@@ -1305,7 +1307,8 @@ impl TyphooNApp {
             if let Some(visible) = self.mtf_visible.get_mut(idx) {
                 *visible = true;
             }
-            if label == "D1"
+            if focus_active_d1
+                && label == "D1"
                 && self
                     .charts
                     .get(idx)
@@ -1320,7 +1323,7 @@ impl TyphooNApp {
     /// for the current symbol; the legacy `target` is ignored except for menu compatibility.
     pub(super) fn setup_mtf_grid(&mut self, cols: usize, _target: usize) {
         let sym = self.symbol_input.trim().to_string();
-        self.ensure_mtf_grid_for_symbol(&sym);
+        self.ensure_mtf_grid_for_symbol(&sym, true);
         self.mtf_cols = cols;
         self.mtf_enabled = true;
         let symbol_count = mtf_visible_chart_groups(&self.charts, &self.mtf_visible).len();
@@ -1878,27 +1881,13 @@ mod tests {
 
         let groups = mtf_visible_chart_groups(&charts, &visible);
 
+        // Groups are sorted alphabetically by symbol (BABYUSD before WOK), and each
+        // group's indices are ordered by ascending timeframe rank.
         assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].symbol, "WOK");
-        assert_eq!(groups[0].indices, vec![4, 2, 0, 5]);
-        assert_eq!(groups[1].symbol, "BABYUSD");
-        assert_eq!(groups[1].indices, vec![6, 3, 1]);
-    }
-
-    #[test]
-    fn mtf_grid_detects_symbols_missing_supported_timeframes() {
-        let charts = vec![
-            ChartState::new("CC", Timeframe::D1),
-            ChartState::new("CC", Timeframe::H4),
-            ChartState::new("WEN", Timeframe::D1),
-        ];
-        let visible = vec![true; charts.len()];
-
-        let missing_symbols = mtf_grid_symbols_with_missing_timeframes(&charts, &visible);
-
-        assert_eq!(missing_symbols, vec!["CC".to_string(), "WEN".to_string()]);
-        assert!(mtf_grid_missing_timeframes(&charts, &visible, "CC").contains(&Timeframe::M1));
-        assert!(mtf_grid_missing_timeframes(&charts, &visible, "CC").contains(&Timeframe::MN1));
+        assert_eq!(groups[0].symbol, "BABYUSD");
+        assert_eq!(groups[0].indices, vec![6, 3, 1]);
+        assert_eq!(groups[1].symbol, "WOK");
+        assert_eq!(groups[1].indices, vec![4, 2, 0, 5]);
     }
 
     #[test]
@@ -1931,11 +1920,9 @@ mod tests {
         let groups = mtf_visible_chart_groups(&charts, &visible);
 
         assert_eq!(groups.len(), 1);
+        // Empty M1/M5 backing charts (indices 0,1) are excluded; only the loaded
+        // M15/H1 tabs (indices 2,3) remain.
         assert_eq!(groups[0].indices, vec![2, 3]);
-        assert_eq!(
-            mtf_group_timeframe_labels(&charts, &groups[0]),
-            vec!["M15", "H1"]
-        );
     }
 
     #[test]
