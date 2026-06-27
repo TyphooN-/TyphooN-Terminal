@@ -119,6 +119,61 @@ pub async fn handle_market_data_command(
                 Err(e) => send_error(broker_msg_tx, e),
             }
         }
+        BrokerCmd::UpdateWatchlist { id, symbols } => {
+            let Some(b) = broker else {
+                return;
+            };
+            match b.update_watchlist(&id, &symbols).await {
+                Ok(_) => {
+                    let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                        "Watchlist {} updated ({} symbols)",
+                        id,
+                        symbols.len()
+                    )));
+                }
+                Err(e) => send_error(broker_msg_tx, e),
+            }
+        }
+        BrokerCmd::AddWatchlistSymbol { id, symbol } => {
+            let Some(b) = broker else {
+                return;
+            };
+            match b.add_watchlist_symbol(&id, &symbol).await {
+                Ok(_) => {
+                    let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                        "Added {} to watchlist {}",
+                        symbol, id
+                    )));
+                }
+                Err(e) => send_error(broker_msg_tx, e),
+            }
+        }
+        BrokerCmd::RemoveWatchlistSymbol { id, symbol } => {
+            let Some(b) = broker else {
+                return;
+            };
+            match b.remove_watchlist_symbol(&id, &symbol).await {
+                Ok(_) => {
+                    let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                        "Removed {} from watchlist {}",
+                        symbol, id
+                    )));
+                }
+                Err(e) => send_error(broker_msg_tx, e),
+            }
+        }
+        BrokerCmd::DeleteWatchlist { id } => {
+            let Some(b) = broker else {
+                return;
+            };
+            match b.delete_watchlist(&id).await {
+                Ok(_) => {
+                    let _ = broker_msg_tx
+                        .send(BrokerMsg::OrderResult(format!("Watchlist {} deleted", id)));
+                }
+                Err(e) => send_error(broker_msg_tx, e),
+            }
+        }
         BrokerCmd::GetOptionsChain { symbol, expiry } => {
             let Some(b) = broker else {
                 return;

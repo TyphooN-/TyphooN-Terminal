@@ -135,6 +135,10 @@ pub fn spawn_broker_message_processor(
                 | BrokerCmd::GetCorporateActions { .. }
                 | BrokerCmd::GetWatchlists
                 | BrokerCmd::CreateWatchlist { .. }
+                | BrokerCmd::UpdateWatchlist { .. }
+                | BrokerCmd::AddWatchlistSymbol { .. }
+                | BrokerCmd::RemoveWatchlistSymbol { .. }
+                | BrokerCmd::DeleteWatchlist { .. }
                 | BrokerCmd::GetOptionsChain { .. }) => {
                     market_data_commands::handle_market_data_command(
                         cmd,

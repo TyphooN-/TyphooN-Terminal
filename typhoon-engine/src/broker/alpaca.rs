@@ -4063,6 +4063,64 @@ impl AlpacaBroker {
         Ok(out)
     }
 
+    fn normalize_watchlist_symbol(symbol: &str, context: &str) -> Result<String, String> {
+        let symbol = symbol.trim().to_ascii_uppercase();
+        if symbol.is_empty() {
+            return Err(format!("{context} rejected: symbol is required"));
+        }
+        Ok(symbol)
+    }
+
+    fn watchlist_id_path(id: &str, context: &str) -> Result<String, String> {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(format!("{context} rejected: id is required"));
+        }
+        Ok(alpaca_path_segment(id))
+    }
+
+    fn add_watchlist_symbol_body(symbol: &str) -> Result<serde_json::Value, String> {
+        let symbol = Self::normalize_watchlist_symbol(symbol, "Add watchlist symbol")?;
+        Ok(serde_json::json!({ "symbol": symbol }))
+    }
+
+    fn watchlist_symbol_path(symbol: &str, context: &str) -> Result<String, String> {
+        let symbol = Self::normalize_watchlist_symbol(symbol, context)?;
+        Ok(alpaca_path_segment(&symbol))
+    }
+
+    async fn json_or_empty_success(
+        resp: reqwest::Response,
+        context: &str,
+    ) -> Result<serde_json::Value, String> {
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| format!("{context} body read failed: {e}"))?;
+        if text.trim().is_empty() && status.is_success() {
+            return Ok(serde_json::Value::Null);
+        }
+        let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+            if status.is_success() {
+                format!("{context} parse failed: {e}")
+            } else {
+                let snippet: String = text.chars().take(240).collect();
+                format!("{context} failed: HTTP {status}: {snippet}")
+            }
+        })?;
+        if !status.is_success() {
+            if let Some(msg) = alpaca_error_message(&json) {
+                return Err(format!("{context} rejected: {msg}"));
+            }
+            return Err(format!("{context} failed: HTTP {status}"));
+        }
+        if let Some(msg) = alpaca_error_message(&json) {
+            return Err(format!("{context} rejected: {msg}"));
+        }
+        Ok(json)
+    }
+
     fn create_watchlist_body(name: &str, symbols: &[String]) -> Result<serde_json::Value, String> {
         let name = name.trim();
         if name.is_empty() {
@@ -4136,18 +4194,12 @@ impl AlpacaBroker {
         id: &str,
         symbols: &[String],
     ) -> Result<serde_json::Value, String> {
-        if id.trim().is_empty() {
-            return Err("Update watchlist rejected: id is required".into());
-        }
+        let encoded_id = Self::watchlist_id_path(id, "Update watchlist")?;
         self.rate_limiter.wait().await;
         let body = Self::update_watchlist_body(symbols)?;
         let resp = self
             .client
-            .put(format!(
-                "{}/v2/watchlists/{}",
-                self.base_url,
-                alpaca_path_segment(id.trim())
-            ))
+            .put(format!("{}/v2/watchlists/{}", self.base_url, encoded_id))
             .headers(self.headers())
             .json(&body)
             .send()
@@ -4159,6 +4211,78 @@ impl AlpacaBroker {
             self.rate_limiter.trigger_cooldown().await;
         }
         Self::json_or_error(resp, "Update watchlist").await
+    }
+
+    /// Append one symbol to an existing Alpaca watchlist.
+    pub async fn add_watchlist_symbol(
+        &self,
+        id: &str,
+        symbol: &str,
+    ) -> Result<serde_json::Value, String> {
+        let encoded_id = Self::watchlist_id_path(id, "Add watchlist symbol")?;
+        let body = Self::add_watchlist_symbol_body(symbol)?;
+        self.rate_limiter.wait().await;
+        let resp = self
+            .client
+            .post(format!("{}/v2/watchlists/{}", self.base_url, encoded_id))
+            .headers(self.headers())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Add watchlist symbol failed: {e}"))?;
+
+        let status = resp.status();
+        if status.as_u16() == 429 {
+            self.rate_limiter.trigger_cooldown().await;
+        }
+        Self::json_or_empty_success(resp, "Add watchlist symbol").await
+    }
+
+    /// Remove one symbol from an Alpaca watchlist.
+    pub async fn remove_watchlist_symbol(
+        &self,
+        id: &str,
+        symbol: &str,
+    ) -> Result<serde_json::Value, String> {
+        let encoded_id = Self::watchlist_id_path(id, "Remove watchlist symbol")?;
+        let encoded_symbol = Self::watchlist_symbol_path(symbol, "Remove watchlist symbol")?;
+        self.rate_limiter.wait().await;
+        let resp = self
+            .client
+            .delete(format!(
+                "{}/v2/watchlists/{}/{}",
+                self.base_url, encoded_id, encoded_symbol
+            ))
+            .headers(self.headers())
+            .send()
+            .await
+            .map_err(|e| format!("Remove watchlist symbol failed: {e}"))?;
+
+        let status = resp.status();
+        if status.as_u16() == 429 {
+            self.rate_limiter.trigger_cooldown().await;
+        }
+        Self::json_or_empty_success(resp, "Remove watchlist symbol").await
+    }
+
+    /// Delete an Alpaca watchlist by id. Alpaca documents this as permanent.
+    pub async fn delete_watchlist(&self, id: &str) -> Result<(), String> {
+        let encoded_id = Self::watchlist_id_path(id, "Delete watchlist")?;
+        self.rate_limiter.wait().await;
+        let resp = self
+            .client
+            .delete(format!("{}/v2/watchlists/{}", self.base_url, encoded_id))
+            .headers(self.headers())
+            .send()
+            .await
+            .map_err(|e| format!("Delete watchlist failed: {e}"))?;
+
+        let status = resp.status();
+        if status.as_u16() == 429 {
+            self.rate_limiter.trigger_cooldown().await;
+        }
+        Self::json_or_empty_success(resp, "Delete watchlist").await?;
+        Ok(())
     }
 }
 

@@ -1387,6 +1387,24 @@ fn watchlist_bodies_trim_and_validate_inputs_before_http() {
     assert!(AlpacaBroker::update_watchlist_body(&[" ".to_string()]).is_err());
 }
 
+#[test]
+fn watchlist_symbol_mutation_policy_validates_and_encodes_paths() {
+    let add = AlpacaBroker::add_watchlist_symbol_body(" btc/usd ").unwrap();
+    assert_eq!(add["symbol"], "BTC/USD");
+    assert!(AlpacaBroker::add_watchlist_symbol_body(" ").is_err());
+
+    assert_eq!(
+        AlpacaBroker::watchlist_id_path(" id with spaces ", "Update watchlist").unwrap(),
+        "id%20with%20spaces"
+    );
+    assert_eq!(
+        AlpacaBroker::watchlist_symbol_path(" btc/usd ", "Remove watchlist symbol").unwrap(),
+        "BTC%2FUSD"
+    );
+    assert!(AlpacaBroker::watchlist_id_path(" ", "Delete watchlist").is_err());
+    assert!(AlpacaBroker::watchlist_symbol_path(" ", "Remove watchlist symbol").is_err());
+}
+
 // ── OCO order body construction ──
 
 #[test]

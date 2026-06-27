@@ -195,6 +195,25 @@ pub enum BrokerCmd {
         name: String,
         symbols: Vec<String>,
     },
+    /// Replace Alpaca watchlist symbols by id.
+    UpdateWatchlist {
+        id: String,
+        symbols: Vec<String>,
+    },
+    /// Append one symbol to an Alpaca watchlist.
+    AddWatchlistSymbol {
+        id: String,
+        symbol: String,
+    },
+    /// Remove one symbol from an Alpaca watchlist.
+    RemoveWatchlistSymbol {
+        id: String,
+        symbol: String,
+    },
+    /// Delete an Alpaca watchlist by id.
+    DeleteWatchlist {
+        id: String,
+    },
     /// Fetch Alpaca options chain for underlying.
     GetOptionsChain {
         symbol: String,
