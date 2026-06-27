@@ -137,10 +137,62 @@ impl Timeframe {
 /// (ADR-125 Target 2, slice 7b). A symbol-key primitive shared by the chart renderers
 /// (axis ticker label, time-axis) and native cache/market-data code; native re-exports it.
 pub fn bare_symbol_from_key(key: &str) -> String {
-    let parts: Vec<&str> = key.split(':').collect();
-    match parts.as_slice() {
-        [_src, sym, _tf] => (*sym).to_string(),
-        [sym, _tf] => (*sym).to_string(),
-        _ => key.to_string(),
+    const KNOWN_SOURCES: &[&str] = &[
+        "default",
+        "kraken",
+        "kraken-equities",
+        "kraken-futures",
+        "alpaca",
+        "yahoo-chart",
+        "paper_TyphooN",
+        "alpaca_paper_TyphooN",
+    ];
+    const KNOWN_TIMEFRAMES: &[&str] = &[
+        "1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week", "1Month", "M1", "M5",
+        "M15", "M30", "H1", "H4", "D1", "W1", "MN1",
+    ];
+
+    let parts: Vec<&str> = key.split(':').filter(|part| !part.is_empty()).collect();
+    if parts.is_empty() {
+        return key.to_string();
+    }
+    let end = if parts
+        .last()
+        .map(|part| {
+            KNOWN_TIMEFRAMES
+                .iter()
+                .any(|tf| part.eq_ignore_ascii_case(tf))
+        })
+        .unwrap_or(false)
+    {
+        parts.len().saturating_sub(1)
+    } else {
+        parts.len()
+    };
+    for part in parts[..end].iter().rev() {
+        if !KNOWN_SOURCES
+            .iter()
+            .any(|source| part.eq_ignore_ascii_case(source))
+        {
+            return (*part).to_string();
+        }
+    }
+    parts[end.saturating_sub(1)].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bare_symbol_from_key;
+
+    #[test]
+    fn bare_symbol_from_key_strips_nested_source_wrappers() {
+        assert_eq!(bare_symbol_from_key("alpaca:AVAT:1Min"), "AVAT");
+        assert_eq!(bare_symbol_from_key("default:alpaca:AVAT:1Min"), "AVAT");
+        assert_eq!(
+            bare_symbol_from_key("kraken-equities:WOK.EQ:5Min"),
+            "WOK.EQ"
+        );
+        assert_eq!(bare_symbol_from_key("BTC/USD:1Hour"), "BTC/USD");
+        assert_eq!(bare_symbol_from_key("AVAT"), "AVAT");
     }
 }

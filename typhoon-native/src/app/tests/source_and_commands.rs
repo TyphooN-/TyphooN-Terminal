@@ -214,6 +214,31 @@ fn restored_low_tf_equity_cache_key_does_not_probe_alpaca_assist() {
 }
 
 #[test]
+fn alpaca_low_tf_assist_skips_kraken_equity_universe_with_o1_membership() {
+    let kraken_equities: std::collections::HashSet<String> = ["AVAT".to_string()].into();
+    assert!(TyphooNApp::alpaca_low_tf_assist_unsupported_for_symbol(
+        &kraken_equities,
+        "AVAT",
+        "1Min"
+    ));
+    assert!(TyphooNApp::alpaca_low_tf_assist_unsupported_for_symbol(
+        &kraken_equities,
+        "AVAT",
+        "5Min"
+    ));
+    assert!(!TyphooNApp::alpaca_low_tf_assist_unsupported_for_symbol(
+        &kraken_equities,
+        "AVAT",
+        "15Min"
+    ));
+    assert!(!TyphooNApp::alpaca_low_tf_assist_unsupported_for_symbol(
+        &kraken_equities,
+        "AAPL",
+        "1Min"
+    ));
+}
+
+#[test]
 fn chart_equity_source_rank_inverts_with_primary_broker() {
     // ADR-126: the primary broker's equity source is the trusted rank-0 scale; the
     // other tradeable broker drops to the rank-2 assist. Yahoo/default are unchanged

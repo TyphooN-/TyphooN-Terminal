@@ -199,6 +199,7 @@ impl TyphooNApp {
             .collect();
         symbols.sort();
         symbols.dedup();
+        self.kraken_equity_universe_set = symbols.iter().cloned().collect();
         self.kraken_equity_universe_symbols = symbols;
         self.kraken_equity_names = names;
         self.kraken_equity_universe_requested = true;

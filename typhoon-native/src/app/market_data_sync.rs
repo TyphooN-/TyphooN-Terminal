@@ -1397,6 +1397,13 @@ impl TyphooNApp {
                 continue;
             };
             let symbol = normalize_market_data_symbol(&candidate.symbol).replace('/', "");
+            if Self::alpaca_low_tf_assist_unsupported_for_symbol(
+                &self.kraken_equity_universe_set,
+                &symbol,
+                tf,
+            ) {
+                continue;
+            }
             let fetch_key = alpaca_fetch_key(&symbol, tf);
             if self.is_fetch_on_cooldown("alpaca", &symbol, tf) {
                 continue;
@@ -1428,6 +1435,13 @@ impl TyphooNApp {
             return false;
         }
         let symbol = normalize_market_data_symbol(symbol).replace('/', "");
+        if Self::alpaca_low_tf_assist_unsupported_for_symbol(
+            &self.kraken_equity_universe_set,
+            &symbol,
+            tf,
+        ) {
+            return false;
+        }
         if !self.alpaca_no_data_loaded {
             self.alpaca_no_data_load();
         }
@@ -1493,6 +1507,14 @@ impl TyphooNApp {
             backfill_complete,
         });
         true
+    }
+
+    pub(super) fn alpaca_low_tf_assist_unsupported_for_symbol(
+        kraken_equity_universe_set: &std::collections::HashSet<String>,
+        symbol: &str,
+        tf: &str,
+    ) -> bool {
+        matches!(tf, "1Min" | "5Min") && kraken_equity_universe_set.contains(symbol)
     }
 
     /// `true` if the Kraken WS OHLC pipeline pushed a bar for this

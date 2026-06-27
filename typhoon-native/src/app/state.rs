@@ -748,6 +748,10 @@ pub struct TyphooNApp {
     pub(crate) auto_full_tilt_active: bool,
     /// Full tradable Kraken Securities/equities symbol universe from the internal public catalog.
     pub(crate) kraken_equity_universe_symbols: Vec<String>,
+    /// O(1) membership mirror for `kraken_equity_universe_symbols`; used to keep
+    /// unsupported Alpaca/Yahoo low-timeframe assist fetches from repeatedly
+    /// probing xStock rows that the native Kraken-equities path owns.
+    pub(crate) kraken_equity_universe_set: std::collections::HashSet<String>,
     /// Lightweight ticker → company name map populated from the Kraken iapi equity
     /// catalog at universe load time. Used as a fast fallback for chart headers and
     /// the symbol picker when the full `all_fundamentals` table is empty (the normal
