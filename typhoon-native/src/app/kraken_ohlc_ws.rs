@@ -55,8 +55,22 @@ impl TyphooNApp {
         if !self.kraken_enabled || !self.kraken_ws_ohlc_enabled {
             return false;
         }
+        // Honor the global crypto/fiat quote filters on the WS firehose too, not just
+        // the REST scrape. Without this, disabling a quote (e.g. EUR) stopped the
+        // scrape but the WS kept streaming + caching every EUR pair, so the filter
+        // looked ignored. Uses the same per-pair rule as the disabled-quote cache
+        // prune, so a pair the prune would delete is never re-subscribed.
+        let filtered_spot: Vec<(String, String)> = self
+            .kraken_pairs
+            .iter()
+            .filter(|(pair_name, display)| {
+                let sym = if display.is_empty() { pair_name } else { display };
+                !self.kraken_pair_quote_disabled(sym)
+            })
+            .cloned()
+            .collect();
         let desired = build_kraken_ws_subscribe_symbols_for_app(
-            &self.kraken_pairs,
+            &filtered_spot,
             &self.kraken_equity_universe_symbols,
             &self.kraken_equity_demand_symbols(),
             self.kraken_scrape_xstocks,

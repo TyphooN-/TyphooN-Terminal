@@ -1472,6 +1472,10 @@ fn kraken_pair_asset_class_identifies_spot_fx() {
         2, false, true, false, false, false, false, false, false, false, false, false, false,
     ));
     assert_eq!(kraken_pair_asset_class("XBTUSD", "BTC/USD"), "crypto");
+    // A crypto/EUR pair reads as EUR-quoted, so the global quote filter (and the WS
+    // firehose / cache prune that share kraken_pair_quote_disabled) exclude it when
+    // EUR is disabled — even while USD stays enabled.
+    assert_eq!(TyphooNApp::kraken_symbol_quote("ADXEUR"), Some("EUR"));
 }
 
 #[test]

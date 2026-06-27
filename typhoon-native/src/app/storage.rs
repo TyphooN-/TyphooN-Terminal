@@ -206,11 +206,6 @@ impl TyphooNApp {
     }
 
     pub(super) fn disabled_kraken_quote_cache_keys(&self) -> Vec<String> {
-        const FIAT_QUOTES: [&str; 10] = [
-            "USD", "USDT", "USDC", "USDG", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF",
-        ];
-        const FIAT_BASES: [&str; 7] = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF"];
-
         let mut keys = Vec::new();
         for (key, _, _) in &self.bg.detailed_stats {
             let Some(rest) = key.strip_prefix("kraken:") else {
@@ -219,21 +214,11 @@ impl TyphooNApp {
             let Some((symbol, _timeframe)) = rest.split_once(':') else {
                 continue;
             };
-            let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
-            let Some(quote) = Self::kraken_symbol_quote(&symbol) else {
-                continue;
-            };
-            if !FIAT_QUOTES.contains(&quote) || self.crypto_fiat_quote_scrape_enabled(quote) {
-                continue;
+            // Same per-pair rule the WS firehose filters on, so the prune and the
+            // live subscription stay in lock-step.
+            if self.kraken_pair_quote_disabled(symbol) {
+                keys.push(key.clone());
             }
-            let base = symbol
-                .strip_suffix(quote)
-                .unwrap_or(symbol.as_str())
-                .trim_end_matches('/');
-            if FIAT_BASES.contains(&base) {
-                continue;
-            }
-            keys.push(key.clone());
         }
         keys.sort();
         keys.dedup();

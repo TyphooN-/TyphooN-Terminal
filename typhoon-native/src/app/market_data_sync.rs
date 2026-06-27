@@ -754,6 +754,30 @@ impl TyphooNApp {
         }
     }
 
+    /// True when a Kraken spot pair is excluded by the global crypto/fiat quote
+    /// filters: its quote is a fiat/stable quote that is currently disabled and its
+    /// base is not itself a fiat currency (pure fiat-FX pairs like EUR/USD are always
+    /// kept). The single source of truth shared by the WS OHLC firehose and the
+    /// disabled-quote cache prune so the two can't drift.
+    pub(super) fn kraken_pair_quote_disabled(&self, symbol: &str) -> bool {
+        const FIAT_QUOTES: [&str; 10] = [
+            "USD", "USDT", "USDC", "USDG", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF",
+        ];
+        const FIAT_BASES: [&str; 7] = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF"];
+        let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
+        let Some(quote) = Self::kraken_symbol_quote(&symbol) else {
+            return false;
+        };
+        if !FIAT_QUOTES.contains(&quote) || self.crypto_fiat_quote_scrape_enabled(quote) {
+            return false;
+        }
+        let base = symbol
+            .strip_suffix(quote)
+            .unwrap_or(symbol.as_str())
+            .trim_end_matches('/');
+        !FIAT_BASES.contains(&base)
+    }
+
     pub(super) fn kraken_spot_sector_scrape_enabled(&self, sector: usize) -> bool {
         Self::kraken_spot_sector_scrape_enabled_from_flags(
             sector,
