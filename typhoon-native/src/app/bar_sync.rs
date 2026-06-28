@@ -100,6 +100,14 @@ pub(super) fn compute_bar_sync_stats(
         let Some(tf) = normalize_sync_timeframe_key(raw_tf) else {
             continue;
         };
+        // Yahoo now syncs daily-and-up only; hide any orphaned intraday rows so the
+        // Sync Status % reflects the actual lane policy (those KVs are purged once on
+        // startup). Alpaca still serves 15Min+, so it only hides 1Min/5Min.
+        if prefix == "yahoo-chart"
+            && !typhoon_engine::core::fallback_bars::yahoo_chart_supports_timeframe(tf)
+        {
+            continue;
+        }
         if matches!(prefix, "alpaca" | "yahoo-chart") && matches!(tf, "1Min" | "5Min") {
             continue;
         }

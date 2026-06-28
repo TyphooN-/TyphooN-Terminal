@@ -2134,6 +2134,29 @@ impl SqliteCache {
         Ok(())
     }
 
+    /// Delete every `source:SYMBOL:tf` bar entry for the given source and the
+    /// listed timeframes. Used to reclaim orphaned KVs after a lane stops syncing
+    /// a timeframe (e.g. the Yahoo chart lane dropping intraday — those rows are
+    /// no longer fetched, merged, or counted, so they are dead weight). Keys are
+    /// `source:SYMBOL:tf` and symbols never contain a colon, so the anchored
+    /// `LIKE 'source:%:tf'` cannot match a different source or timeframe. Returns
+    /// the number of rows deleted across all timeframes.
+    pub fn purge_bars_for_source_timeframes(
+        &self,
+        source: &str,
+        timeframes: &[&str],
+    ) -> Result<usize, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut deleted = 0usize;
+        for tf in timeframes {
+            let pattern = format!("{source}:%:{tf}");
+            deleted += conn
+                .execute("DELETE FROM bar_cache WHERE key LIKE ?1", params![pattern])
+                .map_err(|e| format!("purge {source}:*:{tf} failed: {e}"))?;
+        }
+        Ok(deleted)
+    }
+
     /// Count bar_cache rows below a target zstd level. Used by the auto-compact
     /// scheduler to decide whether a recompression pass is worth waking up for —
     /// already-compacted entries are skipped by `compact_storage`, so the work

@@ -35,6 +35,28 @@ fn live_bar_writes_use_fast_zstd_level_not_idle_compaction_level() {
 }
 
 #[test]
+fn purge_bars_for_source_timeframes_only_removes_matching_source_and_tf() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let bars = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10.0}]"#;
+    cache.put_bars("yahoo-chart:AAPL:15Min", bars).unwrap();
+    cache.put_bars("yahoo-chart:AAPL:1Hour", bars).unwrap();
+    cache.put_bars("yahoo-chart:AAPL:1Day", bars).unwrap(); // keep — not an intraday tf
+    cache.put_bars("alpaca:AAPL:15Min", bars).unwrap(); // keep — different source
+
+    let n = cache
+        .purge_bars_for_source_timeframes("yahoo-chart", &["15Min", "30Min", "1Hour"])
+        .unwrap();
+    assert_eq!(n, 2); // 15Min + 1Hour existed; 30Min did not
+
+    assert!(cache.get_bars_raw("yahoo-chart:AAPL:15Min").unwrap().is_none());
+    assert!(cache.get_bars_raw("yahoo-chart:AAPL:1Hour").unwrap().is_none());
+    assert!(cache.get_bars_raw("yahoo-chart:AAPL:1Day").unwrap().is_some());
+    assert!(cache.get_bars_raw("alpaca:AAPL:15Min").unwrap().is_some());
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn delete_equity_bar_cache_for_symbol_clears_provider_and_merged_rows() {
     let db_path = temp_db_path();
     let cache = SqliteCache::open(&db_path).unwrap();

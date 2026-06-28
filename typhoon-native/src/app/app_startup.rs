@@ -123,6 +123,33 @@ pub(super) fn spawn_async_cache_open(
 }
 
 impl TyphooNApp {
+    /// One-time cleanup: drop the orphaned Yahoo intraday bar KVs left over from
+    /// before the Yahoo chart lane was narrowed to daily-and-up. M15/M30/H1 are no
+    /// longer fetched, merged, or counted, so those rows are dead weight. Gated by
+    /// a persisted KV flag (runs at most once) and executed on a blocking worker so
+    /// the DELETE never touches the render thread.
+    fn maybe_purge_orphaned_yahoo_intraday(&self) {
+        let Some(cache) = self.cache.clone() else {
+            return;
+        };
+        self.rt_handle.spawn_blocking(move || {
+            const FLAG: &str = "maint:yahoo_intraday_purged_v1";
+            if cache.get_kv(FLAG).ok().flatten().is_some() {
+                return;
+            }
+            match cache.purge_bars_for_source_timeframes("yahoo-chart", &["15Min", "30Min", "1Hour"])
+            {
+                Ok(n) => {
+                    tracing::info!(
+                        "Purged {n} orphaned Yahoo intraday bar KVs (M15/M30/H1 no longer synced)"
+                    );
+                    let _ = cache.put_kv(FLAG, "1");
+                }
+                Err(e) => tracing::warn!("Yahoo intraday purge skipped: {e}"),
+            }
+        });
+    }
+
     pub(crate) fn tick_cache_startup(&mut self) {
         // ── Receive async cache open result ──────────────────────────────
         if self.cache.is_none() {
@@ -137,6 +164,7 @@ impl TyphooNApp {
         // Load charts once cache arrives
         if !self.cache_loaded && self.cache.is_some() {
             self.cache_loaded = true;
+            self.maybe_purge_orphaned_yahoo_intraday();
             self.hydrate_loaded_charts();
             self.sync_preferences_load();
             self.alpaca_retry_load();
