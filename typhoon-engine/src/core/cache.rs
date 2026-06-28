@@ -2146,13 +2146,30 @@ impl SqliteCache {
         source: &str,
         timeframes: &[&str],
     ) -> Result<usize, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        // Delete in bounded rowid chunks, releasing the write lock between each, so
+        // a large purge (tens of thousands of rows) never holds the single conn
+        // mutex long enough to stall a render-thread cache read — the same hazard
+        // the streaming compaction avoids. Symbols never contain a colon, so the
+        // anchored `LIKE 'source:%:tf'` can't match a different source/timeframe.
+        const CHUNK: i64 = 500;
         let mut deleted = 0usize;
         for tf in timeframes {
             let pattern = format!("{source}:%:{tf}");
-            deleted += conn
-                .execute("DELETE FROM bar_cache WHERE key LIKE ?1", params![pattern])
-                .map_err(|e| format!("purge {source}:*:{tf} failed: {e}"))?;
+            loop {
+                let n = {
+                    let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+                    conn.execute(
+                        "DELETE FROM bar_cache WHERE rowid IN \
+                         (SELECT rowid FROM bar_cache WHERE key LIKE ?1 LIMIT ?2)",
+                        params![pattern, CHUNK],
+                    )
+                    .map_err(|e| format!("purge {source}:*:{tf} failed: {e}"))?
+                }; // lock released each iteration so other readers/writers interleave
+                deleted += n;
+                if (n as i64) < CHUNK {
+                    break;
+                }
+            }
         }
         Ok(deleted)
     }

@@ -137,6 +137,10 @@ impl TyphooNApp {
             if cache.get_kv(FLAG).ok().flatten().is_some() {
                 return;
             }
+            // Let the cold-start chart loads + initial sync settle before touching
+            // the cache. Combined with the chunked delete, the purge then never
+            // contends the conn lock against the startup chart reads.
+            std::thread::sleep(std::time::Duration::from_secs(45));
             match cache.purge_bars_for_source_timeframes("yahoo-chart", &["15Min", "30Min", "1Hour"])
             {
                 Ok(n) => {
