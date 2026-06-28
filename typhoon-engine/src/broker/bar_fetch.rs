@@ -523,18 +523,51 @@ fn merged_equity_materialize_target_from_cache_key(cache_key: &str) -> Option<(S
     Some((symbol, timeframe.to_string()))
 }
 
-/// Higher timeframes that can be *derived* from a freshly-stored base timeframe by
-/// aggregation, instead of spending a second provider request on them. Restricted to
-/// the window-safe, fixed-period intraday rollups whose bucket boundaries land on
-/// clean UTC multiples (so the aggregate aligns with a native bar): a 30-minute bar
-/// is two 15-minute bars; a 4-hour bar is four 1-hour bars. Each entry is
-/// `(derived_timeframe, derived_period_seconds)`. Calendar rollups (1Week/1Month),
-/// whose boundaries are not fixed-second, are intentionally excluded here.
-fn fixed_period_tf_derivations(base_tf: &str) -> &'static [(&'static str, i64)] {
+/// How a derived higher timeframe buckets its base bars.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Rollup {
+    /// Fixed-second intraday period: bucket on UTC multiples of `secs`.
+    Fixed(i64),
+    /// Calendar week, Monday 00:00 UTC start.
+    Week,
+    /// Calendar month, 1st 00:00 UTC start.
+    Month,
+}
+
+/// Higher timeframes derivable from a freshly-stored base timeframe by aggregation,
+/// instead of spending a separate rate-limited request on each. Window-safe: each
+/// base TF's provider window already spans the derived one, so the aggregate is as
+/// deep as a direct fetch. 30m←15m and 4h←1h bucket on fixed UTC periods; 1W and 1M
+/// ←1D bucket on calendar boundaries.
+fn tf_derivations(base_tf: &str) -> &'static [(&'static str, Rollup)] {
     match base_tf {
-        "15Min" => &[("30Min", 1_800)],
-        "1Hour" => &[("4Hour", 14_400)],
+        "15Min" => &[("30Min", Rollup::Fixed(1_800))],
+        "1Hour" => &[("4Hour", Rollup::Fixed(14_400))],
+        "1Day" => &[("1Week", Rollup::Week), ("1Month", Rollup::Month)],
         _ => &[],
+    }
+}
+
+/// Bucket-start epoch (seconds, UTC) for a bar at `ts_ms` under `rollup` — the
+/// timestamp the aggregated bar carries, chosen to land on the same boundary a native
+/// bar of that timeframe would, so derived and native rows dedup rather than double.
+fn rollup_bucket_start_secs(ts_ms: i64, rollup: Rollup) -> Option<i64> {
+    use chrono::Datelike;
+    let epoch_s = ts_ms.div_euclid(1_000);
+    match rollup {
+        Rollup::Fixed(period) if period > 0 => Some(epoch_s - epoch_s.rem_euclid(period)),
+        Rollup::Fixed(_) => None,
+        Rollup::Week => {
+            let date = chrono::DateTime::from_timestamp(epoch_s, 0)?.date_naive();
+            let back = date.weekday().num_days_from_monday() as u64;
+            let monday = date.checked_sub_days(chrono::Days::new(back))?;
+            Some(monday.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
+        }
+        Rollup::Month => {
+            let date = chrono::DateTime::from_timestamp(epoch_s, 0)?.date_naive();
+            let first = chrono::NaiveDate::from_ymd_opt(date.year(), date.month(), 1)?;
+            Some(first.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
+        }
     }
 }
 
@@ -546,28 +579,25 @@ fn source_derives_higher_tfs(source: &str) -> bool {
     matches!(source, "alpaca" | "yahoo-chart" | "kraken-equities")
 }
 
-/// Aggregate a sorted raw bar series (ts_ms, o, h, l, c, v) into fixed-period buckets
-/// (`period_secs`), emitting cache-shaped JSON bars timestamped at each bucket start
-/// (RFC3339). Open = first bar in the bucket, close = last, high/low = extremes,
-/// volume = sum. Bars with non-positive prices or `high < low` are skipped.
-fn aggregate_raw_to_fixed_period(
+/// Aggregate a raw bar series (ts_ms, o, h, l, c, v) into `rollup` buckets, emitting
+/// cache-shaped JSON bars timestamped at each bucket start (RFC3339). Open = first bar
+/// in the bucket, close = last, high/low = extremes, volume = sum. Bars with
+/// non-positive prices or `high < low` are skipped; input order is irrelevant.
+fn aggregate_raw_to_rollup(
     raw: &[(i64, f64, f64, f64, f64, f64)],
-    period_secs: i64,
+    rollup: Rollup,
 ) -> Vec<serde_json::Value> {
-    if period_secs <= 0 {
-        return Vec::new();
-    }
     let mut sorted: Vec<&(i64, f64, f64, f64, f64, f64)> = raw.iter().collect();
     sorted.sort_by_key(|b| b.0);
-    // bucket_start_secs -> (open, high, low, close, volume)
     let mut buckets: std::collections::BTreeMap<i64, (f64, f64, f64, f64, f64)> =
         std::collections::BTreeMap::new();
     for &(ts_ms, o, h, l, c, v) in sorted {
         if o <= 0.0 || h <= 0.0 || l <= 0.0 || c <= 0.0 || h < l {
             continue;
         }
-        let epoch_s = ts_ms.div_euclid(1000);
-        let bucket = epoch_s - epoch_s.rem_euclid(period_secs);
+        let Some(bucket) = rollup_bucket_start_secs(ts_ms, rollup) else {
+            continue;
+        };
         let entry = buckets.entry(bucket).or_insert((o, h, l, c, 0.0));
         if h > entry.1 {
             entry.1 = h;
@@ -608,7 +638,7 @@ fn derive_and_store_higher_tfs(
     if !source_derives_higher_tfs(source) {
         return Vec::new();
     }
-    let derivations = fixed_period_tf_derivations(base_tf);
+    let derivations = tf_derivations(base_tf);
     if derivations.is_empty() {
         return Vec::new();
     }
@@ -619,18 +649,22 @@ fn derive_and_store_higher_tfs(
         return Vec::new();
     }
     let mut derived = Vec::new();
-    for &(derived_tf, period_secs) in derivations {
-        let agg = aggregate_raw_to_fixed_period(&base_raw, period_secs);
+    for &(derived_tf, rollup) in derivations {
+        let agg = aggregate_raw_to_rollup(&base_raw, rollup);
         if agg.is_empty() {
             continue;
         }
         let derived_key = format!("{source}:{symbol}:{derived_tf}");
         let json = serde_json::to_string(&agg).unwrap_or_default();
-        // Merge (not overwrite): a prior direct fetch of this timeframe may hold
-        // deeper history than the base window covers. Derived bars are timestamped on
-        // the same UTC boundaries as native ones, so the merge dedups rather than
-        // duplicating.
-        if cache.merge_bars(&derived_key, &json, 0).is_ok() {
+        // Intraday fixed-period bars land on the same UTC boundary as native ones, so
+        // merge — it dedups and keeps any deeper direct history. Calendar bars derive
+        // from the deepest base (1Day) and a stale direct fetch may sit on a different
+        // boundary, so overwrite to keep the series self-consistent (no double bars).
+        let stored = match rollup {
+            Rollup::Fixed(_) => cache.merge_bars(&derived_key, &json, 0).is_ok(),
+            Rollup::Week | Rollup::Month => cache.put_bars(&derived_key, &json).is_ok(),
+        };
+        if stored {
             derived.push((derived_tf, agg.len()));
         }
     }
@@ -951,16 +985,65 @@ mod tests {
 
     #[test]
     fn tf_derivation_eligibility_is_assist_lanes_and_base_timeframes_only() {
-        assert_eq!(fixed_period_tf_derivations("15Min"), &[("30Min", 1_800)]);
-        assert_eq!(fixed_period_tf_derivations("1Hour"), &[("4Hour", 14_400)]);
-        assert!(fixed_period_tf_derivations("30Min").is_empty());
-        assert!(fixed_period_tf_derivations("1Day").is_empty());
+        assert_eq!(tf_derivations("15Min"), &[("30Min", Rollup::Fixed(1_800))]);
+        assert_eq!(tf_derivations("1Hour"), &[("4Hour", Rollup::Fixed(14_400))]);
+        assert_eq!(
+            tf_derivations("1Day"),
+            &[("1Week", Rollup::Week), ("1Month", Rollup::Month)]
+        );
+        assert!(tf_derivations("30Min").is_empty());
+        assert!(tf_derivations("4Hour").is_empty());
         assert!(source_derives_higher_tfs("alpaca"));
         assert!(source_derives_higher_tfs("yahoo-chart"));
         assert!(source_derives_higher_tfs("kraken-equities"));
         // Native crypto lanes already return every timeframe — never derived.
         assert!(!source_derives_higher_tfs("kraken"));
         assert!(!source_derives_higher_tfs("kraken-futures"));
+    }
+
+    #[test]
+    fn aggregate_1d_to_weekly_buckets_on_monday_with_correct_ohlcv() {
+        // 2024-01-01 is a Monday. Three daily bars in week 1, two in week 2.
+        let d = 86_400_000i64;
+        let mon1 = 1_704_067_200_000i64; // 2024-01-01 00:00 UTC
+        let raw = vec![
+            (mon1, 10.0, 12.0, 9.0, 11.0, 100.0),         // Mon Jan 1
+            (mon1 + d, 11.0, 13.0, 10.0, 12.0, 110.0),    // Tue Jan 2
+            (mon1 + 2 * d, 12.0, 14.0, 11.0, 13.0, 120.0), // Wed Jan 3
+            (mon1 + 7 * d, 20.0, 22.0, 19.0, 21.0, 200.0), // Mon Jan 8
+            (mon1 + 8 * d, 21.0, 23.0, 20.0, 22.0, 210.0), // Tue Jan 9
+        ];
+        let out = aggregate_raw_to_rollup(&raw, Rollup::Week);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["timestamp"].as_str().unwrap(), "2024-01-01T00:00:00+00:00");
+        assert_eq!(out[0]["open"].as_f64().unwrap(), 10.0);
+        assert_eq!(out[0]["high"].as_f64().unwrap(), 14.0);
+        assert_eq!(out[0]["low"].as_f64().unwrap(), 9.0);
+        assert_eq!(out[0]["close"].as_f64().unwrap(), 13.0);
+        assert_eq!(out[0]["volume"].as_f64().unwrap(), 330.0);
+        assert_eq!(out[1]["timestamp"].as_str().unwrap(), "2024-01-08T00:00:00+00:00");
+        assert_eq!(out[1]["close"].as_f64().unwrap(), 22.0);
+        assert_eq!(out[1]["volume"].as_f64().unwrap(), 410.0);
+    }
+
+    #[test]
+    fn aggregate_1d_to_monthly_buckets_on_first_of_month() {
+        let d = 86_400_000i64;
+        let jan1 = 1_704_067_200_000i64; // 2024-01-01 00:00 UTC
+        let raw = vec![
+            (jan1, 10.0, 12.0, 9.0, 11.0, 100.0),          // Jan 1
+            (jan1 + 30 * d, 15.0, 16.0, 14.0, 15.0, 150.0), // Jan 31
+            (jan1 + 31 * d, 20.0, 22.0, 19.0, 21.0, 200.0), // Feb 1
+        ];
+        let out = aggregate_raw_to_rollup(&raw, Rollup::Month);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["timestamp"].as_str().unwrap(), "2024-01-01T00:00:00+00:00");
+        assert_eq!(out[0]["open"].as_f64().unwrap(), 10.0);
+        assert_eq!(out[0]["high"].as_f64().unwrap(), 16.0);
+        assert_eq!(out[0]["close"].as_f64().unwrap(), 15.0);
+        assert_eq!(out[0]["volume"].as_f64().unwrap(), 250.0);
+        assert_eq!(out[1]["timestamp"].as_str().unwrap(), "2024-02-01T00:00:00+00:00");
+        assert_eq!(out[1]["open"].as_f64().unwrap(), 20.0);
     }
 
     #[test]
@@ -973,7 +1056,7 @@ mod tests {
             (s + 1_800_000, 12.0, 14.0, 11.0, 13.0, 200.0), // 14:30
             (s + 2_700_000, 13.0, 15.0, 12.0, 14.0, 250.0), // 14:45
         ];
-        let out = aggregate_raw_to_fixed_period(&raw, 1_800);
+        let out = aggregate_raw_to_rollup(&raw, Rollup::Fixed(1_800));
         assert_eq!(out.len(), 2);
         // Bucket 1 (14:00-14:30): open=first, close=last, high/low=extremes, vol=sum.
         assert_eq!(out[0]["timestamp"].as_str().unwrap(), "2024-01-01T14:00:00+00:00");
@@ -999,7 +1082,7 @@ mod tests {
             (s, 10.0, 12.0, 9.0, 11.0, 100.0),            // 14:00
             (s + 1_000, -1.0, 1.0, 1.0, 1.0, 1.0),        // invalid (price <= 0) -> skipped
         ];
-        let out = aggregate_raw_to_fixed_period(&raw, 1_800);
+        let out = aggregate_raw_to_rollup(&raw, Rollup::Fixed(1_800));
         assert_eq!(out.len(), 1);
         // open must come from the chronologically-first bar (14:00), not input order.
         assert_eq!(out[0]["open"].as_f64().unwrap(), 10.0);
