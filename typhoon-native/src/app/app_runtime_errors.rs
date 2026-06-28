@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::app_runtime_support::is_routine_market_data_status;
+use crate::app::app_runtime_support::{is_routine_market_data_status, yahoo_chart_429_backoff_secs};
 
 impl TyphooNApp {
     pub(super) fn handle_broker_error(&mut self, e: String, now: i64) {
@@ -31,12 +31,21 @@ impl TyphooNApp {
             };
             self.kraken_equity_universe_retry_after_ts = now + backoff;
         } else if e.contains("Yahoo Chart HTTP 429") {
-            let pause = 300; // 5 minutes backoff on Yahoo rate limit
-            if now + pause > self.yahoo_chart_sync_pause_until_ts {
+            // Escalating, self-decaying backoff. The lane fires several concurrent
+            // requests, so one rate-limit event arrives as a burst of 429s — only
+            // escalate once per pause window (when not already paused) so the burst
+            // counts once. An isolated 429 now recovers in ~45s instead of the old
+            // flat 5m that pinned the lane dark; sustained limiting escalates toward
+            // a 10m ceiling. The counter resets on the first successful Yahoo
+            // response (see handle_bars_fetched).
+            if self.yahoo_chart_sync_pause_until_ts <= now {
+                self.yahoo_chart_consecutive_429 = self.yahoo_chart_consecutive_429.saturating_add(1);
+                let pause = yahoo_chart_429_backoff_secs(self.yahoo_chart_consecutive_429);
                 self.yahoo_chart_sync_pause_until_ts = now + pause;
                 self.yahoo_chart_sync_pause_reason = e.clone();
                 self.log.push_back(LogEntry::warn(format!(
-                    "Yahoo Chart rate limited — pausing fallback lane for 5m"
+                    "Yahoo Chart rate limited (x{}) — pausing fallback lane {}s",
+                    self.yahoo_chart_consecutive_429, pause
                 )));
             }
         } else if e.contains("401") || e.contains("Unauthorized") || e.contains("403") {

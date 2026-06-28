@@ -557,6 +557,7 @@ impl TyphooNApp {
             kraken_equities_sync_pause_reason: String::new(),
             yahoo_chart_sync_pause_until_ts: 0,
             yahoo_chart_sync_pause_reason: String::new(),
+            yahoo_chart_consecutive_429: 0,
             sec_cache_filings: Vec::new(),
             sec_cache_filings_key: None,
             sec_cache_filings_controls_key: None,

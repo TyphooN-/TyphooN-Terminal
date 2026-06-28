@@ -101,6 +101,12 @@ impl TyphooNApp {
                 self.refresh_storage_snapshot_after_action("alpaca_bars");
             }
         }
+        if source == "yahoo-chart" && self.yahoo_chart_consecutive_429 != 0 {
+            // A completed Yahoo response (any bar count) proves the lane isn't
+            // 429-blocked right now — reset the escalating backoff so the next
+            // isolated 429 recovers in ~45s instead of compounding toward 10m.
+            self.yahoo_chart_consecutive_429 = 0;
+        }
 
         if should_reload {
             self.queue_chart_reload(self.active_tab);

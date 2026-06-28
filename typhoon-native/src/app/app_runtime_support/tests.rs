@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn yahoo_chart_429_backoff_escalates_then_caps() {
+    // Isolated 429 (consecutive == 1) recovers fast; sustained limiting escalates
+    // to a protective ceiling. Zero is treated as the first event.
+    assert_eq!(yahoo_chart_429_backoff_secs(0), 45);
+    assert_eq!(yahoo_chart_429_backoff_secs(1), 45);
+    assert_eq!(yahoo_chart_429_backoff_secs(2), 90);
+    assert_eq!(yahoo_chart_429_backoff_secs(3), 180);
+    assert_eq!(yahoo_chart_429_backoff_secs(4), 360);
+    assert_eq!(yahoo_chart_429_backoff_secs(5), 600);
+    assert_eq!(yahoo_chart_429_backoff_secs(6), 600);
+    assert_eq!(yahoo_chart_429_backoff_secs(100), 600);
+}
+
+#[test]
 fn routine_market_data_status_filters_alpaca_progress_noise() {
     assert!(is_routine_market_data_status(
         "Alpaca GOOGL 1Week: fetching full server history (first sync)..."

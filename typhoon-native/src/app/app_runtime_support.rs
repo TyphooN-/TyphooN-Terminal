@@ -349,6 +349,19 @@ pub(super) fn kraken_xstocks_weekend_closed_now() -> bool {
     kraken_xstocks_weekend_closed_at(chrono::Utc::now())
 }
 
+/// Escalating, bounded backoff (seconds) for the Nth consecutive Yahoo Chart
+/// 429. Yahoo's unauthenticated chart endpoint throttles bulk access; a single
+/// rate-limit event arrives as a burst of 429s (the lane fires several requests
+/// at once), so the caller increments `consecutive` once per pause window and
+/// resets it to 0 on the first successful response. The schedule —
+/// 1→45s, 2→90s, 3→180s, 4→360s, 5+→600s — lets an isolated 429 recover in ~45s
+/// (vs. the old flat 5m that pinned the lane dark) while sustained limiting still
+/// escalates toward a protective 10m ceiling.
+pub(super) fn yahoo_chart_429_backoff_secs(consecutive: u32) -> i64 {
+    let steps = consecutive.saturating_sub(1).min(4);
+    (45_i64 << steps).min(600)
+}
+
 /// Session-aware status for the regular US-equities market clock (Alpaca
 /// `/v2/clock`). Unlike Kraken xStocks (24/5 with an overnight session), the
 /// regular US market has four states: pre-market (4:00–9:30 ET), core/regular

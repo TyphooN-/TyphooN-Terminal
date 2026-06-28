@@ -772,6 +772,10 @@ pub struct TyphooNApp {
     pub(crate) kraken_equities_sync_pause_reason: String,
     pub(crate) yahoo_chart_sync_pause_until_ts: i64,
     pub(crate) yahoo_chart_sync_pause_reason: String,
+    /// Consecutive Yahoo 429 rate-limit events (a concurrent burst counts once).
+    /// Drives the escalating pause backoff; resets to 0 on the first successful
+    /// Yahoo response so an isolated 429 recovers fast instead of compounding.
+    pub(crate) yahoo_chart_consecutive_429: u32,
     pub(crate) heavy_sync_in_progress: bool,
     /// SEC window caches — all keyed off `(bg_rev, broker_scope, ...)` so the heavy
     /// dedup/filter/sort work only runs when state actually changes, not every frame.
