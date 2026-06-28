@@ -93,10 +93,17 @@ fn fallback_bars_to_cache_json(bars: &[FallbackBar]) -> Result<String, String> {
     serde_json::to_string(&json_bars).map_err(|e| format!("serialize fallback bars: {e}"))
 }
 
+/// Timeframes the Yahoo chart assist lane will fetch. Intentionally daily and up:
+/// Yahoo's unauthenticated endpoint is rate-fragile (429 → lane backoff) and its
+/// intraday history is a shallow recent window, so in practice the 15Min/30Min/
+/// 1Hour rows never converged (~0.2% synced) while they consumed the lane's tiny
+/// budget. Yahoo's real merge value is breadth on the higher timeframes (1Month
+/// neared 100%, 1Week ~10%), so we focus the limited lane there — intraday equity
+/// depth comes from Alpaca / Kraken instead.
 pub fn yahoo_chart_supports_timeframe(timeframe: &str) -> bool {
     matches!(
         normalize_sync_timeframe_key(timeframe),
-        Some("15Min" | "30Min" | "1Hour" | "1Day" | "1Week" | "1Month")
+        Some("1Day" | "1Week" | "1Month")
     )
 }
 
@@ -339,6 +346,19 @@ pub fn store_fallback_bars(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn yahoo_chart_lane_is_daily_and_up_only() {
+        for tf in ["1Day", "1Week", "1Month", "D1", "W1", "MN1"] {
+            assert!(yahoo_chart_supports_timeframe(tf), "{tf} should be supported");
+        }
+        for tf in ["15Min", "30Min", "1Hour", "M15", "M30", "H1", "5Min", "1Min"] {
+            assert!(
+                !yahoo_chart_supports_timeframe(tf),
+                "{tf} should NOT be on the Yahoo lane"
+            );
+        }
+    }
 
     #[test]
     fn yahoo_chart_request_symbol_uses_hyphen_for_class_shares() {
