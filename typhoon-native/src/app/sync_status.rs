@@ -111,6 +111,17 @@ impl TyphooNApp {
                 .keys()
                 .cloned()
                 .collect(),
+            no_data_keys_by_source: {
+                // Mirror the scheduler's no-data view: the unresolvable index per
+                // broker, plus the persisted Alpaca no-data tombstones folded into
+                // the `alpaca` source (see select_alpaca_sync_workset callers).
+                let mut by_source = self.unresolvable_fetch_keys_by_broker.clone();
+                by_source
+                    .entry("alpaca".to_string())
+                    .or_default()
+                    .extend(self.alpaca_no_data_pairs.keys().cloned());
+                by_source
+            },
         }
     }
 
@@ -180,7 +191,19 @@ impl TyphooNApp {
                 }
                 ui.separator();
 
-                // Per-broker summary chips
+                // Per-broker summary chips. "Reachable" excludes cells that every
+                // applicable provider has tombstoned as no-data (currently the
+                // Merged lane). The raw fresh/total is left unchanged and the
+                // reachable % is shown alongside only when it differs.
+                let unreachable_by_broker: std::collections::HashMap<&str, u64> = {
+                    let mut m: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+                    for row in &rows {
+                        if row.unreachable > 0 {
+                            *m.entry(row.broker.as_str()).or_default() += row.unreachable;
+                        }
+                    }
+                    m
+                };
                 ui.horizontal_wrapped(|ui| {
                     for (broker, total, healthy, pct) in &broker_totals {
                         let color = if *total == 0 {
@@ -192,10 +215,27 @@ impl TyphooNApp {
                         } else {
                             egui::Color32::from_rgb(231, 76, 60)
                         };
-                        ui.label(egui::RichText::new(format!(
-                            "{}: {:.1}% ({}/{})",
-                            broker, pct, healthy, total,
-                        )).color(color).monospace().strong());
+                        let no_data = unreachable_by_broker.get(broker.as_str()).copied().unwrap_or(0);
+                        let label = if no_data > 0 {
+                            let reach_total = total.saturating_sub(no_data);
+                            let reach_pct = if reach_total == 0 {
+                                100.0
+                            } else {
+                                (*healthy as f32 / reach_total as f32) * 100.0
+                            };
+                            format!(
+                                "{}: {:.1}% ({}/{}) · {:.1}% reachable ({} no-data)",
+                                broker, pct, healthy, total, reach_pct, no_data
+                            )
+                        } else {
+                            format!("{}: {:.1}% ({}/{})", broker, pct, healthy, total)
+                        };
+                        let resp = ui.label(egui::RichText::new(label).color(color).monospace().strong());
+                        if no_data > 0 {
+                            resp.on_hover_text(format!(
+                                "Raw % counts all {total} expected cells. {no_data} are provider-no-data (every applicable source has tombstoned them), so they can never become healthy on this lane. Reachable % excludes them: healthy / (total − no-data)."
+                            ));
+                        }
                         ui.label(egui::RichText::new("|").color(AXIS_TEXT));
                     }
                 });
@@ -319,6 +359,12 @@ pub(super) struct BarSyncInputs {
     alpaca_backfill_keys: std::collections::HashSet<String>,
     kraken_backfill_keys: std::collections::HashSet<String>,
     kraken_futures_backfill_keys: std::collections::HashSet<String>,
+    /// Per-source provider-no-data tombstones (`source` → set of `SYM:TF` fetch
+    /// keys). Used by the Merged classifier to mark a fully-tombstoned cell
+    /// Unreachable. `alpaca` folds in both the unresolvable index and the
+    /// persisted Alpaca no-data set.
+    no_data_keys_by_source:
+        std::collections::HashMap<String, std::collections::HashSet<String>>,
 }
 
 /// Result of an off-thread bar-sync recompute, applied by `poll_bar_sync_compute`.
@@ -405,6 +451,7 @@ impl BarSyncInputs {
             stale: 0,
             empty: 0,
             settled: 0,
+            unreachable: 0,
             note: Some(
                 "Full Kraken Securities/xStocks tradable catalog. This reference universe forms the Merged, Alpaca assist, and Yahoo assist sync target lists; native Kraken Equities history rows remain demand-scoped."
                     .to_string(),
@@ -452,6 +499,7 @@ impl BarSyncInputs {
             let mut healthy = 0u64;
             let mut stale = 0u64;
             let mut empty = 0u64;
+            let mut unreachable = 0u64;
             for symbol in &symbols {
                 let symbol = normalize_market_data_symbol(symbol)
                     .replace('/', "")
@@ -471,6 +519,12 @@ impl BarSyncInputs {
                     MergedSyncStatus::Healthy => healthy += 1,
                     MergedSyncStatus::Stale => stale += 1,
                     MergedSyncStatus::Empty => empty += 1,
+                    // Counts toward the raw Empty denominator, with the no-data
+                    // overlay tracked separately for the reachable %.
+                    MergedSyncStatus::Unreachable => {
+                        empty += 1;
+                        unreachable += 1;
+                    }
                 }
             }
             let total = healthy + stale + empty;
@@ -487,6 +541,7 @@ impl BarSyncInputs {
                 stale,
                 empty,
                 settled: 0,
+                unreachable,
                 note: None,
                 pct_healthy,
             });
@@ -559,6 +614,9 @@ impl BarSyncInputs {
                 }
             }
         }
+        let fetch_key = alpaca_fetch_key(symbol, tf);
+        let mut supported_sources = 0u32;
+        let mut tombstoned_sources = 0u32;
         for source in ["kraken-equities", "alpaca", "yahoo-chart"] {
             if source == "kraken-equities" && !kraken_equity_full_universe_timeframe(tf) {
                 continue;
@@ -574,6 +632,17 @@ impl BarSyncInputs {
                 && (!self.backfill_yahoo_chart_enabled || !yahoo_chart_supports_timeframe(tf))
             {
                 continue;
+            }
+            // This source is applicable for (symbol, tf). Track whether it has
+            // permanently tombstoned the cell as no-data so a fully-tombstoned
+            // Empty can be reported Unreachable (excluded from the reachable %).
+            supported_sources += 1;
+            if self
+                .no_data_keys_by_source
+                .get(source)
+                .is_some_and(|keys| keys.contains(&fetch_key))
+            {
+                tombstoned_sources += 1;
             }
 
             let key = format!("{source}:{symbol}:{tf}");
@@ -607,6 +676,8 @@ impl BarSyncInputs {
         }
         if saw_stale {
             MergedSyncStatus::Stale
+        } else if supported_sources > 0 && tombstoned_sources == supported_sources {
+            MergedSyncStatus::Unreachable
         } else {
             MergedSyncStatus::Empty
         }
@@ -708,6 +779,7 @@ impl BarSyncInputs {
                             stale: 0,
                             empty: 1,
                             settled: 0,
+                            unreachable: 0,
                             note: None,
                             pct_healthy: 0.0,
                         });
@@ -724,6 +796,10 @@ enum MergedSyncStatus {
     Healthy,
     Stale,
     Empty,
+    /// No source has data AND every applicable provider has tombstoned this
+    /// (symbol, tf) as no-data — counted as Empty in the raw total, but tracked
+    /// separately so the "reachable" % can exclude it.
+    Unreachable,
 }
 
 fn merged_sync_period_ms(tf: &str) -> Option<i64> {

@@ -59,6 +59,22 @@ fn sync_state_source_prefix_for_segment(seg: &str) -> Option<&'static str> {
     }
 }
 
+/// True for the sub-daily equity timeframes that only print during a live
+/// session. Daily and higher settle once at the close, so they remain worth
+/// pulling while the market is shut; 1Min is excluded because the Alpaca low-TF
+/// assist never queues it. Used by the Lever 1 market-closed fetch gate.
+pub(super) fn is_intraday_equity_sync_tf(tf: &str) -> bool {
+    matches!(tf, "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour")
+}
+
+/// True only when the US equities clock string reports the fully-CLOSED state.
+/// OPEN / PRE-MARKET / AFTER-HOURS can still print (extended-hours) bars, and an
+/// empty/unknown status fails open (not closed), so the gate never wrongly
+/// suppresses a fetch that could land a real bar.
+pub(super) fn market_status_is_closed(status: &str) -> bool {
+    status.contains("CLOSED")
+}
+
 /// Build the per-source `(symbol, timeframe) -> SyncCacheState` maps the sync
 /// scheduler consumes, in a SINGLE pass over `detailed_stats`. Each lane used to
 /// rescan the whole catalog on the render thread (`build_source_cache_state_map`,
@@ -1451,6 +1467,13 @@ impl TyphooNApp {
         dispatched
     }
 
+    /// Whether the regular US equities session (incl. extended hours) is fully
+    /// closed, per the Alpaca market clock. Fails open if the clock hasn't been
+    /// fetched yet. Drives the Lever 1 intraday-equity fetch gate.
+    pub(super) fn us_equities_closed(&self) -> bool {
+        market_status_is_closed(&self.market_clock_status)
+    }
+
     pub(super) fn queue_alpaca_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return false;
@@ -1520,6 +1543,20 @@ impl TyphooNApp {
         };
         let fetch_key = alpaca_fetch_key(&symbol, tf);
         let backfill_complete = self.alpaca_backfill_complete_pairs.contains_key(&fetch_key);
+        // Lever 1: when US equities are fully CLOSED, a backfill-complete intraday
+        // cell can't gain a newer bar (no session is printing), so re-probing it
+        // only burns Alpaca RPM that an unfinished historical backfill or a 24/7
+        // lane could use. Skip those background refreshes. NOT gated: the focused
+        // chart, daily+ bars (they settle at the close and are worth pulling), and
+        // cells still backfilling history. Crypto rides Kraken, so nothing 24/7 is
+        // affected.
+        if !focus
+            && backfill_complete
+            && is_intraday_equity_sync_tf(tf)
+            && self.us_equities_closed()
+        {
+            return false;
+        }
         if !self.pending_alpaca_fetches.insert(fetch_key) {
             return false;
         }
@@ -2182,6 +2219,28 @@ impl TyphooNApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn market_status_is_closed_only_for_fully_closed_state() {
+        assert!(market_status_is_closed("US equities CLOSED · opens in 6h"));
+        assert!(!market_status_is_closed("US equities OPEN · closes in 5h 0m"));
+        assert!(!market_status_is_closed("US equities PRE-MARKET · Core in 55m"));
+        assert!(!market_status_is_closed(
+            "US equities AFTER-HOURS · closes in 3h 0m"
+        ));
+        // Fail open before the clock is fetched.
+        assert!(!market_status_is_closed(""));
+    }
+
+    #[test]
+    fn intraday_equity_sync_tf_excludes_daily_and_higher() {
+        for tf in ["5Min", "15Min", "30Min", "1Hour", "4Hour"] {
+            assert!(is_intraday_equity_sync_tf(tf), "{tf} should be intraday");
+        }
+        for tf in ["1Min", "1Day", "1Week", "1Month"] {
+            assert!(!is_intraday_equity_sync_tf(tf), "{tf} should not be gated");
+        }
+    }
 
     #[test]
     fn build_source_sync_state_maps_buckets_by_source_and_keeps_newest() {

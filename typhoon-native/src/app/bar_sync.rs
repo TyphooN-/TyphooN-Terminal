@@ -15,6 +15,12 @@ pub(super) struct SyncStatsRow {
     pub(super) stale: u64,     // last bar lag ≥ threshold
     pub(super) empty: u64,     // cached blob has no bars (last_ms <= 0)
     pub(super) settled: u64,   // checked/exhausted provider window, counted healthy
+    /// Subset of `stale + empty` where every applicable provider has tombstoned
+    /// this (symbol, tf) as no-data — it can never become healthy on this broker,
+    /// so it inflates the raw denominator. Currently populated only for Merged
+    /// rows (the lane whose denominator is the full catalog). Excluding it gives
+    /// the "reachable" %; the raw `total`/`pct_healthy` are left unchanged.
+    pub(super) unreachable: u64,
     pub(super) note: Option<String>,
     pub(super) pct_healthy: f32, // 0..100
 }
@@ -160,6 +166,7 @@ pub(super) fn compute_bar_sync_stats(
                 stale,
                 empty,
                 settled,
+                unreachable: 0,
                 note,
                 pct_healthy,
             }
@@ -473,6 +480,7 @@ mod tests {
                 stale: 0,
                 empty: 0,
                 settled: 0,
+                unreachable: 0,
                 note: None,
                 pct_healthy: 100.0,
             },
@@ -484,6 +492,7 @@ mod tests {
                 stale: 0,
                 empty: 0,
                 settled: 0,
+                unreachable: 0,
                 note: None,
                 pct_healthy: 100.0,
             },
@@ -495,6 +504,7 @@ mod tests {
                 stale: 1,
                 empty: 0,
                 settled: 0,
+                unreachable: 0,
                 note: None,
                 pct_healthy: 50.0,
             },
@@ -506,6 +516,7 @@ mod tests {
                 stale: 0,
                 empty: 0,
                 settled: 0,
+                unreachable: 0,
                 note: Some("reference catalog, not bar-sync workload".into()),
                 pct_healthy: 100.0,
             },
@@ -525,6 +536,7 @@ mod tests {
             stale: 0,
             empty: 0,
             settled: 0,
+            unreachable: 0,
             note: Some("reference catalog, not bar-sync workload".into()),
             pct_healthy: 100.0,
         };
@@ -616,6 +628,7 @@ mod tests {
             stale: 1,
             empty: 1,
             settled: 7,
+            unreachable: 0,
             note: Some("provider lane note".to_string()),
             pct_healthy: 33.3,
         };
