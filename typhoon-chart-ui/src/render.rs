@@ -1111,52 +1111,9 @@ pub fn draw_chart(
         );
     }
 
-    // ATR Projection — multi-timeframe horizontal levels (matching ATR_Projection.mqh).
-    // Draw one clipped line primitive per level; dotted per-pixel segments were pure
-    // tessellation/GPU-upload pressure and did not add price accuracy.
-    if flags.atr_proj {
-        let atr_yellow = egui::Color32::from_rgb(255, 255, 0); // clrYellow
-        // A timeframe whose ATR band is narrow puts its Hi and Lo labels on top
-        // of each other ("ATR W1 Hi" / "ATR W1 Lo" smearing into "ATR WL HL").
-        // Spread the labels into separate bands; the lines stay at true price.
-        let mut label_bands: Vec<(f32, f32)> = Vec::new();
-        for &(label, htf_open, atr_val, line_start_idx) in &chart.atr_proj_levels {
-            let upper_price = htf_open + atr_val;
-            let lower_price = htf_open - atr_val;
-            let x_start_raw = if line_start_idx >= start_idx {
-                data_left + ((line_start_idx - start_idx) as f32) * bar_w
-            } else {
-                chart_rect.left()
-            };
-            let x_start = clamp_f32_bounds(x_start_raw, chart_rect.left(), chart_rect.right());
-            let x_end = chart_rect.right();
-            for (price, suffix) in [(upper_price, "Hi"), (lower_price, "Lo")] {
-                let y = price_to_y(price);
-                if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                    painter.line_segment(
-                        [egui::pos2(x_start, y), egui::pos2(x_end, y)],
-                        egui::Stroke::new(1.5, atr_yellow),
-                    );
-                    // Label: "ATR D1 Hi 1.2345" — anchored above its line, then
-                    // de-conflicted so a tight Hi/Lo pair stays legible.
-                    let center = place_level_label(
-                        y - 8.0,
-                        5.0,
-                        chart_rect.top(),
-                        chart_rect.bottom(),
-                        &mut label_bands,
-                    );
-                    painter.text(
-                        egui::pos2(x_start + 4.0, center),
-                        egui::Align2::LEFT_CENTER,
-                        &format!("ATR {} {} {}", label, suffix, format_price(price)),
-                        egui::FontId::monospace(8.0),
-                        atr_yellow,
-                    );
-                }
-            }
-        }
-    }
+    // ATR Projection lines + labels are drawn AFTER the supply/demand & FVG zones
+    // (see below, just past draw_post_zone_trend_overlays) so the translucent zone
+    // fills can't tint the yellow band or its text — same layering as the MAs.
 
     // Parabolic SAR dots. Dense zoomed-out views cannot distinguish one dot per
     // historical bar, so sample at viewport density like candles/indicator lines.
@@ -1574,6 +1531,54 @@ pub fn draw_chart(
     draw_post_zone_trend_overlays(
         painter, chart, chart_rect, data_left, bar_w, price_to_y, flags, start_idx, end_idx,
     );
+
+    // ATR Projection — multi-timeframe horizontal levels (matching ATR_Projection.mqh).
+    // Drawn here, after the zones and post-zone trend overlays, so the translucent
+    // supply/demand & FVG fills don't tint the yellow band/labels (same layering as
+    // the moving averages). One clipped line primitive per level.
+    if flags.atr_proj {
+        let atr_yellow = egui::Color32::from_rgb(255, 255, 0); // clrYellow
+        // A timeframe whose ATR band is narrow puts its Hi and Lo labels on top
+        // of each other ("ATR W1 Hi" / "ATR W1 Lo" smearing into "ATR WL HL").
+        // Spread the labels into separate bands; the lines stay at true price.
+        let mut label_bands: Vec<(f32, f32)> = Vec::new();
+        for &(label, htf_open, atr_val, line_start_idx) in &chart.atr_proj_levels {
+            let upper_price = htf_open + atr_val;
+            let lower_price = htf_open - atr_val;
+            let x_start_raw = if line_start_idx >= start_idx {
+                data_left + ((line_start_idx - start_idx) as f32) * bar_w
+            } else {
+                chart_rect.left()
+            };
+            let x_start = clamp_f32_bounds(x_start_raw, chart_rect.left(), chart_rect.right());
+            let x_end = chart_rect.right();
+            for (price, suffix) in [(upper_price, "Hi"), (lower_price, "Lo")] {
+                let y = price_to_y(price);
+                if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                    painter.line_segment(
+                        [egui::pos2(x_start, y), egui::pos2(x_end, y)],
+                        egui::Stroke::new(1.5, atr_yellow),
+                    );
+                    // Label: "ATR D1 Hi 1.2345" — anchored above its line, then
+                    // de-conflicted so a tight Hi/Lo pair stays legible.
+                    let center = place_level_label(
+                        y - 8.0,
+                        5.0,
+                        chart_rect.top(),
+                        chart_rect.bottom(),
+                        &mut label_bands,
+                    );
+                    painter.text(
+                        egui::pos2(x_start + 4.0, center),
+                        egui::Align2::LEFT_CENTER,
+                        &format!("ATR {} {} {}", label, suffix, format_price(price)),
+                        egui::FontId::monospace(8.0),
+                        atr_yellow,
+                    );
+                }
+            }
+        }
+    }
 
     draw_header_crosshair_and_legend(
         painter,

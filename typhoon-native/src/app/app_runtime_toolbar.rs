@@ -421,9 +421,20 @@ impl TyphooNApp {
                                             &normalized_symbol,
                                         )
                                         .is_some();
-                                    if self.kraken_connected && kraken_equity_pair {
-                                        // Per-symbol session: symbols without overnight
-                                        // support (catalog `overnight_trading_support`)
+                                    if self.kraken_connected
+                                        && kraken_equity_pair
+                                        && matches!(self.primary_broker, OrderBroker::Alpaca)
+                                        && self.broker_connected
+                                        && !self.market_clock_status.is_empty()
+                                    {
+                                        // When Alpaca is the primary broker, an equity's
+                                        // session is the US regular-market clock it actually
+                                        // trades on — not the Kraken xStocks 24/5 wrapper.
+                                        Some(self.market_clock_status.clone())
+                                    } else if self.kraken_connected && kraken_equity_pair {
+                                        // Kraken primary (or Alpaca clock unavailable):
+                                        // per-symbol xStocks session. Symbols without
+                                        // overnight support (catalog `overnight_trading_support`)
                                         // close 8 PM–4 AM ET instead of trading 24/5.
                                         let overnight_enabled = !self
                                             .kraken_equity_no_overnight
