@@ -187,3 +187,58 @@ pub(super) fn extract_xml_value(body: &str, tag: &str) -> Option<String> {
     }
     None
 }
+
+/// Human-readable label and direction for an SEC Form 4 transaction code.
+/// Direction: `1` = acquired, `-1` = disposed, `0` = neutral/unknown. Used by the
+/// structured Form 4 viewer to both describe and color each row — the raw EDGAR
+/// document is XSLT table HTML that strips into unreadable pipe-soup, so the
+/// parsed transactions are rendered instead.
+pub fn form4_transaction_code_label(code: &str) -> (&'static str, i8) {
+    match code.trim().to_ascii_uppercase().as_str() {
+        "P" => ("Open-market purchase", 1),
+        "S" => ("Open-market sale", -1),
+        "A" => ("Grant / award", 1),
+        "D" => ("Disposition to issuer", -1),
+        "M" => ("Option exercise / conversion", 1),
+        "X" => ("Derivative exercise", 1),
+        "C" => ("Derivative conversion", 1),
+        "F" => ("Tax / cost withholding", -1),
+        "G" => ("Gift", 0),
+        "J" => ("Other acq./disp.", 0),
+        "V" => ("Voluntary early report", 0),
+        "" => ("—", 0),
+        _ => ("Other", 0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn form4_code_labels_carry_direction_and_are_case_insensitive() {
+        assert_eq!(form4_transaction_code_label("P").1, 1);
+        assert_eq!(form4_transaction_code_label("s").1, -1);
+        assert_eq!(form4_transaction_code_label("A").1, 1);
+        assert_eq!(form4_transaction_code_label("F").1, -1);
+        assert_eq!(form4_transaction_code_label("G").1, 0);
+        assert_eq!(form4_transaction_code_label("").0, "—");
+        assert_eq!(form4_transaction_code_label("ZZ").0, "Other");
+    }
+
+    #[test]
+    fn extract_transactions_parses_nested_value_block() {
+        let xml = "<nonDerivativeTransaction>\
+            <transactionCode>P</transactionCode>\
+            <transactionShares><value>100</value></transactionShares>\
+            <transactionPricePerShare><value>10.5</value></transactionPricePerShare>\
+            <transactionDate><value>2026-06-23</value></transactionDate>\
+            </nonDerivativeTransaction>";
+        let txns = extract_transactions(xml);
+        assert_eq!(txns.len(), 1);
+        assert_eq!(txns[0].code, "P");
+        assert_eq!(txns[0].shares, 100.0);
+        assert_eq!(txns[0].price, 10.5);
+        assert_eq!(txns[0].date, "2026-06-23");
+    }
+}

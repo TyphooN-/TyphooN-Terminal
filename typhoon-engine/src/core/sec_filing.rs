@@ -27,6 +27,7 @@ use content_text::decode_html_entities;
 pub use content_text::{polish_filing_text, strip_html_to_text};
 pub use diff::{diff_filing_content, find_previous_filing};
 use insider_form4::fetch_and_parse_form4;
+pub use insider_form4::form4_transaction_code_label;
 #[cfg(test)]
 use insider_form4::{extract_transactions, extract_xml_value};
 pub use keywords::{add_keyword, check_keywords, check_keywords_in, get_keywords, remove_keyword};

@@ -1,6 +1,26 @@
 use super::*;
 use crate::app::app_runtime_support::should_start_manual_background_scope_scrape;
 
+/// Group an integer-valued amount with thousands separators (`707811.0` →
+/// `"707,811"`). Used by the structured Form 4 viewer for share counts / values.
+fn fmt_int_commas(n: f64) -> String {
+    let v = n.round() as i64;
+    let digits = v.unsigned_abs().to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    let len = digits.len();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if v < 0 {
+        format!("-{out}")
+    } else {
+        out
+    }
+}
+
 impl TyphooNApp {
     pub(super) fn render_sec_calendar_windows(&mut self, ctx: &egui::Context) {
         // SEC Filing Scanner — tabbed: Filings | Alerts | Insiders | Timeline
@@ -153,6 +173,67 @@ impl TyphooNApp {
                                                     ui.label(egui::RichText::new("Yes — insider transaction").color(sec_med)); ui.end_row();
                                                 }
                                             });
+                                            // ── Structured Form 4 insider-transaction view ──
+                                            // The raw EDGAR Form 4 document is XSLT table HTML that
+                                            // strips into unreadable pipe-soup, so render the parsed
+                                            // transactions (issuer-side data) as a clean table instead.
+                                            if matches!(f.form_type.as_str(), "4" | "4/A") {
+                                                let txns: Vec<sec_filing::InsiderTrade> = self
+                                                    .bg
+                                                    .insider_trades
+                                                    .get(&f.ticker)
+                                                    .map(|v| {
+                                                        v.iter()
+                                                            .filter(|t| t.accession_number == f.accession_number)
+                                                            .cloned()
+                                                            .collect()
+                                                    })
+                                                    .unwrap_or_default();
+                                                ui.separator();
+                                                ui.label(egui::RichText::new("Insider Transactions").color(sec_med).strong());
+                                                if txns.is_empty() {
+                                                    ui.label(egui::RichText::new("No parsed transactions for this filing yet (Form 4 parse pending, or a holdings-only amendment).").small().color(sec_low));
+                                                } else {
+                                                    if let Some(first) = txns.first() {
+                                                        let role = if first.is_officer && first.is_director {
+                                                            "Officer & Director"
+                                                        } else if first.is_officer {
+                                                            "Officer"
+                                                        } else if first.is_director {
+                                                            "Director"
+                                                        } else {
+                                                            "Insider"
+                                                        };
+                                                        let who = if first.insider_title.trim().is_empty() {
+                                                            format!("{} — {}", first.insider_name, role)
+                                                        } else {
+                                                            format!("{} — {} ({})", first.insider_name, first.insider_title, role)
+                                                        };
+                                                        ui.label(egui::RichText::new(who).color(sec_cyan).small().strong());
+                                                    }
+                                                    egui::Grid::new("sec_form4_txns").striped(true).num_columns(6).min_col_width(52.0).show(ui, |ui| {
+                                                        for h in ["Date", "Code", "Type", "Shares", "Price", "Value"] {
+                                                            ui.label(egui::RichText::new(h).color(AXIS_TEXT).small().strong());
+                                                        }
+                                                        ui.end_row();
+                                                        for t in &txns {
+                                                            let (desc, dir) = sec_filing::form4_transaction_code_label(&t.transaction_type);
+                                                            let col = match dir {
+                                                                1 => egui::Color32::from_rgb(26, 188, 156),
+                                                                -1 => egui::Color32::from_rgb(231, 76, 60),
+                                                                _ => AXIS_TEXT,
+                                                            };
+                                                            ui.label(egui::RichText::new(&t.transaction_date).small().monospace());
+                                                            ui.label(egui::RichText::new(&t.transaction_type).color(col).small().strong().monospace());
+                                                            ui.label(egui::RichText::new(desc).color(col).small());
+                                                            ui.label(egui::RichText::new(fmt_int_commas(t.shares)).small().monospace());
+                                                            ui.label(egui::RichText::new(if t.price > 0.0 { format!("${:.2}", t.price) } else { "—".to_string() }).small().monospace());
+                                                            ui.label(egui::RichText::new(if t.aggregate_value > 0.0 { format!("${}", fmt_int_commas(t.aggregate_value)) } else { "—".to_string() }).small().monospace());
+                                                            ui.end_row();
+                                                        }
+                                                    });
+                                                }
+                                            }
                                             // In-window document viewer (sticky if pinned or accession matches selected)
                                             let show_doc = self.sec_filing_pinned
                                                 || self.sec_filing_content_for == f.accession_number;
@@ -195,13 +276,21 @@ impl TyphooNApp {
                                                     ui.separator();
                                                 }
                                                 let header = if self.sec_filing_pinned && self.sec_filing_content_for != f.accession_number {
-                                                    format!("Filing Document (pinned: {})", self.sec_filing_content_for)
-                                                } else { "Filing Document".to_string() };
-                                                ui.label(egui::RichText::new(header).small().strong());
-                                                let doc_h = ui.available_height().max(150.0);
-                                                egui::ScrollArea::vertical().id_salt("sec_doc_viewer").max_height(doc_h).auto_shrink(false).show(ui, |ui| {
-                                                    ui.label(egui::RichText::new(&self.sec_filing_content).small().monospace().color(egui::Color32::from_rgb(190, 190, 200)));
-                                                });
+                                                    format!("Raw filing document (pinned: {})", self.sec_filing_content_for)
+                                                } else { "Raw filing document".to_string() };
+                                                // Form 4 raw text is mangled XSLT pipe-soup and the
+                                                // structured table above already carries the data, so
+                                                // default-collapse it there; keep it open for prose forms.
+                                                let raw_open = !matches!(f.form_type.as_str(), "4" | "4/A");
+                                                egui::CollapsingHeader::new(egui::RichText::new(header).small().strong())
+                                                    .id_salt("sec_doc_collapse")
+                                                    .default_open(raw_open)
+                                                    .show(ui, |ui| {
+                                                        let doc_h = ui.available_height().max(150.0);
+                                                        egui::ScrollArea::vertical().id_salt("sec_doc_viewer").max_height(doc_h).auto_shrink(false).show(ui, |ui| {
+                                                            ui.label(egui::RichText::new(&self.sec_filing_content).small().monospace().color(egui::Color32::from_rgb(190, 190, 200)));
+                                                        });
+                                                    });
                                             }
                                         });
                                         ui.add_space(4.0);
