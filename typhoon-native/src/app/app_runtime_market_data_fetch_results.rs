@@ -138,19 +138,38 @@ impl TyphooNApp {
         matches!(timeframe, "1Hour" | "4Hour" | "1Day" | "1Week" | "1Month")
     }
 
-    /// Queue an overlay-refreshing reload for every open chart of `symbol` except
-    /// `skip_idx` (already handled by the active-chart path). Reuses the deferred,
-    /// O(1)-deduped chart loader so repeated fetches during a sync don't pile up.
+    /// Refresh the MTF_MA / MultiKAMA overlay lines for every open chart of
+    /// `symbol` except `skip_idx` (handled by the active-chart path), without
+    /// reloading bars.
+    ///
+    /// Backfilling overlays does NOT require a full chart reload: the chart
+    /// already has its candles, only the projected higher-timeframe lines are
+    /// stale (they were computed before this HTF series landed in cache). The old
+    /// implementation queued a full `queue_chart_reload`, which re-decompressed
+    /// and re-merged every same-symbol chart's candles on the render thread — the
+    /// ~140–790ms-per-chart "second pass" that fired once `heavy_sync` ended and
+    /// doubled startup load time on a large grid. Recompute just the overlay lines
+    /// from the now-cached HTF series instead; the shared HTF indicator memo makes
+    /// the SMA200/KAMA computation O(1) per symbol/timeframe across hosts, so this
+    /// is a small projection per chart rather than a fresh SQLite load. Charts with
+    /// no bars yet are skipped (nothing to project onto — the deferred loader will
+    /// load them normally).
     fn queue_same_symbol_overlay_reloads(&mut self, symbol: &str, skip_idx: usize) {
+        let Some(cache) = self.cache.clone() else {
+            return;
+        };
         let targets: Vec<usize> = self
             .charts
             .iter()
             .enumerate()
-            .filter(|(idx, c)| *idx != skip_idx && c.symbol_matches(symbol))
+            .filter(|(idx, c)| *idx != skip_idx && c.symbol_matches(symbol) && !c.bars.is_empty())
             .map(|(idx, _)| idx)
             .collect();
         for idx in targets {
-            self.queue_chart_reload(idx);
+            if let Some(chart) = self.charts.get_mut(idx) {
+                chart.compute_mtf_sma(&cache);
+                chart.compute_multi_kama(&cache);
+            }
         }
     }
 
