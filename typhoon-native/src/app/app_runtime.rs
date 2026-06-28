@@ -1,6 +1,33 @@
 use super::*;
 
 use super::app_runtime_support::*;
+
+/// Log the slowest `pre_broker` tick when it crosses the threshold, with a sorted
+/// breakdown of the others. Silent in steady state; a cold-start hang prints e.g.
+/// `Slow pre_broker tick: deferred_chart_loads took 13800.0ms — breakdown: ...`,
+/// which the aggregate `pre_broker_ms` alone never isolated.
+fn report_slow_pre_broker_ticks(ticks: &[(&'static str, f32)]) {
+    const SLOW_TICK_MS: f32 = 150.0;
+    let Some(&(name, ms)) = ticks
+        .iter()
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+    else {
+        return;
+    };
+    if ms < SLOW_TICK_MS {
+        return;
+    }
+    let mut sorted: Vec<(&'static str, f32)> =
+        ticks.iter().copied().filter(|(_, t)| *t >= 1.0).collect();
+    sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let breakdown = sorted
+        .iter()
+        .take(6)
+        .map(|(n, t)| format!("{n}={t:.1}ms"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    tracing::warn!("Slow pre_broker tick: {name} took {ms:.1}ms — breakdown: {breakdown}");
+}
 // egui 0.34: Panel::show(ctx) deprecated in favor of show_inside(ui).
 // Full migration to ui() pattern is deferred while this runtime pass focuses on module boundaries.
 #[allow(deprecated)]
@@ -35,11 +62,28 @@ impl eframe::App for TyphooNApp {
         if ctx.input(|i| !i.events.is_empty()) {
             self.auto_compact_last_input_at = std::time::Instant::now();
         }
-        self.tick_auto_compact();
-        self.clear_stale_ui_busy_flags(now_instant);
+        // PERF DIAG: time each pre_broker tick so a cold-start stall names the exact
+        // sub-operation. `pre_broker_ms` is only the aggregate; a one-off multi-second
+        // hang (render-thread cache-lock contention during the startup burst) was
+        // untraceable from it. Silent in steady state — report_slow_pre_broker_ticks
+        // logs a breakdown only when a tick crosses the threshold.
+        let mut pre_broker_ticks: Vec<(&'static str, f32)> = Vec::with_capacity(24);
+        macro_rules! timed_tick {
+            ($name:literal, $body:expr) => {{
+                let _tt = std::time::Instant::now();
+                $body;
+                pre_broker_ticks.push(($name, _tt.elapsed().as_secs_f32() * 1000.0));
+            }};
+        }
+        timed_tick!("auto_compact", self.tick_auto_compact());
+        timed_tick!(
+            "clear_stale_ui_busy_flags",
+            self.clear_stale_ui_busy_flags(now_instant)
+        );
         // Alpaca retry queue: internally throttled to 10s between ticks.
         // Loads persisted state on first call, re-dispatches due entries.
-        self.poll_alpaca_retry_queue();
+        timed_tick!("poll_alpaca_retry_queue", self.poll_alpaca_retry_queue());
+        let _tt_state_caches = std::time::Instant::now();
         // PERF: Broad sync/scrape work must not leave egui in continuous full-rate
         // repaint mode. The flag was previously initialized but never driven, so
         // a 12k-symbol universe sync + news/SEC/fundamentals passes still rendered
@@ -83,6 +127,10 @@ impl eframe::App for TyphooNApp {
             self.cached_alpaca_sync_state = rebuilt;
             self.cached_alpaca_sync_state_rev = Some(self.bg_rev);
         }
+        pre_broker_ticks.push((
+            "state_caches",
+            _tt_state_caches.elapsed().as_secs_f32() * 1000.0,
+        ));
         ctx.set_visuals(Self::dark_visuals());
         // Bound log size to prevent unbounded memory growth.
         // 200 is a steady-state cap — small enough that pop_front is amortized O(1)
@@ -91,25 +139,37 @@ impl eframe::App for TyphooNApp {
             self.log.pop_front();
         }
 
-        self.request_missing_kraken_catalogs();
-
-        self.refresh_active_crypto_chart_if_due(now_instant);
-
-        self.tick_watchlist_quote_refresh(now_instant);
-
-        self.tick_positions_orders_refresh(now_instant);
-
-        self.tick_bar_sync_status_refresh();
-
-        self.tick_kraken_universe_schedulers(now_instant);
-
-        self.tick_kraken_ws_scheduling(now_instant);
-
-        self.tick_news_body_hydrator(now_instant);
-
-        self.tick_screenshot_capture(ctx);
-
-        self.tick_cache_startup();
+        timed_tick!(
+            "request_missing_kraken_catalogs",
+            self.request_missing_kraken_catalogs()
+        );
+        timed_tick!(
+            "refresh_active_crypto_chart_if_due",
+            self.refresh_active_crypto_chart_if_due(now_instant)
+        );
+        timed_tick!(
+            "watchlist_quote_refresh",
+            self.tick_watchlist_quote_refresh(now_instant)
+        );
+        timed_tick!(
+            "positions_orders_refresh",
+            self.tick_positions_orders_refresh(now_instant)
+        );
+        timed_tick!("bar_sync_status_refresh", self.tick_bar_sync_status_refresh());
+        timed_tick!(
+            "kraken_universe_schedulers",
+            self.tick_kraken_universe_schedulers(now_instant)
+        );
+        timed_tick!(
+            "kraken_ws_scheduling",
+            self.tick_kraken_ws_scheduling(now_instant)
+        );
+        timed_tick!(
+            "news_body_hydrator",
+            self.tick_news_body_hydrator(now_instant)
+        );
+        timed_tick!("screenshot_capture", self.tick_screenshot_capture(ctx));
+        timed_tick!("cache_startup", self.tick_cache_startup());
 
         // ── Global font/spacing to match old WebKit (Consolas 11px) ──────
         if self.frame_count == 1 {
@@ -160,13 +220,23 @@ impl eframe::App for TyphooNApp {
             ctx.set_global_style(style);
         }
 
-        self.tick_background_snapshot_drain();
-
-        self.tick_deferred_chart_loads(ctx, now_instant);
-
-        self.tick_dirty_indicator_recompute();
-
-        self.tick_chart_background_results();
+        timed_tick!(
+            "background_snapshot_drain",
+            self.tick_background_snapshot_drain()
+        );
+        timed_tick!(
+            "deferred_chart_loads",
+            self.tick_deferred_chart_loads(ctx, now_instant)
+        );
+        timed_tick!(
+            "dirty_indicator_recompute",
+            self.tick_dirty_indicator_recompute()
+        );
+        timed_tick!(
+            "chart_background_results",
+            self.tick_chart_background_results()
+        );
+        report_slow_pre_broker_ticks(&pre_broker_ticks);
 
         (
             perf_pre_broker_ms,
