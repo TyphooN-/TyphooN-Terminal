@@ -656,15 +656,13 @@ fn derive_and_store_higher_tfs(
         }
         let derived_key = format!("{source}:{symbol}:{derived_tf}");
         let json = serde_json::to_string(&agg).unwrap_or_default();
-        // Intraday fixed-period bars land on the same UTC boundary as native ones, so
-        // merge — it dedups and keeps any deeper direct history. Calendar bars derive
-        // from the deepest base (1Day) and a stale direct fetch may sit on a different
-        // boundary, so overwrite to keep the series self-consistent (no double bars).
-        let stored = match rollup {
-            Rollup::Fixed(_) => cache.merge_bars(&derived_key, &json, 0).is_ok(),
-            Rollup::Week | Rollup::Month => cache.put_bars(&derived_key, &json).is_ok(),
-        };
-        if stored {
+        // Always merge (never overwrite): the cache normalizes every bar to a
+        // canonical timeframe bucket on write — 1Week → Monday 00:00, 1Month → 1st
+        // 00:00, intraday → UTC multiples — so a derived bar and any existing native
+        // bar for the same period collapse to one bucket (newer wins). Purely
+        // additive: it can't double a candle and can't drop a native week a gap in
+        // the base would miss. No existing KV needs purging.
+        if cache.merge_bars(&derived_key, &json, 0).is_ok() {
             derived.push((derived_tf, agg.len()));
         }
     }
