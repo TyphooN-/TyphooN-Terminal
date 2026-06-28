@@ -25,7 +25,14 @@ impl BrokerRuntimeResources {
     pub fn new() -> Self {
         Self {
             alpaca_fetch_permits: Arc::new(Semaphore::new(4)),
-            yahoo_chart_fetch_permits: Arc::new(Semaphore::new(4)),
+            // Yahoo's chart endpoint has no published rate limit but throttles
+            // (429) and, on sustained abuse, temporarily IP-blocks. 4 was very
+            // conservative; 6 gives the breadth-assist lane more parallelism. This
+            // is the one lane with safe headroom — Kraken Spot (24 permits) sits
+            // near its public counter and Kraken Equities (8) is pinned to the
+            // ~6 req/s Cloudflare iapi wall, so neither can be pushed. If Yahoo
+            // starts 429-ing/blocking, drop this back to 4.
+            yahoo_chart_fetch_permits: Arc::new(Semaphore::new(6)),
             kraken_fetch_permits: Arc::new(Semaphore::new(KRAKEN_PUBLIC_FETCH_PERMITS)),
             kraken_equity_fetch_permits: Arc::new(Semaphore::new(KRAKEN_EQUITIES_FETCH_PERMITS)),
             kraken_public_client: reqwest::Client::builder()
