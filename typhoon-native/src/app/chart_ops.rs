@@ -1127,11 +1127,17 @@ impl TyphooNApp {
                         && mtf_grid_symbol_key(&c.symbol).eq_ignore_ascii_case(&key)
                 });
                 // Skip cells with a live tab (read live in the render) and cells whose
-                // bars are still fresh; the bars TTL paces the refresh while the value
-                // store keeps the dot lit between refreshes.
+                // dot value is still fresh in the sticky grid store. This gates on the
+                // 1h value store — what the navbar dots actually read — NOT the 90s
+                // bars/result cache. Gating on the 90s cache made the fill re-load
+                // EVERY grid cell's full bar set every 90s: a continuous decompress +
+                // merge + indicator treadmill on the worker pool that churned gigabytes
+                // of RSS and held the cache lock against the render thread (the
+                // recurring ~150ms render stalls). The dots are slow higher-timeframe
+                // indicators, so an hourly refresh (or an on-demand reload when the user
+                // opens that chart) is plenty.
                 if has_tab
-                    || super::chart::chart_result_cache_get(&key, tf.cache_suffix(), now_ms)
-                        .is_some()
+                    || super::chart::mtf_grid_value_get(&key, tf.cache_suffix(), now_ms).is_some()
                 {
                     continue;
                 }
