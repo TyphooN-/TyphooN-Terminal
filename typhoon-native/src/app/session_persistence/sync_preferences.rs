@@ -268,6 +268,7 @@ impl TyphooNApp {
             on_ac: auto_compact::on_ac_power(),
             uncompacted_count: uncompacted,
             in_progress: self.auto_compact_in_progress,
+            heavy_sync: self.heavy_sync_in_progress,
         };
         let decision = auto_compact::evaluate_gate(&inputs);
         if !decision.run {

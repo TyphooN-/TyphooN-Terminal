@@ -2269,110 +2269,101 @@ impl SqliteCache {
         level: i32,
         progress: Option<&dyn Fn(usize, usize, &str, usize, usize)>,
     ) -> Result<(usize, i64), String> {
-        // Phase 1: Read entries that need compaction (skip already at target level)
-        let entries: Vec<(String, Vec<u8>)>;
-        let kv_entries: Vec<(String, Vec<u8>)>;
-        let _skipped_count: usize;
-        {
-            let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-            // Only select entries where zstd_level < target — skip already-compacted
-            let mut stmt = conn
-                .prepare("SELECT key, data FROM bar_cache WHERE zstd_level < ?1")
-                .map_err(|e| format!("Prepare failed: {e}"))?;
-            entries = stmt
-                .query_map(params![level], |row| {
+        // Streaming, memory-bounded compaction.
+        //
+        // The earlier design loaded *every* uncompacted blob into one in-memory
+        // Vec (phase 1) and recompressed them all at once (phase 2). On a multi-GB
+        // cache that produced gigabyte RSS swings, and the recompression — though
+        // it held no lock — starved the egui thread via allocator/page pressure for
+        // the whole run (200ms+ frame stalls). Process in small key-cursor chunks
+        // instead: read a window on the read connection, recompress off-lock, write
+        // it back under a brief write lock, then advance the cursor. Peak memory is
+        // O(READ_CHUNK), and the write lock is released between every chunk so
+        // foreground sync writes and chart reads interleave.
+        const READ_CHUNK: i64 = 256;
+
+        // Totals up front for the progress bar (cheap COUNTs on the read conn).
+        let total = {
+            let conn = self
+                .read_conn
+                .lock()
+                .map_err(|e| format!("Read lock failed: {e}"))?;
+            let bar_total: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM bar_cache WHERE zstd_level < ?1",
+                    params![level],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            let kv_total: i64 = conn
+                .query_row("SELECT COUNT(*) FROM kv_cache", [], |r| r.get(0))
+                .unwrap_or(0);
+            (bar_total + kv_total).max(0) as usize
+        };
+        let mut processed = 0usize;
+        let mut bytes_saved = 0i64;
+
+        // ---- Bars: cursor by key over rows still below the target level ----
+        // Rows updated to `level` drop out of the `zstd_level < ?` filter; the
+        // cursor advances by key regardless, so each key is examined at most once
+        // (O(n) total index walk, never O(n²)).
+        let mut cursor = String::new();
+        loop {
+            let batch: Vec<(String, Vec<u8>)> = {
+                let conn = self
+                    .read_conn
+                    .lock()
+                    .map_err(|e| format!("Read lock failed: {e}"))?;
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT key, data FROM bar_cache \
+                         WHERE zstd_level < ?1 AND key > ?2 ORDER BY key LIMIT ?3",
+                    )
+                    .map_err(|e| format!("Prepare failed: {e}"))?;
+                stmt.query_map(params![level, cursor, READ_CHUNK], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
                 })
                 .map_err(|e| format!("Query failed: {e}"))?
                 .filter_map(|r| r.ok())
-                .collect();
-            // Count how many were skipped (already at target level)
-            _skipped_count = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM bar_cache WHERE zstd_level >= ?1",
-                    params![level],
-                    |r| r.get::<_, i64>(0),
-                )
-                .unwrap_or(0) as usize;
-            drop(stmt);
-            kv_entries = match conn.prepare("SELECT key, value FROM kv_cache") {
-                Ok(mut kv_stmt) => kv_stmt
-                    .query_map([], |row| {
-                        Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-                    })
-                    .ok()
-                    .map(|rows| rows.filter_map(|r| r.ok()).collect())
-                    .unwrap_or_default(),
-                Err(_) => Vec::new(),
+                .collect()
             };
-        } // Lock released — UI thread can read cache freely during recompression
+            let Some((last_key, _)) = batch.last() else {
+                break;
+            };
+            cursor = last_key.clone();
 
-        // Phase 2: Recompress on CPU (no lock held — this is the slow part)
-        let total = entries.len() + kv_entries.len();
-        let mut processed = 0usize;
-        let mut bytes_saved = 0i64;
-        let mut bar_updates: Vec<(String, Vec<u8>)> = Vec::new();
-        let mut kv_updates: Vec<(String, Vec<u8>)> = Vec::new();
-
-        for (key, compressed) in &entries {
-            let decompressed = match zstd::decode_all(compressed.as_slice()) {
-                Ok(d) => d,
-                Err(_) => {
+            // Recompress off-lock — the slow part stays out of the critical section.
+            let mut updates: Vec<(String, Vec<u8>)> = Vec::new();
+            for (key, compressed) in &batch {
+                let Ok(decompressed) = zstd::decode_all(compressed.as_slice()) else {
                     processed += 1;
                     continue;
-                }
-            };
-            let recompressed = match zstd::encode_all(decompressed.as_slice(), level) {
-                Ok(r) => r,
-                Err(_) => {
+                };
+                let Ok(recompressed) = zstd::encode_all(decompressed.as_slice(), level) else {
                     processed += 1;
                     continue;
+                };
+                let saved = compressed.len() as i64 - recompressed.len() as i64;
+                let after_len = if saved > 0 {
+                    recompressed.len()
+                } else {
+                    compressed.len()
+                };
+                if saved > 0 {
+                    bytes_saved += saved;
+                    updates.push((key.clone(), recompressed));
                 }
-            };
-            let saved = compressed.len() as i64 - recompressed.len() as i64;
-            if saved > 0 {
-                bar_updates.push((key.clone(), recompressed.clone()));
-                bytes_saved += saved;
-            }
-            processed += 1;
-            if let Some(cb) = progress {
-                cb(
-                    processed,
-                    total,
-                    key,
-                    compressed.len(),
-                    if saved > 0 {
-                        recompressed.len()
-                    } else {
-                        compressed.len()
-                    },
-                );
-            }
-        }
-
-        for (key, compressed) in &kv_entries {
-            if let Ok(decompressed) = zstd::decode_all(compressed.as_slice()) {
-                if let Ok(recompressed) = zstd::encode_all(decompressed.as_slice(), level) {
-                    let saved = compressed.len() as i64 - recompressed.len() as i64;
-                    if saved > 0 {
-                        kv_updates.push((key.clone(), recompressed));
-                        bytes_saved += saved;
-                    }
+                processed += 1;
+                if let Some(cb) = progress {
+                    cb(processed, total, key, compressed.len(), after_len);
                 }
             }
-            processed += 1;
-            if let Some(cb) = progress {
-                cb(processed, total, key, compressed.len(), compressed.len());
-            }
-        }
 
-        // Phase 3: Write updates in batches (brief lock per batch, UI stays responsive)
-        // Also updates zstd_level so subsequent compacts skip already-processed entries
-        {
-            let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-            for chunk in bar_updates.chunks(50) {
+            // Write this window back under a brief write lock.
+            if !updates.is_empty() {
+                let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
                 let _ = conn.execute_batch("BEGIN;");
-                for (key, data) in chunk {
+                for (key, data) in &updates {
                     let _ = conn.execute(
                         "UPDATE bar_cache SET data = ?1, zstd_level = ?2 WHERE key = ?3",
                         params![data, level, key],
@@ -2380,9 +2371,52 @@ impl SqliteCache {
                 }
                 let _ = conn.execute_batch("COMMIT;");
             }
-            for chunk in kv_updates.chunks(50) {
+        }
+
+        // ---- KV: cursor by key over every row (kv_cache has no level column) ----
+        let mut cursor = String::new();
+        loop {
+            let batch: Vec<(String, Vec<u8>)> = {
+                let conn = self
+                    .read_conn
+                    .lock()
+                    .map_err(|e| format!("Read lock failed: {e}"))?;
+                let mut stmt = conn
+                    .prepare("SELECT key, value FROM kv_cache WHERE key > ?1 ORDER BY key LIMIT ?2")
+                    .map_err(|e| format!("Prepare failed: {e}"))?;
+                stmt.query_map(params![cursor, READ_CHUNK], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                })
+                .map_err(|e| format!("Query failed: {e}"))?
+                .filter_map(|r| r.ok())
+                .collect()
+            };
+            let Some((last_key, _)) = batch.last() else {
+                break;
+            };
+            cursor = last_key.clone();
+
+            let mut updates: Vec<(String, Vec<u8>)> = Vec::new();
+            for (key, compressed) in &batch {
+                if let Ok(decompressed) = zstd::decode_all(compressed.as_slice()) {
+                    if let Ok(recompressed) = zstd::encode_all(decompressed.as_slice(), level) {
+                        let saved = compressed.len() as i64 - recompressed.len() as i64;
+                        if saved > 0 {
+                            bytes_saved += saved;
+                            updates.push((key.clone(), recompressed));
+                        }
+                    }
+                }
+                processed += 1;
+                if let Some(cb) = progress {
+                    cb(processed, total, key, compressed.len(), compressed.len());
+                }
+            }
+
+            if !updates.is_empty() {
+                let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
                 let _ = conn.execute_batch("BEGIN;");
-                for (key, data) in chunk {
+                for (key, data) in &updates {
                     let _ = conn.execute(
                         "UPDATE kv_cache SET value = ?1 WHERE key = ?2",
                         params![data, key],
@@ -2392,10 +2426,13 @@ impl SqliteCache {
             }
         }
 
-        // Phase 4: VACUUM (brief lock, reclaims space)
+        // Reclaim the pages freed by the rewrites. auto_vacuum=INCREMENTAL is set on
+        // the connection, so a bounded incremental vacuum reclaims compaction's freed
+        // pages without the multi-minute exclusive file rewrite a full VACUUM costs on
+        // a large cache (and without needing a second full copy of the DB on disk).
         {
             let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-            let _ = conn.execute_batch("VACUUM;");
+            let _ = conn.execute_batch("PRAGMA incremental_vacuum;");
         }
 
         Ok((processed, bytes_saved))

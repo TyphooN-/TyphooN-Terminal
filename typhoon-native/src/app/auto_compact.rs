@@ -131,6 +131,12 @@ pub struct GateInputs {
     pub on_ac: bool,
     pub uncompacted_count: i64,
     pub in_progress: bool,
+    /// Broad foreground market-data sync is active. Compaction recompresses cold
+    /// rows and contends with the bar-sync writers on the cache connection, so a
+    /// run launched mid-sync (e.g. a 04:00 window that coincides with startup
+    /// catch-up) would fight the very sync it should stay out of. Defer until the
+    /// storm settles; the next minute's tick re-evaluates.
+    pub heavy_sync: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -146,6 +152,9 @@ pub fn evaluate_gate(inputs: &GateInputs) -> GateDecision {
     }
     if inputs.in_progress {
         return skip("compact already running");
+    }
+    if inputs.heavy_sync {
+        return skip("foreground market-data sync in progress");
     }
     let cadence_ms: i64 = schedule.cadence_days * 24 * 60 * 60 * 1000;
     if inputs.last_run_ms > 0 && (inputs.now_ms - inputs.last_run_ms) < cadence_ms {
@@ -422,6 +431,7 @@ mod tests {
             on_ac: true,
             uncompacted_count: UNCOMPACTED_THRESHOLD + 1,
             in_progress: false,
+            heavy_sync: false,
         }
     }
 
@@ -442,6 +452,13 @@ mod tests {
     fn gate_skips_when_already_running() {
         let mut i = base();
         i.in_progress = true;
+        assert!(!evaluate_gate(&i).run);
+    }
+
+    #[test]
+    fn gate_skips_during_heavy_sync() {
+        let mut i = base();
+        i.heavy_sync = true;
         assert!(!evaluate_gate(&i).run);
     }
 
