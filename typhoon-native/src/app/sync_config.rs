@@ -15,16 +15,26 @@ pub(super) const KRAKEN_FUTURES_BACKGROUND_SCAN_LIMIT: usize = 384;
 /// allowances and async worker capacity. It is still bounded: pending sets,
 /// provider rate limiters, no-data tombstones, and backfill-complete markers stay
 /// in force so we do not turn a large universe into duplicate request storms.
+///
+/// The dispatch budgets below (queue windows + batch sizes) are deliberately
+/// generous so each 1s tick refills the broker queues faster than the workers can
+/// drain them — the worker therefore never idles waiting on the scheduler, and the
+/// only thing pacing actual requests is the per-provider rate limiter (the real
+/// ceiling). Pushing these higher is safe: the limiter still throttles to the
+/// provider's allowance, so a bigger queue just buffers more in-flight work, it
+/// does not raise the request rate past the limit. Background scan limits are NOT
+/// in this set on purpose — they run on the render thread, so they stay bounded to
+/// avoid the per-tick `pre_broker` stalls.
 pub(super) const FULL_TILT_SYNC_INTERVAL_SECS: u64 = 1;
 pub(super) const BALANCED_SYNC_INTERVAL_SECS: u64 = 60;
-pub(super) const ALPACA_FULL_TILT_QUEUE_WINDOW: usize = 160;
-pub(super) const ALPACA_FULL_TILT_BATCH_SIZE: usize = 120;
+pub(super) const ALPACA_FULL_TILT_QUEUE_WINDOW: usize = 256;
+pub(super) const ALPACA_FULL_TILT_BATCH_SIZE: usize = 200;
 pub(super) const ALPACA_FULL_TILT_FETCH_PERMITS: usize = 8;
 pub(super) const ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 4_096;
-pub(super) const KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW: usize = 256;
+pub(super) const KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW: usize = 384;
 pub(super) const KRAKEN_SPOT_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2_048;
-pub(super) const KRAKEN_EQUITIES_FULL_TILT_QUEUE_WINDOW: usize = 512;
-pub(super) const KRAKEN_EQUITIES_FULL_TILT_BATCH_SIZE: usize = 192;
+pub(super) const KRAKEN_EQUITIES_FULL_TILT_QUEUE_WINDOW: usize = 768;
+pub(super) const KRAKEN_EQUITIES_FULL_TILT_BATCH_SIZE: usize = 320;
 // Full-tilt still rotates through the full xStocks catalog, but scanning 8k+
 // candidates on the egui thread every 1s showed up as recurring 180-650ms
 // `pre_broker_ms` stalls during startup catch-up. Keep each scheduler tick
@@ -41,13 +51,13 @@ pub(super) const KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2048;
 /// the trade list current; the REST pull is a safety-net resync, not a
 /// primary feed.
 pub(super) const KRAKEN_TRADES_REST_REFRESH_SECS: u64 = 600;
-pub(super) const KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW: usize = 384;
+pub(super) const KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW: usize = 576;
 pub(super) const KRAKEN_FUTURES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 1024;
 
 pub(super) const YAHOO_CHART_QUEUE_WINDOW: usize = 12;
 pub(super) const YAHOO_CHART_BATCH_SIZE: usize = 1;
-pub(super) const YAHOO_CHART_FULL_TILT_QUEUE_WINDOW: usize = 72;
-pub(super) const YAHOO_CHART_FULL_TILT_BATCH_SIZE: usize = 6;
+pub(super) const YAHOO_CHART_FULL_TILT_QUEUE_WINDOW: usize = 120;
+pub(super) const YAHOO_CHART_FULL_TILT_BATCH_SIZE: usize = 12;
 pub(super) const YAHOO_CHART_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2_048;
 
 /// Kraken Spot public OHLC is a provider-window API, not a traversal API. Kraken
