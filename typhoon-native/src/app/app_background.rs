@@ -109,9 +109,20 @@ pub(super) fn spawn_background_refresh(
                             }
                         }
 
-                        // Trading halts / LULD pauses — short cadence (transient).
+                        // Trading halts / LULD pauses — short cadence while a US
+                        // session could be live, but a halt cannot post overnight
+                        // or on weekends, so back the poll off hard then (the
+                        // every-2-min weekend refresh was pure waste). Coarse,
+                        // clock-free, holiday-blind — good enough to gate a poll.
+                        let halt_cadence = if typhoon_engine::core::market_session::us_equities_extended_session_possible(
+                            chrono::Utc::now(),
+                        ) {
+                            std::time::Duration::from_secs(2 * 60)
+                        } else {
+                            std::time::Duration::from_secs(30 * 60)
+                        };
                         let halts_due = last_halt_refresh
-                            .map(|t| t.elapsed() >= std::time::Duration::from_secs(2 * 60))
+                            .map(|t| t.elapsed() >= halt_cadence)
                             .unwrap_or(true);
                         if halts_due {
                             let refreshed = tokio::runtime::Builder::new_current_thread()

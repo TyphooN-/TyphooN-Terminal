@@ -233,16 +233,22 @@ impl TyphooNApp {
                                     ui.separator();
                                 }
 
-                                // Filing table (scrollable, fill remaining height)
-                                // Build sector/industry lookup for the visible rows. Map keys borrow
-                                // from `self.bg.all_fundamentals` so this is allocation-light: O(n)
-                                // over fundamentals + O(1) per row lookup.
-                                let sec_fund_map: std::collections::HashMap<&str, (&str, &str)> = self
-                                    .bg
-                                    .all_fundamentals
-                                    .iter()
-                                    .map(|f| (f.symbol.as_str(), (f.sector.as_str(), f.industry.as_str())))
-                                    .collect();
+                                // Filing table (scrollable, fill remaining height).
+                                // PERF: the symbol → (sector, industry) lookup was rebuilt over all
+                                // ~12k fundamentals every frame — the recurring ~250ms `sec_calendar`
+                                // stall. Cache it behind `bg_rev` and hand the grid closure a cheap
+                                // Rc clone (it can't borrow `self`, which the closure mutates).
+                                if self.sec_fund_sector_rev != Some(self.bg_rev) {
+                                    self.sec_fund_sector_map = std::rc::Rc::new(
+                                        self.bg
+                                            .all_fundamentals
+                                            .iter()
+                                            .map(|f| (f.symbol.clone(), (f.sector.clone(), f.industry.clone())))
+                                            .collect(),
+                                    );
+                                    self.sec_fund_sector_rev = Some(self.bg_rev);
+                                }
+                                let sec_fund_map = self.sec_fund_sector_map.clone();
                                 let avail = ui.available_height().max(200.0);
                                 egui::ScrollArea::vertical().id_salt("sec_filings_tab").min_scrolled_height(avail).auto_shrink(false).show(ui, |ui| {
                                     if idxs.is_empty() {
@@ -282,7 +288,7 @@ impl TyphooNApp {
                                                 ui.label(egui::RichText::new(&f.category).color(cc).small());
                                                 let (sector, industry) = sec_fund_map
                                                     .get(f.ticker.as_str())
-                                                    .copied()
+                                                    .map(|(s, i)| (s.as_str(), i.as_str()))
                                                     .unwrap_or(("", ""));
                                                 ui.label(egui::RichText::new(sector).small().color(if sector.is_empty() { sec_low } else { rc }));
                                                 ui.label(egui::RichText::new(industry).small().color(if industry.is_empty() { sec_low } else { rc }));

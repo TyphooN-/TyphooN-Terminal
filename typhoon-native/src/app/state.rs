@@ -797,6 +797,12 @@ pub struct TyphooNApp {
     /// Tab count strings — `(scoped_filings, alerts, insider_total)`.
     pub(crate) sec_cache_tab_counts: (usize, usize, usize),
     pub(crate) sec_cache_tab_counts_key: Option<u64>,
+    /// Filings-tab symbol → (sector, industry) lookup, cached behind `bg_rev` so
+    /// the SEC window doesn't rebuild it over all ~12k fundamentals every frame.
+    /// `Rc` so the grid closure takes an O(1) clone instead of borrowing `self`.
+    pub(crate) sec_fund_sector_map:
+        std::rc::Rc<std::collections::HashMap<String, (String, String)>>,
+    pub(crate) sec_fund_sector_rev: Option<u64>,
     /// Last time SEC window caches performed O(N) rebuild work on the UI thread.
     pub(crate) sec_cache_last_rebuild: std::time::Instant,
     pub(crate) show_event_calendar: bool,

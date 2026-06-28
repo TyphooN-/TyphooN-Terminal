@@ -42,6 +42,22 @@ fn us_eastern_offset_seconds(now_utc: chrono::DateTime<chrono::Utc>) -> i64 {
     }
 }
 
+/// Coarse, clock-free check for whether the US-equities *extended* session
+/// (pre-market 04:00 ET through after-hours 20:00 ET, Mon–Fri) could be live.
+/// Used to back off transient-data refreshers (trading halts / LULD) on weekends
+/// and overnight, where no new halt can post. Holiday-blind by design — a holiday
+/// just costs one extra coarse refresh — so it needs no broker clock and is safe
+/// to call from background threads.
+pub fn us_equities_extended_session_possible(now_utc: chrono::DateTime<chrono::Utc>) -> bool {
+    use chrono::{Datelike, Timelike, Weekday};
+    let et = now_utc.naive_utc() + chrono::Duration::seconds(us_eastern_offset_seconds(now_utc));
+    if matches!(et.weekday(), Weekday::Sat | Weekday::Sun) {
+        return false;
+    }
+    let minute_of_day = et.hour() as i64 * 60 + et.minute() as i64;
+    (4 * 60..20 * 60).contains(&minute_of_day)
+}
+
 /// Session-aware status for the regular US-equities market clock (Alpaca
 /// `/v2/clock`). Unlike Kraken xStocks (24/5 with an overnight session), the
 /// regular US market has four states: pre-market (4:00–9:30 ET), core/regular
@@ -130,6 +146,18 @@ mod tests {
         chrono::DateTime::parse_from_rfc3339(ts)
             .unwrap()
             .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn extended_session_possible_is_weekday_0400_to_2000_et() {
+        // 2026-06-08 Mon (EDT, UTC-4). Window is 04:00–20:00 ET.
+        assert!(!us_equities_extended_session_possible(at("2026-06-08T07:59:00Z"))); // 03:59 ET
+        assert!(us_equities_extended_session_possible(at("2026-06-08T08:00:00Z"))); // 04:00 ET
+        assert!(us_equities_extended_session_possible(at("2026-06-08T17:00:00Z"))); // 13:00 ET
+        assert!(!us_equities_extended_session_possible(at("2026-06-09T00:00:00Z"))); // 20:00 ET
+        // Saturday/Sunday are always closed regardless of hour.
+        assert!(!us_equities_extended_session_possible(at("2026-06-06T17:00:00Z"))); // Sat 13:00 ET
+        assert!(!us_equities_extended_session_possible(at("2026-06-07T17:00:00Z"))); // Sun 13:00 ET
     }
 
     #[test]

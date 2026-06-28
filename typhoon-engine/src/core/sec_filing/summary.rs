@@ -257,22 +257,26 @@ fn summarize_13f(text: &str) -> FilingSummary {
 /// Note: structured InsiderTrade data is usually available separately; this is a fallback.
 fn summarize_form4(text: &str) -> FilingSummary {
     let mut summary = FilingSummary::default();
-    // Look for transaction code ("A"=grant, "P"=purchase, "S"=sale, "M"=exercise) near dollar amounts.
-    let lower = text.to_lowercase();
-    let mentions = |needle: &str| lower.matches(needle).count();
-    let sold = mentions("disposition") + mentions("sold");
-    let bought = mentions("acquisition") + mentions("purchased");
-    summary.headline = format!(
-        "Form 4 — {} acquisition / {} disposition mention(s)",
-        bought, sold
-    );
+    // The transaction rows encode acquired/disposed as the "(A)" / "(D)" code,
+    // not the words "acquisition" / "disposition" — so the old word-count read
+    // "0 acquisition / 0 disposition" on forms that plainly had trades. Surface
+    // the transaction-bearing rows (those carrying a dollar amount, which is the
+    // price-per-share column) directly instead; the fully parsed, structured
+    // trades live in the Insiders tab. `is_transaction_row` keeps the headline
+    // honest rather than emitting a misleading count.
+    let is_transaction_row = |line: &str| {
+        let t = line.trim();
+        t.contains('$') && t.len() > 8 && t.len() < 400
+    };
+    let row_count = text.lines().filter(|l| is_transaction_row(l)).count();
+    summary.headline = if row_count == 0 {
+        "Form 4 — insider transaction report".to_string()
+    } else {
+        format!("Form 4 — insider transaction report ({row_count} transaction row(s))")
+    };
     summary.bullets.push(summary.headline.clone());
-    // Pull the first paragraph with a dollar amount.
-    for para in text.split("\n\n").take(40) {
-        if para.contains('$') && para.len() > 30 && para.len() < 400 {
-            summary.bullets.push(para.trim().to_string());
-            break;
-        }
+    for row in text.lines().filter(|l| is_transaction_row(l)).take(6) {
+        summary.bullets.push(row.trim().to_string());
     }
     summary
 }

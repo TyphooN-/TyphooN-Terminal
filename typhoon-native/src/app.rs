@@ -568,6 +568,8 @@ impl TyphooNApp {
             sec_cache_timeline_key: None,
             sec_cache_tab_counts: (0, 0, 0),
             sec_cache_tab_counts_key: None,
+            sec_fund_sector_map: std::rc::Rc::new(std::collections::HashMap::new()),
+            sec_fund_sector_rev: None,
             sec_cache_last_rebuild: std::time::Instant::now(),
             show_event_calendar: false,
             event_calendar_rows: Vec::new(),
