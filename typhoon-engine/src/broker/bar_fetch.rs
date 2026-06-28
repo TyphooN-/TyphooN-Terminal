@@ -523,6 +523,120 @@ fn merged_equity_materialize_target_from_cache_key(cache_key: &str) -> Option<(S
     Some((symbol, timeframe.to_string()))
 }
 
+/// Higher timeframes that can be *derived* from a freshly-stored base timeframe by
+/// aggregation, instead of spending a second provider request on them. Restricted to
+/// the window-safe, fixed-period intraday rollups whose bucket boundaries land on
+/// clean UTC multiples (so the aggregate aligns with a native bar): a 30-minute bar
+/// is two 15-minute bars; a 4-hour bar is four 1-hour bars. Each entry is
+/// `(derived_timeframe, derived_period_seconds)`. Calendar rollups (1Week/1Month),
+/// whose boundaries are not fixed-second, are intentionally excluded here.
+fn fixed_period_tf_derivations(base_tf: &str) -> &'static [(&'static str, i64)] {
+    match base_tf {
+        "15Min" => &[("30Min", 1_800)],
+        "1Hour" => &[("4Hour", 14_400)],
+        _ => &[],
+    }
+}
+
+/// True for the merged-equity assist lanes where a high-timeframe row is a separate
+/// rate-limited request worth deriving instead of fetching. Native crypto lanes
+/// (kraken/kraken-futures) already return every timeframe directly, so they are not
+/// derived.
+fn source_derives_higher_tfs(source: &str) -> bool {
+    matches!(source, "alpaca" | "yahoo-chart" | "kraken-equities")
+}
+
+/// Aggregate a sorted raw bar series (ts_ms, o, h, l, c, v) into fixed-period buckets
+/// (`period_secs`), emitting cache-shaped JSON bars timestamped at each bucket start
+/// (RFC3339). Open = first bar in the bucket, close = last, high/low = extremes,
+/// volume = sum. Bars with non-positive prices or `high < low` are skipped.
+fn aggregate_raw_to_fixed_period(
+    raw: &[(i64, f64, f64, f64, f64, f64)],
+    period_secs: i64,
+) -> Vec<serde_json::Value> {
+    if period_secs <= 0 {
+        return Vec::new();
+    }
+    let mut sorted: Vec<&(i64, f64, f64, f64, f64, f64)> = raw.iter().collect();
+    sorted.sort_by_key(|b| b.0);
+    // bucket_start_secs -> (open, high, low, close, volume)
+    let mut buckets: std::collections::BTreeMap<i64, (f64, f64, f64, f64, f64)> =
+        std::collections::BTreeMap::new();
+    for &(ts_ms, o, h, l, c, v) in sorted {
+        if o <= 0.0 || h <= 0.0 || l <= 0.0 || c <= 0.0 || h < l {
+            continue;
+        }
+        let epoch_s = ts_ms.div_euclid(1000);
+        let bucket = epoch_s - epoch_s.rem_euclid(period_secs);
+        let entry = buckets.entry(bucket).or_insert((o, h, l, c, 0.0));
+        if h > entry.1 {
+            entry.1 = h;
+        }
+        if l < entry.2 {
+            entry.2 = l;
+        }
+        entry.3 = c;
+        entry.4 += v;
+    }
+    buckets
+        .into_iter()
+        .filter_map(|(bucket, (o, h, l, c, v))| {
+            let ts = chrono::DateTime::from_timestamp(bucket, 0)?.to_rfc3339();
+            Some(serde_json::json!({
+                "timestamp": ts, "open": o, "high": h, "low": l, "close": c, "volume": v,
+            }))
+        })
+        .collect()
+}
+
+/// After a base timeframe is written, derive its window-safe higher timeframes from
+/// the full cached series and store them under the same source prefix. The derived
+/// rows are assist-priority — a native higher-timeframe row outranks them in the
+/// merge — so this only *fills* timeframes the provider would otherwise be fetched
+/// for, never clobbers native data. One re-read + aggregation per base write, all on
+/// the cache's blocking pool. Returns the derived `(timeframe, bar_count)` pairs.
+fn derive_and_store_higher_tfs(
+    cache: &SqliteCache,
+    cache_key: &str,
+) -> Vec<(&'static str, usize)> {
+    let mut parts = cache_key.splitn(3, ':');
+    let (Some(source), Some(symbol), Some(base_tf)) =
+        (parts.next(), parts.next(), parts.next())
+    else {
+        return Vec::new();
+    };
+    if !source_derives_higher_tfs(source) {
+        return Vec::new();
+    }
+    let derivations = fixed_period_tf_derivations(base_tf);
+    if derivations.is_empty() {
+        return Vec::new();
+    }
+    let Some(base_raw) = cache.get_bars_raw(cache_key).ok().flatten() else {
+        return Vec::new();
+    };
+    if base_raw.is_empty() {
+        return Vec::new();
+    }
+    let mut derived = Vec::new();
+    for &(derived_tf, period_secs) in derivations {
+        let agg = aggregate_raw_to_fixed_period(&base_raw, period_secs);
+        if agg.is_empty() {
+            continue;
+        }
+        let derived_key = format!("{source}:{symbol}:{derived_tf}");
+        let json = serde_json::to_string(&agg).unwrap_or_default();
+        // Merge (not overwrite): a prior direct fetch of this timeframe may hold
+        // deeper history than the base window covers. Derived bars are timestamped on
+        // the same UTC boundaries as native ones, so the merge dedups rather than
+        // duplicating.
+        if cache.merge_bars(&derived_key, &json, 0).is_ok() {
+            derived.push((derived_tf, agg.len()));
+        }
+    }
+    derived
+}
+
 async fn store_json_bars_in_cache(
     cache_handle: Option<std::sync::Arc<SqliteCache>>,
     cache_key: String,
@@ -557,6 +671,12 @@ async fn store_json_bars_in_cache(
             // Materialization is expensive (full rebuild + persist) and causes
             // massive temporary allocations + CPU spikes during broad sync.
             // Let chart reads trigger on-demand materialization instead.
+
+            // Derive window-safe higher timeframes from this base write so the
+            // scheduler doesn't spend a separate rate-limited request on each — the
+            // only real speedup against fixed provider rate walls. Assist-priority
+            // and no-op for native crypto lanes / non-base timeframes.
+            let _derived = derive_and_store_higher_tfs(&cache, &cache_key);
         }
         Ok::<usize, String>(count)
     })
@@ -828,6 +948,64 @@ pub async fn run_kraken_futures_fetch_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tf_derivation_eligibility_is_assist_lanes_and_base_timeframes_only() {
+        assert_eq!(fixed_period_tf_derivations("15Min"), &[("30Min", 1_800)]);
+        assert_eq!(fixed_period_tf_derivations("1Hour"), &[("4Hour", 14_400)]);
+        assert!(fixed_period_tf_derivations("30Min").is_empty());
+        assert!(fixed_period_tf_derivations("1Day").is_empty());
+        assert!(source_derives_higher_tfs("alpaca"));
+        assert!(source_derives_higher_tfs("yahoo-chart"));
+        assert!(source_derives_higher_tfs("kraken-equities"));
+        // Native crypto lanes already return every timeframe — never derived.
+        assert!(!source_derives_higher_tfs("kraken"));
+        assert!(!source_derives_higher_tfs("kraken-futures"));
+    }
+
+    #[test]
+    fn aggregate_15m_to_30m_buckets_on_utc_boundaries_with_correct_ohlcv() {
+        // 2024-01-01 14:00 UTC = 1_704_117_600 s. Four 15m bars -> two 30m bars.
+        let s = 1_704_117_600_000i64;
+        let raw = vec![
+            (s, 10.0, 12.0, 9.0, 11.0, 100.0),         // 14:00
+            (s + 900_000, 11.0, 13.0, 10.0, 12.0, 150.0), // 14:15
+            (s + 1_800_000, 12.0, 14.0, 11.0, 13.0, 200.0), // 14:30
+            (s + 2_700_000, 13.0, 15.0, 12.0, 14.0, 250.0), // 14:45
+        ];
+        let out = aggregate_raw_to_fixed_period(&raw, 1_800);
+        assert_eq!(out.len(), 2);
+        // Bucket 1 (14:00-14:30): open=first, close=last, high/low=extremes, vol=sum.
+        assert_eq!(out[0]["timestamp"].as_str().unwrap(), "2024-01-01T14:00:00+00:00");
+        assert_eq!(out[0]["open"].as_f64().unwrap(), 10.0);
+        assert_eq!(out[0]["high"].as_f64().unwrap(), 13.0);
+        assert_eq!(out[0]["low"].as_f64().unwrap(), 9.0);
+        assert_eq!(out[0]["close"].as_f64().unwrap(), 12.0);
+        assert_eq!(out[0]["volume"].as_f64().unwrap(), 250.0);
+        // Bucket 2 (14:30-15:00).
+        assert_eq!(out[1]["timestamp"].as_str().unwrap(), "2024-01-01T14:30:00+00:00");
+        assert_eq!(out[1]["open"].as_f64().unwrap(), 12.0);
+        assert_eq!(out[1]["high"].as_f64().unwrap(), 15.0);
+        assert_eq!(out[1]["low"].as_f64().unwrap(), 11.0);
+        assert_eq!(out[1]["close"].as_f64().unwrap(), 14.0);
+        assert_eq!(out[1]["volume"].as_f64().unwrap(), 450.0);
+    }
+
+    #[test]
+    fn aggregate_skips_invalid_bars_and_handles_unsorted_input() {
+        let s = 1_704_117_600_000i64;
+        let raw = vec![
+            (s + 900_000, 11.0, 13.0, 10.0, 12.0, 150.0), // 14:15 (out of order)
+            (s, 10.0, 12.0, 9.0, 11.0, 100.0),            // 14:00
+            (s + 1_000, -1.0, 1.0, 1.0, 1.0, 1.0),        // invalid (price <= 0) -> skipped
+        ];
+        let out = aggregate_raw_to_fixed_period(&raw, 1_800);
+        assert_eq!(out.len(), 1);
+        // open must come from the chronologically-first bar (14:00), not input order.
+        assert_eq!(out[0]["open"].as_f64().unwrap(), 10.0);
+        assert_eq!(out[0]["close"].as_f64().unwrap(), 12.0);
+        assert_eq!(out[0]["volume"].as_f64().unwrap(), 250.0);
+    }
 
     #[test]
     fn full_backfill_needed_when_cached_dataset_is_below_target_and_not_complete() {
