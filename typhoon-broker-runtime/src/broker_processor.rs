@@ -28,6 +28,9 @@ pub fn spawn_broker_message_processor(
     rt_handle.spawn(async move {
         let mut cmd_rx = broker_cmd_rx;
         let mut broker: Option<AlpacaBroker> = None;
+        // Control sender for the Alpaca market-data WS (push the live subscription
+        // set). Held across commands so the single connection is reused.
+        let mut alpaca_quote_control: Option<tokio::sync::mpsc::Sender<Vec<String>>> = None;
         let mut kraken_broker: Option<typhoon_engine::broker::kraken::KrakenBroker> = None;
         let mut kraken_ws_broker: Option<typhoon_engine::broker::kraken::KrakenBroker> = None;
         // Pre-acquire and per-endpoint spacing are now owned by the
@@ -90,6 +93,24 @@ pub fn spawn_broker_message_processor(
                         &broker_msg_tx_clone,
                     )
                     .await;
+                }
+                BrokerCmd::AlpacaStreamQuotes { symbols } => {
+                    // Start the single market-data WS on first use, then keep
+                    // pushing the live subscription set to it.
+                    if alpaca_quote_control.is_none() {
+                        if let Some(b) = broker.clone() {
+                            alpaca_quote_control = alpaca_ws_commands::start_alpaca_quote_stream(
+                                b,
+                                &broker_msg_tx_clone,
+                            )
+                            .await;
+                        }
+                    }
+                    if let Some(ctrl) = alpaca_quote_control.as_ref() {
+                        if ctrl.send(symbols).await.is_err() {
+                            alpaca_quote_control = None; // task gone — allow a restart
+                        }
+                    }
                 }
                 cmd @ (BrokerCmd::SecScrape { .. } | BrokerCmd::FinnhubNews { .. }) => {
                     news::handle_news_command(

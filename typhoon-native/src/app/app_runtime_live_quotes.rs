@@ -43,6 +43,33 @@ impl TyphooNApp {
         }
     }
 
+    /// Real-time Alpaca market-data tick. Updates matching charts (so the focused
+    /// chart's forming bar and its position P/L go live) and the watchlist —
+    /// mirrors the Kraken book-quote path so equities Kraken doesn't cover (e.g.
+    /// HKIT) still get live prices instead of delayed REST.
+    pub(super) fn handle_alpaca_quote(&mut self, symbol: String, bid: f64, ask: f64) {
+        if bid <= 0.0 || ask <= 0.0 || !bid.is_finite() || !ask.is_finite() {
+            return;
+        }
+        let wanted = bare_symbol_from_key(&symbol)
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .to_ascii_uppercase();
+        for chart in &mut self.charts {
+            let chart_symbol = bare_symbol_from_key(&chart.symbol)
+                .replace('/', "")
+                .trim_end_matches(".EQ")
+                .to_ascii_uppercase();
+            if chart_symbol == wanted
+                || chart_symbol.contains(&wanted)
+                || wanted.contains(&chart_symbol)
+            {
+                chart.apply_live_quote_update(bid, ask, false);
+            }
+        }
+        self.apply_live_quote_to_watchlist(&wanted, bid, ask);
+    }
+
     pub(super) fn handle_kraken_book_quote_tick(&mut self, symbol: String, bid: f64, ask: f64) {
         let last = (bid + ask) * 0.5;
         if last <= 0.0 || !last.is_finite() {

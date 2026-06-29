@@ -832,6 +832,193 @@ impl AlpacaBroker {
         Ok(ws_stream)
     }
 
+    /// Open the Alpaca market-data WebSocket and stream real-time quotes+trades.
+    /// Auto-detects entitlement: tries the full-market SIP feed first and falls
+    /// back to the free real-time IEX feed if the account isn't subscribed (SIP
+    /// auth is rejected). Returns the decoded-JSON message channel, a control
+    /// sender to push the live subscription set (positions + watchlist + chart),
+    /// and the feed that was actually selected. The task diffs subscription sets,
+    /// keepalives, and reconnects (re-subscribing its current set) with backoff.
+    pub async fn start_market_data_ws(
+        &self,
+    ) -> Result<
+        (
+            tokio::sync::mpsc::Receiver<String>,
+            tokio::sync::mpsc::Sender<Vec<String>>,
+            &'static str,
+        ),
+        String,
+    > {
+        let key = self.api_key.to_string();
+        let secret = self.secret_key.to_string();
+        let (feed, mut ws_stream) = match Self::connect_market_data_once("sip", &key, &secret).await
+        {
+            Ok(s) => ("sip", s),
+            Err(_) => ("iex", Self::connect_market_data_once("iex", &key, &secret).await?),
+        };
+
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::channel::<String>(512);
+        let (sub_tx, mut sub_rx) = tokio::sync::mpsc::channel::<Vec<String>>(16);
+
+        tokio::spawn(async move {
+            use std::time::{Duration, Instant};
+            const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(20);
+            const STALE_AFTER: Duration = Duration::from_secs(75);
+            let mut reconnect_delay = Duration::from_secs(1);
+            let mut current: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+            loop {
+                let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
+                keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                let mut last_seen = Instant::now();
+
+                loop {
+                    tokio::select! {
+                        msg = ws_stream.next() => {
+                            let Some(msg) = msg else { break; };
+                            match msg {
+                                Ok(Message::Text(text)) => {
+                                    last_seen = Instant::now();
+                                    reconnect_delay = Duration::from_secs(1);
+                                    if msg_tx.send(text.to_string()).await.is_err() { return; }
+                                }
+                                Ok(Message::Binary(bytes)) => {
+                                    last_seen = Instant::now();
+                                    reconnect_delay = Duration::from_secs(1);
+                                    if let Ok(v) = rmp_serde::from_slice::<serde_json::Value>(&bytes) {
+                                        if msg_tx.send(v.to_string()).await.is_err() { return; }
+                                    }
+                                }
+                                Ok(Message::Ping(p)) => {
+                                    last_seen = Instant::now();
+                                    if ws_stream.send(Message::Pong(p)).await.is_err() { break; }
+                                }
+                                Ok(Message::Pong(_)) | Ok(Message::Frame(_)) => last_seen = Instant::now(),
+                                Ok(Message::Close(_)) => break,
+                                Err(e) => { tracing::warn!("Alpaca data-stream read failed: {e}"); break; }
+                            }
+                        }
+                        sub = sub_rx.recv() => {
+                            let Some(symbols) = sub else { return; }; // control dropped ⇒ shutdown
+                            let next: std::collections::HashSet<String> =
+                                symbols.into_iter().filter(|s| !s.is_empty()).collect();
+                            let add: Vec<String> = next.difference(&current).cloned().collect();
+                            let remove: Vec<String> = current.difference(&next).cloned().collect();
+                            if !add.is_empty() {
+                                let _ = Self::md_send_sub(&mut ws_stream, "subscribe", &add).await;
+                            }
+                            if !remove.is_empty() {
+                                let _ = Self::md_send_sub(&mut ws_stream, "unsubscribe", &remove).await;
+                            }
+                            current = next;
+                        }
+                        _ = keepalive.tick() => {
+                            if last_seen.elapsed() >= STALE_AFTER {
+                                tracing::warn!("Alpaca data-stream stale; reconnecting");
+                                let _ = ws_stream.close(None).await;
+                                break;
+                            }
+                            if ws_stream.send(Message::Ping(Vec::new().into())).await.is_err() { break; }
+                        }
+                    }
+                }
+
+                tokio::time::sleep(reconnect_delay).await;
+                reconnect_delay = (reconnect_delay * 2).min(Duration::from_secs(30));
+                match Self::connect_market_data_once(feed, &key, &secret).await {
+                    Ok(next) => {
+                        ws_stream = next;
+                        // Re-subscribe the live set after a reconnect.
+                        if !current.is_empty() {
+                            let syms: Vec<String> = current.iter().cloned().collect();
+                            let _ = Self::md_send_sub(&mut ws_stream, "subscribe", &syms).await;
+                        }
+                        tracing::info!("Alpaca data-stream ({feed}) reconnected");
+                    }
+                    Err(e) => tracing::warn!("Alpaca data-stream reconnect failed: {e}"),
+                }
+            }
+        });
+
+        Ok((msg_rx, sub_tx, feed))
+    }
+
+    async fn md_send_sub(
+        ws_stream: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        action: &str,
+        symbols: &[String],
+    ) -> Result<(), String> {
+        // Subscribe to both quotes (continuous bid/ask) and trades (actual last
+        // print) — maximises what the free IEX feed surfaces for a symbol.
+        let payload = serde_json::json!({
+            "action": action,
+            "quotes": symbols,
+            "trades": symbols,
+        });
+        ws_stream
+            .send(Message::Text(payload.to_string().into()))
+            .await
+            .map_err(|e| format!("Alpaca data-stream {action} failed: {e}"))
+    }
+
+    async fn connect_market_data_once(
+        feed: &str,
+        key: &str,
+        secret: &str,
+    ) -> Result<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        String,
+    > {
+        let url = format!("wss://stream.data.alpaca.markets/v2/{feed}");
+        let (mut ws_stream, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .map_err(|e| format!("Alpaca data-stream ({feed}) connect failed: {e}"))?;
+        // The data stream uses the flat auth form (distinct from the trading
+        // stream's authenticate/listen).
+        let auth = serde_json::json!({ "action": "auth", "key": key, "secret": secret });
+        ws_stream
+            .send(Message::Text(auth.to_string().into()))
+            .await
+            .map_err(|e| format!("Alpaca data-stream ({feed}) auth send failed: {e}"))?;
+        // Verify auth so a SIP-unentitled account fails fast and falls back to IEX.
+        for _ in 0..6 {
+            let Some(v) = Self::md_read_json(&mut ws_stream, std::time::Duration::from_secs(5)).await
+            else {
+                return Err(format!("Alpaca data-stream ({feed}) no auth response"));
+            };
+            if let Some(arr) = v.as_array() {
+                for item in arr {
+                    let t = item.get("T").and_then(|t| t.as_str()).unwrap_or("");
+                    let msg = item.get("msg").and_then(|m| m.as_str()).unwrap_or("");
+                    if t == "success" && msg == "authenticated" {
+                        return Ok(ws_stream);
+                    }
+                    if t == "error" {
+                        return Err(format!("Alpaca data-stream ({feed}) auth rejected: {msg}"));
+                    }
+                }
+            }
+        }
+        Err(format!("Alpaca data-stream ({feed}) auth not confirmed"))
+    }
+
+    async fn md_read_json(
+        ws_stream: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        timeout: std::time::Duration,
+    ) -> Option<serde_json::Value> {
+        match tokio::time::timeout(timeout, ws_stream.next()).await {
+            Ok(Some(Ok(Message::Text(t)))) => serde_json::from_str(&t).ok(),
+            Ok(Some(Ok(Message::Binary(b)))) => rmp_serde::from_slice(&b).ok(),
+            _ => None,
+        }
+    }
+
     fn headers(&self) -> reqwest::header::HeaderMap {
         let mut headers = reqwest::header::HeaderMap::new();
         if let Ok(key) = self.api_key.parse() {

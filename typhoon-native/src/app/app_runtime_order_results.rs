@@ -62,6 +62,71 @@ impl TyphooNApp {
                 self.account_refresh_at = Some(now_instant);
             }
         }
+
+        self.tick_alpaca_quote_subscription(now_instant);
+    }
+
+    /// Keep the Alpaca market-data WS subscribed to exactly the symbols on screen
+    /// (positions + watchlist + active chart). Sends an updated set only when it
+    /// changes, throttled to 2s, so re-subscription is cheap. The processor lazily
+    /// opens the single WS on the first send.
+    pub(super) fn tick_alpaca_quote_subscription(&mut self, now_instant: std::time::Instant) {
+        if !self.alpaca_enabled || !self.broker_connected {
+            return;
+        }
+        let throttled = self
+            .alpaca_quote_sub_at
+            .is_some_and(|t| now_instant.duration_since(t) < std::time::Duration::from_secs(2));
+        if throttled {
+            return;
+        }
+        // Mark the check time up front so the set is only recomputed/hashed every
+        // 2s while stable (not every frame).
+        self.alpaca_quote_sub_at = Some(now_instant);
+        let symbols = self.alpaca_quote_subscription_symbols();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&symbols, &mut hasher);
+        let sig = std::hash::Hasher::finish(&hasher);
+        if self.alpaca_quote_sub_sig == Some(sig) {
+            return; // unchanged
+        }
+        let _ = self
+            .broker_tx
+            .send(BrokerCmd::AlpacaStreamQuotes { symbols });
+        self.alpaca_quote_sub_sig = Some(sig);
+    }
+
+    /// The equity symbols that should have a live Alpaca quote: open positions +
+    /// watchlist + the active chart, normalised to bare uppercase tickers, crypto
+    /// excluded (that rides Kraken), deduped and sorted (stable signature), capped.
+    fn alpaca_quote_subscription_symbols(&self) -> Vec<String> {
+        let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut push = |raw: &str| {
+            let s = bare_symbol_from_key(raw)
+                .replace('/', "")
+                .trim_end_matches(".EQ")
+                .to_ascii_uppercase();
+            // US-equity tickers: 1–5 letters (+ optional .CLASS); skip crypto
+            // (BTCUSD…) and anything non-alphabetic.
+            let base = s.split('.').next().unwrap_or(&s);
+            let looks_equity = !base.is_empty()
+                && base.len() <= 5
+                && base.chars().all(|c| c.is_ascii_alphabetic())
+                && !(s.ends_with("USD") && s.len() <= 8);
+            if looks_equity {
+                set.insert(s);
+            }
+        };
+        for p in &self.live_positions {
+            push(&p.symbol);
+        }
+        for r in &self.watchlist_rows {
+            push(&r.symbol);
+        }
+        if let Some(chart) = self.charts.get(self.active_tab) {
+            push(&chart.symbol);
+        }
+        set.into_iter().take(60).collect()
     }
 
     pub(super) fn handle_order_result(&mut self, msg: String) {

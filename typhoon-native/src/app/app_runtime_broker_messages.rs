@@ -155,6 +155,9 @@ impl TyphooNApp {
                 BrokerMsg::Quote(symbol, bid, ask, last) => {
                     self.handle_broker_quote(symbol, bid, ask, last);
                 }
+                BrokerMsg::AlpacaQuote(symbol, bid, ask) => {
+                    self.handle_alpaca_quote(symbol, bid, ask);
+                }
                 BrokerMsg::WatchlistQuotes(rows) => {
                     self.handle_watchlist_quotes(rows);
                 }

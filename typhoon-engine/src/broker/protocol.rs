@@ -106,6 +106,12 @@ pub enum BrokerCmd {
     /// Open the Alpaca trading WebSocket and stream real-time `trade_updates`
     /// (instant fills/orders) instead of relying solely on REST polling.
     AlpacaStartTradeStream,
+    /// Start (first call) or update the Alpaca market-data WebSocket subscription
+    /// to exactly `symbols` (positions + watchlist + active chart). The feed
+    /// (SIP if entitled, else free IEX) is auto-detected at connect.
+    AlpacaStreamQuotes {
+        symbols: Vec<String>,
+    },
     CloseAll,
     ClosePosition {
         symbol: String,
@@ -2505,6 +2511,9 @@ pub enum BrokerMsg {
     Positions(Vec<PositionInfo>),
     Orders(Vec<OrderInfo>),
     OrderResult(String),
+    /// Real-time Alpaca market-data tick (symbol, bid, ask). A trade print is
+    /// delivered as bid==ask==last. Non-logging, high-frequency.
+    AlpacaQuote(String, f64, f64),
     KrakenTrades(Vec<crate::broker::kraken::KrakenTrade>),
     KrakenLiveTrade(crate::broker::kraken::KrakenTrade),
     KrakenOpenOrders(Vec<crate::broker::kraken::KrakenOrder>),

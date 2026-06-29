@@ -101,6 +101,81 @@ async fn refresh_account_state(b: &AlpacaBroker, tx: &tokio::sync::mpsc::Unbound
     }
 }
 
+/// Start the Alpaca market-data WebSocket (auto-detected SIP/IEX), spawn the
+/// quote forwarder, and return the control sender the processor uses to push the
+/// live subscription set. `None` if the stream couldn't be opened.
+pub async fn start_alpaca_quote_stream(
+    b: AlpacaBroker,
+    broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
+) -> Option<tokio::sync::mpsc::Sender<Vec<String>>> {
+    match b.start_market_data_ws().await {
+        Ok((mut rx, control, feed)) => {
+            let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                "Alpaca market-data stream connected ({})",
+                feed.to_uppercase()
+            )));
+            let tx = broker_msg_tx.clone();
+            tokio::spawn(async move {
+                while let Some(raw) = rx.recv().await {
+                    for (sym, bid, ask) in parse_market_data_quotes(&raw) {
+                        let _ = tx.send(BrokerMsg::AlpacaQuote(sym, bid, ask));
+                    }
+                }
+                tracing::info!("Alpaca data-stream forwarder ended");
+            });
+            Some(control)
+        }
+        Err(e) => {
+            let _ = broker_msg_tx
+                .send(BrokerMsg::Error(format!("Alpaca market-data stream failed: {e}")));
+            None
+        }
+    }
+}
+
+/// Parse a decoded market-data frame into `(symbol, bid, ask)` ticks. A quote
+/// (`T="q"`) carries bid/ask; a trade (`T="t"`) is delivered as bid==ask==last.
+/// Messages arrive as arrays (sometimes a single object).
+pub fn parse_market_data_quotes(raw: &str) -> Vec<(String, f64, f64)> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Vec::new();
+    };
+    let items = match v {
+        serde_json::Value::Array(a) => a,
+        other => vec![other],
+    };
+    let mut out = Vec::new();
+    for item in &items {
+        match item.get("T").and_then(|t| t.as_str()).unwrap_or("") {
+            "q" => {
+                let sym = item.get("S").and_then(|s| s.as_str());
+                let bid = item.get("bp").and_then(serde_json::Value::as_f64);
+                let ask = item.get("ap").and_then(serde_json::Value::as_f64);
+                if let (Some(sym), Some(bid), Some(ask)) = (sym, bid, ask) {
+                    if bid > 0.0 && ask > 0.0 {
+                        out.push((sym.to_string(), bid, ask));
+                    }
+                }
+            }
+            "t" => {
+                let sym = item.get("S").and_then(|s| s.as_str());
+                let price = item.get("p").and_then(serde_json::Value::as_f64);
+                if let (Some(sym), Some(price)) = (sym, price) {
+                    if price > 0.0 {
+                        out.push((sym.to_string(), price, price));
+                    }
+                }
+            }
+            "error" => tracing::warn!(
+                "Alpaca data-stream error: {}",
+                item.get("msg").and_then(|m| m.as_str()).unwrap_or("")
+            ),
+            _ => {}
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::trade_update_log_line;
@@ -126,5 +201,29 @@ mod tests {
             "order": { "symbol": "HKIT", "side": "sell" }
         });
         assert_eq!(trade_update_log_line(&data), "Alpaca order new: sell HKIT");
+    }
+
+    #[test]
+    fn parses_quote_and_trade_ticks_and_skips_control_frames() {
+        use super::parse_market_data_quotes;
+        // Quote ⇒ (sym, bid, ask).
+        assert_eq!(
+            parse_market_data_quotes(r#"[{"T":"q","S":"HKIT","bp":0.28,"ap":0.29}]"#),
+            vec![("HKIT".to_string(), 0.28, 0.29)]
+        );
+        // Trade ⇒ bid==ask==last.
+        assert_eq!(
+            parse_market_data_quotes(r#"[{"T":"t","S":"HKIT","p":0.285}]"#),
+            vec![("HKIT".to_string(), 0.285, 0.285)]
+        );
+        // Control/handshake frames produce no ticks.
+        assert!(parse_market_data_quotes(r#"[{"T":"success","msg":"authenticated"}]"#).is_empty());
+        // Zero/missing prices are dropped; a valid sibling still parses.
+        assert_eq!(
+            parse_market_data_quotes(
+                r#"[{"T":"q","S":"A","bp":0,"ap":1.0},{"T":"q","S":"B","bp":2.0,"ap":2.1}]"#
+            ),
+            vec![("B".to_string(), 2.0, 2.1)]
+        );
     }
 }

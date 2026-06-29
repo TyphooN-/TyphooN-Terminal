@@ -571,6 +571,11 @@ pub struct TyphooNApp {
     /// Equity froze while the derived Open P/L kept updating per-frame. Refreshed
     /// on a short cadence so equity tracks fills and mark-price moves.
     pub(crate) account_refresh_at: Option<std::time::Instant>,
+    /// Signature (hash) of the last symbol set pushed to the Alpaca market-data
+    /// WS, and when — so we only re-subscribe when the positions/watchlist/chart
+    /// set actually changes, throttled.
+    pub(crate) alpaca_quote_sub_sig: Option<u64>,
+    pub(crate) alpaca_quote_sub_at: Option<std::time::Instant>,
     /// Unix timestamp of last successful orders refresh.
     pub(crate) orders_last_update_ts: i64,
     /// User-managed watchlist symbols (persisted in session).
