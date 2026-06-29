@@ -554,6 +554,10 @@ pub struct TyphooNApp {
     /// Last automatic positions/orders snapshot dispatch. Separate from successful
     /// update timestamp so a slow broker response does not cause per-frame request spam.
     pub(crate) positions_auto_refresh_at: Option<std::time::Instant>,
+    /// Last `GetMarketClock` dispatch. The US-equities session string embeds a
+    /// countdown ("opens in …") computed broker-side at fetch time, so it must be
+    /// re-fetched periodically or the countdown freezes at its connect-time value.
+    pub(crate) market_clock_refresh_at: Option<std::time::Instant>,
     /// Unix timestamp of last successful orders refresh.
     pub(crate) orders_last_update_ts: i64,
     /// User-managed watchlist symbols (persisted in session).

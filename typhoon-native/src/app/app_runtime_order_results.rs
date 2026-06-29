@@ -28,6 +28,25 @@ impl TyphooNApp {
                 self.positions_auto_refresh_at = Some(now_instant);
             }
         }
+
+        // Market clock: the US-equities session string ("PRE-MARKET · Core in 1h
+        // 20m", "OPEN · closes in …", "CLOSED · opens in …") is formatted
+        // broker-side with the countdown baked in at fetch time. Fetched only on
+        // connect, it freezes — a status shown hours after connect counts down from
+        // the connect-time snapshot (e.g. a stale "opens in 10h 30m" on a morning
+        // when core open is ~1h away). Re-fetch on a 60s cadence so the minute-
+        // granularity countdown stays within a minute of truth. Alpaca's /v2/clock
+        // is a trivial endpoint, so 1 req/min is negligible.
+        if self.alpaca_enabled && self.broker_connected {
+            let clock_due = self
+                .market_clock_refresh_at
+                .map(|t| now_instant.duration_since(t) >= std::time::Duration::from_secs(60))
+                .unwrap_or(true);
+            if clock_due {
+                let _ = self.broker_tx.send(BrokerCmd::GetMarketClock);
+                self.market_clock_refresh_at = Some(now_instant);
+            }
+        }
     }
 
     pub(super) fn handle_order_result(&mut self, msg: String) {
