@@ -340,11 +340,42 @@ pub async fn run_alpaca_fetch_task(
         .map(|(_, count)| *count as i64)
         .unwrap_or(0);
     let mut after_ts = incremental.as_ref().map(|(ts, _)| ts.clone());
-    let needs_backfill = should_request_full_backfill(
-        backfill_already_complete,
-        alpaca_sync_target_bars(&timeframe),
-        cached_count,
-    );
+
+    // Self-heal a stalled native 1H/4H. Alpaca's META 1Hour/4Hour stopped at
+    // 2024-01-25 while its 15Min kept printing to today, leaving an 860-day hole
+    // the count target can't see (6302 bars — just the wrong, pre-2024 ones) and
+    // a single incremental delta (≤1000 bars ≈ 150 days) can't reach. If the
+    // SAME symbol's 15Min tail is far fresher than this series' tail, Alpaca has
+    // fillable history, so re-pull full server history once. Comparing against
+    // 15Min makes it self-limiting: once this series catches up the gap closes
+    // and it stops; a symbol Alpaca has no recent data for never triggers (no
+    // re-pull loop, no persisted marker needed).
+    let force_intraday_heal = if matches!(timeframe.as_str(), "1Hour" | "4Hour") {
+        let parse_s = |ts: &str| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .ok()
+                .map(|dt| dt.timestamp())
+        };
+        let fine_tail_s = cache_handle
+            .as_ref()
+            .and_then(|c| {
+                c.get_incremental_start(&format!("alpaca:{symbol}:15Min"))
+                    .ok()
+                    .flatten()
+            })
+            .and_then(|(ts, _)| parse_s(&ts));
+        let this_tail_s = after_ts.as_deref().and_then(parse_s);
+        intraday_stall_needs_full_pull(fine_tail_s, this_tail_s)
+    } else {
+        false
+    };
+
+    let needs_backfill = force_intraday_heal
+        || should_request_full_backfill(
+            backfill_already_complete,
+            alpaca_sync_target_bars(&timeframe),
+            cached_count,
+        );
 
     let mut success = false;
     {
@@ -488,6 +519,21 @@ pub async fn run_alpaca_fetch_task(
         timeframe,
         success,
     });
+}
+
+/// Whether a native 1H/4H series should be re-pulled in full because it stalled
+/// while the same symbol's 15Min feed kept printing. `fine_tail_s` is the 15Min
+/// tail epoch-seconds; `this_tail_s` is the 1H/4H tail (None = no native series).
+/// Comparing the two makes the heal self-limiting — it fires only while 15Min is
+/// ≥30 days fresher, so a healed series stops triggering and a symbol Alpaca has
+/// no recent data for never triggers.
+fn intraday_stall_needs_full_pull(fine_tail_s: Option<i64>, this_tail_s: Option<i64>) -> bool {
+    const STALL_GAP_S: i64 = 30 * 86_400;
+    match (fine_tail_s, this_tail_s) {
+        (Some(fine), Some(this)) => fine - this > STALL_GAP_S,
+        (Some(_), None) => true, // have 15Min but no native 1H/4H ⇒ pull the base once
+        _ => false,
+    }
 }
 
 fn should_request_full_backfill(
@@ -1110,6 +1156,24 @@ mod tests {
     fn backfill_complete_marker_forces_incremental_even_for_thin_history() {
         assert!(!should_request_full_backfill(true, Some(1_000), 1));
         assert!(!should_request_full_backfill(true, Some(u32::MAX), 10_000));
+    }
+
+    #[test]
+    fn intraday_stall_full_pull_fires_only_when_15min_is_far_fresher() {
+        let day = 86_400i64;
+        let now = 1_900_000_000i64;
+        // META case: 15Min current, 1H tail 860 days stale ⇒ heal.
+        assert!(intraday_stall_needs_full_pull(Some(now), Some(now - 860 * day)));
+        // Have 15Min but no native 1H/4H at all ⇒ pull the base once.
+        assert!(intraday_stall_needs_full_pull(Some(now), None));
+        // Healthy: 1H within a normal weekend of the 15Min tail ⇒ no full pull.
+        assert!(!intraday_stall_needs_full_pull(Some(now), Some(now - 3 * day)));
+        // Moderately stale (< 30d) heals via the cheap incremental walk, not a
+        // full pull.
+        assert!(!intraday_stall_needs_full_pull(Some(now), Some(now - 20 * day)));
+        // No 15Min reference (Alpaca has no recent data) ⇒ never loops.
+        assert!(!intraday_stall_needs_full_pull(None, Some(now - 999 * day)));
+        assert!(!intraday_stall_needs_full_pull(None, None));
     }
 
     #[test]
