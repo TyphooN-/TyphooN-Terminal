@@ -566,6 +566,11 @@ pub struct TyphooNApp {
     /// countdown ("opens in …") computed broker-side at fetch time, so it must be
     /// re-fetched periodically or the countdown freezes at its connect-time value.
     pub(crate) market_clock_refresh_at: Option<std::time::Instant>,
+    /// Last `GetAccount` dispatch. Alpaca's account snapshot (equity, buying
+    /// power, margins) was otherwise fetched only on connect, so the headline
+    /// Equity froze while the derived Open P/L kept updating per-frame. Refreshed
+    /// on a short cadence so equity tracks fills and mark-price moves.
+    pub(crate) account_refresh_at: Option<std::time::Instant>,
     /// Unix timestamp of last successful orders refresh.
     pub(crate) orders_last_update_ts: i64,
     /// User-managed watchlist symbols (persisted in session).

@@ -436,6 +436,7 @@ impl TyphooNApp {
             positions_last_update_ts: 0,
             positions_auto_refresh_at: None,
             market_clock_refresh_at: None,
+            account_refresh_at: None,
             orders_last_update_ts: 0,
             user_watchlist: Vec::new(),
             user_watchlist_set: std::collections::HashSet::new(),

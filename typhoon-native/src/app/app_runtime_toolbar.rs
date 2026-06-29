@@ -1,6 +1,39 @@
 use super::app_runtime_support::kraken_xstocks_session_status_now;
 use super::*;
 
+/// Colour for a market-session status string, shared by the Alpaca US-equities
+/// clock and the Kraken xStocks session so neither renders as plain white.
+/// Extended hours (pre-market / after-hours / xStocks overnight) trade with
+/// reduced liquidity — amber, distinct from a full regular session (green) and a
+/// hard CLOSED (red).
+///
+/// Only the state phrase BEFORE the `·` is matched: the countdown label after it
+/// ("· next after-hours in …", "· opens in …") leaks session keywords that would
+/// otherwise mis-colour the row (e.g. a CORE row whose countdown says
+/// "after-hours"). Alpaca uses OPEN/PRE-MARKET/AFTER-HOURS/CLOSED; Kraken xStocks
+/// uses CORE/PRE/AFTER/OVERNIGHT/CLOSED — both vocabularies are covered.
+pub(super) fn session_status_color(session: &str) -> egui::Color32 {
+    const EXTENDED: egui::Color32 = egui::Color32::from_rgb(255, 190, 60);
+    let state = session
+        .split('·')
+        .next()
+        .unwrap_or(session)
+        .to_ascii_uppercase();
+    if state.contains("CLOSED") {
+        DOWN
+    } else if state.contains("PRE")
+        || state.contains("AFTER")
+        || state.contains("OVERNIGHT")
+        || state.contains("EXTENDED")
+    {
+        EXTENDED
+    } else if state.contains("OPEN") || state.contains("CORE") || state.contains("24/7") {
+        UP
+    } else {
+        AXIS_TEXT
+    }
+}
+
 #[allow(deprecated)]
 impl TyphooNApp {
     pub(super) fn render_symbol_timeframe_toolbar(&mut self, ctx: &egui::Context) {
@@ -450,17 +483,7 @@ impl TyphooNApp {
                                     }
                                 });
                                 if let Some(session) = active_session {
-                                    let session_upper = session.to_ascii_uppercase();
-                                    let session_color = if session_upper.contains("CLOSED") {
-                                        DOWN
-                                    } else if session_upper.contains("OPEN")
-                                        || session_upper.contains("KRAKEN XSTOCKS")
-                                        || session == "24/7"
-                                    {
-                                        UP
-                                    } else {
-                                        AXIS_TEXT
-                                    };
+                                    let session_color = session_status_color(&session);
                                     ui.label(
                                         egui::RichText::new(format!("[{}]", session))
                                             .color(session_color)
@@ -604,5 +627,43 @@ impl TyphooNApp {
                         });
                 });
         }
+    }
+}
+
+#[cfg(test)]
+mod session_colour_tests {
+    use super::*;
+    const EXTENDED: egui::Color32 = egui::Color32::from_rgb(255, 190, 60);
+
+    #[test]
+    fn session_colour_handles_alpaca_and_kraken_vocabularies() {
+        // Alpaca US-equities clock.
+        assert_eq!(session_status_color("US equities OPEN · closes in 3h"), UP);
+        assert_eq!(session_status_color("US equities PRE-MARKET · Core in 1h"), EXTENDED);
+        assert_eq!(
+            session_status_color("US equities AFTER-HOURS · closes in 3h 19m"),
+            EXTENDED
+        );
+        assert_eq!(session_status_color("US equities CLOSED · opens in 10h 30m"), DOWN);
+        // Kraken xStocks — CORE is the open session; the "next after-hours"
+        // countdown after the · must NOT pull it into the extended bucket.
+        assert_eq!(
+            session_status_color("Kraken xStocks CORE · next after-hours in 2h"),
+            UP
+        );
+        assert_eq!(session_status_color("Kraken xStocks PRE · next core in 30m"), EXTENDED);
+        assert_eq!(
+            session_status_color("Kraken xStocks AFTER · next overnight in 3h 19m"),
+            EXTENDED
+        );
+        assert_eq!(
+            session_status_color("Kraken xStocks OVERNIGHT · next pre-market in 5h"),
+            EXTENDED
+        );
+        assert_eq!(
+            session_status_color("Kraken xStocks CLOSED · opens Sun 8:00 PM ET in 1d"),
+            DOWN
+        );
+        assert_eq!(session_status_color("24/7"), UP);
     }
 }

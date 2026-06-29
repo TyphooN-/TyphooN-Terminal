@@ -47,6 +47,21 @@ impl TyphooNApp {
                 self.market_clock_refresh_at = Some(now_instant);
             }
         }
+
+        // Account snapshot: equity / buying power / margins were fetched only on
+        // connect, so the headline Equity froze while the derived Open P/L kept
+        // updating per-frame. Refresh on a 10s cadence so equity tracks fills and
+        // mark-price moves. /v2/account is a trivial endpoint (~6 req/min).
+        if self.alpaca_enabled && self.broker_connected {
+            let account_due = self
+                .account_refresh_at
+                .map(|t| now_instant.duration_since(t) >= std::time::Duration::from_secs(10))
+                .unwrap_or(true);
+            if account_due {
+                let _ = self.broker_tx.send(BrokerCmd::GetAccount);
+                self.account_refresh_at = Some(now_instant);
+            }
+        }
     }
 
     pub(super) fn handle_order_result(&mut self, msg: String) {
