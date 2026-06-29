@@ -8,6 +8,7 @@
 pub mod ai_chat;
 pub mod alpaca_account_data;
 pub mod alpaca_order_ops;
+pub mod alpaca_ws_commands;
 pub mod bar_fetch_commands;
 pub mod broker_processor;
 pub mod connection_commands;

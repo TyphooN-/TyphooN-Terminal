@@ -7,7 +7,8 @@ use typhoon_engine::core::cache::SqliteCache;
 
 use crate::resources::BrokerRuntimeResources;
 use crate::{
-    ai_chat, alpaca_account_data, alpaca_order_ops, bar_fetch_commands, connection_commands,
+    ai_chat, alpaca_account_data, alpaca_order_ops, alpaca_ws_commands, bar_fetch_commands,
+    connection_commands,
     external_feeds, fundamentals_commands, kraken_market_commands, kraken_order_ops,
     kraken_ws_commands, market_data_commands, matrix_commands, misc_commands, news,
     research_compute, research_fetch, storage, symbol_search, watchlist_quotes,
@@ -78,6 +79,14 @@ pub fn spawn_broker_message_processor(
                     alpaca_order_ops::handle_alpaca_order_command(
                         cmd,
                         broker.as_ref(),
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
+                }
+                cmd @ BrokerCmd::AlpacaStartTradeStream => {
+                    alpaca_ws_commands::handle_alpaca_ws_command(
+                        cmd,
+                        broker.clone(),
                         &broker_msg_tx_clone,
                     )
                     .await;

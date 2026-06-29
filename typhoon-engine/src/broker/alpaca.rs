@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
+use futures_util::{SinkExt, StreamExt};
 use tokio::sync::Mutex;
+use tokio_tungstenite::tungstenite::protocol::Message;
 use zeroize::Zeroizing;
 
 const CRYPTO_BAR_FEEDS: &[Option<&str>] = &[None];
@@ -699,6 +701,135 @@ impl AlpacaBroker {
 
     pub fn bar_requests_per_minute(&self) -> u32 {
         self.bar_rate_limiter.requests_per_minute()
+    }
+
+    /// Open the Alpaca trading WebSocket (`/stream`) and stream real-time
+    /// `trade_updates` (order new/fill/partial-fill/cancel/replace events).
+    /// Returns a channel of decoded JSON payloads — Text frames forwarded as-is,
+    /// MessagePack binary frames decoded to JSON — so downstream parsing is
+    /// uniform. The spawned task keepalives with pings, detects a stale socket,
+    /// and reconnects with exponential backoff so a drop self-heals (mirrors the
+    /// Kraken private-WS driver).
+    pub async fn start_trade_updates_ws(
+        &self,
+    ) -> Result<tokio::sync::mpsc::Receiver<String>, String> {
+        let url = format!("{}/stream", self.base_url.replacen("https://", "wss://", 1));
+        let key = self.api_key.to_string();
+        let secret = self.secret_key.to_string();
+        let mut ws_stream = Self::connect_trade_updates_ws(&url, &key, &secret).await?;
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+
+        tokio::spawn(async move {
+            use std::time::{Duration, Instant};
+            const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(20);
+            const STALE_AFTER: Duration = Duration::from_secs(75);
+            let mut reconnect_delay = Duration::from_secs(1);
+
+            loop {
+                let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
+                keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                let mut last_seen = Instant::now();
+
+                loop {
+                    tokio::select! {
+                        msg = ws_stream.next() => {
+                            let Some(msg) = msg else { break; };
+                            match msg {
+                                Ok(Message::Text(text)) => {
+                                    last_seen = Instant::now();
+                                    reconnect_delay = Duration::from_secs(1);
+                                    if tx.send(text.to_string()).await.is_err() {
+                                        return;
+                                    }
+                                }
+                                Ok(Message::Binary(bytes)) => {
+                                    last_seen = Instant::now();
+                                    reconnect_delay = Duration::from_secs(1);
+                                    if let Ok(v) =
+                                        rmp_serde::from_slice::<serde_json::Value>(&bytes)
+                                    {
+                                        if tx.send(v.to_string()).await.is_err() {
+                                            return;
+                                        }
+                                    }
+                                }
+                                Ok(Message::Ping(payload)) => {
+                                    last_seen = Instant::now();
+                                    if ws_stream.send(Message::Pong(payload)).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Ok(Message::Pong(_)) | Ok(Message::Frame(_)) => {
+                                    last_seen = Instant::now();
+                                }
+                                Ok(Message::Close(_)) => break,
+                                Err(e) => {
+                                    tracing::warn!("Alpaca trade-stream read failed: {e}");
+                                    break;
+                                }
+                            }
+                        }
+                        _ = keepalive.tick() => {
+                            if last_seen.elapsed() >= STALE_AFTER {
+                                tracing::warn!("Alpaca trade-stream stale; reconnecting");
+                                let _ = ws_stream.close(None).await;
+                                break;
+                            }
+                            if ws_stream.send(Message::Ping(Vec::new().into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                tokio::time::sleep(reconnect_delay).await;
+                reconnect_delay = (reconnect_delay * 2).min(Duration::from_secs(30));
+                match Self::connect_trade_updates_ws(&url, &key, &secret).await {
+                    Ok(next) => {
+                        ws_stream = next;
+                        tracing::info!("Alpaca trade-stream reconnected");
+                    }
+                    Err(e) => tracing::warn!("Alpaca trade-stream reconnect failed: {e}"),
+                }
+            }
+        });
+
+        Ok(rx)
+    }
+
+    async fn connect_trade_updates_ws(
+        url: &str,
+        key: &str,
+        secret: &str,
+    ) -> Result<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        String,
+    > {
+        let (mut ws_stream, _) = tokio_tungstenite::connect_async(url)
+            .await
+            .map_err(|e| format!("Alpaca trade-stream connect failed: {e}"))?;
+        // The trading stream authenticates with the nested key_id/secret_key form,
+        // then subscribes via `listen` (distinct from the market-data stream's
+        // flat auth/subscribe protocol).
+        let auth = serde_json::json!({
+            "action": "authenticate",
+            "data": { "key_id": key, "secret_key": secret }
+        });
+        ws_stream
+            .send(Message::Text(auth.to_string().into()))
+            .await
+            .map_err(|e| format!("Alpaca trade-stream auth failed: {e}"))?;
+        let listen = serde_json::json!({
+            "action": "listen",
+            "data": { "streams": ["trade_updates"] }
+        });
+        ws_stream
+            .send(Message::Text(listen.to_string().into()))
+            .await
+            .map_err(|e| format!("Alpaca trade-stream listen failed: {e}"))?;
+        Ok(ws_stream)
     }
 
     fn headers(&self) -> reqwest::header::HeaderMap {

@@ -103,6 +103,9 @@ pub enum BrokerCmd {
     GetAccount,
     GetPositions,
     GetOrders,
+    /// Open the Alpaca trading WebSocket and stream real-time `trade_updates`
+    /// (instant fills/orders) instead of relying solely on REST polling.
+    AlpacaStartTradeStream,
     CloseAll,
     ClosePosition {
         symbol: String,

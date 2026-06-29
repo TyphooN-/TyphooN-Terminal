@@ -41,6 +41,9 @@ impl TyphooNApp {
             let _ = self.broker_tx.send(BrokerCmd::GetOrders);
             let _ = self.broker_tx.send(BrokerCmd::GetActivities { limit: 100 });
             let _ = self.broker_tx.send(BrokerCmd::GetMarketClock);
+            // Real-time order/fill/account updates over the trading WebSocket; the
+            // periodic REST poll stays as a safety net for the reconnect window.
+            let _ = self.broker_tx.send(BrokerCmd::AlpacaStartTradeStream);
         }
         if is_routine_market_data_status(&s) {
             tracing::debug!("{}", s);
