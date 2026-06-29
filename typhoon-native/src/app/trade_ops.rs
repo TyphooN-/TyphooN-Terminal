@@ -2193,6 +2193,159 @@ impl TyphooNApp {
         self.show_kraken_spot_sell_dialog = open && !close_after_submit;
     }
 
+    /// Open the Alpaca position-close ticket. Closing a long is a SELL, closing a
+    /// short is a BUY — the action is opposite the position direction.
+    pub(super) fn open_alpaca_close_dialog(&mut self, symbol: String, side: String, qty: f64) {
+        self.alpaca_close_symbol = symbol;
+        self.alpaca_close_side = side;
+        self.alpaca_close_qty_total = qty.abs();
+        self.alpaca_close_qty = self.alpaca_close_qty_total;
+        self.alpaca_close_pct = 100.0;
+        self.show_alpaca_close_dialog = true;
+    }
+
+    pub(super) fn render_alpaca_close_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_alpaca_close_dialog {
+            return;
+        }
+        // Closing a long is a SELL; closing a short is a BUY.
+        let is_long = self.alpaca_close_side.eq_ignore_ascii_case("long");
+        let action = if is_long { "Sell" } else { "Buy" };
+        let action_color = if is_long { DOWN } else { UP };
+        let submit_fill = if is_long {
+            egui::Color32::from_rgb(120, 30, 30)
+        } else {
+            egui::Color32::from_rgb(28, 96, 56)
+        };
+        let total = self.alpaca_close_qty_total.max(0.0);
+        let fmt_qty = |q: f64| -> String {
+            if q.fract().abs() < 1e-9 {
+                format!("{q:.0}")
+            } else {
+                format!("{q:.8}")
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string()
+            }
+        };
+
+        let mut open = self.show_alpaca_close_dialog;
+        let mut close_after_submit = false;
+        egui::Window::new(format!("{} {} on Alpaca", action, self.alpaca_close_symbol))
+            .open(&mut open)
+            .default_size([460.0, 250.0])
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Close {} {} — {} a slice at market",
+                        if is_long { "long" } else { "short" },
+                        self.alpaca_close_symbol,
+                        action.to_ascii_lowercase()
+                    ))
+                    .strong()
+                    .color(action_color),
+                );
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    ui.label("Position size:");
+                    ui.label(egui::RichText::new(fmt_qty(total)).monospace().strong());
+                });
+
+                let pct_before = self.alpaca_close_pct;
+                ui.add(
+                    egui::Slider::new(&mut self.alpaca_close_pct, 0.0..=100.0)
+                        .text("% of position")
+                        .suffix("%"),
+                );
+                if (self.alpaca_close_pct - pct_before).abs() > f32::EPSILON {
+                    self.alpaca_close_qty = total * (self.alpaca_close_pct as f64 / 100.0);
+                }
+
+                ui.horizontal(|ui| {
+                    ui.label("Quantity:");
+                    let qty_before = self.alpaca_close_qty;
+                    let qty_resp = ui.add(
+                        egui::DragValue::new(&mut self.alpaca_close_qty)
+                            .range(0.0..=total)
+                            .speed((total / 200.0).max(0.00000001))
+                            .max_decimals(8),
+                    );
+                    if qty_resp.changed() || (self.alpaca_close_qty - qty_before).abs() > f64::EPSILON
+                    {
+                        self.alpaca_close_qty = self.alpaca_close_qty.clamp(0.0, total);
+                        self.alpaca_close_pct = if total > 0.0 {
+                            ((self.alpaca_close_qty / total) * 100.0) as f32
+                        } else {
+                            0.0
+                        };
+                    }
+                });
+
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    for pct in [25.0_f32, 50.0, 75.0, 100.0] {
+                        if ui.button(format!("{pct:.0}%")).clicked() {
+                            self.alpaca_close_pct = pct;
+                            self.alpaca_close_qty = total * (pct as f64 / 100.0);
+                        }
+                    }
+                });
+                ui.separator();
+
+                let can_submit = self.broker_connected && total > 0.0 && self.alpaca_close_pct > 0.0;
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            can_submit,
+                            egui::Button::new(format!(
+                                "{} {} {}",
+                                action,
+                                fmt_qty(self.alpaca_close_qty),
+                                self.alpaca_close_symbol
+                            ))
+                            .fill(submit_fill),
+                        )
+                        .on_hover_text(format!(
+                            "{} {:.1}% of the {} position at market via Alpaca",
+                            action, self.alpaca_close_pct, self.alpaca_close_symbol
+                        ))
+                        .clicked()
+                    {
+                        let symbol = self.alpaca_close_symbol.clone();
+                        let pct = self.alpaca_close_pct as f64;
+                        // Percentage close lets Alpaca compute the exact share math
+                        // server-side from the live position (robust to a stale
+                        // snapshot); a full close uses the dedicated endpoint.
+                        if pct >= 99.95 {
+                            let _ = self.broker_tx.send(BrokerCmd::ClosePosition {
+                                symbol: symbol.clone(),
+                                qty: None,
+                            });
+                            self.log.push_back(LogEntry::info(format!(
+                                "Alpaca: closing entire {symbol} position at market"
+                            )));
+                        } else {
+                            let _ = self.broker_tx.send(BrokerCmd::AlpacaClosePositionPercent {
+                                symbol: symbol.clone(),
+                                percentage: pct,
+                            });
+                            self.log.push_back(LogEntry::info(format!(
+                                "Alpaca: closing {pct:.1}% of {symbol} at market"
+                            )));
+                        }
+                        close_after_submit = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close_after_submit = true;
+                    }
+                });
+            });
+
+        self.show_alpaca_close_dialog = open && !close_after_submit;
+    }
+
     pub(super) fn kraken_trade_account_snapshot(&self) -> Option<TradeAccountSnapshot> {
         let usd_like = self.kraken_usd_equivalent_balance();
         if usd_like <= 0.0 {

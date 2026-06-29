@@ -139,6 +139,8 @@ impl TyphooNApp {
         let _settings_save_after = self.render_settings_window(ctx);
         // Broker connect + Kraken trade-history / open-orders windows
         self.render_broker_kraken_windows(ctx);
+        // Alpaca position-close ticket (Sell to close a long / Buy to close a short)
+        self.render_alpaca_close_dialog(ctx);
 
         // AI Chat (Anthropic Claude / OpenAI GPT / …)
         self.render_ai_chat_window(ctx);

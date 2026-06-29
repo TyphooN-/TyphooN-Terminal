@@ -104,8 +104,7 @@ impl TyphooNApp {
                 &self.live_positions,
             ) {
                 has_positions = true;
-                let mut close_sym: Option<String> = None;
-                let mut close_percent: Option<(String, f64)> = None;
+                let mut open_close: Option<(String, String, f64)> = None;
                 let mut lp_action = SymbolAction::None;
                 for pos in &self.live_positions {
                     let side_c = if pos.side == "long" { UP } else { DOWN };
@@ -164,43 +163,31 @@ impl TyphooNApp {
                             .small(),
                         );
                         if self.broker_connected {
-                            for pct in [25.0, 50.0, 75.0] {
-                                if ui
-                                    .small_button(format!("{}%", pct as i32))
-                                    .on_hover_text(format!(
-                                        "Close {}% of {} via Alpaca percentage close",
-                                        pct as i32, pos.symbol
-                                    ))
-                                    .clicked()
-                                {
-                                    close_percent = Some((pos.symbol.clone(), pct));
-                                }
-                            }
+                            // Closing a long is a SELL, a short a BUY — one button
+                            // that opens a 1–100% slider ticket (Kraken-style)
+                            // instead of four inline buttons that wrapped to a
+                            // second line.
+                            let is_long = pos.side == "long";
+                            let (label, col) =
+                                if is_long { ("Sell…", DOWN) } else { ("Buy…", UP) };
                             if ui
-                                .small_button(egui::RichText::new("100%").color(DOWN))
-                                .on_hover_text("Close entire Alpaca position")
+                                .small_button(egui::RichText::new(label).color(col))
+                                .on_hover_text(format!(
+                                    "Close {} {} — choose 1–100% with a slider",
+                                    pos.symbol,
+                                    if is_long { "(sell)" } else { "(buy to cover)" }
+                                ))
                                 .clicked()
                             {
-                                close_sym = Some(pos.symbol.clone());
+                                open_close =
+                                    Some((pos.symbol.clone(), pos.side.clone(), pos.qty.abs()));
                             }
                         }
                     });
                     ui.separator();
                 }
-                if let Some(sym) = close_sym {
-                    let _ = self
-                        .broker_tx
-                        .send(BrokerCmd::ClosePosition { symbol: sym, qty: None });
-                }
-                if let Some((sym, percentage)) = close_percent {
-                    let _ = self.broker_tx.send(BrokerCmd::AlpacaClosePositionPercent {
-                        symbol: sym.clone(),
-                        percentage,
-                    });
-                    self.log.push_back(LogEntry::info(format!(
-                        "Alpaca: closing {:.0}% of {} at market",
-                        percentage, sym
-                    )));
+                if let Some((sym, side, qty)) = open_close {
+                    self.open_alpaca_close_dialog(sym, side, qty);
                 }
                 if !matches!(lp_action, SymbolAction::None) {
                     self.deferred_symbol_action = lp_action;
