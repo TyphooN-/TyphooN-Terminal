@@ -1200,6 +1200,61 @@ fn chart_build_merged_equity_bars_from_cache(
         }
     }
 
+    // Intraday self-heal: the native 1-hour Alpaca series can stall (META's
+    // stopped 2024-01-25) while the denser 15Min/30Min feed keeps updating to the
+    // current bar. Left alone, the MTF overlay projects that stale 1Hour as a flat
+    // line across the hole then a vertical jump when a later source (Kraken)
+    // resumes it. Derive 1Hour from the densest available lower-TF of the SAME
+    // (native) source and union it in: the rollup is exact (15Min→1Hour reproduces
+    // native Alpaca 1Hour bucket-for-bucket), same-scale (no ADR-124 concern), and
+    // fills the hole with zero network. Pushed AFTER the native rows so the native
+    // bars win every overlap bucket (identical anyway) and the derived bars only
+    // fill the missing buckets. 4Hour/1Week/1Month inherit the repair for free
+    // because they aggregate the merged 1Hour/1Day above.
+    if timeframe == "1Hour" {
+        // Per source (not just the primary): if a source's denser lower-TF feed
+        // extends past its OWN 1Hour tail, derive 1Hour from it. Deriving from a
+        // source's own 15Min is inherently same-scale, so this is safe regardless
+        // of which broker is primary (a stalled Alpaca 1Hour heals from Alpaca
+        // 15Min even when Kraken is primary, and vice-versa).
+        // Only a 1Hour series whose tail is well behind "now" is worth healing;
+        // skip the (large) lower-TF blob read entirely for current series so the
+        // common case stays cheap on the build/render path.
+        const STALE_AFTER_MS: i64 = 2 * 86_400_000; // 2 days
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        for &source in sources {
+            let h1_tail = loaded
+                .iter()
+                .find(|(s, _)| *s == source)
+                .and_then(|(_, raw)| raw.last())
+                .map(|b| b.0);
+            // A present, recent 1Hour tail needs no healing.
+            if h1_tail.is_some_and(|t| now_ms - t < STALE_AFTER_MS) {
+                continue;
+            }
+            for lower in ["15Min", "30Min", "5Min"] {
+                let Some(fine) = chart_source_cache_keys(source, symbol, lower)
+                    .iter()
+                    .find_map(|key| cache.get_bars_raw(key).ok().flatten())
+                    .filter(|raw| !raw.is_empty())
+                else {
+                    continue;
+                };
+                // Only synthesize when the finer feed actually extends past the
+                // source's 1Hour tail — otherwise it is redundant work the union
+                // discards (native bars win every overlap bucket).
+                let fine_tail = fine.iter().map(|b| b.0).max().unwrap_or(0);
+                if h1_tail.is_none_or(|t| fine_tail > t) {
+                    let agg = chart_aggregate_raw_to_1hour(&fine);
+                    if agg.len() >= 2 {
+                        loaded.push((source, agg));
+                    }
+                }
+                break; // densest available lower-TF wins; coarser ones add nothing
+            }
+        }
+    }
+
     // Yahoo exposes no native 4-hour interval (see `yahoo_chart_supports_timeframe`),
     // so a "4Hour" merge would otherwise have no independent corroborator and the
     // trusted-tier outlier correction is skipped entirely — exactly why a bad
@@ -1279,6 +1334,62 @@ fn chart_aggregate_raw_to_4hour(
     let mut out: std::collections::BTreeMap<i64, Bar> = std::collections::BTreeMap::new();
     for (ts, o, h, l, c, v) in sorted {
         let bucket = chart_merge_bucket_ts("4Hour", ts);
+        out.entry(bucket)
+            .and_modify(|b| {
+                if h > b.high {
+                    b.high = h;
+                }
+                if l < b.low {
+                    b.low = l;
+                }
+                b.close = c;
+                b.volume += v;
+            })
+            .or_insert(Bar {
+                ts_ms: bucket,
+                open: o,
+                high: h,
+                low: l,
+                close: c,
+                volume: v,
+            });
+    }
+    out.into_values()
+        .map(|b| (b.ts_ms, b.open, b.high, b.low, b.close, b.volume))
+        .collect()
+}
+
+/// Aggregate a finer intraday raw OHLCV series (5/15/30-min) into 1-hour buckets
+/// aligned exactly to [`chart_merge_bucket_ts`]'s "1Hour" boundaries, so the
+/// result overlaps native 1-hour bars bucket-for-bucket inside the merge. Used to
+/// self-heal a stalled native 1Hour series from the still-current 15Min/30Min
+/// feed (the rollup is exact: 15Min→1Hour reproduces native Alpaca 1Hour
+/// bucket-for-bucket). Open = first bar in a bucket, close = last, high/low =
+/// extremes, volume = sum.
+fn chart_aggregate_raw_to_1hour(
+    raw: &[(i64, f64, f64, f64, f64, f64)],
+) -> Vec<(i64, f64, f64, f64, f64, f64)> {
+    let mut sorted: Vec<(i64, f64, f64, f64, f64, f64)> = raw
+        .iter()
+        .copied()
+        .filter(|(ts, o, h, l, c, _v)| {
+            *ts > 0
+                && *o > 0.0
+                && *h > 0.0
+                && *l > 0.0
+                && *c > 0.0
+                && o.is_finite()
+                && h.is_finite()
+                && l.is_finite()
+                && c.is_finite()
+                && *h >= *l
+        })
+        .collect();
+    sorted.sort_by_key(|(ts, ..)| *ts);
+
+    let mut out: std::collections::BTreeMap<i64, Bar> = std::collections::BTreeMap::new();
+    for (ts, o, h, l, c, v) in sorted {
+        let bucket = chart_merge_bucket_ts("1Hour", ts);
         out.entry(bucket)
             .and_modify(|b| {
                 if h > b.high {

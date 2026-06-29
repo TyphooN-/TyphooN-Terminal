@@ -1127,6 +1127,76 @@ fn chart_equity_merge_4hour_corrects_wick_spike_via_synthesized_yahoo_corroborat
 }
 
 #[test]
+fn chart_equity_merge_1hour_self_heals_stalled_native_from_15min() {
+    // A native 1-hour feed can stall for years (Alpaca's META 1Hour stopped
+    // 2024-01-25) while the denser 15Min keeps printing to the current bar. The
+    // merge derives 1Hour from the still-current 15Min of the same source and
+    // unions it in: native wins every overlap bucket, derived fills the hole — so
+    // the merged 1Hour is gapless and the MTF overlay no longer paints a flat
+    // segment then a vertical catch-up.
+    use chrono::{TimeZone, Utc};
+    let db_path = std::env::temp_dir().join(format!(
+        "typhoon-merged-1h-selfheal-test-{}-{}.db",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+    let hour = chrono::Duration::hours(1);
+    let min = chrono::Duration::minutes(1);
+
+    // Native 1Hour: hours 0..=20 then STOPS (close 100 to tell it apart).
+    let native: Vec<serde_json::Value> = (0..=20i64)
+        .map(|i| {
+            serde_json::json!({
+                "timestamp": (base + hour * i as i32).to_rfc3339(),
+                "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 40.0
+            })
+        })
+        .collect();
+    cache
+        .put_bars("alpaca:HEAL:1Hour", &serde_json::to_string(&native).unwrap())
+        .unwrap();
+
+    // 15Min: dense hours 0..40 (4 bars/hour), close 50 so derived hours are distinct.
+    let m15: Vec<serde_json::Value> = (0..40i64)
+        .flat_map(|h| {
+            (0..4i64).map(move |q| {
+                serde_json::json!({
+                    "timestamp": (base + hour * h as i32 + min * (q * 15) as i32).to_rfc3339(),
+                    "open": 50.0, "high": 51.0, "low": 49.0, "close": 50.0, "volume": 10.0
+                })
+            })
+        })
+        .collect();
+    cache
+        .put_bars("alpaca:HEAL:15Min", &serde_json::to_string(&m15).unwrap())
+        .unwrap();
+
+    let merged = chart_load_merged_equity_bars_from_cache(&cache, "HEAL", "1Hour");
+    let by_hour: std::collections::HashMap<i64, &Bar> = merged
+        .iter()
+        .map(|b| ((b.ts_ms - base.timestamp_millis()) / 3_600_000, b))
+        .collect();
+
+    // Gapless: every hour 0..40 present (was a 19-hour hole at hours 21..39).
+    assert_eq!(merged.len(), 40, "merged 1Hour should be gapless across 0..40");
+    assert!(by_hour.contains_key(&30), "hole hour 30 must be filled from 15Min");
+    // Overlap buckets keep the native bar; derived fills only the hole.
+    assert_eq!(
+        by_hour.get(&10).map(|b| b.close),
+        Some(100.0),
+        "native bar must win the overlap bucket"
+    );
+    assert_eq!(
+        by_hour.get(&30).map(|b| b.close),
+        Some(50.0),
+        "hole bucket must come from the 15Min-derived rollup"
+    );
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn chart_loads_merged_weekly_from_corrected_daily_bars() {
     // Native weekly provider blobs can preserve stale/mis-adjusted OHLC across
     // corporate-action weeks. The user-facing Merged W1 chart should be the
