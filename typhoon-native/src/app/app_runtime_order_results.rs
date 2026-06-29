@@ -1,6 +1,31 @@
 use super::*;
 use crate::app::app_runtime_support::is_routine_market_data_status;
 
+/// Normalise a raw symbol to the ticker to subscribe on Alpaca's market-data WS,
+/// or `None` if it shouldn't be (Kraken xStock, crypto, or non-equity form).
+/// Kraken xStocks (the `.EQ` form, or any universe member while scraping) ride
+/// the Kraken quote feed — subscribing them to Alpaca too would pull a parallel,
+/// possibly different-scale quote (e.g. WOK) into the same chart/watchlist row.
+pub(super) fn alpaca_quote_symbol_eligible(
+    raw: &str,
+    scrape_xstocks: bool,
+    xstock_universe: &std::collections::HashSet<String>,
+) -> Option<String> {
+    let bare = bare_symbol_from_key(raw).replace('/', "").to_ascii_uppercase();
+    let s = bare.trim_end_matches(".EQ").to_string();
+    if bare.ends_with(".EQ") || (scrape_xstocks && xstock_universe.contains(&s)) {
+        return None;
+    }
+    // US-equity tickers: 1–5 letters (+ optional .CLASS); skip crypto (BTCUSD…)
+    // and anything non-alphabetic.
+    let base = s.split('.').next().unwrap_or(&s);
+    let looks_equity = !base.is_empty()
+        && base.len() <= 5
+        && base.chars().all(|c| c.is_ascii_alphabetic())
+        && !(s.ends_with("USD") && s.len() <= 8);
+    looks_equity.then_some(s)
+}
+
 impl TyphooNApp {
     pub(super) fn tick_positions_orders_refresh(&mut self, now_instant: std::time::Instant) {
         // Positions/orders are trading-critical UI, not five-minute background
@@ -101,19 +126,10 @@ impl TyphooNApp {
     /// excluded (that rides Kraken), deduped and sorted (stable signature), capped.
     fn alpaca_quote_subscription_symbols(&self) -> Vec<String> {
         let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let scrape_xstocks = self.kraken_scrape_xstocks;
+        let xstock_universe = &self.kraken_equity_universe_set;
         let mut push = |raw: &str| {
-            let s = bare_symbol_from_key(raw)
-                .replace('/', "")
-                .trim_end_matches(".EQ")
-                .to_ascii_uppercase();
-            // US-equity tickers: 1–5 letters (+ optional .CLASS); skip crypto
-            // (BTCUSD…) and anything non-alphabetic.
-            let base = s.split('.').next().unwrap_or(&s);
-            let looks_equity = !base.is_empty()
-                && base.len() <= 5
-                && base.chars().all(|c| c.is_ascii_alphabetic())
-                && !(s.ends_with("USD") && s.len() <= 8);
-            if looks_equity {
+            if let Some(s) = alpaca_quote_symbol_eligible(raw, scrape_xstocks, xstock_universe) {
                 set.insert(s);
             }
         };
@@ -190,5 +206,33 @@ impl TyphooNApp {
         } else {
             self.log.push_back(LogEntry::info(msg));
         }
+    }
+}
+
+#[cfg(test)]
+mod alpaca_quote_eligibility_tests {
+    use super::alpaca_quote_symbol_eligible;
+    use std::collections::HashSet;
+
+    #[test]
+    fn excludes_xstocks_and_crypto_keeps_plain_equities() {
+        let universe: HashSet<String> = ["WOK", "AAPL"].iter().map(|s| s.to_string()).collect();
+
+        // Plain Alpaca equity Kraken doesn't tokenize ⇒ subscribe.
+        assert_eq!(
+            alpaca_quote_symbol_eligible("HKIT", true, &universe),
+            Some("HKIT".to_string())
+        );
+        // Kraken xStock chart symbol (.EQ form) ⇒ excluded.
+        assert_eq!(alpaca_quote_symbol_eligible("kraken:WOK.EQ:1Day", true, &universe), None);
+        // Bare universe member while scraping ⇒ excluded (rides Kraken).
+        assert_eq!(alpaca_quote_symbol_eligible("AAPL", true, &universe), None);
+        // …but if xStock scraping is off, that ticker is a normal Alpaca equity.
+        assert_eq!(
+            alpaca_quote_symbol_eligible("AAPL", false, &universe),
+            Some("AAPL".to_string())
+        );
+        // Crypto rides Kraken ⇒ excluded.
+        assert_eq!(alpaca_quote_symbol_eligible("BTCUSD", true, &universe), None);
     }
 }
