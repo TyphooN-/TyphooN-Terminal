@@ -1068,10 +1068,35 @@ impl ChartDataLoad for ChartState {
                 self.bars = merged;
                 self.primary_source = "merged";
                 self.primary_first_ts = self.bars.first().map(|bar| bar.ts_ms).unwrap_or(0);
+                // PERF DIAG: per-phase timing of the post-load compute so a slow
+                // cold-start chart load names its costly phase — GPU indicators vs
+                // the MTF SMA / MultiKAMA higher-timeframe overlay loads (each pulls
+                // several HTF series cold) vs prev-candle levels. The bars decompress
+                // is already in the `load_ms` line above. Silent unless the total
+                // crosses the threshold.
+                let _t = std::time::Instant::now();
                 self.compute_indicators_gpu(gpu);
+                let gpu_ms = _t.elapsed().as_secs_f32() * 1000.0;
+                let _t = std::time::Instant::now();
                 self.compute_mtf_sma(cache);
+                let sma_ms = _t.elapsed().as_secs_f32() * 1000.0;
+                let _t = std::time::Instant::now();
                 self.compute_multi_kama(cache);
+                let kama_ms = _t.elapsed().as_secs_f32() * 1000.0;
+                let _t = std::time::Instant::now();
                 self.compute_prev_candle_levels_native(cache);
+                let prev_ms = _t.elapsed().as_secs_f32() * 1000.0;
+                if gpu_ms + sma_ms + kama_ms + prev_ms > 150.0 {
+                    tracing::warn!(
+                        "Chart load compute phases for {} [{}]: gpu={:.0}ms mtf_sma={:.0}ms multi_kama={:.0}ms prev_levels={:.0}ms",
+                        bare_sym,
+                        self.timeframe.label(),
+                        gpu_ms,
+                        sma_ms,
+                        kama_ms,
+                        prev_ms
+                    );
+                }
                 return;
             }
         }
