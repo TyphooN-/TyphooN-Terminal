@@ -465,19 +465,110 @@ fn unpack_bars_tail(data: &[u8], tail: usize) -> Result<String, String> {
     serde_json::to_string(&bars).map_err(|e| format!("JSON serialize failed: {e}"))
 }
 
+/// Number of independent read-only connections in the read pool. WAL allows many
+/// concurrent readers; a single shared read `Connection` (behind one `Mutex`) was
+/// the bottleneck — a background worker's zstd decompress is held *under the lock*
+/// inside `get_bars_raw`, so it parked the render thread's small reads (prev-candle
+/// levels, watchlist quotes) for the whole decompress. 4 covers the common case:
+/// the render thread + the 3 deferred-chart-load workers reading at once.
+const READ_CONN_POOL_SIZE: usize = 4;
+
+/// A small pool of independent read-only SQLite connections that fans readers out
+/// instead of serializing them through one shared connection. `lock` / `try_lock`
+/// mirror `std::sync::Mutex` exactly (same return types), so every existing call
+/// site (`self.read_conn.lock()`, `.try_lock()`) is unchanged.
+struct ReadConnPool {
+    conns: Vec<Mutex<Connection>>,
+    next: std::sync::atomic::AtomicUsize,
+}
+
+impl ReadConnPool {
+    fn new(conns: Vec<Mutex<Connection>>) -> Self {
+        debug_assert!(!conns.is_empty(), "read pool must have at least one conn");
+        Self {
+            conns,
+            next: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// Acquire any currently-free connection without blocking; if all are busy,
+    /// block on a round-robin pick. Mirrors `Mutex::lock`'s return type.
+    fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, Connection>> {
+        let n = self.conns.len();
+        let start = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % n;
+        for k in 0..n {
+            if let Ok(guard) = self.conns[(start + k) % n].try_lock() {
+                return Ok(guard);
+            }
+        }
+        // Everything busy — block on the round-robin pick so the wait is spread.
+        self.conns[start].lock()
+    }
+
+    /// Acquire any currently-free connection, or `WouldBlock` if all are busy.
+    /// Mirrors `Mutex::try_lock`.
+    fn try_lock(&self) -> std::sync::TryLockResult<std::sync::MutexGuard<'_, Connection>> {
+        let n = self.conns.len();
+        let start = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % n;
+        for k in 0..n {
+            match self.conns[(start + k) % n].try_lock() {
+                Ok(guard) => return Ok(guard),
+                Err(std::sync::TryLockError::Poisoned(e)) => {
+                    return Err(std::sync::TryLockError::Poisoned(e));
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {}
+            }
+        }
+        Err(std::sync::TryLockError::WouldBlock)
+    }
+}
+
+/// Open `READ_CONN_POOL_SIZE` independent read-only connections for the read pool.
+/// `cache_size` is the per-connection page-cache pragma (negative = KiB). `with_mmap`
+/// enables the 256MB mmap, which the OS page-cache backs and shares across
+/// connections (so it is NOT multiplied by the pool size).
+fn open_read_conn_pool(
+    path: &PathBuf,
+    cache_size: i64,
+    with_mmap: bool,
+) -> Result<ReadConnPool, String> {
+    let mut conns = Vec::with_capacity(READ_CONN_POOL_SIZE);
+    for _ in 0..READ_CONN_POOL_SIZE {
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| format!("SQLite read conn open failed: {e}"))?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| format!("SQLite read conn busy_timeout failed: {e}"))?;
+        let mmap = if with_mmap {
+            "PRAGMA mmap_size=268435456;"
+        } else {
+            ""
+        };
+        let _ = conn.execute_batch(&format!(
+            "PRAGMA cache_size={cache_size}; PRAGMA temp_store=MEMORY; {mmap}"
+        ));
+        conns.push(Mutex::new(conn));
+    }
+    Ok(ReadConnPool::new(conns))
+}
+
 /// Thread-safe SQLite cache manager.
 ///
-/// Uses two connections for concurrency under WAL mode:
+/// Uses separate connections for concurrency under WAL mode:
 /// - `conn` (Mutex): exclusive write path — put_bars, put_kv, delete, compact, etc.
-/// - `read_conn` (Mutex): dedicated read path — get_bars_raw, detailed_stats, stats, etc.
-///   Never blocked by writes. The bg thread and UI thread can read simultaneously with
-///   the write connection held by compaction.
+/// - `read_conn` (`ReadConnPool`): dedicated read path — get_bars_raw, detailed_stats,
+///   stats, etc. Never blocked by writes. Several readers (render thread + the
+///   deferred-chart-load workers) fan out across the pool's connections instead of
+///   serializing through one, so a worker's in-lock zstd decompress no longer parks
+///   the render thread's small reads.
 ///
-/// SQLite WAL mode allows unlimited concurrent readers + one writer. The two Mutexes
-/// are independent — a write lock on `conn` does NOT block reads on `read_conn`.
+/// SQLite WAL mode allows unlimited concurrent readers + one writer. The write Mutex
+/// and the read pool are independent — a write lock on `conn` does NOT block reads.
 pub struct SqliteCache {
     conn: Mutex<Connection>,
-    read_conn: Mutex<Connection>,
+    read_conn: ReadConnPool,
     db_path: PathBuf,
 }
 
@@ -683,30 +774,16 @@ impl SqliteCache {
             );
         }
 
-        // Open a second read-only connection for the read path.
-        // WAL mode allows this to read concurrently while conn writes.
-        let read_conn = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(|e| format!("SQLite read conn open failed: {e}"))?;
-        read_conn
-            .busy_timeout(std::time::Duration::from_secs(5))
-            .map_err(|e| format!("SQLite read conn busy_timeout failed: {e}"))?;
-        // Align read_conn cache_size with write conn (-64000 = 64MB) so the
-        // shared page cache is effective on hot reads. Previously -32000 (32MB)
-        // which undersized the buffer pool for mixed read/write workloads.
-        let _ = read_conn.execute_batch(
-            "
-            PRAGMA cache_size=-64000;
-            PRAGMA temp_store=MEMORY;
-            PRAGMA mmap_size=268435456;
-        ",
-        );
+        // Open the read-path connection POOL — read-only connections that read
+        // concurrently with the write `conn` (WAL) AND with each other. 32MB page
+        // cache per connection (128MB across the pool, vs the old single 64MB); the
+        // 256MB mmap is OS-shared, so it isn't multiplied. The pool is what keeps a
+        // worker's in-lock decompress from parking the render thread's reads.
+        let read_conn = open_read_conn_pool(path, -32000, true)?;
 
         Ok(Self {
             conn: Mutex::new(conn),
-            read_conn: Mutex::new(read_conn),
+            read_conn,
             db_path: path.clone(),
         })
     }
@@ -735,24 +812,11 @@ impl SqliteCache {
             PRAGMA temp_store=MEMORY;
         ",
         );
-        // Read-only: use a second read-only connection for the read path too.
-        let read_conn = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(|e| format!("SQLite read conn open failed: {e}"))?;
-        read_conn
-            .execute_batch(
-                "
-            PRAGMA cache_size=-16000;
-            PRAGMA temp_store=MEMORY;
-            PRAGMA busy_timeout=5000;
-        ",
-            )
-            .map_err(|e| format!("SQLite read conn pragma failed: {e}"))?;
+        // Read-only: use a read-only connection pool for the read path too.
+        let read_conn = open_read_conn_pool(path, -16000, false)?;
         Ok(Self {
             conn: Mutex::new(conn),
-            read_conn: Mutex::new(read_conn),
+            read_conn,
             db_path: path.clone(),
         })
     }
