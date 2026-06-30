@@ -55,26 +55,21 @@ impl TyphooNApp {
             return;
         }
         self.active_tab = self.active_tab.min(self.charts.len().saturating_sub(1));
-        if self.mtf_enabled {
-            let mut retry_chart_indices = Vec::new();
-            for (idx, chart) in self.charts.iter_mut().enumerate() {
-                if chart.bars.is_empty() {
-                    let mut gpu = self.gpu_indicators.take();
-                    if !chart.try_load(cache, &mut self.log, gpu.as_mut()) {
-                        retry_chart_indices.push(idx);
-                    }
-                    self.gpu_indicators = gpu;
+        // Eagerly load ONLY the focused tab (O(1)) so the chart the user is looking
+        // at is ready on the first frame. Every other empty chart — the rest of an
+        // MTF grid — is collected by the deferred-load queue build that follows in
+        // `tick_cache_startup` and loaded off the render thread
+        // (`spawn_deferred_chart_load`). The old MTF branch synchronously `try_load`'d
+        // *every* chart here in a loop, which was the first-frame startup freeze.
+        if let Some(chart) = self.charts.get_mut(self.active_tab) {
+            if chart.bars.is_empty() {
+                let mut gpu = self.gpu_indicators.take();
+                let loaded = chart.try_load(cache, &mut self.log, gpu.as_mut());
+                self.gpu_indicators = gpu;
+                if !loaded {
+                    self.queue_chart_reload(self.active_tab);
                 }
             }
-            for idx in retry_chart_indices {
-                self.queue_chart_reload(idx);
-            }
-        } else if let Some(chart) = self.charts.get_mut(self.active_tab) {
-            let mut gpu = self.gpu_indicators.take();
-            if !chart.try_load(cache, &mut self.log, gpu.as_mut()) {
-                self.queue_chart_reload(self.active_tab);
-            }
-            self.gpu_indicators = gpu;
         }
     }
 

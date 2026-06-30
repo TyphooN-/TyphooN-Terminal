@@ -186,30 +186,12 @@ impl TyphooNApp {
                             .unwrap_or("?")
                     )));
                 } else if self.charts.len() > 1 {
-                    // Double-click in single mode with multiple tabs → return to MTF grid
+                    // Double-click in single mode with multiple tabs → return to MTF grid.
+                    // Queue empty cells for the off-thread deferred loader instead of a
+                    // synchronous `try_load` loop here — loading all grid cells on the
+                    // render thread on this one click was a multi-second freeze.
                     self.mtf_enabled = true;
-                    // Load any charts with empty bars so all grid cells render
-                    if let Some(ref cache) = self.cache.clone() {
-                        let mut retry_first_chart = false;
-                        for chart in &mut self.charts {
-                            if chart.bars.is_empty() {
-                                {
-                                    let mut gpu = self.gpu_indicators.take();
-                                    if !chart.try_load(
-                                        Arc::as_ref(cache),
-                                        &mut self.log,
-                                        gpu.as_mut(),
-                                    ) {
-                                        retry_first_chart = true;
-                                    }
-                                    self.gpu_indicators = gpu;
-                                }
-                            }
-                        }
-                        if retry_first_chart {
-                            self.queue_chart_reload(0);
-                        }
-                    }
+                    self.queue_empty_charts_for_load();
                     self.log.push_back(LogEntry::info("MTF grid restored"));
                 } else {
                     // Single chart, no MTF → reset zoom/pan

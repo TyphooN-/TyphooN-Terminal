@@ -80,68 +80,110 @@ pub(super) fn spawn_background_refresh(
                     let phase_start = std::time::Instant::now();
                     tracing::trace!("BG thread: lightweight refresh...");
 
-                    // Phase 1b: table creation needs write conn (CREATE TABLE IF NOT EXISTS)
+                    // Phase 1b: table creation needs the write conn (CREATE TABLE IF
+                    // NOT EXISTS). Take it ONLY for this — released immediately. The
+                    // Reg SHO / halts refreshes below must NOT hold the write
+                    // connection across their HTTP fetches; doing so stalled every
+                    // bar-sync writer for the whole network round-trip. They fetch
+                    // unlocked, then re-take the lock only for the quick DELETE+INSERT.
                     if let Ok(wconn) = cache.connection() {
                         let _ = sec_filing::create_sec_tables(&wconn);
                         let _ = fundamentals::create_fundamentals_tables(&wconn);
                         let _ = regulatory_alerts::create_regulatory_alert_tables(&wconn);
-                        let regsho_due = last_regsho_refresh
-                            .map(|t| t.elapsed() >= std::time::Duration::from_secs(30 * 60))
-                            .unwrap_or(true);
-                        if regsho_due {
-                            let refreshed = tokio::runtime::Builder::new_current_thread()
-                                .enable_all()
-                                .build()
-                                .map_err(|e| format!("runtime build failed: {e}"))
-                                .and_then(|rt| rt.block_on(regulatory_alerts::refresh_regsho_threshold_alerts(&wconn)));
+                    }
 
-                            match refreshed {
-                                Ok(n) => {
-                                    if n > 0 {
-                                        tracing::info!("Reg SHO threshold list refreshed: {n} symbols");
-                                    }
-                                    last_regsho_refresh = Some(std::time::Instant::now());
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Reg SHO threshold list refresh failed: {e}");
-                                    last_regsho_refresh = Some(std::time::Instant::now());
-                                }
-                            }
-                        }
-
-                        // Trading halts / LULD pauses — short cadence while a US
-                        // session could be live, but a halt cannot post overnight
-                        // or on weekends, so back the poll off hard then (the
-                        // every-2-min weekend refresh was pure waste). Coarse,
-                        // clock-free, holiday-blind — good enough to gate a poll.
-                        let halt_cadence = if typhoon_engine::core::market_session::us_equities_extended_session_possible(
-                            chrono::Utc::now(),
-                        ) {
-                            std::time::Duration::from_secs(2 * 60)
-                        } else {
-                            std::time::Duration::from_secs(30 * 60)
-                        };
-                        let halts_due = last_halt_refresh
-                            .map(|t| t.elapsed() >= halt_cadence)
-                            .unwrap_or(true);
-                        if halts_due {
-                            let refreshed = tokio::runtime::Builder::new_current_thread()
-                                .enable_all()
-                                .build()
-                                .map_err(|e| format!("runtime build failed: {e}"))
-                                .and_then(|rt| rt.block_on(regulatory_alerts::refresh_trade_halt_alerts(&wconn)));
-                            match refreshed {
-                                Ok(n) => {
-                                    if n > 0 {
-                                        tracing::info!("Trading halts refreshed: {n} active");
+                    let regsho_due = last_regsho_refresh
+                        .map(|t| t.elapsed() >= std::time::Duration::from_secs(30 * 60))
+                        .unwrap_or(true);
+                    if regsho_due {
+                        // Cached as_of read under a brief lock (smart-skip input).
+                        let cached_as_of = cache.connection().ok().and_then(|c| {
+                            regulatory_alerts::get_latest_regsho_as_of(&c).ok().flatten()
+                        });
+                        // Network fetch with NO DB lock held.
+                        let fetched = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .map_err(|e| format!("runtime build failed: {e}"))
+                            .and_then(|rt| {
+                                rt.block_on(regulatory_alerts::fetch_regsho_threshold_entries())
+                            });
+                        match fetched {
+                            Ok((remote_as_of, rows)) => {
+                                // Smart refresh: write only when the remote file is
+                                // newer; the lock is held just for the DELETE+INSERT.
+                                if cached_as_of.as_deref() != Some(remote_as_of.as_str()) {
+                                    if let Ok(wconn) = cache.connection() {
+                                        match regulatory_alerts::replace_regsho_threshold_alerts(
+                                            &wconn,
+                                            &remote_as_of,
+                                            &rows,
+                                        ) {
+                                            Ok(n) => {
+                                                if n > 0 {
+                                                    tracing::info!(
+                                                        "Reg SHO threshold list refreshed: {n} symbols"
+                                                    );
+                                                }
+                                            }
+                                            Err(e) => tracing::warn!(
+                                                "Reg SHO threshold list refresh failed: {e}"
+                                            ),
+                                        }
                                     }
                                 }
-                                Err(e) => {
-                                    tracing::warn!("Trading halts refresh failed: {e}");
+                            }
+                            Err(e) => {
+                                tracing::warn!("Reg SHO threshold list refresh failed: {e}")
+                            }
+                        }
+                        last_regsho_refresh = Some(std::time::Instant::now());
+                    }
+
+                    // Trading halts / LULD pauses — short cadence while a US session
+                    // could be live, but a halt cannot post overnight or on weekends,
+                    // so back the poll off hard then (the every-2-min weekend refresh
+                    // was pure waste). Coarse, clock-free, holiday-blind — good enough
+                    // to gate a poll.
+                    let halt_cadence = if typhoon_engine::core::market_session::us_equities_extended_session_possible(
+                        chrono::Utc::now(),
+                    ) {
+                        std::time::Duration::from_secs(2 * 60)
+                    } else {
+                        std::time::Duration::from_secs(30 * 60)
+                    };
+                    let halts_due = last_halt_refresh
+                        .map(|t| t.elapsed() >= halt_cadence)
+                        .unwrap_or(true);
+                    if halts_due {
+                        // Network fetch with NO DB lock held; write under a brief lock.
+                        let fetched = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .map_err(|e| format!("runtime build failed: {e}"))
+                            .and_then(|rt| {
+                                rt.block_on(regulatory_alerts::fetch_trade_halt_entries())
+                            });
+                        match fetched {
+                            Ok(rows) => {
+                                if let Ok(wconn) = cache.connection() {
+                                    match regulatory_alerts::replace_trade_halt_alerts(
+                                        &wconn, &rows,
+                                    ) {
+                                        Ok(n) => {
+                                            if n > 0 {
+                                                tracing::info!("Trading halts refreshed: {n} active");
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("Trading halts refresh failed: {e}")
+                                        }
+                                    }
                                 }
                             }
-                            last_halt_refresh = Some(std::time::Instant::now());
+                            Err(e) => tracing::warn!("Trading halts refresh failed: {e}"),
                         }
+                        last_halt_refresh = Some(std::time::Instant::now());
                     }
                     // SEC data + cache stats — all via BG's own connection (growing database — no limit)
                     data.sec_filings = sec_filing::get_all_filings(conn).unwrap_or_default();

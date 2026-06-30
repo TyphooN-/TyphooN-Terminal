@@ -4,6 +4,122 @@ use crate::app::app_runtime_support::{
 };
 use typhoon_engine::broker::kraken::{KrakenBroker, KrakenEquityMarket};
 
+/// Pre-computed Kraken equities universe bundle, produced off the render thread by
+/// `compute_kraken_universe_digest` and applied by `tick_kraken_universe_digest`.
+pub(crate) struct KrakenUniverseDigest {
+    pub no_overnight: std::collections::HashSet<String>,
+    pub tokenized: Vec<String>,
+    pub symbols: Vec<String>,
+    pub universe_set: std::collections::HashSet<String>,
+    pub names: std::collections::HashMap<String, String>,
+    pub regulatory_alerts: Option<
+        std::collections::HashMap<
+            String,
+            Vec<typhoon_engine::core::regulatory_alerts::RegulatoryAlert>,
+        >,
+    >,
+}
+
+/// Build the universe bundle from the raw iapi catalog. Pure CPU (string trims,
+/// uppercasing, sort/dedup over ~13k rows) plus the one-time Reg SHO refresh —
+/// run on a worker, never the render thread. Mirrors the old synchronous handler.
+fn compute_kraken_universe_digest(
+    markets: Vec<KrakenEquityMarket>,
+    cache: Option<&SqliteCache>,
+) -> KrakenUniverseDigest {
+    // Symbols the iapi catalog marks as not overnight-tradeable (Some(false)).
+    // Unknown/None defaults to overnight-enabled, so only explicit opt-outs land here.
+    let no_overnight: std::collections::HashSet<String> = markets
+        .iter()
+        .filter(|market| market.overnight_trading == Some(false))
+        .map(|market| market.symbol.trim_end_matches(".EQ").to_ascii_uppercase())
+        .filter(|symbol| !symbol.is_empty())
+        .collect();
+
+    // WS-tokenized subset (real `{SYM}x/USD` WS pairs) — scopes the WS OHLC sweep.
+    let mut tokenized: Vec<String> = markets
+        .iter()
+        .filter(|market| {
+            market.tokenized
+                && market.tradable
+                && market.status.as_deref().unwrap_or("active") != "disabled"
+                && market.instrument_status.as_deref().unwrap_or("enabled") != "disabled"
+        })
+        .map(|market| market.symbol.trim_end_matches(".EQ").to_ascii_uppercase())
+        .filter(|symbol| !symbol.is_empty())
+        .collect();
+    tokenized.sort();
+    tokenized.dedup();
+
+    let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut symbols: Vec<String> = markets
+        .into_iter()
+        .filter(|market| {
+            market.tradable
+                && market.status.as_deref().unwrap_or("active") != "disabled"
+                && market.instrument_status.as_deref().unwrap_or("enabled") != "disabled"
+        })
+        .map(|market| {
+            let bare = market.symbol.trim_end_matches(".EQ").to_ascii_uppercase();
+            if let Some(n) = market.name.as_ref() {
+                if !n.trim().is_empty() {
+                    names.insert(bare.clone(), n.trim().to_string());
+                }
+            }
+            bare
+        })
+        .filter(|symbol| !symbol.is_empty())
+        .collect();
+    symbols.sort();
+    symbols.dedup();
+    let universe_set: std::collections::HashSet<String> = symbols.iter().cloned().collect();
+
+    // Refresh the Reg SHO list now that xStock symbols are available, then rebuild
+    // the in-memory map. CRITICAL: the network fetch runs with NO DB lock held —
+    // `refresh_regsho_threshold_alerts(&conn)` held the write connection across the
+    // HTTP round-trip, stalling every bar-sync writer for its duration. Here the
+    // lock is taken only for the quick cached-as_of read, the (conditional) write,
+    // and the final map read; the fetch happens between them, unlocked.
+    let regulatory_alerts = cache.and_then(|cache| {
+        use typhoon_engine::core::regulatory_alerts as ra;
+        // Quick read: what as_of do we already have? (lock held for this stmt only)
+        let cached_as_of = {
+            let conn = cache.connection().ok()?;
+            ra::get_latest_regsho_as_of(&conn).ok().flatten()
+        };
+        // Network fetch — NO DB lock held. Build a throwaway current-thread runtime
+        // for the one async call. On any failure we skip the write but still rebuild
+        // the map from whatever is already cached (matches the old resilience).
+        let fetched = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()
+            .and_then(|rt| rt.block_on(ra::fetch_regsho_threshold_entries()).ok());
+        if let Some((remote_as_of, rows)) = fetched {
+            // Smart refresh: only write when the remote file is newer (lock held
+            // only for the DELETE+INSERT, not the fetch above).
+            if cached_as_of.as_deref() != Some(remote_as_of.as_str()) {
+                if let Ok(conn) = cache.connection() {
+                    let _ = ra::replace_regsho_threshold_alerts(&conn, &remote_as_of, &rows);
+                }
+            }
+        }
+        // Rebuild the in-memory map from the DB (lock held for this read only).
+        let conn = cache.connection().ok()?;
+        let alerts = ra::get_regulatory_alerts(&conn).ok()?;
+        Some(ra::regulatory_alert_map(&alerts))
+    });
+
+    KrakenUniverseDigest {
+        no_overnight,
+        tokenized,
+        symbols,
+        universe_set,
+        names,
+        regulatory_alerts,
+    }
+}
+
 fn kraken_positions_with_balance_equities(
     mut positions: Vec<PositionInfo>,
     balances: &[(String, f64)],
@@ -149,60 +265,61 @@ impl TyphooNApp {
         if !self.kraken_enabled {
             return false;
         }
-
-        // Symbols the iapi catalog marks as not overnight-tradeable
-        // (Some(false)). Unknown/None defaults to overnight-enabled, so
-        // only the explicit opt-outs land here.
-        self.kraken_equity_no_overnight = markets
-            .iter()
-            .filter(|market| market.overnight_trading == Some(false))
-            .map(|market| market.symbol.trim_end_matches(".EQ").to_ascii_uppercase())
-            .filter(|symbol| !symbol.is_empty())
-            .collect();
-
-        // WS-tokenized subset (real `{SYM}x/USD` WS pairs) — scopes the
-        // WS OHLC snapshot sweep. The full catalog below still drives
-        // the Alpaca/Yahoo breadth lanes and the Merged Sync Status row.
-        let mut tokenized: Vec<String> = markets
-            .iter()
-            .filter(|market| {
-                market.tokenized
-                    && market.tradable
-                    && market.status.as_deref().unwrap_or("active") != "disabled"
-                    && market.instrument_status.as_deref().unwrap_or("enabled") != "disabled"
-            })
-            .map(|market| market.symbol.trim_end_matches(".EQ").to_ascii_uppercase())
-            .filter(|symbol| !symbol.is_empty())
-            .collect();
-        tokenized.sort();
-        tokenized.dedup();
-        self.kraken_equity_tokenized_symbols = tokenized;
-
-        let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-        let mut symbols: Vec<String> = markets
-            .into_iter()
-            .filter(|market| {
-                market.tradable
-                    && market.status.as_deref().unwrap_or("active") != "disabled"
-                    && market.instrument_status.as_deref().unwrap_or("enabled") != "disabled"
-            })
-            .map(|market| {
-                let bare = market.symbol.trim_end_matches(".EQ").to_ascii_uppercase();
-                if let Some(n) = market.name.as_ref() {
-                    if !n.trim().is_empty() {
-                        names.insert(bare.clone(), n.trim().to_string());
-                    }
-                }
-                bare
-            })
-            .filter(|symbol| !symbol.is_empty())
-            .collect();
-        symbols.sort();
-        symbols.dedup();
-        self.kraken_equity_universe_set = symbols.iter().cloned().collect();
-        self.kraken_equity_universe_symbols = symbols;
-        self.kraken_equity_names = names;
+        // Mark requested immediately so the universe isn't re-requested while the
+        // digest runs on the worker. The re-request gate also checks
+        // `universe_symbols.is_empty()` (still true until the digest applies), so we
+        // must push the retry timer out rather than zero it — zeroing here would let
+        // the gate fire a spurious re-fetch during the in-flight window. If the
+        // worker never delivers, the 120s timer is a self-heal fallback.
         self.kraken_equity_universe_requested = true;
+        self.kraken_equity_universe_retry_after_ts = chrono::Utc::now().timestamp() + 120;
+
+        // Digest the full ~13k-symbol catalog (filter/map/sort/dedup) AND the Reg
+        // SHO refresh (a network/DB `block_on`) OFF the render thread — together
+        // they ran ~290ms inside the broker-message drain. The worker produces a
+        // bundle; `tick_kraken_universe_digest` applies it cheaply (O(1) moves).
+        // A new universe message simply replaces the receiver — last apply wins.
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.kraken_universe_digest_rx = Some(rx);
+        let cache = self.cache.clone();
+        let rt_handle = self.rt_handle.clone();
+        rt_handle.spawn_blocking(move || {
+            let digest = compute_kraken_universe_digest(markets, cache.as_deref());
+            let _ = tx.send(digest);
+        });
+
+        // Refill is signalled when the digest is applied, not now.
+        false
+    }
+
+    /// Apply a completed off-thread Kraken universe digest (see
+    /// `handle_kraken_equity_universe`). Cheap: moves the prebuilt collections into
+    /// place, bumps `bg_rev`, and kicks the same follow-ups the synchronous handler
+    /// used to run inline (WS OHLC start, deferred scope scrapes, sync-slot refill).
+    pub(crate) fn tick_kraken_universe_digest(&mut self) {
+        let Some(rx) = self.kraken_universe_digest_rx.as_ref() else {
+            return;
+        };
+        let digest = match rx.try_recv() {
+            Ok(digest) => digest,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.kraken_universe_digest_rx = None;
+                return;
+            }
+        };
+        self.kraken_universe_digest_rx = None;
+
+        self.kraken_equity_no_overnight = digest.no_overnight;
+        self.kraken_equity_tokenized_symbols = digest.tokenized;
+        self.kraken_equity_universe_set = digest.universe_set;
+        self.kraken_equity_universe_symbols = digest.symbols;
+        self.kraken_equity_names = digest.names;
+        if let Some(map) = digest.regulatory_alerts {
+            self.bg.regulatory_alerts_by_symbol = map;
+        }
+        // Universe is live now → clear the retry timer (matches the old handler's
+        // post-load state; the gate is already false via non-empty symbols).
         self.kraken_equity_universe_retry_after_ts = 0;
         self.bg_rev = self.bg_rev.wrapping_add(1);
         self.log.push_back(LogEntry::info(format!(
@@ -211,32 +328,10 @@ impl TyphooNApp {
             self.kraken_equity_tokenized_symbols.len()
         )));
         self.maybe_start_kraken_ws_ohlc();
-
         self.start_deferred_scope_scrapes_after_kraken_universe();
-
-        // Always ensure we have the latest Reg SHO list when xStock symbols become
-        // available (chart load / MTF grid / tab open).
-        if let Some(cache) = &self.cache {
-            if let Ok(wconn) = cache.connection() {
-                // Force a refresh (smart no-op if file unchanged) then immediately
-                // rebuild the in-memory map so the badge appears right away.
-                let _ = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|e| format!("runtime: {e}"))
-                    .and_then(|rt| rt.block_on(typhoon_engine::core::regulatory_alerts::refresh_regsho_threshold_alerts(&wconn)));
-
-                // Rebuild the map from DB right now
-                if let Ok(alerts) =
-                    typhoon_engine::core::regulatory_alerts::get_regulatory_alerts(&wconn)
-                {
-                    self.bg.regulatory_alerts_by_symbol =
-                        typhoon_engine::core::regulatory_alerts::regulatory_alert_map(&alerts);
-                }
-            }
-        }
-
-        true
+        // The synchronous handler returned `true` so the drain refilled sync slots;
+        // do it here now that the universe symbols are live.
+        self.refill_market_data_sync_slots();
     }
 
     pub(super) fn handle_kraken_equity_bars(

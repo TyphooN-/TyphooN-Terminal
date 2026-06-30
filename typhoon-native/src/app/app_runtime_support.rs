@@ -536,18 +536,6 @@ pub(super) fn ui_heavy_sync_active(
         || auto_compact_in_progress
 }
 
-pub(super) fn deferred_chart_load_interval(
-    heavy_sync_in_progress: bool,
-    mtf_enabled: bool,
-) -> std::time::Duration {
-    match (heavy_sync_in_progress, mtf_enabled) {
-        (true, true) => std::time::Duration::from_millis(175),
-        (true, false) => std::time::Duration::from_millis(90),
-        (false, true) => std::time::Duration::from_millis(75),
-        (false, false) => std::time::Duration::from_millis(35),
-    }
-}
-
 impl TyphooNApp {
     #[inline]
     pub(super) fn drop_bg_snapshot_off_ui(&self, data: BgData) {

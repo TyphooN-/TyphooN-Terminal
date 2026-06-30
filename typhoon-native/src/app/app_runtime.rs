@@ -224,6 +224,14 @@ impl eframe::App for TyphooNApp {
             "background_snapshot_drain",
             self.tick_background_snapshot_drain()
         );
+        // Apply a completed off-thread Kraken universe digest here — AFTER the bg
+        // snapshot drain — so its `self.bg.regulatory_alerts_by_symbol` write isn't
+        // clobbered by a same-frame snapshot replace (the old synchronous handler
+        // ran post-drain for the same reason).
+        timed_tick!(
+            "kraken_universe_digest",
+            self.tick_kraken_universe_digest()
+        );
         timed_tick!(
             "deferred_chart_loads",
             self.tick_deferred_chart_loads(ctx, now_instant)

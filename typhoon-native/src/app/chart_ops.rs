@@ -1,7 +1,21 @@
 use super::*;
-use crate::app::app_runtime_support::deferred_chart_load_interval;
 
 const EMPTY_CHART_RELOAD_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Max concurrent background deferred-chart loaders. Each holds a full bar set
+/// while it merges, so this bounds cold-start RSS and read-connection lock churn.
+const DEFERRED_CHART_MAX_INFLIGHT: usize = 3;
+/// Cheap in-memory restores finalized per frame. Each restore clones bars + runs
+/// GPU indicators (a few ms); capping keeps a burst of simultaneously-ready cells
+/// from spiking one frame.
+const DEFERRED_CHART_FINALIZE_PER_FRAME: usize = 4;
+/// Queue entries examined per frame. Bounds the scheduler's own per-frame cost.
+const DEFERRED_CHART_SCAN_WINDOW: usize = 16;
+/// In-flight marker is evicted after this long so a hung/deadlocked worker (whose
+/// completion never arrives) can't strand a cell as permanently "loading". Far
+/// longer than any plausible single load, so it never races a healthy worker.
+const DEFERRED_CHART_INFLIGHT_STALE_AFTER: std::time::Duration =
+    std::time::Duration::from_secs(45);
 
 fn deferred_chart_load_key(chart: &ChartState) -> String {
     format!(
@@ -493,75 +507,249 @@ impl TyphooNApp {
             }
         }
 
-        // ── deferred chart loading: non-blocking, paced attempts ──
-        // Uses try_load() which returns false if cache Mutex is contended (compaction, broker sync).
-        // Failed loads stay queued. The actual load is still expensive — cache read + GPU
-        // indicators + MTF overlays — so pace restored MTF grids instead of burning
-        // consecutive UI frames while broad sync/news/SEC/fundamentals are active.
-        if !self.deferred_chart_loads.is_empty() {
-            let load_interval = if self.mtf_enabled {
-                // Much more aggressive loading for open MTF tabs
-                std::time::Duration::from_millis(80)
-            } else {
-                deferred_chart_load_interval(self.heavy_sync_in_progress, self.mtf_enabled)
-            };
-            if now_instant.duration_since(self.deferred_chart_last_load_at) >= load_interval {
-                let idx = self.deferred_chart_loads[0]; // VecDeque supports indexing
-                let _focused_chart = self.mtf_focused.unwrap_or(self.active_tab);
-                // All open chart tabs (including background MTF cells and non-active
-                // single-chart tabs) should load proactively so data+indicators are
-                // ready when user switches. No more "click to load" behavior.
-                if false {
-                    // was: defer_inactive_mtf_cell during heavy sync
-                    if let Some(skipped_idx) = self.deferred_chart_loads.pop_front() {
-                        self.deferred_chart_loads.push_back(skipped_idx);
+        // ── deferred chart loading: off the render thread ──
+        // The cold load (SQLite read + zstd decompress + equity merge + HTF overlay
+        // reads) is expensive and previously ran here, synchronously, one chart per
+        // frame — every frame the render thread stalled 150–900ms before drawing a
+        // single panel. Now the heavy work runs on the worker pool
+        // (`spawn_deferred_chart_load`), which publishes into the shared result/HTF/
+        // value caches. The render thread only drains completions and does the cheap
+        // in-memory restore (bars clone + GPU indicators) for cells a worker prepared.
+
+        // Drain worker completions: clear the in-flight marker; for empty results,
+        // drop the matching queued chart(s) and throttle the retry (mirrors the old
+        // synchronous empty-load handling so MTF render loops don't respin them).
+        let mut completions: Vec<(String, &'static str, bool)> = Vec::new();
+        if let Some(rx) = self.deferred_chart_load_rx.as_ref() {
+            while let Ok(msg) = rx.try_recv() {
+                completions.push(msg);
+            }
+        }
+        // Evict stale in-flight markers: a worker that hung/deadlocked never sends a
+        // completion, which would otherwise strand its cell forever (the spawn-dedup
+        // check would keep skipping it). Eviction makes it re-spawnable.
+        self.deferred_chart_inflight.retain(|key, spawned_at| {
+            if now_instant.duration_since(*spawned_at) < DEFERRED_CHART_INFLIGHT_STALE_AFTER {
+                return true;
+            }
+            tracing::warn!(
+                "Deferred chart loader stale (no completion in {}s): {} [{}] — will retry",
+                DEFERRED_CHART_INFLIGHT_STALE_AFTER.as_secs(),
+                key.0,
+                key.1
+            );
+            false
+        });
+        for (sym_key, tf, had_bars) in completions {
+            self.deferred_chart_inflight.remove(&(sym_key.clone(), tf));
+            if had_bars {
+                continue;
+            }
+            let mut j = 0;
+            while j < self.deferred_chart_loads.len() {
+                let idx = self.deferred_chart_loads[j];
+                let matches = self
+                    .charts
+                    .get(idx)
+                    .map(|c| {
+                        c.source_override.is_empty()
+                            && c.timeframe.cache_suffix() == tf
+                            && mtf_grid_symbol_key(&c.symbol) == sym_key
+                    })
+                    .unwrap_or(false);
+                if matches {
+                    if let Some(key) = self.charts.get(idx).map(deferred_chart_load_key) {
+                        self.deferred_chart_empty_load_at.insert(key, now_instant);
                     }
-                    self.deferred_chart_last_load_at = now_instant;
-                    ctx.request_repaint_after(load_interval);
+                    self.deferred_chart_loads.remove(j);
+                    self.deferred_chart_load_set.remove(&idx);
                 } else {
-                    let load_key = self.charts.get(idx).map(deferred_chart_load_key);
-                    let mut loaded = false;
-                    if let Some(cache) = self.cache.clone() {
-                        let mut gpu = self.gpu_indicators.take();
-                        if let Some(chart) = self.charts.get_mut(idx) {
-                            // Fast reopen: restore cached bars + GPU-recomputed
-                            // indicators from the unified result cache before falling
-                            // back to the full SQLite load (read + zstd decompress).
-                            loaded = chart.restore_from_result_cache(&cache, gpu.as_mut())
-                                || chart.try_load(&cache, &mut self.log, gpu.as_mut());
-                        } else {
-                            loaded = true; // invalid index, skip
-                        }
-                        self.gpu_indicators = gpu;
-                    }
-                    if loaded {
-                        if let Some(key) = load_key {
-                            if self
-                                .charts
-                                .get(idx)
-                                .map(|chart| chart.bars.is_empty())
-                                .unwrap_or(false)
-                            {
-                                self.deferred_chart_empty_load_at.insert(key, now_instant);
-                            } else {
-                                self.deferred_chart_empty_load_at.remove(&key);
-                                // Populate the unified result cache from this freshly
-                                // loaded chart so reopens and the MTF Grid reuse it.
-                                if let Some(chart) = self.charts.get(idx) {
-                                    chart.publish_result_to_cache();
-                                }
-                            }
-                        }
-                        self.deferred_chart_last_load_at = now_instant;
-                        if let Some(done_idx) = self.deferred_chart_loads.pop_front() {
-                            self.deferred_chart_load_set.remove(&done_idx);
-                        }
-                    }
-                    // If !loaded, leave in queue — will retry after the pacing interval
-                    // when the Mutex is free.
+                    j += 1;
                 }
             }
         }
+
+        if self.deferred_chart_loads.is_empty() {
+            return;
+        }
+        let Some(cache) = self.cache.clone() else {
+            return;
+        };
+
+        // Walk the queue front-to-back. Finalize charts whose background load has
+        // landed (cheap restore, budget-capped), and spawn workers for upcoming
+        // not-yet-loading charts up to the concurrency cap.
+        let mut gpu = self.gpu_indicators.take();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let mut finalized = 0usize;
+        let mut scanned = 0usize;
+        let mut i = 0usize;
+        while i < self.deferred_chart_loads.len() && scanned < DEFERRED_CHART_SCAN_WINDOW {
+            scanned += 1;
+            let idx = self.deferred_chart_loads[i];
+            let Some((load_key, sym_key, tf, source_override, bars_empty, symbol, timeframe)) =
+                self.charts.get(idx).map(|c| {
+                    (
+                        deferred_chart_load_key(c),
+                        mtf_grid_symbol_key(&c.symbol),
+                        c.timeframe.cache_suffix(),
+                        c.source_override,
+                        c.bars.is_empty(),
+                        c.symbol.clone(),
+                        c.timeframe,
+                    )
+                })
+            else {
+                // Stale index — drop it.
+                self.deferred_chart_loads.remove(i);
+                self.deferred_chart_load_set.remove(&idx);
+                continue;
+            };
+
+            // Synchronous in-place load for (a) charts pinned to an explicit source
+            // and (b) refreshes of an already-populated chart (a fetch result, style
+            // change, etc.). `try_load` refreshes in place and preserves the camera,
+            // which the async restore path (empty→loaded only) cannot. The async
+            // worker path below is reserved for the cold-start case — an empty,
+            // auto-source chart — which is the startup-freeze hot path. Populated
+            // reloads arrive one at a time, so running them here can't re-freeze.
+            if !source_override.is_empty() || !bars_empty {
+                if finalized >= DEFERRED_CHART_FINALIZE_PER_FRAME {
+                    i += 1;
+                    continue;
+                }
+                let loaded = self
+                    .charts
+                    .get_mut(idx)
+                    .map(|c| c.try_load(&cache, &mut self.log, gpu.as_mut()))
+                    .unwrap_or(true);
+                if loaded {
+                    let empty = self
+                        .charts
+                        .get(idx)
+                        .map(|c| c.bars.is_empty())
+                        .unwrap_or(false);
+                    if empty {
+                        self.deferred_chart_empty_load_at.insert(load_key, now_instant);
+                    } else {
+                        self.deferred_chart_empty_load_at.remove(&load_key);
+                        if let Some(c) = self.charts.get(idx) {
+                            c.publish_result_to_cache();
+                        }
+                    }
+                    self.deferred_chart_loads.remove(i);
+                    self.deferred_chart_load_set.remove(&idx);
+                    finalized += 1;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            // Ready in the shared result cache (a worker prepared it)? Probe cheaply
+            // before mutating, then do the budget-capped in-memory restore.
+            let ready = super::chart::chart_result_cache_get(&sym_key, tf, now_ms)
+                .map(|e| !e.bars.is_empty())
+                .unwrap_or(false);
+            if ready {
+                if finalized >= DEFERRED_CHART_FINALIZE_PER_FRAME {
+                    i += 1;
+                    continue;
+                }
+                let restored = self
+                    .charts
+                    .get_mut(idx)
+                    .map(|c| c.restore_from_result_cache(&cache, gpu.as_mut()))
+                    .unwrap_or(false);
+                if restored {
+                    self.deferred_chart_empty_load_at.remove(&load_key);
+                    if let Some(c) = self.charts.get(idx) {
+                        c.publish_result_to_cache();
+                    }
+                }
+                // Drop it either way: a non-empty entry restores; a microscopic
+                // TTL-race miss leaves bars empty and re-queues via the preload pass.
+                self.deferred_chart_loads.remove(i);
+                self.deferred_chart_load_set.remove(&idx);
+                finalized += 1;
+                continue;
+            }
+
+            // Not loaded yet — ensure a worker is on it, then advance so other queued
+            // cells get scheduled in the same frame.
+            let key = (sym_key, tf);
+            if !self.deferred_chart_inflight.contains_key(&key)
+                && self.deferred_chart_inflight.len() < DEFERRED_CHART_MAX_INFLIGHT
+            {
+                self.deferred_chart_inflight.insert(key.clone(), now_instant);
+                self.spawn_deferred_chart_load(&cache, symbol, timeframe, key.0, tf);
+            }
+            i += 1;
+        }
+        self.gpu_indicators = gpu;
+
+        // Keep frames coming while loads are outstanding (covers TYPHOON_IDLE_FPS
+        // caps where the app would otherwise not continuously repaint).
+        if !self.deferred_chart_loads.is_empty() {
+            ctx.request_repaint();
+        }
+    }
+
+    /// Load one (symbol, timeframe) on the worker pool and publish the result into
+    /// the shared result/HTF/value caches so the render thread can restore it
+    /// cheaply. Reports `(symbol_key, tf_suffix, had_bars)` back so the scheduler
+    /// can clear the in-flight marker and retire empty results. Mirrors the MTF Grid
+    /// navbar fill (`compute_mtf_grid_status`) — same off-thread load + cache publish.
+    fn spawn_deferred_chart_load(
+        &mut self,
+        cache: &Arc<SqliteCache>,
+        symbol: String,
+        timeframe: Timeframe,
+        sym_key: String,
+        tf_suffix: &'static str,
+    ) {
+        if self.deferred_chart_load_tx.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.deferred_chart_load_tx = Some(tx);
+            self.deferred_chart_load_rx = Some(rx);
+        }
+        let Some(tx) = self.deferred_chart_load_tx.as_ref().map(Clone::clone) else {
+            return;
+        };
+        let cache = Arc::clone(cache);
+        let rt_handle = self.rt_handle.clone();
+        rt_handle.spawn_blocking(move || {
+            let mut temp = ChartState::new(&symbol, timeframe);
+            let dsm = typhoon_engine::core::data_source::DataSourceManager::default();
+            temp.load(&cache, &mut std::collections::VecDeque::new(), None, &dsm);
+            let had_bars = !temp.bars.is_empty();
+            if had_bars {
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let close = temp.bars.last().map(|b| b.close);
+                let sma = temp.sma200.last().and_then(|v| *v);
+                let kama = temp.kama.last().and_then(|v| *v);
+                let fisher = temp.fisher.last().and_then(|v| *v);
+                let fsig = temp.fisher_signal.last().and_then(|v| *v);
+                let source = temp.primary_source;
+                let bars = std::sync::Arc::new(std::mem::take(&mut temp.bars));
+                // Bars → shared HTF cache (overlays reuse them) and the reopen cache;
+                // values → the sticky grid store the navbar reads.
+                super::chart::mtf_htf_cache_put(
+                    &sym_key,
+                    tf_suffix,
+                    std::sync::Arc::clone(&bars),
+                    now_ms,
+                );
+                super::chart::chart_result_cache_put(&sym_key, tf_suffix, bars, source, now_ms);
+                super::chart::mtf_grid_value_put(
+                    &sym_key,
+                    tf_suffix,
+                    (close, sma, kama, fisher, fsig),
+                    now_ms,
+                );
+            }
+            let _ = tx.send((sym_key, tf_suffix, had_bars));
+        });
     }
 }
 
@@ -911,6 +1099,33 @@ impl TyphooNApp {
     pub(super) fn queue_chart_reload(&mut self, idx: usize) {
         if idx < self.charts.len() && self.deferred_chart_load_set.insert(idx) {
             self.deferred_chart_loads.push_back(idx);
+        }
+    }
+
+    /// Queue every open chart that has empty bars for the off-thread deferred
+    /// loader. O(1) per chart (HashSet insert + push, no cache I/O) — replaces the
+    /// "synchronously `try_load` every empty chart in a loop on the render thread"
+    /// idiom that froze the UI for seconds when enabling/restoring an MTF grid.
+    pub(super) fn queue_empty_charts_for_load(&mut self) {
+        for idx in 0..self.charts.len() {
+            if self
+                .charts
+                .get(idx)
+                .map(|c| c.bars.is_empty())
+                .unwrap_or(false)
+            {
+                self.queue_chart_reload(idx);
+            }
+        }
+    }
+
+    /// Queue every open chart for reload via the deferred loader (the RELOAD
+    /// command). Empty charts load off-thread; already-populated charts route to
+    /// the budget-gated synchronous refresh inside the scheduler, so even a full
+    /// reload spreads across frames instead of blocking one.
+    pub(super) fn queue_all_charts_for_reload(&mut self) {
+        for idx in 0..self.charts.len() {
+            self.queue_chart_reload(idx);
         }
     }
 
@@ -1285,28 +1500,17 @@ impl TyphooNApp {
             let idx = if let Some(idx) = existing_idx {
                 idx
             } else {
+                // Push the cell empty and load it off the render thread via the
+                // deferred loader (+ a fetch in case the cache has no rows yet).
+                // Synchronously try_load-ing every timeframe here froze the UI when
+                // opening a symbol's full MTF grid (~7 cold loads on the render thread).
                 let mut chart = ChartState::new(symbol, tf);
                 chart.show_in_tab_bar = false;
-                if let Some(ref cache) = self.cache.clone() {
-                    let mut gpu = self.gpu_indicators.take();
-                    if !chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()) {
-                        self.gpu_indicators = gpu;
-                        self.charts.push(chart);
-                        let idx = self.charts.len().saturating_sub(1);
-                        self.queue_chart_reload(idx);
-                        let _ = self.queue_symbol_fetch_for_source(symbol, tf.cache_suffix());
-                        idx
-                    } else {
-                        self.gpu_indicators = gpu;
-                        self.charts.push(chart);
-                        self.charts.len().saturating_sub(1)
-                    }
-                } else {
-                    self.charts.push(chart);
-                    let idx = self.charts.len().saturating_sub(1);
-                    let _ = self.queue_symbol_fetch_for_source(symbol, tf.cache_suffix());
-                    idx
-                }
+                self.charts.push(chart);
+                let idx = self.charts.len().saturating_sub(1);
+                self.queue_chart_reload(idx);
+                let _ = self.queue_symbol_fetch_for_source(symbol, tf.cache_suffix());
+                idx
             };
             while self.mtf_visible.len() < self.charts.len() {
                 self.mtf_visible.push(true);

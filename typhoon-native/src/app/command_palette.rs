@@ -51,49 +51,18 @@ impl TyphooNApp {
             }
             "MTF" | "MTF_GRID" => {
                 self.mtf_enabled = !self.mtf_enabled;
-                // When enabling MTF grid, load any charts with empty bars
+                // When enabling the grid, queue empty cells for the off-thread
+                // deferred loader (was a synchronous try_load loop = UI freeze).
                 if self.mtf_enabled {
-                    if let Some(ref cache) = self.cache.clone() {
-                        let mut retry_first_chart = false;
-                        for chart in &mut self.charts {
-                            if chart.bars.is_empty() {
-                                {
-                                    let mut gpu = self.gpu_indicators.take();
-                                    if !chart.try_load(
-                                        Arc::as_ref(cache),
-                                        &mut self.log,
-                                        gpu.as_mut(),
-                                    ) {
-                                        retry_first_chart = true;
-                                    }
-                                    self.gpu_indicators = gpu;
-                                }
-                            }
-                        }
-                        if retry_first_chart {
-                            self.queue_chart_reload(0);
-                        }
-                    }
+                    self.queue_empty_charts_for_load();
                 }
                 self.log
                     .push_back(LogEntry::info(format!("MTF grid: {}", self.mtf_enabled)));
             }
             "RELOAD" => {
-                if let Some(ref cache) = self.cache.clone() {
-                    let mut retry_first_chart = false;
-                    for chart in &mut self.charts {
-                        {
-                            let mut gpu = self.gpu_indicators.take();
-                            if !chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()) {
-                                retry_first_chart = true;
-                            }
-                            self.gpu_indicators = gpu;
-                        }
-                    }
-                    if retry_first_chart {
-                        self.queue_chart_reload(0);
-                    }
-                }
+                // Queue all charts for the off-thread deferred loader instead of a
+                // synchronous try_load loop that blocked the UI for the whole reload.
+                self.queue_all_charts_for_reload();
             }
             "SETTINGS" => self.show_settings = true,
             "INDICATORS" => self.show_indicators_panel = !self.show_indicators_panel,

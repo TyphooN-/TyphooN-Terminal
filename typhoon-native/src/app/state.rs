@@ -101,14 +101,26 @@ pub struct TyphooNApp {
     pub(crate) deferred_chart_loads: VecDeque<usize>,
     /// Side index for O(1) duplicate suppression in `deferred_chart_loads`.
     pub(crate) deferred_chart_load_set: HashSet<usize>,
-    /// Last time a deferred chart was synchronously loaded. Used to pace expensive
-    /// cache reads + indicator/MTF recomputes so restored MTF grids don't monopolize
-    /// consecutive UI frames during broad market-data sync.
-    pub(crate) deferred_chart_last_load_at: std::time::Instant,
     /// Last empty deferred load attempt per chart source key. Prevents MTF render
     /// loops from re-queueing an empty provider/cache row every frame while still
     /// allowing broker fetch results to explicitly queue an immediate reload.
     pub(crate) deferred_chart_empty_load_at: std::collections::HashMap<String, std::time::Instant>,
+    /// (symbol_key, tf_suffix) → spawn time for cold loads currently running on a
+    /// background worker (`spawn_deferred_chart_load`). Dedupes spawns and bounds
+    /// concurrency so the render thread never runs the merge/decompress/HTF-read
+    /// path itself — it only does the cheap in-memory restore once a worker lands.
+    /// The timestamp lets the scheduler evict a hung/lost worker's marker so the
+    /// cell becomes re-spawnable (a process can't unwind a panicking worker —
+    /// `panic = "abort"` — so this only guards against a stuck/deadlocked load).
+    pub(crate) deferred_chart_inflight:
+        std::collections::HashMap<(String, &'static str), std::time::Instant>,
+    /// Completion channel for background deferred-chart loaders:
+    /// `(symbol_key, tf_suffix, had_bars)`. Lazily created on first spawn; drained
+    /// each frame to clear the in-flight marker and retire empty results.
+    pub(crate) deferred_chart_load_tx:
+        Option<std::sync::mpsc::Sender<(String, &'static str, bool)>>,
+    pub(crate) deferred_chart_load_rx:
+        Option<std::sync::mpsc::Receiver<(String, &'static str, bool)>>,
 
     /// Command palette open state.
     pub(crate) command_open: bool,
@@ -767,6 +779,12 @@ pub struct TyphooNApp {
     /// Absence ⇒ overnight-enabled (the common case); drives the session label.
     pub(crate) kraken_equity_no_overnight: std::collections::HashSet<String>,
     pub(crate) kraken_equity_universe_requested: bool,
+    /// Result channel for the off-thread Kraken equities universe digest. The
+    /// ~13k-symbol filter/map/sort/dedup + the Reg SHO refresh ran ~290ms on the
+    /// UI thread inside the broker-message drain; now a worker produces the bundle
+    /// and `tick_kraken_universe_digest` applies it cheaply (O(1) moves).
+    pub(crate) kraken_universe_digest_rx:
+        Option<std::sync::mpsc::Receiver<crate::app::app_runtime_kraken_market::KrakenUniverseDigest>>,
     pub(crate) show_reg_sho_window: bool,
     /// Floating window listing current trading halts / LULD pauses (parallels the
     /// Reg SHO window). Opened by the HALTS command.

@@ -355,12 +355,33 @@ impl TyphooNApp {
             // Defer chart loading to subsequent frames — don't block the first frame
             // Charts will load progressively (one per frame) via the deferred_chart_loads mechanism
             self.deferred_chart_loads = if self.mtf_enabled {
-                self.charts
+                let active_key = self
+                    .charts
+                    .get(self.active_tab)
+                    .map(|c| super::chart_ops::mtf_grid_symbol_key(&c.symbol).to_ascii_uppercase());
+                let mut idxs: Vec<usize> = self
+                    .charts
                     .iter()
                     .enumerate()
                     .filter(|(_, c)| c.bars.is_empty())
                     .map(|(i, _)| i)
-                    .collect()
+                    .collect();
+                // Front-load the focused symbol's cells so the visible MTF grid fills
+                // first; the background loaders are capped, so ordering decides which
+                // cells the user sees populate soonest.
+                if let Some(active_key) = active_key {
+                    idxs.sort_by_key(|&i| {
+                        self.charts
+                            .get(i)
+                            .map(|c| {
+                                super::chart_ops::mtf_grid_symbol_key(&c.symbol)
+                                    .to_ascii_uppercase()
+                                    != active_key
+                            })
+                            .unwrap_or(true)
+                    });
+                }
+                idxs.into()
             } else {
                 let idx = self.active_tab;
                 if self
