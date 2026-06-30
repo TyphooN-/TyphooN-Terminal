@@ -1,14 +1,13 @@
 //! Kraken WebSocket v2 book (Level 2) parser, state helpers, and stream driver.
 
-use std::collections::HashMap;
-use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 
 use super::ws_v2::{
     KRAKEN_WS_V2_PUBLIC_URL, build_ws_v2_subscribe_frame, build_ws_v2_unsubscribe_frame,
-    next_ws_v2_req_id, ws_v2_frame_is_channel, ws_v2_json_f64, ws_v2_json_u64, ws_v2_timestamp_ms,
+    next_ws_v2_req_id, ws_v2_json_u64, ws_v2_timestamp_ms,
 };
 use futures_util::{SinkExt, StreamExt};
+use serde_json::value::RawValue;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
@@ -18,35 +17,6 @@ const KRAKEN_WS_BOOK_SUBSCRIBE_BATCH: usize = 250;
 const KRAKEN_WS_BOOK_SUBSCRIBE_FRAME_DELAY: Duration = Duration::from_millis(20);
 const KRAKEN_WS_BOOK_SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(120);
 const KRAKEN_WS_BOOK_PING_INTERVAL: Duration = Duration::from_secs(30);
-
-/// Per-pair `(price_decimals, qty_decimals)` precision (Kraken AssetPairs
-/// `pair_decimals` / `lot_decimals`), keyed by the exact WS v2 pair name
-/// (e.g. `AAPLx/USD`). The v2 book checksum must format each level to the pair's
-/// *fixed* precision before stripping the decimal point and leading zeros; the
-/// raw wire text drops trailing zeros for round-numbered levels (notably the
-/// tokenized xStocks), producing a deterministic checksum mismatch and an endless
-/// resubscribe loop. Pairs absent here fall back to the wire-text formatting
-/// (unchanged behavior — zero regression for pairs whose wire text is padded).
-fn pair_book_precision_registry() -> &'static RwLock<HashMap<String, (u8, u8)>> {
-    static REG: OnceLock<RwLock<HashMap<String, (u8, u8)>>> = OnceLock::new();
-    REG.get_or_init(|| RwLock::new(HashMap::new()))
-}
-
-/// Register a pair's `(price_decimals, qty_decimals)` for WS v2 book checksum
-/// formatting, keyed by the WS pair name. Idempotent; call after loading the
-/// Kraken AssetPairs metadata.
-pub fn register_kraken_pair_book_precision(ws_pair: &str, price_decimals: u8, qty_decimals: u8) {
-    if let Ok(mut reg) = pair_book_precision_registry().write() {
-        reg.insert(ws_pair.to_string(), (price_decimals, qty_decimals));
-    }
-}
-
-fn lookup_pair_book_precision(ws_pair: &str) -> Option<(u8, u8)> {
-    pair_book_precision_registry()
-        .read()
-        .ok()
-        .and_then(|reg| reg.get(ws_pair).copied())
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct KrakenWsBookLevel {
@@ -157,17 +127,9 @@ impl KrakenWsBookState {
     }
 
     pub fn compute_checksum(&self) -> u32 {
-        // Prefer the Kraken-correct fixed-precision encoding when this pair's
-        // decimals are known; otherwise fall back to the raw wire-text encoding.
-        match lookup_pair_book_precision(&self.symbol) {
-            Some((price_decimals, qty_decimals)) => compute_book_checksum_with_precision(
-                &self.bids,
-                &self.asks,
-                price_decimals,
-                qty_decimals,
-            ),
-            None => compute_book_checksum(&self.bids, &self.asks),
-        }
+        // The book levels retain Kraken's exact wire tokens (see `parse_raw_level`),
+        // so the raw-text encoding reproduces Kraken's CRC for every pair.
+        compute_book_checksum(&self.bids, &self.asks)
     }
 }
 
@@ -200,22 +162,59 @@ pub fn build_book_unsubscribe_frame(symbols: &[String]) -> String {
     build_ws_v2_unsubscribe_frame(KRAKEN_WS_V2_BOOK_CHANNEL, symbols)
 }
 
+/// Book frame with the price/qty leaves left as raw JSON tokens. Kraken
+/// serializes book prices/quantities as JSON *numbers* carrying significant
+/// trailing zeros (e.g. `"qty":2.296760`), and the v2 checksum is computed over
+/// that exact digit string. Routing the value through `serde_json::Value`
+/// collapses it to an `f64` and reserializes shortest-round-trip (`2.29676`),
+/// dropping the trailing zero and breaking the CRC. Capturing the raw token text
+/// (serde_json `raw_value`) preserves Kraken's exact serialization.
+#[derive(serde::Deserialize)]
+struct RawBookFrame<'a> {
+    #[serde(default)]
+    channel: Option<String>,
+    #[serde(rename = "type", default)]
+    msg_type: Option<String>,
+    #[serde(borrow, default)]
+    data: Vec<&'a RawValue>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawBookEntry<'a> {
+    symbol: String,
+    #[serde(borrow, default)]
+    asks: Vec<&'a RawValue>,
+    #[serde(borrow, default)]
+    bids: Vec<&'a RawValue>,
+    #[serde(default)]
+    checksum: Option<serde_json::Value>,
+    #[serde(default)]
+    timestamp: Option<serde_json::Value>,
+    #[serde(default)]
+    time: Option<serde_json::Value>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawBookLevelObj<'a> {
+    #[serde(borrow)]
+    price: &'a RawValue,
+    #[serde(borrow, default)]
+    qty: Option<&'a RawValue>,
+    #[serde(borrow, default)]
+    quantity: Option<&'a RawValue>,
+}
+
 pub fn parse_book_message(text: &str) -> Vec<KrakenWsBookDelta> {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+    let Ok(frame) = serde_json::from_str::<RawBookFrame>(text) else {
         return Vec::new();
     };
-    let Some(is_snapshot) = ws_v2_frame_is_channel(&value, KRAKEN_WS_V2_BOOK_CHANNEL) else {
-        return Vec::new();
-    };
-    if !is_snapshot
-        && value.get("channel").and_then(|v| v.as_str()) != Some(KRAKEN_WS_V2_BOOK_CHANNEL)
-    {
+    if frame.channel.as_deref() != Some(KRAKEN_WS_V2_BOOK_CHANNEL) {
         return Vec::new();
     }
-    let Some(data) = value.get("data").and_then(|v| v.as_array()) else {
-        return Vec::new();
-    };
-    data.iter()
+    let is_snapshot = frame.msg_type.as_deref() == Some("snapshot");
+    frame
+        .data
+        .iter()
         .filter_map(|entry| parse_book_entry(entry, is_snapshot))
         .collect()
 }
@@ -340,66 +339,64 @@ fn compute_book_reconnect_backoff(consecutive_failures: u32) -> Duration {
     }
 }
 
-fn parse_book_entry(entry: &serde_json::Value, is_snapshot: bool) -> Option<KrakenWsBookDelta> {
-    let obj = entry.as_object()?;
-    let symbol = obj.get("symbol")?.as_str()?.to_string();
-    let asks = obj
-        .get("asks")
-        .and_then(|v| v.as_array())
-        .map(|levels| parse_levels(levels))
-        .unwrap_or_default();
-    let bids = obj
-        .get("bids")
-        .and_then(|v| v.as_array())
-        .map(|levels| parse_levels(levels))
-        .unwrap_or_default();
+fn parse_book_entry(entry: &RawValue, is_snapshot: bool) -> Option<KrakenWsBookDelta> {
+    let parsed: RawBookEntry = serde_json::from_str(entry.get()).ok()?;
+    let asks = parsed
+        .asks
+        .iter()
+        .filter_map(|level| parse_raw_level(level))
+        .collect();
+    let bids = parsed
+        .bids
+        .iter()
+        .filter_map(|level| parse_raw_level(level))
+        .collect();
     Some(KrakenWsBookDelta {
-        symbol,
+        symbol: parsed.symbol,
         bids,
         asks,
-        checksum: obj.get("checksum").and_then(ws_v2_json_u64),
-        ts_ms: obj
-            .get("timestamp")
-            .or_else(|| obj.get("time"))
+        checksum: parsed.checksum.as_ref().and_then(ws_v2_json_u64),
+        ts_ms: parsed
+            .timestamp
+            .as_ref()
+            .or(parsed.time.as_ref())
             .and_then(ws_v2_timestamp_ms),
         is_snapshot,
     })
 }
 
-fn parse_levels(levels: &[serde_json::Value]) -> Vec<KrakenWsBookLevel> {
-    levels.iter().filter_map(parse_level).collect()
+/// Parse one book level — object `{"price":..,"qty":..}` or array `[price, qty]`
+/// — keeping each price/qty as the exact wire token so the checksum reproduces
+/// Kraken's digit string (trailing zeros and all).
+fn parse_raw_level(level: &RawValue) -> Option<KrakenWsBookLevel> {
+    let body = level.get();
+    if body.trim_start().starts_with('{') {
+        let obj: RawBookLevelObj = serde_json::from_str(body).ok()?;
+        let qty_raw = obj.qty.or(obj.quantity)?;
+        let (price, price_text) = raw_decimal_scalar(obj.price)?;
+        let (qty, qty_text) = raw_decimal_scalar(qty_raw)?;
+        Some(KrakenWsBookLevel::from_wire(price, qty, price_text, qty_text))
+    } else {
+        let arr: Vec<&RawValue> = serde_json::from_str(body).ok()?;
+        let (price, price_text) = raw_decimal_scalar(arr.first()?)?;
+        let (qty, qty_text) = raw_decimal_scalar(arr.get(1)?)?;
+        Some(KrakenWsBookLevel::from_wire(price, qty, price_text, qty_text))
+    }
 }
 
-fn parse_level(level: &serde_json::Value) -> Option<KrakenWsBookLevel> {
-    if let Some(obj) = level.as_object() {
-        let price_value = obj.get("price")?;
-        let qty_value = obj.get("qty").or_else(|| obj.get("quantity"))?;
-        return Some(KrakenWsBookLevel::from_wire(
-            ws_v2_json_f64(price_value)?,
-            ws_v2_json_f64(qty_value)?,
-            json_decimal_text(price_value)?,
-            json_decimal_text(qty_value)?,
-        ));
-    }
-    let arr = level.as_array()?;
-    let price_value = arr.first()?;
-    let qty_value = arr.get(1)?;
-    Some(KrakenWsBookLevel::from_wire(
-        ws_v2_json_f64(price_value)?,
-        ws_v2_json_f64(qty_value)?,
-        json_decimal_text(price_value)?,
-        json_decimal_text(qty_value)?,
-    ))
-}
-
-fn json_decimal_text(value: &serde_json::Value) -> Option<String> {
-    if let Some(text) = value.as_str() {
-        return Some(text.to_string());
-    }
-    if value.is_number() {
-        return Some(value.to_string());
-    }
-    None
+/// Decode a numeric scalar token to `(f64, exact_text)`. A JSON number keeps its
+/// literal text (trailing zeros intact — the whole point); a JSON string yields
+/// its inner content, matching the prior `as_str()` behavior for string-encoded
+/// levels. Non-finite values are rejected, as before.
+fn raw_decimal_scalar(value: &RawValue) -> Option<(f64, String)> {
+    let raw = value.get().trim();
+    let text = if raw.starts_with('"') {
+        serde_json::from_str::<String>(raw).ok()?
+    } else {
+        raw.to_string()
+    };
+    let parsed = text.trim().parse::<f64>().ok().filter(|v| v.is_finite())?;
+    Some((parsed, text))
 }
 
 pub fn compute_book_checksum(bids: &[KrakenWsBookLevel], asks: &[KrakenWsBookLevel]) -> u32 {
@@ -411,49 +408,6 @@ pub fn compute_book_checksum(bids: &[KrakenWsBookLevel], asks: &[KrakenWsBookLev
         push_checksum_level(&mut payload, level);
     }
     crc32fast::hash(payload.as_bytes())
-}
-
-/// Checksum variant that formats each level to the pair's fixed price/qty
-/// precision — the Kraken-correct algorithm — used when the precision is known.
-/// Reconstructs the trailing zeros the wire text omits, so round-numbered
-/// tokenized-xStock books match Kraken's CRC instead of looping on a mismatch.
-pub fn compute_book_checksum_with_precision(
-    bids: &[KrakenWsBookLevel],
-    asks: &[KrakenWsBookLevel],
-    price_decimals: u8,
-    qty_decimals: u8,
-) -> u32 {
-    let mut payload = String::new();
-    for level in asks.iter().take(10) {
-        payload.push_str(&checksum_fixed_precision_component(
-            level.price,
-            price_decimals,
-        ));
-        payload.push_str(&checksum_fixed_precision_component(level.qty, qty_decimals));
-    }
-    for level in bids.iter().take(10) {
-        payload.push_str(&checksum_fixed_precision_component(
-            level.price,
-            price_decimals,
-        ));
-        payload.push_str(&checksum_fixed_precision_component(level.qty, qty_decimals));
-    }
-    crc32fast::hash(payload.as_bytes())
-}
-
-/// Format a price/qty to a fixed number of decimals, then drop the decimal point
-/// and leading zeros — the Kraken v2 book checksum digit encoding.
-fn checksum_fixed_precision_component(value: f64, decimals: u8) -> String {
-    let formatted = format!("{:.*}", decimals as usize, value);
-    let mut compact = formatted.replace('.', "");
-    while compact.starts_with('0') && compact.len() > 1 {
-        compact.remove(0);
-    }
-    if compact.is_empty() {
-        "0".to_string()
-    } else {
-        compact
-    }
 }
 
 fn push_checksum_level(payload: &mut String, level: &KrakenWsBookLevel) {
@@ -619,89 +573,6 @@ mod tests {
     }
 
     #[test]
-    fn fixed_precision_component_reconstructs_trimmed_zeros() {
-        // Round-numbered tokenized-xStock levels: the wire trims trailing zeros,
-        // but the checksum must use the pair's fixed precision.
-        assert_eq!(checksum_fixed_precision_component(190.0, 2), "19000");
-        assert_eq!(checksum_fixed_precision_component(5.0, 8), "500000000");
-        assert_eq!(checksum_fixed_precision_component(0.05, 8), "5000000");
-        assert_eq!(checksum_fixed_precision_component(67100.0, 1), "671000");
-        assert_eq!(checksum_fixed_precision_component(100.5, 4), "1005000");
-    }
-
-    #[test]
-    fn fixed_precision_checksum_matches_wire_text_when_full_precision() {
-        // When the wire already carries full precision, the precision-based
-        // encoding reproduces the wire-text encoding exactly — so pairs whose wire
-        // text is already padded (e.g. major crypto) are unaffected.
-        let asks = vec![KrakenWsBookLevel::from_wire(
-            100.5,
-            0.05,
-            "100.50".into(),
-            "0.05000000".into(),
-        )];
-        let bids = vec![KrakenWsBookLevel::from_wire(
-            100.0,
-            2.5,
-            "100.00".into(),
-            "2.50000000".into(),
-        )];
-        assert_eq!(
-            compute_book_checksum_with_precision(&bids, &asks, 2, 8),
-            compute_book_checksum(&bids, &asks)
-        );
-    }
-
-    #[test]
-    fn registered_precision_fixes_trimmed_xstock_checksum() {
-        // Tokenized xStock: the wire delivered trimmed text ("190" / "5"), so the
-        // raw wire-text checksum diverges from Kraken's CRC. With the pair's
-        // precision registered, the state recomputes against the fixed-precision
-        // encoding — which is what stops the deterministic resubscribe loop.
-        register_kraken_pair_book_precision("TESTx/USD", 2, 8);
-        let state = KrakenWsBookState::new("TESTx/USD", 10);
-        let delta = KrakenWsBookDelta {
-            symbol: "TESTx/USD".into(),
-            bids: vec![KrakenWsBookLevel::from_wire(
-                189.0,
-                3.0,
-                "189".into(),
-                "3".into(),
-            )],
-            asks: vec![KrakenWsBookLevel::from_wire(
-                190.0,
-                5.0,
-                "190".into(),
-                "5".into(),
-            )],
-            checksum: None,
-            ts_ms: None,
-            is_snapshot: true,
-        };
-        let mut applied = state.clone();
-        applied.apply_delta_unchecked(&delta);
-        let precision_checksum =
-            compute_book_checksum_with_precision(&applied.bids, &applied.asks, 2, 8);
-        let wire_checksum = compute_book_checksum(&applied.bids, &applied.asks);
-        // The fix changes behavior for trimmed books, and the state's checksum now
-        // uses the fixed-precision encoding (via the registry).
-        assert_ne!(precision_checksum, wire_checksum);
-        assert_eq!(applied.compute_checksum(), precision_checksum);
-
-        // A delta carrying Kraken's (correct) checksum now validates instead of
-        // looping forever on a mismatch.
-        let mut good = state.clone();
-        let mut accepted = good.clone();
-        accepted.apply_delta_unchecked(&delta);
-        let mut good_delta = delta.clone();
-        good_delta.checksum = Some(u64::from(accepted.compute_checksum()));
-        assert_eq!(
-            good.apply_delta_with_checksum(&good_delta),
-            Ok(Some(precision_checksum))
-        );
-    }
-
-    #[test]
     fn book_checksum_uses_asks_then_bids_top_ten_payload() {
         let asks = vec![
             KrakenWsBookLevel::from_wire(100.5, 0.05000000, "100.5000".into(), "0.05000000".into()),
@@ -785,5 +656,33 @@ mod tests {
         assert_eq!(state.bids[0].price, 99.0);
         assert_eq!(state.asks[0].price, 100.5);
         assert_eq!(state.last_checksum, Some(2));
+    }
+
+    #[test]
+    fn live_metax_snapshot_checksum_validates_with_raw_tokens() {
+        // Real Kraken WS v2 book snapshot for METAx/USD captured 2026-06-30T11:15:58Z.
+        // Kraken sends price/qty as JSON numbers with significant trailing zeros
+        // (e.g. "qty":0.120000, "qty":2.296760); its checksum (1687683704) only
+        // reproduces if those trailing zeros survive parsing. Collapsing the token
+        // through an f64 would yield 0.12 / 2.29676 and a different CRC — the exact
+        // xStock book-checksum loop this parser change fixes. Pins to live bytes.
+        let raw = r#"{"channel":"book","type":"snapshot","data":[{"symbol":"METAx/USD","bids":[{"price":564.01374,"qty":0.120000},{"price":564.00376,"qty":2.296760},{"price":563.62464,"qty":8.836362},{"price":562.20789,"qty":17.672824},{"price":560.00296,"qty":0.060714},{"price":552.71970,"qty":0.087594},{"price":552.62990,"qty":0.087594},{"price":552.59997,"qty":0.569359},{"price":552.48025,"qty":3.591344},{"price":552.23082,"qty":0.043797}],"asks":[{"price":575.78668,"qty":1.425265},{"price":575.83657,"qty":0.164454},{"price":576.29551,"qty":3.289073},{"price":576.33542,"qty":5.481788},{"price":576.35538,"qty":0.548179},{"price":576.78439,"qty":0.164454},{"price":576.96398,"qty":3.014983},{"price":577.13359,"qty":0.548179},{"price":577.20343,"qty":5.481788},{"price":577.32315,"qty":7.619685}],"checksum":1687683704,"timestamp":"2026-06-30T11:15:58.397403Z"}]}"#;
+        let deltas = parse_book_message(raw);
+        assert_eq!(deltas.len(), 1);
+        let delta = &deltas[0];
+        assert_eq!(delta.symbol, "METAx/USD");
+        assert!(delta.is_snapshot);
+        assert_eq!(delta.bids.len(), 10);
+        assert_eq!(delta.asks.len(), 10);
+        assert_eq!(delta.checksum, Some(1_687_683_704));
+        // Trailing zeros must be preserved verbatim in the checksum text.
+        assert_eq!(delta.bids[0].qty_text, "0.120000");
+        assert_eq!(delta.bids[1].qty_text, "2.296760");
+        // Locally-computed CRC must match Kraken's embedded server checksum.
+        let mut state = KrakenWsBookState::new("METAx/USD", 10);
+        let validated = state
+            .apply_delta_with_checksum(delta)
+            .expect("computed checksum must match Kraken's server checksum");
+        assert_eq!(validated, Some(1_687_683_704));
     }
 }

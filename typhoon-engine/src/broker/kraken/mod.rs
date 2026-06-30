@@ -1586,21 +1586,6 @@ impl KrakenBroker {
                 .and_then(|v| v.as_str())
                 .unwrap_or(name)
                 .to_string();
-            // Register the pair's price/qty decimal precision for the WS v2 book
-            // checksum, keyed by the WS pair name. `pair_decimals` is the price
-            // precision, `lot_decimals` the qty precision. Tokenized xStocks rely
-            // on this: the raw book wire text drops trailing zeros, so the checksum
-            // mismatches (and then resubscribes forever) without fixed precision.
-            if let (Some(price_dec), Some(qty_dec)) = (
-                info.get("pair_decimals").and_then(|v| v.as_u64()),
-                info.get("lot_decimals").and_then(|v| v.as_u64()),
-            ) {
-                ws_v2_book::register_kraken_pair_book_precision(
-                    &display,
-                    price_dec.min(u64::from(u8::MAX)) as u8,
-                    qty_dec.min(u64::from(u8::MAX)) as u8,
-                );
-            }
             pairs.push((name.clone(), display));
         }
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
