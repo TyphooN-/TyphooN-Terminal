@@ -45,28 +45,33 @@ impl TyphooNApp {
         // Scroll → zoom (only when not over a floating window, skip in MTF mode — cells handle own zoom)
         let scroll_delta = ctx.input(|i| i.smooth_scroll_delta.y);
         if scroll_delta != 0.0 && !hover_over_window && !self.mtf_enabled {
+            let body_local_x = (hover_pos.x - chart_body_rect.left()).max(0.0);
+            let body_local_y = (hover_pos.y - chart_body_rect.top()).max(0.0);
+            let axis_local_y = (hover_pos.y - price_axis_rect.top()).max(0.0);
             if on_price_axis {
-                // Scroll on price axis → vertical zoom (TradingView style: squish/expand)
+                // Scroll on price axis → vertical zoom (TradingView style: squish/expand), centered on mouse price
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                    let target_price = chart.price_from_y(axis_local_y, price_axis_rect.height());
                     let pct = (scroll_delta * 0.002).clamp(-0.08, 0.08);
                     let factor = (1.0 + pct as f64).clamp(0.1, 20.0);
-                    chart.zoom_chart_price_by(factor);
+                    chart.zoom_chart_price_around(factor, target_price);
                 }
             } else if on_chart_body {
                 let ctrl_held = ctx.input(|i| i.modifiers.ctrl);
                 if ctrl_held {
-                    // Ctrl+scroll on chart → vertical zoom (progressive)
+                    // Ctrl+scroll on chart → vertical zoom (progressive), mouse-centered
                     if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                        let target_price = chart.price_from_y(body_local_y, chart_body_rect.height());
                         let pct = (scroll_delta * 0.002).clamp(-0.08, 0.08);
                         let factor = (1.0 + pct as f64).clamp(0.1, 20.0);
-                        chart.zoom_chart_price_by(factor);
+                        chart.zoom_chart_price_around(factor, target_price);
                     }
                 } else {
-                    // Scroll on chart → horizontal zoom (time axis, progressive)
-                    // Use around-mid for basic centered zoom support (full mouse-cursor centering can use hover bar computation later).
+                    // Scroll on chart → horizontal zoom (time axis, progressive), mouse-centered on bar under cursor
                     for chart in &mut self.charts {
-                        let mid_bar = chart.camera.right_edge_bar() - (chart.camera.bars_visible / 2.0);
-                        chart.zoom_chart_bars_around(1.0 + (scroll_delta as f64 * 0.002).clamp(-0.08, 0.08), mid_bar.max(0.0));
+                        let target_bar = chart.bar_from_x(body_local_x, chart_body_rect.width());
+                        let factor = 1.0 + (scroll_delta as f64 * 0.002).clamp(-0.08, 0.08);
+                        chart.zoom_chart_bars_around(factor, target_bar.max(0.0));
                     }
                 }
             }
@@ -1005,8 +1010,11 @@ impl TyphooNApp {
                 if ptr_in_cell && !scaling_this_cell {
                     let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
                     if scroll != 0.0 {
-                        let mid_bar = chart.camera.right_edge_bar() - (chart.camera.bars_visible / 2.0);
-                        chart.zoom_chart_bars_around((1.0 + (scroll as f64 * 0.002).clamp(-0.08, 0.08)), mid_bar.max(0.0));
+                        // Mouse-centered horizontal zoom for MTF cell
+                        let local_x = (hover_pos.x - cell_chart_body_rect.left()).max(0.0);
+                        let target_bar = chart.bar_from_x(local_x as f32, cell_chart_body_rect.width());
+                        let factor = 1.0 + (scroll as f64 * 0.002).clamp(-0.08, 0.08);
+                        chart.zoom_chart_bars_around(factor, target_bar.max(0.0));
                     }
                 }
 

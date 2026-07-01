@@ -112,15 +112,39 @@ impl ChartCamera {
 
     pub fn max_right_edge(&self, data_len: usize) -> f64 {
         if data_len == 0 {
-            0.0
-        } else {
-            // TradingView-style horizontal free-look: allow one full viewport of
-            // empty space to the right so the newest bar can be dragged all the
-            // way to the left edge. The left bound stays at right_edge=0, which
-            // puts the oldest bar at the right edge with empty space to its left.
-            data_len.saturating_sub(1) as f64
-                + (self.bars_visible - 1.0).max(CHART_RIGHT_MARGIN as f64)
+            return 0.0;
         }
+        // TradingView-style horizontal free-look: allow one full viewport of
+        // empty space to the right so the newest bar can be dragged all the
+        // way to the left edge. The left bound stays at right_edge=0, which
+        // puts the oldest bar at the right edge with empty space to its left.
+        data_len.saturating_sub(1) as f64
+            + (self.bars_visible - 1.0).max(CHART_RIGHT_MARGIN as f64)
+    }
+
+    /// Convert local x (0 at left of rect) to approximate bar index under mouse.
+    /// Used for mouse-centered horizontal zoom.
+    pub fn bar_from_x(&self, x: f32, rect_width: f32) -> f64 {
+        if rect_width <= 0.0 {
+            return self.right_edge_bar();
+        }
+        let bw = rect_width as f64 / self.bars_visible.max(1.0);
+        let left = self.right_edge_bar() - self.bars_visible + 1.0;
+        left + (x as f64 / bw)
+    }
+
+    /// Convert local y (0 at top of rect) to price under mouse, using camera or natural.
+    /// Matches price_to_y convention: high price at top.
+    pub fn price_from_y(&self, y: f32, rect_height: f32, natural_center: f64, natural_span: f64) -> f64 {
+        if rect_height <= 0.0 {
+            return natural_center;
+        }
+        let (c, s) = self.price_center.and_then(|cc| self.price_span.map(|ss| (cc, ss)))
+            .unwrap_or((natural_center, natural_span));
+        let top_p = c + s * 0.5;
+        let bot_p = c - s * 0.5;
+        let frac = (y as f64 / rect_height as f64).clamp(0.0, 1.0);
+        top_p - frac * (top_p - bot_p)
     }
 
     pub fn set_right_edge_bar(&mut self, right_edge: f64, data_len: usize) {

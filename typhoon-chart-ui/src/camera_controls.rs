@@ -130,6 +130,15 @@ impl ChartState {
         self.mark_view_changed();
     }
 
+    pub fn bar_from_x(&self, x: f32, rect_width: f32) -> f64 {
+        self.camera.bar_from_x(x, rect_width)
+    }
+
+    pub fn price_from_y(&self, y: f32, rect_height: f32) -> f64 {
+        let (natural_center, natural_span) = self.natural_visible_price_view().unwrap_or((0.0, 1.0));
+        self.camera.price_from_y(y, rect_height, natural_center, natural_span)
+    }
+
     pub fn mark_view_changed(&mut self) {
         // Camera movement changes pixels even when no new bars arrive. The
         // renderer's live-WS early-out keys off `visible_bars_gen`; without
