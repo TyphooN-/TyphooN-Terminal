@@ -1,6 +1,6 @@
 # ADR-102: Kraken Equities Gap Fill via Alpaca and Provider Fallback
 
-**Status:** Accepted / partially implemented (updated 2026-06-08 — native iapi now sweeps full catalog; see addendum) | **Date:** 2026-05-27
+**Status:** Accepted / partially implemented (updated 2026-07 — WS feed caps + O(1) quote dispatch + Kraken book checksum robustness added; see addenda) | **Date:** 2026-05-27
 
 ## Context
 
@@ -349,16 +349,14 @@ Gap-fill work via Alpaca and other providers is now also subject to the three-ti
 - Sync Status expected rows and `Merged` rows use the same timeframe policy, so
   the visible denominator matches the scheduler contract.
 
-## Implementation status / reopen criteria
+## Implementation status / reopen criteria (updated 2026-07)
 
 - The current implementation covers the native full-catalog denominator, Sync
   Status separation, bounded-concurrent Yahoo Chart fetches, Alpaca multi-symbol
   stock batches for broad non-focused assist work, Yahoo fallback fetchers,
-  and assist-only controls. Reopen this ADR for code work when adding a new
-  fallback provider, provenance-span rendering, strategy/backtest policy hooks,
-  or the full depth/freshness merge policy described above. Any future change
-  must keep the invariant above: high-TF full catalog, intraday demand-scoped
-  unless an explicit provider policy says otherwise.
+  and assist-only controls (backfill_alpaca_kraken_equities_enabled + alpaca_full_bar_sync_enabled separation).
+- Alpaca/Kraken WS robustness (feed detection + adaptive caps, 406 handling, atomic CRC for Kraken book, diff sub/unsub, O(1) quote dispatch via bare-symbol maps) now provides live tick data into the same MTF/equity paths used by bar fallback.
+- Reopen this ADR for code work when adding a new fallback provider, provenance-span rendering, strategy/backtest policy hooks, or the full depth/freshness merge policy described above. Any future change must keep the invariant above: high-TF full catalog, intraday demand-scoped unless an explicit provider policy says otherwise.
 
 Historical implementation items that remain relevant as regression checks:
 

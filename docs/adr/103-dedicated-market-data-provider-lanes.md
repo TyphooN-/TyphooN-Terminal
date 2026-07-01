@@ -1,6 +1,6 @@
 # ADR-103: Dedicated Market-Data Provider Lanes for Deep/Fresh Bars
 
-**Status:** Accepted / roadmap | **Date:** 2026-05-28
+**Status:** Accepted / roadmap (WS robustness + O(1) dispatch + feed caps advanced 2026-07; see related ADRs 087/102/109) | **Date:** 2026-05-28
 
 ## Context
 

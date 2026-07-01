@@ -1,6 +1,6 @@
 # ADR-109: Kraken WebSocket v2 Market Depth Completion
 
-Status: Proposed
+Status: Accepted / L2 book + checksum implemented (updated 2026-07)
 Date: 2026-06-06
 
 ## Context
@@ -27,7 +27,7 @@ Source audit:
   - v2 `ticker` parser, subscribe batching, reconnecting public streamer foundation
 - `typhoon-engine/src/broker/kraken/ws_v2_book.rs`
   - v2 `book` parser/state helper, subscribe batching, reconnecting public streamer foundation
-  - checksum validation/resync is still pending
+  - atomic CRC32 checksum (candidate apply + commit only on match) + xStock wire precision implemented (2026-07)
 - `typhoon-engine/src/broker/kraken/private_ws.rs`
   - private account feed is v1 shape: `ownTrades` and `openOrders`
   - no v2 `executions` or `balances` channel parser yet
@@ -44,7 +44,7 @@ Kraken WebSocket v2 documentation exposes more than we currently consume:
 - Instruments: `instrument` on `wss://ws.kraken.com/v2` — snapshot path already implemented
 - Authenticated account streams: `balances` and `executions` on `wss://ws-auth.kraken.com/v2`
 
-Conclusion: we do **not** support 100% of Kraken WebSocket v2. We support OHLC and one-shot instrument snapshot; v2 ticker/book parser and streamer foundations now exist; private user-stream support is still v1 private WS.
+Conclusion: substantial v2 support now in place (OHLC full, instrument snapshot, ticker foundation, book L2 with atomic checksum + robustness). Private remains largely v1. Full v2 migration for all channels is phased (see phases).
 
 ## Decision
 
@@ -122,7 +122,7 @@ Native side:
 | `ohlc` | Implemented and full-universe streamed | Keep; share future common v2 helpers only if low-risk | Done / preserve |
 | `instrument` | One-shot snapshot implemented | Keep; optionally move parsing to channel module | Done / cleanup |
 | `ticker` L1 | Parser + reconnecting public streamer foundation implemented | Native active/focused-symbol supervisor; quote cards/watchlist/last-price/top-of-book wiring | P1 |
-| `book` L2 | Parser + reconnecting public streamer foundation implemented; v1 book path still exists | Checksum/resync; native active/focused-symbol supervisor; replace v1 public book path | P1 |
+| `book` L2 | Parser + reconnecting public streamer + atomic CRC32 checksum (candidate-state apply, commit **only** on match) + exact wire-token precision preservation for xStocks (METAx etc.) + bounded resub (10) + exp backoff + ping/pong + unsubscribe frames implemented; v1 `public_book.rs` coexists for compat/legacy paths | Native L2 (KrakenStartOrderbookWs + orderbook window + top-of-book quote ticks) wired (uses v2); O(1) bare-symbol quote dispatch for KrakenBookQuoteTick in native; full v1 retirement when verified | Done (core + robustness 2026-07) |
 | `trade` | Missing | Active/focused symbols; time-and-sales, tick feed, last-trade updates | P2 |
 | `level3` L3 | Missing | Authenticated, opt-in, depth/symbol-budgeted visible order book | P2/P3 |
 | `balances` | Missing in v2; private v1 account paths exist | Authenticated v2 balances stream | P2 |
@@ -352,3 +352,16 @@ Start with Phase 1 + Phase 2 parser layer only:
 - Existing OHLC full-universe streaming continues to work and compile cleanly.
 - All new parser/state modules have fixture-backed unit tests.
 - `cargo check --workspace` passes.
+
+## Update 2026-07: L2 Book Robustness Complete (atomic checksum, O(1) dispatch, Alpaca symmetry)
+
+- `ws_v2_book.rs`: Full `KrakenWsBookState` with `apply_delta_with_checksum` using **candidate state** (clone + apply + CRC match before commit). Only commits on exact match. `compute_checksum` uses exact wire `price_text`/`qty_text` tokens (critical for xStock/METAx trailing-zero CRCs; live pinned test).
+- Bounded resub (max 10 consecutive mismatches), exp backoff, ping/pong heartbeat, batched subscribe with delay, unsubscribe frames, event reporting (Connected/Subscribed/Disconnected/Mismatch).
+- Native: `KrakenStartOrderbookWs` + runtime streamer uses v2 `run_book_streamer`; top-of-book emits `KrakenBookQuoteTick`; integrated into O(1) `chart_by_bare` / `watchlist_by_bare` dispatch + `handle_kraken_book_quote_tick`.
+- v1 `public_book.rs` kept for legacy/compat (mod.rs still wires both); v2 is primary for new L2 features (orderbook window, chart L2).
+- Parity with Alpaca WS hardening (feed-aware caps, 406/limit backoff, ack surfacing, diff sub/unsub, reconnect hygiene) — both brokers now have strong WS robustness + O(1) native quote paths.
+- Tests: checksum match/mismatch, snapshot+delta, live xStock fixture, backoff bounds.
+
+L2 book phase (Phase 2) is complete for core + robustness. Remaining phases (trade, L3, account v2 migration) remain P2 per original.
+
+Regression notes from prior work preserved. Re-open for full v1 retirement or L3 auth work.

@@ -115,6 +115,18 @@ The automated scheduler now keeps the per-cycle candidate walk allocation-light:
 
 In addition to the `Missing` / `Stale` / `Backfill` bucket ordering, symbols are now classified into three priority tiers (MTF Grid → Active → Background) before bucket selection. This ensures that charts the user is actively looking at (especially MTF Grid) receive bar data before background universe work.
 
+## Update 2026-07: WS Market-Data Feed Awareness (extension of tier autotuning)
+
+Alpaca market-data WebSocket (quotes + trades) now auto-detects feed ("sip" vs "iex") on connect and emits `BrokerMsg::AlpacaMarketDataFeed`.
+
+- Native subscription logic (`alpaca_quote_subscription_symbols`) is feed-aware: SIP cap ~100, IEX/unknown cap 30 (conservative per Alpaca docs).
+- On 406 / "limit" / "subscription" errors: surface as OrderResult, tighten cap temporarily (to 20), extend throttle (to 10s), 5-min backoff window; auto-clear on reconnect or subscribed ack.
+- Diff subscribe/unsubscribe (add/remove only) + reconnect hygiene + stale detection + exp backoff already present; control frames (success subscribed/auth, errors) now also surfaced for UI visibility.
+- Complements bar-tier autotuning (ADR-087) and Kraken WS v2 robustness (atomic CRC etc.).
+- O(1) hot paths for applying WS ticks (bare-symbol HashMaps + rebuild indices).
+
+This keeps WS sub limits respected without user intervention and provides symmetric robustness for Alpaca/Kraken brokers.
+
 ## Consequences
 
 - **Sync throughput scales with the user's tier** without manual
