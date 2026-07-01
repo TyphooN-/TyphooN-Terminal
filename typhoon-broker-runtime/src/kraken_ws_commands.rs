@@ -548,7 +548,32 @@ pub async fn handle_kraken_ws_command(
                 return;
             };
             let update_msg_tx = msg_tx.clone();
-            let _display_symbol = symbol.clone();
+            // Public trades WS for real-time executed trades (volume, last price confirmation)
+            // O(1) per-trade downstream. Complements L1 ticker.
+            let trades_symbol = ws_symbol.clone();
+            let trades_msg_tx = msg_tx.clone();
+            tokio::spawn(async move {
+                let (trade_tx, mut trade_rx) = tokio::sync::mpsc::channel::<
+                    typhoon_engine::broker::kraken::KrakenWsPublicTrade,
+                >(1024);
+                let (event_tx, mut _event_rx) = tokio::sync::mpsc::unbounded_channel::<
+                    typhoon_engine::broker::kraken::KrakenTradeStreamerEvent,
+                >();
+                tokio::spawn(async move {
+                    typhoon_engine::broker::kraken::run_trades_streamer(
+                        vec![trades_symbol],
+                        trade_tx,
+                        event_tx,
+                    )
+                    .await;
+                });
+                while let Some(t) = trade_rx.recv().await {
+                    let _ = trades_msg_tx.send(BrokerMsg::KrakenWsStatus {
+                        status: "trade".to_string(),
+                        message: format!("{} {:.2} vol={:.4} {}", t.symbol, t.price, t.volume, t.side),
+                    });
+                }
+            });
             let state_symbol = ws_symbol.clone();
             tokio::spawn(async move {
                 let (ticker_tx, mut ticker_rx) = tokio::sync::mpsc::channel::<
@@ -570,7 +595,6 @@ pub async fn handle_kraken_ws_command(
                     tokio::select! {
                         maybe_t = ticker_rx.recv() => {
                             let Some(t) = maybe_t else { break; };
-                            // Forward rich L1 ticker data (bid/ask/sizes/last/vol etc.)
                             let _ = update_msg_tx.send(BrokerMsg::KrakenWsTicker(t));
                         }
                         maybe_event = event_rx.recv() => {

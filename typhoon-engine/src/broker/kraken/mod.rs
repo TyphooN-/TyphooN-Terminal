@@ -16,6 +16,7 @@ mod ws_v2;
 mod ws_v2_book;
 mod ws_v2_level3;
 mod ws_v2_ticker;
+mod ws_v2_trade;
 
 pub use self::equities::{
     IAPI_RATE_LIMITED_ERR_PREFIX, KrakenEquityBar, KrakenEquityMarket, KrakenEquityTicker,
@@ -53,9 +54,14 @@ pub use self::ws_v2_level3::{
     KrakenL3Level, KrakenL3Delta, KrakenL3State, KrakenL3ChecksumError, run_level3_streamer,
 };
 pub use self::ws_v2_ticker::{
-    KRAKEN_WS_V2_TICKER_CHANNEL, KrakenTickerStreamerEvent, KrakenWsTicker,
-    build_ticker_subscribe_frame, build_ticker_subscribe_frames, build_ticker_unsubscribe_frame,
-    parse_ticker_message, run_ticker_streamer,
+    KrakenTickerStreamerEvent, KrakenWsTicker, build_ticker_subscribe_frame,
+    build_ticker_subscribe_frames, build_ticker_unsubscribe_frame, parse_ticker_message,
+    run_ticker_streamer,
+};
+pub use self::ws_v2_trade::{
+    KrakenTradeStreamerEvent, KrakenWsPublicTrade, build_trades_subscribe_frame,
+    build_trades_subscribe_frames, build_trades_unsubscribe_frame, parse_trade_message,
+    run_trades_streamer,
 };
 
 use self::equities::{
