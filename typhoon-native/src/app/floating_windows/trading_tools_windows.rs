@@ -476,7 +476,7 @@ impl TyphooNApp {
                                     // window already open via outer logic / user can open; avoid double-borrow on the open flag inside closure
                                 }
                             });
-                            // Deeper L3 UI: status label (stub)
+                            // Deeper L3 UI: status label (foundation active)
                             if !self.kraken_l3_status.is_empty() {
                                 ui.label(egui::RichText::new(&self.kraken_l3_status).small().color(ob_dim));
                             }

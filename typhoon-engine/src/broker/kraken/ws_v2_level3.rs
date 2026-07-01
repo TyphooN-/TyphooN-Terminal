@@ -110,7 +110,9 @@ async fn run_level3_streamer_once(
         ..Default::default()
     };
 
-    // Real consume + state maintenance. Fall back to sim if no token or empty.
+    // Real consume + state maintenance. L3 deltas feed same KrakenOrderbookUpdate / KrakenBookQuoteTick paths as L2
+    // (provides implicit aggregated L2 projection for cross-check / downstream consumers, per ADR-109 Phase 5).
+    // Fall back to sim if no token or empty.
     let mut tick = 0u64;
     loop {
         if l3_tx.is_closed() {

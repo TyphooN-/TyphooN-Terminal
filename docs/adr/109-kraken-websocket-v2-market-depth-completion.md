@@ -1,6 +1,6 @@
 # ADR-109: Kraken WebSocket v2 Market Depth Completion
 
-Status: Accepted / L2 book + checksum implemented (updated 2026-07)
+Status: Accepted / L2 book + checksum + L3 foundation implemented (updated 2026-07)
 Date: 2026-06-06
 
 ## Context
@@ -124,7 +124,7 @@ Native side:
 | `ticker` L1 | Parser + reconnecting public streamer foundation implemented | Native active/focused-symbol supervisor; quote cards/watchlist/last-price/top-of-book wiring | P1 |
 | `book` L2 | Parser + reconnecting public streamer + atomic CRC32 checksum (candidate-state apply, commit **only** on match) + exact wire-token precision preservation for xStocks (METAx etc.) + bounded resub (10) + exp backoff + ping/pong + unsubscribe frames implemented; v1 `public_book.rs` coexists for compat/legacy paths | Native L2 (KrakenStartOrderbookWs + orderbook window + top-of-book quote ticks) wired (uses v2); O(1) bare-symbol quote dispatch for KrakenBookQuoteTick in native; full v1 retirement when verified | Done (core + robustness 2026-07) |
 | `trade` | Missing | Active/focused symbols; time-and-sales, tick feed, last-trade updates | P2 |
-| `level3` L3 | Missing | Authenticated, opt-in, depth/symbol-budgeted visible order book | P2/P3 |
+|| `level3` L3 | Foundation (ws_v2_level3.rs + streamer + CRC + per-order KrakenL3State + token + status + Bookmap/depth integration) | Opt-in UI panel, full budget enforcement, live-only entitlements, more projections | P2/P3 (foundation done) |
 | `balances` | Missing in v2; private v1 account paths exist | Authenticated v2 balances stream | P2 |
 | `executions` | Missing in v2; v1 `ownTrades`/`openOrders` exist | Authenticated v2 order/trade event stream | P2 |
 
@@ -278,34 +278,32 @@ Verification:
 
 ### Phase 5 — Level 3 opt-in order book
 
-Implement `ws_v2_level3.rs` and native L3 panel/diagnostics.
+`ws_v2_level3.rs` + native integration foundation complete (2026-07 update below).
 
-Important constraints from Kraken docs:
-
+Important constraints from Kraken docs (still apply):
 - Endpoint is `wss://ws-l3.kraken.com/v2`.
 - Channel is authenticated.
 - There are symbol-count and subscription-rate limits.
 - Subscription cost depends on depth.
 - Only one depth subscription per symbol is supported.
 
-Behavior:
+Implemented behavior (foundation):
+- Explicit opt-in per symbol via `KrakenStartLevel3Ws` (demo/sim always available).
+- Maintain individual visible orders (per-order_id state + deltas).
+- CRC checksum validation + status (connected / subscribed / real-feed CRC OK/MISMATCH / demo).
+- L3 deltas project to same update paths as L2 (KrakenOrderbookUpdate + BookQuoteTick) for cross-checking / consumers.
+- Bookmap + depth profile integration with per-order markers, list, age coloring.
 
-- Explicit opt-in per symbol/depth.
-- Do not auto-enable at startup.
-- Maintain individual visible orders, not aggregated price levels.
-- Enforce subscription budget in client before sending frames.
-- Show clear status:
-  - connected
-  - subscribed
-  - throttled by local budget
-  - rejected by Kraken
-  - checksum mismatch/resyncing
-- Provide an aggregated L2 projection from L3 state for cross-checking.
+Remaining (P2/P3, requires entitlements):
+- Enforce subscription budget in client UI before frames.
+- Richer dedicated L3 status panel (beyond current KrakenWsStatus events).
+- Live-only smoke / more projections when entitled.
+- Do not auto-enable at startup (already respected).
 
-Verification:
-
-- Fixture tests for snapshot/update/delete/order-id behavior.
-- Checksum validation.
+Verification (foundation):
+- Unit test + sim exercises parse/apply/CRC/order-id behavior.
+- Checksum validation exercised in test and sim.
+- Sim path for UI/dev; real requires token + entitlements (documented).
 - Live smoke for one symbol/depth only.
 
 ## UI/product impact
@@ -364,4 +362,20 @@ Start with Phase 1 + Phase 2 parser layer only:
 
 L2 book phase (Phase 2) is complete for core + robustness. Remaining phases (trade, L3, account v2 migration) remain P2 per original.
 
-Regression notes from prior work preserved. Re-open for full v1 retirement or L3 auth work.
+## Update 2026-07: L3 Foundation Complete (parser/streamer/CRC/state/viz)
+
+- `ws_v2_level3.rs`: Full implementation of `KrakenL3Level`, `KrakenL3Delta`, `parse_l3_message` (supports snapshot + deltas with order_id / limit_price / order_qty / timestamp), `KrakenL3State` (per-order add/mod/delete by order_id), `compute_l3_checksum` + `KrakenL3ChecksumError` + `apply_delta_with_checksum` (candidate clone + exact match commit only, mirroring L2 book exactly; top-10 levels, text preservation).
+- Real-feed CRC on live deltas: always routes checksum-present messages through validation in streamer (real auth path + sim fallback for demo/no-token). Mismatch status + resilience (forward delta; prod can resub).
+- Auth + wiring: `run_level3_streamer` / `once` accept `Option<String> token`; subscribe includes token when present; modeled on private_ws + ws_v2_book. `KrakenStartLevel3Ws` in runtime fetches token via `get_websockets_token` and spawns.
+- Real consume: WS text frames parsed and emitted as `KrakenL3Delta` (converted to same JSON paths as L2: `KrakenOrderbookUpdate`, `KrakenBookQuoteTick`).
+- Sim fallback: `simulate_l3_delta` exercises the full path (with checksums for CRC tests).
+- State exposure: `KrakenL3State` exported; maintained inside streamer loop and runtime command handler; status events carry CRC OK / MISMATCH / subscribe info.
+- Bookmap + DOM: is_l3 detection, per-order markers, richer scroll list pane (order_id truncated, price×qty, side color, copy on click/row, age "new/mid/old" labels + interactions), age-based coloring (newer = brighter bars).
+- Depth + charts: 25 levels from L3 propagated to `live_depth_bids/asks`; explicit L3 labels in overlay; MTF Grid parity via existing `chart_by_bare` O(1) dispatch (depth updates hit MTF charts for the symbol).
+- Limits documented everywhere: real L3 requires Kraken entitlements + auth token; sim always works for UI/dev.
+- Test: `l3_state_apply_and_checksum_basic` (snapshot → qty modify → delete; asserts state + CRC).
+- Status surface: events like "L3 real-feed CRC OK ...", "L3 real-feed CRC MISMATCH ...", "L3 connected (auth path)" / demo.
+
+L3 foundation (Phase 5 core) is complete and integrated with existing L1/L2 paths for zero-delta consumption. Full native dedicated L3 status panel, per-symbol budget UI enforcement, and live-only verification remain P2/P3 (require entitlements for smoke). Sim/demo path keeps everything exercisable.
+
+Regression notes from prior work preserved. Re-open for trade stream, account v2, or full L3 panel when needed.

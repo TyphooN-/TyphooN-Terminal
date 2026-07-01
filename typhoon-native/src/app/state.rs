@@ -669,7 +669,7 @@ pub struct TyphooNApp {
     /// User preference for L2 DOM depth (clamped on use). Default 100, adjustable in window.
     /// Follow-up polish: makes depth user-controllable and "persisted" for the session.
     pub(crate) dom_depth: usize,
-    /// L3 status for foundation UI display (stub until auth entitlements).
+    /// L3 status for foundation UI display (full impl; real requires entitlements).
     pub(crate) kraken_l3_status: String,
     pub(crate) kraken_orderbook_ws_symbol: String,
     pub(crate) kraken_chart_l2_ws_symbol: String,
