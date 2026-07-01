@@ -53,6 +53,10 @@ impl ChartState {
     }
 
     pub fn begin_chart_camera_pan(&mut self, rect_width: f32, rect_height: f32) {
+        // Activate manual free-look on user pan start (TV/MT5 style).
+        // Ensures MTF cell body drags + single-chart parity set manual_view_override
+        // so live forming/trade updates (price/vol/ts) do not auto-recenter.
+        self.manual_view_override = true;
         // Do not rebuild the camera from rounded legacy fields once manual
         // free-look is active. `view_offset` is integer compatibility state;
         // `ChartCamera` is the authoritative fractional bar/price camera.
