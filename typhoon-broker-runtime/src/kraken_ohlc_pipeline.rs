@@ -226,6 +226,8 @@ pub fn plan_kraken_ws_streamers(
             .collect();
     }
     // Live-only low timeframes: no snapshot, no startup burst, start now.
+    // M1/M5 (and focused MTF low-TF) use public trades WS for live forming + WS-fresh.
+    // This coexists with bounded high-TF snapshots (highest-first staggered) for full-universe.
     let mut plan: Vec<(u32, bool, Duration)> = intervals_min
         .iter()
         .copied()
