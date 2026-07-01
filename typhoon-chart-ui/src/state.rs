@@ -747,6 +747,7 @@ impl ChartState {
     /// and set the dirty flag so draw_chart can early-out everything else.
     #[allow(dead_code)]
     pub fn apply_forming_bar_update(&mut self, bar: Bar) {
+        let old_len = self.bars.len();
         if let Some(last) = self.bars.last_mut() {
             if last.ts_ms == bar.ts_ms {
                 *last = bar;
@@ -760,6 +761,14 @@ impl ChartState {
         self.last_visible_bar_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
         // Reset live trade snapshot on new bar so previous forming trade doesn't bleed
         self.live_trade_vol = 0.0;
+
+        // Auto-follow for non-manual (free-look) cameras on actual bar close / length increase.
+        // Safe during live public trade streams; respects TV/MT5 manual override.
+        if !self.manual_view_override && self.bars.len() > old_len {
+            self.camera.on_data_len_changed(old_len, self.bars.len());
+            self.sync_camera_to_legacy();
+            self.mark_view_changed();
+        }
     }
 
     /// Call when a closed bar is added or the visible range structurally changes.
