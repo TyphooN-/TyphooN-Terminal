@@ -1538,13 +1538,15 @@ pub fn draw_chart(
         let max_w = (chart_rect.width() * 0.15).max(40.0);
         // Heuristic: treat as L3 if many levels (>4) or from recent L3 feed (status wired via orderbook)
         let looks_l3 = all_depth.len() > 4 || (chart.live_bid_size > 0.0 && all_depth.len() > 2);
-        if looks_l3 {
+        let label = if looks_l3 { "L3 depth" } else { "" };
+        let col = if looks_l3 { egui::Color32::from_rgb(80, 200, 120) } else { egui::Color32::from_rgb(160, 160, 80) };
+        if !label.is_empty() {
             painter.text(
                 egui::pos2(chart_rect.right() - 2.0, chart_rect.top() + 10.0),
                 egui::Align2::RIGHT_TOP,
-                "L3",
+                label,
                 egui::FontId::monospace(8.0),
-                egui::Color32::from_rgb(100, 255, 150),
+                col,
             );
         }
         // Simple binning: treat each level as its own 'bucket' for now (full binning by price can expand later)

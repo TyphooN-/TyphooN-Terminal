@@ -218,11 +218,16 @@ pub(super) fn render_live_orderbook_heatmap(
                     let age = get_age_secs(lev);
                     let age_txt = if age < 5.0 { "new" } else if age < 30.0 { "mid" } else { "old" };
                     let txt = format!("{} {} @ {:.4} x {:.4} ({})", side, &oid[..oid.len().min(8)], p, q, age_txt);
-                    let resp = ui.colored_label(col, txt);
-                    if resp.clicked() || ui.small_button("copy").clicked() {
+                    let is_selected = false; // could wire to app state for highlight-to-chart
+                    let label = if is_selected { egui::RichText::new(txt).strong() } else { egui::RichText::new(txt) };
+                    let resp = ui.colored_label(col, label);
+                    if resp.clicked() {
                         ui.ctx().copy_text(oid.to_string());
-                        // Interaction: could highlight in main chart or store selected_order
-                        ui.label(egui::RichText::new(format!("copied {}", &oid[..oid.len().min(6)])).small());
+                        // highlight-to-chart stub: log/select note for main chart / depth
+                        ui.label(egui::RichText::new(format!("selected {} for chart", &oid[..oid.len().min(6)])).small().color(egui::Color32::YELLOW));
+                    }
+                    if ui.small_button("copy").clicked() {
+                        ui.ctx().copy_text(oid.to_string());
                     }
                 }
             }

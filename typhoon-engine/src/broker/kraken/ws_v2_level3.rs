@@ -22,6 +22,8 @@ pub struct KrakenL3Level {
     // Exact wire text for CRC (mirrors book price_text/qty_text)
     pub price_text: Option<String>,
     pub qty_text: Option<String>,
+    // Runtime received time (millis since epoch) for age persistence/coloring even if wire ts absent
+    pub received_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -189,11 +191,11 @@ fn simulate_l3_delta(symbol: String, tick: u64) -> KrakenL3Delta {
     KrakenL3Delta {
         symbol,
         bids: vec![
-            KrakenL3Level { order_id: format!("B{}", tick), limit_price: base - 0.05, order_qty: 1.2 + (tick % 3) as f64 * 0.1, timestamp: ts.clone(), price_text: Some(format!("{:.4}", base - 0.05)), qty_text: Some("1.2".into()) },
-            KrakenL3Level { order_id: format!("B2{}", tick), limit_price: base - 0.1, order_qty: 0.8, timestamp: ts.clone(), price_text: Some(format!("{:.4}", base - 0.1)), qty_text: Some("0.8".into()) },
+            KrakenL3Level { order_id: format!("B{}", tick), limit_price: base - 0.05, order_qty: 1.2 + (tick % 3) as f64 * 0.1, timestamp: ts.clone(), price_text: Some(format!("{:.4}", base - 0.05)), qty_text: Some("1.2".into()), received_at_ms: None },
+            KrakenL3Level { order_id: format!("B2{}", tick), limit_price: base - 0.1, order_qty: 0.8, timestamp: ts.clone(), price_text: Some(format!("{:.4}", base - 0.1)), qty_text: Some("0.8".into()), received_at_ms: None },
         ],
         asks: vec![
-            KrakenL3Level { order_id: format!("A{}", tick), limit_price: base + 0.05, order_qty: 2.5, timestamp: ts, price_text: Some(format!("{:.4}", base + 0.05)), qty_text: Some("2.5".into()) },
+            KrakenL3Level { order_id: format!("A{}", tick), limit_price: base + 0.05, order_qty: 2.5, timestamp: ts, price_text: Some(format!("{:.4}", base + 0.05)), qty_text: Some("2.5".into()), received_at_ms: None },
         ],
         checksum: csum,
         is_snapshot: tick % 5 == 0,
@@ -242,6 +244,7 @@ fn parse_l3_side(side: Option<&Value>) -> Vec<KrakenL3Level> {
                     timestamp: l.get("timestamp").and_then(|t| t.as_str()).map(|s| s.to_string()),
                     price_text,
                     qty_text,
+                    received_at_ms: None,
                 });
             }
         }
@@ -359,11 +362,11 @@ mod tests {
         let snap = KrakenL3Delta {
             symbol: "TEST/USD".into(),
             bids: vec![
-                KrakenL3Level { order_id: "b1".into(), limit_price: 100.0, order_qty: 1.0, timestamp: None, price_text: Some("100.0".into()), qty_text: Some("1.0".into()) },
-                KrakenL3Level { order_id: "b2".into(), limit_price: 99.9, order_qty: 2.0, timestamp: None, price_text: Some("99.9".into()), qty_text: Some("2.0".into()) },
+                KrakenL3Level { order_id: "b1".into(), limit_price: 100.0, order_qty: 1.0, timestamp: None, price_text: Some("100.0".into()), qty_text: Some("1.0".into()), received_at_ms: None },
+                KrakenL3Level { order_id: "b2".into(), limit_price: 99.9, order_qty: 2.0, timestamp: None, price_text: Some("99.9".into()), qty_text: Some("2.0".into()), received_at_ms: None },
             ],
             asks: vec![
-                KrakenL3Level { order_id: "a1".into(), limit_price: 100.1, order_qty: 0.5, timestamp: None, price_text: Some("100.1".into()), qty_text: Some("0.5".into()) },
+                KrakenL3Level { order_id: "a1".into(), limit_price: 100.1, order_qty: 0.5, timestamp: None, price_text: Some("100.1".into()), qty_text: Some("0.5".into()), received_at_ms: None },
             ],
             checksum: None,
             is_snapshot: true,
@@ -379,7 +382,7 @@ mod tests {
         // delta modify
         let mod_delta = KrakenL3Delta {
             symbol: "TEST/USD".into(),
-            bids: vec![KrakenL3Level { order_id: "b1".into(), limit_price: 100.0, order_qty: 1.5, timestamp: None, price_text: Some("100.0".into()), qty_text: Some("1.5".into()) }],
+            bids: vec![KrakenL3Level { order_id: "b1".into(), limit_price: 100.0, order_qty: 1.5, timestamp: None, price_text: Some("100.0".into()), qty_text: Some("1.5".into()), received_at_ms: None }],
             asks: vec![],
             checksum: None,
             is_snapshot: false,
@@ -390,12 +393,86 @@ mod tests {
         // delete
         let del = KrakenL3Delta {
             symbol: "TEST/USD".into(),
-            bids: vec![KrakenL3Level { order_id: "b2".into(), limit_price: 0.0, order_qty: 0.0, timestamp: None, price_text: Some("0".into()), qty_text: Some("0".into()) }],
+            bids: vec![KrakenL3Level { order_id: "b2".into(), limit_price: 0.0, order_qty: 0.0, timestamp: None, price_text: Some("0".into()), qty_text: Some("0".into()), received_at_ms: None }],
             asks: vec![],
             checksum: None,
             is_snapshot: false,
         };
         state.apply_delta(&del);
         assert_eq!(state.bids.len(), 1);
+    }
+
+    #[test]
+    fn l3_checksum_apply_with_mismatch_and_age() {
+        let mut state = KrakenL3State { symbol: "TEST2/USD".into(), ..Default::default() };
+
+        let snap = KrakenL3Delta {
+            symbol: "TEST2/USD".into(),
+            bids: vec![KrakenL3Level {
+                order_id: "b1".into(),
+                limit_price: 50.0,
+                order_qty: 1.0,
+                timestamp: Some("2026-07-01T00:00:00Z".into()),
+                price_text: Some("50.0".into()),
+                qty_text: Some("1.0".into()),
+                received_at_ms: None,
+            }],
+            asks: vec![],
+            checksum: Some(12345678), // bogus for test
+            is_snapshot: true,
+        };
+
+        // mismatch: state not committed (safe design like L2), but Err returned and timestamp logic exercised via apply_delta
+        let res = state.apply_delta_with_checksum(&snap);
+        assert!(res.is_err());
+        assert_eq!(state.bids.len(), 0); // not applied on mismatch
+
+        // use plain apply for the snapshot to set state + timestamp
+        state.apply_delta(&snap);
+        assert_eq!(state.bids.len(), 1);
+        assert!(state.bids[0].timestamp.is_some());
+
+        // now a no-checksum delta (should apply cleanly)
+        let good = KrakenL3Delta {
+            symbol: "TEST2/USD".into(),
+            bids: vec![],
+            asks: vec![KrakenL3Level {
+                order_id: "a1".into(),
+                limit_price: 50.1,
+                order_qty: 0.5,
+                timestamp: None,
+                price_text: Some("50.1".into()),
+                qty_text: Some("0.5".into()),
+                received_at_ms: None,
+            }],
+            checksum: None,
+            is_snapshot: false,
+        };
+        let res = state.apply_delta_with_checksum(&good);
+        assert!(res.is_ok());
+        assert_eq!(state.asks.len(), 1);
+    }
+
+    #[test]
+    fn l3_parse_and_apply_fixture_style() {
+        // inline fixture-like JSON (as desired in ADR-109) — object form matching parser
+        let json = r#"{
+            "channel":"level3",
+            "type":"snapshot",
+            "data":[{
+                "symbol":"FIX/USD",
+                "bids":[{"order_id":"b1","limit_price":99.9,"order_qty":2.0,"timestamp":"2026-07-01T12:00:00Z"}],
+                "asks":[{"order_id":"a1","limit_price":100.1,"order_qty":1.0}]
+            }]
+        }"#;
+
+        let deltas = parse_l3_message(json);
+        assert!(!deltas.is_empty());
+        let mut state = KrakenL3State { symbol: "FIX/USD".into(), ..Default::default() };
+        for d in &deltas {
+            let _ = state.apply_delta_with_checksum(d);
+        }
+        assert_eq!(state.bids.len(), 1);
+        assert_eq!(state.asks.len(), 1);
     }
 }
