@@ -752,6 +752,8 @@ impl ChartState {
         }
         self.forming_bar_dirty = true;
         self.last_visible_bar_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
+        // Reset live trade snapshot on new bar so previous forming trade doesn't bleed
+        self.live_trade_vol = 0.0;
     }
 
     /// Call when a closed bar is added or the visible range structurally changes.
@@ -760,5 +762,6 @@ impl ChartState {
         self.visible_bars_gen = self.visible_bars_gen.wrapping_add(1);
         self.forming_bar_dirty = false;
         self.last_visible_bar_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
+        self.live_trade_vol = 0.0; // clear live trade from prior forming bar
     }
 }
