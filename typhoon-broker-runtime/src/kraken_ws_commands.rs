@@ -591,6 +591,17 @@ pub async fn handle_kraken_ws_command(
                         is_snapshot: false,
                     };
                     let _ = trades_msg_tx.send(BrokerMsg::KrakenWsTicker(trade_ticker));
+
+                    // Also advance WS-fresh for low-TFs (M1/M5) using the trade timestamp.
+                    // Keeps MTF Grid focused low-TF cells "fresh" in the sync scheduler, reducing
+                    // unnecessary REST refetches while live trades are flowing. O(1) per trade.
+                    let trade_ts_ms = (t.time * 1000.0) as i64;
+                    let _ = trades_msg_tx.send(BrokerMsg::KrakenWsBarsCommitted {
+                        fresh: vec![
+                            (t.symbol.clone(), "1Min".to_string(), trade_ts_ms),
+                            (t.symbol.clone(), "5Min".to_string(), trade_ts_ms),
+                        ],
+                    });
                 }
             });
             let state_symbol = ws_symbol.clone();
