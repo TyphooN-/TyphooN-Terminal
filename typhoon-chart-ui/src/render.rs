@@ -1526,7 +1526,12 @@ pub fn draw_chart(
     );
 
     // ── Volume Profile overlay (volume-at-price with POC + Value Area) ─────
-    draw_volume_profile_overlay(painter, chart_rect, bars, price_min, price_max, flags);
+    let live_trade = if chart.live_trade_vol > 0.0 && chart.live_trade_price > 0.0 {
+        Some((chart.live_trade_price, chart.live_trade_vol, chart.live_trade_is_buy))
+    } else {
+        None
+    };
+    draw_volume_profile_overlay(painter, chart_rect, bars, price_min, price_max, flags, live_trade);
 
     // ── Live Depth Profile (binned from L2/L3 book levels) — full book depth
     // Bins live_depth_bids/asks (price, size) into horizontal volume-at-price bars.

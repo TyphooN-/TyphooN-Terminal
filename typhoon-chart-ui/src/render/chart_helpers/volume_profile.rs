@@ -8,6 +8,7 @@ pub(crate) fn draw_volume_profile_overlay(
     price_min: f64,
     price_max: f64,
     flags: &IndicatorFlags,
+    live_trade: Option<(f64, f64, bool)>, // (price, vol, is_buy) for exact trade binning from public trades
 ) {
     // ── Volume Profile overlay (volume-at-price with POC + Value Area) ─────
     if flags.price_histogram {
@@ -48,6 +49,21 @@ pub(crate) fn draw_volume_profile_overlay(
                         }
                         max_vol = max_vol.max(buckets[b]);
                     }
+                }
+            }
+        }
+
+        // Exact live trade from public trades WS (O(1) point bin at precise execution price)
+        if let Some((price, vol, is_buy)) = live_trade {
+            if vol > 0.0 && price > 0.0 && price >= price_min && price <= price_max {
+                let y_frac = ((price_max - price) / (price_max - price_min)).clamp(0.0, 1.0);
+                let b = (y_frac * num_buckets as f64) as usize;
+                if b < num_buckets {
+                    buckets[b] += vol;
+                    if is_buy {
+                        buy_vol[b] += vol;
+                    }
+                    max_vol = max_vol.max(buckets[b]);
                 }
             }
         }
