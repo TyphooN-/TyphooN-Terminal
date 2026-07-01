@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use super::ws_v2::{KRAKEN_WS_V2_LEVEL3_URL, build_ws_v2_subscribe_frame, next_ws_v2_req_id};
+use super::ws_v2::{KRAKEN_WS_V2_LEVEL3_URL, build_ws_v2_subscribe_frame};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -39,6 +39,7 @@ pub struct KrakenL3Delta {
 /// - Emit deltas for downstream (charts depth bins, Bookmap per-order, DOM)
 pub async fn run_level3_streamer(
     symbols: Vec<String>,
+    token: Option<String>,  // pass Some(token) when entitled
     l3_tx: mpsc::Sender<KrakenL3Delta>,
     event_tx: mpsc::UnboundedSender<String>,
 ) {
@@ -51,7 +52,7 @@ pub async fn run_level3_streamer(
         if l3_tx.is_closed() {
             return;
         }
-        match run_level3_streamer_once(&symbols, &l3_tx, &event_tx).await {
+        match run_level3_streamer_once(&symbols, &token, &l3_tx, &event_tx).await {
             Ok(()) => consecutive_failures = 0,
             Err(reason) => {
                 consecutive_failures = consecutive_failures.saturating_add(1);
@@ -70,26 +71,28 @@ pub async fn run_level3_streamer(
 
 async fn run_level3_streamer_once(
     symbols: &[String],
+    token: &Option<String>,
     l3_tx: &mpsc::Sender<KrakenL3Delta>,
     event_tx: &mpsc::UnboundedSender<String>,
 ) -> Result<(), String> {
-    // Real L3 is authenticated. For wiring/demo we connect to LEVEL3_URL.
-    // When entitled: pass token in subscribe params.
     let (ws_stream, _) = connect_async(KRAKEN_WS_V2_LEVEL3_URL)
         .await
         .map_err(|e| format!("L3 ws connect failed: {e}"))?;
     let (mut sink, mut stream) = ws_stream.split();
 
-    let _ = event_tx.send("L3 connected (stub - token required for real)".into());
+    let connected_msg = if token.is_some() { "L3 connected (auth path)" } else { "L3 connected (demo/sim - no token)" };
+    let _ = event_tx.send(connected_msg.into());
 
-    // Subscribe (token omitted here; real path adds "token": <ws_token>)
+    // Subscribe with token if provided (actual auth wiring)
     let subscribe_frame = build_ws_v2_subscribe_frame(
         "level3",
         symbols,
         {
             let mut p = serde_json::Map::new();
             p.insert("snapshot".to_string(), serde_json::Value::Bool(true));
-            // p.insert("token".to_string(), serde_json::Value::String(token));
+            if let Some(t) = token {
+                p.insert("token".to_string(), serde_json::Value::String(t.clone()));
+            }
             p
         },
     );
@@ -99,25 +102,39 @@ async fn run_level3_streamer_once(
 
     let _ = event_tx.send(format!("L3 subscribed for {:?}", symbols));
 
-    // Demo: emit simulated L3 data to exercise parse, depth binning, Bookmap per-order.
-    // In real: loop on stream, parse, send real deltas.
+    // Real consume: read WS messages, parse L3, emit. Fall back to sim if no token or empty.
     let mut tick = 0u64;
     loop {
         if l3_tx.is_closed() {
             return Ok(());
         }
 
-        // Simulate L3 snapshot/update with per-order data (for demo when no entitlements)
-        let sim = simulate_l3_delta(symbols.get(0).cloned().unwrap_or("DEMO/USD".into()), tick);
-        if l3_tx.send(sim).await.is_err() {
-            return Ok(());
+        // Real WS path: consume incoming messages
+        let received = tokio::time::timeout(Duration::from_millis(1500), stream.next()).await;
+        match received {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                for delta in parse_l3_message(&text) {
+                    if l3_tx.send(delta).await.is_err() {
+                        return Ok(());
+                    }
+                }
+            }
+            _ => {
+                // Fallback/demo sim when no real data or no token
+                if token.is_none() {
+                    let sim = simulate_l3_delta(symbols.get(0).cloned().unwrap_or("DEMO/USD".into()), tick);
+                    if l3_tx.send(sim).await.is_err() {
+                        return Ok(());
+                    }
+                }
+            }
         }
 
-        // In real impl, read from stream here like book:
-        // match stream.next().await { Some(Ok(Message::Text(text))) => { for delta in parse_l3_message(&text) { ... } } ... }
-
         tick += 1;
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        // small sleep only on fallback path; real stream drives rate
+        if token.is_none() {
+            tokio::time::sleep(Duration::from_millis(800)).await;
+        }
     }
 }
 
@@ -181,4 +198,50 @@ fn parse_l3_side(side: Option<&Value>) -> Vec<KrakenL3Level> {
         }
     }
     res
+}
+
+/// Deeper L3 state for per-order delta apply (add/mod/delete by order_id).
+#[derive(Debug, Clone, Default)]
+pub struct KrakenL3State {
+    pub symbol: String,
+    pub bids: Vec<KrakenL3Level>,
+    pub asks: Vec<KrakenL3Level>,
+    pub last_checksum: Option<u64>,
+}
+
+impl KrakenL3State {
+    pub fn apply_delta(&mut self, delta: &KrakenL3Delta) {
+        self.symbol = delta.symbol.clone();
+        if delta.is_snapshot {
+            self.bids.clear();
+            self.asks.clear();
+        }
+        apply_l3_levels(&mut self.bids, &delta.bids);
+        apply_l3_levels(&mut self.asks, &delta.asks);
+        self.last_checksum = delta.checksum;
+    }
+
+    /// Basic L3 checksum stub (extend to full CRC32 when real feed active).
+    pub fn compute_checksum(&self) -> u32 {
+        let mut h: u32 = 0;
+        for l in self.bids.iter().chain(self.asks.iter()) {
+            h = h.wrapping_add(l.order_id.len() as u32);
+            h = h.wrapping_add((l.limit_price * 1e6) as u32);
+        }
+        h
+    }
+}
+
+fn apply_l3_levels(levels: &mut Vec<KrakenL3Level>, updates: &[KrakenL3Level]) {
+    for u in updates {
+        if u.order_qty <= 0.0 {
+            levels.retain(|l| l.order_id != u.order_id);
+        } else if let Some(ex) = levels.iter_mut().find(|l| l.order_id == u.order_id) {
+            ex.limit_price = u.limit_price;
+            ex.order_qty = u.order_qty;
+            ex.timestamp = u.timestamp.clone();
+        } else {
+            levels.push(u.clone());
+        }
+    }
 }

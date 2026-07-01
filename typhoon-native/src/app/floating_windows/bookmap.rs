@@ -150,22 +150,46 @@ pub(super) fn render_live_orderbook_heatmap(
                 bid_color,
             );
         }
+        // Per-order individual markers for L3 (small vertical ticks/dots)
+        if is_l3 {
+            let order_id = bid.get("order_id").and_then(|o| o.as_str()).unwrap_or("");
+            let mx = rect.left() + (width * frac * 0.5);
+            let marker = egui::pos2(mx, y + row_h * 0.3);
+            painter.circle_filled(marker, 1.5, egui::Color32::from_rgb(180, 255, 180));
+            if idx < 4 && !order_id.is_empty() {
+                painter.text(
+                    egui::pos2(mx + 3.0, y),
+                    egui::Align2::LEFT_TOP,
+                    &order_id[..order_id.len().min(6)],
+                    egui::FontId::monospace(6.0),
+                    egui::Color32::from_rgb(150, 220, 150),
+                );
+            }
+        }
     }
 
-    // Hover tooltip with top levels + sizes (rich L2)
+    // Hover tooltip with top levels + sizes (rich L2/L3)
     if resp.hovered() {
-        let mut tip = format!("L2 snapshot {}\n", ts);
+        let mut tip = if is_l3 {
+            format!("L3 per-order snapshot {}\nOrders bid: {} ask: {}\n", ts, order_count_bid, order_count_ask)
+        } else {
+            format!("L2 snapshot {}\n", ts)
+        };
         if let Some(b) = bids.first() {
-            let p = b["price"].as_f64().unwrap_or(0.0);
-            let s = b["size"].as_f64().unwrap_or(0.0);
-            tip.push_str(&format!("Top Bid: {} x {}\n", format_price(p), s));
+            let p = get_price(b);
+            let s = get_size(b);
+            let oid = b.get("order_id").and_then(|o| o.as_str()).unwrap_or("");
+            tip.push_str(&format!("Top Bid: {} x {} {}
+", format_price(p), s, oid));
         }
         if let Some(a) = asks.first() {
-            let p = a["price"].as_f64().unwrap_or(0.0);
-            let s = a["size"].as_f64().unwrap_or(0.0);
-            tip.push_str(&format!("Top Ask: {} x {}\n", format_price(p), s));
+            let p = get_price(a);
+            let s = get_size(a);
+            let oid = a.get("order_id").and_then(|o| o.as_str()).unwrap_or("");
+            tip.push_str(&format!("Top Ask: {} x {} {}
+", format_price(p), s, oid));
         }
-        tip.push_str("Hover for live depth density");
+        tip.push_str(if is_l3 { "Per-order markers shown" } else { "Hover for live depth density" });
         resp.on_hover_text(tip);
     }
 

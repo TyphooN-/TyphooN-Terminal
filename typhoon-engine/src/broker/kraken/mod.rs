@@ -50,7 +50,7 @@ pub use self::ws_v2_book::{
     parse_book_message, run_book_streamer,
 };
 pub use self::ws_v2_level3::{
-    KrakenL3Level, KrakenL3Delta, run_level3_streamer,
+    KrakenL3Level, KrakenL3Delta, KrakenL3State, run_level3_streamer,
 };
 pub use self::ws_v2_ticker::{
     KRAKEN_WS_V2_TICKER_CHANNEL, KrakenTickerStreamerEvent, KrakenWsTicker,

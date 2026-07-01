@@ -605,8 +605,18 @@ pub async fn handle_kraken_ws_command(
             let display_symbol = symbol.clone();
             let update_msg_tx = msg_tx.clone();
             // Real streamer wiring for L3 (per-order). Requires entitlements + token.
-            // Uses KRAKEN_WS_V2_LEVEL3_URL. For now demo emits L3 deltas (real connect+auth path wired).
-            // Deltas feed to orderbook update (L3 keys supported), chart depth bins (more levels), Bookmap per-order.
+            // Actual auth token wiring: fetch via get_websockets_token_string when available.
+            let ws_client = kraken_ws_broker.as_ref().or(kraken_broker.as_ref());
+            let maybe_token = if let Some(kb) = ws_client {
+                kb.get_websockets_token_string().await.ok()
+            } else {
+                None
+            };
+            if let Some(ref t) = maybe_token {
+                let _ = update_msg_tx.send(BrokerMsg::OrderResult(format!(
+                    "Kraken L3: token obtained (len={}), using auth path", t.len()
+                )));
+            }
             tokio::spawn(async move {
                 let (l3_tx, mut l3_rx) = tokio::sync::mpsc::channel::<
                     typhoon_engine::broker::kraken::KrakenL3Delta,
@@ -615,22 +625,21 @@ pub async fn handle_kraken_ws_command(
                 let streamer_handle = tokio::spawn(async move {
                     typhoon_engine::broker::kraken::run_level3_streamer(
                         vec![ws_symbol.clone()],
+                        maybe_token,
                         l3_tx,
                         event_tx,
                     )
                     .await;
                 });
                 let _ = update_msg_tx.send(BrokerMsg::OrderResult(format!(
-                    "Kraken L3 streamer starting for {} (real wiring; token/entitlements for production)", display_symbol
+                    "Kraken L3 streamer starting for {} (real wiring + token path)", display_symbol
                 )));
                 loop {
                     tokio::select! {
                         maybe_delta = l3_rx.recv() => {
                             let Some(delta) = maybe_delta else { break; };
-                            // Convert L3 delta to JSON compatible with existing orderbook/DOM/Bookmap/depth paths
                             let text = kraken_l3_to_json(&display_symbol, &delta);
                             let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
-                            // Also top for quotes if wanted
                             if let (Some(top_bid), Some(top_ask)) = (delta.bids.first(), delta.asks.first()) {
                                 let _ = update_msg_tx.send(BrokerMsg::KrakenBookQuoteTick {
                                     symbol: display_symbol.clone(),
