@@ -661,6 +661,7 @@ pub async fn handle_kraken_ws_command(
             let update_msg_tx = msg_tx.clone();
             // Real streamer wiring for L3 (per-order). Requires entitlements + token.
             // Actual auth token wiring: fetch via get_websockets_token_string when available.
+            // Edge: CRC resub + age for MTF/full-universe live; bounded channel (1024).
             let ws_client = kraken_ws_broker.as_ref().or(kraken_broker.as_ref());
             let maybe_token = if let Some(kb) = ws_client {
                 kb.get_websockets_token_string().await.ok()
