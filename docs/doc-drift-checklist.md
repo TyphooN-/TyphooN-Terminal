@@ -27,7 +27,7 @@
 - [x] L1 (ticker/quotes with sizes, O(1) dispatch) — consistent.
 - [x] Kraken Futures bars/sync — present in code (bar_fetch) and docs.
 - [x] Alpaca as assist/fallback + trading (tier-autotuning, catalog-breadth) — matches ADRs 087/112/113.
-- [x] M1/M5 rules (Kraken Spot/Equities valid low-TF targets; assist rows non-target) — referenced in floating-windows-perf-plan and memory, but not prominently in main ADRs/docs.
+- [x] M1/M5 rules (Kraken Spot/Equities valid low-TF targets; assist rows non-target) — live public trades WS + forming vol + WS-fresh + sync priority now wired for low-TF MTF. Referenced + implemented in code paths.
 - [x] Sync schedulers / O(1) / coverage-first / AIMD / pending-work (ADRs 029, 087, 094, 098, 102, 107, 128) — language generally aligns with current bounded queues, backfill-complete markers, etc.
 - [~] Many "pending work", "missing bars", "gap fill" references in sync ADRs — mostly accurate descriptions of ongoing mechanisms, not outdated claims.
 - [x] v1 public_book.rs kept for legacy/compat — correctly noted in ADR-109.
