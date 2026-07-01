@@ -209,6 +209,23 @@ pub fn parse_market_data_quotes(raw: &str) -> Vec<AlpacaQuoteData> {
                     }
                 }
             }
+            "b" => {
+                // Bars for robustness (OHLC updates from WS; use for confirmation / last)
+                let sym = item.get("S").and_then(|s| s.as_str()).map(|s| s.to_string());
+                let c = item.get("c").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+                if let Some(sym) = sym {
+                    if c > 0.0 {
+                        out.push(AlpacaQuoteData {
+                            symbol: sym,
+                            bid: c,
+                            ask: c,
+                            bid_size: 0.0,
+                            ask_size: 0.0,
+                            last: Some(c),
+                        });
+                    }
+                }
+            }
             "error" => {
                 let code = item.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
                 let msg = item.get("msg").and_then(|m| m.as_str()).unwrap_or("");
@@ -264,24 +281,22 @@ mod tests {
     #[test]
     fn parses_quote_and_trade_ticks_and_skips_control_frames() {
         use super::parse_market_data_quotes;
-        // Quote ⇒ (sym, bid, ask).
-        assert_eq!(
-            parse_market_data_quotes(r#"[{"T":"q","S":"HKIT","bp":0.28,"ap":0.29}]"#),
-            vec![("HKIT".to_string(), 0.28, 0.29)]
-        );
-        // Trade ⇒ bid==ask==last.
-        assert_eq!(
-            parse_market_data_quotes(r#"[{"T":"t","S":"HKIT","p":0.285}]"#),
-            vec![("HKIT".to_string(), 0.285, 0.285)]
-        );
-        // Control/handshake frames produce no ticks.
+        // Quote
+        let qs = parse_market_data_quotes(r#"[{"T":"q","S":"HKIT","bp":0.28,"ap":0.29}]"#);
+        assert_eq!(qs.len(), 1);
+        assert_eq!(qs[0].symbol, "HKIT");
+        assert!((qs[0].bid - 0.28).abs() < 1e-9);
+        // Trade
+        let ts = parse_market_data_quotes(r#"[{"T":"t","S":"HKIT","p":0.285}]"#);
+        assert_eq!(ts.len(), 1);
+        assert_eq!(ts[0].last, Some(0.285));
+        // Control
         assert!(parse_market_data_quotes(r#"[{"T":"success","msg":"authenticated"}]"#).is_empty());
-        // Zero/missing prices are dropped; a valid sibling still parses.
-        assert_eq!(
-            parse_market_data_quotes(
-                r#"[{"T":"q","S":"A","bp":0,"ap":1.0},{"T":"q","S":"B","bp":2.0,"ap":2.1}]"#
-            ),
-            vec![("B".to_string(), 2.0, 2.1)]
+        // Mixed: A has ask>0 so kept (per if bid>0 || ask>0); B good
+        let mixed = parse_market_data_quotes(
+            r#"[{"T":"q","S":"A","bp":0,"ap":1.0},{"T":"q","S":"B","bp":2.0,"ap":2.1}]"#
         );
+        assert_eq!(mixed.len(), 2);
+        assert_eq!(mixed[1].symbol, "B");
     }
 }

@@ -618,53 +618,70 @@ pub async fn handle_kraken_ws_command(
                 )));
             }
             tokio::spawn(async move {
-                let (l3_tx, mut l3_rx) = tokio::sync::mpsc::channel::<
-                    typhoon_engine::broker::kraken::KrakenL3Delta,
-                >(1024);
-                let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-                let streamer_handle = tokio::spawn(async move {
-                    typhoon_engine::broker::kraken::run_level3_streamer(
-                        vec![ws_symbol.clone()],
-                        maybe_token,
-                        l3_tx,
-                        event_tx,
-                    )
-                    .await;
-                });
-                let _ = update_msg_tx.send(BrokerMsg::OrderResult(format!(
-                    "Kraken L3 streamer starting for {} (real wiring + token path)", display_symbol
-                )));
-                let mut l3_state = typhoon_engine::broker::kraken::KrakenL3State::default();
+                let mut resub_count: u32 = 0;
                 loop {
-                    tokio::select! {
-                        maybe_delta = l3_rx.recv() => {
-                            let Some(delta) = maybe_delta else { break; };
-                            // Maintain exposed state
-                            let _ = l3_state.apply_delta(&delta);
-                            let text = kraken_l3_to_json(&display_symbol, &delta);
-                            let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
-                            // Send checksum status via event if present
-                            if let Some(cs) = delta.checksum {
-                                let _ = update_msg_tx.send(BrokerMsg::KrakenWsStatus { status: "L3".into(), message: format!("checksum {}", cs) });
+                    let (l3_tx, mut l3_rx) = tokio::sync::mpsc::channel::<
+                        typhoon_engine::broker::kraken::KrakenL3Delta,
+                    >(1024);
+                    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                    let streamer_symbol = ws_symbol.clone();
+                    let token = maybe_token.clone();
+                    let streamer_handle = tokio::spawn(async move {
+                        typhoon_engine::broker::kraken::run_level3_streamer(
+                            vec![streamer_symbol],
+                            token,
+                            l3_tx,
+                            event_tx,
+                        )
+                        .await;
+                    });
+                    let _ = update_msg_tx.send(BrokerMsg::OrderResult(format!(
+                        "Kraken L3 streamer starting for {} (real wiring + token path)", display_symbol
+                    )));
+                    let mut l3_state = typhoon_engine::broker::kraken::KrakenL3State::default();
+                    let mut retry = false;
+                    loop {
+                        tokio::select! {
+                            maybe_delta = l3_rx.recv() => {
+                                let Some(delta) = maybe_delta else { break; };
+                                // Maintain state with CRC validation for robustness (resub on mismatch)
+                                match l3_state.apply_delta_with_checksum(&delta) {
+                                    Ok(_) => {
+                                        let text = kraken_l3_to_json(&display_symbol, &delta);
+                                        let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
+                                        if let (Some(top_bid), Some(top_ask)) = (delta.bids.first(), delta.asks.first()) {
+                                            let _ = update_msg_tx.send(BrokerMsg::KrakenBookQuoteTick {
+                                                symbol: display_symbol.clone(),
+                                                bid: top_bid.limit_price,
+                                                ask: top_ask.limit_price,
+                                                bid_size: top_bid.order_qty,
+                                                ask_size: top_ask.order_qty,
+                                            });
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = update_msg_tx.send(BrokerMsg::Error(format!(
+                                            "Kraken L3 CRC mismatch {} exp={} act={}; forcing resub for snapshot",
+                                            e.symbol, e.expected, e.actual
+                                        )));
+                                        retry = true;
+                                        break;  // abort streamer; restart for fresh snapshot
+                                    }
+                                }
                             }
-                            if let (Some(top_bid), Some(top_ask)) = (delta.bids.first(), delta.asks.first()) {
-                                let _ = update_msg_tx.send(BrokerMsg::KrakenBookQuoteTick {
-                                    symbol: display_symbol.clone(),
-                                    bid: top_bid.limit_price,
-                                    ask: top_ask.limit_price,
-                                    bid_size: top_bid.order_qty,
-                                    ask_size: top_ask.order_qty,
-                                });
-                            }
-                        }
-                        maybe_event = event_rx.recv() => {
-                            if let Some(ev) = maybe_event {
-                                let _ = update_msg_tx.send(BrokerMsg::KrakenWsStatus { status: "L3 (real-feed CRC + age + MTF)".into(), message: ev });
+                            maybe_event = event_rx.recv() => {
+                                if let Some(ev) = maybe_event {
+                                    let _ = update_msg_tx.send(BrokerMsg::KrakenWsStatus { status: "L3 (real-feed CRC + age + MTF)".into(), message: ev });
+                                }
                             }
                         }
                     }
+                    streamer_handle.abort();
+                    if !retry { break; }
+                    resub_count += 1;
+                    if resub_count > 5 { break; }  // bound to avoid spam
+                    tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(resub_count.min(3)))).await;
                 }
-                let _ = streamer_handle.await;
             });
         }
         _ => {}

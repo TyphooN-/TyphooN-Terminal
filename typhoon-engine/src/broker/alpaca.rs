@@ -956,6 +956,8 @@ impl AlpacaBroker {
             "action": action,
             "quotes": symbols,
             "trades": symbols,
+            "bars": symbols,  // additional reliable OHLC for robustness (1m+ depending on feed)
+            "orderbooks": symbols,  // depth snapshots where supported (crypto especially; O(1) per-symbol)
         });
         ws_stream
             .send(Message::Text(payload.to_string().into()))
