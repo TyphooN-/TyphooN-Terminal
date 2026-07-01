@@ -115,6 +115,21 @@ impl ChartState {
         self.mark_view_changed();
     }
 
+    pub fn zoom_chart_price_around(&mut self, factor: f64, target_price: f64) {
+        let (natural_center, natural_span) =
+            self.natural_visible_price_view().unwrap_or((0.0, 1.0));
+        self.camera
+            .zoom_price_around(factor, target_price, natural_center, natural_span);
+        self.sync_camera_to_legacy();
+        self.mark_view_changed();
+    }
+
+    pub fn zoom_chart_bars_around(&mut self, factor: f64, target_bar: f64) {
+        self.camera.zoom_bars_around(factor, target_bar, self.bars.len());
+        self.sync_camera_to_legacy();
+        self.mark_view_changed();
+    }
+
     pub fn mark_view_changed(&mut self) {
         // Camera movement changes pixels even when no new bars arrive. The
         // renderer's live-WS early-out keys off `visible_bars_gen`; without

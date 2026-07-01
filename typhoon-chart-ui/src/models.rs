@@ -209,6 +209,28 @@ impl ChartCamera {
         self.follow_latest = false;
     }
 
+    /// Zoom price around a specific target price (for mouse-centered scroll).
+    pub fn zoom_price_around(
+        &mut self,
+        factor: f64,
+        target_price: f64,
+        natural_price_center: f64,
+        natural_price_span: f64,
+    ) {
+        let factor = factor.clamp(0.01, 100.0);
+        if self.price_center.is_none() || self.price_span.is_none() {
+            self.set_price_view(natural_price_center, natural_price_span);
+        }
+        let current_center = self.price_center.unwrap_or(natural_price_center);
+        let current_span = self.price_span.unwrap_or(natural_price_span).max(f64::EPSILON);
+        let new_span = current_span / factor;
+        // Adjust center so that target_price stays at the same relative position in the view.
+        let rel = (target_price - current_center) / current_span;
+        let new_center = target_price - rel * new_span;
+        self.set_price_view(new_center, new_span);
+        self.follow_latest = false;
+    }
+
     pub fn zoom_bars_by(&mut self, factor: f64, data_len: usize) {
         if data_len == 0 {
             return;
@@ -216,6 +238,24 @@ impl ChartCamera {
         let old_right_edge = self.right_edge_bar();
         self.bars_visible = (self.bars_visible * factor).clamp(10.0, data_len.max(10) as f64);
         self.set_right_edge_bar(old_right_edge, data_len);
+        self.follow_latest = false;
+    }
+
+    /// Zoom bars (time) around a target bar index (for mouse-centered scroll).
+    /// target_bar is the data index under the mouse.
+    pub fn zoom_bars_around(&mut self, factor: f64, target_bar: f64, data_len: usize) {
+        if data_len == 0 {
+            return;
+        }
+        let old_right = self.right_edge_bar();
+        let old_visible = self.bars_visible;
+        let new_visible = (old_visible * factor).clamp(10.0, data_len.max(10) as f64);
+        // Adjust right_edge so that target_bar stays fixed in the view.
+        // Approximate: the relative position in the visible window.
+        let rel = (old_right - target_bar) / old_visible.max(1.0);
+        let new_right = target_bar + rel * new_visible;
+        self.bars_visible = new_visible;
+        self.set_right_edge_bar(new_right, data_len);
         self.follow_latest = false;
     }
 

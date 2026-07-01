@@ -63,8 +63,10 @@ impl TyphooNApp {
                     }
                 } else {
                     // Scroll on chart → horizontal zoom (time axis, progressive)
+                    // Use around-mid for basic centered zoom support (full mouse-cursor centering can use hover bar computation later).
                     for chart in &mut self.charts {
-                        Self::handle_zoom(chart, scroll_delta);
+                        let mid_bar = chart.camera.right_edge_bar() - (chart.camera.bars_visible / 2.0);
+                        chart.zoom_chart_bars_around((1.0 + (scroll_delta as f64 * 0.002).clamp(-0.08, 0.08)), mid_bar.max(0.0));
                     }
                 }
             }
@@ -1003,7 +1005,8 @@ impl TyphooNApp {
                 if ptr_in_cell && !scaling_this_cell {
                     let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
                     if scroll != 0.0 {
-                        Self::handle_zoom(chart, scroll);
+                        let mid_bar = chart.camera.right_edge_bar() - (chart.camera.bars_visible / 2.0);
+                        chart.zoom_chart_bars_around((1.0 + (scroll as f64 * 0.002).clamp(-0.08, 0.08)), mid_bar.max(0.0));
                     }
                 }
 
