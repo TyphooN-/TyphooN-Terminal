@@ -594,6 +594,9 @@ pub struct TyphooNApp {
     /// set actually changes, throttled.
     pub(crate) alpaca_quote_sub_sig: Option<u64>,
     pub(crate) alpaca_quote_sub_at: Option<std::time::Instant>,
+    /// Current Alpaca market-data WS feed ("sip" or "iex"). Used for
+    /// feed-aware subscription caps (IEX limited to ~30 symbols).
+    pub(crate) alpaca_market_data_feed: Option<String>,
     /// Unix timestamp of last successful orders refresh.
     pub(crate) orders_last_update_ts: i64,
     /// User-managed watchlist symbols (persisted in session).

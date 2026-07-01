@@ -2514,6 +2514,10 @@ pub enum BrokerMsg {
     /// Real-time Alpaca market-data tick (symbol, bid, ask). A trade print is
     /// delivered as bid==ask==last. Non-logging, high-frequency.
     AlpacaQuote(String, f64, f64),
+    /// Chosen Alpaca market-data feed for the current WS connection.
+    /// "sip" (entitled full) or "iex" (free real-time). Used by UI for
+    /// feed-aware subscription caps and diagnostics.
+    AlpacaMarketDataFeed(String),
     KrakenTrades(Vec<crate::broker::kraken::KrakenTrade>),
     KrakenLiveTrade(crate::broker::kraken::KrakenTrade),
     KrakenOpenOrders(Vec<crate::broker::kraken::KrakenOrder>),

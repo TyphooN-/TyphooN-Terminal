@@ -142,9 +142,12 @@ impl TyphooNApp {
         if let Some(chart) = self.charts.get(self.active_tab) {
             push(&chart.symbol);
         }
-        // Conservative cap. IEX (free real-time) has a documented ~30 symbol WS limit.
-        // SIP is higher. Keep <=30 until we have live feed feedback to make it adaptive.
-        set.into_iter().take(30).collect()
+        let cap = match self.alpaca_market_data_feed.as_deref() {
+            Some("sip") | Some("SIP") => 100, // entitled SIP has much higher limits
+            Some("iex") | Some("IEX") | None => 30, // free IEX limit (or unknown)
+            _ => 30,
+        };
+        set.into_iter().take(cap).collect()
     }
 
     pub(super) fn handle_order_result(&mut self, msg: String) {

@@ -110,6 +110,7 @@ pub async fn start_alpaca_quote_stream(
 ) -> Option<tokio::sync::mpsc::Sender<Vec<String>>> {
     match b.start_market_data_ws().await {
         Ok((mut rx, control, feed)) => {
+            let _ = broker_msg_tx.send(BrokerMsg::AlpacaMarketDataFeed(feed.to_string()));
             let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
                 "Alpaca market-data stream connected ({})",
                 feed.to_uppercase()
@@ -166,10 +167,15 @@ pub fn parse_market_data_quotes(raw: &str) -> Vec<(String, f64, f64)> {
                     }
                 }
             }
-            "error" => tracing::warn!(
-                "Alpaca data-stream error: {}",
-                item.get("msg").and_then(|m| m.as_str()).unwrap_or("")
-            ),
+            "error" => {
+                let code = item.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
+                let msg = item.get("msg").and_then(|m| m.as_str()).unwrap_or("");
+                if code == 406 || msg.to_lowercase().contains("subscription") || msg.contains("limit") {
+                    tracing::warn!("Alpaca WS subscription limit hit (406 or limit): {} (code={})", msg, code);
+                } else {
+                    tracing::warn!("Alpaca data-stream error (code={}): {}", code, msg);
+                }
+            }
             "success" => {
                 let msg = item.get("msg").and_then(|m| m.as_str()).unwrap_or("");
                 if msg.contains("subscribed") || msg.contains("subscription") {

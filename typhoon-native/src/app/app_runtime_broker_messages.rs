@@ -158,6 +158,9 @@ impl TyphooNApp {
                 BrokerMsg::AlpacaQuote(symbol, bid, ask) => {
                     self.handle_alpaca_quote(symbol, bid, ask);
                 }
+                BrokerMsg::AlpacaMarketDataFeed(feed) => {
+                    self.alpaca_market_data_feed = Some(feed);
+                }
                 BrokerMsg::WatchlistQuotes(rows) => {
                     self.handle_watchlist_quotes(rows);
                 }
