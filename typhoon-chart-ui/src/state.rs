@@ -475,6 +475,18 @@ impl ChartState {
         true
     }
 
+    /// Apply a real-time executed trade: update forming price (close/high/low) + accumulate trade volume into the current forming bar.
+    /// O(1) per trade. Used for Kraken public trades feed (and MTF cells via chart_by_bare).
+    pub fn apply_forming_trade(&mut self, price: f64, trade_vol: f64) -> bool {
+        let price_updated = self.apply_forming_price_update(price);
+        if price_updated && trade_vol > 0.0 && trade_vol.is_finite() {
+            if let Some(bar) = self.bars.last_mut() {
+                bar.volume += trade_vol;
+            }
+        }
+        price_updated
+    }
+
     pub fn apply_live_quote_update(&mut self, bid: f64, ask: f64, bid_size: f64, ask_size: f64, delayed: bool) -> bool {
         let mid = (bid + ask) * 0.5;
         if bid <= 0.0 || ask <= 0.0 || mid <= 0.0 || !bid.is_finite() || !ask.is_finite() {

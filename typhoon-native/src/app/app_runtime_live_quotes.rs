@@ -99,7 +99,12 @@ impl TyphooNApp {
             for &i in idxs {
                 if let Some(chart) = self.charts.get_mut(i) {
                     chart.apply_live_quote_update(bid, ask, t.bid_qty.unwrap_or(0.0), t.ask_qty.unwrap_or(0.0), false);
-                    chart.apply_forming_price_update(last);
+                    if t.bid.is_none() && t.ask.is_none() && t.volume_24h.unwrap_or(0.0) > 0.0 {
+                        // Trade-driven ticker emission (from Kraken public trades): accumulate real volume
+                        chart.apply_forming_trade(last, t.volume_24h.unwrap_or(0.0));
+                    } else {
+                        chart.apply_forming_price_update(last);
+                    }
                 }
             }
         }
