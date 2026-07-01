@@ -482,13 +482,19 @@ impl ChartState {
 
     /// Apply a real-time executed trade: update forming price (close/high/low) + accumulate trade volume into the current forming bar.
     /// O(1) per trade. Used for Kraken public trades feed (and MTF cells via chart_by_bare).
-    pub fn apply_forming_trade(&mut self, price: f64, trade_vol: f64) -> bool {
+    pub fn apply_forming_trade(&mut self, price: f64, trade_vol: f64, trade_ts_ms: Option<i64>) -> bool {
         let price_updated = self.apply_forming_price_update(price);
         if price_updated && trade_vol > 0.0 && trade_vol.is_finite() {
             if let Some(bar) = self.bars.last_mut() {
                 // Low-TF (M1/M5) Kraken: public trades volume accumulated O(1) into forming bar.
                 // Per-chart (per TF) so M1/M5 get precise live volume without double-count (new bar starts clean).
                 bar.volume += trade_vol;
+                // Advance forming bar ts to latest trade time for better freshness / merged bar feel in sync and MTF.
+                if let Some(ts) = trade_ts_ms {
+                    if ts > bar.ts_ms {
+                        bar.ts_ms = ts;
+                    }
+                }
             }
         }
         // Manual camera (free-look) preservation: forming live updates (price + vol from trades) only dirty the bar,

@@ -102,7 +102,7 @@ impl TyphooNApp {
                     if t.bid.is_none() && t.ask.is_none() && t.volume_24h.unwrap_or(0.0) > 0.0 {
                         // Trade-driven ticker emission (from Kraken public trades): accumulate real volume
                         let vol = t.volume_24h.unwrap_or(0.0);
-                        let _ = chart.apply_forming_trade(last, vol);
+                        let _ = chart.apply_forming_trade(last, vol, t.ts_ms);
                         chart.live_trade_price = last;
                         chart.live_trade_vol = vol;
                         // Use real side from public trades if present, else heuristic
