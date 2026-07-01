@@ -437,42 +437,61 @@ impl TyphooNApp {
                                     format!("{} — {} · checksum {}", sym, ts, checksum_status)
                                 };
                                 ui.label(egui::RichText::new(header).strong().small());
-                                ui.separator();
-                                let bids = v["bids"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
-                                let asks = v["asks"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
-                                // max size for bar scaling
+
+                                let bids: Vec<_> = v["bids"].as_array().map(|a| a.as_slice()).unwrap_or(&[]).to_vec();
+                                let asks: Vec<_> = v["asks"].as_array().map(|a| a.as_slice()).unwrap_or(&[]).to_vec();
+
+                                // Compute rich L2 metrics
+                                let bid_vol: f64 = bids.iter().filter_map(|e| e["size"].as_f64()).sum();
+                                let ask_vol: f64 = asks.iter().filter_map(|e| e["size"].as_f64()).sum();
+                                let total_vol = (bid_vol + ask_vol).max(1e-9);
+                                let imbalance = (bid_vol - ask_vol) / total_vol;
+                                let imb_color = if imbalance > 0.05 { ob_bid } else if imbalance < -0.05 { ob_ask } else { ob_dim };
+                                ui.label(egui::RichText::new(format!(
+                                    "Bid vol: {:.2}  Ask vol: {:.2}  Imbalance: {:.1}% ",
+                                    bid_vol, ask_vol, imbalance * 100.0
+                                )).small().color(imb_color));
+
+                                // max size for bar scaling (use per level or global)
                                 let max_sz = bids.iter().chain(asks.iter())
                                     .filter_map(|e| e["size"].as_f64())
                                     .fold(0.0_f64, f64::max).max(1.0);
                                 let avail_w = ui.available_width().min(320.0);
+
+                                // cumulative for richer view
+                                let mut cum_bid = 0.0f64;
+                                let mut cum_ask = 0.0f64;
+
                                 egui::ScrollArea::vertical().auto_shrink(false).max_height(340.0).show(ui, |ui| {
-                                    ui.label(egui::RichText::new("Asks (sell side)").color(ob_ask).small().strong());
-                                    for ask in asks.iter().rev().take(15) {
+                                    ui.label(egui::RichText::new("Asks (sell side) — richer L2").color(ob_ask).small().strong());
+                                    for ask in asks.iter().rev().take(25) {
                                         let price = ask["price"].as_f64().unwrap_or(0.0);
                                         let size  = ask["size"].as_f64().unwrap_or(0.0);
+                                        cum_ask += size;
                                         let frac  = (size / max_sz) as f32;
                                         ui.horizontal(|ui| {
                                             ui.label(egui::RichText::new(format_price(price)).monospace().small().color(ob_ask));
-                                            let (rect, _) = ui.allocate_exact_size(egui::vec2(avail_w - 90.0, 10.0), egui::Sense::hover());
+                                            let (rect, _) = ui.allocate_exact_size(egui::vec2(avail_w - 140.0, 10.0), egui::Sense::hover());
                                             ui.painter_at(rect).rect_filled(
                                                 egui::Rect::from_min_size(rect.min, egui::vec2(frac * rect.width(), 10.0)),
                                                 0.0, egui::Color32::from_rgba_premultiplied(200, 40, 40, 120));
-                                            ui.label(egui::RichText::new(format!("{:.4}", size)).monospace().small().color(ob_dim));
+                                            ui.label(egui::RichText::new(format!("{:.4} c{:.2}", size, cum_ask)).monospace().small().color(ob_dim));
                                         });
                                     }
                                     ui.separator();
-                                    ui.label(egui::RichText::new("Bids (buy side)").color(ob_bid).small().strong());
-                                    for bid in bids.iter().take(15) {
+                                    ui.label(egui::RichText::new("Bids (buy side) — richer L2").color(ob_bid).small().strong());
+                                    for bid in bids.iter().take(25) {
                                         let price = bid["price"].as_f64().unwrap_or(0.0);
                                         let size  = bid["size"].as_f64().unwrap_or(0.0);
+                                        cum_bid += size;
                                         let frac  = (size / max_sz) as f32;
                                         ui.horizontal(|ui| {
                                             ui.label(egui::RichText::new(format_price(price)).monospace().small().color(ob_bid));
-                                            let (rect, _) = ui.allocate_exact_size(egui::vec2(avail_w - 90.0, 10.0), egui::Sense::hover());
+                                            let (rect, _) = ui.allocate_exact_size(egui::vec2(avail_w - 140.0, 10.0), egui::Sense::hover());
                                             ui.painter_at(rect).rect_filled(
                                                 egui::Rect::from_min_size(rect.min, egui::vec2(frac * rect.width(), 10.0)),
                                                 0.0, egui::Color32::from_rgba_premultiplied(0, 180, 60, 120));
-                                            ui.label(egui::RichText::new(format!("{:.4}", size)).monospace().small().color(ob_dim));
+                                            ui.label(egui::RichText::new(format!("{:.4} c{:.2}", size, cum_bid)).monospace().small().color(ob_dim));
                                         });
                                     }
                                 });

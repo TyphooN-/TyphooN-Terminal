@@ -2485,6 +2485,14 @@ pub enum BrokerCmd {
         depth: usize,
         publish_dom: bool,
     },
+    /// Start Kraken WS v2 ticker (L1) for rich bid/ask + volume + last etc.
+    KrakenStartTickerWs {
+        symbol: String,
+    },
+    /// Start Kraken Level 3 (authenticated, per-order book) — rich but limited availability.
+    KrakenStartLevel3Ws {
+        symbol: String,
+    },
     KrakenClosePosition {
         pair: String,
         volume: Option<f64>,
@@ -2504,6 +2512,18 @@ pub enum BrokerCmd {
 }
 
 /// Messages sent from async broker task → UI.
+/// Rich L1 quote data from Alpaca market data WS.
+#[derive(Debug, Clone)]
+pub struct AlpacaQuoteData {
+    pub symbol: String,
+    pub bid: f64,
+    pub ask: f64,
+    pub bid_size: f64,
+    pub ask_size: f64,
+    /// For trade prints, this is the trade price (bid==ask==last).
+    pub last: Option<f64>,
+}
+
 pub enum BrokerMsg {
     Connected(String),
     Error(String),
@@ -2511,9 +2531,9 @@ pub enum BrokerMsg {
     Positions(Vec<PositionInfo>),
     Orders(Vec<OrderInfo>),
     OrderResult(String),
-    /// Real-time Alpaca market-data tick (symbol, bid, ask). A trade print is
-    /// delivered as bid==ask==last. Non-logging, high-frequency.
-    AlpacaQuote(String, f64, f64),
+    /// Real-time Alpaca market-data L1 (rich quote with sizes).
+    /// Trade print sets bid==ask==last (sizes may be 0 or trade size).
+    AlpacaQuote(AlpacaQuoteData),
     /// Chosen Alpaca market-data feed for the current WS connection.
     /// "sip" (entitled full) or "iex" (free real-time). Used by UI for
     /// feed-aware subscription caps and diagnostics.
@@ -2531,6 +2551,8 @@ pub enum BrokerMsg {
         bid: f64,
         ask: f64,
     },
+    /// Rich L1 from Kraken WS v2 ticker (bid/ask + sizes + last + 24h stats).
+    KrakenWsTicker( crate::broker::kraken::KrakenWsTicker ),
     /// Bars just committed to cache by the Kraken WS OHLC pipeline.
     /// Each entry is `(typhoon_symbol, tf_label, last_bar_ts_ms)` so the
     /// REST scheduler can mark the (symbol, tf) WS-fresh and skip refetch.

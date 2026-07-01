@@ -739,7 +739,9 @@ pub fn spawn_broker_message_processor(
                 cmd @ (BrokerCmd::KrakenStartPrivateWs
                 | BrokerCmd::KrakenStartOhlcStreamers { .. }
                 | BrokerCmd::KrakenOhlcSnapshotSweep { .. }
-                | BrokerCmd::KrakenStartOrderbookWs { .. }) => {
+                | BrokerCmd::KrakenStartOrderbookWs { .. }
+                | BrokerCmd::KrakenStartTickerWs { .. }
+                | BrokerCmd::KrakenStartLevel3Ws { .. }) => {
                     kraken_ws_commands::handle_kraken_ws_command(
                         cmd,
                         kraken_broker.as_ref(),

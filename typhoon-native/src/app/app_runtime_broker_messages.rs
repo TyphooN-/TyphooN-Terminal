@@ -61,6 +61,9 @@ impl TyphooNApp {
                 BrokerMsg::KrakenBookQuoteTick { symbol, bid, ask } => {
                     self.handle_kraken_book_quote_tick(symbol, bid, ask);
                 }
+                BrokerMsg::KrakenWsTicker(t) => {
+                    self.handle_kraken_ws_ticker(t);
+                }
                 BrokerMsg::KrakenWsBarsCommitted { fresh } => {
                     self.handle_kraken_ws_bars_committed(fresh);
                 }
@@ -155,8 +158,8 @@ impl TyphooNApp {
                 BrokerMsg::Quote(symbol, bid, ask, last) => {
                     self.handle_broker_quote(symbol, bid, ask, last);
                 }
-                BrokerMsg::AlpacaQuote(symbol, bid, ask) => {
-                    self.handle_alpaca_quote(symbol, bid, ask);
+                BrokerMsg::AlpacaQuote(q) => {
+                    self.handle_alpaca_quote(q);
                 }
                 BrokerMsg::AlpacaMarketDataFeed(feed) => {
                     self.alpaca_market_data_feed = Some(feed);

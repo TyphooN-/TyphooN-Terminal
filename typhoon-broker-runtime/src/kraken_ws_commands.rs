@@ -505,6 +505,81 @@ pub async fn handle_kraken_ws_command(
                 );
             }
         }
-        _ => unreachable!("non-Kraken websocket command routed to Kraken websocket handler"),
-    }
-}
+        BrokerCmd::KrakenStartTickerWs { symbol } => {
+            let msg_tx = broker_msg_tx.clone();
+            let ws_symbol = typhoon_engine::core::kraken::resolve_kraken_ws_pair(
+                &kraken_public_client,
+                &symbol,
+            )
+            .await
+            .or_else(|| resolve_kraken_chart_book_ws_symbol(&symbol));
+            let Some(ws_symbol) = ws_symbol else {
+                let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                    "Kraken WS v2 ticker skipped: {symbol} is not a WS-mappable Kraken pair"
+                )));
+                return;
+            };
+            let update_msg_tx = msg_tx.clone();
+            let _display_symbol = symbol.clone();
+            let state_symbol = ws_symbol.clone();
+            tokio::spawn(async move {
+                let (ticker_tx, mut ticker_rx) = tokio::sync::mpsc::channel::<
+                    typhoon_engine::broker::kraken::KrakenWsTicker,
+                >(1024);
+                let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<
+                    typhoon_engine::broker::kraken::KrakenTickerStreamerEvent,
+                >();
+                let streamer_symbol = state_symbol.clone();
+                let streamer_handle = tokio::spawn(async move {
+                    typhoon_engine::broker::kraken::run_ticker_streamer(
+                        vec![streamer_symbol],
+                        ticker_tx,
+                        event_tx,
+                    )
+                    .await;
+                });
+                loop {
+                    tokio::select! {
+                        maybe_t = ticker_rx.recv() => {
+                            let Some(t) = maybe_t else { break; };
+                            // Forward rich L1 ticker data (bid/ask/sizes/last/vol etc.)
+                            let _ = update_msg_tx.send(BrokerMsg::KrakenWsTicker(t));
+                        }
+                        maybe_event = event_rx.recv() => {
+                            let Some(event) = maybe_event else { continue; };
+                            let text = match event {
+                                typhoon_engine::broker::kraken::KrakenTickerStreamerEvent::Connected => {
+                                    format!("Kraken WS v2 ticker connected: {state_symbol}")
+                                }
+                                typhoon_engine::broker::kraken::KrakenTickerStreamerEvent::Subscribed { batches } => {
+                                    format!("Kraken WS v2 ticker subscribed: {state_symbol} batches={batches}")
+                                }
+                                typhoon_engine::broker::kraken::KrakenTickerStreamerEvent::Disconnected { reason } => {
+                                    format!("Kraken WS v2 ticker disconnected: {state_symbol} {reason}")
+                                }
+                                typhoon_engine::broker::kraken::KrakenTickerStreamerEvent::SubscribeFailed { reason } => {
+                                    format!("Kraken WS v2 ticker subscribe failed: {state_symbol} {reason}")
+                                }
+                            };
+                            let _ = update_msg_tx.send(BrokerMsg::KrakenWsStatus { status: "ticker".into(), message: text });
+                        }
+                    }
+                }
+                let _ = streamer_handle.await;
+            });
+            let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                "Kraken WS v2 ticker starting for L1: {ws_symbol}"
+            )));
+        }
+        BrokerCmd::KrakenStartLevel3Ws { symbol } => {
+            let msg_tx = broker_msg_tx.clone();
+            // Kraken L3 is authenticated per-order book (add/mod/del), richer than L2 but requires token + subscription limits.
+            // Foundation URL exists; full streamer not wired yet (use L1 ticker + L2 book for most rich data).
+            let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                "Kraken L3 (per-order) requested for {} — auth/streamer support partial (L1/L2 are primary rich feeds)", symbol
+            )));
+            // TODO: full impl with auth token + ws-l3 subscribe when needed.
+        }
+         _ => unreachable!("non-Kraken websocket command routed to Kraken websocket handler"),
+     }
+ }

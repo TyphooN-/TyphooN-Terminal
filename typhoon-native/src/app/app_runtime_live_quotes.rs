@@ -35,27 +35,37 @@ impl TyphooNApp {
         }
     }
 
-    /// Real-time Alpaca market-data tick. Updates matching charts (so the focused
-    /// chart's forming bar and its position P/L go live) and the watchlist —
-    /// mirrors the Kraken book-quote path so equities Kraken doesn't cover (e.g.
-    /// HKIT) still get live prices instead of delayed REST.
-    pub(super) fn handle_alpaca_quote(&mut self, symbol: String, bid: f64, ask: f64) {
-        if bid <= 0.0 || ask <= 0.0 || !bid.is_finite() || !ask.is_finite() {
+    /// Real-time Alpaca market-data L1 (rich with sizes from WS).
+    /// Updates charts and watchlist with bid/ask (sizes logged for richer view).
+    pub(super) fn handle_alpaca_quote(&mut self, q: typhoon_engine::broker::protocol::AlpacaQuoteData) {
+        if (q.bid <= 0.0 && q.ask <= 0.0) || (!q.bid.is_finite() && !q.ask.is_finite()) {
             return;
         }
-        let wanted = bare_symbol_from_key(&symbol)
+        let bid = if q.bid > 0.0 { q.bid } else { q.ask };
+        let ask = if q.ask > 0.0 { q.ask } else { q.bid };
+        let wanted = bare_symbol_from_key(&q.symbol)
             .replace('/', "")
             .trim_end_matches(".EQ")
             .to_ascii_uppercase();
-        // O(1) via index (exact bare match; fuzzy legacy rare after normalization)
+        // O(1) via index
         if let Some(idxs) = self.chart_by_bare.get(&wanted) {
             for &i in idxs {
                 if let Some(chart) = self.charts.get_mut(i) {
                     chart.apply_live_quote_update(bid, ask, false);
+                    // Rich L1: could store sizes in chart state if extended
                 }
             }
         }
         self.apply_live_quote_to_watchlist(&wanted, bid, ask);
+        // Log richer info occasionally
+        if q.bid_size > 0.0 || q.ask_size > 0.0 {
+            self.log.push_back(LogEntry::info(format!(
+                "Alpaca L1 {}: b{}@{} a{}@{}",
+                wanted,
+                format_price(q.bid_size), format_price(bid),
+                format_price(q.ask_size), format_price(ask)
+            )));
+        }
     }
 
     pub(super) fn handle_kraken_book_quote_tick(&mut self, symbol: String, bid: f64, ask: f64) {
@@ -76,6 +86,36 @@ impl TyphooNApp {
             }
         }
         self.apply_live_quote_to_watchlist(&wanted, bid, ask);
+    }
+
+    /// Rich L1 from Kraken WS v2 ticker. Uses bid/ask/sizes/last + 24h for richer view.
+    pub(super) fn handle_kraken_ws_ticker(&mut self, t: typhoon_engine::broker::kraken::KrakenWsTicker) {
+        let bid = t.bid.unwrap_or(0.0);
+        let ask = t.ask.unwrap_or(0.0);
+        let last = t.last.unwrap_or((bid + ask) * 0.5);
+        if last <= 0.0 || !last.is_finite() {
+            return;
+        }
+        let wanted = bare_symbol_from_key(&t.symbol)
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .to_ascii_uppercase();
+        if let Some(idxs) = self.chart_by_bare.get(&wanted) {
+            for &i in idxs {
+                if let Some(chart) = self.charts.get_mut(i) {
+                    chart.apply_live_quote_update(bid, ask, false);
+                    chart.apply_forming_price_update(last);
+                }
+            }
+        }
+        self.apply_live_quote_to_watchlist(&wanted, bid, ask);
+        // Log richer L1 occasionally (volume etc.)
+        if t.volume_24h.unwrap_or(0.0) > 0.0 {
+            self.log.push_back(LogEntry::info(format!(
+                "Kraken L1 ticker {}: last {} vol24h {}",
+                wanted, format_price(last), format_price(t.volume_24h.unwrap_or(0.0))
+            )));
+        }
     }
 
     pub(super) fn handle_kraken_equity_quote(

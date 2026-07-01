@@ -48,10 +48,12 @@ impl TyphooNApp {
                 self.kraken_chart_l2_last_start_attempt = now_instant;
                 self.kraken_chart_l2_ws_symbol = bare.clone();
                 let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
-                    symbol: bare,
+                    symbol: bare.clone(),
                     depth: 10,
                     publish_dom: false,
                 });
+                // Also start rich L1 ticker for the same symbol (complements book top)
+                let _ = self.broker_tx.send(BrokerCmd::KrakenStartTickerWs { symbol: bare });
             }
         }
     }

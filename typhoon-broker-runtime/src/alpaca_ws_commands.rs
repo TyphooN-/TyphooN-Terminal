@@ -7,7 +7,7 @@
 //! misses (drops, the brief reconnect window).
 
 use typhoon_engine::broker::alpaca::AlpacaBroker;
-use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
+use typhoon_engine::broker::protocol::{AlpacaQuoteData, BrokerCmd, BrokerMsg};
 
 pub async fn handle_alpaca_ws_command(
     cmd: BrokerCmd,
@@ -143,8 +143,8 @@ pub async fn start_alpaca_quote_stream(
                             }
                         }
                     }
-                    for (sym, bid, ask) in parse_market_data_quotes(&raw) {
-                        let _ = tx.send(BrokerMsg::AlpacaQuote(sym, bid, ask));
+                    for q in parse_market_data_quotes(&raw) {
+                        let _ = tx.send(BrokerMsg::AlpacaQuote(q));
                     }
                 }
                 tracing::info!("Alpaca data-stream forwarder ended");
@@ -162,7 +162,7 @@ pub async fn start_alpaca_quote_stream(
 /// Parse a decoded market-data frame into `(symbol, bid, ask)` ticks. A quote
 /// (`T="q"`) carries bid/ask; a trade (`T="t"`) is delivered as bid==ask==last.
 /// Messages arrive as arrays (sometimes a single object).
-pub fn parse_market_data_quotes(raw: &str) -> Vec<(String, f64, f64)> {
+pub fn parse_market_data_quotes(raw: &str) -> Vec<AlpacaQuoteData> {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
         return Vec::new();
     };
@@ -174,21 +174,38 @@ pub fn parse_market_data_quotes(raw: &str) -> Vec<(String, f64, f64)> {
     for item in &items {
         match item.get("T").and_then(|t| t.as_str()).unwrap_or("") {
             "q" => {
-                let sym = item.get("S").and_then(|s| s.as_str());
-                let bid = item.get("bp").and_then(serde_json::Value::as_f64);
-                let ask = item.get("ap").and_then(serde_json::Value::as_f64);
-                if let (Some(sym), Some(bid), Some(ask)) = (sym, bid, ask) {
-                    if bid > 0.0 && ask > 0.0 {
-                        out.push((sym.to_string(), bid, ask));
+                let sym = item.get("S").and_then(|s| s.as_str()).map(|s| s.to_string());
+                let bid = item.get("bp").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+                let ask = item.get("ap").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+                let bs = item.get("bs").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+                let asz = item.get("as").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+                if let Some(sym) = sym {
+                    if bid > 0.0 || ask > 0.0 {
+                        out.push(AlpacaQuoteData {
+                            symbol: sym,
+                            bid,
+                            ask,
+                            bid_size: bs,
+                            ask_size: asz,
+                            last: None,
+                        });
                     }
                 }
             }
             "t" => {
-                let sym = item.get("S").and_then(|s| s.as_str());
-                let price = item.get("p").and_then(serde_json::Value::as_f64);
-                if let (Some(sym), Some(price)) = (sym, price) {
+                let sym = item.get("S").and_then(|s| s.as_str()).map(|s| s.to_string());
+                let price = item.get("p").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+                let size = item.get("s").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+                if let Some(sym) = sym {
                     if price > 0.0 {
-                        out.push((sym.to_string(), price, price));
+                        out.push(AlpacaQuoteData {
+                            symbol: sym,
+                            bid: price,
+                            ask: price,
+                            bid_size: size,
+                            ask_size: size,
+                            last: Some(price),
+                        });
                     }
                 }
             }
