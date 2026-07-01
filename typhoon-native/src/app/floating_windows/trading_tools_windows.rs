@@ -422,17 +422,32 @@ impl TyphooNApp {
                             let ob_bid = egui::Color32::from_rgb(0, 200, 80);
                             let ob_ask = egui::Color32::from_rgb(220, 50, 50);
                             let ob_dim = egui::Color32::from_rgb(80, 80, 100);
-                            // Rich L2 polish: refresh button
+
+                            // Derive sym for buttons: prefer last result, fall back to active chart
+                            let dom_sym = if let Ok(v) = serde_json::from_str::<serde_json::Value>(&self.orderbook_result) {
+                                v["symbol"].as_str().unwrap_or("").to_string()
+                            } else {
+                                self.charts.get(self.active_tab)
+                                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                                    .unwrap_or_default()
+                            };
+
+                            // Rich L2 polish: refresh + stream buttons
                             ui.horizontal(|ui| {
-                                if ui.button("Refresh L2").clicked() {
-                                    // Try to re-fetch using last known or current focused
-                                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&self.orderbook_result) {
-                                        if let Some(sym) = v["symbol"].as_str() {
-                                            let _ = self.broker_tx.send(BrokerCmd::GetOrderbook { symbol: sym.to_string() });
-                                        }
-                                    }
+                                if ui.button("Refresh L2").clicked() && !dom_sym.is_empty() {
+                                    let _ = self.broker_tx.send(BrokerCmd::GetOrderbook { symbol: dom_sym.clone() });
                                 }
-                                ui.label(egui::RichText::new("(for snapshots; Kraken streams live)").small().color(ob_dim));
+                                ui.label(egui::RichText::new("(snapshots; Kraken streams)").small().color(ob_dim));
+                                if ui.add_enabled(
+                                    kraken_bookmap_stream_supported(&dom_sym, &self.kraken_pairs),
+                                    egui::Button::new("Start Stream").small()
+                                ).clicked() && !dom_sym.is_empty() {
+                                    let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
+                                        symbol: dom_sym.clone(),
+                                        depth: 100,
+                                        publish_dom: true,
+                                    });
+                                }
                             });
                             if self.orderbook_result.is_empty() {
                                 ui.label(egui::RichText::new("No L2 data — click Fetch Depth in Bookmap or Fetch L2 in Order Flow.").color(ob_dim).small());
@@ -476,10 +491,23 @@ impl TyphooNApp {
                                             "Spread: {:.4}  Mid: {:.4}",
                                             spread, mid
                                         )).small().color(ob_dim));
-                                    }
-                                }
+                                        }
 
-                                // max size for bar scaling (use per level or global)
+                                        // Top L1 sizes from the same snapshot (richer view)
+                                        if let (Some(top_bid), Some(top_ask)) = (
+                                        bids.first().and_then(|b| b["size"].as_f64()),
+                                        asks.first().and_then(|a| a["size"].as_f64()),
+                                        ) {
+                                        if top_bid > 0.0 || top_ask > 0.0 {
+                                            ui.label(egui::RichText::new(format!(
+                                                "Top sizes — Bid: {:.4}  Ask: {:.4}",
+                                                top_bid, top_ask
+                                            )).small().color(ob_dim));
+                                        }
+                                        }
+                                        }
+
+                                        // max size for bar scaling (use per level or global)
                                 let max_sz = bids.iter().chain(asks.iter())
                                     .filter_map(|e| e["size"].as_f64())
                                     .fold(0.0_f64, f64::max).max(1.0);
