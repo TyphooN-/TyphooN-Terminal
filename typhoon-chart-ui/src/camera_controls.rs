@@ -99,6 +99,16 @@ impl ChartState {
         self.mark_view_changed();
     }
 
+    /// Dedicated for right-price-axis drag: pure vertical scale, no time shift.
+    pub fn scale_chart_price_axis(&mut self, factor: f64) {
+        let (natural_center, natural_span) =
+            self.natural_visible_price_view().unwrap_or((0.0, 1.0));
+        self.camera
+            .scale_price_axis(factor, natural_center, natural_span);
+        self.sync_camera_to_legacy();
+        self.mark_view_changed();
+    }
+
     pub fn zoom_chart_bars_by(&mut self, factor: f64) {
         self.camera.zoom_bars_by(factor, self.bars.len());
         self.sync_camera_to_legacy();

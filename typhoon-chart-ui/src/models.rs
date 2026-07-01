@@ -178,6 +178,17 @@ impl ChartCamera {
         self.follow_latest = false;
     }
 
+    pub fn scale_price_axis(&mut self, factor: f64, natural_price_center: f64, natural_price_span: f64) {
+        let factor = factor.clamp(0.01, 100.0);
+        if self.price_center.is_none() || self.price_span.is_none() {
+            self.set_price_view(natural_price_center, natural_price_span);
+        }
+        let center = self.price_center.unwrap_or(natural_price_center);
+        let span = self.price_span.unwrap_or(natural_price_span).max(f64::EPSILON);
+        self.set_price_view(center, span / factor);
+        self.follow_latest = false;
+    }
+
     pub fn zoom_price_by(
         &mut self,
         factor: f64,

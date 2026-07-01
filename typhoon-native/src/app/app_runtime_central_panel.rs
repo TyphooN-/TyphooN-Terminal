@@ -929,7 +929,7 @@ impl TyphooNApp {
                     if dy.abs() > 0.0 {
                         let zoom_delta = -dy as f64 * 0.003;
                         let factor = (1.0 + zoom_delta).clamp(0.1, 20.0);
-                        chart.zoom_chart_price_by(factor);
+                        chart.scale_chart_price_axis(factor);  // pure vertical scale, no time shift
                     }
                 }
                 if cell_scale_resp.double_clicked() {
@@ -1119,6 +1119,8 @@ impl TyphooNApp {
                     egui::Sense::click_and_drag(),
                 )
                 .on_hover_cursor(egui::CursorIcon::ResizeVertical);
+            // Right-axis drag = pure vertical price scale (zoom span, keep center) per TV/MT5.
+            // Body drag (separate rect) = horizontal time pan + vertical price position pan (free-look).
             let resp = ui.interact(
                 chart_body_interact_rect,
                 ui.id().with(("single_chart_body_drag", self.active_tab)),
@@ -1141,7 +1143,7 @@ impl TyphooNApp {
                     if dy.abs() > 0.0 {
                         let zoom_delta = -dy as f64 * 0.003;
                         let factor = (1.0 + zoom_delta).clamp(0.1, 20.0);
-                        chart.zoom_chart_price_by(factor);
+                        chart.scale_chart_price_axis(factor);  // pure vertical scale, no time shift
                         chart.is_dragging = false;
                     }
                 } else if chart.is_scaling_price {
