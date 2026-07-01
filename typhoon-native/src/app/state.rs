@@ -666,6 +666,9 @@ pub struct TyphooNApp {
     pub(crate) holders_result: String, // last fetched SEC EDGAR 13F JSON
     pub(crate) show_orderbook_window: bool,
     pub(crate) orderbook_result: String, // last fetched L2 orderbook JSON
+    /// User preference for L2 DOM depth (clamped on use). Default 100, adjustable in window.
+    /// Follow-up polish: makes depth user-controllable and "persisted" for the session.
+    pub(crate) dom_depth: usize,
     pub(crate) kraken_orderbook_ws_symbol: String,
     pub(crate) kraken_chart_l2_ws_symbol: String,
     pub(crate) kraken_chart_l2_last_start_attempt: std::time::Instant,

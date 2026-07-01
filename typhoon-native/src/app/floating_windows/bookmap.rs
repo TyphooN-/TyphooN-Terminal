@@ -59,14 +59,19 @@ pub(super) fn render_live_orderbook_heatmap(
         .fold(0.0_f64, f64::max)
         .max(1.0);
     let ts = v["timestamp"].as_str().unwrap_or("live");
-    ui.label(
-        egui::RichText::new(format!("Live L2 depth — {ts}"))
-            .color(dim_color)
-            .small(),
-    );
+    // Follow-up polish: staleness + top rich L1 sizes
+    let top_bid_size = bids.first().and_then(|b| b["size"].as_f64()).unwrap_or(0.0);
+    let top_ask_size = asks.first().and_then(|a| a["size"].as_f64()).unwrap_or(0.0);
+    let header = if top_bid_size > 0.0 || top_ask_size > 0.0 {
+        format!("Live L2 depth — {}  (top b{:.2} a{:.2})", ts, top_bid_size, top_ask_size)
+    } else {
+        format!("Live L2 depth — {}", ts)
+    };
+    ui.label(egui::RichText::new(header).color(dim_color).small());
+
     let width = ui.available_width().max(240.0).min(620.0);
     let height = 170.0;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(5, 5, 15));
 
@@ -85,6 +90,7 @@ pub(super) fn render_live_orderbook_heatmap(
         let size = ask["size"].as_f64().unwrap_or(0.0);
         let price = ask["price"].as_f64().unwrap_or(0.0);
         let frac = (size / max_size).clamp(0.0, 1.0) as f32;
+        let alpha = (80.0 + 175.0 * frac as f64).clamp(60.0, 220.0) as u8; // better density scaling
         let y = mid_y - (idx as f32 + 1.0) * row_h;
         let bar = egui::Rect::from_min_size(
             egui::pos2(rect.right() - width * frac, y),
@@ -93,7 +99,7 @@ pub(super) fn render_live_orderbook_heatmap(
         painter.rect_filled(
             bar,
             0.0,
-            egui::Color32::from_rgba_premultiplied(200, 40, 40, 125),
+            egui::Color32::from_rgba_premultiplied(200, 40, 40, alpha),
         );
         if idx < 6 {
             painter.text(
@@ -109,6 +115,7 @@ pub(super) fn render_live_orderbook_heatmap(
         let size = bid["size"].as_f64().unwrap_or(0.0);
         let price = bid["price"].as_f64().unwrap_or(0.0);
         let frac = (size / max_size).clamp(0.0, 1.0) as f32;
+        let alpha = (80.0 + 175.0 * frac as f64).clamp(60.0, 220.0) as u8;
         let y = mid_y + idx as f32 * row_h;
         let bar = egui::Rect::from_min_size(
             egui::pos2(rect.left(), y),
@@ -117,7 +124,7 @@ pub(super) fn render_live_orderbook_heatmap(
         painter.rect_filled(
             bar,
             0.0,
-            egui::Color32::from_rgba_premultiplied(0, 180, 60, 125),
+            egui::Color32::from_rgba_premultiplied(0, 180, 60, alpha),
         );
         if idx < 6 {
             painter.text(
@@ -129,6 +136,24 @@ pub(super) fn render_live_orderbook_heatmap(
             );
         }
     }
+
+    // Hover tooltip with top levels + sizes (rich L2)
+    if resp.hovered() {
+        let mut tip = format!("L2 snapshot {}\n", ts);
+        if let Some(b) = bids.first() {
+            let p = b["price"].as_f64().unwrap_or(0.0);
+            let s = b["size"].as_f64().unwrap_or(0.0);
+            tip.push_str(&format!("Top Bid: {} x {}\n", format_price(p), s));
+        }
+        if let Some(a) = asks.first() {
+            let p = a["price"].as_f64().unwrap_or(0.0);
+            let s = a["size"].as_f64().unwrap_or(0.0);
+            tip.push_str(&format!("Top Ask: {} x {}\n", format_price(p), s));
+        }
+        tip.push_str("Hover for live depth density");
+        resp.on_hover_text(tip);
+    }
+
     true
 }
 

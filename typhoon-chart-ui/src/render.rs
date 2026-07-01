@@ -1680,6 +1680,26 @@ pub fn draw_chart(
     // ── alert price lines (extracted) ─────────────────────────────────────────
     draw_price_alert_lines(painter, chart_rect, price_to_y, alerts, format_price);
 
+    // Follow-up polish: faint live bid/ask horizontal lines (rich L1 from WS ticker/book)
+    if let Some(_mid) = chart.fresh_live_quote_mid() {
+        if chart.live_bid > 0.0 && chart.live_ask > 0.0 {
+            let bid_y = price_to_y(chart.live_bid);
+            let ask_y = price_to_y(chart.live_ask);
+            if bid_y >= chart_rect.top() && bid_y <= chart_rect.bottom() {
+                painter.line_segment(
+                    [egui::pos2(chart_rect.left(), bid_y), egui::pos2(chart_rect.right(), bid_y)],
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 160, 60)), // faint green for bid
+                );
+            }
+            if ask_y >= chart_rect.top() && ask_y <= chart_rect.bottom() {
+                painter.line_segment(
+                    [egui::pos2(chart_rect.left(), ask_y), egui::pos2(chart_rect.right(), ask_y)],
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 40, 40)), // faint red for ask
+                );
+            }
+        }
+    }
+
     // ── drawing annotations (extracted) ─────────────────────────────────────
     if draw_drawing_annotations(
         painter,

@@ -432,6 +432,22 @@ impl TyphooNApp {
                                     .unwrap_or_default()
                             };
 
+                            // Follow-up: depth preference slider (session-persisted for L2 DOM)
+                            ui.horizontal(|ui| {
+                                ui.label("Depth:");
+                                let mut d = self.dom_depth as i32;
+                                ui.add(egui::Slider::new(&mut d, 10..=250).step_by(10.0));
+                                self.dom_depth = d.clamp(10, 500) as usize;
+                                if ui.button("Apply to Stream").clicked() && !dom_sym.is_empty() {
+                                    // Use preferred depth when (re)starting
+                                    let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
+                                        symbol: dom_sym.clone(),
+                                        depth: self.dom_depth,
+                                        publish_dom: true,
+                                    });
+                                }
+                            });
+
                             // Rich L2 polish: refresh + stream + L3 trigger buttons
                             ui.horizontal(|ui| {
                                 if ui.button("Refresh L2").clicked() && !dom_sym.is_empty() {
@@ -444,7 +460,7 @@ impl TyphooNApp {
                                 ).clicked() && !dom_sym.is_empty() {
                                     let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
                                         symbol: dom_sym.clone(),
-                                        depth: 100,
+                                        depth: self.dom_depth,
                                         publish_dom: true,
                                     });
                                 }

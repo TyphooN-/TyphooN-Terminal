@@ -498,6 +498,7 @@ impl TyphooNApp {
             holders_result: String::new(),
             show_orderbook_window: false,
             orderbook_result: String::new(),
+            dom_depth: 100,
             kraken_orderbook_ws_symbol: String::new(),
             kraken_chart_l2_ws_symbol: String::new(),
             kraken_chart_l2_last_start_attempt: std::time::Instant::now()
