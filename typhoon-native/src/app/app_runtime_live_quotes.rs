@@ -137,7 +137,16 @@ impl TyphooNApp {
                         // Use the (possibly trade-advanced) forming bar ts as the freshness anchor.
                         let bar_ts = chart.bars.last().map(|b| b.ts_ms).unwrap_or(0);
                         let ts = t.ts_ms.unwrap_or(now_ms).max(bar_ts);
-                        self.kraken_ws_fresh_until.insert((wanted.clone(), tf), now_ms.max(ts));
+                        self.kraken_ws_fresh_until.insert((wanted.clone(), tf.clone()), now_ms.max(ts));
+
+                        // Also advance the Kraken sync cache state ts. This lets the candidate
+                        // scorer (classify + focus/score) treat the live-updated low-TF MTF bar
+                        // as current, giving it effective priority/boost without disturbing the
+                        // high-TF-first ring for full-universe.
+                        let sync_key = (wanted.clone(), tf);
+                        let entry = self.cached_kraken_sync_state.entry(sync_key).or_insert_with(Default::default);
+                        entry.last_bar_ts_s = (now_ms.max(ts) / 1000) as i64;
+                        entry.write_ts_s = (now_ms / 1000) as i64;
                     }
                 }
             }
