@@ -231,4 +231,21 @@ pub(crate) fn draw_extended_hours_candle(
             }
         }
     }
+
+    // Live trade marker from public Kraken trades (O(1) exact execution price on forming bar)
+    if chart.live_trade_price > 0.0 {
+        let last_idx = chart.bars.len().saturating_sub(1);
+        if last_idx < chart.bars.len() {
+            let cx = data_left + (last_idx as f32 + 0.5) * bar_w;
+            let y = price_to_y(chart.live_trade_price);
+            let col = if chart.live_trade_is_buy { UP } else { DOWN };
+            // Small horizontal tick at exact trade price (visible on forming candle)
+            painter.line_segment(
+                [egui::pos2(cx - 4.0, y), egui::pos2(cx + 4.0, y)],
+                egui::Stroke::new(1.5, col),
+            );
+            // Tiny dot for emphasis
+            painter.circle_filled(egui::pos2(cx, y), 1.5, col);
+        }
+    }
 }
