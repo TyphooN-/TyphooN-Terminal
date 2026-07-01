@@ -25,7 +25,7 @@ This ADR addresses three dimensions:
 2. **GPU compute expansion** — new shaders for tick aggregation,
    batch screener, Renko construction, volume profile, rolling statistics,
    multi-symbol backtest; plus a GPU render pipeline for chart primitives
-3. **Client parity** — protocol expansion with push messages, server-
+3. **Client equivalence** — protocol expansion with push messages, server-
    computed indicators, alerts, news; web client candlestick charts and
    trading parity; TUI braille charts and multi-broker support
 

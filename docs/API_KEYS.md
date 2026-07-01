@@ -23,7 +23,7 @@ Optional API keys and broker credentials that unlock additional features.
 
 ## Kraken (Primary Market Data + Trading)
 
-**Used for:** Public Spot and Kraken Equities/xStocks market data, public Kraken Futures instrument/candle data, public tradeable-pair discovery, and authenticated crypto/xStocks balances, open orders, open positions, order placement, amend/edit, cancel-all, and batch orders.
+**Used for:** Public Spot and Kraken Equities/xStocks market data, public Kraken Futures instrument/candle data, public tradeable-pair discovery, and authenticated crypto/xStocks balances, open orders, open positions, order placement, amend/edit, cancel-all, and batch orders. Kraken Futures trading surface is lighter (primarily data for chart sync; full private trading gated by entitlements).
 
 - **Sign up:** https://pro.kraken.com/
 - **Cost:** Free API keys; trading fees apply on filled orders

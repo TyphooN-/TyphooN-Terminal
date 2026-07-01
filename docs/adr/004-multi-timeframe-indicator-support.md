@@ -28,6 +28,8 @@ Only show timeframes HIGHER than the current chart (matching MT5 behavior):
 
 Uses `TF_RANK` map: `1Min=0, 5Min=1, 15Min=2, 30Min=3, 1Hour=4, 4Hour=5, 1Day=6, 1Week=7, 1Month=8`
 
+Modern depth profile bins and L3 per-order data also respect MTF projection where applicable.
+
 ## MTF MA Grid
 
 Dashboard panel showing bullish/bearish state (green/red dots) for SMA200, KAMA, and Fisher across M15/M30/H1/H4/D1/W1.

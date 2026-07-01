@@ -13,3 +13,4 @@ NNFX system requires viewing multiple timeframes simultaneously.
 - Pro: Same indicator set across all cells
 - Pro: Command presets now support 2×2, 3×3, 4×3, and 4×4 layouts via `MTF_2X2`, `MTF_3X3`, `MTF_4X3`, and `MTF_4X4`.
 - Trade-off: grid layout is preset-driven, not arbitrary drag-resizable per cell.
+- Depth profile and L3 updates propagate to MTF cells via chart_by_bare O(1) dispatch.

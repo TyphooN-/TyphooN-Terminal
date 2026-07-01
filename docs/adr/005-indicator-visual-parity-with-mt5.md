@@ -58,4 +58,4 @@ A full audit of all indicator calculations was performed, fixing bootstrap/seed/
 - **minBars off-by-one**: Correct minimum bar count for indicator warm-up
 - **ForceIndex EMA bootstrap**: Proper EMA seed for Force Index
 
-All fixes ensure pixel-level parity with MT5 across every indicator in the registry. Multi-timeframe display coverage is tracked by [ADR-004](004-multi-timeframe-indicator-support.md) and [ADR-017](017-multi-timeframe-grid.md).
+All fixes ensure pixel-level visual equivalence with MT5-style NNFX across every indicator in the registry. Multi-timeframe display coverage is tracked by [ADR-004](004-multi-timeframe-indicator-support.md) and [ADR-017](017-multi-timeframe-grid.md).

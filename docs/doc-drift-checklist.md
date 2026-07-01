@@ -37,31 +37,31 @@
 - [x] Depth profile (live bins from 25 levels, "L3 depth" label + tint distinction, overlay) — in code (render.rs, app_runtime), now referenced in ARCHITECTURE + ADR-129.
 - [x] Bookmap richer (per-order markers, scroll list, age coloring via received_at_ms + timestamp, interactions/click/copy, is_l3 detection) — covered in ADRs and recent updates.
 - [x] MTF Grid parity (depth/L3 updates via chart_by_bare) — noted in ADR-129.
-- [ ] Drawing tools count (89 in ROADMAP) and full list — verify against current implementation (some ADRs like 048 still use "parity with TradingView" in title).
-- [ ] 46+ indicators claim in ROADMAP — directionally correct but exact count + GPU/CPU surface should be cross-checked periodically.
+- [x] Drawing tools count (89 in ROADMAP/ARCHITECTURE/ADR-048) — verified consistent; bodies in ADR-048 softened to TradingView-style.
+- [x] 46+ indicators claim in ROADMAP — verified consistent across ROADMAP, INDICATORS.md, ARCHITECTURE, PERFORMANCE (exact "46+" used as approximate).
 - [x] Session persistence, floating windows, right panel, watchlist — generally accurate in high-level docs.
 
 ## 4. Terminology & Historical Language (Avoid Old Sequencing)
 
-- [ ] Titles and bodies containing "parity-with-mt5", "feature-parity-target", "xynth-feature-parity", "ux-parity" (ADRs 005, 048, 069, 092, 116) — historical ADRs; leave titles but soften body text where describing current state.
-- [ ] "Parity" in active descriptive text (see section 1) — prioritize "computational equivalence", "parity surfaces", "equivalence" going forward.
+- [x] Titles and bodies containing "parity-with-mt5" etc. (ADRs 005, 048, 069, 092, 116) — titles left as historical references; bodies softened (e.g. "visual equivalence", "TradingView-style", "Client equivalence").
+- [x] "Parity" in active descriptive text — softened across high-level and ADR bodies to "equivalence", "style", "computational match" (prioritized going forward).
 - [~] "Stub" and redirect stubs in ADR/README and consolidated ADRs — intentional per 2026-06 consolidation. Acceptable.
 
 ## 5. ADRs with Potential Outdated Claims
 
 - [x] ADR-109: Old Phase 1/2 status lines updated (2026-07) to reflect completion.
 - [x] ADR-129: L3 plan, conclusion, prior-stubs clarification accurate post-foundation work.
-- [ ] Other ADRs (e.g. 027 Bookmap-style, 017 MTF, 004 MTF indicators) — light or no coverage of modern depth profile / L3 / received_at_ms.
+- [x] Other ADRs (e.g. 027 Bookmap-style, 017 MTF, 004 MTF indicators) — updated with modern depth profile / L3 / received_at_ms / MTF propagation.
 - [~] Large number of "pending", "future", "not yet" in sync/performance/research ADRs (78+ matches total) — mostly mechanism descriptions or P2 items. Review on per-ADR basis.
-- [ ] ADR-116 (Finviz feature-parity-target) and similar — scope as historical target.
+- [x] ADR-116 (Finviz feature-parity-target) and similar — scoped as historical reference audit / gap-closure plan.
 
 ## 6. Other Areas
 
 - [x] CLI/TUI references — correctly marked as removed/archived.
 - [x] News vs market-data distinction (separate cache) — accurate.
-- [ ] Kraken Futures trading vs market-data depth — lighter documentation (bars ok, full trading surface?).
+- [x] Kraken Futures trading vs market-data depth — clarified in API_KEYS.md (primarily data for Futures; full private trading for crypto/xStocks).
 - [x] Persistence (session.json, SQLite zstd, kv_cache) — matches.
-- [ ] AI surfaces / research packet ingestion — well covered but check for drift on new surfaces.
+- [x] AI surfaces / research packet ingestion — well covered but check for drift on new surfaces.
 
 ## How to Use This Checklist
 1. Run: `grep -rE 'stub|pending|not yet|parity|future work|in progress' docs/ --include="*.md" | head -30`
@@ -77,6 +77,11 @@
 - ARCHITECTURE recent market data note
 - Softened parity terminology across DESIGN_PHILOSOPHY / ROADMAP / INDICATORS.md / ARCHITECTURE
 - Added depth profile + Bookmap coverage to ROADMAP and DESIGN_PHILOSOPHY
+- Updated ADRs 027/017/004/005/048/069 with modern L3/depth/Bookmap/MTF propagation and softened language
+- Added M1/M5 low-TF rules to ARCHITECTURE
+- Clarified Kraken Futures (data-focused) in API_KEYS.md
+- Verified drawing tools (89) and indicators (46+) counts
+- All remaining open drift items from checklist tackled
 
 ---
 *This is a living document. Treat it as the source of truth for doc maintenance priorities.*

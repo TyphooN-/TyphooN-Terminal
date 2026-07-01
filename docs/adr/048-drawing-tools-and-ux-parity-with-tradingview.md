@@ -5,7 +5,7 @@
 
 ## Context
 
-UX audit identified 7 gaps vs TradingView's drawing tool experience. These are the most impactful missing features for daily trading workflow.
+UX audit identified 7 gaps vs TradingView-style drawing tool experience. These are the most impactful missing features for daily trading workflow.
 
 ## Gaps
 
@@ -119,6 +119,6 @@ Applied to: HLine, TrendLine, VLine, Rectangle, Ray, Channel, ExtendedLine, HRay
 ## Consequences
 - All 7 original UX gaps complete (Gaps 1-7)
 - 4 additional UX features added (color picker, property editor, follow toggle, shortcuts)
-- 89 drawing tools with full TradingView parity + 7 bonus tools
+- 89 drawing tools with full TradingView-style support + 7 bonus tools
 - All drawing colors user-configurable pre-placement
 - Per-drawing right-click editing of color/width/style
