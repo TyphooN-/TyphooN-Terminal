@@ -1021,6 +1021,20 @@ impl TyphooNApp {
             let mut chart = ChartState::new(symbol, tf);
             chart.chart_type = chart_type;
             chart.source_override = source_override;
+
+            // Preserve manual camera on reload / MTF restore for live symbols.
+            // User free-look (drag/zoom) should survive sync or tab restore.
+            let prior_manual = self.charts.iter().find(|c| {
+                c.symbol.eq_ignore_ascii_case(symbol) && c.timeframe == tf
+            }).map(|c| (c.manual_view_override, c.camera.clone(), c.view_offset, c.visible_bars));
+            if let Some((was_manual, cam, vo, vb)) = prior_manual {
+                if was_manual {
+                    chart.manual_view_override = true;
+                    chart.camera = cam;
+                    chart.view_offset = vo;
+                    chart.visible_bars = vb;
+                }
+            }
             let cache_ref = Arc::as_ref(&cache);
             let mut gpu = self.gpu_indicators.take();
             let load_succeeded = chart.try_load(cache_ref, &mut self.log, gpu.as_mut());
