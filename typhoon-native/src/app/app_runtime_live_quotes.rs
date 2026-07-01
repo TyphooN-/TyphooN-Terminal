@@ -118,6 +118,22 @@ impl TyphooNApp {
                 }
             }
         }
+
+        // Stronger MTF/foreground sync priority for live trades: mark WS-fresh for *exactly the TFs that have open charts for this symbol*
+        // (not just hardcoded M1/M5). This keeps focused MTF cells fresh in the scheduler when trades arrive, reducing unnecessary REST.
+        if t.bid.is_none() && t.ask.is_none() && t.volume_24h.unwrap_or(0.0) > 0.0 {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let ts = t.ts_ms.unwrap_or(now_ms);
+            if let Some(idxs) = self.chart_by_bare.get(&wanted) {
+                for &i in idxs {
+                    if let Some(chart) = self.charts.get(i) {
+                        let tf = chart.timeframe.label().to_string();
+                        self.kraken_ws_fresh_until.insert((wanted.clone(), tf), now_ms.max(ts));
+                    }
+                }
+            }
+        }
+
         self.apply_live_quote_to_watchlist(&wanted, bid, ask, t.bid_qty.unwrap_or(0.0), t.ask_qty.unwrap_or(0.0));
         // Incremental trade volume from public Kraken trades to watchlist row (O(1))
         if t.volume_24h.unwrap_or(0.0) > 0.0 {
