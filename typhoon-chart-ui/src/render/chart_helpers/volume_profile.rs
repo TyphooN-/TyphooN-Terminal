@@ -17,21 +17,36 @@ pub(crate) fn draw_volume_profile_overlay(
         let mut buy_vol = vec![0.0_f64; num_buckets]; // close > open = buying pressure
         let mut max_vol = 0.0_f64;
 
-        for bar in bars {
-            let y_high_frac = ((price_max - bar.high) / (price_max - price_min)).clamp(0.0, 1.0);
-            let y_low_frac = ((price_max - bar.low) / (price_max - price_min)).clamp(0.0, 1.0);
-            let b_top = (y_high_frac * num_buckets as f64) as usize;
-            let b_bot = ((y_low_frac * num_buckets as f64) as usize).min(num_buckets - 1);
-            let span = (b_bot - b_top).max(1) as f64;
-            let vol_per_level = bar.volume / span;
-            let is_buy = bar.close >= bar.open;
-            for b in b_top..=b_bot {
+        for (i, bar) in bars.iter().enumerate() {
+            let is_forming = i == bars.len().saturating_sub(1);
+            if is_forming && bar.volume > 0.0 {
+                // Real-time from public trades: bin forming volume at exact last/close price (O(1) point bin)
+                let y_frac = ((price_max - bar.close) / (price_max - price_min)).clamp(0.0, 1.0);
+                let b = (y_frac * num_buckets as f64) as usize;
                 if b < num_buckets {
-                    buckets[b] += vol_per_level;
+                    buckets[b] += bar.volume;
+                    let is_buy = bar.close >= bar.open;
                     if is_buy {
-                        buy_vol[b] += vol_per_level;
+                        buy_vol[b] += bar.volume;
                     }
                     max_vol = max_vol.max(buckets[b]);
+                }
+            } else {
+                let y_high_frac = ((price_max - bar.high) / (price_max - price_min)).clamp(0.0, 1.0);
+                let y_low_frac = ((price_max - bar.low) / (price_max - price_min)).clamp(0.0, 1.0);
+                let b_top = (y_high_frac * num_buckets as f64) as usize;
+                let b_bot = ((y_low_frac * num_buckets as f64) as usize).min(num_buckets - 1);
+                let span = (b_bot - b_top).max(1) as f64;
+                let vol_per_level = bar.volume / span;
+                let is_buy = bar.close >= bar.open;
+                for b in b_top..=b_bot {
+                    if b < num_buckets {
+                        buckets[b] += vol_per_level;
+                        if is_buy {
+                            buy_vol[b] += vol_per_level;
+                        }
+                        max_vol = max_vol.max(buckets[b]);
+                    }
                 }
             }
         }
