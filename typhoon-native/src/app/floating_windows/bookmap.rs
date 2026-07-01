@@ -59,6 +59,11 @@ pub(super) fn render_live_orderbook_heatmap(
     let get_size = |level: &serde_json::Value| -> f64 {
         level["order_qty"].as_f64().or_else(|| level["size"].as_f64()).unwrap_or(0.0)
     };
+    let is_l3 = v.get("is_l3").and_then(|b| b.as_bool()).unwrap_or(false) ||
+                bids.iter().any(|b| b.get("order_id").is_some()) ||
+                asks.iter().any(|a| a.get("order_id").is_some());
+    let order_count_bid: usize = if is_l3 { bids.len() } else { 0 };
+    let order_count_ask: usize = if is_l3 { asks.len() } else { 0 };
 
     let max_size = bids
         .iter()
@@ -70,7 +75,9 @@ pub(super) fn render_live_orderbook_heatmap(
     // Follow-up polish: staleness + top rich L1 sizes
     let top_bid_size = bids.first().and_then(|b| b["size"].as_f64()).unwrap_or(0.0);
     let top_ask_size = asks.first().and_then(|a| a["size"].as_f64()).unwrap_or(0.0);
-    let header = if top_bid_size > 0.0 || top_ask_size > 0.0 {
+    let header = if is_l3 {
+        format!("Live L3 per-order — {} ({} orders bid, {} ask)", ts, order_count_bid, order_count_ask)
+    } else if top_bid_size > 0.0 || top_ask_size > 0.0 {
         format!("Live L2 depth — {}  (top b{:.2} a{:.2})", ts, top_bid_size, top_ask_size)
     } else {
         format!("Live L2 depth — {}", ts)

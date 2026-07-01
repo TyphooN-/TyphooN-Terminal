@@ -504,7 +504,10 @@ impl TyphooNApp {
                                 let ask_cnt = asks.len();
                                 let age_note = if ts.is_empty() { " (live)".to_string() } else { format!(" age:{}", ts) };
                                 let provider_note = if sym.contains("/") || sym.to_uppercase().ends_with("USD") { "Kraken" } else { "Alpaca snapshot" };
-                                ui.label(egui::RichText::new(format!("Levels: B{} A{} · {} {}", bid_cnt, ask_cnt, provider_note, age_note)).small().color(ob_dim));
+                                let l3_note = if v.get("is_l3").and_then(|b| b.as_bool()).unwrap_or(false) || bids.iter().any(|b| b.get("order_id").is_some()) {
+                                    " · L3 per-order"
+                                } else { "" };
+                                ui.label(egui::RichText::new(format!("Levels: B{} A{} · {} {}{}", bid_cnt, ask_cnt, provider_note, age_note, l3_note)).small().color(ob_dim));
 
                                 // Compute rich L2 metrics
                                 let bid_vol: f64 = bids.iter().filter_map(|e| e["size"].as_f64()).sum();

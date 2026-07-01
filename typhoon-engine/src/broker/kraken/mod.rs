@@ -14,6 +14,7 @@ mod private_ws;
 mod public_book;
 mod ws_v2;
 mod ws_v2_book;
+mod ws_v2_level3;
 mod ws_v2_ticker;
 
 pub use self::equities::{
@@ -47,6 +48,9 @@ pub use self::ws_v2_book::{
     KrakenWsBookDelta, KrakenWsBookLevel, KrakenWsBookState, build_book_subscribe_frame,
     build_book_subscribe_frames, build_book_unsubscribe_frame, compute_book_checksum,
     parse_book_message, run_book_streamer,
+};
+pub use self::ws_v2_level3::{
+    KrakenL3Level, KrakenL3Delta, run_level3_streamer,
 };
 pub use self::ws_v2_ticker::{
     KRAKEN_WS_V2_TICKER_CHANNEL, KrakenTickerStreamerEvent, KrakenWsTicker,

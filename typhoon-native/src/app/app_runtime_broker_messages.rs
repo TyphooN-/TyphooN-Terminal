@@ -73,14 +73,14 @@ impl TyphooNApp {
                                     let p = l["price"].as_f64().or_else(|| l["limit_price"].as_f64()).unwrap_or(0.0);
                                     let s = l["size"].as_f64().or_else(|| l["order_qty"].as_f64()).unwrap_or(0.0);
                                     if p > 0.0 && s > 0.0 { Some((p, s)) } else { None }
-                                }).take(8).collect()
+                                }).take(25).collect()
                             }).unwrap_or_default();
                             let asks: Vec<(f64, f64)> = v["asks"].as_array().map(|arr| {
                                 arr.iter().filter_map(|l| {
                                     let p = l["price"].as_f64().or_else(|| l["limit_price"].as_f64()).unwrap_or(0.0);
                                     let s = l["size"].as_f64().or_else(|| l["order_qty"].as_f64()).unwrap_or(0.0);
                                     if p > 0.0 && s > 0.0 { Some((p, s)) } else { None }
-                                }).take(8).collect()
+                                }).take(25).collect()
                             }).unwrap_or_default();
                             for &i in idxs {
                                 if let Some(chart) = self.charts.get_mut(i) {

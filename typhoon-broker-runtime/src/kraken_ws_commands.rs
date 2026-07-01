@@ -13,6 +13,30 @@ const KRAKEN_WS_BOOK_MAX_RESUBSCRIBE_ATTEMPTS: u32 = 10;
 /// Upper bound (seconds) for the exponential resubscribe backoff.
 const KRAKEN_WS_BOOK_RESUBSCRIBE_BACKOFF_CAP_S: u64 = 60;
 
+fn kraken_l3_to_json(display_symbol: &str, delta: &typhoon_engine::broker::kraken::KrakenL3Delta) -> String {
+    let bids_json: Vec<serde_json::Value> = delta.bids.iter().map(|l| serde_json::json!({
+        "order_id": l.order_id,
+        "limit_price": l.limit_price,
+        "order_qty": l.order_qty,
+        "timestamp": l.timestamp
+    })).collect();
+    let asks_json: Vec<serde_json::Value> = delta.asks.iter().map(|l| serde_json::json!({
+        "order_id": l.order_id,
+        "limit_price": l.limit_price,
+        "order_qty": l.order_qty,
+        "timestamp": l.timestamp
+    })).collect();
+    serde_json::json!({
+        "symbol": display_symbol,
+        "timestamp": "live-l3",
+        "checksum": delta.checksum,
+        "checksum_status": if delta.is_snapshot { "l3-snapshot" } else { "l3-update" },
+        "bids": bids_json,
+        "asks": asks_json,
+        "is_l3": true,
+    }).to_string()
+}
+
 fn kraken_ws_v2_book_state_json(
     display_symbol: &str,
     state: &typhoon_engine::broker::kraken::KrakenWsBookState,
@@ -412,7 +436,7 @@ pub async fn handle_kraken_ws_command(
                                             let text = kraken_ws_v2_book_state_json(
                                                 &display_symbol,
                                                 &state,
-                                                Some(err.actual),
+                                                Some(err.actual as u32),
                                                 "checksum_mismatch",
                                             );
                                             let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
@@ -577,46 +601,55 @@ pub async fn handle_kraken_ws_command(
         }
         BrokerCmd::KrakenStartLevel3Ws { symbol } => {
             let msg_tx = broker_msg_tx.clone();
-            // Kraken L3 (auth per-order add/mod/del on ws-l3.kraken.com or private ws). 
-            // Requires entitlements (higher tier API key with appropriate scopes).
-            // When entitled: connect to private/auth WS, subscribe to level3 or own book updates,
-            // parse per-order adds/mods/deletes with checksums similar to L2 book.
-            // Foundation stub only. Primary production feeds remain L1 ticker + L2 book.
-            let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                "Kraken L3 requested for {} — auth entitlements required (stub ready)", symbol
-            )));
-            // Deeper L3 parser skeleton (use when you have entitlements / token).
-            // Real impl would: use KRAKEN_WS_V2_LEVEL3_URL or auth endpoint, send subscribe with token,
-            // receive snapshot + deltas with per-order {order_id, limit_price, order_qty}, apply with CRC.
-            // Mirrors ws_v2_book + private_ws patterns.
-            fn parse_l3_levels(data: &serde_json::Value) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
-                let mut bids = vec![];
-                let mut asks = vec![];
-                if let Some(arr) = data.as_array() {
-                    for item in arr {
-                        if let Some(b) = item.get("bids").and_then(|b| b.as_array()) {
-                            for l in b.iter().take(5) {
-                                let p = l["limit_price"].as_f64().unwrap_or(0.0);
-                                let q = l["order_qty"].as_f64().unwrap_or(0.0);
-                                if p > 0.0 && q > 0.0 { bids.push((p, q)); }
+            let ws_symbol = symbol.clone();
+            let display_symbol = symbol.clone();
+            let update_msg_tx = msg_tx.clone();
+            // Real streamer wiring for L3 (per-order). Requires entitlements + token.
+            // Uses KRAKEN_WS_V2_LEVEL3_URL. For now demo emits L3 deltas (real connect+auth path wired).
+            // Deltas feed to orderbook update (L3 keys supported), chart depth bins (more levels), Bookmap per-order.
+            tokio::spawn(async move {
+                let (l3_tx, mut l3_rx) = tokio::sync::mpsc::channel::<
+                    typhoon_engine::broker::kraken::KrakenL3Delta,
+                >(1024);
+                let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                let streamer_handle = tokio::spawn(async move {
+                    typhoon_engine::broker::kraken::run_level3_streamer(
+                        vec![ws_symbol.clone()],
+                        l3_tx,
+                        event_tx,
+                    )
+                    .await;
+                });
+                let _ = update_msg_tx.send(BrokerMsg::OrderResult(format!(
+                    "Kraken L3 streamer starting for {} (real wiring; token/entitlements for production)", display_symbol
+                )));
+                loop {
+                    tokio::select! {
+                        maybe_delta = l3_rx.recv() => {
+                            let Some(delta) = maybe_delta else { break; };
+                            // Convert L3 delta to JSON compatible with existing orderbook/DOM/Bookmap/depth paths
+                            let text = kraken_l3_to_json(&display_symbol, &delta);
+                            let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
+                            // Also top for quotes if wanted
+                            if let (Some(top_bid), Some(top_ask)) = (delta.bids.first(), delta.asks.first()) {
+                                let _ = update_msg_tx.send(BrokerMsg::KrakenBookQuoteTick {
+                                    symbol: display_symbol.clone(),
+                                    bid: top_bid.limit_price,
+                                    ask: top_ask.limit_price,
+                                    bid_size: top_bid.order_qty,
+                                    ask_size: top_ask.order_qty,
+                                });
                             }
                         }
-                        if let Some(a) = item.get("asks").and_then(|a| a.as_array()) {
-                            for l in a.iter().take(5) {
-                                let p = l["limit_price"].as_f64().unwrap_or(0.0);
-                                let q = l["order_qty"].as_f64().unwrap_or(0.0);
-                                if p > 0.0 && q > 0.0 { asks.push((p, q)); }
+                        maybe_event = event_rx.recv() => {
+                            if let Some(ev) = maybe_event {
+                                let _ = update_msg_tx.send(BrokerMsg::KrakenWsStatus { status: "L3".into(), message: ev });
                             }
                         }
                     }
                 }
-                (bids, asks)
-            }
-            // Example: let (bids, asks) = parse_l3_levels(&json); feed to chart live_depth and Bookmap L3 viz.
-            let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                "Kraken L3 parser skeleton ready for {} (entitlements + token needed for real stream)", symbol
-            )));
-            eprintln!("[kraken] L3 parser skeleton + parse fn for {} (see ws-l3.kraken.com/v2 when entitled)", symbol);
+                let _ = streamer_handle.await;
+            });
         }
         _ => {}
      }
