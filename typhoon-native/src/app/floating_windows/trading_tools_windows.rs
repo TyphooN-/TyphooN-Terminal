@@ -466,9 +466,14 @@ impl TyphooNApp {
                                 }
                                 // L3 foundation trigger (polish 6)
                                 if ui.button("Start L3 (Kraken)").clicked() && !dom_sym.is_empty() && kraken_bookmap_stream_supported(&dom_sym, &self.kraken_pairs) {
+                                    self.kraken_l3_status = format!("L3 requested for {} (awaiting auth + stream)", dom_sym);
                                     let _ = self.broker_tx.send(BrokerCmd::KrakenStartLevel3Ws { symbol: dom_sym.clone() });
                                 }
                             });
+                            // Deeper L3 UI: status label (stub)
+                            if !self.kraken_l3_status.is_empty() {
+                                ui.label(egui::RichText::new(&self.kraken_l3_status).small().color(ob_dim));
+                            }
                             if self.orderbook_result.is_empty() {
                                 ui.label(egui::RichText::new("No L2 data — click Fetch Depth in Bookmap or Fetch L2 in Order Flow.").color(ob_dim).small());
                             } else if let Ok(v) = serde_json::from_str::<serde_json::Value>(&self.orderbook_result) {

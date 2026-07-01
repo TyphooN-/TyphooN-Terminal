@@ -1,6 +1,6 @@
 # ADR-129: Level 1 / Level 2 / Level 3 Market Data Support (Alpaca + Kraken)
 
-**Status:** Accepted / Implemented (2026-07) — All 1-7 polish items + extensions complete. L1 sizes inline+tooltips+axis, richer KrakenBookQuoteTick, L2 DOM with counts/age/provider/L3 trigger, L3 stub enhanced with UI button, new ADR-129. All verified.
+**Status:** Accepted / Implemented (2026-07) — All 1-7 + follow-ups complete. L1 sizes + lines + tooltips, depth pref, Bookmap hover+alpha, richer KrakenBookQuoteTick, L2 DOM full, L3 deeper foundation (stub + status field + UI label + clear limits). Verified + committed.
 
 **Date:** 2026-07-01 (updated during implementation)
 

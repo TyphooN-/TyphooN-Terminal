@@ -499,6 +499,7 @@ impl TyphooNApp {
             show_orderbook_window: false,
             orderbook_result: String::new(),
             dom_depth: 100,
+            kraken_l3_status: "L3 stub (auth entitlements required for per-order depth)".to_string(),
             kraken_orderbook_ws_symbol: String::new(),
             kraken_chart_l2_ws_symbol: String::new(),
             kraken_chart_l2_last_start_attempt: std::time::Instant::now()

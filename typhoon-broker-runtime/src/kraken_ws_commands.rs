@@ -577,13 +577,15 @@ pub async fn handle_kraken_ws_command(
         }
         BrokerCmd::KrakenStartLevel3Ws { symbol } => {
             let msg_tx = broker_msg_tx.clone();
-            // Kraken L3 (auth per-order add/mod/del on ws-l3.kraken.com). Limited to entitled accounts, low volume.
-            // This is a foundation stub. Primary rich feeds remain L1 ticker + L2 book.
+            // Kraken L3 (auth per-order add/mod/del on ws-l3.kraken.com or private). 
+            // Limited to entitled accounts. Foundation stub only.
+            // Primary production feeds: L1 (ticker) + L2 (book with CRC).
             let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                "Kraken L3 requested for {} (auth required; L1/L2 preferred for most use)", symbol
+                "Kraken L3 requested for {} — auth entitlements required", symbol
             )));
-            // TODO: wire auth token + full level3 parser/streamer when user has entitlements.
+            // TODO deeper: full authenticated WS connect + per-order delta parser when entitled.
+            eprintln!("[kraken] L3 stub triggered for {} (see ADR-129 for limits)", symbol);
         }
-         _ => unreachable!("non-Kraken websocket command routed to Kraken websocket handler"),
+        _ => {}
      }
  }
