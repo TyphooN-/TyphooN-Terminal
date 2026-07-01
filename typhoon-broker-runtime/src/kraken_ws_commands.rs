@@ -64,10 +64,12 @@ fn kraken_ws_v2_book_state_json(
 
 fn top_of_kraken_ws_v2_book(
     state: &typhoon_engine::broker::kraken::KrakenWsBookState,
-) -> Option<(f64, f64)> {
-    let bid = state.bids.first()?.price;
-    let ask = state.asks.first()?.price;
-    (bid > 0.0 && ask > 0.0 && bid.is_finite() && ask.is_finite()).then_some((bid, ask))
+) -> Option<(f64, f64, f64, f64)> {
+    let b = state.bids.first()?;
+    let a = state.asks.first()?;
+    if b.price > 0.0 && a.price > 0.0 && b.price.is_finite() && a.price.is_finite() {
+        Some((b.price, a.price, b.qty, a.qty))
+    } else { None }
 }
 
 fn resolve_kraken_chart_book_ws_symbol(symbol: &str) -> Option<String> {
@@ -386,12 +388,13 @@ pub async fn handle_kraken_ws_command(
                                         // Healthy snapshot — clear the consecutive-mismatch
                                         // counter so only *sustained* failures trip the cap.
                                         resubscribe_count = 0;
-                                        if let Some((bid, ask)) = top_of_kraken_ws_v2_book(&state) {
+                                        if let Some((bid, ask, _bsz, _asz)) = top_of_kraken_ws_v2_book(&state) {
                                             let _ = update_msg_tx.send(BrokerMsg::KrakenBookQuoteTick {
-                                                symbol: display_symbol.clone(),
+                                                symbol: state_symbol.clone(),
                                                 bid,
                                                 ask,
                                             });
+                                            // sizes (_bsz/_asz) available from L2 top for future richer tick
                                         }
                                         if publish_dom {
                                             let text = kraken_ws_v2_book_state_json(

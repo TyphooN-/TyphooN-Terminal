@@ -244,7 +244,8 @@ pub(crate) fn draw_right_axis_price_labels(
                 egui::Stroke::new(1.0, bid_text_col),
                 egui::StrokeKind::Inside,
             );
-            let label = format!("Bid {}", format_price(chart.live_bid));
+            let size_part = if chart.live_bid_size > 0.0 { format!(" x {}", format_price(chart.live_bid_size)) } else { String::new() };
+            let label = format!("Bid {}{}", format_price(chart.live_bid), size_part);
             painter.text(
                 egui::pos2(chart_rect.right() + 4.0, bid_label_y),
                 egui::Align2::LEFT_CENTER,
@@ -273,7 +274,8 @@ pub(crate) fn draw_right_axis_price_labels(
                 egui::Stroke::new(1.0, ask_text_col),
                 egui::StrokeKind::Inside,
             );
-            let label = format!("Ask {}", format_price(chart.live_ask));
+            let size_part = if chart.live_ask_size > 0.0 { format!(" x {}", format_price(chart.live_ask_size)) } else { String::new() };
+            let label = format!("Ask {}{}", format_price(chart.live_ask), size_part);
             painter.text(
                 egui::pos2(chart_rect.right() + 4.0, ask_label_y),
                 egui::Align2::LEFT_CENTER,

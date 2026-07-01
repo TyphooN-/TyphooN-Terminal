@@ -51,7 +51,7 @@ impl TyphooNApp {
         if let Some(idxs) = self.chart_by_bare.get(&wanted) {
             for &i in idxs {
                 if let Some(chart) = self.charts.get_mut(i) {
-                    chart.apply_live_quote_update(bid, ask, false);
+                    chart.apply_live_quote_update(bid, ask, q.bid_size, q.ask_size, false);
                     // Rich L1: could store sizes in chart state if extended
                 }
             }
@@ -81,7 +81,7 @@ impl TyphooNApp {
         if let Some(idxs) = self.chart_by_bare.get(&wanted) {
             for &i in idxs {
                 if let Some(chart) = self.charts.get_mut(i) {
-                    chart.apply_live_quote_update(bid, ask, false);
+                    chart.apply_live_quote_update(bid, ask, 0.0, 0.0, false);
                 }
             }
         }
@@ -103,7 +103,7 @@ impl TyphooNApp {
         if let Some(idxs) = self.chart_by_bare.get(&wanted) {
             for &i in idxs {
                 if let Some(chart) = self.charts.get_mut(i) {
-                    chart.apply_live_quote_update(bid, ask, false);
+                    chart.apply_live_quote_update(bid, ask, t.bid_qty.unwrap_or(0.0), t.ask_qty.unwrap_or(0.0), false);
                     chart.apply_forming_price_update(last);
                 }
             }
@@ -155,7 +155,7 @@ impl TyphooNApp {
                             .live_quote_at
                             .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
                     if !weekend_closed && !(ticker.delayed && realtime_fresh) {
-                        chart.apply_live_quote_update(ticker.bid, ticker.ask, ticker.delayed);
+                        chart.apply_live_quote_update(ticker.bid, ticker.ask, 0.0, 0.0, ticker.delayed);
                     }
                 }
             }
@@ -169,7 +169,7 @@ impl TyphooNApp {
                             .live_quote_at
                             .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
                     if !weekend_closed && !(ticker.delayed && realtime_fresh) {
-                        chart.apply_live_quote_update(ticker.bid, ticker.ask, ticker.delayed);
+                        chart.apply_live_quote_update(ticker.bid, ticker.ask, 0.0, 0.0, ticker.delayed);
                     }
                 }
             }

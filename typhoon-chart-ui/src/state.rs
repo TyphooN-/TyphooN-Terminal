@@ -52,6 +52,9 @@ pub struct ChartState {
     /// Live bid/ask from streaming quotes (for spread line rendering).
     pub live_bid: f64,
     pub live_ask: f64,
+    /// Live sizes from rich L1 (Alpaca quotes, Kraken ticker/book).
+    pub live_bid_size: f64,
+    pub live_ask_size: f64,
     /// When `live_bid`/`live_ask` were last refreshed from a streaming quote.
     /// The spread lines are hidden once this goes stale so a frozen quote isn't
     /// drawn next to a live (differently-priced) last/candle.
@@ -369,6 +372,8 @@ impl ChartState {
         self.symbol = symbol.into();
         self.live_bid = 0.0;
         self.live_ask = 0.0;
+        self.live_bid_size = 0.0;
+        self.live_ask_size = 0.0;
         self.live_quote_at = None;
         self.live_quote_delayed = false;
     }
@@ -464,13 +469,15 @@ impl ChartState {
         true
     }
 
-    pub fn apply_live_quote_update(&mut self, bid: f64, ask: f64, delayed: bool) -> bool {
+    pub fn apply_live_quote_update(&mut self, bid: f64, ask: f64, bid_size: f64, ask_size: f64, delayed: bool) -> bool {
         let mid = (bid + ask) * 0.5;
         if bid <= 0.0 || ask <= 0.0 || mid <= 0.0 || !bid.is_finite() || !ask.is_finite() {
             return false;
         }
         self.live_bid = bid;
         self.live_ask = ask;
+        if bid_size > 0.0 { self.live_bid_size = bid_size; }
+        if ask_size > 0.0 { self.live_ask_size = ask_size; }
         self.live_quote_at = Some(std::time::Instant::now());
         self.live_quote_delayed = delayed;
         // A delayed quote (Kraken iapi equities is always delayed=true) is stored
@@ -523,6 +530,8 @@ impl ChartState {
             compare_bars: Vec::new(),
             live_bid: 0.0,
             live_ask: 0.0,
+            live_bid_size: 0.0,
+            live_ask_size: 0.0,
             live_quote_at: None,
             live_quote_delayed: false,
             ext_open: 0.0,

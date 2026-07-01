@@ -422,6 +422,18 @@ impl TyphooNApp {
                             let ob_bid = egui::Color32::from_rgb(0, 200, 80);
                             let ob_ask = egui::Color32::from_rgb(220, 50, 50);
                             let ob_dim = egui::Color32::from_rgb(80, 80, 100);
+                            // Rich L2 polish: refresh button
+                            ui.horizontal(|ui| {
+                                if ui.button("Refresh L2").clicked() {
+                                    // Try to re-fetch using last known or current focused
+                                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&self.orderbook_result) {
+                                        if let Some(sym) = v["symbol"].as_str() {
+                                            let _ = self.broker_tx.send(BrokerCmd::GetOrderbook { symbol: sym.to_string() });
+                                        }
+                                    }
+                                }
+                                ui.label(egui::RichText::new("(for snapshots; Kraken streams live)").small().color(ob_dim));
+                            });
                             if self.orderbook_result.is_empty() {
                                 ui.label(egui::RichText::new("No L2 data — click Fetch Depth in Bookmap or Fetch L2 in Order Flow.").color(ob_dim).small());
                             } else if let Ok(v) = serde_json::from_str::<serde_json::Value>(&self.orderbook_result) {

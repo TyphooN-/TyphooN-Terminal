@@ -441,6 +441,16 @@ impl TyphooNApp {
 
                     let (row_rect, row_resp) =
                         ui.allocate_exact_size(egui::vec2(avail_w, row_h), egui::Sense::click());
+                    // Rich L1 tooltip polish
+                    let tip = if wl.live_bid > 0.0 || wl.live_ask > 0.0 {
+                        let bsz = if wl.live_bid_size > 0.0 { format!(" x {}", format_price(wl.live_bid_size)) } else { String::new() };
+                        let asz = if wl.live_ask_size > 0.0 { format!(" x {}", format_price(wl.live_ask_size)) } else { String::new() };
+                        format!("Bid: {}{}\nAsk: {}{}\n(WS L1 sizes when available)", 
+                            format_price(wl.live_bid), bsz, format_price(wl.live_ask), asz)
+                    } else {
+                        "No live WS quote yet".to_string()
+                    };
+                    row_resp.clone().on_hover_text(tip);
                     let rp = ui.painter_at(row_rect);
 
                     // ADR-092: Row background with P&L heatmap intensity
