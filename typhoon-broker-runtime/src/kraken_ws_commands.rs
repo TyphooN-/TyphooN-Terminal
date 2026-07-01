@@ -572,6 +572,25 @@ pub async fn handle_kraken_ws_command(
                         status: "trade".to_string(),
                         message: format!("{} {:.2} vol={:.4} {}", t.symbol, t.price, t.volume, t.side),
                     });
+                    // Drive last price / forming bar from executed public trade (O(1) via existing ticker path + chart_by_bare)
+                    // This gives real-time executed price to charts/MTF/watchlist, complementing ticker L1.
+                    let trade_ticker = typhoon_engine::broker::kraken::KrakenWsTicker {
+                        symbol: t.symbol.clone(),
+                        bid: None,
+                        bid_qty: None,
+                        ask: None,
+                        ask_qty: None,
+                        last: Some(t.price),
+                        volume_24h: Some(t.volume), // reuse volume field for trade vol as signal
+                        vwap_24h: None,
+                        low_24h: None,
+                        high_24h: None,
+                        change_24h: None,
+                        change_pct_24h: None,
+                        ts_ms: None,
+                        is_snapshot: false,
+                    };
+                    let _ = trades_msg_tx.send(BrokerMsg::KrakenWsTicker(trade_ticker));
                 }
             });
             let state_symbol = ws_symbol.clone();
