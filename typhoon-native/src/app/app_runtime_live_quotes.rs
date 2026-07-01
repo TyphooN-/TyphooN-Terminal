@@ -123,11 +123,15 @@ impl TyphooNApp {
         // (not just hardcoded M1/M5). This keeps focused MTF cells fresh in the scheduler when trades arrive, reducing unnecessary REST.
         if t.bid.is_none() && t.ask.is_none() && t.volume_24h.unwrap_or(0.0) > 0.0 {
             let now_ms = chrono::Utc::now().timestamp_millis();
-            let ts = t.ts_ms.unwrap_or(now_ms);
             if let Some(idxs) = self.chart_by_bare.get(&wanted) {
                 for &i in idxs {
                     if let Some(chart) = self.charts.get(i) {
                         let tf = chart.timeframe.label().to_string();
+                        // Use the (possibly trade-advanced) forming bar ts as the freshness anchor.
+                        // This ties live public trades directly into "merged bar" ts for the sync
+                        // scheduler, keeping focused MTF low-TF cells fresh (100% merged goal + MTF priority).
+                        let bar_ts = chart.bars.last().map(|b| b.ts_ms).unwrap_or(0);
+                        let ts = t.ts_ms.unwrap_or(now_ms).max(bar_ts);
                         self.kraken_ws_fresh_until.insert((wanted.clone(), tf), now_ms.max(ts));
                     }
                 }
