@@ -127,9 +127,14 @@ impl TyphooNApp {
                 for &i in idxs {
                     if let Some(chart) = self.charts.get(i) {
                         let tf = chart.timeframe.label().to_string();
+                        // Only boost live low-TF (M1/M5) freshness from public trades.
+                        // High-TF-first tiered snapshots (bounded, staggered highest-first in ohlc_pipeline)
+                        // for full-universe remain untouched. This keeps tiered high-TF priority while
+                        // live low-TF MTF cells get WS-fresh skips + merged-bar ts.
+                        if !matches!(tf.as_str(), "1Min" | "5Min" | "M1" | "M5") {
+                            continue;
+                        }
                         // Use the (possibly trade-advanced) forming bar ts as the freshness anchor.
-                        // This ties live public trades directly into "merged bar" ts for the sync
-                        // scheduler, keeping focused MTF low-TF cells fresh (100% merged goal + MTF priority).
                         let bar_ts = chart.bars.last().map(|b| b.ts_ms).unwrap_or(0);
                         let ts = t.ts_ms.unwrap_or(now_ms).max(bar_ts);
                         self.kraken_ws_fresh_until.insert((wanted.clone(), tf), now_ms.max(ts));
