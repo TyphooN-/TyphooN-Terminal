@@ -118,6 +118,31 @@ pub async fn start_alpaca_quote_stream(
             let tx = broker_msg_tx.clone();
             tokio::spawn(async move {
                 while let Some(raw) = rx.recv().await {
+                    // Surface control frames (acks, errors) as OrderResult for visibility
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                        let items = if let Some(arr) = v.as_array() { arr.clone() } else { vec![v] };
+                        for item in &items {
+                            if let Some(t) = item.get("T").and_then(|x| x.as_str()) {
+                                if t == "success" {
+                                    if let Some(msg) = item.get("msg").and_then(|m| m.as_str()) {
+                                        if msg.contains("subscribed") || msg.contains("authenticated") {
+                                            let _ = tx.send(BrokerMsg::OrderResult(format!("Alpaca data WS: {}", msg)));
+                                        }
+                                    }
+                                } else if t == "error" {
+                                    let code = item.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
+                                    let msg = item.get("msg").and_then(|m| m.as_str()).unwrap_or("");
+                                    let note = if code == 406 || msg.to_lowercase().contains("limit") || msg.contains("subscription") {
+                                        format!("Alpaca WS limit ({}): {}", code, msg)
+                                    } else {
+                                        format!("Alpaca WS error ({}): {}", code, msg)
+                                    };
+                                    let _ = tx.send(BrokerMsg::OrderResult(note.clone()));
+                                    tracing::warn!("{}", note);
+                                }
+                            }
+                        }
+                    }
                     for (sym, bid, ask) in parse_market_data_quotes(&raw) {
                         let _ = tx.send(BrokerMsg::AlpacaQuote(sym, bid, ask));
                     }
