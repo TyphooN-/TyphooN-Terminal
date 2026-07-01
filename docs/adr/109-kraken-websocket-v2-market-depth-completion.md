@@ -157,7 +157,7 @@ Verification:
 
 ### Phase 1 — L1 ticker
 
-Status: engine parser + stream driver foundation implemented. Native subscription reconciliation and UI wiring pending.
+Status: engine parser + stream driver foundation implemented (2026-07). Native subscription reconciliation and UI wiring **completed** in subsequent updates (see L3 foundation section and ADR-129).
 
 Implement `ws_v2_ticker.rs` and native active-symbol streamer.
 
@@ -199,7 +199,7 @@ Verification:
 
 ### Phase 2 — L2 order book v2 replacement
 
-Status: engine parser/state helper + stream driver foundation implemented. CRC32 checksum validation, resync policy, and native replacement wiring pending.
+Status: engine parser/state helper + stream driver foundation implemented (2026-07). CRC32 checksum validation, resync policy, and native replacement wiring **completed** in subsequent updates (v2 primary; v1 kept for compat — see Update sections and ADR-129).
 
 Implement `ws_v2_book.rs` and replace `public_book.rs` v1 path.
 

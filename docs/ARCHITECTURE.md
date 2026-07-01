@@ -57,6 +57,8 @@ No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
 
 Broker & data scope is **Kraken + Alpaca only** (ADR-111). Equity bars merge a trusted tier against an independent corroborator (ADR-112/113), with known stock splits back-adjusted from a curated fallback when the FMP split feed is unavailable (ADR-122).
 
+Recent market data work (ADR-129/109): Strong L1 (ticker/quotes with sizes) for both brokers. Kraken L2 (v2 book with atomic CRC32, exact wire tokens). L3 foundation (per-order `ws_v2_level3.rs`, real/sim streamer + token, CRC, KrakenL3State). Depth profile (live bins + overlay) and richer Bookmap (per-order list, markers, age coloring, interactions) on focused symbols.
+
 | Tier | Source | Coverage |
 |------|--------|----------|
 | Trusted | Kraken Spot | Crypto trading (full Spot REST order surface + private WS ownTrades/openOrders), recent REST OHLCV, and full-catalog public OHLC WebSocket forward freshness under `kraken:SYMBOL:TF`. Spot public pacing/cooldown per ADR-095 and WS write-path controls per ADR-099. |
