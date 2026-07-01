@@ -13,32 +13,24 @@ impl TyphooNApp {
             return;
         }
 
-        let sym_norm = symbol.replace('/', "").to_ascii_uppercase();
-        for chart in &mut self.charts {
-            let chart_sym = chart.symbol.replace('/', "").to_ascii_uppercase();
-            let mut parts = chart_sym.rsplit(':');
-            let last_part = parts.next().unwrap_or(chart_sym.as_str());
-            let chart_bare = if matches!(
-                last_part,
-                "1MIN"
-                    | "5MIN"
-                    | "15MIN"
-                    | "30MIN"
-                    | "1HOUR"
-                    | "4HOUR"
-                    | "1DAY"
-                    | "1WEEK"
-                    | "1MONTH"
-            ) {
-                parts.next().unwrap_or(chart_sym.as_str())
-            } else {
-                chart_sym.as_str()
-            };
-            if chart_bare == sym_norm.as_str()
-                || chart_bare.contains(sym_norm.as_str())
-                || sym_norm.contains(chart_bare)
-            {
-                chart.apply_forming_price_update(last);
+        let wanted = bare_symbol_from_key(&symbol)
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .trim_end_matches(".eq")
+            .to_ascii_uppercase();
+        if let Some(idxs) = self.chart_by_bare.get(&wanted) {
+            for &i in idxs {
+                if let Some(chart) = self.charts.get_mut(i) {
+                    chart.apply_forming_price_update(last);
+                }
+            }
+        } else {
+            // fallback fuzzy for legacy keys (rare)
+            for chart in &mut self.charts {
+                let chart_sym = chart.symbol.replace('/', "").to_ascii_uppercase();
+                if chart_sym.contains(&wanted) || wanted.contains(&chart_sym) {
+                    chart.apply_forming_price_update(last);
+                }
             }
         }
     }
@@ -111,23 +103,34 @@ impl TyphooNApp {
             },
         );
 
-        // Note: keep linear for now because chart bare extraction differs; can O(1) later with consistent norm
-        for chart in &mut self.charts {
-            let chart_sym = chart.symbol.replace('/', "").to_ascii_uppercase();
-            let chart_bare = chart_sym
-                .rsplit(':')
-                .nth(1)
-                .or_else(|| chart_sym.rsplit(':').next())
-                .unwrap_or("")
-                .trim_end_matches(".EQ")
-                .to_string();
-            if chart_bare == symbol {
-                let realtime_fresh = !chart.live_quote_delayed
-                    && chart
-                        .live_quote_at
-                        .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
-                if !weekend_closed && !(ticker.delayed && realtime_fresh) {
-                    chart.apply_live_quote_update(ticker.bid, ticker.ask, ticker.delayed);
+        let wanted = bare_symbol_from_key(&symbol)
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .to_ascii_uppercase();
+        if let Some(idxs) = self.chart_by_bare.get(&wanted) {
+            for &i in idxs {
+                if let Some(chart) = self.charts.get_mut(i) {
+                    let realtime_fresh = !chart.live_quote_delayed
+                        && chart
+                            .live_quote_at
+                            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
+                    if !weekend_closed && !(ticker.delayed && realtime_fresh) {
+                        chart.apply_live_quote_update(ticker.bid, ticker.ask, ticker.delayed);
+                    }
+                }
+            }
+        } else {
+            // fallback (rare norm diff)
+            for chart in &mut self.charts {
+                let chart_bare = chart.symbol.replace('/', "").to_ascii_uppercase();
+                if chart_bare.contains(&wanted) {
+                    let realtime_fresh = !chart.live_quote_delayed
+                        && chart
+                            .live_quote_at
+                            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
+                    if !weekend_closed && !(ticker.delayed && realtime_fresh) {
+                        chart.apply_live_quote_update(ticker.bid, ticker.ask, ticker.delayed);
+                    }
                 }
             }
         }
