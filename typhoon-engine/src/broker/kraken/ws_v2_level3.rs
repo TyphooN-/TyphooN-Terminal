@@ -183,22 +183,47 @@ async fn run_level3_streamer_once(
 }
 
 fn simulate_l3_delta(symbol: String, tick: u64) -> KrakenL3Delta {
-    // Enhanced for real-feed CRC path testing + age demo
-    let base = 100.0 + (tick % 5) as f64 * 0.1;
+    // Enhanced for real-feed CRC path testing + age demo + variety for gated L3 sim (add/mod/delete mix, proper received_at_ms)
+    let base = 100.0 + (tick % 7) as f64 * 0.12;
     let ts = Some(format!("{}", 1000000000 + tick));
-    // Fake but plausible checksum for CRC test path
-    let csum = if tick % 3 == 0 { Some(1234567890u64) } else { None };
+    let now_ms = Some((1000000000u64 + tick * 100) as u64);
+    let csum = if tick % 4 == 0 { Some(0xBEEF_CAFEu64 + tick) } else { None };
+
+    let mut bids = vec![KrakenL3Level {
+        order_id: format!("B{}", tick),
+        limit_price: base - 0.05,
+        order_qty: 1.2 + (tick % 3) as f64 * 0.15,
+        timestamp: ts.clone(),
+        price_text: Some(format!("{:.4}", base - 0.05)),
+        qty_text: Some("1.2".into()),
+        received_at_ms: now_ms,
+    }];
+
+    let asks = vec![KrakenL3Level {
+        order_id: format!("A{}", tick),
+        limit_price: base + 0.05,
+        order_qty: 2.5,
+        timestamp: ts.clone(),
+        price_text: Some(format!("{:.4}", base + 0.05)),
+        qty_text: Some("2.5".into()),
+        received_at_ms: now_ms,
+    }];
+
+    if tick % 7 == 3 {
+        bids.clear(); // delete sim
+    }
+    if tick % 5 == 2 {
+        if let Some(b) = bids.first_mut() {
+            b.order_qty *= 0.7; // mod sim
+        }
+    }
+
     KrakenL3Delta {
         symbol,
-        bids: vec![
-            KrakenL3Level { order_id: format!("B{}", tick), limit_price: base - 0.05, order_qty: 1.2 + (tick % 3) as f64 * 0.1, timestamp: ts.clone(), price_text: Some(format!("{:.4}", base - 0.05)), qty_text: Some("1.2".into()), received_at_ms: None },
-            KrakenL3Level { order_id: format!("B2{}", tick), limit_price: base - 0.1, order_qty: 0.8, timestamp: ts.clone(), price_text: Some(format!("{:.4}", base - 0.1)), qty_text: Some("0.8".into()), received_at_ms: None },
-        ],
-        asks: vec![
-            KrakenL3Level { order_id: format!("A{}", tick), limit_price: base + 0.05, order_qty: 2.5, timestamp: ts, price_text: Some(format!("{:.4}", base + 0.05)), qty_text: Some("2.5".into()), received_at_ms: None },
-        ],
+        bids,
+        asks,
         checksum: csum,
-        is_snapshot: tick % 5 == 0,
+        is_snapshot: tick % 6 == 0,
     }
 }
 

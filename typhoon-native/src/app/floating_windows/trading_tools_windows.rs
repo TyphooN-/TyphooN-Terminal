@@ -408,7 +408,7 @@ impl TyphooNApp {
                             }
                         });
             if open {
-                open_bookmaps.push(BookmapWindowState { symbol: sym, open });
+                open_bookmaps.push(BookmapWindowState { symbol: sym, open, selected_order_id: None });
             }
         }
         self.bookmap_windows = open_bookmaps;

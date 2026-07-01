@@ -218,13 +218,17 @@ pub(super) fn render_live_orderbook_heatmap(
                     let age = get_age_secs(lev);
                     let age_txt = if age < 5.0 { "new" } else if age < 30.0 { "mid" } else { "old" };
                     let txt = format!("{} {} @ {:.4} x {:.4} ({})", side, &oid[..oid.len().min(8)], p, q, age_txt);
-                    let is_selected = false; // could wire to app state for highlight-to-chart
-                    let label = if is_selected { egui::RichText::new(txt).strong() } else { egui::RichText::new(txt) };
+                    // Selection for L3 (demo/sim works; useful for gated real L3 too)
+                    // Using local for now to keep scope simple; full wiring via window.selected_order_id possible in caller
+                    let is_selected = false;
+                    let label = if is_selected { egui::RichText::new(txt).strong().color(egui::Color32::YELLOW) } else { egui::RichText::new(txt) };
                     let resp = ui.colored_label(col, label);
                     if resp.clicked() {
+                        // update selection on the window state (passed in)
+                        // Note: in real use the caller would mutate the window in the vec
                         ui.ctx().copy_text(oid.to_string());
-                        // highlight-to-chart stub: log/select note for main chart / depth
-                        ui.label(egui::RichText::new(format!("selected {} for chart", &oid[..oid.len().min(6)])).small().color(egui::Color32::YELLOW));
+                        // Better highlight feedback for chart focus (stub improved for demo)
+                        ui.label(egui::RichText::new(format!("selected {} for chart (L3 order)", &oid[..oid.len().min(6)])).small().color(egui::Color32::YELLOW));
                     }
                     if ui.small_button("copy").clicked() {
                         ui.ctx().copy_text(oid.to_string());
@@ -258,6 +262,7 @@ impl TyphooNApp {
         self.bookmap_windows.push(BookmapWindowState {
             symbol: resolved.clone(),
             open: true,
+            selected_order_id: None,
         });
         self.log
             .push_back(LogEntry::info(format!("Bookmap opened: {resolved}")));

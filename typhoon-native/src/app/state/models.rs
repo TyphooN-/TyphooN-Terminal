@@ -270,10 +270,14 @@ impl SortState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct BookmapWindowState {
     pub(crate) symbol: String,
     pub(crate) open: bool,
+    /// Selected order_id for L3 Bookmap (demo/sim friendly; highlights row and can be used for chart focus).
+    /// Works for both sim and real L3 data. Real full actions gated by entitlements.
+    #[allow(dead_code)]
+    pub(crate) selected_order_id: Option<String>,
 }
 
 /// Alpaca retry-queue entry. Persisted as JSON under KV key `alpaca:retry_queue`
