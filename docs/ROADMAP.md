@@ -39,7 +39,8 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] MTF grid (2×2 to 4×4, up to 16 charts)
 - [x] Right panel: tabbed (Trade/Pos/Ord/WL/Risk), TradingView-style watchlist
 - [x] Bottom panel: log + volume bars
-- [x] 54+ floating windows
+- [x] 54+ floating windows (incl. Bookmap-style depth, Symbol Explorer)
+- [x] Depth profile overlay (live level bins, L3 distinction)
 - [x] Right-click context menu with drawing tools + chart type switcher
 - [x] 89 drawing tools (lines, channels, Fibonacci, shapes, Gann, Elliott, measurement, patterns, annotations, position, cycles, projection, curves)
 - [x] Session persistence (save/restore on quit/startup)
@@ -133,7 +134,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] WGSL backend (GPU execution via wgpu compute shaders)
 - [x] PineScript v5 parser (indicator, input.*, ta.*, plot, math.*)
 - [x] Full 10-language transpiler matrix: MQL5, MQL4, PineScript, ThinkScript, EasyLanguage, AFL, ProBuilder, NinjaScript, cAlgo, ACSIL
-- Deferred: hot-reload custom indicators from file and an indicator marketplace/import UI remain outside the current native parity target.
+- Deferred: hot-reload custom indicators from file and an indicator marketplace/import UI remain outside the current native implementation target.
 
 ### Phase 13: Kraken Broker
 - [x] Public OHLCV ingest: Spot REST recent-window bars, Spot full-catalog OHLC WebSocket forward freshness, Securities/xStocks iapi high-timeframe catalog sync, and Futures explicit range sync
@@ -169,7 +170,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] Slash commands: RESUMECLAUDE / RESUMEGEMINI / RESUMECODEX / RESUMEAI
 - [x] Ask Codex reasoning effort control
 
-### Phase 18: Research and indicator parity
+### Phase 18: Research and indicator surfaces
 - [x] ~375 TA-Lib primitives (indicators + candlestick patterns) across semantic feature families
 - [x] external-terminal-style research features (options chain, expirations calendar, earnings whispers, institutional ownership, insider transactions)
 - [x] Research-packet pipeline as the AI-agent-readable surface (ADR-079)

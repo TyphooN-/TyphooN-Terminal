@@ -8,7 +8,7 @@ All indicators computed in pure Rust on `&[f64]` slices. No Web Workers, no WASM
 |----------|-----------|-----------|-------|-------------|
 | **Baseline** | SMA | 200 | Yellow | Simple Moving Average — trend direction |
 | **Baseline** | KAMA | 10, 2, 30 | White | Kaufman Adaptive MA — NNFX core trend (MT5 match) |
-| **Confirmation 1** | Fisher Transform | 32 | Green/Red bars | Ehlers Fisher — NNFX confirmation (MT5 parity) |
+| **Confirmation 1** | Fisher Transform | 32 | Green/Red bars | Ehlers Fisher — NNFX confirmation (MT5-style / computational match) |
 | **Volume** | Better Volume | 20 | Multi-color | Climax up (green), climax down (red), high (blue), low (yellow), churn (gray) |
 | **Exit** | ATR Projection | 14 | Yellow bands | Open ± ATR(14) — volatility bands |
 | **Support** | Previous Candle Levels | H1/H4/D1/W1/MN1 | White/Magenta | Previous bar high/low per timeframe |
@@ -56,7 +56,7 @@ All indicators computed in pure Rust on `&[f64]` slices. No Web Workers, no WASM
 | Indicator | Parameters | Color | Range | Description |
 |-----------|-----------|-------|-------|-------------|
 | RSI | 14 | Yellow | 0-100 | Relative Strength Index, OB 70 / OS 30 |
-| Fisher Transform | 32 (smoothing 0.5/0.5, coefficient 0.25) | Green/Red bars + signal | Auto | NNFX confirmation (MT5 parity) |
+| Fisher Transform | 32 (smoothing 0.5/0.5, coefficient 0.25) | Green/Red bars + signal | Auto | NNFX confirmation (MT5-style / computational match) |
 | MACD | 12, 26, 9 | Blue line, orange signal | Auto | MACD + signal + histogram |
 | Stochastic | 14, 3, 3 | Blue %K, Orange %D | 0-100 | OB 80 / OS 20 |
 | ADX | 14 | Yellow ADX, Green DI+, Red DI- | 0-60 | Trend strength + directional |

@@ -14,16 +14,16 @@ The terminal computes its own risk verification — VaR, CVaR, correlation, expo
 
 Market data comes from **Kraken + Alpaca** (trusted, corporate-action-adjusted) with Yahoo Chart as the independent corroborator. Equity bars from multiple providers are merged into one continuous, scale-validated series, and a bad trusted print is corrected against the corroborator rather than charted (ADR-111/112/113).
 
-### 4. NNFX System Parity
+### 4. NNFX System Equivalence
 
-The indicator system matches the No-Nonsense Forex (NNFX) methodology:
+The indicator system follows the No-Nonsense Forex (NNFX) methodology:
 - KAMA(10,2,30) for trend direction
 - Fisher Transform(32) for confirmation
 - ATR Projection(14) for volatility bands
 - Better Volume for volume analysis
 - SMA(200) as baseline
 
-All ported from MQL5 with exact computational parity.
+All ported from MQL5 with computational equivalence to the originals.
 
 ### 5. Quake Console Interface
 
@@ -35,7 +35,7 @@ egui's immediate mode paradigm means the entire UI is a function of state — no
 
 ### 7. Engine as Library
 
-The `typhoon-engine` crate exports all broker, cache, risk, analytics, and backtest functionality as a Rust library. The active product surface is the native GUI. The former CLI/TUI consumer is archived on `deprecated/cli-tui` and no longer builds on `master`.
+The `typhoon-engine` crate exports all broker, cache, risk, analytics, and backtest functionality as a Rust library. The active product surface is the native GUI. The former CLI/TUI consumer is archived on `deprecated/cli-tui` and no longer builds on `master`. Live depth profile overlays and richer per-order Bookmap views are available on focused symbols.
 
 ### 8. Risk Corridor Discipline
 
