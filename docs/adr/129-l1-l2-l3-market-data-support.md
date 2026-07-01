@@ -6,8 +6,8 @@
 - l3-real-parser + real streamer: ws_v2_level3.rs with run_level3_streamer (token wiring, real WS consume + parse, sim fallback).
 - full CRC32 L3: compute_l3_checksum + KrakenL3ChecksumError mirroring book; apply_delta_with_checksum (commit only on match).
 - KrakenL3State: maintained in streamer + runtime/commands (apply per order_id add/mod/del); exposed status via events.
-- bookmap richer: per-order markers + scroll list pane (order_id, price/qty, side color, copy id).
-- depth profile: explicit "L3" label heuristic when richer levels present.
+- bookmap richer: per-order markers + scroll list pane (order_id, price/qty, side color, copy id); runtime `received_at_ms` for age persistence.
+- depth profile: "L3 depth" label (with distinct tint) when L3-like data detected; explicit distinction from L2.
 - Unit test for L3 state/apply/checksum. All prior + this deeper slice verified.
 - This slice (continue): full real-feed CRC on live deltas, order-age coloring (bars+list), list interactions (clickable + age), MTF parity (propagation + comments). Verified.
 ---
@@ -77,8 +77,8 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
 |- [x] Real-feed CRC32: `compute_l3_checksum`, `KrakenL3ChecksumError`, `apply_delta_with_checksum` (candidate clone + commit only on match; full on live deltas when present).
 |- [x] Per-order state: `KrakenL3State` with add/mod/delete by order_id; maintained in streamer + runtime/commands; exposed via status events.
 |- [x] Real WS consume + emit same `KrakenOrderbookUpdate` + `KrakenBookQuoteTick` paths for zero-delta downstream (DOM/Bookmap/charts).
-|- [x] Bookmap richer: per-order markers, scroll list pane (order_id/price/qty/side + copy), age coloring (timestamp-derived, newer brighter), clickable row interactions + age labels ("new/mid/old").
-|- [x] Depth profile integration: 25 levels propagated, L3 detection/heuristic, explicit "L3" label in overlay.
+|- [x] Bookmap richer: per-order markers, scroll list pane (order_id/price/qty/side + copy), age coloring (newer = brighter; uses wire timestamp + runtime `received_at_ms` for persistence even if wire ts absent), clickable row interactions + age labels ("new/mid/old").
+|- [x] Depth profile integration: 25 levels propagated, L3 detection/heuristic, "L3 depth" label with distinct tint in overlay.
 |- [x] MTF parity: depth/L3 updates flow to all matching charts (incl. MTF Grid) via `chart_by_bare`; comments + notes.
 |- [x] Status + events: checksum OK/MISMATCH, connected/subscribed, "L3 (real-feed CRC + age + MTF)".
 |- [x] Unit test: `l3_state_apply_and_checksum_basic` (snapshot → modify → delete; CRC exercise).

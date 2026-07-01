@@ -364,14 +364,14 @@ L2 book phase (Phase 2) is complete for core + robustness. Remaining phases (tra
 
 ## Update 2026-07: L3 Foundation Complete (parser/streamer/CRC/state/viz)
 
-- `ws_v2_level3.rs`: Full implementation of `KrakenL3Level`, `KrakenL3Delta`, `parse_l3_message` (supports snapshot + deltas with order_id / limit_price / order_qty / timestamp), `KrakenL3State` (per-order add/mod/delete by order_id), `compute_l3_checksum` + `KrakenL3ChecksumError` + `apply_delta_with_checksum` (candidate clone + exact match commit only, mirroring L2 book exactly; top-10 levels, text preservation).
+- `ws_v2_level3.rs`: Full implementation of `KrakenL3Level` (incl. `received_at_ms` for runtime age persistence even without wire timestamp), `KrakenL3Delta`, `parse_l3_message` (supports snapshot + deltas with order_id / limit_price / order_qty / timestamp), `KrakenL3State` (per-order add/mod/delete by order_id), `compute_l3_checksum` + `KrakenL3ChecksumError` + `apply_delta_with_checksum` (candidate clone + exact match commit only, mirroring L2 book exactly; top-10 levels, text preservation).
 - Real-feed CRC on live deltas: always routes checksum-present messages through validation in streamer (real auth path + sim fallback for demo/no-token). Mismatch status + resilience (forward delta; prod can resub).
 - Auth + wiring: `run_level3_streamer` / `once` accept `Option<String> token`; subscribe includes token when present; modeled on private_ws + ws_v2_book. `KrakenStartLevel3Ws` in runtime fetches token via `get_websockets_token` and spawns.
 - Real consume: WS text frames parsed and emitted as `KrakenL3Delta` (converted to same JSON paths as L2: `KrakenOrderbookUpdate`, `KrakenBookQuoteTick`).
 - Sim fallback: `simulate_l3_delta` exercises the full path (with checksums for CRC tests).
 - State exposure: `KrakenL3State` exported; maintained inside streamer loop and runtime command handler; status events carry CRC OK / MISMATCH / subscribe info.
-- Bookmap + DOM: is_l3 detection, per-order markers, richer scroll list pane (order_id truncated, price×qty, side color, copy on click/row, age "new/mid/old" labels + interactions), age-based coloring (newer = brighter bars).
-- Depth + charts: 25 levels from L3 propagated to `live_depth_bids/asks`; explicit L3 labels in overlay; MTF Grid parity via existing `chart_by_bare` O(1) dispatch (depth updates hit MTF charts for the symbol).
+- Bookmap + DOM: is_l3 detection, per-order markers, richer scroll list pane (order_id truncated, price×qty, side color, copy on click/row, age "new/mid/old" labels + interactions), age-based coloring (newer = brighter bars; backed by wire timestamp + `received_at_ms`).
+- Depth + charts: 25 levels from L3 propagated to `live_depth_bids/asks`; "L3 depth" label with distinct tint in overlay; MTF Grid parity via existing `chart_by_bare` O(1) dispatch (depth updates hit MTF charts for the symbol).
 - Limits documented everywhere: real L3 requires Kraken entitlements + auth token; sim always works for UI/dev.
 - Test: `l3_state_apply_and_checksum_basic` (snapshot → qty modify → delete; asserts state + CRC).
 - Status surface: events like "L3 real-feed CRC OK ...", "L3 real-feed CRC MISMATCH ...", "L3 connected (auth path)" / demo.
