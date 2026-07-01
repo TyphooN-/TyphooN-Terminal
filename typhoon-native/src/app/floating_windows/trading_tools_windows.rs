@@ -452,6 +452,21 @@ impl TyphooNApp {
                                     bid_vol, ask_vol, imbalance * 100.0
                                 )).small().color(imb_color));
 
+                                // Rich L2 polish: spread and mid
+                                if let (Some(top_ask), Some(top_bid)) = (
+                                    asks.first().and_then(|a| a["price"].as_f64()),
+                                    bids.first().and_then(|b| b["price"].as_f64()),
+                                ) {
+                                    if top_ask > 0.0 && top_bid > 0.0 {
+                                        let spread = top_ask - top_bid;
+                                        let mid = (top_ask + top_bid) / 2.0;
+                                        ui.label(egui::RichText::new(format!(
+                                            "Spread: {:.4}  Mid: {:.4}",
+                                            spread, mid
+                                        )).small().color(ob_dim));
+                                    }
+                                }
+
                                 // max size for bar scaling (use per level or global)
                                 let max_sz = bids.iter().chain(asks.iter())
                                     .filter_map(|e| e["size"].as_f64())

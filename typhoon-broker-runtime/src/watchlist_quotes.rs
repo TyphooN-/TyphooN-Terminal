@@ -94,6 +94,8 @@ pub fn spawn_watchlist_quotes_task(
                         ext_change_pct,
                         live_bid: 0.0,
                         live_ask: 0.0,
+                        live_bid_size: 0.0,
+                        live_ask_size: 0.0,
                         live_quote_at: None,
                     };
                 }

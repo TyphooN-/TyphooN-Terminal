@@ -56,7 +56,7 @@ impl TyphooNApp {
                 }
             }
         }
-        self.apply_live_quote_to_watchlist(&wanted, bid, ask);
+        self.apply_live_quote_to_watchlist(&wanted, bid, ask, q.bid_size, q.ask_size);
         // Log richer info occasionally
         if q.bid_size > 0.0 || q.ask_size > 0.0 {
             self.log.push_back(LogEntry::info(format!(
@@ -85,7 +85,7 @@ impl TyphooNApp {
                 }
             }
         }
-        self.apply_live_quote_to_watchlist(&wanted, bid, ask);
+        self.apply_live_quote_to_watchlist(&wanted, bid, ask, 0.0, 0.0);
     }
 
     /// Rich L1 from Kraken WS v2 ticker. Uses bid/ask/sizes/last + 24h for richer view.
@@ -108,7 +108,7 @@ impl TyphooNApp {
                 }
             }
         }
-        self.apply_live_quote_to_watchlist(&wanted, bid, ask);
+        self.apply_live_quote_to_watchlist(&wanted, bid, ask, t.bid_qty.unwrap_or(0.0), t.ask_qty.unwrap_or(0.0));
         // Log richer L1 occasionally (volume etc.)
         if t.volume_24h.unwrap_or(0.0) > 0.0 {
             self.log.push_back(LogEntry::info(format!(
@@ -195,7 +195,7 @@ impl TyphooNApp {
         // keep the watchlist's own consolidated quote (handle_watchlist_quotes);
         // real-time WS L2 book ticks still flow via handle_kraken_book_quote_tick.
         if !weekend_closed && !ticker.delayed {
-            self.apply_live_quote_to_watchlist(&symbol, ticker.bid, ticker.ask);
+            self.apply_live_quote_to_watchlist(&symbol, ticker.bid, ticker.ask, 0.0, 0.0);
         }
 
         tracing::debug!(
@@ -208,11 +208,9 @@ impl TyphooNApp {
         );
     }
 
-    /// Inject fresh live bid/ask into matching watchlist row (O(1) via index).
-    /// Stores full bid/ask + timestamp so the watchlist can render Ask/Bid
-    /// the same way the chart price axis does. Uses live mid for the "Last"
-    /// column so change calculations stay perfectly in sync.
-    fn apply_live_quote_to_watchlist(&mut self, bare_symbol: &str, bid: f64, ask: f64) {
+    /// Inject fresh live bid/ask (+ optional sizes) into matching watchlist row (O(1) via index).
+    /// Rich L1 polish: stores sizes for display in watchlist/tooltip when available.
+    fn apply_live_quote_to_watchlist(&mut self, bare_symbol: &str, bid: f64, ask: f64, bid_size: f64, ask_size: f64) {
         if bid <= 0.0 || ask <= 0.0 {
             return;
         }
@@ -232,6 +230,8 @@ impl TyphooNApp {
                 {
                     row.live_bid = bid;
                     row.live_ask = ask;
+                    if bid_size > 0.0 { row.live_bid_size = bid_size; }
+                    if ask_size > 0.0 { row.live_ask_size = ask_size; }
                     row.live_quote_at = Some(now);
 
                     if row.prev_close > 0.0 {

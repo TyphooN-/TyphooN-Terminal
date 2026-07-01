@@ -40,6 +40,12 @@ pub struct WatchlistRow {
     /// Live ask from WS (0.0 when none or stale >30s).
     #[serde(default, skip)]
     pub live_ask: f64,
+    /// Live bid size (rich L1 from Alpaca quotes or Kraken book/ticker).
+    #[serde(default, skip)]
+    pub live_bid_size: f64,
+    /// Live ask size (rich L1).
+    #[serde(default, skip)]
+    pub live_ask_size: f64,
     /// When the live quote arrived (for freshness check, same rule as charts).
     #[serde(default, skip)]
     pub live_quote_at: Option<std::time::Instant>,
@@ -83,6 +89,8 @@ pub fn watchlist_row_from_raw_bars(
         ext_change_pct: 0.0,
         live_bid: 0.0,
         live_ask: 0.0,
+        live_bid_size: 0.0,
+        live_ask_size: 0.0,
         live_quote_at: None,
     })
 }
@@ -100,6 +108,8 @@ pub fn empty_watchlist_row(symbol: &str) -> WatchlistRow {
         ext_change_pct: 0.0,
         live_bid: 0.0,
         live_ask: 0.0,
+        live_bid_size: 0.0,
+        live_ask_size: 0.0,
         live_quote_at: None,
     }
 }
