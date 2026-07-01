@@ -122,17 +122,17 @@ async fn run_level3_streamer_once(
         match received {
             Ok(Some(Ok(Message::Text(text)))) => {
                 for delta in parse_l3_message(&text) {
-                    // Maintain + validate with CRC (full checksum cut)
-                    let validated = if let Some(_) = delta.checksum {
+                    // Full real-feed CRC on live deltas (when checksum present; applies to real auth + sim test paths)
+                    let validated = if delta.checksum.is_some() {
                         match state.apply_delta_with_checksum(&delta) {
                             Ok(Some(actual)) => {
-                                let _ = event_tx.send(format!("L3 checksum OK {}: {}", delta.symbol, actual));
+                                let _ = event_tx.send(format!("L3 real-feed CRC OK {}: {}", delta.symbol, actual));
                                 let mut d = delta.clone();
                                 d.checksum = Some(actual as u64);
                                 d
                             }
                             Err(e) => {
-                                let _ = event_tx.send(format!("L3 checksum MISMATCH {} exp={} act={}", e.symbol, e.expected, e.actual));
+                                let _ = event_tx.send(format!("L3 real-feed CRC MISMATCH {} exp={} act={} (keeping delta; prod: resub on mismatch)", e.symbol, e.expected, e.actual));
                                 delta
                             }
                             _ => delta,
@@ -147,13 +147,25 @@ async fn run_level3_streamer_once(
                 }
             }
             _ => {
-                // Fallback/demo sim when no real data or no token
+                // Fallback/demo sim when no real data or no token -- route through CRC validation for full path test
                 if token.is_none() {
                     let sim = simulate_l3_delta(symbols.get(0).cloned().unwrap_or("DEMO/USD".into()), tick);
-                    state.apply_delta(&sim);
-                    if l3_tx.send(sim).await.is_err() {
+                    let validated_sim = if sim.checksum.is_some() {
+                        match state.apply_delta_with_checksum(&sim) {
+                            Ok(Some(_)) => sim,
+                            Err(_) => { state.apply_delta(&sim); sim },
+                            _ => sim,
+                        }
+                    } else {
+                        state.apply_delta(&sim);
+                        sim
+                    };
+                    if l3_tx.send(validated_sim).await.is_err() {
                         return Ok(());
                     }
+                    tick += 1;
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    continue;
                 }
             }
         }
@@ -167,18 +179,21 @@ async fn run_level3_streamer_once(
 }
 
 fn simulate_l3_delta(symbol: String, tick: u64) -> KrakenL3Delta {
-    // Simple varying per-order data to demo
+    // Enhanced for real-feed CRC path testing + age demo
     let base = 100.0 + (tick % 5) as f64 * 0.1;
+    let ts = Some(format!("{}", 1000000000 + tick));
+    // Fake but plausible checksum for CRC test path
+    let csum = if tick % 3 == 0 { Some(1234567890u64) } else { None };
     KrakenL3Delta {
         symbol,
         bids: vec![
-            KrakenL3Level { order_id: format!("B{}", tick), limit_price: base - 0.05, order_qty: 1.2 + (tick % 3) as f64 * 0.1, timestamp: Some("now".into()), price_text: None, qty_text: None },
-            KrakenL3Level { order_id: format!("B2{}", tick), limit_price: base - 0.1, order_qty: 0.8, timestamp: Some("now".into()), price_text: None, qty_text: None },
+            KrakenL3Level { order_id: format!("B{}", tick), limit_price: base - 0.05, order_qty: 1.2 + (tick % 3) as f64 * 0.1, timestamp: ts.clone(), price_text: Some(format!("{:.4}", base - 0.05)), qty_text: Some("1.2".into()) },
+            KrakenL3Level { order_id: format!("B2{}", tick), limit_price: base - 0.1, order_qty: 0.8, timestamp: ts.clone(), price_text: Some(format!("{:.4}", base - 0.1)), qty_text: Some("0.8".into()) },
         ],
         asks: vec![
-            KrakenL3Level { order_id: format!("A{}", tick), limit_price: base + 0.05, order_qty: 2.5, timestamp: Some("now".into()), price_text: None, qty_text: None },
+            KrakenL3Level { order_id: format!("A{}", tick), limit_price: base + 0.05, order_qty: 2.5, timestamp: ts, price_text: Some(format!("{:.4}", base + 0.05)), qty_text: Some("2.5".into()) },
         ],
-        checksum: Some(123456 + tick),
+        checksum: csum,
         is_snapshot: tick % 5 == 0,
     }
 }

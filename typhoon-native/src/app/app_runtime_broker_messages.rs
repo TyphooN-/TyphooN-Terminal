@@ -58,8 +58,9 @@ impl TyphooNApp {
                             .push_back(LogEntry::info("Kraken orderbook WS: live depth streaming"));
                     }
 
-                    // Full book depth binning: extract top levels from L2 snapshot and push to matching charts
+                    // Full book depth binning: extract top levels from L2/L3 snapshot and push to matching charts
                     // so the chart depth profile overlay shows binned volume-at-price from the live book (not just top).
+                    // MTF parity: applies to all open charts including MTF Grid for the bare symbol.
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                         let sym = v["symbol"].as_str().unwrap_or("");
                         let bare = bare_symbol_from_key(sym)

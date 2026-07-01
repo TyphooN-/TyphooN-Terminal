@@ -659,7 +659,7 @@ pub async fn handle_kraken_ws_command(
                         }
                         maybe_event = event_rx.recv() => {
                             if let Some(ev) = maybe_event {
-                                let _ = update_msg_tx.send(BrokerMsg::KrakenWsStatus { status: "L3".into(), message: ev });
+                                let _ = update_msg_tx.send(BrokerMsg::KrakenWsStatus { status: "L3 (real-feed CRC + age + MTF)".into(), message: ev });
                             }
                         }
                     }

@@ -59,6 +59,12 @@ pub(super) fn render_live_orderbook_heatmap(
     let get_size = |level: &serde_json::Value| -> f64 {
         level["order_qty"].as_f64().or_else(|| level["size"].as_f64()).unwrap_or(0.0)
     };
+
+    // Order-age for L3 coloring/interactions: parse ts -> age secs (smaller = newer)
+    let get_age_secs = |level: &serde_json::Value| -> f64 {
+        level.get("timestamp").and_then(|t| t.as_str()).and_then(|s| s.parse::<f64>().ok()).map(|ts| (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64() - ts).max(0.0)).unwrap_or(8.0)
+    };
+
     let is_l3 = v.get("is_l3").and_then(|b| b.as_bool()).unwrap_or(false) ||
                 bids.iter().any(|b| b.get("order_id").is_some()) ||
                 asks.iter().any(|a| a.get("order_id").is_some());
@@ -111,10 +117,13 @@ pub(super) fn render_live_orderbook_heatmap(
             egui::pos2(rect.right() - width * frac, y),
             egui::vec2(width * frac, row_h - 1.0),
         );
+        let age = get_age_secs(ask);
+        let age_f = (1.0 / (1.0 + age / 20.0)) as f32; // newer brighter
+        let a2 = (alpha as f32 * (0.65 + 0.35 * age_f)).clamp(50.0, 255.0) as u8;
         painter.rect_filled(
             bar,
             0.0,
-            egui::Color32::from_rgba_premultiplied(200, 40, 40, alpha),
+            egui::Color32::from_rgba_premultiplied(200, 40, 40, a2),
         );
         if idx < 6 {
             painter.text(
@@ -136,10 +145,13 @@ pub(super) fn render_live_orderbook_heatmap(
             egui::pos2(rect.left(), y),
             egui::vec2(width * frac, row_h - 1.0),
         );
+        let age = get_age_secs(bid);
+        let age_f = (1.0 / (1.0 + age / 20.0)) as f32;
+        let a2 = (alpha as f32 * (0.65 + 0.35 * age_f)).clamp(50.0, 255.0) as u8;
         painter.rect_filled(
             bar,
             0.0,
-            egui::Color32::from_rgba_premultiplied(0, 180, 60, alpha),
+            egui::Color32::from_rgba_premultiplied(0, 180, 60, a2),
         );
         if idx < 6 {
             painter.text(
@@ -193,20 +205,24 @@ pub(super) fn render_live_orderbook_heatmap(
         resp.on_hover_text(tip);
     }
 
-    // Richer Bookmap L3: order list pane (order_id visible, copy, side colored)
+    // Richer Bookmap L3: order list pane with age coloring + interactions (click = copy + select note)
     if is_l3 {
         ui.separator();
-        ui.label(egui::RichText::new("L3 orders (top 5/side)").small());
-        egui::ScrollArea::vertical().max_height(90.0).show(ui, |ui| {
+        ui.label(egui::RichText::new("L3 orders (age-colored, top 5/side)").small());
+        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
             for (side, col, levs) in [("BID", bid_color, bids), ("ASK", ask_color, asks)] {
                 for lev in levs.iter().take(5) {
                     let oid = lev.get("order_id").and_then(|o| o.as_str()).unwrap_or("?");
                     let p = get_price(lev);
                     let q = get_size(lev);
-                    let txt = format!("{} {} @ {:.4} x {:.4}", side, &oid[..oid.len().min(8)], p, q);
-                    ui.colored_label(col, txt);
-                    if ui.small_button("copy").clicked() {
+                    let age = get_age_secs(lev);
+                    let age_txt = if age < 5.0 { "new" } else if age < 30.0 { "mid" } else { "old" };
+                    let txt = format!("{} {} @ {:.4} x {:.4} ({})", side, &oid[..oid.len().min(8)], p, q, age_txt);
+                    let resp = ui.colored_label(col, txt);
+                    if resp.clicked() || ui.small_button("copy").clicked() {
                         ui.ctx().copy_text(oid.to_string());
+                        // Interaction: could highlight in main chart or store selected_order
+                        ui.label(egui::RichText::new(format!("copied {}", &oid[..oid.len().min(6)])).small());
                     }
                 }
             }

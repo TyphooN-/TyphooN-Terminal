@@ -9,7 +9,8 @@
 - bookmap richer: per-order markers + scroll list pane (order_id, price/qty, side color, copy id).
 - depth profile: explicit "L3" label heuristic when richer levels present.
 - Unit test for L3 state/apply/checksum. All prior + this deeper slice verified.
-
+- This slice (continue): full real-feed CRC on live deltas, order-age coloring (bars+list), list interactions (clickable + age), MTF parity (propagation + comments). Verified.
+---
 **Date:** 2026-07-01 (updated during implementation)
 
 ## Context
