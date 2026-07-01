@@ -99,9 +99,18 @@ impl TyphooNApp {
         if !self.alpaca_enabled || !self.broker_connected {
             return;
         }
+        let base_throttle_s = if let Some(hit) = self.alpaca_sub_limit_hit_at {
+            if now_instant.duration_since(hit) < std::time::Duration::from_secs(300) {
+                10 // back off re-subs after limit hit
+            } else {
+                2
+            }
+        } else {
+            2
+        };
         let throttled = self
             .alpaca_quote_sub_at
-            .is_some_and(|t| now_instant.duration_since(t) < std::time::Duration::from_secs(2));
+            .is_some_and(|t| now_instant.duration_since(t) < std::time::Duration::from_secs(base_throttle_s));
         if throttled {
             return;
         }
@@ -142,10 +151,19 @@ impl TyphooNApp {
         if let Some(chart) = self.charts.get(self.active_tab) {
             push(&chart.symbol);
         }
-        let cap = match self.alpaca_market_data_feed.as_deref() {
-            Some("sip") | Some("SIP") => 100, // entitled SIP has much higher limits
-            Some("iex") | Some("IEX") | None => 30, // free IEX limit (or unknown)
+        let base_cap = match self.alpaca_market_data_feed.as_deref() {
+            Some("sip") | Some("SIP") => 100,
+            Some("iex") | Some("IEX") | None => 30,
             _ => 30,
+        };
+        let cap = if let Some(hit) = self.alpaca_sub_limit_hit_at {
+            if std::time::Instant::now().duration_since(hit) < std::time::Duration::from_secs(300) {
+                base_cap.min(20) // temporarily tighter after recent limit hit
+            } else {
+                base_cap
+            }
+        } else {
+            base_cap
         };
         set.into_iter().take(cap).collect()
     }
@@ -177,6 +195,18 @@ impl TyphooNApp {
         if is_trade && self.kraken_enabled && self.kraken_connected && msg_lc.contains("kraken") {
             let _ = self.broker_tx.send(BrokerCmd::KrakenGetPositions);
             let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
+        }
+
+        if msg_lc.contains("limit") || msg_lc.contains("406") || msg_lc.contains("subscription limit") {
+            self.alpaca_sub_limit_hit_at = Some(std::time::Instant::now());
+        }
+        if msg.contains("subscribed") || msg.contains("subscription") {
+            // Ack received: assume recovery possible
+            if let Some(hit) = self.alpaca_sub_limit_hit_at {
+                if std::time::Instant::now().duration_since(hit) > std::time::Duration::from_secs(30) {
+                    self.alpaca_sub_limit_hit_at = None;
+                }
+            }
         }
 
         // Track BARDATA progress.

@@ -443,6 +443,7 @@ impl TyphooNApp {
             alpaca_quote_sub_sig: None,
             alpaca_quote_sub_at: None,
             alpaca_market_data_feed: None,
+            alpaca_sub_limit_hit_at: None,
             orders_last_update_ts: 0,
             user_watchlist: Vec::new(),
             user_watchlist_set: std::collections::HashSet::new(),

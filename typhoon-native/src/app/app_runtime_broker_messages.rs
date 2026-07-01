@@ -160,6 +160,8 @@ impl TyphooNApp {
                 }
                 BrokerMsg::AlpacaMarketDataFeed(feed) => {
                     self.alpaca_market_data_feed = Some(feed);
+                    // Successful (re)connect: clear any prior limit backoff
+                    self.alpaca_sub_limit_hit_at = None;
                 }
                 BrokerMsg::WatchlistQuotes(rows) => {
                     self.handle_watchlist_quotes(rows);

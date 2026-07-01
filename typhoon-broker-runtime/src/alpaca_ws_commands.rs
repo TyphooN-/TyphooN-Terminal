@@ -171,7 +171,9 @@ pub fn parse_market_data_quotes(raw: &str) -> Vec<(String, f64, f64)> {
                 let code = item.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
                 let msg = item.get("msg").and_then(|m| m.as_str()).unwrap_or("");
                 if code == 406 || msg.to_lowercase().contains("subscription") || msg.contains("limit") {
-                    tracing::warn!("Alpaca WS subscription limit hit (406 or limit): {} (code={})", msg, code);
+                    let note = format!("Alpaca WS subscription limit hit (406 or limit): {} (code={})", msg, code);
+                    tracing::warn!("{}", note);
+                    // UI-visible via OrderResult in handle_order_result detection (limit backoff)
                 } else {
                     tracing::warn!("Alpaca data-stream error (code={}): {}", code, msg);
                 }
