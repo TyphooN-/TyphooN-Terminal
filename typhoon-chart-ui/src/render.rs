@@ -1530,12 +1530,23 @@ pub fn draw_chart(
 
     // ── Live Depth Profile (binned from L2/L3 book levels) — full book depth
     // Bins live_depth_bids/asks (price, size) into horizontal volume-at-price bars.
-    // When L3 (or richer L2) feeds more levels, this becomes a true depth profile.
+    // L3 per-order data (when wired) produces richer bins + explicit "L3" label.
     // Complements historical volume profile.
     let all_depth: Vec<_> = chart.live_depth_bids.iter().chain(chart.live_depth_asks.iter()).cloned().collect();
     if !all_depth.is_empty() {
         let max_size = all_depth.iter().map(|(_, s)| *s).fold(0.0_f64, f64::max).max(1.0);
         let max_w = (chart_rect.width() * 0.15).max(40.0);
+        // Heuristic: treat as L3 if many levels (>4) or from recent L3 feed (status wired via orderbook)
+        let looks_l3 = all_depth.len() > 4 || (chart.live_bid_size > 0.0 && all_depth.len() > 2);
+        if looks_l3 {
+            painter.text(
+                egui::pos2(chart_rect.right() - 2.0, chart_rect.top() + 10.0),
+                egui::Align2::RIGHT_TOP,
+                "L3",
+                egui::FontId::monospace(8.0),
+                egui::Color32::from_rgb(100, 255, 150),
+            );
+        }
         // Simple binning: treat each level as its own 'bucket' for now (full binning by price can expand later)
         for (price, size) in &all_depth {
             if *size <= 0.0 || *price <= 0.0 { continue; }

@@ -193,6 +193,26 @@ pub(super) fn render_live_orderbook_heatmap(
         resp.on_hover_text(tip);
     }
 
+    // Richer Bookmap L3: order list pane (order_id visible, copy, side colored)
+    if is_l3 {
+        ui.separator();
+        ui.label(egui::RichText::new("L3 orders (top 5/side)").small());
+        egui::ScrollArea::vertical().max_height(90.0).show(ui, |ui| {
+            for (side, col, levs) in [("BID", bid_color, bids), ("ASK", ask_color, asks)] {
+                for lev in levs.iter().take(5) {
+                    let oid = lev.get("order_id").and_then(|o| o.as_str()).unwrap_or("?");
+                    let p = get_price(lev);
+                    let q = get_size(lev);
+                    let txt = format!("{} {} @ {:.4} x {:.4}", side, &oid[..oid.len().min(8)], p, q);
+                    ui.colored_label(col, txt);
+                    if ui.small_button("copy").clicked() {
+                        ui.ctx().copy_text(oid.to_string());
+                    }
+                }
+            }
+        });
+    }
+
     true
 }
 

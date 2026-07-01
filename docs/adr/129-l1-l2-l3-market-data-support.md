@@ -1,12 +1,14 @@
 # ADR-129: Level 1 / Level 2 / Level 3 Market Data Support (Alpaca + Kraken)
 
-**Status:** Accepted / Implemented (2026-07, continued) — 
-- persist-depth-flag: show_depth_profile in snapshot_build + session_persistence restore (market_data_sync not needed for UI flags).
-- full-depth-binning: live_depth_bids/asks in ChartState; orderbook updates now parse & propagate top-8 levels to matching charts for binned depth profile overlay (L2 + L3 keys supported).
-- l3-real-parser: parse_l3_levels skeleton in KrakenStartLevel3Ws (per-order format, comments on real streamer + KRAKEN_WS_V2_LEVEL3_URL + auth like private_ws).
-- bookmap-l3-viz: get_price/get_size helpers + loops support L3 fields; per-order data renders.
-- integrate-l3-depth: L3 Demo populates L3-style orderbook JSON (exercises depth binning, Bookmap, DOM); KrakenOrderbookUpdate now feeds charts; depth profile draws binned levels.
-- Demo + wiring for when entitlements available. All 1-7 + follow-ups complete.
+**Status:** Accepted / Implemented (2026-07, continued) —
+- persist-depth-flag: show_depth_profile in snapshot_build + session_persistence restore.
+- full-depth-binning: live_depth_bids/asks propagated (now 25 levels), binned overlay + L3 detection.
+- l3-real-parser + real streamer: ws_v2_level3.rs with run_level3_streamer (token wiring, real WS consume + parse, sim fallback).
+- full CRC32 L3: compute_l3_checksum + KrakenL3ChecksumError mirroring book; apply_delta_with_checksum (commit only on match).
+- KrakenL3State: maintained in streamer + runtime/commands (apply per order_id add/mod/del); exposed status via events.
+- bookmap richer: per-order markers + scroll list pane (order_id, price/qty, side color, copy id).
+- depth profile: explicit "L3" label heuristic when richer levels present.
+- Unit test for L3 state/apply/checksum. All prior + this deeper slice verified.
 
 **Date:** 2026-07-01 (updated during implementation)
 

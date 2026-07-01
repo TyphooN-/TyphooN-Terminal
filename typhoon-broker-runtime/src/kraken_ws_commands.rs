@@ -634,12 +634,19 @@ pub async fn handle_kraken_ws_command(
                 let _ = update_msg_tx.send(BrokerMsg::OrderResult(format!(
                     "Kraken L3 streamer starting for {} (real wiring + token path)", display_symbol
                 )));
+                let mut l3_state = typhoon_engine::broker::kraken::KrakenL3State::default();
                 loop {
                     tokio::select! {
                         maybe_delta = l3_rx.recv() => {
                             let Some(delta) = maybe_delta else { break; };
+                            // Maintain exposed state
+                            let _ = l3_state.apply_delta(&delta);
                             let text = kraken_l3_to_json(&display_symbol, &delta);
                             let _ = update_msg_tx.send(BrokerMsg::KrakenOrderbookUpdate(text));
+                            // Send checksum status via event if present
+                            if let Some(cs) = delta.checksum {
+                                let _ = update_msg_tx.send(BrokerMsg::KrakenWsStatus { status: "L3".into(), message: format!("checksum {}", cs) });
+                            }
                             if let (Some(top_bid), Some(top_ask)) = (delta.bids.first(), delta.asks.first()) {
                                 let _ = update_msg_tx.send(BrokerMsg::KrakenBookQuoteTick {
                                     symbol: display_symbol.clone(),
