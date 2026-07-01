@@ -432,7 +432,7 @@ impl TyphooNApp {
                                     .unwrap_or_default()
                             };
 
-                            // Rich L2 polish: refresh + stream buttons
+                            // Rich L2 polish: refresh + stream + L3 trigger buttons
                             ui.horizontal(|ui| {
                                 if ui.button("Refresh L2").clicked() && !dom_sym.is_empty() {
                                     let _ = self.broker_tx.send(BrokerCmd::GetOrderbook { symbol: dom_sym.clone() });
@@ -447,6 +447,10 @@ impl TyphooNApp {
                                         depth: 100,
                                         publish_dom: true,
                                     });
+                                }
+                                // L3 foundation trigger (polish 6)
+                                if ui.button("Start L3 (Kraken)").clicked() && !dom_sym.is_empty() && kraken_bookmap_stream_supported(&dom_sym, &self.kraken_pairs) {
+                                    let _ = self.broker_tx.send(BrokerCmd::KrakenStartLevel3Ws { symbol: dom_sym.clone() });
                                 }
                             });
                             if self.orderbook_result.is_empty() {
@@ -467,6 +471,13 @@ impl TyphooNApp {
 
                                 let bids: Vec<_> = v["bids"].as_array().map(|a| a.as_slice()).unwrap_or(&[]).to_vec();
                                 let asks: Vec<_> = v["asks"].as_array().map(|a| a.as_slice()).unwrap_or(&[]).to_vec();
+
+                                // Polish 3/5: level counts + freshness note (after parse)
+                                let bid_cnt = bids.len();
+                                let ask_cnt = asks.len();
+                                let age_note = if ts.is_empty() { " (live)".to_string() } else { format!(" age:{}", ts) };
+                                let provider_note = if sym.contains("/") || sym.to_uppercase().ends_with("USD") { "Kraken" } else { "Alpaca snapshot" };
+                                ui.label(egui::RichText::new(format!("Levels: B{} A{} · {} {}", bid_cnt, ask_cnt, provider_note, age_note)).small().color(ob_dim));
 
                                 // Compute rich L2 metrics
                                 let bid_vol: f64 = bids.iter().filter_map(|e| e["size"].as_f64()).sum();

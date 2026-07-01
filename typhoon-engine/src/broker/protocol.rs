@@ -2550,6 +2550,9 @@ pub enum BrokerMsg {
         symbol: String,
         bid: f64,
         ask: f64,
+        /// Rich L2 top sizes (from Kraken WS v2 book).
+        bid_size: f64,
+        ask_size: f64,
     },
     /// Rich L1 from Kraken WS v2 ticker (bid/ask + sizes + last + 24h stats).
     KrakenWsTicker( crate::broker::kraken::KrakenWsTicker ),

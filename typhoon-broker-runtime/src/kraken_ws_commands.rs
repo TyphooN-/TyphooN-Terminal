@@ -388,13 +388,14 @@ pub async fn handle_kraken_ws_command(
                                         // Healthy snapshot — clear the consecutive-mismatch
                                         // counter so only *sustained* failures trip the cap.
                                         resubscribe_count = 0;
-                                        if let Some((bid, ask, _bsz, _asz)) = top_of_kraken_ws_v2_book(&state) {
+                                        if let Some((bid, ask, bsz, asz)) = top_of_kraken_ws_v2_book(&state) {
                                             let _ = update_msg_tx.send(BrokerMsg::KrakenBookQuoteTick {
                                                 symbol: state_symbol.clone(),
                                                 bid,
                                                 ask,
+                                                bid_size: bsz,
+                                                ask_size: asz,
                                             });
-                                            // sizes (_bsz/_asz) available from L2 top for future richer tick
                                         }
                                         if publish_dom {
                                             let text = kraken_ws_v2_book_state_json(
@@ -576,12 +577,12 @@ pub async fn handle_kraken_ws_command(
         }
         BrokerCmd::KrakenStartLevel3Ws { symbol } => {
             let msg_tx = broker_msg_tx.clone();
-            // Kraken L3 is authenticated per-order book (add/mod/del), richer than L2 but requires token + subscription limits.
-            // Foundation URL exists; full streamer not wired yet (use L1 ticker + L2 book for most rich data).
+            // Kraken L3 (auth per-order add/mod/del on ws-l3.kraken.com). Limited to entitled accounts, low volume.
+            // This is a foundation stub. Primary rich feeds remain L1 ticker + L2 book.
             let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                "Kraken L3 (per-order) requested for {} — auth/streamer support partial (L1/L2 are primary rich feeds)", symbol
+                "Kraken L3 requested for {} (auth required; L1/L2 preferred for most use)", symbol
             )));
-            // TODO: full impl with auth token + ws-l3 subscribe when needed.
+            // TODO: wire auth token + full level3 parser/streamer when user has entitlements.
         }
          _ => unreachable!("non-Kraken websocket command routed to Kraken websocket handler"),
      }

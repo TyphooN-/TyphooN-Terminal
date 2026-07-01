@@ -513,10 +513,17 @@ impl TyphooNApp {
                     } else {
                         (wl.last, wl.change, wl.change_pct, chg_color)
                     };
+                    let last_str = if wl.live_bid_size > 0.0 || wl.live_ask_size > 0.0 {
+                        let bsz = if wl.live_bid_size > 0.0 { format!("b{:.2} ", wl.live_bid_size) } else { "".to_string() };
+                        let asz = if wl.live_ask_size > 0.0 { format!("a{:.2}", wl.live_ask_size) } else { "".to_string() };
+                        format!("{} {}{}", format_price(disp_last), bsz, asz)
+                    } else {
+                        format_price(disp_last)
+                    };
                     rp.text(
                         egui::pos2(rx + col_last - 2.0, ry),
                         egui::Align2::RIGHT_CENTER,
-                        &format_price(disp_last),
+                        &last_str,
                         font.clone(),
                         egui::Color32::WHITE,
                     );

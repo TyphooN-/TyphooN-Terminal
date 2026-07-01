@@ -58,8 +58,8 @@ impl TyphooNApp {
                             .push_back(LogEntry::info("Kraken orderbook WS: live depth streaming"));
                     }
                 }
-                BrokerMsg::KrakenBookQuoteTick { symbol, bid, ask } => {
-                    self.handle_kraken_book_quote_tick(symbol, bid, ask);
+                BrokerMsg::KrakenBookQuoteTick { symbol, bid, ask, bid_size, ask_size } => {
+                    self.handle_kraken_book_quote_tick(symbol, bid, ask, bid_size, ask_size);
                 }
                 BrokerMsg::KrakenWsTicker(t) => {
                     self.handle_kraken_ws_ticker(t);

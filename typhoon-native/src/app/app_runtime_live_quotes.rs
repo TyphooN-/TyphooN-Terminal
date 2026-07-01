@@ -68,24 +68,19 @@ impl TyphooNApp {
         }
     }
 
-    pub(super) fn handle_kraken_book_quote_tick(&mut self, symbol: String, bid: f64, ask: f64) {
-        let last = (bid + ask) * 0.5;
-        if last <= 0.0 || !last.is_finite() {
+    pub(super) fn handle_kraken_book_quote_tick(&mut self, symbol: String, bid: f64, ask: f64, bid_size: f64, ask_size: f64) {
+        if bid <= 0.0 || ask <= 0.0 {
             return;
         }
-        let wanted = bare_symbol_from_key(&symbol)
-            .replace('/', "")
-            .trim_end_matches(".EQ")
-            .to_ascii_uppercase();
-        // O(1) via index
+        let wanted = bare_symbol_from_key(&symbol);
         if let Some(idxs) = self.chart_by_bare.get(&wanted) {
             for &i in idxs {
                 if let Some(chart) = self.charts.get_mut(i) {
-                    chart.apply_live_quote_update(bid, ask, 0.0, 0.0, false);
+                    chart.apply_live_quote_update(bid, ask, bid_size, ask_size, false);
                 }
             }
         }
-        self.apply_live_quote_to_watchlist(&wanted, bid, ask, 0.0, 0.0);
+        self.apply_live_quote_to_watchlist(&wanted, bid, ask, bid_size, ask_size);
     }
 
     /// Rich L1 from Kraken WS v2 ticker. Uses bid/ask/sizes/last + 24h for richer view.
