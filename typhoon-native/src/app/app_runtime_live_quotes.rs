@@ -101,8 +101,13 @@ impl TyphooNApp {
                     chart.apply_live_quote_update(bid, ask, t.bid_qty.unwrap_or(0.0), t.ask_qty.unwrap_or(0.0), false);
                     if t.bid.is_none() && t.ask.is_none() && t.volume_24h.unwrap_or(0.0) > 0.0 {
                         // Trade-driven ticker emission (from Kraken public trades): accumulate real volume
-                        let _ = chart.apply_forming_trade(last, t.volume_24h.unwrap_or(0.0));
-                        chart.mark_view_changed();  // ensure MTF + single cells repaint promptly for live trade updates (priority for foreground/MTF)
+                        let vol = t.volume_24h.unwrap_or(0.0);
+                        let _ = chart.apply_forming_trade(last, vol);
+                        chart.live_trade_price = last;
+                        chart.live_trade_vol = vol;
+                        // For side, heuristic from price direction or default true (buy pressure common); real side available in trade struct upstream
+                        chart.live_trade_is_buy = last >= chart.bars.last().map(|b| b.open).unwrap_or(last);
+                        chart.mark_view_changed(); // ensure MTF + single cells repaint promptly for live trade updates (priority for foreground/MTF)
                     } else {
                         chart.apply_forming_price_update(last);
                     }

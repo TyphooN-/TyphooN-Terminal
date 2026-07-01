@@ -59,6 +59,11 @@ pub struct ChartState {
     /// (price, size). Populated from Kraken book updates when available.
     pub live_depth_bids: Vec<(f64, f64)>,
     pub live_depth_asks: Vec<(f64, f64)>,
+    /// Live trade from public trades WS (exact executed price + vol + side).
+    /// Used to augment depth profile and forming updates with real-time executions.
+    pub live_trade_price: f64,
+    pub live_trade_vol: f64,
+    pub live_trade_is_buy: bool,
     /// When `live_bid`/`live_ask` were last refreshed from a streaming quote.
     /// The spread lines are hidden once this goes stale so a frozen quote isn't
     /// drawn next to a live (differently-priced) last/candle.
@@ -561,6 +566,9 @@ impl ChartState {
             live_ask_size: 0.0,
             live_depth_bids: Vec::new(),
             live_depth_asks: Vec::new(),
+            live_trade_price: 0.0,
+            live_trade_vol: 0.0,
+            live_trade_is_buy: false,
             live_quote_at: None,
             live_quote_delayed: false,
             ext_open: 0.0,

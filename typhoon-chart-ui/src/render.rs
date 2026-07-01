@@ -1570,6 +1570,27 @@ pub fn draw_chart(
                 col,
             );
         }
+
+        // Live executed trade marker on depth profile (from public trades feed, O(1))
+        if chart.live_trade_vol > 0.0 && chart.live_trade_price > 0.0 {
+            let y = price_to_y(chart.live_trade_price);
+            if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                let tw = (chart.live_trade_vol / max_size.max(1.0) * max_w as f64 * 0.6).clamp(3.0, 20.0) as f32;
+                let tcol = if chart.live_trade_is_buy {
+                    egui::Color32::from_rgba_premultiplied(0, 220, 120, 220) // buy teal
+                } else {
+                    egui::Color32::from_rgba_premultiplied(255, 80, 80, 220) // sell red
+                };
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(chart_rect.right() - tw, y - 2.0),
+                        egui::pos2(chart_rect.right(), y + 2.0),
+                    ),
+                    0.0,
+                    tcol,
+                );
+            }
+        }
     }
 
     draw_post_zone_trend_overlays(
