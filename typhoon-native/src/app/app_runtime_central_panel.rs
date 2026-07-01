@@ -201,13 +201,9 @@ impl TyphooNApp {
                     self.queue_empty_charts_for_load();
                     self.log.push_back(LogEntry::info("MTF grid restored"));
                 } else {
-                    // Single chart, no MTF → reset zoom/pan
+                    // Single chart, no MTF → double-click body resets to follow-latest (TV/MT5)
                     if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                        chart.price_zoom = 1.0;
-                        chart.price_pan = 0.0;
-                        chart.visible_bars = 200;
-                        chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
-                        chart.manual_view_override = false;
+                        chart.reset_to_follow_latest();
                     }
                 }
             }
@@ -946,6 +942,7 @@ impl TyphooNApp {
                     }
                 }
                 if cell_scale_resp.double_clicked() {
+                    // Price axis double → vertical auto-fit only
                     chart.price_zoom = 1.0;
                     chart.price_pan = 0.0;
                     chart.manual_view_override = false;
@@ -970,6 +967,12 @@ impl TyphooNApp {
                     || (chart.is_dragging && ctx.input(|i| i.pointer.primary_down())))
                     && !scaling_this_cell
                     && self.draw_mode == DrawMode::None;
+
+                if cell_body_resp.double_clicked() {
+                    // Body double-click on MTF cell → reset this cell's camera to follow latest (TV/MT5 style)
+                    chart.reset_to_follow_latest();
+                }
+
                 if cell_body_started && !chart.is_dragging {
                     chart.is_dragging = true;
                     chart.is_drawing_drag = false;

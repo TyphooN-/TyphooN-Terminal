@@ -39,6 +39,21 @@ impl ChartState {
         );
     }
 
+    pub fn reset_to_follow_latest(&mut self) {
+        // TV/MT5 style: double-click (or explicit reset) clears manual free-look
+        // and snaps to follow the latest bar. Safe during live forming updates.
+        self.manual_view_override = false;
+        self.price_zoom = 1.0;
+        self.price_pan = 0.0;
+        self.visible_bars = 200;  // reasonable default
+        if !self.bars.is_empty() {
+            self.view_offset = self.bars.len().saturating_sub(1) + 5;  // small right margin
+        }
+        self.camera.on_data_len_changed(0, self.bars.len());
+        self.sync_camera_to_legacy();
+        self.mark_view_changed();
+    }
+
     pub fn reset_camera_from_legacy(&mut self) {
         self.camera = ChartCamera::from_legacy(
             self.view_offset,
