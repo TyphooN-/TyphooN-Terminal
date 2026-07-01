@@ -120,6 +120,7 @@ impl ChartState {
     }
 
     pub fn zoom_chart_price_around(&mut self, factor: f64, target_price: f64) {
+        self.manual_view_override = true; // user zoom -> manual free-look (TV/MT5)
         let (natural_center, natural_span) =
             self.natural_visible_price_view().unwrap_or((0.0, 1.0));
         self.camera
@@ -129,6 +130,7 @@ impl ChartState {
     }
 
     pub fn zoom_chart_bars_around(&mut self, factor: f64, target_bar: f64) {
+        self.manual_view_override = true; // user zoom action -> manual free-look (TV/MT5)
         self.camera.zoom_bars_around(factor, target_bar, self.bars.len());
         self.sync_camera_to_legacy();
         self.mark_view_changed();
