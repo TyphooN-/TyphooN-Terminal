@@ -55,6 +55,10 @@ pub struct ChartState {
     /// Live sizes from rich L1 (Alpaca quotes, Kraken ticker/book).
     pub live_bid_size: f64,
     pub live_ask_size: f64,
+    /// Top N live depth levels from L2/L3 book for binned depth profile overlay.
+    /// (price, size). Populated from Kraken book updates when available.
+    pub live_depth_bids: Vec<(f64, f64)>,
+    pub live_depth_asks: Vec<(f64, f64)>,
     /// When `live_bid`/`live_ask` were last refreshed from a streaming quote.
     /// The spread lines are hidden once this goes stale so a frozen quote isn't
     /// drawn next to a live (differently-priced) last/candle.
@@ -374,6 +378,8 @@ impl ChartState {
         self.live_ask = 0.0;
         self.live_bid_size = 0.0;
         self.live_ask_size = 0.0;
+        self.live_depth_bids.clear();
+        self.live_depth_asks.clear();
         self.live_quote_at = None;
         self.live_quote_delayed = false;
     }
@@ -478,6 +484,11 @@ impl ChartState {
         self.live_ask = ask;
         if bid_size > 0.0 { self.live_bid_size = bid_size; }
         if ask_size > 0.0 { self.live_ask_size = ask_size; }
+        // For depth profile binning: seed with top level (full book levels can be pushed from L2/L3 updates)
+        self.live_depth_bids.clear();
+        if bid > 0.0 && bid_size > 0.0 { self.live_depth_bids.push((bid, bid_size)); }
+        self.live_depth_asks.clear();
+        if ask > 0.0 && ask_size > 0.0 { self.live_depth_asks.push((ask, ask_size)); }
         self.live_quote_at = Some(std::time::Instant::now());
         self.live_quote_delayed = delayed;
         // A delayed quote (Kraken iapi equities is always delayed=true) is stored
@@ -532,6 +543,8 @@ impl ChartState {
             live_ask: 0.0,
             live_bid_size: 0.0,
             live_ask_size: 0.0,
+            live_depth_bids: Vec::new(),
+            live_depth_asks: Vec::new(),
             live_quote_at: None,
             live_quote_delayed: false,
             ext_open: 0.0,

@@ -52,10 +52,18 @@ pub(super) fn render_live_orderbook_heatmap(
         return false;
     }
 
+    // Support both L2 ("price"/"size") and L3 ("limit_price"/"order_qty", "order_id")
+    let get_price = |level: &serde_json::Value| -> f64 {
+        level["limit_price"].as_f64().or_else(|| level["price"].as_f64()).unwrap_or(0.0)
+    };
+    let get_size = |level: &serde_json::Value| -> f64 {
+        level["order_qty"].as_f64().or_else(|| level["size"].as_f64()).unwrap_or(0.0)
+    };
+
     let max_size = bids
         .iter()
         .chain(asks.iter())
-        .filter_map(|level| level["size"].as_f64())
+        .map(get_size)
         .fold(0.0_f64, f64::max)
         .max(1.0);
     let ts = v["timestamp"].as_str().unwrap_or("live");
@@ -87,8 +95,8 @@ pub(super) fn render_live_orderbook_heatmap(
     let max_levels = 24_usize;
     let row_h = (height * 0.5 / max_levels as f32).max(3.0);
     for (idx, ask) in asks.iter().take(max_levels).enumerate() {
-        let size = ask["size"].as_f64().unwrap_or(0.0);
-        let price = ask["price"].as_f64().unwrap_or(0.0);
+        let size = get_size(ask);
+        let price = get_price(ask);
         let frac = (size / max_size).clamp(0.0, 1.0) as f32;
         let alpha = (80.0 + 175.0 * frac as f64).clamp(60.0, 220.0) as u8; // better density scaling
         let y = mid_y - (idx as f32 + 1.0) * row_h;
@@ -112,8 +120,8 @@ pub(super) fn render_live_orderbook_heatmap(
         }
     }
     for (idx, bid) in bids.iter().take(max_levels).enumerate() {
-        let size = bid["size"].as_f64().unwrap_or(0.0);
-        let price = bid["price"].as_f64().unwrap_or(0.0);
+        let size = get_size(bid);
+        let price = get_price(bid);
         let frac = (size / max_size).clamp(0.0, 1.0) as f32;
         let alpha = (80.0 + 175.0 * frac as f64).clamp(60.0, 220.0) as u8;
         let y = mid_y + idx as f32 * row_h;

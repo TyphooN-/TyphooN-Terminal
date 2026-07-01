@@ -1,6 +1,12 @@
 # ADR-129: Level 1 / Level 2 / Level 3 Market Data Support (Alpaca + Kraken)
 
-**Status:** Accepted / Implemented (2026-07) — All 1-7 + follow-ups + more depth profile + L3 entitled prep. Live depth overlay on charts (sizes at bid/ask), depth profile toggle, L3 stub with entitled sim button + detailed placeholder for when user has auth. Other polish (menu/central integration).
+**Status:** Accepted / Implemented (2026-07, continued) — 
+- persist-depth-flag: show_depth_profile in snapshot_build + session_persistence restore (market_data_sync not needed for UI flags).
+- full-depth-binning: live_depth_bids/asks in ChartState; orderbook updates now parse & propagate top-8 levels to matching charts for binned depth profile overlay (L2 + L3 keys supported).
+- l3-real-parser: parse_l3_levels skeleton in KrakenStartLevel3Ws (per-order format, comments on real streamer + KRAKEN_WS_V2_LEVEL3_URL + auth like private_ws).
+- bookmap-l3-viz: get_price/get_size helpers + loops support L3 fields; per-order data renders.
+- integrate-l3-depth: L3 Demo populates L3-style orderbook JSON (exercises depth binning, Bookmap, DOM); KrakenOrderbookUpdate now feeds charts; depth profile draws binned levels.
+- Demo + wiring for when entitlements available. All 1-7 + follow-ups complete.
 
 **Date:** 2026-07-01 (updated during implementation)
 

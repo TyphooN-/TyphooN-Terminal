@@ -1528,37 +1528,33 @@ pub fn draw_chart(
     // ── Volume Profile overlay (volume-at-price with POC + Value Area) ─────
     draw_volume_profile_overlay(painter, chart_rect, bars, price_min, price_max, flags);
 
-    // ── Live Depth Profile (L2 top sizes at bid/ask) — follow-up polish
-    // Uses live_bid/ask + sizes propagated from ticker/book. Visible when sizes >0.
-    // Complements historical volume profile with current market depth at top of book.
-    if chart.live_bid_size > 0.0 || chart.live_ask_size > 0.0 {
-        let max_size = chart.live_bid_size.max(chart.live_ask_size).max(1.0);
-        let max_w = (chart_rect.width() * 0.12).max(30.0);
-        let bid_y = price_to_y(chart.live_bid);
-        let ask_y = price_to_y(chart.live_ask);
-        let bid_w = ((chart.live_bid_size / max_size) as f32 * max_w as f32).max(2.0);
-        let ask_w = ((chart.live_ask_size / max_size) as f32 * max_w as f32).max(2.0);
-
-        // Bid depth bar (left of right edge, green)
-        if bid_y >= chart_rect.top() && bid_y <= chart_rect.bottom() {
+    // ── Live Depth Profile (binned from L2/L3 book levels) — full book depth
+    // Bins live_depth_bids/asks (price, size) into horizontal volume-at-price bars.
+    // When L3 (or richer L2) feeds more levels, this becomes a true depth profile.
+    // Complements historical volume profile.
+    let all_depth: Vec<_> = chart.live_depth_bids.iter().chain(chart.live_depth_asks.iter()).cloned().collect();
+    if !all_depth.is_empty() {
+        let max_size = all_depth.iter().map(|(_, s)| *s).fold(0.0_f64, f64::max).max(1.0);
+        let max_w = (chart_rect.width() * 0.15).max(40.0);
+        // Simple binning: treat each level as its own 'bucket' for now (full binning by price can expand later)
+        for (price, size) in &all_depth {
+            if *size <= 0.0 || *price <= 0.0 { continue; }
+            let y = price_to_y(*price);
+            if y < chart_rect.top() || y > chart_rect.bottom() { continue; }
+            let frac = (*size / max_size) as f32;
+            let w = (frac * max_w as f32).max(2.0);
+            let col = if chart.live_bid > 0.0 && (*price - chart.live_bid).abs() < 1e-9 || chart.live_bid_size > 0.0 && *size == chart.live_bid_size {
+                egui::Color32::from_rgba_premultiplied(0, 180, 60, 160) // bid green
+            } else {
+                egui::Color32::from_rgba_premultiplied(200, 40, 40, 160) // ask red
+            };
             painter.rect_filled(
                 egui::Rect::from_min_max(
-                    egui::pos2(chart_rect.right() - bid_w, bid_y - 2.0),
-                    egui::pos2(chart_rect.right(), bid_y + 2.0),
+                    egui::pos2(chart_rect.right() - w, y - 1.5),
+                    egui::pos2(chart_rect.right(), y + 1.5),
                 ),
                 0.0,
-                egui::Color32::from_rgba_premultiplied(0, 180, 60, 160),
-            );
-        }
-        // Ask depth bar (red)
-        if ask_y >= chart_rect.top() && ask_y <= chart_rect.bottom() {
-            painter.rect_filled(
-                egui::Rect::from_min_max(
-                    egui::pos2(chart_rect.right() - ask_w, ask_y - 2.0),
-                    egui::pos2(chart_rect.right(), ask_y + 2.0),
-                ),
-                0.0,
-                egui::Color32::from_rgba_premultiplied(200, 40, 40, 160),
+                col,
             );
         }
     }

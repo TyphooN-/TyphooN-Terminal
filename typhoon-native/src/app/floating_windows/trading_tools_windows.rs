@@ -471,7 +471,9 @@ impl TyphooNApp {
                                 }
                                 if ui.button("L3 Demo (entitled sim)").clicked() && !dom_sym.is_empty() {
                                     self.kraken_l3_status = format!("L3 demo active for {} (simulated per-order depth — assume entitlements)", dom_sym);
-                                    // When entitled in real use: this would start real private WS L3 stream + parser.
+                                    // Sample L3-style data to exercise parser, Bookmap L3 viz, and chart depth binning
+                                    self.orderbook_result = format!(r#"{{"symbol":"{}","timestamp":"sim-l3","checksum":123456,"bids":[{{"order_id":"O1","limit_price":123.45,"order_qty":1.2,"timestamp":"now"}},{{"order_id":"O2","limit_price":123.40,"order_qty":0.8}}],"asks":[{{"order_id":"A1","limit_price":123.55,"order_qty":2.5}}]}}"#, dom_sym);
+                                    // window already open via outer logic / user can open; avoid double-borrow on the open flag inside closure
                                 }
                             });
                             // Deeper L3 UI: status label (stub)

@@ -1168,7 +1168,7 @@ fn live_quote_update_marks_forming_bar_dirty() {
     });
     chart.mark_structural_change();
 
-    assert!(chart.apply_live_quote_update(110.0, 112.0, false));
+    assert!(chart.apply_live_quote_update(110.0, 112.0, 10.0, 10.0, false));
 
     let last = chart.bars.last().unwrap();
     assert_eq!(last.close, 111.0);
@@ -1192,7 +1192,7 @@ fn wide_live_quote_spread_does_not_become_current_price() {
 
     // Off-hours/tokenized-equity books can be real but very wide. Keep the
     // bid/ask for spread display; do not turn that midpoint into C/current.
-    assert!(!chart.apply_live_quote_update(0.065, 0.0866, false));
+    assert!(!chart.apply_live_quote_update(0.065, 0.0866, 1.0, 1.0, false));
 
     let last = chart.bars.last().unwrap();
     assert_eq!(last.close, 0.0766);
@@ -1216,7 +1216,7 @@ fn extended_hours_live_quote_does_not_mutate_regular_close() {
     chart.ext_active = true;
     chart.ext_close = 0.0772;
 
-    assert!(!chart.apply_live_quote_update(0.0770, 0.0774, false));
+    assert!(!chart.apply_live_quote_update(0.0770, 0.0774, 1.0, 1.0, false));
 
     assert_eq!(chart.bars.last().unwrap().close, 0.0766);
     assert!((chart.fresh_live_quote_mid().unwrap() - 0.0772).abs() < 1e-12);
@@ -1240,7 +1240,7 @@ fn delayed_live_quote_does_not_drive_realtime_display() {
         volume: 1.0,
     });
 
-    assert!(!chart.apply_live_quote_update(0.0858, 0.0870, true));
+    assert!(!chart.apply_live_quote_update(0.0858, 0.0870, 1.0, 1.0, true));
     // Stored so the rest of the app can see the latest (delayed) quote…
     assert_eq!(chart.live_bid, 0.0858);
     assert_eq!(chart.live_ask, 0.0870);
@@ -1250,7 +1250,7 @@ fn delayed_live_quote_does_not_drive_realtime_display() {
     assert_eq!(chart.fresh_live_quote_mid(), None);
 
     // A real-time (delayed=false) quote at the same spread still drives the chart.
-    assert!(chart.apply_live_quote_update(0.1020, 0.1032, false));
+    assert!(chart.apply_live_quote_update(0.1020, 0.1032, 5.0, 5.0, false));
     assert!((chart.fresh_live_quote_mid().unwrap() - 0.1026).abs() < 1e-9);
     assert!((chart.bars.last().unwrap().close - 0.1026).abs() < 1e-9);
 }

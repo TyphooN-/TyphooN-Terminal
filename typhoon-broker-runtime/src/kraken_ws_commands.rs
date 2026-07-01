@@ -585,9 +585,38 @@ pub async fn handle_kraken_ws_command(
             let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
                 "Kraken L3 requested for {} — auth entitlements required (stub ready)", symbol
             )));
-            // TODO when entitled: wire full auth + parser (see private_ws example for ownTrades).
-            // For now, status shown in DOM; no real per-order stream.
-            eprintln!("[kraken] L3 stub triggered for {} (entitlements needed; see ADR-129)", symbol);
+            // Deeper L3 parser skeleton (use when you have entitlements / token).
+            // Real impl would: use KRAKEN_WS_V2_LEVEL3_URL or auth endpoint, send subscribe with token,
+            // receive snapshot + deltas with per-order {order_id, limit_price, order_qty}, apply with CRC.
+            // Mirrors ws_v2_book + private_ws patterns.
+            fn parse_l3_levels(data: &serde_json::Value) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
+                let mut bids = vec![];
+                let mut asks = vec![];
+                if let Some(arr) = data.as_array() {
+                    for item in arr {
+                        if let Some(b) = item.get("bids").and_then(|b| b.as_array()) {
+                            for l in b.iter().take(5) {
+                                let p = l["limit_price"].as_f64().unwrap_or(0.0);
+                                let q = l["order_qty"].as_f64().unwrap_or(0.0);
+                                if p > 0.0 && q > 0.0 { bids.push((p, q)); }
+                            }
+                        }
+                        if let Some(a) = item.get("asks").and_then(|a| a.as_array()) {
+                            for l in a.iter().take(5) {
+                                let p = l["limit_price"].as_f64().unwrap_or(0.0);
+                                let q = l["order_qty"].as_f64().unwrap_or(0.0);
+                                if p > 0.0 && q > 0.0 { asks.push((p, q)); }
+                            }
+                        }
+                    }
+                }
+                (bids, asks)
+            }
+            // Example: let (bids, asks) = parse_l3_levels(&json); feed to chart live_depth and Bookmap L3 viz.
+            let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                "Kraken L3 parser skeleton ready for {} (entitlements + token needed for real stream)", symbol
+            )));
+            eprintln!("[kraken] L3 parser skeleton + parse fn for {} (see ws-l3.kraken.com/v2 when entitled)", symbol);
         }
         _ => {}
      }

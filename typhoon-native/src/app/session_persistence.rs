@@ -1602,6 +1602,9 @@ impl TyphooNApp {
                     if let Some(b) = w["volume_profile"].as_bool() {
                         self.show_volume_profile = b;
                     }
+                    if let Some(b) = w["depth_profile"].as_bool() {
+                        self.show_depth_profile = b;
+                    }
                     if let Some(b) = w["hv_cone"].as_bool() {
                         self.show_hv_cone = b;
                     }

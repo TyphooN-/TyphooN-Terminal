@@ -51,11 +51,44 @@ impl TyphooNApp {
                 }
                 BrokerMsg::KrakenOrderbookUpdate(text) => {
                     let was_empty = self.orderbook_result.is_empty();
-                    self.orderbook_result = text;
+                    self.orderbook_result = text.clone();
                     self.show_orderbook_window = true;
                     if was_empty {
                         self.log
                             .push_back(LogEntry::info("Kraken orderbook WS: live depth streaming"));
+                    }
+
+                    // Full book depth binning: extract top levels from L2 snapshot and push to matching charts
+                    // so the chart depth profile overlay shows binned volume-at-price from the live book (not just top).
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                        let sym = v["symbol"].as_str().unwrap_or("");
+                        let bare = bare_symbol_from_key(sym)
+                            .replace('/', "")
+                            .trim_end_matches(".EQ")
+                            .trim_end_matches(".eq")
+                            .to_ascii_uppercase();
+                        if let Some(idxs) = self.chart_by_bare.get(&bare) {
+                            let bids: Vec<(f64, f64)> = v["bids"].as_array().map(|arr| {
+                                arr.iter().filter_map(|l| {
+                                    let p = l["price"].as_f64().or_else(|| l["limit_price"].as_f64()).unwrap_or(0.0);
+                                    let s = l["size"].as_f64().or_else(|| l["order_qty"].as_f64()).unwrap_or(0.0);
+                                    if p > 0.0 && s > 0.0 { Some((p, s)) } else { None }
+                                }).take(8).collect()
+                            }).unwrap_or_default();
+                            let asks: Vec<(f64, f64)> = v["asks"].as_array().map(|arr| {
+                                arr.iter().filter_map(|l| {
+                                    let p = l["price"].as_f64().or_else(|| l["limit_price"].as_f64()).unwrap_or(0.0);
+                                    let s = l["size"].as_f64().or_else(|| l["order_qty"].as_f64()).unwrap_or(0.0);
+                                    if p > 0.0 && s > 0.0 { Some((p, s)) } else { None }
+                                }).take(8).collect()
+                            }).unwrap_or_default();
+                            for &i in idxs {
+                                if let Some(chart) = self.charts.get_mut(i) {
+                                    chart.live_depth_bids = bids.clone();
+                                    chart.live_depth_asks = asks.clone();
+                                }
+                            }
+                        }
                     }
                 }
                 BrokerMsg::KrakenBookQuoteTick { symbol, bid, ask, bid_size, ask_size } => {

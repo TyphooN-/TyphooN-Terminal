@@ -186,6 +186,7 @@ impl TyphooNApp {
                 "ev_scanner": self.show_ev_scanner,
                 "stress_test": self.show_stress_test,
                 "volume_profile": self.show_volume_profile,
+                "depth_profile": self.show_depth_profile,
                 "hv_cone": self.show_hv_cone,
                 "sector_heatmap": self.show_sector_heatmap,
                 "dividends_screen": self.show_dividends,
