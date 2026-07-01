@@ -1528,6 +1528,41 @@ pub fn draw_chart(
     // ── Volume Profile overlay (volume-at-price with POC + Value Area) ─────
     draw_volume_profile_overlay(painter, chart_rect, bars, price_min, price_max, flags);
 
+    // ── Live Depth Profile (L2 top sizes at bid/ask) — follow-up polish
+    // Uses live_bid/ask + sizes propagated from ticker/book. Visible when sizes >0.
+    // Complements historical volume profile with current market depth at top of book.
+    if chart.live_bid_size > 0.0 || chart.live_ask_size > 0.0 {
+        let max_size = chart.live_bid_size.max(chart.live_ask_size).max(1.0);
+        let max_w = (chart_rect.width() * 0.12).max(30.0);
+        let bid_y = price_to_y(chart.live_bid);
+        let ask_y = price_to_y(chart.live_ask);
+        let bid_w = ((chart.live_bid_size / max_size) as f32 * max_w as f32).max(2.0);
+        let ask_w = ((chart.live_ask_size / max_size) as f32 * max_w as f32).max(2.0);
+
+        // Bid depth bar (left of right edge, green)
+        if bid_y >= chart_rect.top() && bid_y <= chart_rect.bottom() {
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(chart_rect.right() - bid_w, bid_y - 2.0),
+                    egui::pos2(chart_rect.right(), bid_y + 2.0),
+                ),
+                0.0,
+                egui::Color32::from_rgba_premultiplied(0, 180, 60, 160),
+            );
+        }
+        // Ask depth bar (red)
+        if ask_y >= chart_rect.top() && ask_y <= chart_rect.bottom() {
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(chart_rect.right() - ask_w, ask_y - 2.0),
+                    egui::pos2(chart_rect.right(), ask_y + 2.0),
+                ),
+                0.0,
+                egui::Color32::from_rgba_premultiplied(200, 40, 40, 160),
+            );
+        }
+    }
+
     draw_post_zone_trend_overlays(
         painter, chart, chart_rect, data_left, bar_w, price_to_y, flags, start_idx, end_idx,
     );

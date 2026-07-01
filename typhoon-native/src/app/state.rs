@@ -679,6 +679,8 @@ pub struct TyphooNApp {
     pub(crate) show_montecarlo: bool,
     pub(crate) show_stress_test: bool,
     pub(crate) show_volume_profile: bool,
+    /// Depth profile from live L2 (book sizes at bid/ask levels). Toggle via menu or command.
+    pub(crate) show_depth_profile: bool,
     pub(crate) show_hv_cone: bool,
     pub(crate) show_sector_heatmap: bool,
     pub(crate) show_dividends: bool,

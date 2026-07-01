@@ -3214,6 +3214,7 @@ impl TyphooNApp {
                         if ui.button("Indicators…").clicked() { self.show_indicators_panel = true; ui.close(); }
                         if ui.button("Data Window").clicked() { self.show_data_window = true; ui.close(); }
                         if ui.button("Volume Profile").clicked() { self.show_volume_profile = true; ui.close(); }
+                        if ui.button("Depth Profile (L2)").clicked() { self.show_depth_profile = true; ui.close(); }
                         if ui.button("Price Alerts…").clicked() { self.show_alerts = true; ui.close(); }
                         // ADR-094: Open command palette with chart context
                         if ui.button("Command Palette…").clicked() {

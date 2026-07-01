@@ -322,6 +322,10 @@ impl TyphooNApp {
                                 self.show_volume_profile = true;
                                 ui.close();
                             }
+                            if ui.button("Depth Profile (L2)").clicked() {
+                                self.show_depth_profile = true;
+                                ui.close();
+                            }
                             if ui.button("Order Flow").clicked() {
                                 self.show_order_flow = true;
                                 ui.close();

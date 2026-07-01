@@ -509,6 +509,8 @@ impl TyphooNApp {
             show_montecarlo: false,
             show_stress_test: false,
             show_volume_profile: false,
+            // More chart depth profile (L2 book sizes at price). Complements volume profile.
+            show_depth_profile: false,
             show_hv_cone: false,
             show_sector_heatmap: false,
             show_dividends: false,

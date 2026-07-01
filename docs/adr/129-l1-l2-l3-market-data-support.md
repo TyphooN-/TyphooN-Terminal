@@ -1,6 +1,6 @@
 # ADR-129: Level 1 / Level 2 / Level 3 Market Data Support (Alpaca + Kraken)
 
-**Status:** Accepted / Implemented (2026-07) — All 1-7 + follow-ups complete. L1 sizes + lines + tooltips, depth pref, Bookmap hover+alpha, richer KrakenBookQuoteTick, L2 DOM full, L3 deeper foundation (stub + status field + UI label + clear limits). Verified + committed.
+**Status:** Accepted / Implemented (2026-07) — All 1-7 + follow-ups + more depth profile + L3 entitled prep. Live depth overlay on charts (sizes at bid/ask), depth profile toggle, L3 stub with entitled sim button + detailed placeholder for when user has auth. Other polish (menu/central integration).
 
 **Date:** 2026-07-01 (updated during implementation)
 

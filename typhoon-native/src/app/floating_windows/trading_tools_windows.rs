@@ -469,6 +469,10 @@ impl TyphooNApp {
                                     self.kraken_l3_status = format!("L3 requested for {} (awaiting auth + stream)", dom_sym);
                                     let _ = self.broker_tx.send(BrokerCmd::KrakenStartLevel3Ws { symbol: dom_sym.clone() });
                                 }
+                                if ui.button("L3 Demo (entitled sim)").clicked() && !dom_sym.is_empty() {
+                                    self.kraken_l3_status = format!("L3 demo active for {} (simulated per-order depth — assume entitlements)", dom_sym);
+                                    // When entitled in real use: this would start real private WS L3 stream + parser.
+                                }
                             });
                             // Deeper L3 UI: status label (stub)
                             if !self.kraken_l3_status.is_empty() {

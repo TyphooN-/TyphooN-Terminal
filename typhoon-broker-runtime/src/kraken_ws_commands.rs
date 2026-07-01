@@ -577,14 +577,17 @@ pub async fn handle_kraken_ws_command(
         }
         BrokerCmd::KrakenStartLevel3Ws { symbol } => {
             let msg_tx = broker_msg_tx.clone();
-            // Kraken L3 (auth per-order add/mod/del on ws-l3.kraken.com or private). 
-            // Limited to entitled accounts. Foundation stub only.
-            // Primary production feeds: L1 (ticker) + L2 (book with CRC).
+            // Kraken L3 (auth per-order add/mod/del on ws-l3.kraken.com or private ws). 
+            // Requires entitlements (higher tier API key with appropriate scopes).
+            // When entitled: connect to private/auth WS, subscribe to level3 or own book updates,
+            // parse per-order adds/mods/deletes with checksums similar to L2 book.
+            // Foundation stub only. Primary production feeds remain L1 ticker + L2 book.
             let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                "Kraken L3 requested for {} — auth entitlements required", symbol
+                "Kraken L3 requested for {} — auth entitlements required (stub ready)", symbol
             )));
-            // TODO deeper: full authenticated WS connect + per-order delta parser when entitled.
-            eprintln!("[kraken] L3 stub triggered for {} (see ADR-129 for limits)", symbol);
+            // TODO when entitled: wire full auth + parser (see private_ws example for ownTrades).
+            // For now, status shown in DOM; no real per-order stream.
+            eprintln!("[kraken] L3 stub triggered for {} (entitlements needed; see ADR-129)", symbol);
         }
         _ => {}
      }
