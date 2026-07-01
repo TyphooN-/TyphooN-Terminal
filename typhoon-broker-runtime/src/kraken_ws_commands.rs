@@ -587,8 +587,9 @@ pub async fn handle_kraken_ws_command(
                         high_24h: None,
                         change_24h: None,
                         change_pct_24h: None,
-                        ts_ms: None,
+                        ts_ms: Some((t.time * 1000.0) as i64),
                         is_snapshot: false,
+                        last_trade_side: Some(t.side.clone()),
                     };
                     let _ = trades_msg_tx.send(BrokerMsg::KrakenWsTicker(trade_ticker));
 

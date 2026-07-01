@@ -33,6 +33,9 @@ pub struct KrakenWsTicker {
     pub change_pct_24h: Option<f64>,
     pub ts_ms: Option<i64>,
     pub is_snapshot: bool,
+    /// Last trade side from public trades (for richer live trade indicators / depth tint).
+    /// None for regular ticker L1.
+    pub last_trade_side: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,6 +220,7 @@ fn parse_ticker_entry(entry: &serde_json::Value, is_snapshot: bool) -> Option<Kr
             .or_else(|| obj.get("time"))
             .and_then(ws_v2_timestamp_ms),
         is_snapshot,
+        last_trade_side: None,
     })
 }
 

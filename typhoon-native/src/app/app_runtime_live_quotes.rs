@@ -105,8 +105,12 @@ impl TyphooNApp {
                         let _ = chart.apply_forming_trade(last, vol);
                         chart.live_trade_price = last;
                         chart.live_trade_vol = vol;
-                        // For side, heuristic from price direction or default true (buy pressure common); real side available in trade struct upstream
-                        chart.live_trade_is_buy = last >= chart.bars.last().map(|b| b.open).unwrap_or(last);
+                        // Use real side from public trades if present, else heuristic
+                        chart.live_trade_is_buy = match &t.last_trade_side {
+                            Some(s) if s.eq_ignore_ascii_case("buy") => true,
+                            Some(s) if s.eq_ignore_ascii_case("sell") => false,
+                            _ => last >= chart.bars.last().map(|b| b.open).unwrap_or(last),
+                        };
                         chart.mark_view_changed(); // ensure MTF + single cells repaint promptly for live trade updates (priority for foreground/MTF)
                     } else {
                         chart.apply_forming_price_update(last);
