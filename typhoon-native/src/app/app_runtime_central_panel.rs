@@ -886,6 +886,12 @@ impl TyphooNApp {
                 // restore it once draw_chart returns, before the next cell iterates.
                 let trade_ov = std::mem::take(&mut self.charts[vi].cached_trade_overlay);
                 let chart = &mut self.charts[vi];
+                // Live trade / forming update from public trades: force gen bump for this MTF cell
+                // so renderers (volume profile, depth, tooltip, camera) pick up O(1) changes promptly.
+                // MTF Grid is trading-session critical.
+                if chart.forming_bar_dirty || chart.live_trade_vol > 0.0 {
+                    chart.mark_view_changed();
+                }
                 let idx = grid_pos;
                 let col = idx % cols;
                 let row = idx / cols;
