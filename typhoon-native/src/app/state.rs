@@ -560,6 +560,12 @@ pub struct TyphooNApp {
     // ── watchlist ────────────────────────────────────────────────────────
     /// Rich watchlist data: symbol name, last, prev_close, change, change_pct, volume, cache_key.
     pub(crate) watchlist_rows: Vec<WatchlistRow>,
+    /// O(1) dispatch for live quotes: bare upper normalized symbol -> row index.
+    /// Maintained alongside Vec so watchlist order (sort, UI) stays Vec while hot paths are map.
+    pub(crate) watchlist_by_bare: std::collections::HashMap<String, usize>,
+    /// O(1) dispatch for live quotes: bare upper normalized symbol -> list of chart indices.
+    /// Supports MTF grid (multiple charts per symbol) and duplicate protection.
+    pub(crate) chart_by_bare: std::collections::HashMap<String, Vec<usize>>,
     /// Unix timestamp of last successful watchlist quote refresh — drives staleness badge.
     pub(crate) watchlist_last_update_ts: i64,
     /// Last time an automatic watchlist quote refresh was dispatched. `None` until

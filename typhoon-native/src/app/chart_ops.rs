@@ -1508,6 +1508,7 @@ impl TyphooNApp {
                 chart.show_in_tab_bar = false;
                 self.charts.push(chart);
                 let idx = self.charts.len().saturating_sub(1);
+                self.rebuild_live_indices();
                 self.queue_chart_reload(idx);
                 let _ = self.queue_symbol_fetch_for_source(symbol, tf.cache_suffix());
                 idx

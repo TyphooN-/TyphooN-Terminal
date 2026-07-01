@@ -112,6 +112,7 @@ impl TyphooNApp {
                     if updated_from_cache {
                         self.watchlist_rows = rows;
                         self.watchlist_last_update_ts = chrono::Utc::now().timestamp();
+                        self.rebuild_live_indices();
                     }
                 }
             }
@@ -687,6 +688,7 @@ impl TyphooNApp {
                                 self.watchlist_rows.iter().position(|r| &r.symbol == sym)
                             {
                                 self.watchlist_rows.swap(row_idx, row_idx - 1);
+                                self.rebuild_live_indices();
                             }
                         }
                     }
@@ -699,6 +701,7 @@ impl TyphooNApp {
                                 self.watchlist_rows.iter().position(|r| &r.symbol == sym)
                             {
                                 self.watchlist_rows.swap(row_idx, row_idx + 1);
+                                self.rebuild_live_indices();
                             }
                         }
                     }
@@ -713,6 +716,7 @@ impl TyphooNApp {
                             {
                                 let row = self.watchlist_rows.remove(row_idx);
                                 self.watchlist_rows.insert(0, row);
+                                self.rebuild_live_indices();
                             }
                         }
                     }
@@ -722,6 +726,7 @@ impl TyphooNApp {
                     self.user_watchlist.retain(|s| s != sym);
                     self.user_watchlist_set.remove(sym);
                     self.watchlist_rows.retain(|r| &r.symbol != sym);
+                    self.rebuild_live_indices();
                 }
                 // Handle + button → open new chart tab
                 if let Some(sym) = open_new_sym {

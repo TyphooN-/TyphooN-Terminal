@@ -94,6 +94,7 @@ impl TyphooNApp {
                         while self.mtf_visible.len() < self.charts.len() {
                             self.mtf_visible.push(true);
                         }
+                        self.rebuild_live_indices();
                         self.hydrate_loaded_charts();
                     }
                 }

@@ -301,6 +301,7 @@ impl TyphooNApp {
                 let new_chart = ChartState::new(&self.symbol_input, tf);
                 self.charts.push(new_chart);
                 self.active_tab = self.charts.len() - 1;
+                self.rebuild_live_indices();
                 // Defer the expensive load to the paced loader so opening a tab never
                 // blocks the render thread on a heavy symbol (ADR-098).
                 self.queue_chart_reload(self.active_tab);
@@ -313,6 +314,7 @@ impl TyphooNApp {
                     if self.active_tab >= self.charts.len() {
                         self.active_tab = self.charts.len() - 1;
                     }
+                    self.rebuild_live_indices();
                 }
             }
             "RISKRUIN" => self.show_risk_ruin = true,

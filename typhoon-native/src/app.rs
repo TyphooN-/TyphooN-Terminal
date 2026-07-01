@@ -431,6 +431,8 @@ impl TyphooNApp {
             mm_result: String::new(),
             active_tab: 0,
             watchlist_rows,
+            watchlist_by_bare: std::collections::HashMap::new(),
+            chart_by_bare: std::collections::HashMap::new(),
             watchlist_last_update_ts: 0,
             watchlist_auto_refresh_at: None,
             watchlist_quotes_fetched_count: 0,

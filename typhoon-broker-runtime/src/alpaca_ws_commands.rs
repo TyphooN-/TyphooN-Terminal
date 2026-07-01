@@ -170,6 +170,14 @@ pub fn parse_market_data_quotes(raw: &str) -> Vec<(String, f64, f64)> {
                 "Alpaca data-stream error: {}",
                 item.get("msg").and_then(|m| m.as_str()).unwrap_or("")
             ),
+            "success" => {
+                let msg = item.get("msg").and_then(|m| m.as_str()).unwrap_or("");
+                if msg.contains("subscribed") || msg.contains("subscription") {
+                    tracing::debug!("Alpaca subscription ack: {}", msg);
+                } else {
+                    tracing::debug!("Alpaca success: {}", msg);
+                }
+            }
             _ => {}
         }
     }

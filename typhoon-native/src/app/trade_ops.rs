@@ -1712,13 +1712,20 @@ impl TyphooNApp {
     /// price; returns None when no matching chart has a fresh live quote so
     /// callers fall back to the cached price.
     pub(super) fn live_quote_mid_for_symbol(&self, symbol: &str) -> Option<f64> {
-        let want = bare_symbol_from_key(symbol).to_ascii_uppercase();
-        self.charts.iter().find_map(|c| {
-            if bare_symbol_from_key(&c.symbol).to_ascii_uppercase() != want {
-                return None;
+        let want = bare_symbol_from_key(symbol)
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .to_ascii_uppercase();
+        if let Some(idxs) = self.chart_by_bare.get(&want) {
+            for &i in idxs {
+                if let Some(c) = self.charts.get(i) {
+                    if let Some(mid) = c.fresh_live_quote_mid() {
+                        return Some(mid);
+                    }
+                }
             }
-            c.fresh_live_quote_mid()
-        })
+        }
+        None
     }
 
     fn latest_cached_equity_price_sources(&self) -> [&'static str; 3] {

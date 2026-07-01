@@ -142,7 +142,9 @@ impl TyphooNApp {
         if let Some(chart) = self.charts.get(self.active_tab) {
             push(&chart.symbol);
         }
-        set.into_iter().take(60).collect()
+        // Conservative cap. IEX (free real-time) has a documented ~30 symbol WS limit.
+        // SIP is higher. Keep <=30 until we have live feed feedback to make it adaptive.
+        set.into_iter().take(30).collect()
     }
 
     pub(super) fn handle_order_result(&mut self, msg: String) {

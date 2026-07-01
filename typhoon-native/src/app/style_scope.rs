@@ -623,6 +623,7 @@ impl TyphooNApp {
                     let chart = ChartState::new(&sym, tf);
                     self.charts.push(chart);
                     self.active_tab = self.charts.len() - 1;
+                    self.rebuild_live_indices();
                     // Defer load to the paced loader (ADR-098): opening a chart must not
                     // block the render thread on a heavy symbol's full-history load.
                     self.queue_chart_reload(self.active_tab);
@@ -661,6 +662,7 @@ impl TyphooNApp {
                     let chart = ChartState::new(&sym, tf);
                     self.charts.push(chart);
                     self.active_tab = self.charts.len() - 1;
+                    self.rebuild_live_indices();
                     // Defer load to the paced loader (ADR-098): opening a chart must not
                     // block the render thread on a heavy symbol's full-history load.
                     self.queue_chart_reload(self.active_tab);

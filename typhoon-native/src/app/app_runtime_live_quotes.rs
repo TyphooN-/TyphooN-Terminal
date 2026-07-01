@@ -55,16 +55,12 @@ impl TyphooNApp {
             .replace('/', "")
             .trim_end_matches(".EQ")
             .to_ascii_uppercase();
-        for chart in &mut self.charts {
-            let chart_symbol = bare_symbol_from_key(&chart.symbol)
-                .replace('/', "")
-                .trim_end_matches(".EQ")
-                .to_ascii_uppercase();
-            if chart_symbol == wanted
-                || chart_symbol.contains(&wanted)
-                || wanted.contains(&chart_symbol)
-            {
-                chart.apply_live_quote_update(bid, ask, false);
+        // O(1) via index (exact bare match; fuzzy legacy rare after normalization)
+        if let Some(idxs) = self.chart_by_bare.get(&wanted) {
+            for &i in idxs {
+                if let Some(chart) = self.charts.get_mut(i) {
+                    chart.apply_live_quote_update(bid, ask, false);
+                }
             }
         }
         self.apply_live_quote_to_watchlist(&wanted, bid, ask);
@@ -79,16 +75,12 @@ impl TyphooNApp {
             .replace('/', "")
             .trim_end_matches(".EQ")
             .to_ascii_uppercase();
-        for chart in &mut self.charts {
-            let chart_symbol = bare_symbol_from_key(&chart.symbol)
-                .replace('/', "")
-                .trim_end_matches(".EQ")
-                .to_ascii_uppercase();
-            if chart_symbol == wanted
-                || chart_symbol.contains(&wanted)
-                || wanted.contains(&chart_symbol)
-            {
-                chart.apply_live_quote_update(bid, ask, false);
+        // O(1) via index
+        if let Some(idxs) = self.chart_by_bare.get(&wanted) {
+            for &i in idxs {
+                if let Some(chart) = self.charts.get_mut(i) {
+                    chart.apply_live_quote_update(bid, ask, false);
+                }
             }
         }
         self.apply_live_quote_to_watchlist(&wanted, bid, ask);
@@ -119,6 +111,7 @@ impl TyphooNApp {
             },
         );
 
+        // Note: keep linear for now because chart bare extraction differs; can O(1) later with consistent norm
         for chart in &mut self.charts {
             let chart_sym = chart.symbol.replace('/', "").to_ascii_uppercase();
             let chart_bare = chart_sym
@@ -172,7 +165,7 @@ impl TyphooNApp {
         );
     }
 
-    /// Inject fresh live bid/ask into any matching watchlist row.
+    /// Inject fresh live bid/ask into matching watchlist row (O(1) via index).
     /// Stores full bid/ask + timestamp so the watchlist can render Ask/Bid
     /// the same way the chart price axis does. Uses live mid for the "Last"
     /// column so change calculations stay perfectly in sync.
@@ -183,30 +176,59 @@ impl TyphooNApp {
         let mid = (bid + ask) * 0.5;
         let now = std::time::Instant::now();
 
-        for row in &mut self.watchlist_rows {
-            let row_sym = row
-                .symbol
+        if let Some(&idx) = self.watchlist_by_bare.get(bare_symbol) {
+            if let Some(row) = self.watchlist_rows.get_mut(idx) {
+                let row_sym = row
+                    .symbol
+                    .replace('/', "")
+                    .trim_end_matches(".EQ")
+                    .to_ascii_uppercase();
+                if row_sym == bare_symbol
+                    || row_sym.contains(bare_symbol)
+                    || bare_symbol.contains(&row_sym)
+                {
+                    row.live_bid = bid;
+                    row.live_ask = ask;
+                    row.live_quote_at = Some(now);
+
+                    if row.prev_close > 0.0 {
+                        row.last = mid;
+                        row.change = mid - row.prev_close;
+                        row.change_pct = (row.change / row.prev_close) * 100.0;
+                    } else {
+                        row.last = mid;
+                    }
+                    self.watchlist_last_update_ts = chrono::Utc::now().timestamp();
+                }
+            }
+        }
+    }
+
+    /// Rebuild O(1) indices after any mutation to charts or watchlist_rows.
+    /// Called after user actions, session restore, watchlist load etc.
+    /// Hot quote paths use these instead of linear scans.
+    pub(super) fn rebuild_live_indices(&mut self) {
+        self.chart_by_bare.clear();
+        for (i, chart) in self.charts.iter().enumerate() {
+            let bare = bare_symbol_from_key(&chart.symbol)
                 .replace('/', "")
                 .trim_end_matches(".EQ")
+                .trim_end_matches(".eq")
                 .to_ascii_uppercase();
-            if row_sym == bare_symbol
-                || row_sym.contains(bare_symbol)
-                || bare_symbol.contains(&row_sym)
-            {
-                row.live_bid = bid;
-                row.live_ask = ask;
-                row.live_quote_at = Some(now);
+            if !bare.is_empty() {
+                self.chart_by_bare.entry(bare).or_default().push(i);
+            }
+        }
 
-                // Prefer live mid for the displayed Last so change calculations stay live
-                if row.prev_close > 0.0 {
-                    row.last = mid;
-                    row.change = mid - row.prev_close;
-                    row.change_pct = (row.change / row.prev_close) * 100.0;
-                } else {
-                    row.last = mid;
-                }
-                self.watchlist_last_update_ts = chrono::Utc::now().timestamp();
-                break;
+        self.watchlist_by_bare.clear();
+        for (i, row) in self.watchlist_rows.iter().enumerate() {
+            let bare = bare_symbol_from_key(&row.symbol)
+                .replace('/', "")
+                .trim_end_matches(".EQ")
+                .trim_end_matches(".eq")
+                .to_ascii_uppercase();
+            if !bare.is_empty() {
+                self.watchlist_by_bare.insert(bare, i);
             }
         }
     }

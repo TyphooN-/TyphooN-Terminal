@@ -254,6 +254,7 @@ impl TyphooNApp {
             row_symbols.contains(&pos_symbol) || row_symbols.contains(&asset_symbol)
         });
         self.watchlist_rows = rows;
+        self.rebuild_live_indices();
 
         // Watchlist quotes are the freshest equity valuation input during extended hours. Reprice
         // Kraken Securities balances from them so Positions/Cur does not lag by iapi's delayed feed.
