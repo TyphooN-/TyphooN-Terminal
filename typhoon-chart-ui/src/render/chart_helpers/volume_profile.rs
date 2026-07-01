@@ -20,7 +20,8 @@ pub(crate) fn draw_volume_profile_overlay(
         for (i, bar) in bars.iter().enumerate() {
             let is_forming = i == bars.len().saturating_sub(1);
             if is_forming && bar.volume > 0.0 {
-                // Real-time from public trades: bin forming volume at exact last/close price (O(1) point bin)
+                // Real-time from public trades: bin forming volume at exact close price (trade execution price) (O(1) point bin)
+                // Trade side (buy/sell) propagates indirectly via bar.close vs bar.open for buy_vol in profile (close updated by last trade).
                 let y_frac = ((price_max - bar.close) / (price_max - price_min)).clamp(0.0, 1.0);
                 let b = (y_frac * num_buckets as f64) as usize;
                 if b < num_buckets {

@@ -101,7 +101,8 @@ impl TyphooNApp {
                     chart.apply_live_quote_update(bid, ask, t.bid_qty.unwrap_or(0.0), t.ask_qty.unwrap_or(0.0), false);
                     if t.bid.is_none() && t.ask.is_none() && t.volume_24h.unwrap_or(0.0) > 0.0 {
                         // Trade-driven ticker emission (from Kraken public trades): accumulate real volume
-                        chart.apply_forming_trade(last, t.volume_24h.unwrap_or(0.0));
+                        let _ = chart.apply_forming_trade(last, t.volume_24h.unwrap_or(0.0));
+                        chart.mark_view_changed();  // ensure MTF + single cells repaint promptly for live trade updates (priority for foreground/MTF)
                     } else {
                         chart.apply_forming_price_update(last);
                     }
@@ -109,6 +110,14 @@ impl TyphooNApp {
             }
         }
         self.apply_live_quote_to_watchlist(&wanted, bid, ask, t.bid_qty.unwrap_or(0.0), t.ask_qty.unwrap_or(0.0));
+        // Incremental trade volume from public Kraken trades to watchlist row (O(1))
+        if t.volume_24h.unwrap_or(0.0) > 0.0 {
+            if let Some(&idx) = self.watchlist_by_bare.get(&wanted) {
+                if let Some(row) = self.watchlist_rows.get_mut(idx) {
+                    row.volume += t.volume_24h.unwrap_or(0.0);
+                }
+            }
+        }
         // Log richer L1 occasionally (volume etc.)
         if t.volume_24h.unwrap_or(0.0) > 0.0 {
             self.log.push_back(LogEntry::info(format!(

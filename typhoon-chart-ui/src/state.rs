@@ -481,9 +481,13 @@ impl ChartState {
         let price_updated = self.apply_forming_price_update(price);
         if price_updated && trade_vol > 0.0 && trade_vol.is_finite() {
             if let Some(bar) = self.bars.last_mut() {
+                // Low-TF (M1/M5) Kraken: public trades volume accumulated O(1) into forming bar.
+                // Per-chart (per TF) so M1/M5 get precise live volume without double-count (new bar starts clean).
                 bar.volume += trade_vol;
             }
         }
+        // Manual camera (free-look) preservation: forming live updates (price + vol from trades) only dirty the bar,
+        // do not reset manual price_center or follow_latest. Camera code already respects manual_override.
         price_updated
     }
 
