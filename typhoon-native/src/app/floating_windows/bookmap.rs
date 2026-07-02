@@ -284,11 +284,43 @@ pub(super) fn render_live_orderbook_heatmap(
     // Richer Bookmap L3: order list pane with age coloring + interactions (click = copy + select note)
     if is_l3 {
         ui.separator();
+        let selected_summary = selected_order_id.as_deref().map(|selected| {
+            bids.iter()
+                .find(|level| level.get("order_id").and_then(|o| o.as_str()) == Some(selected))
+                .map(|level| {
+                    format!(
+                        "selected BID {} @ {} x {:.4}",
+                        &selected[..selected.len().min(8)],
+                        format_price(get_price(level)),
+                        get_size(level)
+                    )
+                })
+                .or_else(|| {
+                    asks.iter()
+                        .find(|level| {
+                            level.get("order_id").and_then(|o| o.as_str()) == Some(selected)
+                        })
+                        .map(|level| {
+                            format!(
+                                "selected ASK {} @ {} x {:.4}",
+                                &selected[..selected.len().min(8)],
+                                format_price(get_price(level)),
+                                get_size(level)
+                            )
+                        })
+                })
+                .unwrap_or_else(|| {
+                    format!(
+                        "selected {} (not in current snapshot)",
+                        &selected[..selected.len().min(8)]
+                    )
+                })
+        });
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("L3 orders (age-colored, top 5/side)").small());
-            if let Some(selected) = selected_order_id.as_deref() {
+            if let Some(selected) = selected_summary.as_deref() {
                 ui.label(
-                    egui::RichText::new(format!("selected {}", &selected[..selected.len().min(8)]))
+                    egui::RichText::new(selected)
                         .small()
                         .color(egui::Color32::YELLOW),
                 );
