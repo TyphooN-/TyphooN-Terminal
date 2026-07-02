@@ -451,19 +451,31 @@ impl TyphooNApp {
                                     .unwrap_or_default()
                             };
 
+                            let dom_stream_supported =
+                                kraken_bookmap_stream_supported(&dom_sym, &self.kraken_pairs);
+
                             // Follow-up: depth preference slider (session-persisted for L2 DOM)
                             ui.horizontal(|ui| {
                                 ui.label("Depth:");
                                 let mut d = self.dom_depth as i32;
                                 ui.add(egui::Slider::new(&mut d, 10..=250).step_by(10.0));
                                 self.dom_depth = d.clamp(10, 250) as usize;
-                                if ui.button("Apply to Stream").clicked() && !dom_sym.is_empty() {
+                                let apply_button = ui.add_enabled(
+                                    dom_stream_supported && !dom_sym.is_empty(),
+                                    egui::Button::new("Apply to Stream"),
+                                );
+                                if apply_button.clicked() {
                                     // Use preferred depth when (re)starting
                                     let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
                                         symbol: dom_sym.clone(),
                                         depth: self.dom_depth,
                                         publish_dom: true,
                                     });
+                                }
+                                if !dom_stream_supported && !dom_sym.is_empty() {
+                                    apply_button.on_hover_text(
+                                        "Live Kraken depth streaming is only available for supported Kraken spot pairs; use Refresh L2 for snapshots on unsupported symbols.",
+                                    );
                                 }
                             });
 
@@ -474,7 +486,7 @@ impl TyphooNApp {
                                 }
                                 ui.label(egui::RichText::new("(snapshots; Kraken streams)").small().color(ob_dim));
                                 if ui.add_enabled(
-                                    kraken_bookmap_stream_supported(&dom_sym, &self.kraken_pairs),
+                                    dom_stream_supported,
                                     egui::Button::new("Start Stream").small()
                                 ).clicked() && !dom_sym.is_empty() {
                                     let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
@@ -484,8 +496,7 @@ impl TyphooNApp {
                                     });
                                 }
                                 // L3 foundation trigger (polish 6): real L3 is opt-in and entitlement-gated.
-                                let l3_supported =
-                                    kraken_bookmap_stream_supported(&dom_sym, &self.kraken_pairs);
+                                let l3_supported = dom_stream_supported;
                                 let l3_button = ui.add_enabled(
                                     l3_supported && !dom_sym.is_empty(),
                                     egui::Button::new("Start L3 (Kraken)").small(),

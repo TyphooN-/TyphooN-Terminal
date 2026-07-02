@@ -86,7 +86,7 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
 
 ### Cross-cutting (Polish 4, 7 + more)
 - [x] Polish 4: Kraken book sizes flow through `KrakenBookQuoteTick`/live quote paths and are rendered under freshness guards.
-- [x] Polish 7: focused/on-demand stream scope, O(1) dispatch, session `dom_depth` preference, bounded checksummed book/L3 state, and explicit staleness/status labels.
+- [x] Polish 7: focused/on-demand stream scope, O(1) dispatch, session `dom_depth` preference, every live depth stream entrypoint guarded to supported Kraken spot pairs, bounded checksummed book/L3 state, and explicit staleness/status labels.
 - Additional completeness / future TODOs: 
   - [x] Chart tooltips with full rich L1.
   - [x] DOM top-of-book sizes feeding L1 paths.

@@ -28,8 +28,9 @@ Orderbook DOM, toolbar L2, and Order Flow Stream L2 share the same session
 source/depth shape explicitly as Kraken WS L2, Kraken WS L3, or Alpaca snapshot.
 
 Kraken depth streaming is guarded to Kraken spot-pair symbols only. The UI
-checks the loaded Kraken spot universe before enabling live depth, so equity
-symbols and unsupported broker symbols cannot accidentally start Kraken L2
+checks the loaded Kraken spot universe before enabling every live stream entrypoint
+(Start Stream, Apply to Stream, Bookmap Stream Depth, and L3 start), so equity
+symbols and unsupported broker symbols cannot accidentally start Kraken L2/L3
 streams.
 
 Retained streaming L2/L3 history is not part of the current Bookmap window scope.
