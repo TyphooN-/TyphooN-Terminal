@@ -485,15 +485,21 @@ impl TyphooNApp {
                                     let _ = self.broker_tx.send(BrokerCmd::GetOrderbook { symbol: dom_sym.clone() });
                                 }
                                 ui.label(egui::RichText::new("(snapshots; Kraken streams)").small().color(ob_dim));
-                                if ui.add_enabled(
+                                let stream_button = ui.add_enabled(
                                     dom_stream_supported,
                                     egui::Button::new("Start Stream").small()
-                                ).clicked() && !dom_sym.is_empty() {
+                                );
+                                if stream_button.clicked() && !dom_sym.is_empty() {
                                     let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
                                         symbol: dom_sym.clone(),
                                         depth: self.dom_depth,
                                         publish_dom: true,
                                     });
+                                }
+                                if !dom_stream_supported && !dom_sym.is_empty() {
+                                    stream_button.on_hover_text(
+                                        "Live Kraken depth streaming is only available for supported Kraken spot pairs; use Refresh L2 for snapshots on unsupported symbols.",
+                                    );
                                 }
                                 // L3 foundation trigger (polish 6): real L3 is opt-in and entitlement-gated.
                                 let l3_supported = dom_stream_supported;
