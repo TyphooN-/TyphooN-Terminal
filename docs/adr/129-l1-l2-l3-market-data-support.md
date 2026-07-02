@@ -11,6 +11,7 @@
 - Unit test for L3 state/apply/checksum. All prior + this deeper slice verified.
 - Continued polish: public-trade live execution markers on chart/right axis, watchlist L1 size freshness parity, Bookmap L3 selected-order persistence/header/heatmap highlight, shared DOM depth preference across stream entrypoints, L3-aware DOM metrics, and L3 entitlement/status surfacing.
 - capability-model (code): the previously conceptual "each broker advertises L1/L2/L3 capabilities" is now a concrete typed model — `typhoon_engine::broker::capabilities` (`MarketDataSupport`, `DepthAssetScope`, `BrokerMarketDataCapabilities`, and `OrderBroker::{l1,l2,l3}_support` / `market_data_capabilities`). The native depth gate routes through it (`depth_stream_supported(broker, …)`) so gating is broker-parameterized (exhaustive match ⇒ adding a broker is a compile error until its depth behavior is declared). See "Broker Capability Model (code)" below.
+- typed-provenance (code): the last hard-coded provenance strings are gone — `MarketDataProvenance` + `MarketDataTransport` (in `broker::capabilities`) are the single source of truth for payload `source`/`transport`. All producers (engine snapshots/WS, broker-runtime WS v2 L2/L3, native L3 sim) stamp it; the DOM badge consumer parses it back via `OrderBroker::from_persist_str` + `MarketDataTransport::from_wire`. Wire tokens unchanged; behavior identical.
 ---
 **Date:** 2026-07-01 (updated during implementation)
 
@@ -149,9 +150,17 @@ the symbol) — so selecting a different Primary broker never disables depth tha
 another enabled broker can still stream.
 
 L3 detection stays broker-agnostic (`orderbook_value_is_l3`: explicit `is_l3`
-flag or per-order `order_id`), and snapshot/stream payloads carry normalized
-`source`/`transport` metadata — both already provider-neutral, both consistent
-with this model.
+flag or per-order `order_id`), and snapshot/stream payloads carry **typed**
+provenance rather than raw string literals: `MarketDataProvenance` +
+`MarketDataTransport` (`websocket` | `snapshot` | `demo`) in
+`broker::capabilities` are the single source of truth for the `source` /
+`transport` wire vocabulary. `source` reuses `OrderBroker::as_persist_str`, so
+every producer (engine snapshots/WS, broker-runtime WS v2 L2/L3, native L3 sim)
+stamps it via `MarketDataProvenance`, and the DOM badge consumer
+(`orderbook_provider_badge`) parses it back through
+`OrderBroker::from_persist_str` + `MarketDataTransport::from_wire` — producer and
+consumer share one typed vocabulary, with legacy heuristics kept only as
+fallbacks for unstamped payloads.
 
 ## Acceptance Criteria
 - All 1-7 items + extensions implemented and visible in UI.

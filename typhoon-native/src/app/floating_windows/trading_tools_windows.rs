@@ -1,19 +1,27 @@
 use super::*;
+use typhoon_engine::broker::capabilities::{MarketDataProvenance, MarketDataTransport};
 
+/// DOM/Bookmap provider badge. Parses the normalized `source`/`transport`
+/// provenance (ADR-129 capability model) into typed `OrderBroker` +
+/// `MarketDataTransport` before matching, so producers and this consumer share
+/// one vocabulary. The trailing `_` arms are legacy/heuristic fallbacks for
+/// payloads that predate the provenance stamp.
 fn orderbook_provider_badge(
     v: &serde_json::Value,
     symbol: &str,
     checksum_status: &str,
     is_l3: bool,
 ) -> &'static str {
-    let source = v.get("source").and_then(|s| s.as_str()).unwrap_or("");
-    let transport = v.get("transport").and_then(|s| s.as_str()).unwrap_or("");
-    match (source, transport, is_l3) {
-        ("kraken", "demo", true) => "Kraken L3 demo",
-        ("kraken", _, true) => "Kraken WS L3",
-        ("kraken", "websocket", false) => "Kraken WS L2",
-        ("kraken", _, false) => "Kraken snapshot",
-        ("alpaca", _, _) => "Alpaca snapshot",
+    let broker =
+        OrderBroker::from_persist_str(v.get("source").and_then(|s| s.as_str()).unwrap_or(""));
+    let transport =
+        MarketDataTransport::from_wire(v.get("transport").and_then(|s| s.as_str()).unwrap_or(""));
+    match (broker, transport, is_l3) {
+        (Some(OrderBroker::Kraken), Some(MarketDataTransport::Demo), true) => "Kraken L3 demo",
+        (Some(OrderBroker::Kraken), _, true) => "Kraken WS L3",
+        (Some(OrderBroker::Kraken), Some(MarketDataTransport::WebSocket), false) => "Kraken WS L2",
+        (Some(OrderBroker::Kraken), _, false) => "Kraken snapshot",
+        (Some(OrderBroker::Alpaca), _, _) => "Alpaca snapshot",
         _ if !checksum_status.is_empty() => "Kraken WS L2",
         _ if symbol.contains('/') || symbol.to_uppercase().ends_with("USD") => "Kraken WS L2",
         _ => "Alpaca snapshot",
@@ -551,9 +559,13 @@ impl TyphooNApp {
                                     self.kraken_l3_status = format!("L3 demo active for {} (simulated per-order depth — assume entitlements)", dom_sym);
                                     let now_s = chrono::Utc::now().timestamp_millis() as f64 / 1000.0;
                                     // Sample L3-style data to exercise parser, Bookmap L3 viz, selected-order header details, and age coloring.
+                                    let prov = MarketDataProvenance::new(
+                                        OrderBroker::Kraken,
+                                        MarketDataTransport::Demo,
+                                    );
                                     self.orderbook_result = serde_json::json!({
-                                        "source": "kraken",
-                                        "transport": "demo",
+                                        "source": prov.source_wire(),
+                                        "transport": prov.transport_wire(),
                                         "symbol": dom_sym,
                                         "timestamp": "sim-l3",
                                         "checksum": 123456,

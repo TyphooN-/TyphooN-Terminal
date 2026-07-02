@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
+use typhoon_engine::broker::capabilities::{MarketDataProvenance, MarketDataTransport};
+use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg, OrderBroker};
 use typhoon_engine::core::cache::SqliteCache;
 
 use crate::kraken_ohlc_pipeline;
@@ -41,9 +42,10 @@ fn kraken_l3_to_json(
             })
         })
         .collect();
+    let prov = MarketDataProvenance::new(OrderBroker::Kraken, MarketDataTransport::WebSocket);
     serde_json::json!({
-        "source": "kraken",
-        "transport": "websocket",
+        "source": prov.source_wire(),
+        "transport": prov.transport_wire(),
         "symbol": display_symbol,
         "timestamp": "live-l3",
         "checksum": delta.checksum,
@@ -90,9 +92,10 @@ fn kraken_ws_v2_book_state_json(
             })
         })
         .collect();
+    let prov = MarketDataProvenance::new(OrderBroker::Kraken, MarketDataTransport::WebSocket);
     serde_json::json!({
-        "source": "kraken",
-        "transport": "websocket",
+        "source": prov.source_wire(),
+        "transport": prov.transport_wire(),
         "symbol": display_symbol,
         "ws_symbol": state.symbol,
         "timestamp": timestamp,

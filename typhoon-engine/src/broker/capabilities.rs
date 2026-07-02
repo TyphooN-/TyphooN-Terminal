@@ -159,6 +159,86 @@ impl OrderBroker {
     }
 }
 
+/// Wire transport stamped on a market-data (orderbook/depth) payload's
+/// `transport` field. The tokens here are the **single source of truth** for the
+/// provenance vocabulary — producers stamp them via [`MarketDataProvenance`],
+/// and the DOM badge consumer parses them back with [`MarketDataTransport::from_wire`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MarketDataTransport {
+    /// Live streaming deltas/ticks over WebSocket.
+    WebSocket,
+    /// On-demand REST snapshot (point-in-time, no deltas).
+    Snapshot,
+    /// Simulated / demo feed (e.g. L3 sim when unentitled).
+    Demo,
+}
+
+impl MarketDataTransport {
+    /// Exact wire token for the payload `transport` field. Changing these means
+    /// updating every producer + the DOM badge matcher together.
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            MarketDataTransport::WebSocket => "websocket",
+            MarketDataTransport::Snapshot => "snapshot",
+            MarketDataTransport::Demo => "demo",
+        }
+    }
+
+    /// Parse a wire token back to the typed transport (`None` if absent/legacy).
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "websocket" => Some(MarketDataTransport::WebSocket),
+            "snapshot" => Some(MarketDataTransport::Snapshot),
+            "demo" => Some(MarketDataTransport::Demo),
+            _ => None,
+        }
+    }
+
+    /// True for live streaming transports (gates "live" vs "snapshot/demo" UI).
+    pub fn is_live(self) -> bool {
+        matches!(self, MarketDataTransport::WebSocket)
+    }
+}
+
+/// Normalized provenance stamped onto every market-data (orderbook/depth)
+/// payload: which broker produced it and over what transport. Replaces the raw
+/// `"source"` / `"transport"` string literals that were scattered across
+/// producers so the wire vocabulary lives in one typed place shared by
+/// producers (engine + broker-runtime + native sim) and the DOM badge consumer.
+///
+/// `source` reuses [`OrderBroker::as_persist_str`] (`"alpaca"` / `"kraken"`) so
+/// the badge consumer can round-trip it through [`OrderBroker::from_persist_str`].
+#[derive(Clone, Copy, Debug)]
+pub struct MarketDataProvenance {
+    pub broker: OrderBroker,
+    pub transport: MarketDataTransport,
+}
+
+impl MarketDataProvenance {
+    pub fn new(broker: OrderBroker, transport: MarketDataTransport) -> Self {
+        Self { broker, transport }
+    }
+
+    /// Broker wire token for the payload `source` field.
+    pub fn source_wire(self) -> &'static str {
+        self.broker.as_persist_str()
+    }
+
+    /// Transport wire token for the payload `transport` field.
+    pub fn transport_wire(self) -> &'static str {
+        self.transport.as_wire()
+    }
+
+    /// The provenance as a `{ "source": …, "transport": … }` JSON object, for
+    /// producers that assemble a payload incrementally or want to assert it.
+    pub fn to_json(self) -> serde_json::Value {
+        serde_json::json!({
+            "source": self.source_wire(),
+            "transport": self.transport_wire(),
+        })
+    }
+}
+
 // ── Planned broker re-additions (documented, not yet enabled) ────────────────
 // When these return they gain an `OrderBroker` arm; the exhaustive matches above
 // then force their L1/L2/L3 capabilities + depth scopes to be declared here, in
@@ -229,5 +309,34 @@ mod tests {
                 assert!(caps.l3_scope.covers_anything());
             }
         }
+    }
+
+    #[test]
+    fn provenance_round_trips_wire_tokens() {
+        // `source` tokens match OrderBroker::as_persist_str; transport tokens stable.
+        let ws = MarketDataProvenance::new(OrderBroker::Kraken, MarketDataTransport::WebSocket);
+        assert_eq!(ws.source_wire(), "kraken");
+        assert_eq!(ws.transport_wire(), "websocket");
+        assert!(ws.transport.is_live());
+
+        let snap = MarketDataProvenance::new(OrderBroker::Alpaca, MarketDataTransport::Snapshot);
+        assert_eq!(snap.to_json()["source"], "alpaca");
+        assert_eq!(snap.to_json()["transport"], "snapshot");
+        assert!(!snap.transport.is_live());
+
+        // Producer → consumer round-trip via the shared vocabulary.
+        assert_eq!(
+            OrderBroker::from_persist_str(ws.source_wire()),
+            Some(OrderBroker::Kraken)
+        );
+        assert_eq!(
+            MarketDataTransport::from_wire("demo"),
+            Some(MarketDataTransport::Demo)
+        );
+        assert_eq!(MarketDataTransport::from_wire(""), None);
+        assert_eq!(
+            MarketDataTransport::from_wire("websocket"),
+            Some(MarketDataTransport::WebSocket)
+        );
     }
 }

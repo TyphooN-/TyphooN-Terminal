@@ -11,6 +11,9 @@
 use futures_util::SinkExt;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
+use crate::broker::capabilities::{MarketDataProvenance, MarketDataTransport};
+use crate::broker::protocol::OrderBroker;
+
 pub(super) async fn connect_kraken_public_book_once(
     ws_pair: &str,
     depth: usize,
@@ -128,9 +131,10 @@ pub(super) fn kraken_public_book_snapshot_json(
             .map(|(price, size)| serde_json::json!({ "price": price, "size": size }))
             .collect()
     };
+    let prov = MarketDataProvenance::new(OrderBroker::Kraken, MarketDataTransport::WebSocket);
     serde_json::json!({
-        "source": "kraken",
-        "transport": "websocket",
+        "source": prov.source_wire(),
+        "transport": prov.transport_wire(),
         "symbol": display_symbol,
         "ws_pair": ws_pair,
         "timestamp": chrono::Utc::now().to_rfc3339(),
@@ -145,9 +149,10 @@ pub(super) fn kraken_public_book_status_message(
     ws_pair: &str,
     status: &str,
 ) -> String {
+    let prov = MarketDataProvenance::new(OrderBroker::Kraken, MarketDataTransport::WebSocket);
     serde_json::json!({
-        "source": "kraken",
-        "transport": "websocket",
+        "source": prov.source_wire(),
+        "transport": prov.transport_wire(),
         "symbol": display_symbol,
         "ws_pair": ws_pair,
         "status": status,
@@ -163,9 +168,10 @@ pub(super) fn kraken_public_book_error_message(
     ws_pair: &str,
     error: &str,
 ) -> String {
+    let prov = MarketDataProvenance::new(OrderBroker::Kraken, MarketDataTransport::WebSocket);
     serde_json::json!({
-        "source": "kraken",
-        "transport": "websocket",
+        "source": prov.source_wire(),
+        "transport": prov.transport_wire(),
         "symbol": display_symbol,
         "ws_pair": ws_pair,
         "status": "error",

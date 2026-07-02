@@ -82,6 +82,9 @@ use futures_util::{SinkExt, StreamExt};
 use hmac::{Hmac, KeyInit, Mac};
 use reqwest::Client;
 use sha2::{Digest, Sha256, Sha512};
+
+use crate::broker::capabilities::{MarketDataProvenance, MarketDataTransport};
+use crate::broker::protocol::OrderBroker;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1550,9 +1553,10 @@ impl KrakenBroker {
                 })
                 .unwrap_or_default()
         };
+        let prov = MarketDataProvenance::new(OrderBroker::Kraken, MarketDataTransport::Snapshot);
         Ok(serde_json::json!({
-            "source": "kraken",
-            "transport": "snapshot",
+            "source": prov.source_wire(),
+            "transport": prov.transport_wire(),
             "symbol": crate::core::kraken::normalize_pair_symbol(symbol),
             "timestamp": chrono::Utc::now().to_rfc3339(),
             "bids": parse_side("bids"),

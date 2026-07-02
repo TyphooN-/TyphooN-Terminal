@@ -12,6 +12,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::protocol::Message;
+
+use crate::broker::capabilities::{MarketDataProvenance, MarketDataTransport};
+use crate::broker::protocol::OrderBroker;
 use zeroize::Zeroizing;
 
 const CRYPTO_BAR_FEEDS: &[Option<&str>] = &[None];
@@ -3885,9 +3888,10 @@ impl AlpacaBroker {
         let bids = Self::parse_crypto_orderbook_side(&orderbook["b"], "bid")?;
         let asks = Self::parse_crypto_orderbook_side(&orderbook["a"], "ask")?;
 
+        let prov = MarketDataProvenance::new(OrderBroker::Alpaca, MarketDataTransport::Snapshot);
         Ok(serde_json::json!({
-            "source": "alpaca",
-            "transport": "snapshot",
+            "source": prov.source_wire(),
+            "transport": prov.transport_wire(),
             "symbol": symbol,
             "timestamp": orderbook["t"],
             "bids": bids,
