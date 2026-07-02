@@ -243,35 +243,14 @@ pub(crate) fn draw_right_axis_price_labels(
                 x += dash_len * 2.0;
             }
             let label_y = place_axis_label(trade_y, 8.0);
-            let lbl_rect = egui::Rect::from_min_size(
-                egui::pos2(chart_rect.right() + 2.0, label_y - 8.0),
-                egui::vec2(price_axis_w - 4.0, 16.0),
-            );
-            painter.rect_filled(lbl_rect, 2.0, egui::Color32::from_rgb(12, 18, 28));
-            painter.rect_stroke(
-                lbl_rect,
-                2.0,
-                egui::Stroke::new(1.0, trade_col),
-                egui::StrokeKind::Inside,
-            );
-            let side = if chart.live_trade_is_buy {
-                "Buy"
-            } else {
-                "Sell"
-            };
+            let side = if chart.live_trade_is_buy { "Buy" } else { "Sell" };
             let label = format!(
                 "{} {} x {}",
                 side,
                 format_price(chart.live_trade_price),
-                format_price(chart.live_trade_vol)
+                crate::render::time_axis::format_size(chart.live_trade_vol)
             );
-            painter.text(
-                egui::pos2(chart_rect.right() + 4.0, label_y),
-                egui::Align2::LEFT_CENTER,
-                label,
-                egui::FontId::monospace(9.0),
-                trade_col,
-            );
+            draw_axis_flag(painter, chart_rect, price_axis_w, label_y, label, trade_col);
         }
     }
 
@@ -282,7 +261,6 @@ pub(crate) fn draw_right_axis_price_labels(
         let ask_col = egui::Color32::from_rgba_premultiplied(220, 50, 50, 150);
         let bid_text_col = egui::Color32::from_rgb(0, 220, 80);
         let ask_text_col = egui::Color32::from_rgb(255, 90, 90);
-        let label_bg = egui::Color32::from_rgb(12, 18, 28);
         if bid_y >= chart_rect.top() && bid_y <= chart_rect.bottom() {
             painter.line_segment(
                 [
@@ -292,28 +270,21 @@ pub(crate) fn draw_right_axis_price_labels(
                 egui::Stroke::new(0.75, bid_col),
             );
             let bid_label_y = place_axis_label(bid_y, 8.0);
-            let lbl_rect = egui::Rect::from_min_size(
-                egui::pos2(chart_rect.right() + 2.0, bid_label_y - 8.0),
-                egui::vec2(price_axis_w - 4.0, 16.0),
-            );
-            painter.rect_filled(lbl_rect, 2.0, label_bg);
-            painter.rect_stroke(
-                lbl_rect,
-                2.0,
-                egui::Stroke::new(1.0, bid_text_col),
-                egui::StrokeKind::Inside,
-            );
             let size_part = if chart.live_bid_size > 0.0 {
-                format!(" x {}", format_price(chart.live_bid_size))
+                format!(
+                    " x {}",
+                    crate::render::time_axis::format_size(chart.live_bid_size)
+                )
             } else {
                 String::new()
             };
-            let label = format!("Bid {}{}", format_price(chart.live_bid), size_part);
-            painter.text(
-                egui::pos2(chart_rect.right() + 4.0, bid_label_y),
-                egui::Align2::LEFT_CENTER,
+            let label = format!("B {}{}", format_price(chart.live_bid), size_part);
+            draw_axis_flag(
+                painter,
+                chart_rect,
+                price_axis_w,
+                bid_label_y,
                 label,
-                egui::FontId::monospace(9.0),
                 bid_text_col,
             );
         }
@@ -326,30 +297,55 @@ pub(crate) fn draw_right_axis_price_labels(
                 egui::Stroke::new(0.75, ask_col),
             );
             let ask_label_y = place_axis_label(ask_y, 8.0);
-            let lbl_rect = egui::Rect::from_min_size(
-                egui::pos2(chart_rect.right() + 2.0, ask_label_y - 8.0),
-                egui::vec2(price_axis_w - 4.0, 16.0),
-            );
-            painter.rect_filled(lbl_rect, 2.0, label_bg);
-            painter.rect_stroke(
-                lbl_rect,
-                2.0,
-                egui::Stroke::new(1.0, ask_text_col),
-                egui::StrokeKind::Inside,
-            );
             let size_part = if chart.live_ask_size > 0.0 {
-                format!(" x {}", format_price(chart.live_ask_size))
+                format!(
+                    " x {}",
+                    crate::render::time_axis::format_size(chart.live_ask_size)
+                )
             } else {
                 String::new()
             };
-            let label = format!("Ask {}{}", format_price(chart.live_ask), size_part);
-            painter.text(
-                egui::pos2(chart_rect.right() + 4.0, ask_label_y),
-                egui::Align2::LEFT_CENTER,
+            let label = format!("A {}{}", format_price(chart.live_ask), size_part);
+            draw_axis_flag(
+                painter,
+                chart_rect,
+                price_axis_w,
+                ask_label_y,
                 label,
-                egui::FontId::monospace(9.0),
                 ask_text_col,
             );
         }
     }
+}
+
+/// Draw a right-axis price flag (current/EXT bid/ask/executed-trade tag).
+///
+/// The flag's right edge is pinned to the price-axis outer edge and it is sized
+/// to its text, growing **leftward** when the label is wider than the axis
+/// strip. This keeps long L1 labels ("A 0.1770 x 1200") fully on-screen instead
+/// of spilling off the right edge of the window. Border and text share `col`.
+fn draw_axis_flag(
+    painter: &egui::Painter,
+    chart_rect: egui::Rect,
+    price_axis_w: f32,
+    center_y: f32,
+    text: String,
+    col: egui::Color32,
+) {
+    let bg = egui::Color32::from_rgb(12, 18, 28);
+    let pad_x = 4.0;
+    let galley = painter.layout_no_wrap(text, egui::FontId::monospace(9.0), col);
+    let box_w = (galley.rect.width() + pad_x * 2.0).max(price_axis_w - 4.0);
+    let box_right = chart_rect.right() + price_axis_w - 2.0;
+    let rect = egui::Rect::from_min_max(
+        egui::pos2(box_right - box_w, center_y - 8.0),
+        egui::pos2(box_right, center_y + 8.0),
+    );
+    painter.rect_filled(rect, 2.0, bg);
+    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, col), egui::StrokeKind::Inside);
+    painter.galley(
+        egui::pos2(rect.left() + pad_x, center_y - galley.rect.height() * 0.5),
+        galley,
+        col,
+    );
 }

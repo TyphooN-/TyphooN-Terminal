@@ -1795,6 +1795,21 @@ pub fn draw_chart(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn format_size_is_compact_not_price_padded() {
+        use super::time_axis::format_size;
+        // Whole share/contract quantities render without the price-style ".0000"
+        // that used to overflow the right-axis bid/ask flags off the window edge.
+        assert_eq!(format_size(1200.0), "1200");
+        assert_eq!(format_size(400.0), "400");
+        // Large sizes abbreviate.
+        assert_eq!(format_size(150_000.0), "150K");
+        assert_eq!(format_size(1_500_000.0), "1.5M");
+        // Fractional (crypto) sizes keep significant digits, trailing zeros trimmed.
+        assert_eq!(format_size(0.005_600), "0.0056");
+        assert_eq!(format_size(0.0), "0");
+    }
+
+    #[test]
     fn indicator_value_lookup_returns_none_when_series_lags_bars() {
         let series = vec![Some(1.0), None, Some(3.0)];
 

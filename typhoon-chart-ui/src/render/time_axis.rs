@@ -14,6 +14,32 @@ pub fn format_price(p: f64) -> String {
     }
 }
 
+/// Compact size/quantity label (shares, contracts, coins) — distinct from
+/// `format_price` so L1 book sizes render as `1200` / `150K` / `2.5M` (or
+/// `0.0056` for fractional crypto), not the price-style `1200.0000` that
+/// overflowed the right-axis bid/ask flags.
+pub fn format_size(sz: f64) -> String {
+    let a = sz.abs();
+    if a == 0.0 {
+        "0".into()
+    } else if a >= 1_000_000.0 {
+        format!("{:.1}M", sz / 1_000_000.0)
+    } else if a >= 100_000.0 {
+        format!("{:.0}K", sz / 1_000.0)
+    } else if a >= 1.0 {
+        // Whole quantities show without decimals; fractional to 2 dp.
+        if (sz - sz.round()).abs() < 1e-6 {
+            format!("{:.0}", sz)
+        } else {
+            format!("{:.2}", sz)
+        }
+    } else {
+        // Fractional crypto sizes: keep significant digits, trim trailing zeros.
+        let s = format!("{:.6}", sz);
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
 pub(super) fn format_axis_price_label(prefix: &str, price: f64) -> String {
     format!("{} {}", prefix, format_price(price))
 }
