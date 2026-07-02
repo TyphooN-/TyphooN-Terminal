@@ -367,7 +367,7 @@ pub(super) fn render_live_orderbook_heatmap(
                             ui.ctx().copy_text(oid.to_string());
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "selected {} for chart (L3 order)",
+                                    "selected {} (copied L3 order id)",
                                     &oid[..oid.len().min(6)]
                                 ))
                                 .small()

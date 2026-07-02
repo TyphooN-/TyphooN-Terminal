@@ -274,9 +274,8 @@ impl SortState {
 pub(crate) struct BookmapWindowState {
     pub(crate) symbol: String,
     pub(crate) open: bool,
-    /// Selected order_id for L3 Bookmap (demo/sim friendly; highlights row and can be used for chart focus).
+    /// Selected order_id for L3 Bookmap (demo/sim friendly; highlights row/header/marker and supports copy).
     /// Works for both sim and real L3 data. Real full actions gated by entitlements.
-    #[allow(dead_code)]
     pub(crate) selected_order_id: Option<String>,
 }
 
