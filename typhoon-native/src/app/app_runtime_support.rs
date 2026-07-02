@@ -17,6 +17,19 @@ pub(super) fn is_routine_market_data_status(msg: &str) -> bool {
         // path should treat repeats as routine status instead of stacking
         // a red error per balance tick.
         || msg.starts_with(typhoon_engine::broker::kraken::IAPI_RATE_LIMITED_ERR_PREFIX)
+        // A best-effort corroborator (Yahoo Chart) hitting a transient transport
+        // failure — connection reset, DNS hiccup, timeout, send error — is not a
+        // user-actionable error; the symbol retries next cycle. Keep it out of the
+        // red error log. (Rate limits are handled separately with a backoff pause
+        // via the "Yahoo Chart HTTP 429" branch; genuine no-data becomes an
+        // Unresolvable tombstone upstream and never reaches this path.)
+        || (msg.starts_with("Yahoo Chart fallback failed for")
+            && (msg.contains("error sending request")
+                || msg.contains("timed out")
+                || msg.contains("connection")
+                || msg.contains("dns error")
+                || msg.contains("tcp connect")
+                || msg.contains("body error")))
 }
 
 pub(super) fn should_emit_alpaca_retry_queue_log(queue_len: usize) -> bool {
