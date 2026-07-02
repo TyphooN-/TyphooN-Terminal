@@ -18,6 +18,18 @@ pub(super) fn orderbook_json_matches_symbol(orderbook_json: &str, symbol: &str) 
         .unwrap_or(false)
 }
 
+pub(super) fn orderbook_value_is_l3(v: &serde_json::Value) -> bool {
+    v.get("is_l3").and_then(|x| x.as_bool()).unwrap_or(false)
+        || v.get("bids")
+            .and_then(|b| b.as_array())
+            .map(|bids| bids.iter().any(|b| b.get("order_id").is_some()))
+            .unwrap_or(false)
+        || v.get("asks")
+            .and_then(|a| a.as_array())
+            .map(|asks| asks.iter().any(|a| a.get("order_id").is_some()))
+            .unwrap_or(false)
+}
+
 pub(super) fn orderbook_json_is_l3_for_symbol(orderbook_json: &str, symbol: &str) -> bool {
     if orderbook_json.trim().is_empty() || symbol.trim().is_empty() {
         return false;
@@ -33,17 +45,7 @@ pub(super) fn orderbook_json_is_l3_for_symbol(orderbook_json: &str, symbol: &str
                 })
                 .unwrap_or(false)
         })
-        .map(|v| {
-            v.get("is_l3").and_then(|x| x.as_bool()).unwrap_or(false)
-                || v.get("bids")
-                    .and_then(|b| b.as_array())
-                    .map(|bids| bids.iter().any(|b| b.get("order_id").is_some()))
-                    .unwrap_or(false)
-                || v.get("asks")
-                    .and_then(|a| a.as_array())
-                    .map(|asks| asks.iter().any(|a| a.get("order_id").is_some()))
-                    .unwrap_or(false)
-        })
+        .map(|v| orderbook_value_is_l3(&v))
         .unwrap_or(false)
 }
 
@@ -102,9 +104,7 @@ pub(super) fn render_live_orderbook_heatmap(
             .unwrap_or(8.0)
     };
 
-    let is_l3 = v.get("is_l3").and_then(|b| b.as_bool()).unwrap_or(false)
-        || bids.iter().any(|b| b.get("order_id").is_some())
-        || asks.iter().any(|a| a.get("order_id").is_some());
+    let is_l3 = orderbook_value_is_l3(&v);
     let order_count_bid: usize = if is_l3 { bids.len() } else { 0 };
     let order_count_ask: usize = if is_l3 { asks.len() } else { 0 };
 
