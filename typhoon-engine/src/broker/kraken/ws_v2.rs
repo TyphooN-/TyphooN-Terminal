@@ -5,15 +5,32 @@
 //! The goal is to prevent another monolithic Kraken protocol file.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 pub const KRAKEN_WS_V2_PUBLIC_URL: &str = "wss://ws.kraken.com/v2";
 pub const KRAKEN_WS_V2_AUTH_URL: &str = "wss://ws-auth.kraken.com/v2";
 pub const KRAKEN_WS_V2_LEVEL3_URL: &str = "wss://ws-l3.kraken.com/v2";
 
+/// Reconnect a v2 public stream if no frame — data **or** heartbeat — arrives
+/// within this window. Kraken v2 emits `heartbeat` frames ~1/s on an
+/// idle-but-alive connection, so a lapse this long means a half-open/dead socket
+/// that the OS TCP layer may not surface for many minutes (a stuck write can sit
+/// in retransmit for 15-30 min). Comfortably above the ~1 s heartbeat cadence so
+/// a healthy but quiet feed never trips it. Mirrors Alpaca's `STALE_AFTER`.
+pub const KRAKEN_WS_V2_STALE_AFTER: Duration = Duration::from_secs(60);
+
 static WS_V2_REQ_ID: AtomicU64 = AtomicU64::new(10_000);
 
 pub(crate) fn next_ws_v2_req_id() -> u64 {
     WS_V2_REQ_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+/// True when the elapsed time since the last received frame exceeds
+/// `stale_after` — i.e. the connection looks half-open and should be recycled.
+/// Split out (pure over `Duration`) so the threshold logic is unit-testable
+/// without a live socket.
+pub fn ws_v2_connection_is_stale(since_last_frame: Duration, stale_after: Duration) -> bool {
+    since_last_frame > stale_after
 }
 
 pub fn build_ws_v2_subscribe_frame(
@@ -169,6 +186,20 @@ mod tests {
         assert_eq!(value["params"]["symbol"][0], "BTC/USD");
         assert_eq!(value["params"]["snapshot"], true);
         assert!(value["req_id"].is_u64());
+    }
+
+    #[test]
+    fn connection_staleness_trips_past_the_window() {
+        // Below the window (heartbeats keep it fresh) → not stale.
+        assert!(!ws_v2_connection_is_stale(
+            Duration::from_secs(59),
+            KRAKEN_WS_V2_STALE_AFTER
+        ));
+        // Past the window (no data or heartbeat) → stale, reconnect.
+        assert!(ws_v2_connection_is_stale(
+            Duration::from_secs(61),
+            KRAKEN_WS_V2_STALE_AFTER
+        ));
     }
 
     #[test]

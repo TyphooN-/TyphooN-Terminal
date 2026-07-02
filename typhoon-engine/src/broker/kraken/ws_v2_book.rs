@@ -3,8 +3,9 @@
 use std::time::Duration;
 
 use super::ws_v2::{
-    KRAKEN_WS_V2_PUBLIC_URL, build_ws_v2_subscribe_frame, build_ws_v2_unsubscribe_frame,
-    next_ws_v2_req_id, ws_v2_json_u64, ws_v2_timestamp_ms,
+    KRAKEN_WS_V2_PUBLIC_URL, KRAKEN_WS_V2_STALE_AFTER, build_ws_v2_subscribe_frame,
+    build_ws_v2_unsubscribe_frame, next_ws_v2_req_id, ws_v2_connection_is_stale, ws_v2_json_u64,
+    ws_v2_timestamp_ms,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::value::RawValue;
@@ -292,6 +293,9 @@ async fn run_book_streamer_once(
     let mut ping_ticker = tokio::time::interval(KRAKEN_WS_BOOK_PING_INTERVAL);
     ping_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     ping_ticker.tick().await;
+    // Half-open watchdog: any received frame (data, heartbeat, ping, pong)
+    // refreshes this; a lapse past KRAKEN_WS_V2_STALE_AFTER forces a reconnect.
+    let mut last_frame = std::time::Instant::now();
 
     loop {
         if book_tx.is_closed() {
@@ -299,6 +303,9 @@ async fn run_book_streamer_once(
         }
         tokio::select! {
             msg = stream.next() => {
+                if matches!(msg, Some(Ok(_))) {
+                    last_frame = std::time::Instant::now();
+                }
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         for delta in parse_book_message(&text) {
@@ -324,6 +331,9 @@ async fn run_book_streamer_once(
                 }).to_string();
                 if sink.send(Message::Text(ping.into())).await.is_err() {
                     return Err("book ws ping send failed".into());
+                }
+                if ws_v2_connection_is_stale(last_frame.elapsed(), KRAKEN_WS_V2_STALE_AFTER) {
+                    return Err("book ws stale: no frame within window; reconnecting".into());
                 }
             }
         }

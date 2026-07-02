@@ -8,8 +8,9 @@
 use std::time::Duration;
 
 use super::ws_v2::{
-    KRAKEN_WS_V2_PUBLIC_URL, build_ws_v2_subscribe_frame, build_ws_v2_unsubscribe_frame,
-    next_ws_v2_req_id, parse_ws_v2_channel_type, ws_v2_json_f64,
+    KRAKEN_WS_V2_PUBLIC_URL, KRAKEN_WS_V2_STALE_AFTER, build_ws_v2_subscribe_frame,
+    build_ws_v2_unsubscribe_frame, next_ws_v2_req_id, parse_ws_v2_channel_type,
+    ws_v2_connection_is_stale, ws_v2_json_f64,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
@@ -146,6 +147,9 @@ async fn run_trades_streamer_once(
     });
 
     let mut ping_interval = tokio::time::interval(KRAKEN_WS_TRADE_PING_INTERVAL);
+    // Half-open watchdog: any received frame (data, heartbeat, ping, pong)
+    // refreshes this; a lapse past KRAKEN_WS_V2_STALE_AFTER forces a reconnect.
+    let mut last_frame = std::time::Instant::now();
 
     loop {
         tokio::select! {
@@ -154,8 +158,14 @@ async fn run_trades_streamer_once(
                 if write.send(Message::Text(ping.into())).await.is_err() {
                     return Err("ping failed".to_string());
                 }
+                if ws_v2_connection_is_stale(last_frame.elapsed(), KRAKEN_WS_V2_STALE_AFTER) {
+                    return Err("trade ws stale: no frame within window; reconnecting".to_string());
+                }
             }
             msg = read.next() => {
+                if matches!(msg, Some(Ok(_))) {
+                    last_frame = std::time::Instant::now();
+                }
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         // Ack handling omitted for brevity (similar to ticker)
