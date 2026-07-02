@@ -111,7 +111,7 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
 
 ## Implementation Notes (this cut)
 - Extended `ChartState`, `WatchlistRow`, `apply_*` functions for sizes.
-- Enhanced DOM with Refresh + Start Stream + top sizes + spread/mid + imbalance.
+- Enhanced DOM with Fetch L2 Snapshot + Start Stream + top sizes + spread/mid + imbalance.
 - Added Kraken top qty extraction.
 - New ADR-129 created.
 - All changes verified and pushed in coherent cuts.

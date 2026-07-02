@@ -284,7 +284,7 @@ impl TyphooNApp {
                                 orderbook_json_is_l3_for_symbol(&self.orderbook_result, &sym);
                             ui.horizontal(|ui| {
                                 ui.label(egui::RichText::new(format!("Depth: {sym}")).strong());
-                                if ui.button("Fetch Depth").clicked() && !sym.is_empty() {
+                                if ui.button("Fetch Depth Snapshot").clicked() && !sym.is_empty() {
                                     let _ = self.broker_tx.send(BrokerCmd::GetOrderbook {
                                         symbol: sym.clone(),
                                     });
@@ -495,14 +495,14 @@ impl TyphooNApp {
                                 }
                                 if !dom_stream_supported && !dom_sym.is_empty() {
                                     apply_button.on_hover_text(
-                                        "Live Kraken depth streaming is only available for supported Kraken spot pairs; use Refresh L2 for snapshots on unsupported symbols.",
+                                        "Live Kraken depth streaming is only available for supported Kraken spot pairs; use Fetch L2 Snapshot for snapshots on unsupported symbols.",
                                     );
                                 }
                             });
 
-                            // Rich L2 polish: refresh + stream + L3 trigger buttons
+                            // Rich L2 polish: snapshot fetch + stream + L3 trigger buttons
                             ui.horizontal(|ui| {
-                                if ui.button("Refresh L2").clicked() && !dom_sym.is_empty() {
+                                if ui.button("Fetch L2 Snapshot").clicked() && !dom_sym.is_empty() {
                                     let _ = self.broker_tx.send(BrokerCmd::GetOrderbook { symbol: dom_sym.clone() });
                                 }
                                 ui.label(egui::RichText::new("(snapshots; Kraken streams)").small().color(ob_dim));
@@ -519,7 +519,7 @@ impl TyphooNApp {
                                 }
                                 if !dom_stream_supported && !dom_sym.is_empty() {
                                     stream_button.on_hover_text(
-                                        "Live Kraken depth streaming is only available for supported Kraken spot pairs; use Refresh L2 for snapshots on unsupported symbols.",
+                                        "Live Kraken depth streaming is only available for supported Kraken spot pairs; use Fetch L2 Snapshot for snapshots on unsupported symbols.",
                                     );
                                 }
                                 // L3 foundation trigger (polish 6): real L3 is opt-in and entitlement-gated.
