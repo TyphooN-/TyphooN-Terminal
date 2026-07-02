@@ -156,10 +156,10 @@ impl TyphooNApp {
                     if !self.user_watchlist_set.contains(&sym) {
                         self.user_watchlist.push(sym.clone());
                         self.user_watchlist_set.insert(sym);
-                        self.watchlist_cache_tried = false; // retry cache lookup
-                        // Trigger immediate refresh. The handler falls back to Yahoo/cache
-                        // when broker snapshots are unavailable, so don't gate this on
-                        // market-hours broker connectivity.
+                        // Retry cache lookup and trigger immediate refresh. The handler falls back
+                        // to Yahoo/cache when broker snapshots are unavailable, so don't gate this
+                        // on market-hours broker connectivity.
+                        self.watchlist_cache_tried = false;
                         let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes {
                             symbols: self.user_watchlist.clone(),
                         });
@@ -397,7 +397,11 @@ impl TyphooNApp {
                             1
                         } else if !show_ext {
                             // No Ext%/Close columns: Chg% | Vol split directly.
-                            if rx < (col_pct + col_vol) * 0.5 { 3 } else { 4 }
+                            if rx < (col_pct + col_vol) * 0.5 {
+                                3
+                            } else {
+                                4
+                            }
                         } else if rx < (col_pct + col_close) * 0.5 {
                             3
                         } else if rx < (col_close + col_ext) * 0.5 {
@@ -441,14 +445,31 @@ impl TyphooNApp {
 
                     let (row_rect, row_resp) =
                         ui.allocate_exact_size(egui::vec2(avail_w, row_h), egui::Sense::click());
-                    // Rich L1 tooltip polish
-                    let tip = if wl.live_bid > 0.0 || wl.live_ask > 0.0 {
-                        let bsz = if wl.live_bid_size > 0.0 { format!(" x {}", format_price(wl.live_bid_size)) } else { String::new() };
-                        let asz = if wl.live_ask_size > 0.0 { format!(" x {}", format_price(wl.live_ask_size)) } else { String::new() };
-                        format!("Bid: {}{}\nAsk: {}{}\n(WS L1 sizes when available)", 
-                            format_price(wl.live_bid), bsz, format_price(wl.live_ask), asz)
+                    // Rich L1 tooltip polish. Match the chart's 30s live freshness rule;
+                    // stale bid/ask sizes must not masquerade as current tape.
+                    let live_quote_fresh = wl
+                        .live_quote_at
+                        .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
+                    let tip = if live_quote_fresh && (wl.live_bid > 0.0 || wl.live_ask > 0.0) {
+                        let bsz = if wl.live_bid_size > 0.0 {
+                            format!(" x {}", format_price(wl.live_bid_size))
+                        } else {
+                            String::new()
+                        };
+                        let asz = if wl.live_ask_size > 0.0 {
+                            format!(" x {}", format_price(wl.live_ask_size))
+                        } else {
+                            String::new()
+                        };
+                        format!(
+                            "Bid: {}{}\nAsk: {}{}\n(WS L1 sizes when available)",
+                            format_price(wl.live_bid),
+                            bsz,
+                            format_price(wl.live_ask),
+                            asz
+                        )
                     } else {
-                        "No live WS quote yet".to_string()
+                        "No fresh live WS quote".to_string()
                     };
                     row_resp.clone().on_hover_text(tip);
                     let rp = ui.painter_at(row_rect);
@@ -513,13 +534,22 @@ impl TyphooNApp {
                     } else {
                         (wl.last, wl.change, wl.change_pct, chg_color)
                     };
-                    let last_str = if wl.live_bid_size > 0.0 || wl.live_ask_size > 0.0 {
-                        let bsz = if wl.live_bid_size > 0.0 { format!("b{:.2} ", wl.live_bid_size) } else { "".to_string() };
-                        let asz = if wl.live_ask_size > 0.0 { format!("a{:.2}", wl.live_ask_size) } else { "".to_string() };
-                        format!("{} {}{}", format_price(disp_last), bsz, asz)
-                    } else {
-                        format_price(disp_last)
-                    };
+                    let last_str =
+                        if live_quote_fresh && (wl.live_bid_size > 0.0 || wl.live_ask_size > 0.0) {
+                            let bsz = if wl.live_bid_size > 0.0 {
+                                format!("b{:.2} ", wl.live_bid_size)
+                            } else {
+                                "".to_string()
+                            };
+                            let asz = if wl.live_ask_size > 0.0 {
+                                format!("a{:.2}", wl.live_ask_size)
+                            } else {
+                                "".to_string()
+                            };
+                            format!("{} {}{}", format_price(disp_last), bsz, asz)
+                        } else {
+                            format_price(disp_last)
+                        };
                     rp.text(
                         egui::pos2(rx + col_last - 2.0, ry),
                         egui::Align2::RIGHT_CENTER,
