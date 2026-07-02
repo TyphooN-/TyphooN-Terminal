@@ -10,7 +10,15 @@ Optional API keys and broker credentials that unlock additional features.
 - **Paper trading:** Free, instant activation
 - **Live trading:** Requires identity verification
 - **Data:** IEX (free) or SIP (paid) market data feeds
-- **Rate limit:** 200 requests/minute (free plan)
+- **Rate limit:** 200 requests/minute (free plan), enforced **per account key**
+- **Multiple accounts (ADR-130):** the free tier allows 1 live + 3 paper
+  accounts. Settings → API Keys exposes 4 Alpaca slots (label + key/secret +
+  Paper/Trade/Data flags). Every slot with **Data** on joins the historical
+  bar-sync rotation — 4 accounts ≈ 4× sync throughput. Slot 1 uses the legacy
+  `alpaca_api_key`/`alpaca_secret` keyring entries; slots 2–4 store under
+  `alpaca_api_key_N`/`alpaca_secret_N`. The top-bar `Primary:` chip cycles
+  accounts; Trading → TradeCopy… copies positions between accounts and can
+  mirror new app-placed orders across all trade-enabled accounts.
 
 ## FRED (Federal Reserve Economic Data)
 
@@ -30,6 +38,12 @@ Optional API keys and broker credentials that unlock additional features.
 - **Key format:** API key + base64 API secret
 - **Required permissions:** Balance/positions for account display; order create/modify and cancel/close for trading
 - **Note:** Public Spot OHLCV, Kraken Equities/xStocks iapi market data, Kraken Futures instrument discovery, and Kraken Futures chart candles do not require credentials. The terminal syncs these bars asynchronously but paces Spot OHLC requests to Kraken's documented public limits and Kraken iapi requests through the AIMD limiter; authenticated keys are only needed for trading/account features. Kraken market-data credentials do not expand news coverage — news comes from the separate multi-source research pipeline in ADR-078.
+- **Multiple accounts (ADR-130):** Settings exposes Kraken slots 2–4
+  (`kraken_api_key_N`/`kraken_api_secret_N`) as additional trading identities
+  for the top-bar `Primary:` account cycler. Because Kraken market data is
+  public, extra Kraken accounts do **not** increase sync speed, and the
+  private ownTrades/openOrders WebSocket keeps following the previous account
+  until the next app restart after a primary switch.
 
 ## Anthropic (Claude AI)
 

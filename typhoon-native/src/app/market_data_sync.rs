@@ -1369,8 +1369,22 @@ impl TyphooNApp {
         )
     }
 
+    /// Aggregate Alpaca historical budget across the account pool (ADR-130):
+    /// the per-account RPM (hint/observed) times the number of accounts in the
+    /// data-sync rotation, since each account has an independent rate limiter.
+    pub(super) fn alpaca_aggregate_historical_rpm(&self) -> u32 {
+        self.alpaca_effective_historical_rpm()
+            .saturating_mul(self.alpaca_data_account_count() as u32)
+    }
+
     pub(super) fn alpaca_sync_capacity(&self) -> AlpacaSyncCapacity {
-        let mut capacity = alpaca_sync_capacity_for_rpm(self.alpaca_effective_historical_rpm());
+        // Tier by the AGGREGATE pool budget so the scheduler feeds enough
+        // symbols to keep every account's limiter busy, then scale worker
+        // permits with the pool size (bounded — each in-flight worker is still
+        // paced by its own account's limiter).
+        let accounts = self.alpaca_data_account_count();
+        let mut capacity = alpaca_sync_capacity_for_rpm(self.alpaca_aggregate_historical_rpm());
+        capacity.fetch_permits = capacity.fetch_permits.saturating_mul(accounts).min(48);
         if self.full_tilt_sync_enabled() {
             capacity.fetch_permits = capacity.fetch_permits.max(ALPACA_FULL_TILT_FETCH_PERMITS);
             capacity.queue_window = capacity.queue_window.max(ALPACA_FULL_TILT_QUEUE_WINDOW);

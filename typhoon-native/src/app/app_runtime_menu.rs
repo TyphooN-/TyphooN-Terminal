@@ -228,6 +228,20 @@ impl TyphooNApp {
                                     ui.close();
                                 }
                             }
+                            ui.separator();
+                            let tradecopy_label = if self.tradecopy_mirror_orders {
+                                "TradeCopy…  [mirroring ON]"
+                            } else {
+                                "TradeCopy…"
+                            };
+                            if ui
+                                .button(tradecopy_label)
+                                .on_hover_text("Copy trades between broker accounts: one-shot position copy plus live order mirroring across all trade-enabled accounts (ADR-130).")
+                                .clicked()
+                            {
+                                self.show_tradecopy = true;
+                                ui.close();
+                            }
                         });
                         ui.menu_button("Tools", |ui| {
                             if ui.button("Console (~)").clicked() {
@@ -421,64 +435,51 @@ impl TyphooNApp {
                             )));
                         }
                         } // end Scope switch (only shown with 2+ enabled brokers)
-                        // Primary broker switch — click to cycle which enabled
-                        // broker is PRIMARY (order-routing default + trusted
-                        // equity-merge lane). Every other enabled broker becomes a
-                        // sync ASSIST lane. Mirrors the Scope button; scales to N
-                        // brokers via OrderBroker::enabled_cycle.
-                        if top_brokers.len() >= 2 {
-                            let enabled_brokers = &top_brokers;
+                        // Primary switch — click to cycle which enabled broker
+                        // ACCOUNT is PRIMARY (order-routing default + trusted
+                        // equity-merge lane). The cycle now walks every connected
+                        // account of every enabled broker (ADR-130), so e.g.
+                        // Alpaca Live → Alpaca Paper 1 → … → Kraken. Every other
+                        // enabled broker stays a sync ASSIST lane (ADR-126).
+                        let account_cycle = self.primary_account_cycle();
+                        if top_brokers.len() >= 2 || account_cycle.len() >= 2 {
                             ui.separator();
                             let primary_col = match self.primary_broker {
                                 OrderBroker::Alpaca => egui::Color32::from_rgb(255, 160, 60),
                                 OrderBroker::Kraken => egui::Color32::from_rgb(0, 170, 160),
                             };
+                            let current_account_id =
+                                self.primary_account_id_for(self.primary_broker);
+                            let chip_label = account_cycle
+                                .iter()
+                                .find(|(broker, id, _)| {
+                                    *broker == self.primary_broker && *id == current_account_id
+                                })
+                                .map(|(_, _, label)| label.clone())
+                                .unwrap_or_else(|| self.primary_broker.label().to_string());
                             let primary_btn = egui::Button::new(
-                                egui::RichText::new(format!(
-                                    "Primary: {}",
-                                    self.primary_broker.label()
-                                ))
-                                .strong()
-                                .color(egui::Color32::WHITE),
+                                egui::RichText::new(format!("Primary: {}", chip_label))
+                                    .strong()
+                                    .color(egui::Color32::WHITE),
                             )
                             .fill(primary_col);
                             if ui
                                 .add(primary_btn)
-                                .on_hover_text("Primary broker = order-routing default + trusted data-merge lane; other enabled brokers are sync assist lanes. Click to cycle.")
+                                .on_hover_text("Primary account = order-routing default + trusted data-merge lane; other enabled brokers are sync assist lanes. Click to cycle through every connected broker account.")
                                 .clicked()
+                                && !account_cycle.is_empty()
                             {
-                                let next_idx = enabled_brokers
+                                let next_idx = account_cycle
                                     .iter()
-                                    .position(|broker| *broker == self.primary_broker)
-                                    .map(|idx| (idx + 1) % enabled_brokers.len())
+                                    .position(|(broker, id, _)| {
+                                        *broker == self.primary_broker
+                                            && *id == current_account_id
+                                    })
+                                    .map(|idx| (idx + 1) % account_cycle.len())
                                     .unwrap_or(0);
-                                let next = enabled_brokers[next_idx];
-                                if next != self.primary_broker {
-                                    self.primary_broker = next;
-                                    // Routing follows the primary immediately; the
-                                    // per-trade Broker combo can still override.
-                                    self.order_broker = next;
-                                    // Flip the equity data-merge trusted lane too
-                                    // (ADR-126): primary defines the price scale,
-                                    // the other broker becomes gap-fill assist.
-                                    set_chart_merge_primary_broker(next);
-                                    let assists = self.assist_brokers();
-                                    let assist_str = if assists.is_empty() {
-                                        "none".to_string()
-                                    } else {
-                                        assists
-                                            .iter()
-                                            .map(|broker| broker.label())
-                                            .collect::<Vec<_>>()
-                                            .join(", ")
-                                    };
-                                    self.log.push_back(LogEntry::info(format!(
-                                        "Primary broker → {} (assist: {})",
-                                        next.label(),
-                                        assist_str
-                                    )));
-                                    self.save_session();
-                                }
+                                let (next_broker, next_account, _) =
+                                    account_cycle[next_idx].clone();
+                                self.apply_primary_selection(next_broker, &next_account);
                             }
                         }
                         // Alert breach badge — visible red counter when alerts have fired.

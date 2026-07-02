@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
-use typhoon_engine::broker::alpaca::AlpacaBroker;
 use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
 use typhoon_engine::core::cache::SqliteCache;
 
+use crate::account_pool::AlpacaAccountPool;
+
 pub async fn handle_bar_fetch_command(
     cmd: BrokerCmd,
-    broker: Option<&AlpacaBroker>,
+    alpaca_pool: &AlpacaAccountPool,
     broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
     shared_cache_broker: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
     alpaca_fetch_permits: Arc<tokio::sync::Semaphore>,
@@ -20,8 +21,10 @@ pub async fn handle_bar_fetch_command(
             db_path: _,
             backfill_complete,
         } => {
-            if let Some(b) = broker {
-                let broker = b.clone();
+            // Round-robin over the data-sync account rotation: each account
+            // owns an independent rate limiter, so N accounts multiply the
+            // aggregate historical budget (ADR-130).
+            if let Some(broker) = alpaca_pool.next_data_broker() {
                 let msg_tx = broker_msg_tx.clone();
                 let shared_cache = shared_cache_broker.clone();
                 let permits = alpaca_fetch_permits.clone();
@@ -56,8 +59,7 @@ pub async fn handle_bar_fetch_command(
             }
         }
         BrokerCmd::AlpacaFetchBarsBatch { symbols, timeframe } => {
-            if let Some(b) = broker {
-                let broker = b.clone();
+            if let Some(broker) = alpaca_pool.next_data_broker() {
                 let msg_tx = broker_msg_tx.clone();
                 let shared_cache = shared_cache_broker.clone();
                 let permits = alpaca_fetch_permits.clone();
@@ -96,7 +98,7 @@ pub async fn handle_bar_fetch_command(
         }
         BrokerCmd::FetchAllBars { symbol, timeframe } => {
             // Sequential (not spawned) — prevents flooding Alpaca's rate limiter
-            if let Some(b) = broker {
+            if let Some(b) = alpaca_pool.next_data_broker() {
                 let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
                     "BARDATA: fetching {} {}...",
                     symbol, timeframe

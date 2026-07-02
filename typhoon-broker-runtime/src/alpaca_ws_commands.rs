@@ -9,24 +9,26 @@
 use typhoon_engine::broker::alpaca::AlpacaBroker;
 use typhoon_engine::broker::protocol::{AlpacaQuoteData, BrokerCmd, BrokerMsg};
 
+/// Start the trade-updates stream for the given (primary) account. Returns the
+/// forwarder task handle so the processor can abort it on a primary-account
+/// switch — otherwise the old account's stream would keep re-pulling and
+/// emitting the wrong account's positions/orders on every fill.
 pub async fn handle_alpaca_ws_command(
     cmd: BrokerCmd,
     broker: Option<AlpacaBroker>,
     broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
-) {
+) -> Option<tokio::task::JoinHandle<()>> {
     if !matches!(cmd, BrokerCmd::AlpacaStartTradeStream) {
-        return;
+        return None;
     }
-    let Some(b) = broker else {
-        return;
-    };
+    let b = broker?;
     match b.start_trade_updates_ws().await {
         Ok(mut rx) => {
             let _ = broker_msg_tx.send(BrokerMsg::OrderResult(
                 "Alpaca trade stream connected — real-time fills/orders".into(),
             ));
             let tx = broker_msg_tx.clone();
-            tokio::spawn(async move {
+            Some(tokio::spawn(async move {
                 while let Some(raw) = rx.recv().await {
                     let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
                         continue;
@@ -49,10 +51,11 @@ pub async fn handle_alpaca_ws_command(
                     }
                 }
                 tracing::info!("Alpaca trade-stream forwarder ended");
-            });
+            }))
         }
         Err(e) => {
             let _ = broker_msg_tx.send(BrokerMsg::Error(format!("Alpaca trade stream failed: {e}")));
+            None
         }
     }
 }
@@ -87,8 +90,11 @@ fn trade_update_log_line(data: &serde_json::Value) -> String {
     }
 }
 
-/// Re-pull authoritative positions/orders/account and emit the existing
-/// messages so the UI updates immediately on a fill.
+/// Re-pull authoritative positions/orders/account/fills and emit the existing
+/// messages so the UI updates immediately on a fill. Recent fills matter here:
+/// without them a fill that lands mid-session never reaches the Recent Fills
+/// panel or the chart buy/sell arrows (activities were previously fetched only
+/// once at connect).
 async fn refresh_account_state(b: &AlpacaBroker, tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>) {
     if let Ok(pos) = b.get_positions().await {
         let _ = tx.send(BrokerMsg::Positions(pos));
@@ -99,6 +105,7 @@ async fn refresh_account_state(b: &AlpacaBroker, tx: &tokio::sync::mpsc::Unbound
     if let Ok(acct) = b.get_account().await {
         let _ = tx.send(BrokerMsg::Account(acct));
     }
+    crate::alpaca_account_data::fetch_and_send_recent_fills(b, tx, 100).await;
 }
 
 /// Start the Alpaca market-data WebSocket (auto-detected SIP/IEX), spawn the

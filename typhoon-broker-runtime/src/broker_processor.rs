@@ -1,10 +1,10 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, RwLock};
 
-use typhoon_engine::broker::alpaca::AlpacaBroker;
-use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
+use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg, OrderBroker};
 use typhoon_engine::core::cache::SqliteCache;
 
+use crate::account_pool::{AlpacaAccountPool, KrakenAccountPool};
 use crate::resources::BrokerRuntimeResources;
 use crate::{
     ai_chat, alpaca_account_data, alpaca_order_ops, alpaca_ws_commands, bar_fetch_commands,
@@ -27,11 +27,18 @@ pub fn spawn_broker_message_processor(
     let shared_cache_broker = shared_cache.clone();
     rt_handle.spawn(async move {
         let mut cmd_rx = broker_cmd_rx;
-        let mut broker: Option<AlpacaBroker> = None;
+        // Multi-account pools (ADR-130): the primary account serves trading /
+        // account-data commands; every data-sync-enabled account joins the
+        // historical bar-fetch rotation.
+        let mut alpaca_pool = AlpacaAccountPool::default();
+        let mut kraken_pool = KrakenAccountPool::default();
         // Control sender for the Alpaca market-data WS (push the live subscription
         // set). Held across commands so the single connection is reused.
         let mut alpaca_quote_control: Option<tokio::sync::mpsc::Sender<Vec<String>>> = None;
-        let mut kraken_broker: Option<typhoon_engine::broker::kraken::KrakenBroker> = None;
+        // Trade-updates WS forwarder for the current primary account; aborted
+        // and restarted on a primary switch so fills of the old account stop
+        // overwriting the new account's state.
+        let mut alpaca_trade_stream_task: Option<tokio::task::JoinHandle<()>> = None;
         let mut kraken_ws_broker: Option<typhoon_engine::broker::kraken::KrakenBroker> = None;
         // Pre-acquire and per-endpoint spacing are now owned by the
         // engine-side `iapi_limiter` (token bucket + escalating backoff,
@@ -53,17 +60,74 @@ pub fn spawn_broker_message_processor(
                 cmd @ (BrokerCmd::Connect { .. } | BrokerCmd::ConfigureAlpacaSync { .. }) => {
                     connection_commands::handle_connection_command(
                         cmd,
-                        &mut broker,
-                        &mut kraken_broker,
+                        &mut alpaca_pool,
+                        &mut kraken_pool,
                         &mut kraken_ws_broker,
                         &mut alpaca_fetch_permits,
                         &broker_msg_tx_clone,
                     )
                     .await;
                 }
-                cmd @ BrokerCmd::MarkUnresolvable { .. } => {
-                    misc_commands::handle_misc_command(cmd, broker.as_ref(), &broker_msg_tx_clone)
+                cmd @ BrokerCmd::SetPrimaryAccount { .. } => {
+                    let is_alpaca = matches!(
+                        cmd,
+                        BrokerCmd::SetPrimaryAccount {
+                            broker: OrderBroker::Alpaca,
+                            ..
+                        }
+                    );
+                    connection_commands::handle_connection_command(
+                        cmd,
+                        &mut alpaca_pool,
+                        &mut kraken_pool,
+                        &mut kraken_ws_broker,
+                        &mut alpaca_fetch_permits,
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
+                    if is_alpaca {
+                        // Trade stream must follow the new primary; the old
+                        // account's stream would otherwise keep re-emitting the
+                        // old positions/orders on every fill.
+                        if let Some(task) = alpaca_trade_stream_task.take() {
+                            task.abort();
+                        }
+                        alpaca_trade_stream_task = alpaca_ws_commands::handle_alpaca_ws_command(
+                            BrokerCmd::AlpacaStartTradeStream,
+                            alpaca_pool.primary_broker().cloned(),
+                            &broker_msg_tx_clone,
+                        )
                         .await;
+                    }
+                }
+                BrokerCmd::SetOrderMirroring { enabled } => {
+                    alpaca_pool.set_mirror_orders(enabled);
+                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
+                        "TradeCopy live mirroring {}",
+                        if enabled { "ENABLED — app-placed Alpaca orders replicate to all other trade-enabled accounts" } else { "disabled" }
+                    )));
+                }
+                BrokerCmd::AlpacaTradeCopy {
+                    source_id,
+                    target_ids,
+                    flatten_extra,
+                } => {
+                    alpaca_order_ops::handle_alpaca_trade_copy(
+                        source_id,
+                        target_ids,
+                        flatten_extra,
+                        &alpaca_pool,
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
+                }
+                cmd @ BrokerCmd::MarkUnresolvable { .. } => {
+                    misc_commands::handle_misc_command(
+                        cmd,
+                        alpaca_pool.primary_broker(),
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
                 }
                 cmd @ (BrokerCmd::GetAccount
                 | BrokerCmd::GetPositions
@@ -71,7 +135,7 @@ pub fn spawn_broker_message_processor(
                 | BrokerCmd::GetOrderHistory { .. }) => {
                     alpaca_account_data::handle_alpaca_account_data_command(
                         cmd,
-                        broker.as_ref(),
+                        alpaca_pool.primary_broker(),
                         &broker_msg_tx_clone,
                     )
                     .await;
@@ -81,15 +145,18 @@ pub fn spawn_broker_message_processor(
                 | BrokerCmd::AlpacaClosePositionPercent { .. }) => {
                     alpaca_order_ops::handle_alpaca_order_command(
                         cmd,
-                        broker.as_ref(),
+                        &alpaca_pool,
                         &broker_msg_tx_clone,
                     )
                     .await;
                 }
                 cmd @ BrokerCmd::AlpacaStartTradeStream => {
-                    alpaca_ws_commands::handle_alpaca_ws_command(
+                    if let Some(task) = alpaca_trade_stream_task.take() {
+                        task.abort();
+                    }
+                    alpaca_trade_stream_task = alpaca_ws_commands::handle_alpaca_ws_command(
                         cmd,
-                        broker.clone(),
+                        alpaca_pool.primary_broker().cloned(),
                         &broker_msg_tx_clone,
                     )
                     .await;
@@ -98,7 +165,7 @@ pub fn spawn_broker_message_processor(
                     // Start the single market-data WS on first use, then keep
                     // pushing the live subscription set to it.
                     if alpaca_quote_control.is_none() {
-                        if let Some(b) = broker.clone() {
+                        if let Some(b) = alpaca_pool.primary_broker().cloned() {
                             alpaca_quote_control = alpaca_ws_commands::start_alpaca_quote_stream(
                                 b,
                                 &broker_msg_tx_clone,
@@ -120,19 +187,19 @@ pub fn spawn_broker_message_processor(
                     );
                 }
                 cmd @ BrokerCmd::GetQuote { .. } => {
-                    misc_commands::handle_misc_command(cmd, broker.as_ref(), &broker_msg_tx_clone)
+                    misc_commands::handle_misc_command(cmd, alpaca_pool.primary_broker(), &broker_msg_tx_clone)
                         .await;
                 }
                 BrokerCmd::GetWatchlistQuotes { symbols } => {
                     watchlist_quotes::spawn_watchlist_quotes_task(
                         symbols,
-                        broker.clone(),
+                        alpaca_pool.primary_broker().cloned(),
                         broker_msg_tx_clone.clone(),
                         shared_cache_broker.clone(),
                     );
                 }
                 cmd @ BrokerCmd::GetMarketClock => {
-                    misc_commands::handle_misc_command(cmd, broker.as_ref(), &broker_msg_tx_clone)
+                    misc_commands::handle_misc_command(cmd, alpaca_pool.primary_broker(), &broker_msg_tx_clone)
                         .await;
                 }
                 cmd @ (BrokerCmd::GetActivities { .. }
@@ -140,7 +207,7 @@ pub fn spawn_broker_message_processor(
                 | BrokerCmd::GetAllAssets) => {
                     alpaca_account_data::handle_alpaca_account_data_command(
                         cmd,
-                        broker.as_ref(),
+                        alpaca_pool.primary_broker(),
                         &broker_msg_tx_clone,
                     )
                     .await;
@@ -148,7 +215,7 @@ pub fn spawn_broker_message_processor(
                 BrokerCmd::SearchSymbols { query } => {
                     symbol_search::handle_symbol_search_command(
                         query,
-                        broker.as_ref(),
+                        alpaca_pool.primary_broker(),
                         &broker_msg_tx_clone,
                     )
                     .await;
@@ -172,8 +239,8 @@ pub fn spawn_broker_message_processor(
                 | BrokerCmd::GetOptionsChain { .. }) => {
                     market_data_commands::handle_market_data_command(
                         cmd,
-                        broker.as_ref(),
-                        kraken_broker.as_ref(),
+                        alpaca_pool.primary_broker(),
+                        kraken_pool.primary_broker(),
                         &shared_cache_broker,
                         &broker_msg_tx_clone,
                     )
@@ -192,7 +259,7 @@ pub fn spawn_broker_message_processor(
                 | BrokerCmd::AlpacaStopLimitOrder { .. }) => {
                     alpaca_order_ops::handle_alpaca_order_command(
                         cmd,
-                        broker.as_ref(),
+                        &alpaca_pool,
                         &broker_msg_tx_clone,
                     )
                     .await;
@@ -213,7 +280,7 @@ pub fn spawn_broker_message_processor(
                 cmd @ BrokerCmd::KrakenSyncExits { .. } => {
                     kraken_order_ops::handle_kraken_order_command(
                         cmd,
-                        kraken_broker.as_ref(),
+                        kraken_pool.primary_broker(),
                         &broker_msg_tx_clone,
                     )
                     .await;
@@ -687,7 +754,7 @@ pub fn spawn_broker_message_processor(
                 cmd @ BrokerCmd::NewsScrapeAll { .. } => {
                     news::handle_news_scrape_all_command(
                         cmd,
-                        broker.as_ref(),
+                        alpaca_pool.primary_broker(),
                         &broker_msg_tx_clone,
                         shared_cache_broker.clone(),
                     )
@@ -696,8 +763,8 @@ pub fn spawn_broker_message_processor(
                 cmd @ BrokerCmd::KrakenConnect { .. } => {
                     connection_commands::handle_connection_command(
                         cmd,
-                        &mut broker,
-                        &mut kraken_broker,
+                        &mut alpaca_pool,
+                        &mut kraken_pool,
                         &mut kraken_ws_broker,
                         &mut alpaca_fetch_permits,
                         &broker_msg_tx_clone,
@@ -715,7 +782,7 @@ pub fn spawn_broker_message_processor(
                 | BrokerCmd::KrakenFetchOpenOrders) => {
                     kraken_order_ops::handle_kraken_account_order_command(
                         cmd,
-                        kraken_broker.as_ref(),
+                        kraken_pool.primary_broker(),
                         &broker_msg_tx_clone,
                     )
                     .await;
@@ -726,7 +793,7 @@ pub fn spawn_broker_message_processor(
                 | BrokerCmd::KrakenFetchEquityUniverse) => {
                     kraken_market_commands::handle_kraken_market_command(
                         cmd,
-                        kraken_broker.as_ref(),
+                        kraken_pool.primary_broker(),
                         &broker_msg_tx_clone,
                         shared_cache_broker.clone(),
                         kraken_equity_fetch_permits.clone(),
@@ -744,7 +811,7 @@ pub fn spawn_broker_message_processor(
                 | BrokerCmd::KrakenStartLevel3Ws { .. }) => {
                     kraken_ws_commands::handle_kraken_ws_command(
                         cmd,
-                        kraken_broker.as_ref(),
+                        kraken_pool.primary_broker(),
                         kraken_ws_broker.as_ref(),
                         &broker_msg_tx_clone,
                         shared_cache_broker.clone(),
@@ -755,7 +822,7 @@ pub fn spawn_broker_message_processor(
                 cmd @ (BrokerCmd::KrakenCloseAll | BrokerCmd::KrakenGetPairs) => {
                     kraken_order_ops::handle_kraken_account_order_command(
                         cmd,
-                        kraken_broker.as_ref(),
+                        kraken_pool.primary_broker(),
                         &broker_msg_tx_clone,
                     )
                     .await;
@@ -763,7 +830,7 @@ pub fn spawn_broker_message_processor(
                 cmd @ BrokerCmd::KrakenFuturesGetInstruments => {
                     kraken_market_commands::handle_kraken_market_command(
                         cmd,
-                        kraken_broker.as_ref(),
+                        kraken_pool.primary_broker(),
                         &broker_msg_tx_clone,
                         shared_cache_broker.clone(),
                         kraken_equity_fetch_permits.clone(),
@@ -778,7 +845,7 @@ pub fn spawn_broker_message_processor(
                 | BrokerCmd::ResearchScrape { .. }) => {
                     fundamentals_commands::handle_fundamentals_command(
                         cmd,
-                        broker.as_ref(),
+                        alpaca_pool.primary_broker(),
                         &broker_msg_tx_clone,
                         shared_cache_broker.clone(),
                     )
@@ -799,7 +866,7 @@ pub fn spawn_broker_message_processor(
                 | BrokerCmd::KrakenFuturesBackfill { .. }) => {
                     bar_fetch_commands::handle_bar_fetch_command(
                         cmd,
-                        broker.as_ref(),
+                        &alpaca_pool,
                         &broker_msg_tx_clone,
                         shared_cache_broker.clone(),
                         alpaca_fetch_permits.clone(),

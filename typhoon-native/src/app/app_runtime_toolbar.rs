@@ -500,16 +500,30 @@ impl TyphooNApp {
                                     );
                                 }
                                 if let Some(ref acct) = self.live_account {
-                                    let mode = if self.broker_paper { "Paper" } else { "Live" };
-                                    let color = if self.broker_paper {
+                                    // Mode reflects the *primary* Alpaca account
+                                    // (ADR-130 pools can mix live + paper).
+                                    let primary_paper = self.alpaca_primary_is_paper();
+                                    let mode = if primary_paper { "Paper" } else { "Live" };
+                                    let color = if primary_paper {
                                         egui::Color32::WHITE
                                     } else {
                                         UP
                                     };
+                                    let extra_accounts = self
+                                        .alpaca_account_roster
+                                        .iter()
+                                        .filter(|a| a.connected)
+                                        .count()
+                                        .saturating_sub(1);
+                                    let suffix = if extra_accounts > 0 {
+                                        format!(" +{extra_accounts}")
+                                    } else {
+                                        String::new()
+                                    };
                                     ui.label(
                                         egui::RichText::new(format!(
-                                            "[Alpaca ({}) ${:.0}]",
-                                            mode, acct.equity
+                                            "[Alpaca ({}) ${:.0}{}]",
+                                            mode, acct.equity, suffix
                                         ))
                                         .color(color)
                                         .small(),

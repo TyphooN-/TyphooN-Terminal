@@ -1629,13 +1629,22 @@ impl TyphooNApp {
                 if !fill_sym.contains(&bare_upper) && !bare_upper.contains(&fill_sym) {
                     continue;
                 }
-                let ts = chrono::NaiveDateTime::parse_from_str(time, "%Y-%m-%dT%H:%M:%S%.fZ")
-                    .or_else(|_| chrono::NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S"))
+                // Alpaca `transaction_time` is RFC3339 with either a `Z` or a
+                // numeric offset (e.g. `-04:00`); the old fixed `…Z` pattern
+                // silently dropped offset-form fills → ts=0 → no chart arrow.
+                let ts = chrono::DateTime::parse_from_rfc3339(time)
+                    .map(|dt| dt.timestamp_millis())
                     .or_else(|_| {
-                        chrono::NaiveDate::parse_from_str(time, "%Y-%m-%d")
-                            .map(|d| d.and_hms_opt(0, 0, 0).unwrap_or_default())
+                        chrono::NaiveDateTime::parse_from_str(time, "%Y-%m-%dT%H:%M:%S%.fZ")
+                            .or_else(|_| {
+                                chrono::NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S")
+                            })
+                            .or_else(|_| {
+                                chrono::NaiveDate::parse_from_str(time, "%Y-%m-%d")
+                                    .map(|d| d.and_hms_opt(0, 0, 0).unwrap_or_default())
+                            })
+                            .map(|dt| dt.and_utc().timestamp_millis())
                     })
-                    .map(|dt| dt.and_utc().timestamp_millis())
                     .unwrap_or(0);
                 if let Some(bar_idx) = find_bar(ts) {
                     let is_buy = side == "buy";

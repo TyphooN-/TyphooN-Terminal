@@ -428,8 +428,9 @@ impl TyphooNApp {
                                     } else {
                                         alpaca_account_pl
                                     };
-                                    let is_live = !is_alpaca || !self.broker_paper;
-                                    let mode = if is_alpaca && self.broker_paper {
+                                    let primary_paper = self.alpaca_primary_is_paper();
+                                    let is_live = !is_alpaca || !primary_paper;
+                                    let mode = if is_alpaca && primary_paper {
                                         "Paper"
                                     } else {
                                         "Live"

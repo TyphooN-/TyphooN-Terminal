@@ -40,6 +40,7 @@ mod ai;
 mod ai_processes;
 mod alpaca_sync;
 mod app_background;
+mod broker_accounts;
 
 mod app_runtime;
 mod app_runtime_alpaca_account;
@@ -128,6 +129,7 @@ pub(crate) use self::types::*;
 
 use self::alpaca_sync::*;
 use self::bar_sync::*;
+use self::broker_accounts::*;
 use self::kraken_sync::*;
 
 use self::sync_config::*;
@@ -292,6 +294,12 @@ impl TyphooNApp {
             broker_api_key: String::new(),
             broker_secret: String::new(),
             broker_paper: true,
+            alpaca_extra_accounts: default_alpaca_extra_accounts(),
+            alpaca_primary_account_id: "alpaca1".to_string(),
+            alpaca_account_roster: Vec::new(),
+            kraken_extra_accounts: default_kraken_extra_accounts(),
+            kraken_primary_account_id: "kraken1".to_string(),
+            kraken_account_roster: Vec::new(),
             alpaca_full_bar_sync_enabled: false,
             alpaca_enabled: true,
             kraken_full_bar_sync_enabled: false,
@@ -452,6 +460,12 @@ impl TyphooNApp {
             show_settings: false,
             was_settings_open: false,
             show_risk_calc: false,
+            show_tradecopy: false,
+            tradecopy_source_id: "alpaca1".to_string(),
+            tradecopy_target_ids: std::collections::BTreeSet::new(),
+            tradecopy_flatten_extra: false,
+            tradecopy_mirror_orders: false,
+            tradecopy_allow_live_targets: false,
             show_compound_calc: false,
             ci_principal: String::new(),
             ci_rate: String::new(),

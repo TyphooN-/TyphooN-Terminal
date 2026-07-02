@@ -44,6 +44,13 @@ impl TyphooNApp {
             // Real-time order/fill/account updates over the trading WebSocket; the
             // periodic REST poll stays as a safety net for the reconnect window.
             let _ = self.broker_tx.send(BrokerCmd::AlpacaStartTradeStream);
+            // A (re)connect builds a fresh account pool whose mirror flag
+            // defaults off — re-assert the UI's TradeCopy mirroring state.
+            if self.tradecopy_mirror_orders {
+                let _ = self
+                    .broker_tx
+                    .send(BrokerCmd::SetOrderMirroring { enabled: true });
+            }
         }
         if is_routine_market_data_status(&s) {
             tracing::debug!("{}", s);

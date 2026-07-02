@@ -9,7 +9,8 @@ pub(crate) use watchlist::{KrakenEquityQuoteMeta, WatchlistRow, watchlist_row_fr
 use super::*;
 
 pub(crate) use broker_messages::{
-    BrokerCmd, BrokerMsg, OrderBroker, QuickTradePlan, TradeAccountSnapshot,
+    AccountRosterEntry, BrokerAccountSpec, BrokerCmd, BrokerMsg, OrderBroker, QuickTradePlan,
+    TradeAccountSnapshot,
 };
 #[cfg(test)]
 pub(crate) use broker_messages::{
@@ -18,8 +19,8 @@ pub(crate) use broker_messages::{
 };
 pub(crate) use models::{
     AlpacaRetry, BgData, BookmapWindowState, BottomTab, EventKind, EventRow, EventSource,
-    FinancialsPeriod, FinancialsView, ImportedResearchArtifact, KRAKEN_TRADE_HISTORY_CAP,
-    PacketTreeNode, RightPanelSectionId, RightTab, RiskMode, SortState,
+    ExtraAccountConfig, FinancialsPeriod, FinancialsView, ImportedResearchArtifact,
+    KRAKEN_TRADE_HISTORY_CAP, PacketTreeNode, RightPanelSectionId, RightTab, RiskMode, SortState,
 };
 #[cfg(test)]
 pub(crate) use typhoon_engine::core::watchlist::{
@@ -242,10 +243,20 @@ pub struct TyphooNApp {
     /// ADR-038 Phase 2: Pluggable data source manager.
     pub(crate) data_sources: typhoon_engine::core::data_source::DataSourceManager,
 
-    /// Broker connection fields (Alpaca).
+    /// Broker connection fields (Alpaca). `broker_api_key`/`broker_secret` are
+    /// account slot 1 (legacy single-account keys); slots 2–4 live in
+    /// `alpaca_extra_accounts` (ADR-130: 1 live + 3 paper on the free tier,
+    /// each with an independent data rate limit).
     pub(crate) broker_api_key: String,
     pub(crate) broker_secret: String,
     pub(crate) broker_paper: bool,
+    /// Alpaca account slots 2–4 (credentials via keyring slots, metadata via
+    /// session persistence).
+    pub(crate) alpaca_extra_accounts: Vec<ExtraAccountConfig>,
+    /// Persisted primary Alpaca account id ("alpaca1".."alpaca4").
+    pub(crate) alpaca_primary_account_id: String,
+    /// Runtime-reported roster (per-account connect state / equity / primary).
+    pub(crate) alpaca_account_roster: Vec<AccountRosterEntry>,
     /// Full bar-sync controls are deliberately separate from broker login.
     /// Off = light mode: account/trading plus targeted fetches for open charts,
     /// owned positions, open-order symbols, and the user's watchlist.
@@ -258,6 +269,11 @@ pub struct TyphooNApp {
     pub(crate) kraken_api_secret: String,
     pub(crate) kraken_ws_api_key: String,
     pub(crate) kraken_ws_api_secret: String,
+    /// Kraken account slots 2–4 (trading identity only — Kraken market data is
+    /// public, so extra accounts do not join bar sync).
+    pub(crate) kraken_extra_accounts: Vec<ExtraAccountConfig>,
+    pub(crate) kraken_primary_account_id: String,
+    pub(crate) kraken_account_roster: Vec<AccountRosterEntry>,
     pub(crate) kraken_enabled: bool,
     pub(crate) kraken_connected: bool,
     pub(crate) kraken_pairs_requested: bool,
@@ -617,6 +633,14 @@ pub struct TyphooNApp {
     // ── floating window visibility ───────────────────────────────────────
     pub(crate) show_settings: bool,
     pub(crate) was_settings_open: bool,
+    /// TradeCopy window (ADR-130): copy positions between broker accounts and
+    /// toggle live order mirroring.
+    pub(crate) show_tradecopy: bool,
+    pub(crate) tradecopy_source_id: String,
+    pub(crate) tradecopy_target_ids: std::collections::BTreeSet<String>,
+    pub(crate) tradecopy_flatten_extra: bool,
+    pub(crate) tradecopy_mirror_orders: bool,
+    pub(crate) tradecopy_allow_live_targets: bool,
     pub(crate) show_risk_calc: bool,
     pub(crate) show_compound_calc: bool,
     pub(crate) ci_principal: String,

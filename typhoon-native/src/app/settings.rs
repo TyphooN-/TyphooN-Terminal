@@ -38,6 +38,30 @@ impl TyphooNApp {
                             ui.radio_value(&mut self.broker_paper, false, "Live");
                         });
                         ui.end_row();
+                        // Extra Alpaca accounts (slots 2–4, ADR-130): the free
+                        // tier allows 1 live + 3 paper accounts, and every
+                        // account with data-sync on multiplies historical bar
+                        // sync throughput (independent per-account rate limits).
+                        for (idx, acct) in self.alpaca_extra_accounts.iter_mut().enumerate() {
+                            let slot = idx + 2;
+                            ui.label(format!("Alpaca #{slot} Label:"));
+                            ui.horizontal(|ui| {
+                                ui.add(egui::TextEdit::singleline(&mut acct.label).desired_width(90.0).hint_text(format!("Paper {slot}")));
+                                ui.checkbox(&mut acct.paper, "Paper")
+                                    .on_hover_text("Paper vs live endpoint for this account slot.");
+                                ui.checkbox(&mut acct.trade_enabled, "Trade")
+                                    .on_hover_text("Allow this account as a TradeCopy/mirror target.");
+                                ui.checkbox(&mut acct.data_sync_enabled, "Data")
+                                    .on_hover_text("Include this account in the historical bar-sync rotation (each account has its own rate limit — more accounts sync faster).");
+                            });
+                            ui.end_row();
+                            ui.label(format!("Alpaca #{slot} Key:"));
+                            ui.add(egui::TextEdit::singleline(&mut acct.api_key).desired_width(250.0).password(true));
+                            ui.end_row();
+                            ui.label(format!("Alpaca #{slot} Secret:"));
+                            ui.add(egui::TextEdit::singleline(&mut acct.secret).desired_width(250.0).password(true));
+                            ui.end_row();
+                        }
                     }
                     ui.label("Finnhub API Key:");
                     ui.add(egui::TextEdit::singleline(&mut self.finnhub_key).desired_width(250.0).password(true));
@@ -61,6 +85,25 @@ impl TyphooNApp {
                         ui.label("Kraken WS API Secret:");
                         ui.add(egui::TextEdit::singleline(&mut self.kraken_ws_api_secret).desired_width(250.0).password(true));
                         ui.end_row();
+                        // Extra Kraken accounts (slots 2–4, ADR-130): trading
+                        // identities for primary cycling; Kraken market data is
+                        // public so extra accounts don't join bar sync.
+                        for (idx, acct) in self.kraken_extra_accounts.iter_mut().enumerate() {
+                            let slot = idx + 2;
+                            ui.label(format!("Kraken #{slot} Label:"));
+                            ui.horizontal(|ui| {
+                                ui.add(egui::TextEdit::singleline(&mut acct.label).desired_width(90.0).hint_text(format!("Kraken {slot}")));
+                                ui.checkbox(&mut acct.trade_enabled, "Trade")
+                                    .on_hover_text("Allow this account as an order target when account-level routing lands for Kraken.");
+                            });
+                            ui.end_row();
+                            ui.label(format!("Kraken #{slot} Key:"));
+                            ui.add(egui::TextEdit::singleline(&mut acct.api_key).desired_width(250.0).password(true));
+                            ui.end_row();
+                            ui.label(format!("Kraken #{slot} Secret:"));
+                            ui.add(egui::TextEdit::singleline(&mut acct.secret).desired_width(250.0).password(true));
+                            ui.end_row();
+                        }
                     }
                     ui.label("Gemini API Key:");
                     ui.add(egui::TextEdit::singleline(&mut self.gemini_key).desired_width(250.0).password(true));
@@ -126,36 +169,58 @@ impl TyphooNApp {
                     if ui.add_enabled(self.alpaca_enabled, egui::Button::new(connect_label)).clicked() && !self.broker_connected {
                         if !self.broker_api_key.is_empty() && !self.broker_secret.is_empty() {
                             // Save credentials to system keyring and log the saved credential names only.
-                            let mut saved_credentials: Vec<&'static str> = Vec::new();
+                            let mut saved_credentials: Vec<String> = Vec::new();
                             if let Err(e) = keyring::store(keyring::keys::ALPACA_API_KEY, &self.broker_api_key) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store alpaca_api_key failed: {}", e)));
                             } else {
-                                saved_credentials.push("alpaca_api_key");
+                                saved_credentials.push("alpaca_api_key".into());
                             }
                             if let Err(e) = keyring::store(keyring::keys::ALPACA_SECRET, &self.broker_secret) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store alpaca_secret failed: {}", e)));
                             } else {
-                                saved_credentials.push("alpaca_secret");
+                                saved_credentials.push("alpaca_secret".into());
+                            }
+                            // Extra Alpaca account slots (2–4): store or clear.
+                            for (idx, acct) in self.alpaca_extra_accounts.iter().enumerate() {
+                                let slot = idx + 2;
+                                let (key_name, secret_name) = super::broker_accounts::alpaca_slot_keyring_keys(slot);
+                                if acct.api_key.trim().is_empty() || acct.secret.trim().is_empty() {
+                                    let _ = keyring::delete(&key_name);
+                                    let _ = keyring::delete(&secret_name);
+                                    continue;
+                                }
+                                match (
+                                    keyring::store(&key_name, &acct.api_key),
+                                    keyring::store(&secret_name, &acct.secret),
+                                ) {
+                                    (Ok(()), Ok(())) => {
+                                        saved_credentials.push(key_name.clone());
+                                        saved_credentials.push(secret_name.clone());
+                                    }
+                                    _ => self.log.push_back(LogEntry::warn(format!(
+                                        "Keyring store for Alpaca slot {slot} failed"
+                                    ))),
+                                }
                             }
                             if !self.finnhub_key.is_empty() {
                                 if let Err(e) = keyring::store(keyring::keys::FINNHUB_KEY, &self.finnhub_key) {
                                     self.log.push_back(LogEntry::warn(format!("Keyring store finnhub_key failed: {}", e)));
                                 } else {
-                                    saved_credentials.push("finnhub_key");
+                                    saved_credentials.push("finnhub_key".into());
                                 }
                             }
                             if !self.cryptopanic_key.is_empty() {
                                 if let Err(e) = keyring::store(keyring::keys::CRYPTOPANIC_KEY, &self.cryptopanic_key) {
                                     self.log.push_back(LogEntry::warn(format!("Keyring store cryptopanic_key failed: {}", e)));
                                 } else {
-                                    saved_credentials.push("cryptopanic_key");
+                                    saved_credentials.push("cryptopanic_key".into());
                                 }
                             }
                             if !self.fred_key.is_empty() {
                                 if let Err(e) = keyring::store(keyring::keys::FRED_KEY, &self.fred_key) {
                                     self.log.push_back(LogEntry::warn(format!("Keyring store fred_key failed: {}", e)));
                                 } else {
-                                    saved_credentials.push("fred_key");
+                                    saved_credentials.push("fred_key".into());
                                 }
                             }
                             if !saved_credentials.is_empty() {
@@ -164,14 +229,8 @@ impl TyphooNApp {
                                     saved_credentials.join(", ")
                                 )));
                             }
-                            let capacity = self.alpaca_sync_capacity();
-                            let _ = self.broker_tx.send(BrokerCmd::Connect {
-                                api_key: self.broker_api_key.clone(),
-                                secret: self.broker_secret.clone(),
-                                paper: self.broker_paper,
-                                bar_requests_per_minute: self.alpaca_effective_historical_rpm(),
-                                fetch_permits: capacity.fetch_permits,
-                            });
+                            self.send_alpaca_connect();
+                            settings_save_after = true;
                         }
                     }
                     // Kraken connect button
@@ -185,26 +244,48 @@ impl TyphooNApp {
                             egui::RichText::new("Connect Kraken")
                         };
                         if ui.add_enabled(self.kraken_enabled, egui::Button::new(kraken_label)).clicked() && !self.kraken_connected {
-                            let mut saved_credentials: Vec<&'static str> = Vec::new();
+                            let mut saved_credentials: Vec<String> = Vec::new();
                             if let Err(e) = keyring::store(keyring::keys::KRAKEN_API_KEY, &self.kraken_api_key) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store kraken_api_key failed: {}", e)));
                             } else {
-                                saved_credentials.push("kraken_api_key");
+                                saved_credentials.push("kraken_api_key".into());
                             }
                             if let Err(e) = keyring::store(keyring::keys::KRAKEN_API_SECRET, &self.kraken_api_secret) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store kraken_api_secret failed: {}", e)));
                             } else {
-                                saved_credentials.push("kraken_api_secret");
+                                saved_credentials.push("kraken_api_secret".into());
                             }
                             if let Err(e) = keyring::store(keyring::keys::KRAKEN_WS_API_KEY, &self.kraken_ws_api_key) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store kraken_ws_api_key failed: {}", e)));
                             } else {
-                                saved_credentials.push("kraken_ws_api_key");
+                                saved_credentials.push("kraken_ws_api_key".into());
                             }
                             if let Err(e) = keyring::store(keyring::keys::KRAKEN_WS_API_SECRET, &self.kraken_ws_api_secret) {
                                 self.log.push_back(LogEntry::warn(format!("Keyring store kraken_ws_api_secret failed: {}", e)));
                             } else {
-                                saved_credentials.push("kraken_ws_api_secret");
+                                saved_credentials.push("kraken_ws_api_secret".into());
+                            }
+                            // Extra Kraken account slots (2–4): store or clear.
+                            for (idx, acct) in self.kraken_extra_accounts.iter().enumerate() {
+                                let slot = idx + 2;
+                                let (key_name, secret_name) = super::broker_accounts::kraken_slot_keyring_keys(slot);
+                                if acct.api_key.trim().is_empty() || acct.secret.trim().is_empty() {
+                                    let _ = keyring::delete(&key_name);
+                                    let _ = keyring::delete(&secret_name);
+                                    continue;
+                                }
+                                match (
+                                    keyring::store(&key_name, &acct.api_key),
+                                    keyring::store(&secret_name, &acct.secret),
+                                ) {
+                                    (Ok(()), Ok(())) => {
+                                        saved_credentials.push(key_name.clone());
+                                        saved_credentials.push(secret_name.clone());
+                                    }
+                                    _ => self.log.push_back(LogEntry::warn(format!(
+                                        "Keyring store for Kraken slot {slot} failed"
+                                    ))),
+                                }
                             }
                             if !saved_credentials.is_empty() {
                                 self.log.push_back(LogEntry::info(format!(
@@ -217,8 +298,10 @@ impl TyphooNApp {
                                 api_secret: self.kraken_api_secret.clone(),
                                 ws_api_key: self.kraken_ws_api_key.clone(),
                                 ws_api_secret: self.kraken_ws_api_secret.clone(),
+                                extra_accounts: self.kraken_extra_account_specs(),
                             });
                             self.log.push_back(LogEntry::info("Kraken — connecting..."));
+                            settings_save_after = true;
                         }
                     }
                 });

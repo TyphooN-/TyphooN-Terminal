@@ -65,6 +65,12 @@ re-prioritize, so both Scope and Primary are hidden. Left-click cycles enabled
 brokers, sets `primary_broker`, points `order_broker` at it (the per-trade combo
 can still override afterward), mirrors the choice into the merge, and persists.
 
+**ADR-130 update:** the cycle is now **account-granular** — it walks every
+connected account of every enabled broker (`Alpaca · Live → Alpaca · Paper 1 →
+… → Kraken`), and the chip shows with ≥2 brokers **or** ≥2 accounts. The
+broker-level effects described here fire only when the *broker* changes; an
+intra-broker step sends `SetPrimaryAccount` to the runtime account pool only.
+
 ### Order routing (bug fix)
 
 `resolve_order_broker` now **only** normalizes when the current target is

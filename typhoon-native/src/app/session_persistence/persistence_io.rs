@@ -207,6 +207,26 @@ impl TyphooNApp {
                 self.cryptopanic_key.clone(),
             ),
         ];
+        // Extra broker account slots (ADR-130) — only non-empty pairs, so a
+        // slot cleared in Settings isn't resurrected by autosave.
+        let mut cred_pairs = cred_pairs;
+        for (idx, acct) in self.alpaca_extra_accounts.iter().enumerate() {
+            if acct.api_key.trim().is_empty() || acct.secret.trim().is_empty() {
+                continue;
+            }
+            let (key_name, secret_name) = super::super::broker_accounts::alpaca_slot_keyring_keys(idx + 2);
+            cred_pairs.push((key_name, acct.api_key.clone()));
+            cred_pairs.push((secret_name, acct.secret.clone()));
+        }
+        for (idx, acct) in self.kraken_extra_accounts.iter().enumerate() {
+            if acct.api_key.trim().is_empty() || acct.secret.trim().is_empty() {
+                continue;
+            }
+            let (key_name, secret_name) = super::super::broker_accounts::kraken_slot_keyring_keys(idx + 2);
+            cred_pairs.push((key_name, acct.api_key.clone()));
+            cred_pairs.push((secret_name, acct.secret.clone()));
+        }
+        let cred_pairs = cred_pairs;
         let cache_clone = self.cache.clone();
         let rt_handle = self.rt_handle.clone();
         rt_handle.spawn_blocking(move || {

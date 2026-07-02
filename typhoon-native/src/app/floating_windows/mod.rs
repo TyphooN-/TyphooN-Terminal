@@ -137,6 +137,8 @@ impl TyphooNApp {
         self.was_settings_open = self.show_settings;
 
         let _settings_save_after = self.render_settings_window(ctx);
+        // TradeCopy (multi-account position copy + live order mirroring, ADR-130)
+        self.render_tradecopy_window(ctx);
         // Broker connect + Kraken trade-history / open-orders windows
         self.render_broker_kraken_windows(ctx);
         // Alpaca position-close ticket (Sell to close a long / Buy to close a short)

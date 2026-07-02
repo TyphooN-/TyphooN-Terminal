@@ -421,6 +421,20 @@ impl BarSyncInputs {
         self.add_kraken_equities_tradable_catalog_row(&mut rows);
         self.add_expected_kraken_sync_rows(&mut rows);
         self.add_kraken_equities_merged_rows(&mut rows, &checked_or_complete_lookup);
+        // Disabled Sync TFs (e.g. M1/M5 unchecked) are skipped by automated
+        // sync, so their cached-leftover rows must neither render in the
+        // window nor drag down the broker/overall %s (which would otherwise
+        // pin auto full-tilt on rows the scheduler is told to ignore).
+        let enabled_tfs: std::collections::HashSet<&str> = self
+            .timeframes
+            .iter()
+            .filter_map(|tf| normalize_sync_timeframe_key(tf))
+            .collect();
+        rows.retain(|row| {
+            row.tf == "Catalog"
+                || normalize_sync_timeframe_key(&row.tf)
+                    .is_some_and(|tf| enabled_tfs.contains(tf))
+        });
         sort_sync_stats_rows(&mut rows);
         let (total, healthy) = rows
             .iter()
@@ -824,6 +838,49 @@ fn kraken_equities_merged_timeframe_supported(tf: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_sync_timeframes_are_dropped_from_rows_and_percentages() {
+        let now_s = chrono::Utc::now().timestamp();
+        let inputs = BarSyncInputs {
+            detailed_stats: vec![
+                ("kraken:BTC/USD:1Min".into(), 10, now_s),
+                ("kraken:BTC/USD:5Min".into(), 0, now_s),
+                ("kraken:BTC/USD:1Day".into(), 10, now_s),
+            ],
+            bar_ts_cache: std::collections::HashMap::new(),
+            cache_stats_present: false,
+            catalog_symbol_count: 0,
+            catalog_symbols: Vec::new(),
+            demand_symbols: Vec::new(),
+            ws_sweep_symbols: Vec::new(),
+            spot_symbols: Vec::new(),
+            futures_symbols: Vec::new(),
+            // M1/M5 disabled: only 1Day is an enabled sync TF.
+            timeframes: vec!["1Day".to_string()],
+            backfill_alpaca_kraken_equities_enabled: false,
+            backfill_yahoo_chart_enabled: false,
+            kraken_ws_fresh_until: std::collections::HashMap::new(),
+            alpaca_backfill_keys: std::collections::HashSet::new(),
+            kraken_backfill_keys: std::collections::HashSet::new(),
+            kraken_futures_backfill_keys: std::collections::HashSet::new(),
+            no_data_keys_by_source: std::collections::HashMap::new(),
+        };
+        let result = inputs.compute();
+        assert!(
+            result.rows.iter().all(|row| row.tf == "1Day"),
+            "disabled-TF rows must not render: {:?}",
+            result
+                .rows
+                .iter()
+                .map(|r| (r.broker.clone(), r.tf.clone()))
+                .collect::<Vec<_>>()
+        );
+        // Overall % counts only the enabled 1Day row (healthy), not the
+        // empty 5Min row — so it must be 100%, not dragged down.
+        assert_eq!(result.total, 1);
+        assert!((result.overall_pct - 100.0).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn merged_sync_rows_support_native_and_constructed_kraken_equities_timeframes() {

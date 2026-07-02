@@ -63,6 +63,43 @@ impl OrderBroker {
     }
 }
 
+/// One broker login (API key pair) plus its role flags. A broker module may
+/// hold several of these (ADR-130): Alpaca free tier allows 1 live + 3 paper
+/// accounts, each with an independent market-data rate limit, so extra
+/// accounts multiply historical sync throughput. `trade_enabled` marks the
+/// account as a TradeCopy target; `data_sync_enabled` puts it in the bar-sync
+/// fan-out rotation.
+#[derive(Clone, Debug)]
+pub struct BrokerAccountSpec {
+    /// Stable id, e.g. "alpaca1".."alpaca4" / "kraken1".."kraken4".
+    pub id: String,
+    /// User-facing label ("Live", "Paper 1", …).
+    pub label: String,
+    pub api_key: String,
+    pub secret: String,
+    /// Alpaca: paper vs live endpoint. Kraken ignores this (single endpoint).
+    pub paper: bool,
+    pub trade_enabled: bool,
+    pub data_sync_enabled: bool,
+}
+
+/// Connection/roster state for one account, reported by the broker runtime
+/// after (re)connect or primary switch so the UI can render the account list
+/// and the top-bar primary cycler.
+#[derive(Clone, Debug)]
+pub struct AccountRosterEntry {
+    pub id: String,
+    pub label: String,
+    pub paper: bool,
+    pub trade_enabled: bool,
+    pub data_sync_enabled: bool,
+    pub equity: f64,
+    pub is_primary: bool,
+    pub connected: bool,
+    /// Short status detail ("Connected", auth error, …).
+    pub detail: String,
+}
+
 pub struct QuickTradePlan {
     pub symbol: String,
     pub last_price: f64,
@@ -89,12 +126,35 @@ pub struct TradeAccountSnapshot {
 #[allow(dead_code)] // All variants are handled in broker task. Some lack dedicated UI buttons but are
 // accessible via console commands or research windows.
 pub enum BrokerCmd {
+    /// Connect every configured Alpaca account. `primary_id` selects the
+    /// trading/account-data account; all accounts with `data_sync_enabled`
+    /// join the historical bar-fetch rotation (per-account rate limiters, so
+    /// N accounts ≈ N× the historical sync budget). `fetch_permits` is the
+    /// aggregate worker cap across the pool.
     Connect {
-        api_key: String,
-        secret: String,
-        paper: bool,
+        accounts: Vec<BrokerAccountSpec>,
+        primary_id: String,
         bar_requests_per_minute: u32,
         fetch_permits: usize,
+    },
+    /// Re-point the primary (order-routing + account-data) account for a
+    /// broker without reconnecting the pool.
+    SetPrimaryAccount {
+        broker: OrderBroker,
+        account_id: String,
+    },
+    /// Mirror app-placed Alpaca orders onto every other trade-enabled account
+    /// in the pool (TradeCopy live mode).
+    SetOrderMirroring {
+        enabled: bool,
+    },
+    /// One-shot TradeCopy: replicate the source account's open positions onto
+    /// each target account by submitting market orders for the per-symbol qty
+    /// delta. `flatten_extra` also closes target positions the source lacks.
+    AlpacaTradeCopy {
+        source_id: String,
+        target_ids: Vec<String>,
+        flatten_extra: bool,
     },
     ConfigureAlpacaSync {
         bar_requests_per_minute: u32,
@@ -2425,12 +2485,17 @@ pub enum BrokerCmd {
         finnhub_key: String,
         cryptopanic_key: String,
     },
-    /// Connect to Kraken crypto exchange.
+    /// Connect to Kraken crypto exchange. The four scalar fields are the
+    /// primary account (REST + optional WS-token key override, unchanged
+    /// wire-compat shape); `extra_accounts` are additional Kraken logins for
+    /// account-level primary cycling and future TradeCopy targets. Kraken
+    /// market data is public, so extra accounts do not join bar sync.
     KrakenConnect {
         api_key: String,
         api_secret: String,
         ws_api_key: String,
         ws_api_secret: String,
+        extra_accounts: Vec<BrokerAccountSpec>,
     },
     /// Get Kraken account balance.
     KrakenGetBalance,
@@ -2528,6 +2593,12 @@ pub enum BrokerMsg {
     Connected(String),
     Error(String),
     Account(AccountInfo),
+    /// Per-broker account roster after (re)connect or a primary switch. The
+    /// UI uses it for the top-bar primary cycler and the TradeCopy window.
+    AccountRoster {
+        broker: OrderBroker,
+        accounts: Vec<AccountRosterEntry>,
+    },
     Positions(Vec<PositionInfo>),
     Orders(Vec<OrderInfo>),
     OrderResult(String),

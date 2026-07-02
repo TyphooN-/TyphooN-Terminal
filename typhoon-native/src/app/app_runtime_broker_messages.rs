@@ -134,6 +134,9 @@ impl TyphooNApp {
                 BrokerMsg::Account(acct) => {
                     self.handle_alpaca_account(acct);
                 }
+                BrokerMsg::AccountRoster { broker, accounts } => {
+                    self.handle_account_roster(broker, accounts);
+                }
                 BrokerMsg::Positions(pos) => {
                     self.handle_alpaca_positions(pos);
                 }

@@ -279,6 +279,21 @@ pub(crate) struct BookmapWindowState {
     pub(crate) selected_order_id: Option<String>,
 }
 
+/// One extra broker account slot (2–4). Credentials are stored in the keyring
+/// (per-slot keys); this metadata is persisted with the session (ADR-130).
+/// `paper` is Alpaca-only; Kraken ignores it.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ExtraAccountConfig {
+    pub(crate) label: String,
+    #[serde(skip)]
+    pub(crate) api_key: String,
+    #[serde(skip)]
+    pub(crate) secret: String,
+    pub(crate) paper: bool,
+    pub(crate) trade_enabled: bool,
+    pub(crate) data_sync_enabled: bool,
+}
+
 /// Alpaca retry-queue entry. Persisted as JSON under KV key `alpaca:retry_queue`
 /// so 429'd symbol/TF pairs resume after app restart.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

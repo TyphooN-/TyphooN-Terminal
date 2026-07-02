@@ -41,6 +41,11 @@ impl TyphooNApp {
             if self.alpaca_enabled && self.broker_connected {
                 let _ = self.broker_tx.send(BrokerCmd::GetPositions);
                 let _ = self.broker_tx.send(BrokerCmd::GetOrders);
+                // Recent fills were fetched only at connect, so a fill landing
+                // mid-session never reached the Recent Fills panel or the chart
+                // buy/sell arrows when the trade-updates WS was down. Reconcile
+                // them on the same 30s cadence as positions/orders.
+                let _ = self.broker_tx.send(BrokerCmd::GetActivities { limit: 100 });
                 requested = true;
             }
             if self.kraken_enabled && self.kraken_connected {

@@ -20,6 +20,12 @@ impl TyphooNApp {
             "kraken_enabled": self.kraken_enabled,
             "kraken_full_bar_sync_enabled": self.kraken_full_bar_sync_enabled,
             "primary_broker": self.primary_broker.as_persist_str(),
+            // Multi-account metadata (ADR-130). Credentials stay in the
+            // keyring; only labels/flags/primary selection persist here.
+            "alpaca_primary_account_id": self.alpaca_primary_account_id,
+            "kraken_primary_account_id": self.kraken_primary_account_id,
+            "alpaca_extra_accounts": self.alpaca_extra_accounts,
+            "kraken_extra_accounts": self.kraken_extra_accounts,
             "kraken_scrape_xstocks": self.kraken_scrape_xstocks,
             "kraken_scrape_usd_crypto": self.kraken_scrape_usd_crypto,
             "kraken_scrape_fiat_crypto": self.kraken_scrape_fiat_crypto,
@@ -79,6 +85,42 @@ impl TyphooNApp {
             self.order_broker = primary;
             // Mirror into the merge's process-wide selection (ADR-126).
             set_chart_merge_primary_broker(primary);
+        }
+        if let Some(id) = value["alpaca_primary_account_id"].as_str() {
+            if !id.is_empty() {
+                self.alpaca_primary_account_id = id.to_string();
+            }
+        }
+        if let Some(id) = value["kraken_primary_account_id"].as_str() {
+            if !id.is_empty() {
+                self.kraken_primary_account_id = id.to_string();
+            }
+        }
+        // Account-slot metadata: merge onto the defaults (creds arrive later
+        // from the keyring; `#[serde(skip)]` keeps them out of this JSON).
+        if let Ok(extra) = serde_json::from_value::<Vec<ExtraAccountConfig>>(
+            value["alpaca_extra_accounts"].clone(),
+        ) {
+            for (idx, loaded) in extra.into_iter().enumerate() {
+                if let Some(slot) = self.alpaca_extra_accounts.get_mut(idx) {
+                    let (api_key, secret) = (slot.api_key.clone(), slot.secret.clone());
+                    *slot = loaded;
+                    slot.api_key = api_key;
+                    slot.secret = secret;
+                }
+            }
+        }
+        if let Ok(extra) = serde_json::from_value::<Vec<ExtraAccountConfig>>(
+            value["kraken_extra_accounts"].clone(),
+        ) {
+            for (idx, loaded) in extra.into_iter().enumerate() {
+                if let Some(slot) = self.kraken_extra_accounts.get_mut(idx) {
+                    let (api_key, secret) = (slot.api_key.clone(), slot.secret.clone());
+                    *slot = loaded;
+                    slot.api_key = api_key;
+                    slot.secret = secret;
+                }
+            }
         }
         if let Some(enabled) = value["kraken_scrape_xstocks"].as_bool() {
             self.kraken_scrape_xstocks = enabled;

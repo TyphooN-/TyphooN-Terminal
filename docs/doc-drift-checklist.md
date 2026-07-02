@@ -25,6 +25,7 @@
 
 ## 2. Broker & Market Data (L1/L2/L3, Sync, Tiers)
 
+- [x] Multi-account brokers (ADR-130, 2026-07-02): Alpaca 4-slot account pool with round-robin bar-fetch fan-out + aggregate capacity scaling, Kraken extra trading identities, account-granular `Primary:` cycling (ADR-126 updated), TradeCopy window (one-shot position copy + live order mirroring), Sync Status drops disabled-TF rows from view + %, recent-fills WS/poll refresh + RFC3339 arrow-timestamp fix — documented in ADR-130 + API_KEYS.md + README ADR index.
 - [x] L3 foundation (ws_v2_level3.rs, streamer with token/real/sim, CRC32 apply_with_checksum, KrakenL3State, received_at_ms, per-order, token/no-token entitlement status, projection to same paths, Bookmap/depth integration, tests) — covered in ADR-129 + ADR-109 Update sections.
 - [x] L2 v2 book (CRC, exact tokens, 25 levels, shared DOM depth preference across user-facing stream entrypoints, v1 kept for compat) — documented; historical "pending" status lines in ADR-109 cleaned in 2026-07.
 - [x] L1 (ticker/quotes/public trades with sizes, O(1) dispatch, watchlist/chart freshness parity) — consistent.

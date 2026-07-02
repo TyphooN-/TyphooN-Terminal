@@ -316,26 +316,49 @@ impl TyphooNApp {
                         loaded_values.len()
                     )));
                 }
+                // Multi-account credential slots 2–4 (ADR-130). Same
+                // keyring-then-SQLite-fallback rule as the table above.
+                let load_credential = |key: &str| -> Option<String> {
+                    match keyring::load(key) {
+                        Ok(Some(v)) if !v.is_empty() => Some(v),
+                        _ => cache_ref
+                            .as_ref()
+                            .and_then(|cache| cache.get_kv(&format!("cred:{}", key)).ok().flatten())
+                            .filter(|v| !v.is_empty()),
+                    }
+                };
+                let mut extra_slots_loaded = 0usize;
+                for slot in 2..=super::broker_accounts::MAX_BROKER_ACCOUNT_SLOTS {
+                    let idx = slot - 2;
+                    let (ak, sk) = super::broker_accounts::alpaca_slot_keyring_keys(slot);
+                    if let (Some(key), Some(secret)) = (load_credential(&ak), load_credential(&sk))
+                    {
+                        if let Some(acct) = self.alpaca_extra_accounts.get_mut(idx) {
+                            acct.api_key = key;
+                            acct.secret = secret;
+                            extra_slots_loaded += 1;
+                        }
+                    }
+                    let (kk, ks) = super::broker_accounts::kraken_slot_keyring_keys(slot);
+                    if let (Some(key), Some(secret)) = (load_credential(&kk), load_credential(&ks))
+                    {
+                        if let Some(acct) = self.kraken_extra_accounts.get_mut(idx) {
+                            acct.api_key = key;
+                            acct.secret = secret;
+                            extra_slots_loaded += 1;
+                        }
+                    }
+                }
+                if extra_slots_loaded > 0 {
+                    self.log.push_back(LogEntry::info(format!(
+                        "Loaded {} extra broker account slot(s)",
+                        extra_slots_loaded
+                    )));
+                }
             }
-            // Auto-connect Alpaca if credentials are available.
-            if self.alpaca_enabled
-                && !self.broker_api_key.is_empty()
-                && !self.broker_secret.is_empty()
-            {
-                let capacity = self.alpaca_sync_capacity();
-                let _ = self.broker_tx.send(BrokerCmd::Connect {
-                    api_key: self.broker_api_key.clone(),
-                    secret: self.broker_secret.clone(),
-                    paper: self.broker_paper,
-                    bar_requests_per_minute: self.alpaca_effective_historical_rpm(),
-                    fetch_permits: capacity.fetch_permits,
-                });
-                self.log.push_back(LogEntry::info(format!(
-                    "Alpaca auto-connecting ({}) — {} req/min startup budget, {} workers",
-                    if self.broker_paper { "Paper" } else { "Live" },
-                    self.alpaca_effective_historical_rpm(),
-                    capacity.fetch_permits
-                )));
+            // Auto-connect all configured Alpaca accounts (pooled, ADR-130).
+            if self.alpaca_enabled {
+                self.send_alpaca_connect();
             }
             // Auto-connect Kraken if credentials are available
             if self.kraken_enabled
@@ -347,6 +370,7 @@ impl TyphooNApp {
                     api_secret: self.kraken_api_secret.clone(),
                     ws_api_key: self.kraken_ws_api_key.clone(),
                     ws_api_secret: self.kraken_ws_api_secret.clone(),
+                    extra_accounts: self.kraken_extra_account_specs(),
                 });
                 self.log
                     .push_back(LogEntry::info("Kraken auto-connecting..."));

@@ -1,6 +1,38 @@
 use typhoon_engine::broker::alpaca::AlpacaBroker;
 use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
 
+/// Pull FILL account activities and emit them as structured `RecentFills`.
+/// Shared by the explicit `GetActivities` command, the trade-updates WS
+/// refresh (so a fill that lands mid-session shows up immediately in the
+/// Recent Fills panel + chart arrows), and the primary-account switch path.
+pub async fn fetch_and_send_recent_fills(
+    b: &AlpacaBroker,
+    broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
+    limit: u32,
+) {
+    match b.get_account_activities("FILL", limit).await {
+        Ok(activities) => {
+            let fills: Vec<(String, String, f64, f64, String)> = activities
+                .iter()
+                .filter(|a| a.activity_type == "FILL")
+                .filter_map(|a| {
+                    let sym = a.symbol.as_deref()?.to_string();
+                    let side = a.side.as_deref()?.to_string();
+                    let qty: f64 = a.qty.as_deref()?.parse().ok()?;
+                    let price: f64 = a.price.as_deref()?.parse().ok()?;
+                    Some((sym, side, qty, price, a.date.clone()))
+                })
+                .collect();
+            // Always send, even when empty: after a primary-account switch the
+            // stale previous-account fills must clear from the panel/arrows.
+            let _ = broker_msg_tx.send(BrokerMsg::RecentFills(fills));
+        }
+        Err(e) => {
+            tracing::debug!("Recent fills refresh failed: {}", e);
+        }
+    }
+}
+
 pub async fn handle_alpaca_account_data_command(
     cmd: BrokerCmd,
     broker: Option<&AlpacaBroker>,
@@ -75,9 +107,7 @@ pub async fn handle_alpaca_account_data_command(
                         Some((sym, side, qty, price, a.date.clone()))
                     })
                     .collect();
-                if !fills.is_empty() {
-                    let _ = broker_msg_tx.send(BrokerMsg::RecentFills(fills));
-                }
+                let _ = broker_msg_tx.send(BrokerMsg::RecentFills(fills));
             }
             Err(e) => {
                 let _ = broker_msg_tx.send(BrokerMsg::Error(e));
