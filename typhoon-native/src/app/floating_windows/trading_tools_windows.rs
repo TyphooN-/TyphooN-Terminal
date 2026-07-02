@@ -474,10 +474,30 @@ impl TyphooNApp {
                                         publish_dom: true,
                                     });
                                 }
-                                // L3 foundation trigger (polish 6)
-                                if ui.button("Start L3 (Kraken)").clicked() && !dom_sym.is_empty() && kraken_bookmap_stream_supported(&dom_sym, &self.kraken_pairs) {
-                                    self.kraken_l3_status = format!("L3 requested for {} (awaiting auth + stream)", dom_sym);
-                                    let _ = self.broker_tx.send(BrokerCmd::KrakenStartLevel3Ws { symbol: dom_sym.clone() });
+                                // L3 foundation trigger (polish 6): real L3 is opt-in and entitlement-gated.
+                                let l3_supported =
+                                    kraken_bookmap_stream_supported(&dom_sym, &self.kraken_pairs);
+                                let l3_button = ui.add_enabled(
+                                    l3_supported && !dom_sym.is_empty(),
+                                    egui::Button::new("Start L3 (Kraken)").small(),
+                                );
+                                if l3_button.clicked() {
+                                    self.kraken_l3_status = format!(
+                                        "L3 requested for {} (awaiting auth entitlement + stream)",
+                                        dom_sym
+                                    );
+                                    let _ = self.broker_tx.send(BrokerCmd::KrakenStartLevel3Ws {
+                                        symbol: dom_sym.clone(),
+                                    });
+                                }
+                                if !l3_supported && !dom_sym.is_empty() {
+                                    l3_button.on_hover_text(
+                                        "Real Kraken L3 is only available for supported Kraken spot pairs and still requires auth entitlements. Use L3 Demo to exercise the UI path.",
+                                    );
+                                } else {
+                                    l3_button.on_hover_text(
+                                        "Start Kraken authenticated L3 for this spot pair. Requires Kraken auth entitlements; L1/L2 remain preferred if unavailable.",
+                                    );
                                 }
                                 if ui.button("L3 Demo (entitled sim)").clicked() && !dom_sym.is_empty() {
                                     self.kraken_l3_status = format!("L3 demo active for {} (simulated per-order depth — assume entitlements)", dom_sym);
@@ -838,7 +858,7 @@ impl TyphooNApp {
                                 }
                             });
                         if ui.button("Transpile").clicked() && !self.compiler_source.is_empty() {
-                            use typhoon_transpiler::transpile::{transpile, SourceLanguage};
+                            use typhoon_transpiler::transpile::{SourceLanguage, transpile};
                             let from = match self.compiler_language {
                                 0 => SourceLanguage::Mql5,
                                 1 => SourceLanguage::Mql4,
