@@ -18,6 +18,25 @@ pub(super) fn orderbook_json_matches_symbol(orderbook_json: &str, symbol: &str) 
         .unwrap_or(false)
 }
 
+pub(super) fn orderbook_json_is_l3_for_symbol(orderbook_json: &str, symbol: &str) -> bool {
+    if orderbook_json.trim().is_empty() || symbol.trim().is_empty() {
+        return false;
+    }
+    serde_json::from_str::<serde_json::Value>(orderbook_json)
+        .ok()
+        .filter(|v| {
+            v.get("symbol")
+                .and_then(|s| s.as_str())
+                .map(|book_symbol| {
+                    bookmap_symbol_key(book_symbol)
+                        .eq_ignore_ascii_case(&bookmap_symbol_key(symbol))
+                })
+                .unwrap_or(false)
+        })
+        .and_then(|v| v.get("is_l3").and_then(|x| x.as_bool()))
+        .unwrap_or(false)
+}
+
 pub(super) fn kraken_bookmap_stream_supported(
     symbol: &str,
     kraken_pairs: &[(String, String)],
@@ -415,7 +434,10 @@ impl TyphooNApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{kraken_bookmap_stream_supported, orderbook_json_matches_symbol};
+    use super::{
+        kraken_bookmap_stream_supported, orderbook_json_is_l3_for_symbol,
+        orderbook_json_matches_symbol,
+    };
 
     #[test]
     fn orderbook_json_symbol_matching_normalizes_pairs() {
@@ -443,5 +465,21 @@ mod tests {
         assert!(!kraken_bookmap_stream_supported("GDC.EQ", &known_pairs));
 
         assert!(kraken_bookmap_stream_supported("ETHUSD", &[]));
+    }
+
+    #[test]
+    fn orderbook_l3_flag_requires_symbol_match() {
+        let book = serde_json::json!({
+            "symbol": "BTC/USD",
+            "is_l3": true,
+            "bids": [{ "order_id": "O1", "limit_price": 100.0, "order_qty": 1.0 }],
+            "asks": [{ "order_id": "A1", "limit_price": 101.0, "order_qty": 2.0 }]
+        })
+        .to_string();
+
+        assert!(orderbook_json_is_l3_for_symbol(&book, "BTCUSD"));
+        assert!(orderbook_json_is_l3_for_symbol(&book, "btc/usd"));
+        assert!(!orderbook_json_is_l3_for_symbol(&book, "ETHUSD"));
+        assert!(!orderbook_json_is_l3_for_symbol("not-json", "BTCUSD"));
     }
 }

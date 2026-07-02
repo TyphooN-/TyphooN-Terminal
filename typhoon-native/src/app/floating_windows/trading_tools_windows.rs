@@ -259,11 +259,8 @@ impl TyphooNApp {
                             let bm_dim = egui::Color32::from_rgb(80, 80, 100);
 
                             let stream_supported = kraken_bookmap_stream_supported(&sym, &self.kraken_pairs);
-                            let live_depth_is_l3 = orderbook_json_matches_symbol(&self.orderbook_result, &sym)
-                                && serde_json::from_str::<serde_json::Value>(&self.orderbook_result)
-                                    .ok()
-                                    .and_then(|v| v.get("is_l3").and_then(|x| x.as_bool()))
-                                    .unwrap_or(false);
+                            let live_depth_is_l3 =
+                                orderbook_json_is_l3_for_symbol(&self.orderbook_result, &sym);
                             ui.horizontal(|ui| {
                                 ui.label(egui::RichText::new(format!("Depth: {sym}")).strong());
                                 if ui.button("Fetch Depth").clicked() && !sym.is_empty() {
