@@ -259,6 +259,11 @@ impl TyphooNApp {
                             let bm_dim = egui::Color32::from_rgb(80, 80, 100);
 
                             let stream_supported = kraken_bookmap_stream_supported(&sym, &self.kraken_pairs);
+                            let live_depth_is_l3 = orderbook_json_matches_symbol(&self.orderbook_result, &sym)
+                                && serde_json::from_str::<serde_json::Value>(&self.orderbook_result)
+                                    .ok()
+                                    .and_then(|v| v.get("is_l3").and_then(|x| x.as_bool()))
+                                    .unwrap_or(false);
                             ui.horizontal(|ui| {
                                 ui.label(egui::RichText::new(format!("Depth: {sym}")).strong());
                                 if ui.button("Fetch Depth").clicked() && !sym.is_empty() {
@@ -284,7 +289,13 @@ impl TyphooNApp {
                                 if !stream_supported && !sym.is_empty() {
                                     stream_button.on_hover_text("Live Kraken depth is only available for Kraken spot pairs, not equity symbols.");
                                 }
-                                ui.label(egui::RichText::new("L2 depth").color(bm_dim).small());
+                                let depth_label = if live_depth_is_l3 { "L3 depth" } else { "L2 depth" };
+                                let depth_color = if live_depth_is_l3 {
+                                    egui::Color32::from_rgb(255, 210, 80)
+                                } else {
+                                    bm_dim
+                                };
+                                ui.label(egui::RichText::new(depth_label).color(depth_color).small());
                             });
                             ui.separator();
 
