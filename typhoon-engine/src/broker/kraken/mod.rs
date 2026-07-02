@@ -51,7 +51,7 @@ pub use self::ws_v2_book::{
     parse_book_message, run_book_streamer,
 };
 pub use self::ws_v2_level3::{
-    KrakenL3Level, KrakenL3Delta, KrakenL3State, KrakenL3ChecksumError, run_level3_streamer,
+    KrakenL3ChecksumError, KrakenL3Delta, KrakenL3Level, KrakenL3State, run_level3_streamer,
 };
 pub use self::ws_v2_ticker::{
     KrakenTickerStreamerEvent, KrakenWsTicker, build_ticker_subscribe_frame,
@@ -1552,6 +1552,7 @@ impl KrakenBroker {
         };
         Ok(serde_json::json!({
             "source": "kraken",
+            "transport": "snapshot",
             "symbol": crate::core::kraken::normalize_pair_symbol(symbol),
             "timestamp": chrono::Utc::now().to_rfc3339(),
             "bids": parse_side("bids"),

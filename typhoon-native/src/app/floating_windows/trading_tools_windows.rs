@@ -532,6 +532,8 @@ impl TyphooNApp {
                                     let now_s = chrono::Utc::now().timestamp_millis() as f64 / 1000.0;
                                     // Sample L3-style data to exercise parser, Bookmap L3 viz, selected-order header details, and age coloring.
                                     self.orderbook_result = serde_json::json!({
+                                        "source": "kraken",
+                                        "transport": "demo",
                                         "symbol": dom_sym,
                                         "timestamp": "sim-l3",
                                         "checksum": 123456,
@@ -592,15 +594,18 @@ impl TyphooNApp {
                                     .unwrap_or(false)
                                     || bids.iter().any(|b| b.get("order_id").is_some())
                                     || asks.iter().any(|a| a.get("order_id").is_some());
-                                let provider_note = if is_l3 {
-                                    "Kraken WS L3"
-                                } else if !checksum_status.is_empty()
-                                    || sym.contains('/')
-                                    || sym.to_uppercase().ends_with("USD")
-                                {
-                                    "Kraken WS L2"
-                                } else {
-                                    "Alpaca snapshot"
+                                let source = v.get("source").and_then(|s| s.as_str()).unwrap_or("");
+                                let transport = v.get("transport").and_then(|s| s.as_str()).unwrap_or("");
+                                let provider_note = match (source, transport, is_l3) {
+                                    ("kraken", _, true) => "Kraken WS L3",
+                                    ("kraken", "websocket", false) => "Kraken WS L2",
+                                    ("kraken", _, false) => "Kraken snapshot",
+                                    ("alpaca", _, _) => "Alpaca snapshot",
+                                    _ if !checksum_status.is_empty() => "Kraken WS L2",
+                                    _ if sym.contains('/') || sym.to_uppercase().ends_with("USD") => {
+                                        "Kraken WS L2"
+                                    }
+                                    _ => "Alpaca snapshot",
                                 };
                                 let l3_note = if is_l3 { " · per-order" } else { "" };
                                 ui.label(

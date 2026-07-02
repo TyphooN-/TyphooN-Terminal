@@ -95,6 +95,7 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
   - [x] Chart tooltips with full rich L1.
   - [x] DOM top-of-book sizes feeding L1 paths.
   - [x] Broker-specific DOM badges ("Kraken WS L2", "Kraken WS L3", "Alpaca snapshot").
+  - [x] Snapshot/stream payloads carry normalized `source`/`transport` metadata so DOM badges do not rely on symbol suffix heuristics.
   - Verification harness updates as each cut lands.
   - ADR cross-refs and status bumps as implementation changes.
 

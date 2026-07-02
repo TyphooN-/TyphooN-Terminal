@@ -4,12 +4,12 @@
 //! Provides Alpaca REST trading operations: open, close, partial close by
 //! quantity/percentage where the API supports it, modify, and account info.
 
+use futures_util::{SinkExt, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
-use futures_util::{SinkExt, StreamExt};
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use zeroize::Zeroizing;
@@ -854,7 +854,10 @@ impl AlpacaBroker {
         let (feed, mut ws_stream) = match Self::connect_market_data_once("sip", &key, &secret).await
         {
             Ok(s) => ("sip", s),
-            Err(_) => ("iex", Self::connect_market_data_once("iex", &key, &secret).await?),
+            Err(_) => (
+                "iex",
+                Self::connect_market_data_once("iex", &key, &secret).await?,
+            ),
         };
 
         let (msg_tx, msg_rx) = tokio::sync::mpsc::channel::<String>(512);
@@ -988,7 +991,8 @@ impl AlpacaBroker {
             .map_err(|e| format!("Alpaca data-stream ({feed}) auth send failed: {e}"))?;
         // Verify auth so a SIP-unentitled account fails fast and falls back to IEX.
         for _ in 0..6 {
-            let Some(v) = Self::md_read_json(&mut ws_stream, std::time::Duration::from_secs(5)).await
+            let Some(v) =
+                Self::md_read_json(&mut ws_stream, std::time::Duration::from_secs(5)).await
             else {
                 return Err(format!("Alpaca data-stream ({feed}) no auth response"));
             };
@@ -3882,6 +3886,8 @@ impl AlpacaBroker {
         let asks = Self::parse_crypto_orderbook_side(&orderbook["a"], "ask")?;
 
         Ok(serde_json::json!({
+            "source": "alpaca",
+            "transport": "snapshot",
             "symbol": symbol,
             "timestamp": orderbook["t"],
             "bids": bids,

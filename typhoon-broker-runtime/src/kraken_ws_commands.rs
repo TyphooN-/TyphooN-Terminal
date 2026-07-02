@@ -13,20 +13,37 @@ const KRAKEN_WS_BOOK_MAX_RESUBSCRIBE_ATTEMPTS: u32 = 10;
 /// Upper bound (seconds) for the exponential resubscribe backoff.
 const KRAKEN_WS_BOOK_RESUBSCRIBE_BACKOFF_CAP_S: u64 = 60;
 
-fn kraken_l3_to_json(display_symbol: &str, delta: &typhoon_engine::broker::kraken::KrakenL3Delta) -> String {
-    let bids_json: Vec<serde_json::Value> = delta.bids.iter().map(|l| serde_json::json!({
-        "order_id": l.order_id,
-        "limit_price": l.limit_price,
-        "order_qty": l.order_qty,
-        "timestamp": l.timestamp
-    })).collect();
-    let asks_json: Vec<serde_json::Value> = delta.asks.iter().map(|l| serde_json::json!({
-        "order_id": l.order_id,
-        "limit_price": l.limit_price,
-        "order_qty": l.order_qty,
-        "timestamp": l.timestamp
-    })).collect();
+fn kraken_l3_to_json(
+    display_symbol: &str,
+    delta: &typhoon_engine::broker::kraken::KrakenL3Delta,
+) -> String {
+    let bids_json: Vec<serde_json::Value> = delta
+        .bids
+        .iter()
+        .map(|l| {
+            serde_json::json!({
+                "order_id": l.order_id,
+                "limit_price": l.limit_price,
+                "order_qty": l.order_qty,
+                "timestamp": l.timestamp
+            })
+        })
+        .collect();
+    let asks_json: Vec<serde_json::Value> = delta
+        .asks
+        .iter()
+        .map(|l| {
+            serde_json::json!({
+                "order_id": l.order_id,
+                "limit_price": l.limit_price,
+                "order_qty": l.order_qty,
+                "timestamp": l.timestamp
+            })
+        })
+        .collect();
     serde_json::json!({
+        "source": "kraken",
+        "transport": "websocket",
         "symbol": display_symbol,
         "timestamp": "live-l3",
         "checksum": delta.checksum,
@@ -34,7 +51,8 @@ fn kraken_l3_to_json(display_symbol: &str, delta: &typhoon_engine::broker::krake
         "bids": bids_json,
         "asks": asks_json,
         "is_l3": true,
-    }).to_string()
+    })
+    .to_string()
 }
 
 fn kraken_ws_v2_book_state_json(
@@ -73,6 +91,8 @@ fn kraken_ws_v2_book_state_json(
         })
         .collect();
     serde_json::json!({
+        "source": "kraken",
+        "transport": "websocket",
         "symbol": display_symbol,
         "ws_symbol": state.symbol,
         "timestamp": timestamp,
@@ -93,7 +113,9 @@ fn top_of_kraken_ws_v2_book(
     let a = state.asks.first()?;
     if b.price > 0.0 && a.price > 0.0 && b.price.is_finite() && a.price.is_finite() {
         Some((b.price, a.price, b.qty, a.qty))
-    } else { None }
+    } else {
+        None
+    }
 }
 
 fn resolve_kraken_chart_book_ws_symbol(symbol: &str) -> Option<String> {
@@ -570,7 +592,10 @@ pub async fn handle_kraken_ws_command(
                 while let Some(t) = trade_rx.recv().await {
                     let _ = trades_msg_tx.send(BrokerMsg::KrakenWsStatus {
                         status: "trade".to_string(),
-                        message: format!("{} {:.2} vol={:.4} {}", t.symbol, t.price, t.volume, t.side),
+                        message: format!(
+                            "{} {:.2} vol={:.4} {}",
+                            t.symbol, t.price, t.volume, t.side
+                        ),
                     });
                     // Drive last price / forming bar from executed public trade (O(1) via existing ticker path + chart_by_bare)
                     // This gives real-time executed price to charts/MTF/watchlist, complementing ticker L1.
@@ -737,13 +762,20 @@ pub async fn handle_kraken_ws_command(
                         }
                     }
                     streamer_handle.abort();
-                    if !retry { break; }
+                    if !retry {
+                        break;
+                    }
                     resub_count += 1;
-                    if resub_count > 5 { break; }  // bound to avoid spam
-                    tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(resub_count.min(3)))).await;
+                    if resub_count > 5 {
+                        break;
+                    } // bound to avoid spam
+                    tokio::time::sleep(std::time::Duration::from_secs(
+                        2u64.pow(resub_count.min(3)),
+                    ))
+                    .await;
                 }
             });
         }
         _ => {}
-     }
- }
+    }
+}
