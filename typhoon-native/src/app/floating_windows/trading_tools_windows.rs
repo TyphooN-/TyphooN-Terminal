@@ -9,6 +9,7 @@ fn orderbook_provider_badge(
     let source = v.get("source").and_then(|s| s.as_str()).unwrap_or("");
     let transport = v.get("transport").and_then(|s| s.as_str()).unwrap_or("");
     match (source, transport, is_l3) {
+        ("kraken", "demo", true) => "Kraken L3 demo",
         ("kraken", _, true) => "Kraken WS L3",
         ("kraken", "websocket", false) => "Kraken WS L2",
         ("kraken", _, false) => "Kraken snapshot",
@@ -1130,6 +1131,11 @@ mod tests {
         assert_eq!(
             orderbook_provider_badge(&kraken_ws, "AAPL", "", true),
             "Kraken WS L3"
+        );
+        let kraken_demo = serde_json::json!({ "source": "kraken", "transport": "demo" });
+        assert_eq!(
+            orderbook_provider_badge(&kraken_demo, "BTC/USD", "", true),
+            "Kraken L3 demo"
         );
         assert_eq!(
             orderbook_provider_badge(&kraken_snapshot, "BTC/USD", "", false),
