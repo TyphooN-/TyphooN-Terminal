@@ -216,6 +216,65 @@ pub(crate) fn draw_right_axis_price_labels(
         && chart
             .live_quote_at
             .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
+    if chart.live_trade_vol > 0.0
+        && chart.live_trade_price > 0.0
+        && chart.live_trade_price.is_finite()
+    {
+        let trade_y = price_to_y(chart.live_trade_price);
+        if trade_y >= chart_rect.top() && trade_y <= chart_rect.bottom() {
+            let trade_col = if chart.live_trade_is_buy {
+                egui::Color32::from_rgb(0, 220, 180)
+            } else {
+                egui::Color32::from_rgb(255, 90, 90)
+            };
+            let line_col = if chart.live_trade_is_buy {
+                egui::Color32::from_rgba_premultiplied(0, 220, 180, 175)
+            } else {
+                egui::Color32::from_rgba_premultiplied(255, 90, 90, 175)
+            };
+            let dash_len = 3.0_f32;
+            let mut x = chart_rect.left();
+            while x < chart_rect.right() {
+                let end = (x + dash_len).min(chart_rect.right());
+                painter.line_segment(
+                    [egui::pos2(x, trade_y), egui::pos2(end, trade_y)],
+                    egui::Stroke::new(1.0, line_col),
+                );
+                x += dash_len * 2.0;
+            }
+            let label_y = place_axis_label(trade_y, 8.0);
+            let lbl_rect = egui::Rect::from_min_size(
+                egui::pos2(chart_rect.right() + 2.0, label_y - 8.0),
+                egui::vec2(price_axis_w - 4.0, 16.0),
+            );
+            painter.rect_filled(lbl_rect, 2.0, egui::Color32::from_rgb(12, 18, 28));
+            painter.rect_stroke(
+                lbl_rect,
+                2.0,
+                egui::Stroke::new(1.0, trade_col),
+                egui::StrokeKind::Inside,
+            );
+            let side = if chart.live_trade_is_buy {
+                "Buy"
+            } else {
+                "Sell"
+            };
+            let label = format!(
+                "{} {} x {}",
+                side,
+                format_price(chart.live_trade_price),
+                format_price(chart.live_trade_vol)
+            );
+            painter.text(
+                egui::pos2(chart_rect.right() + 4.0, label_y),
+                egui::Align2::LEFT_CENTER,
+                label,
+                egui::FontId::monospace(9.0),
+                trade_col,
+            );
+        }
+    }
+
     if quote_fresh && chart.live_bid > 0.0 && chart.live_ask > 0.0 {
         let bid_y = price_to_y(chart.live_bid);
         let ask_y = price_to_y(chart.live_ask);
@@ -244,7 +303,11 @@ pub(crate) fn draw_right_axis_price_labels(
                 egui::Stroke::new(1.0, bid_text_col),
                 egui::StrokeKind::Inside,
             );
-            let size_part = if chart.live_bid_size > 0.0 { format!(" x {}", format_price(chart.live_bid_size)) } else { String::new() };
+            let size_part = if chart.live_bid_size > 0.0 {
+                format!(" x {}", format_price(chart.live_bid_size))
+            } else {
+                String::new()
+            };
             let label = format!("Bid {}{}", format_price(chart.live_bid), size_part);
             painter.text(
                 egui::pos2(chart_rect.right() + 4.0, bid_label_y),
@@ -274,7 +337,11 @@ pub(crate) fn draw_right_axis_price_labels(
                 egui::Stroke::new(1.0, ask_text_col),
                 egui::StrokeKind::Inside,
             );
-            let size_part = if chart.live_ask_size > 0.0 { format!(" x {}", format_price(chart.live_ask_size)) } else { String::new() };
+            let size_part = if chart.live_ask_size > 0.0 {
+                format!(" x {}", format_price(chart.live_ask_size))
+            } else {
+                String::new()
+            };
             let label = format!("Ask {}{}", format_price(chart.live_ask), size_part);
             painter.text(
                 egui::pos2(chart_rect.right() + 4.0, ask_label_y),
