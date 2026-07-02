@@ -50,3 +50,29 @@ pub(crate) const WL_COLORS: [egui::Color32; 8] = [
     egui::Color32::from_rgb(255, 130, 60),  // orange
     egui::Color32::from_rgb(200, 80, 200),  // pink
 ];
+
+pub(crate) fn kraken_depth_stream_supported(
+    symbol: &str,
+    kraken_pairs: &[(String, String)],
+) -> bool {
+    let trimmed = symbol.trim();
+    if trimmed.is_empty() || trimmed.contains(".EQ") {
+        return false;
+    }
+
+    let symbol_key =
+        typhoon_engine::core::kraken::normalize_pair_symbol(&normalize_market_data_symbol(trimmed))
+            .replace('/', "");
+
+    kraken_pairs.iter().any(|(pair, display)| {
+        typhoon_engine::core::kraken::normalize_pair_symbol(&normalize_market_data_symbol(pair))
+            .replace('/', "")
+            .eq_ignore_ascii_case(&symbol_key)
+            || typhoon_engine::core::kraken::normalize_pair_symbol(&normalize_market_data_symbol(
+                display,
+            ))
+            .replace('/', "")
+            .eq_ignore_ascii_case(&symbol_key)
+    }) || (kraken_pairs.is_empty()
+        && typhoon_engine::core::kraken::to_kraken_pair_lossy(trimmed).is_some())
+}

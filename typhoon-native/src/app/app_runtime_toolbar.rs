@@ -271,28 +271,8 @@ impl TyphooNApp {
                         let orderbook_symbol = bare_symbol_from_key(&source_state.0)
                             .trim_end_matches(".EQ")
                             .to_ascii_uppercase();
-                        let orderbook_symbol_key = typhoon_engine::core::kraken::normalize_pair_symbol(
-                            &normalize_market_data_symbol(&orderbook_symbol),
-                        )
-                        .replace('/', "");
-                        let orderbook_symbol_is_public_kraken = !orderbook_symbol.is_empty()
-                            && (self.kraken_pairs.iter().any(|(pair, display)| {
-                                typhoon_engine::core::kraken::normalize_pair_symbol(
-                                    &normalize_market_data_symbol(pair),
-                                )
-                                .replace('/', "")
-                                .eq_ignore_ascii_case(&orderbook_symbol_key)
-                                    || typhoon_engine::core::kraken::normalize_pair_symbol(
-                                        &normalize_market_data_symbol(display),
-                                    )
-                                    .replace('/', "")
-                                    .eq_ignore_ascii_case(&orderbook_symbol_key)
-                            })
-                                || (self.kraken_pairs.is_empty()
-                                    && typhoon_engine::core::kraken::to_kraken_pair_lossy(
-                                        &orderbook_symbol,
-                                    )
-                                    .is_some()));
+                        let orderbook_symbol_is_public_kraken =
+                            kraken_depth_stream_supported(&orderbook_symbol, &self.kraken_pairs);
                         let show_kraken_l2 = self.kraken_enabled && orderbook_symbol_is_public_kraken;
                         if show_kraken_l2 {
                             let is_streaming = self

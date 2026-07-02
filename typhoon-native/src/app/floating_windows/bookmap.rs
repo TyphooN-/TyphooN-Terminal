@@ -41,18 +41,7 @@ pub(super) fn kraken_bookmap_stream_supported(
     symbol: &str,
     kraken_pairs: &[(String, String)],
 ) -> bool {
-    let trimmed = symbol.trim();
-    if trimmed.is_empty() || trimmed.contains(".EQ") {
-        return false;
-    }
-    let normalized = bookmap_symbol_key(trimmed);
-    if kraken_pairs.iter().any(|(pair, display)| {
-        bookmap_symbol_key(pair).eq_ignore_ascii_case(&normalized)
-            || bookmap_symbol_key(display).eq_ignore_ascii_case(&normalized)
-    }) {
-        return true;
-    }
-    kraken_pairs.is_empty() && typhoon_engine::core::kraken::to_kraken_pair_lossy(trimmed).is_some()
+    kraken_depth_stream_supported(symbol, kraken_pairs)
 }
 
 pub(super) fn render_live_orderbook_heatmap(
