@@ -144,6 +144,23 @@ fn chart_quote_overlay_rejects_stale_quote_for_newer_bar() {
 }
 
 #[test]
+fn kraken_depth_stream_support_uses_loaded_pair_universe() {
+    let pairs = vec![("XBT/USD".to_string(), "BTC/USD".to_string())];
+    assert!(kraken_depth_stream_supported("BTCUSD", &pairs));
+    assert!(kraken_depth_stream_supported("BTC/USD", &pairs));
+    assert!(kraken_depth_stream_supported("XBTUSD", &pairs));
+    assert!(!kraken_depth_stream_supported("AAPL", &pairs));
+    assert!(!kraken_depth_stream_supported("AAPL.EQ", &pairs));
+}
+
+#[test]
+fn kraken_depth_stream_support_falls_back_only_without_pair_universe() {
+    assert!(kraken_depth_stream_supported("BTCUSD", &[]));
+    assert!(!kraken_depth_stream_supported("", &[]));
+    assert!(!kraken_depth_stream_supported("AAPL.EQ", &[]));
+}
+
+#[test]
 fn chart_fresh_equity_source_policy_targets_plain_equities_only() {
     assert!(chart_prefers_fresh_equity_source("WOK"));
     assert!(chart_prefers_fresh_equity_source("WOK.EQ"));
@@ -260,7 +277,10 @@ fn chart_equity_source_rank_inverts_with_primary_broker() {
         Some(2)
     );
     for primary in [OrderBroker::Kraken, OrderBroker::Alpaca] {
-        assert_eq!(chart_equity_source_rank_for("yahoo-chart", primary), Some(3));
+        assert_eq!(
+            chart_equity_source_rank_for("yahoo-chart", primary),
+            Some(3)
+        );
         assert_eq!(chart_equity_source_rank_for("default", primary), Some(4));
         assert_eq!(chart_equity_source_rank_for("kraken", primary), None);
     }
@@ -457,9 +477,18 @@ fn chart_equity_merge_keeps_compact_trusted_scale_over_exploded_depth() {
     );
     let by_ts: std::collections::HashMap<i64, f64> =
         merged.iter().map(|b| (b.ts_ms, b.close)).collect();
-    assert!((by_ts[&(20 * day)] - 0.02).abs() < 1e-9, "deep raw era kept");
-    assert!((by_ts[&(60 * day)] - 0.02).abs() < 1e-9, "between-split raw era kept");
-    assert!((by_ts[&(100 * day)] - 2.0).abs() < 1e-9, "recent bars unchanged");
+    assert!(
+        (by_ts[&(20 * day)] - 0.02).abs() < 1e-9,
+        "deep raw era kept"
+    );
+    assert!(
+        (by_ts[&(60 * day)] - 0.02).abs() < 1e-9,
+        "between-split raw era kept"
+    );
+    assert!(
+        (by_ts[&(100 * day)] - 2.0).abs() < 1e-9,
+        "recent bars unchanged"
+    );
 }
 
 #[test]
@@ -542,8 +571,11 @@ fn chart_equity_merge_corrects_days_old_intraday_spike() {
         .map(|i| (i * hour, 0.10, 0.10, 0.10, 0.10, 50.0))
         .collect();
 
-    let merged =
-        chart_merge_equity_raw_bars("1Hour", &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)], &[]);
+    let merged = chart_merge_equity_raw_bars(
+        "1Hour",
+        &[("yahoo-chart", &yahoo), ("alpaca", &alpaca)],
+        &[],
+    );
     let by_ts: std::collections::HashMap<i64, f64> =
         merged.iter().map(|b| (b.ts_ms, b.close)).collect();
     assert!(
@@ -649,7 +681,10 @@ fn curated_known_splits_supply_wok_reverse_split() {
         .unwrap()
         .and_utc()
         .timestamp_millis();
-    assert_eq!(splits[0].ex_ts_ms, expected_ts, "ex-date 2025-12-29 00:00 UTC");
+    assert_eq!(
+        splits[0].ex_ts_ms, expected_ts,
+        "ex-date 2025-12-29 00:00 UTC"
+    );
     assert!(
         chart_curated_known_splits("AAPL").is_empty(),
         "curated table is opt-in per symbol"
@@ -953,12 +988,20 @@ fn prev_candle_levels_use_native_higher_timeframe_candles() {
 
     let approx = |a: Option<f64>, b: f64| (a.unwrap() - b).abs() < 1e-9;
     // Daily: previous = 2nd-to-last native day, current = last native day.
-    assert!(approx(chart.prev_daily_high, 0.13), "{:?}", chart.prev_daily_high);
+    assert!(
+        approx(chart.prev_daily_high, 0.13),
+        "{:?}",
+        chart.prev_daily_high
+    );
     assert!(approx(chart.prev_daily_low, 0.095));
     assert!(approx(chart.current_daily_high, 0.14));
     assert!(approx(chart.current_daily_low, 0.100));
     // Weekly: previous = 2nd-to-last native week, current = last native week.
-    assert!(approx(chart.prev_weekly_high, 0.16), "{:?}", chart.prev_weekly_high);
+    assert!(
+        approx(chart.prev_weekly_high, 0.16),
+        "{:?}",
+        chart.prev_weekly_high
+    );
     assert!(approx(chart.prev_weekly_low, 0.085));
     assert!(approx(chart.current_weekly_high, 0.17));
     assert!(approx(chart.current_weekly_low, 0.090));
@@ -1155,7 +1198,10 @@ fn chart_equity_merge_1hour_self_heals_stalled_native_from_15min() {
         })
         .collect();
     cache
-        .put_bars("alpaca:HEAL:1Hour", &serde_json::to_string(&native).unwrap())
+        .put_bars(
+            "alpaca:HEAL:1Hour",
+            &serde_json::to_string(&native).unwrap(),
+        )
         .unwrap();
 
     // 15Min: dense hours 0..40 (4 bars/hour), close 50 so derived hours are distinct.
@@ -1180,8 +1226,15 @@ fn chart_equity_merge_1hour_self_heals_stalled_native_from_15min() {
         .collect();
 
     // Gapless: every hour 0..40 present (was a 19-hour hole at hours 21..39).
-    assert_eq!(merged.len(), 40, "merged 1Hour should be gapless across 0..40");
-    assert!(by_hour.contains_key(&30), "hole hour 30 must be filled from 15Min");
+    assert_eq!(
+        merged.len(),
+        40,
+        "merged 1Hour should be gapless across 0..40"
+    );
+    assert!(
+        by_hour.contains_key(&30),
+        "hole hour 30 must be filled from 15Min"
+    );
     // Overlap buckets keep the native bar; derived fills only the hole.
     assert_eq!(
         by_hour.get(&10).map(|b| b.close),
@@ -1900,7 +1953,14 @@ fn mtf_overlay_drops_misscaled_intraday_source_but_keeps_lagging_average() {
     let host: Vec<Bar> = (0..120i64)
         .map(|i| {
             let c = 10.0 - (i as f64 / 119.0) * 9.0;
-            Bar { ts_ms: i * day, open: c, high: c * 1.02, low: c * 0.98, close: c, volume: 100.0 }
+            Bar {
+                ts_ms: i * day,
+                open: c,
+                high: c * 1.02,
+                low: c * 0.98,
+                close: c,
+                volume: 100.0,
+            }
         })
         .collect();
 
@@ -1911,7 +1971,10 @@ fn mtf_overlay_drops_misscaled_intraday_source_but_keeps_lagging_average() {
     // A uniformly offset-but-consistent source (within tolerance everywhere) is kept.
     let shifted: Vec<Bar> = host
         .iter()
-        .map(|b| Bar { close: b.close * 1.5, ..*b })
+        .map(|b| Bar {
+            close: b.close * 1.5,
+            ..*b
+        })
         .collect();
     assert!(ChartState::htf_source_matches_host_scale(&host, &shifted));
 
@@ -1922,8 +1985,16 @@ fn mtf_overlay_drops_misscaled_intraday_source_but_keeps_lagging_average() {
         .enumerate()
         .map(|(i, b)| {
             let f = if i < 48 { 10.0 } else { 1.0 };
-            Bar { open: b.open * f, high: b.high * f, low: b.low * f, close: b.close * f, ..*b }
+            Bar {
+                open: b.open * f,
+                high: b.high * f,
+                low: b.low * f,
+                close: b.close * f,
+                ..*b
+            }
         })
         .collect();
-    assert!(!ChartState::htf_source_matches_host_scale(&host, &misscaled));
+    assert!(!ChartState::htf_source_matches_host_scale(
+        &host, &misscaled
+    ));
 }
