@@ -51,10 +51,36 @@ pub(crate) const WL_COLORS: [egui::Color32; 8] = [
     egui::Color32::from_rgb(200, 80, 200),  // pink
 ];
 
-pub(crate) fn kraken_depth_stream_supported(
+/// Broker-agnostic entry point: can `broker` deliver a **live streaming** L2
+/// depth book for `symbol`? Gated first on the broker's declared L2 capability
+/// (ADR-129 capability model: `OrderBroker::l2_support`), then on the
+/// broker-specific symbol scope. Adding a broker to `OrderBroker` forces a new
+/// arm here, so depth gating can never silently keep a stale single-broker
+/// assumption. `kraken_pairs` is the loaded Kraken pair catalog consumed by the
+/// Kraken arm; it is ignored by brokers whose depth scope is not Kraken's.
+pub(crate) fn depth_stream_supported(
+    broker: OrderBroker,
     symbol: &str,
     kraken_pairs: &[(String, String)],
 ) -> bool {
+    // Only brokers that declare a *streaming* L2 book can start a live depth
+    // stream. Alpaca (crypto REST snapshots) and any future snapshot-only
+    // broker short-circuit to `false` here via the shared capability model.
+    if !broker.l2_support().is_live() {
+        return false;
+    }
+    match broker {
+        OrderBroker::Kraken => kraken_pair_streamable(symbol, kraken_pairs),
+        // Unreachable today (Alpaca L2 is Snapshot, filtered above); listed so a
+        // future streaming Alpaca depth feed must opt in explicitly rather than
+        // inherit Kraken's pair logic.
+        OrderBroker::Alpaca => false,
+    }
+}
+
+/// Kraken-specific predicate: is `symbol` a Kraken spot/xStock pair whose v2
+/// `book` we can stream? The Kraken arm of [`depth_stream_supported`].
+fn kraken_pair_streamable(symbol: &str, kraken_pairs: &[(String, String)]) -> bool {
     let trimmed = symbol.trim();
     if trimmed.is_empty() || trimmed.contains(".EQ") {
         return false;
@@ -75,4 +101,14 @@ pub(crate) fn kraken_depth_stream_supported(
             .eq_ignore_ascii_case(&symbol_key)
     }) || (kraken_pairs.is_empty()
         && typhoon_engine::core::kraken::to_kraken_pair_lossy(trimmed).is_some())
+}
+
+/// Kraken depth-stream gate used across DOM/Bookmap/toolbar call sites. Thin
+/// alias for the Kraken arm of the broker-agnostic [`depth_stream_supported`];
+/// kept as the name the depth/Bookmap surfaces already call.
+pub(crate) fn kraken_depth_stream_supported(
+    symbol: &str,
+    kraken_pairs: &[(String, String)],
+) -> bool {
+    depth_stream_supported(OrderBroker::Kraken, symbol, kraken_pairs)
 }

@@ -2,6 +2,15 @@
 
 **Status:** Accepted | **Date:** 2026-06-22
 
+> **Scope note (2026-07):** the Primary/Assist choice governs **order routing**
+> and the **rank-0 equity-merge lane** — it does **not** gate live market data.
+> L1/L2/L3 is **capability- and symbol-routed** via the model in
+> [ADR-129](129-l1-l2-l3-market-data-support.md) (`OrderBroker::market_data_capabilities`,
+> `common.rs::depth_stream_supported`): depth is served by whichever enabled
+> broker can serve the symbol (e.g. Kraken streams `BTC/USD` depth even while
+> Alpaca is Primary). So switching Primary never disables L1/L2/L3 that another
+> enabled broker still provides.
+
 Builds on **ADR-009** (Multi-Broker Architecture), **ADR-111** (broker scope =
 Kraken + Alpaca only), **ADR-112** (demand-depth vs catalog-breadth sync lanes),
 and **ADR-113 / ADR-124** (cross-source equity merge & its symmetric

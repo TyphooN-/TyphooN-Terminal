@@ -10,6 +10,7 @@
 - depth profile: "L3 depth" label (with distinct tint) when L3-like data detected; explicit distinction from L2.
 - Unit test for L3 state/apply/checksum. All prior + this deeper slice verified.
 - Continued polish: public-trade live execution markers on chart/right axis, watchlist L1 size freshness parity, Bookmap L3 selected-order persistence/header/heatmap highlight, shared DOM depth preference across stream entrypoints, L3-aware DOM metrics, and L3 entitlement/status surfacing.
+- capability-model (code): the previously conceptual "each broker advertises L1/L2/L3 capabilities" is now a concrete typed model — `typhoon_engine::broker::capabilities` (`MarketDataSupport`, `DepthAssetScope`, `BrokerMarketDataCapabilities`, and `OrderBroker::{l1,l2,l3}_support` / `market_data_capabilities`). The native depth gate routes through it (`depth_stream_supported(broker, …)`) so gating is broker-parameterized (exhaustive match ⇒ adding a broker is a compile error until its depth behavior is declared). See "Broker Capability Model (code)" below.
 ---
 **Date:** 2026-07-01 (updated during implementation)
 
@@ -101,8 +102,60 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
   - Verification harness updates as each cut lands.
   - ADR cross-refs and status bumps as implementation changes.
 
+## Broker Capability Model (code)
+
+The "each broker advertises supported L1/L2/L3 capabilities" principle is a
+concrete, typed model in the engine so every UI surface consumes normalized
+capabilities instead of hard-coding a broker. **Any surface deciding whether to
+offer L1/L2/L3 for a symbol must consult this model, not a broker identity
+check.** This is the durable form of "we are modular — remember it in all
+aspects of terminal design."
+
+`typhoon-engine/src/broker/capabilities.rs`:
+
+- `MarketDataSupport` — `Unsupported < Delayed < Snapshot < Stream` (ordered).
+  Predicates: `is_available()` (any data), `is_realtime()` (snapshot|stream),
+  `is_live()` (stream only — gates "Start Stream" affordances). `label()` for
+  provenance/badges.
+- `DepthAssetScope` — `None | CryptoOnly | SpotAndXStock | All`; which asset
+  classes a broker's L2/L3 book covers, so depth is never offered on symbols a
+  broker cannot serve.
+- `BrokerMarketDataCapabilities` — `{ broker, l1, l2, l3, l2_scope, l3_scope,
+  l3_entitlement_gated, notes }`.
+- `OrderBroker::l1_support() / l2_support() / l3_support()` and
+  `OrderBroker::market_data_capabilities()` — the single source of truth. Every
+  arm is an **exhaustive match on `OrderBroker`**, so adding a broker fails to
+  compile until its L1/L2/L3 support + depth scopes are declared here in one
+  place.
+
+Capability matrix (current + planned):
+
+| Broker | L1 | L2 | L2 scope | L3 | L3 gated | Notes |
+|---|---|---|---|---|---|---|
+| **Alpaca** | Stream | Snapshot | crypto only | — | — | L1 WS (SIP/IEX); L2 crypto REST snapshots; no L3 |
+| **Kraken** | Stream | Stream | spot + xStock | Stream | yes | book v2 CRC32; L3 auth/entitlement-gated (sim demo otherwise) |
+| _tastytrade_ (planned) | Stream | Stream (entitled) | equities/futures | — | — | restore after Alpaca/Kraken combover (DXLink) |
+| _Binance_ (planned) | Stream | Stream | crypto | Stream-like | no | plausible later crypto venue (diff-depth + trade stream) |
+
+Native gating routes through this model. `common.rs::depth_stream_supported(
+broker, symbol, kraken_pairs)` first checks `broker.l2_support().is_live()`
+(snapshot-only/unsupported brokers short-circuit to `false`), then dispatches
+per broker (Kraken → spot/xStock pair check; others declare their own arm).
+`kraken_depth_stream_supported` is now a thin alias for the Kraken arm, so the
+21 DOM/Bookmap/toolbar call sites and their tests are unchanged while the gate
+is broker-parameterized. Depth is **symbol-routed, not primary-broker-routed**
+(matches `handle_orderbook`, which serves depth from whichever broker can serve
+the symbol) — so selecting a different Primary broker never disables depth that
+another enabled broker can still stream.
+
+L3 detection stays broker-agnostic (`orderbook_value_is_l3`: explicit `is_l3`
+flag or per-order `order_id`), and snapshot/stream payloads carry normalized
+`source`/`transport` metadata — both already provider-neutral, both consistent
+with this model.
+
 ## Acceptance Criteria
 - All 1-7 items + extensions implemented and visible in UI.
+- Broker capability model is typed, exhaustive over `OrderBroker`, and unit-tested; native depth gating routes through it with unchanged Alpaca/Kraken behavior.
 - `cargo check` clean across crates.
 - Focused verify script passes (L1 sizes, L2 metrics, stream triggers).
 - No regressions in existing O(1) dispatch, book checksums, reconnect logic.
