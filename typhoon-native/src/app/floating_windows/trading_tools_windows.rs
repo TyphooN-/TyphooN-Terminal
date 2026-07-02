@@ -608,12 +608,7 @@ impl TyphooNApp {
                                 let bid_cnt = bids.len();
                                 let ask_cnt = asks.len();
                                 let age_note = if ts.is_empty() { " (live)".to_string() } else { format!(" age:{}", ts) };
-                                let is_l3 = v
-                                    .get("is_l3")
-                                    .and_then(|b| b.as_bool())
-                                    .unwrap_or(false)
-                                    || bids.iter().any(|b| b.get("order_id").is_some())
-                                    || asks.iter().any(|a| a.get("order_id").is_some());
+                                let is_l3 = orderbook_value_is_l3(&v);
                                 let provider_note =
                                     orderbook_provider_badge(&v, &sym, checksum_status, is_l3);
                                 let l3_note = if is_l3 { " · per-order" } else { "" };
