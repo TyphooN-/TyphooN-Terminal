@@ -425,7 +425,7 @@ impl TyphooNApp {
 
         // Orderbook DOM — shows real L2 data from Fetch Depth/Fetch L2
         if self.show_orderbook_window {
-            let mut demo_bookmap_symbol: Option<String> = None;
+            let mut bookmap_symbol_to_open: Option<String> = None;
             egui::Window::new("Orderbook DOM")
                         .open(&mut self.show_orderbook_window)
                         .resizable(true).default_size([360.0, 420.0])
@@ -490,6 +490,7 @@ impl TyphooNApp {
                                     let _ = self.broker_tx.send(BrokerCmd::KrakenStartLevel3Ws {
                                         symbol: dom_sym.clone(),
                                     });
+                                    bookmap_symbol_to_open = Some(dom_sym.clone());
                                 }
                                 if !l3_supported && !dom_sym.is_empty() {
                                     l3_button.on_hover_text(
@@ -517,7 +518,7 @@ impl TyphooNApp {
                                             {"order_id":"A1","limit_price":123.55,"order_qty":2.5,"timestamp":format!("{:.3}", now_s - 45.0)}
                                         ]
                                     }).to_string();
-                                    demo_bookmap_symbol = Some(dom_sym.clone());
+                                    bookmap_symbol_to_open = Some(dom_sym.clone());
                                 }
                             });
                             // Deeper L3 UI: status label (foundation active)
@@ -651,7 +652,7 @@ impl TyphooNApp {
                                 ui.label(egui::RichText::new("Failed to parse orderbook data.").color(ob_ask).small());
                             }
                         });
-            if let Some(symbol) = demo_bookmap_symbol {
+            if let Some(symbol) = bookmap_symbol_to_open {
                 self.open_bookmap_window(Some(symbol));
             }
         }
