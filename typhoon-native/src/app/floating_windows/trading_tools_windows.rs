@@ -1,5 +1,24 @@
 use super::*;
 
+fn orderbook_provider_badge(
+    v: &serde_json::Value,
+    symbol: &str,
+    checksum_status: &str,
+    is_l3: bool,
+) -> &'static str {
+    let source = v.get("source").and_then(|s| s.as_str()).unwrap_or("");
+    let transport = v.get("transport").and_then(|s| s.as_str()).unwrap_or("");
+    match (source, transport, is_l3) {
+        ("kraken", _, true) => "Kraken WS L3",
+        ("kraken", "websocket", false) => "Kraken WS L2",
+        ("kraken", _, false) => "Kraken snapshot",
+        ("alpaca", _, _) => "Alpaca snapshot",
+        _ if !checksum_status.is_empty() => "Kraken WS L2",
+        _ if symbol.contains('/') || symbol.to_uppercase().ends_with("USD") => "Kraken WS L2",
+        _ => "Alpaca snapshot",
+    }
+}
+
 impl TyphooNApp {
     pub(super) fn render_trading_tools_windows(&mut self, ctx: &egui::Context) {
         // Order Flow
@@ -594,19 +613,8 @@ impl TyphooNApp {
                                     .unwrap_or(false)
                                     || bids.iter().any(|b| b.get("order_id").is_some())
                                     || asks.iter().any(|a| a.get("order_id").is_some());
-                                let source = v.get("source").and_then(|s| s.as_str()).unwrap_or("");
-                                let transport = v.get("transport").and_then(|s| s.as_str()).unwrap_or("");
-                                let provider_note = match (source, transport, is_l3) {
-                                    ("kraken", _, true) => "Kraken WS L3",
-                                    ("kraken", "websocket", false) => "Kraken WS L2",
-                                    ("kraken", _, false) => "Kraken snapshot",
-                                    ("alpaca", _, _) => "Alpaca snapshot",
-                                    _ if !checksum_status.is_empty() => "Kraken WS L2",
-                                    _ if sym.contains('/') || sym.to_uppercase().ends_with("USD") => {
-                                        "Kraken WS L2"
-                                    }
-                                    _ => "Alpaca snapshot",
-                                };
+                                let provider_note =
+                                    orderbook_provider_badge(&v, &sym, checksum_status, is_l3);
                                 let l3_note = if is_l3 { " · per-order" } else { "" };
                                 ui.label(
                                     egui::RichText::new(format!(
@@ -1102,5 +1110,51 @@ impl TyphooNApp {
                     }
                 });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::orderbook_provider_badge;
+
+    #[test]
+    fn orderbook_provider_badge_prefers_source_transport_metadata() {
+        let kraken_ws = serde_json::json!({ "source": "kraken", "transport": "websocket" });
+        let kraken_snapshot = serde_json::json!({ "source": "kraken", "transport": "snapshot" });
+        let alpaca_snapshot = serde_json::json!({ "source": "alpaca", "transport": "snapshot" });
+
+        assert_eq!(
+            orderbook_provider_badge(&kraken_ws, "AAPL", "", false),
+            "Kraken WS L2"
+        );
+        assert_eq!(
+            orderbook_provider_badge(&kraken_ws, "AAPL", "", true),
+            "Kraken WS L3"
+        );
+        assert_eq!(
+            orderbook_provider_badge(&kraken_snapshot, "BTC/USD", "", false),
+            "Kraken snapshot"
+        );
+        assert_eq!(
+            orderbook_provider_badge(&alpaca_snapshot, "BTC/USD", "", false),
+            "Alpaca snapshot"
+        );
+    }
+
+    #[test]
+    fn orderbook_provider_badge_keeps_legacy_fallbacks() {
+        let legacy = serde_json::json!({});
+        assert_eq!(
+            orderbook_provider_badge(&legacy, "BTC/USD", "", false),
+            "Kraken WS L2"
+        );
+        assert_eq!(
+            orderbook_provider_badge(&legacy, "AAPL", "checksum-ok", false),
+            "Kraken WS L2"
+        );
+        assert_eq!(
+            orderbook_provider_badge(&legacy, "AAPL", "", false),
+            "Alpaca snapshot"
+        );
     }
 }
