@@ -88,11 +88,11 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
 - [x] Polish 4: Kraken book sizes flow through `KrakenBookQuoteTick`/live quote paths and are rendered under freshness guards.
 - [x] Polish 7: focused/on-demand stream scope, O(1) dispatch, session `dom_depth` preference, bounded checksummed book/L3 state, and explicit staleness/status labels.
 - Additional completeness / future TODOs: 
-  - Chart tooltips with full rich L1.
-  - DOM top-of-book sizes feeding L1 paths.
-  - Broker-specific badges ("Kraken WS L2", "Alpaca Snapshot").
-  - Verification harness updates.
-  - ADR cross-refs and status bumps.
+  - [x] Chart tooltips with full rich L1.
+  - [x] DOM top-of-book sizes feeding L1 paths.
+  - [x] Broker-specific DOM badges ("Kraken WS L2", "Kraken WS L3", "Alpaca snapshot").
+  - Verification harness updates as each cut lands.
+  - ADR cross-refs and status bumps as implementation changes.
 
 ## Acceptance Criteria
 - All 1-7 items + extensions implemented and visible in UI.

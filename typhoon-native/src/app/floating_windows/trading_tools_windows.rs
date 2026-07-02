@@ -568,11 +568,31 @@ impl TyphooNApp {
                                 let bid_cnt = bids.len();
                                 let ask_cnt = asks.len();
                                 let age_note = if ts.is_empty() { " (live)".to_string() } else { format!(" age:{}", ts) };
-                                let provider_note = if sym.contains("/") || sym.to_uppercase().ends_with("USD") { "Kraken" } else { "Alpaca snapshot" };
-                                let l3_note = if v.get("is_l3").and_then(|b| b.as_bool()).unwrap_or(false) || bids.iter().any(|b| b.get("order_id").is_some()) {
-                                    " · L3 per-order"
-                                } else { "" };
-                                ui.label(egui::RichText::new(format!("Levels: B{} A{} · {} {}{}", bid_cnt, ask_cnt, provider_note, age_note, l3_note)).small().color(ob_dim));
+                                let is_l3 = v
+                                    .get("is_l3")
+                                    .and_then(|b| b.as_bool())
+                                    .unwrap_or(false)
+                                    || bids.iter().any(|b| b.get("order_id").is_some())
+                                    || asks.iter().any(|a| a.get("order_id").is_some());
+                                let provider_note = if is_l3 {
+                                    "Kraken WS L3"
+                                } else if !checksum_status.is_empty()
+                                    || sym.contains('/')
+                                    || sym.to_uppercase().ends_with("USD")
+                                {
+                                    "Kraken WS L2"
+                                } else {
+                                    "Alpaca snapshot"
+                                };
+                                let l3_note = if is_l3 { " · per-order" } else { "" };
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Levels: B{} A{} · {} {}{}",
+                                        bid_cnt, ask_cnt, provider_note, age_note, l3_note
+                                    ))
+                                    .small()
+                                    .color(ob_dim),
+                                );
 
                                 // Compute rich L2 metrics
                                 let bid_vol: f64 = bids.iter().map(|e| level_size(e)).sum();

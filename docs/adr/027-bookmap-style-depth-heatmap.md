@@ -24,7 +24,8 @@ latest live orderbook snapshot only when the snapshot symbol matches the target
 Bookmap window. Kraken L3 foundation (ws_v2_level3 with CRC, KrakenL3State,
 received_at_ms for age) feeds the same update paths. Bookmap `Stream Depth`, the
 Orderbook DOM, toolbar L2, and Order Flow Stream L2 share the same session
-`dom_depth` preference instead of hardcoded depth values.
+`dom_depth` preference instead of hardcoded depth values. The DOM header labels
+source/depth shape explicitly as Kraken WS L2, Kraken WS L3, or Alpaca snapshot.
 
 Kraken depth streaming is guarded to Kraken spot-pair symbols only. The UI
 checks the loaded Kraken spot universe before enabling live depth, so equity
