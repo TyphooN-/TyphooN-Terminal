@@ -2,9 +2,9 @@
 
 ## Deprecated & Removed (2026-06)
 
-The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the history below that cover these subsystems are kept for the record but no longer ship:
+The terminal narrowed to a native **Kraken + Alpaca** desktop app for the current combover. Items in the history below that cover removed subsystems are kept for the record and do not currently ship, but the broker architecture remains modular: tastytrade is a likely future restoration after Alpaca/Kraken are complete, and Binance is a plausible later crypto venue.
 
-- **Brokers/data:** MT5/Darwinex (DARWIN portfolio + BarCacheWriter bridge), tastytrade, CryptoCompare, and removed fallback lanes — see [ADR-111](adr/111-broker-scope-reduction-kraken-alpaca-only.md). Code preserved on `deprecated/*` branches.
+- **Brokers/data currently removed:** MT5/Darwinex (DARWIN portfolio + BarCacheWriter bridge), tastytrade, CryptoCompare, and removed fallback lanes — see [ADR-111](adr/111-broker-scope-reduction-kraken-alpaca-only.md). Code preserved on `deprecated/*` branches. Future restoration should start with tastytrade through the normalized broker capability model, not by reviving old UI-specific paths.
 - **LAN sync + WASM/web phone client:** removed; native-desktop only.
 - **Live martingale trading:** deprecated — see [ADR-114](adr/114-deprecate-martingale-live-trading.md).
 - **MQL5 export pipeline:** removed (the `typhoon-transpiler` language-tooling crate is retained).
@@ -103,12 +103,14 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the 
 - [x] Storage Manager pagination
 - [x] Cross-source data hierarchy (current: Kraken + Alpaca trusted tier with Yahoo corroborator — ADR-111/113)
 
-### Phase 9: tastytrade Integration *(removed 2026-06 — see Deprecated & Removed)*
+### Phase 9: tastytrade Integration *(removed 2026-06; likely future restoration after Alpaca/Kraken combover)*
 - [x] tastytrade REST API client (session-based login, balances, positions, orders)
 - [x] Market data via DXLink WebSocket (historical bars: SETUP→AUTH→FEED protocol)
 - [x] Option chains + Greeks (nested expiration/strike, IV rank/percentile via market metrics)
 - [x] Quote snapshots + market metrics (bid/ask, IV rank, IV percentile, beta)
 - [x] Cross-source bar merge with scale validation (current: Kraken + Alpaca + Yahoo — ADR-113)
+- [ ] Future restoration path: reintroduce tastytrade as a broker module with declared L1/L2/L3/data-history capabilities, entitlement/status reporting, and shared chart/watchlist/DOM semantics.
+- [ ] Later candidate: Binance crypto venue, using the same broker capability/freshness/snapshot-vs-stream model.
 
 ### Phase 10: Advanced Features
 - [x] More drawing tools (pitchfork, Elliott, Gann — all implemented, 89 total)

@@ -12,7 +12,7 @@ The terminal computes its own risk verification — VaR, CVaR, correlation, expo
 
 ### 3. Trusted Data + Independent Corroboration
 
-Market data comes from **Kraken + Alpaca** (trusted, corporate-action-adjusted) with Yahoo Chart as the independent corroborator. Equity bars from multiple providers are merged into one continuous, scale-validated series, and a bad trusted print is corrected against the corroborator rather than charted (ADR-111/112/113).
+Market data currently comes from **Kraken + Alpaca** (trusted, corporate-action-adjusted where applicable) with Yahoo Chart as the independent corroborator. The design is broker-modular: L1/L2/L3 support must remain robust regardless of selected primary broker, with provider capabilities and entitlement limits modeled explicitly. tastytrade is a likely future restoration after the Alpaca/Kraken combover; Binance is a plausible later crypto venue. Equity bars from multiple providers are merged into one continuous, scale-validated series, and a bad trusted print is corrected against the corroborator rather than charted (ADR-111/112/113).
 
 ### 4. NNFX System Equivalence
 

@@ -1,4 +1,4 @@
-# ADR-129: Level 1 / Level 2 / Level 3 Market Data Support (Alpaca + Kraken)
+# ADR-129: Level 1 / Level 2 / Level 3 Market Data Support (Broker-Modular: Alpaca + Kraken now)
 
 **Status:** Accepted / Implemented (2026-07, continued) —
 - persist-depth-flag: show_depth_profile in snapshot_build + session_persistence restore.
@@ -15,10 +15,12 @@
 
 ## Context
 
-TyphooN Terminal (native egui) consumes real-time market data from two primary brokers:
+TyphooN Terminal (native egui) currently consumes real-time market data from two primary brokers, but the L1/L2/L3 design is broker-modular rather than hard-coded to a single primary broker:
 
 - **Alpaca**: Strong real-time L1 (quotes + trades via Market Data WS, IEX/SIP fallback). L2 limited to crypto REST snapshots (`/v1beta1/crypto/.../orderbooks/snapshots`). No equities streaming L2 or L3.
 - **Kraken**: Excellent L1 (`ticker` v2) + L2 (`book` v2 with atomic CRC32 checksums, exact wire precision for xStocks). Trades available. L3 (`level3` authenticated per-order) exists but is rate-limited/auth-heavy and lower-volume.
+
+Future broker modules must plug into the same capability model instead of forking UI semantics: likely next is restoring **tastytrade** after the Alpaca/Kraken combover is complete, with **Binance** a plausible later crypto venue. Each broker advertises supported L1/L2/L3 capabilities, entitlement constraints, freshness semantics, and snapshot-vs-stream behavior; UI surfaces consume normalized capabilities and degrade cleanly when a broker lacks a level.
 
 Prior work (ADR-109, 027, 103, 119, recent robustness cuts):
 - L1: Alpaca sizes extracted + propagated (AlpacaQuoteData). Kraken v2 ticker fully wired (KrakenStartTickerWs, BrokerMsg, O(1) dispatch to charts/watchlist).
@@ -31,11 +33,11 @@ User request: "as rich as possible" L1/L2/L3 + "further polish" for all 1-7 oppo
 
 ## Decision
 
-Adopt a **broker-aware, presentation-focused** L1/L2/L3 model:
+Adopt a **broker-modular, capability-aware, presentation-focused** L1/L2/L3 model:
 
-- L1 (best bid/ask + last + sizes + basic stats) is the primary live overlay for charts, watchlist, and forming bars.
-- L2 (depth book) is on-demand or focused-symbol only (streaming for Kraken, snapshot for Alpaca crypto). Never full-universe streaming.
-- L3 (order-level) is gated, auth-only, low-volume, primarily for advanced order-flow / forensics. Not default.
+- L1 (best bid/ask + last + sizes + basic stats) is the primary live overlay for charts, watchlist, and forming bars, regardless of selected primary broker.
+- L2 (depth book) is on-demand or focused-symbol only (streaming for Kraken, snapshot for Alpaca crypto today). Never full-universe streaming. Future brokers must mark L2 as stream, snapshot, delayed, or unsupported.
+- L3 (order-level) is gated, auth/entitlement-heavy, low-volume, primarily for advanced order-flow / forensics. Not default. Future brokers with L3-like feeds must expose explicit entitlement/status/fallback behavior before UI enables real starts.
 
 Prioritize **rich data propagation** (sizes, volume, imbalance, timestamps) into UI surfaces using existing O(1) dispatch.
 
@@ -45,7 +47,7 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
 - Deliver rich L1 (with sizes) visible in watchlist (inline + tooltip), chart axis + headers, forming updates.
 - Deliver rich L2 (depth + metrics) in dedicated DOM + Bookmap with interactivity, freshness, controls.
 - Provide usable L3 foundation (full streamer + CRC + state + viz + clear limits documented; sim always works).
-- Make data "as rich as the APIs allow" while preserving robustness (checksums, backoff, feed caps, O(1)).
+- Make data "as rich as the APIs allow" while preserving robustness (checksums, backoff, feed caps, O(1)) and broker modularity.
 - Persist minimal UX prefs (e.g., default DOM depth).
 - Keep everything warning-free and verified.
 
@@ -53,6 +55,7 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
 - Full-universe L2/L3 streaming.
 - Persisting full depth history to disk (except on-demand snapshots).
 - Equities L2 on Alpaca (API limitation).
+- Broker-specific UI forks for each future provider; use normalized L1/L2/L3 capability/status models instead.
 - L3 as primary UI surface.
 
 ## Implementation Plan & Status (2026-07)
@@ -88,6 +91,7 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
 - [x] Polish 4: Kraken book sizes flow through `KrakenBookQuoteTick`/live quote paths and are rendered under freshness guards.
 - [x] Polish 7: focused/on-demand stream scope, O(1) dispatch, session `dom_depth` preference, every live depth stream entrypoint guarded to supported Kraken spot pairs, bounded checksummed book/L3 state, and explicit staleness/status labels.
 - Additional completeness / future TODOs: 
+  - [x] Broker-modular capability discipline documented for Alpaca/Kraken now, tastytrade restoration next-likely, and Binance possible later.
   - [x] Chart tooltips with full rich L1.
   - [x] DOM top-of-book sizes feeding L1 paths.
   - [x] Broker-specific DOM badges ("Kraken WS L2", "Kraken WS L3", "Alpaca snapshot").
@@ -119,6 +123,6 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
 ## Conclusion
 With this cut, L1/L2 presentation is substantially richer for both brokers. L3 has a complete foundation: full per-order parser/streamer (real + sim), CRC32 validation on live deltas, per-order state maintenance, auth token wiring, Bookmap per-order viz + age coloring + interactions, depth profile integration, MTF parity via shared propagation, and tests. Real L3 remains gated by Kraken entitlements (sim/demo path always available).
 
-Future work is incremental: deeper live-only features once entitled, a dedicated L3 status/budget panel if real L3 becomes routinely used, retained depth-history/ring-buffer heatmap only after feed entitlement + texture budget exist, and optional click-to-chart/focus affordances from selected L3 orders.
+Future work is incremental: deeper live-only features once entitled, a dedicated L3 status/budget panel if real L3 becomes routinely used, retained depth-history/ring-buffer heatmap only after feed entitlement + texture budget exist, optional click-to-chart/focus affordances from selected L3 orders, and broker-module expansion after the Alpaca/Kraken combover. tastytrade is the likely next restored provider; Binance is a plausible later venue. Both must enter through the same capability/status/freshness model rather than special-casing UI behavior.
 
 Status: **Accepted / implemented (2026-07)**. L1/L2/L3 foundation + listed polish complete and verified.
