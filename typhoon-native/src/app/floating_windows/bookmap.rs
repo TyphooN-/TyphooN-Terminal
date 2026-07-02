@@ -33,7 +33,17 @@ pub(super) fn orderbook_json_is_l3_for_symbol(orderbook_json: &str, symbol: &str
                 })
                 .unwrap_or(false)
         })
-        .and_then(|v| v.get("is_l3").and_then(|x| x.as_bool()))
+        .map(|v| {
+            v.get("is_l3").and_then(|x| x.as_bool()).unwrap_or(false)
+                || v.get("bids")
+                    .and_then(|b| b.as_array())
+                    .map(|bids| bids.iter().any(|b| b.get("order_id").is_some()))
+                    .unwrap_or(false)
+                || v.get("asks")
+                    .and_then(|a| a.as_array())
+                    .map(|asks| asks.iter().any(|a| a.get("order_id").is_some()))
+                    .unwrap_or(false)
+        })
         .unwrap_or(false)
 }
 
@@ -470,5 +480,31 @@ mod tests {
         assert!(orderbook_json_is_l3_for_symbol(&book, "btc/usd"));
         assert!(!orderbook_json_is_l3_for_symbol(&book, "ETHUSD"));
         assert!(!orderbook_json_is_l3_for_symbol("not-json", "BTCUSD"));
+    }
+
+    #[test]
+    fn orderbook_l3_detection_accepts_per_order_fields_without_flag() {
+        let bid_order = serde_json::json!({
+            "symbol": "BTC/USD",
+            "bids": [{ "order_id": "O1", "limit_price": 100.0, "order_qty": 1.0 }],
+            "asks": [{ "price": 101.0, "size": 2.0 }]
+        })
+        .to_string();
+        let ask_order = serde_json::json!({
+            "symbol": "BTC/USD",
+            "bids": [{ "price": 100.0, "size": 1.0 }],
+            "asks": [{ "order_id": "A1", "limit_price": 101.0, "order_qty": 2.0 }]
+        })
+        .to_string();
+        let l2_book = serde_json::json!({
+            "symbol": "BTC/USD",
+            "bids": [{ "price": 100.0, "size": 1.0 }],
+            "asks": [{ "price": 101.0, "size": 2.0 }]
+        })
+        .to_string();
+
+        assert!(orderbook_json_is_l3_for_symbol(&bid_order, "BTCUSD"));
+        assert!(orderbook_json_is_l3_for_symbol(&ask_order, "BTCUSD"));
+        assert!(!orderbook_json_is_l3_for_symbol(&l2_book, "BTCUSD"));
     }
 }

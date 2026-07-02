@@ -30,6 +30,9 @@ Kraken snapshot, or Alpaca snapshot.
 Orderbook snapshot/stream payloads carry normalized `source`/`transport` metadata so
 the DOM can distinguish Kraken snapshots, Kraken websocket depth, Kraken L3/demo,
 and Alpaca snapshots without brittle symbol suffix guesses.
+Bookmap's symbol-scoped L3 badge uses both explicit `is_l3` metadata and per-order
+`order_id` fields on either bid or ask side, so real L3 payloads still render as
+L3 if the source omits the convenience flag.
 
 Kraken depth streaming is guarded to Kraken spot-pair symbols only. The UI
 checks the loaded Kraken spot universe before enabling every live stream entrypoint
