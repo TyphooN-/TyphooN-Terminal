@@ -425,6 +425,7 @@ impl TyphooNApp {
 
         // Orderbook DOM — shows real L2 data from Fetch Depth/Fetch L2
         if self.show_orderbook_window {
+            let mut demo_bookmap_symbol: Option<String> = None;
             egui::Window::new("Orderbook DOM")
                         .open(&mut self.show_orderbook_window)
                         .resizable(true).default_size([360.0, 420.0])
@@ -516,7 +517,7 @@ impl TyphooNApp {
                                             {"order_id":"A1","limit_price":123.55,"order_qty":2.5,"timestamp":format!("{:.3}", now_s - 45.0)}
                                         ]
                                     }).to_string();
-                                    // window already open via outer logic / user can open; avoid double-borrow on the open flag inside closure
+                                    demo_bookmap_symbol = Some(dom_sym.clone());
                                 }
                             });
                             // Deeper L3 UI: status label (foundation active)
@@ -650,6 +651,9 @@ impl TyphooNApp {
                                 ui.label(egui::RichText::new("Failed to parse orderbook data.").color(ob_ask).small());
                             }
                         });
+            if let Some(symbol) = demo_bookmap_symbol {
+                self.open_bookmap_window(Some(symbol));
+            }
         }
 
         // MQL5/PineScript Indicator Compiler
