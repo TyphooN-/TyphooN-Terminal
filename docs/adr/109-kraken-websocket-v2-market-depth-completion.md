@@ -24,15 +24,15 @@ Source audit:
 - `typhoon-engine/src/broker/kraken/ws_v2.rs`
   - shared v2 endpoints, request ids, frame builders, ACK parsing, numeric/timestamp helpers
 - `typhoon-engine/src/broker/kraken/ws_v2_ticker.rs`
-  - v2 `ticker` parser, subscribe batching, reconnecting public streamer foundation
+  - v2 `ticker` parser, subscribe batching, reconnecting public streamer, and native focused-symbol L1 propagation are implemented
 - `typhoon-engine/src/broker/kraken/ws_v2_book.rs`
-  - v2 `book` parser/state helper, subscribe batching, reconnecting public streamer foundation
+  - v2 `book` parser/state helper, subscribe batching, reconnecting public streamer, native DOM/Bookmap/top-of-book quote wiring, and shared depth controls are implemented
   - atomic CRC32 checksum (candidate apply + commit only on match) + xStock wire precision implemented (2026-07)
 - `typhoon-engine/src/broker/kraken/private_ws.rs`
   - private account feed is v1 shape: `ownTrades` and `openOrders`
   - no v2 `executions` or `balances` channel parser yet
-- `typhoon-native/src/app/kraken_ohlc_ws.rs`
-  - app-level full-universe OHLC streamer/write path only; no L1/L2/L3 market-data dispatcher yet
+- `typhoon-native/src/app/app_runtime_kraken_ws.rs` and broker message handlers
+  - focused Kraken L1/L2/trade/L3 market-data dispatch; L2/L3 status propagation; low-timeframe WS freshness hints; no full-universe L2/L3
 
 Kraken WebSocket v2 documentation exposes more than we currently consume:
 
@@ -44,7 +44,7 @@ Kraken WebSocket v2 documentation exposes more than we currently consume:
 - Instruments: `instrument` on `wss://ws.kraken.com/v2` — snapshot path already implemented
 - Authenticated account streams: `balances` and `executions` on `wss://ws-auth.kraken.com/v2`
 
-Conclusion: substantial v2 support now in place (OHLC full, instrument snapshot, ticker foundation, book L2 with atomic checksum + robustness). Private remains largely v1. Full v2 migration for all channels is phased (see phases).
+Conclusion: substantial v2 support is now in place (OHLC full, instrument snapshot, ticker L1, public trades, book L2 with atomic checksum + robustness, and gated L3 foundation/status). Private account streams remain largely v1. Full v2 migration for balances/executions is still phased (see phases).
 
 ## Decision
 

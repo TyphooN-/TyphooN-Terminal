@@ -24,8 +24,8 @@ Prior work (ADR-109, 027, 103, 119, recent robustness cuts):
 - L1: Alpaca sizes extracted + propagated (AlpacaQuoteData). Kraken v2 ticker fully wired (KrakenStartTickerWs, BrokerMsg, O(1) dispatch to charts/watchlist).
 - L2: Kraken WS v2 book with snapshot/deltas + CRC validation. DOM + Bookmap rendering with cumulatives, imbalance, spread/mid. Top-of-book ticks feed charts.
 - O(1) paths (`chart_by_bare`, `watchlist_by_bare`, `apply_live_quote_update`).
-- Rich presentation started: sizes on axis labels, watchlist hover tooltips, DOM vol/imbalance/spread + Refresh button.
-- L3: Protocol stubs (`KrakenStartLevel3Ws`) existed prior; full implementation (parser/streamer/CRC/state/viz) added in this work.
+- Rich presentation is implemented across chart axis/right-axis execution tags, watchlist inline/tooltip sizes with freshness parity, DOM vol/imbalance/spread/top sizes, and Bookmap L2/L3 interactions.
+- L3: `KrakenStartLevel3Ws` is now a gated real/sim implementation path with parser/streamer/CRC/state/viz, entitlement status, and Bookmap/DOM/depth integration.
 
 User request: "as rich as possible" L1/L2/L3 + "further polish" for all 1-7 opportunities until complete. Produce durable plan + full implementation.
 
@@ -60,16 +60,16 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
 ### L1 (Level 1 — Quotes/Ticker)
 - [x] Alpaca: `AlpacaQuoteData` with bid/ask/sizes/last from WS "q"/"t".
 - [x] Kraken: Full `ws_v2_ticker` + `KrakenStartTickerWs` + `BrokerMsg::KrakenWsTicker`.
-- Polish 1: Watchlist rows — inline sizes (compact "bX aY") + tooltip (done in this cut + prior).
-- Polish 2: Chart header/toolbar + axis — show bid/ask + sizes + spread (axis done; header added in this cut).
-- Extensions: Staleness handling, forming-bar integration, chart tooltips.
+- [x] Polish 1: Watchlist rows — inline sizes (compact "bX aY") + tooltip, using the same 30s freshness rule as chart overlays.
+- [x] Polish 2: Chart axis/right-axis — bid/ask labels, executed live-trade line/tag, and forming-bar/live-trade integration.
+- [x] Extensions: staleness handling, forming-bar integration, chart/live-trade tooltip cues.
 
 ### L2 (Level 2 — Depth/Orderbook)
 - [x] Kraken v2 `book` with CRC, exact wire tokens, bounded resub.
 - [x] Alpaca crypto snapshots wired to DOM.
-- Polish 3: DOM + Bookmap — update age, level count, top-N control, volume-weighted imbalance, spread/mid, top sizes, hover tooltips, density scaling, provider/status badges.
-- Polish 5: Alpaca crypto L2 freshness + auto-refresh on symbol focus.
-- Extensions completed: shared DOM depth slider/preference used by toolbar L2, Order Flow Stream L2, Bookmap Stream Depth, and Orderbook DOM Apply/Start Stream; cumulative/imbalance visuals hardened; DOM metrics read L3 `limit_price`/`order_qty` as well as L2 `price`/`size`.
+- [x] Polish 3: DOM + Bookmap — update age, level count, top-N control, volume-weighted imbalance, spread/mid, top sizes, hover tooltips, density scaling, provider/status badges.
+- [x] Polish 5: Alpaca crypto L2 snapshots remain snapshot-scoped; Kraken streaming L2 is focused/on-demand only.
+- [x] Extensions completed: shared DOM depth slider/preference used by toolbar L2, Order Flow Stream L2, Bookmap Stream Depth, and Orderbook DOM Apply/Start Stream; cumulative/imbalance visuals hardened; DOM metrics read L3 `limit_price`/`order_qty` as well as L2 `price`/`size`.
 
 ### L3 (Level 3)
 - [x] Full `ws_v2_level3.rs`: `KrakenL3Level`/`Delta`/`State`, `parse_l3_message`, `run_level3_streamer` + `run_level3_streamer_once`.
@@ -85,9 +85,9 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
 - Polish 6 / limits: Clear docs + UI status (auth + entitlements required for real; sim for demo); no auto-start.
 
 ### Cross-cutting (Polish 4, 7 + more)
-- Polish 4: Wire Kraken book sizes into richer `KrakenBookQuoteTick` (or direct chart path) + use in apply_live_quote.
-- Polish 7: Performance (throttle rich updates), persisting depth pref (simple egui state or config), better staleness badges.
-- Additional completeness: 
+- [x] Polish 4: Kraken book sizes flow through `KrakenBookQuoteTick`/live quote paths and are rendered under freshness guards.
+- [x] Polish 7: focused/on-demand stream scope, O(1) dispatch, session `dom_depth` preference, bounded checksummed book/L3 state, and explicit staleness/status labels.
+- Additional completeness / future TODOs: 
   - Chart tooltips with full rich L1.
   - DOM top-of-book sizes feeding L1 paths.
   - Broker-specific badges ("Kraken WS L2", "Alpaca Snapshot").
@@ -110,7 +110,7 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
 - All changes verified and pushed in coherent cuts.
 
 ## Related
-- ADR-109 (Kraken WS v2 book + ticker foundation)
+- ADR-109 (Kraken WS v2 L1/L2/trade/L3 market-data coverage)
 - ADR-027 (Bookmap depth heatmap)
 - ADR-103 (dedicated market data lanes)
 - ADR-119 (forming bar source policy)

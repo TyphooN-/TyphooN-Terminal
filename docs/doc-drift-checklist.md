@@ -50,7 +50,7 @@
 ## 5. ADRs with Potential Outdated Claims
 
 - [x] ADR-109: Old Phase 1/2 status lines updated (2026-07) to reflect completion.
-- [x] ADR-129: L3 plan, conclusion, prior-stubs clarification accurate post-foundation work.
+- [x] ADR-129: L3 plan, conclusion, and prior-stub wording now reflect the gated real/sim implementation.
 - [x] Other ADRs (e.g. 027 Bookmap-style, 017 MTF, 004 MTF indicators) — updated with modern depth profile / L3 / received_at_ms / MTF propagation.
 - [~] Large number of "pending", "future", "not yet" in sync/performance/research ADRs (78+ matches total) — mostly mechanism descriptions or P2 items. Review on per-ADR basis.
 - [x] ADR-116 (Finviz feature-parity-target) and similar — scoped as historical reference audit / gap-closure plan.
@@ -62,7 +62,7 @@
 - [x] Kraken Futures trading vs market-data depth — clarified in API_KEYS.md (primarily data for Futures; full private trading for crypto/xStocks).
 - [x] Persistence (session.json, SQLite zstd, kv_cache) — matches.
 - [x] AI surfaces / research packet ingestion — well covered but check for drift on new surfaces.
-- Code work on gated items (sim/demo side): Enhanced L3 simulate_l3_delta with delete/mod variety + proper received_at_ms for age coloring/CRC testing (demo now better exercises the real path logic). Bookmap L3 selection stub improved (references state field for highlight; feedback strengthened).
+- Code work on gated items (sim/demo side): L3 sim/demo remains available for entitlement-free testing; Bookmap L3 selection is now real per-window state with row/header/heatmap marker highlighting, not a local stub.
 
 ## How to Use This Checklist
 1. Run: `grep -rE 'stub|pending|not yet|parity|future work|in progress' docs/ --include="*.md" | head -30`
