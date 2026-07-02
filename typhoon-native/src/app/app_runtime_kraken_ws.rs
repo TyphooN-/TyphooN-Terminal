@@ -61,6 +61,9 @@ impl TyphooNApp {
     pub(super) fn handle_kraken_ws_status(&mut self, status: String, message: String) {
         let should_reconcile = status == "online" && message.contains("reconnected");
         let text = format!("Kraken WS {status}: {message}");
+        if status.to_ascii_lowercase().contains("l3") {
+            self.kraken_l3_status = text.clone();
+        }
         if matches!(status.as_str(), "error" | "closed") {
             self.log.push_back(LogEntry::warn(text));
         } else {
