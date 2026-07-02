@@ -581,9 +581,41 @@ pub async fn handle_kraken_ws_command(
                 let (trade_tx, mut trade_rx) = tokio::sync::mpsc::channel::<
                     typhoon_engine::broker::kraken::KrakenWsPublicTrade,
                 >(1024);
-                let (event_tx, mut _event_rx) = tokio::sync::mpsc::unbounded_channel::<
+                let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<
                     typhoon_engine::broker::kraken::KrakenTradeStreamerEvent,
                 >();
+                // Drain + surface the trade-feed lifecycle like the ticker/book/L3
+                // lanes do. Without this the unbounded event channel would buffer
+                // forever now that the streamer retries indefinitely, and tape
+                // degradation/recovery would be invisible to the user.
+                let status_symbol = trades_symbol.clone();
+                let status_tx = trades_msg_tx.clone();
+                tokio::spawn(async move {
+                    while let Some(event) = event_rx.recv().await {
+                        let message = match event {
+                            typhoon_engine::broker::kraken::KrakenTradeStreamerEvent::Connected => {
+                                format!("Kraken WS v2 trade connected: {status_symbol}")
+                            }
+                            typhoon_engine::broker::kraken::KrakenTradeStreamerEvent::Subscribed {
+                                batches,
+                            } => format!(
+                                "Kraken WS v2 trade subscribed: {status_symbol} batches={batches}"
+                            ),
+                            typhoon_engine::broker::kraken::KrakenTradeStreamerEvent::Disconnected {
+                                reason,
+                            } => {
+                                format!("Kraken WS v2 trade disconnected: {status_symbol} {reason}")
+                            }
+                            typhoon_engine::broker::kraken::KrakenTradeStreamerEvent::SubscribeFailed {
+                                reason,
+                            } => format!("Kraken WS v2 trade degraded: {status_symbol} {reason}"),
+                        };
+                        let _ = status_tx.send(BrokerMsg::KrakenWsStatus {
+                            status: "trade".into(),
+                            message,
+                        });
+                    }
+                });
                 tokio::spawn(async move {
                     typhoon_engine::broker::kraken::run_trades_streamer(
                         vec![trades_symbol],

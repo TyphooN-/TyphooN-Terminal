@@ -20,6 +20,10 @@ pub const KRAKEN_WS_V2_TRADE_CHANNEL: &str = "trade";
 const KRAKEN_WS_TRADE_SUBSCRIBE_BATCH: usize = 250;
 const KRAKEN_WS_TRADE_SUBSCRIBE_FRAME_DELAY: Duration = Duration::from_millis(20);
 const KRAKEN_WS_TRADE_PING_INTERVAL: Duration = Duration::from_secs(30);
+/// Emit a one-shot "degraded" status after this many consecutive reconnect
+/// failures. The streamer keeps retrying afterward (it never permanently gives
+/// up on a transient burst) — this only surfaces the degradation once.
+const KRAKEN_WS_TRADE_DEGRADED_AFTER: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct KrakenWsPublicTrade {
@@ -204,15 +208,53 @@ pub async fn run_trades_streamer(
             Err(reason) => {
                 consecutive_failures = consecutive_failures.saturating_add(1);
                 let _ = event_tx.send(KrakenTradeStreamerEvent::Disconnected { reason });
-                if consecutive_failures > 5 {
+                // Robustness: never permanently abandon the tape on a transient
+                // failure burst (mirrors the ticker/book/level3 streamers, per this
+                // module's header). Surface a one-shot "degraded" status at the
+                // threshold, then keep retrying with capped exponential backoff so
+                // live executions self-heal when the feed recovers. The only terminal
+                // exit is the consumer dropping `trade_tx` (checked at the loop top).
+                if consecutive_failures == KRAKEN_WS_TRADE_DEGRADED_AFTER {
                     let _ = event_tx.send(KrakenTradeStreamerEvent::SubscribeFailed {
-                        reason: "too many failures".to_string(),
+                        reason: format!(
+                            "trade feed degraded after {consecutive_failures} consecutive failures; retrying"
+                        ),
                     });
-                    return;
                 }
-                let backoff = Duration::from_millis(500 * consecutive_failures as u64).min(Duration::from_secs(10));
-                tokio::time::sleep(backoff).await;
+                tokio::time::sleep(compute_trades_reconnect_backoff(consecutive_failures)).await;
             }
         }
+    }
+}
+
+/// Capped exponential reconnect backoff, identical in shape to the ticker/book
+/// streamers: a short 250 ms first retry, then `2^min(n,6)` seconds (max 64 s).
+fn compute_trades_reconnect_backoff(consecutive_failures: u32) -> Duration {
+    if consecutive_failures == 0 {
+        Duration::from_millis(250)
+    } else {
+        let exp = consecutive_failures.min(6);
+        Duration::from_secs(2_u64.saturating_pow(exp))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trade_reconnect_backoff_is_bounded_and_never_terminal() {
+        // Same capped-exponential shape as the ticker/book lanes; a large failure
+        // count saturates at 64 s rather than overflowing or giving up.
+        assert_eq!(
+            compute_trades_reconnect_backoff(0),
+            Duration::from_millis(250)
+        );
+        assert_eq!(compute_trades_reconnect_backoff(1), Duration::from_secs(2));
+        assert_eq!(compute_trades_reconnect_backoff(6), Duration::from_secs(64));
+        assert_eq!(
+            compute_trades_reconnect_backoff(100),
+            Duration::from_secs(64)
+        );
     }
 }
