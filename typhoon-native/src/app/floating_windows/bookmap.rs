@@ -118,6 +118,16 @@ pub(super) fn render_live_orderbook_heatmap(
     // Follow-up polish: staleness + top rich L1 sizes
     let top_bid_size = bids.first().map(get_size).unwrap_or(0.0);
     let top_ask_size = asks.first().map(get_size).unwrap_or(0.0);
+    let top_density = if max_size > 0.0 {
+        (top_bid_size.max(top_ask_size) / max_size * 100.0).round() as i32
+    } else {
+        0
+    };
+    let density_note = if top_density >= 40 {
+        format!(" · top {}% dense", top_density)
+    } else {
+        String::new()
+    };
     let header = if is_l3 {
         format!(
             "Live L3 per-order — {} ({} orders bid, {} ask)",
@@ -125,8 +135,8 @@ pub(super) fn render_live_orderbook_heatmap(
         )
     } else if top_bid_size > 0.0 || top_ask_size > 0.0 {
         format!(
-            "Live L2 depth — {}  (top b{:.2} a{:.2})",
-            ts, top_bid_size, top_ask_size
+            "Live L2 depth — {}  (top b{:.2} a{:.2}){}",
+            ts, top_bid_size, top_ask_size, density_note
         )
     } else {
         format!("Live L2 depth — {}", ts)
