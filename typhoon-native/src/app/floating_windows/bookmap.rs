@@ -159,6 +159,31 @@ pub(super) fn render_live_orderbook_heatmap(
                 ask_color,
             );
         }
+        // Per-order individual markers for L3 asks, mirrored from bid markers.
+        if is_l3 {
+            let order_id = ask.get("order_id").and_then(|o| o.as_str()).unwrap_or("");
+            let mx = rect.right() - (width * frac * 0.5);
+            let marker = egui::pos2(mx, y + row_h * 0.3);
+            let selected = selected_order_id.as_deref() == Some(order_id);
+            let marker_col = if selected {
+                egui::Color32::YELLOW
+            } else {
+                egui::Color32::from_rgb(255, 180, 180)
+            };
+            painter.circle_filled(marker, if selected { 3.0 } else { 1.5 }, marker_col);
+            if selected {
+                painter.circle_stroke(marker, 5.0, egui::Stroke::new(1.0, egui::Color32::YELLOW));
+            }
+            if idx < 4 && !order_id.is_empty() {
+                painter.text(
+                    egui::pos2(mx + 3.0, y),
+                    egui::Align2::LEFT_TOP,
+                    &order_id[..order_id.len().min(6)],
+                    egui::FontId::monospace(6.0),
+                    marker_col,
+                );
+            }
+        }
     }
     for (idx, bid) in bids.iter().take(max_levels).enumerate() {
         let size = get_size(bid);
@@ -192,14 +217,23 @@ pub(super) fn render_live_orderbook_heatmap(
             let order_id = bid.get("order_id").and_then(|o| o.as_str()).unwrap_or("");
             let mx = rect.left() + (width * frac * 0.5);
             let marker = egui::pos2(mx, y + row_h * 0.3);
-            painter.circle_filled(marker, 1.5, egui::Color32::from_rgb(180, 255, 180));
+            let selected = selected_order_id.as_deref() == Some(order_id);
+            let marker_col = if selected {
+                egui::Color32::YELLOW
+            } else {
+                egui::Color32::from_rgb(180, 255, 180)
+            };
+            painter.circle_filled(marker, if selected { 3.0 } else { 1.5 }, marker_col);
+            if selected {
+                painter.circle_stroke(marker, 5.0, egui::Stroke::new(1.0, egui::Color32::YELLOW));
+            }
             if idx < 4 && !order_id.is_empty() {
                 painter.text(
                     egui::pos2(mx + 3.0, y),
                     egui::Align2::LEFT_TOP,
                     &order_id[..order_id.len().min(6)],
                     egui::FontId::monospace(6.0),
-                    egui::Color32::from_rgb(150, 220, 150),
+                    marker_col,
                 );
             }
         }
