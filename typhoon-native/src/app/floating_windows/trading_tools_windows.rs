@@ -452,7 +452,7 @@ impl TyphooNApp {
         }
         self.bookmap_windows = open_bookmaps;
 
-        // Orderbook DOM — shows real L2 data from Fetch Depth/Fetch L2
+        // Orderbook DOM — shows real L2 data from Fetch Depth Snapshot / Fetch L2 Snapshot
         if self.show_orderbook_window {
             let mut bookmap_symbol_to_open: Option<String> = None;
             egui::Window::new("Orderbook DOM")
@@ -574,7 +574,7 @@ impl TyphooNApp {
                                 ui.label(egui::RichText::new(&self.kraken_l3_status).small().color(ob_dim));
                             }
                             if self.orderbook_result.is_empty() {
-                                ui.label(egui::RichText::new("No L2 data — click Fetch Depth in Bookmap or Fetch L2 in Order Flow.").color(ob_dim).small());
+                                ui.label(egui::RichText::new("No L2 data — click Fetch Depth Snapshot in Bookmap or Fetch L2 Snapshot in Order Flow.").color(ob_dim).small());
                             } else if let Ok(v) = serde_json::from_str::<serde_json::Value>(&self.orderbook_result) {
                                 let sym = v["symbol"].as_str().unwrap_or("?");
                                 let ts  = v["timestamp"].as_str().unwrap_or("");
