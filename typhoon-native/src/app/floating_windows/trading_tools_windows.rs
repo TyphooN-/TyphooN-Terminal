@@ -508,6 +508,18 @@ impl TyphooNApp {
 
                                 let bids: Vec<_> = v["bids"].as_array().map(|a| a.as_slice()).unwrap_or(&[]).to_vec();
                                 let asks: Vec<_> = v["asks"].as_array().map(|a| a.as_slice()).unwrap_or(&[]).to_vec();
+                                let level_price = |level: &serde_json::Value| -> f64 {
+                                    level["limit_price"]
+                                        .as_f64()
+                                        .or_else(|| level["price"].as_f64())
+                                        .unwrap_or(0.0)
+                                };
+                                let level_size = |level: &serde_json::Value| -> f64 {
+                                    level["order_qty"]
+                                        .as_f64()
+                                        .or_else(|| level["size"].as_f64())
+                                        .unwrap_or(0.0)
+                                };
 
                                 // Polish 3/5: level counts + freshness note (after parse)
                                 let bid_cnt = bids.len();
@@ -520,8 +532,8 @@ impl TyphooNApp {
                                 ui.label(egui::RichText::new(format!("Levels: B{} A{} · {} {}{}", bid_cnt, ask_cnt, provider_note, age_note, l3_note)).small().color(ob_dim));
 
                                 // Compute rich L2 metrics
-                                let bid_vol: f64 = bids.iter().filter_map(|e| e["size"].as_f64()).sum();
-                                let ask_vol: f64 = asks.iter().filter_map(|e| e["size"].as_f64()).sum();
+                                let bid_vol: f64 = bids.iter().map(|e| level_size(e)).sum();
+                                let ask_vol: f64 = asks.iter().map(|e| level_size(e)).sum();
                                 let total_vol = (bid_vol + ask_vol).max(1e-9);
                                 let imbalance = (bid_vol - ask_vol) / total_vol;
                                 let imb_color = if imbalance > 0.05 { ob_bid } else if imbalance < -0.05 { ob_ask } else { ob_dim };
@@ -532,8 +544,8 @@ impl TyphooNApp {
 
                                 // Rich L2 polish: spread and mid
                                 if let (Some(top_ask), Some(top_bid)) = (
-                                    asks.first().and_then(|a| a["price"].as_f64()),
-                                    bids.first().and_then(|b| b["price"].as_f64()),
+                                    asks.first().map(|a| level_price(a)),
+                                    bids.first().map(|b| level_price(b)),
                                 ) {
                                     if top_ask > 0.0 && top_bid > 0.0 {
                                         let spread = top_ask - top_bid;
@@ -546,8 +558,8 @@ impl TyphooNApp {
 
                                         // Top L1 sizes from the same snapshot (richer view)
                                         if let (Some(top_bid), Some(top_ask)) = (
-                                        bids.first().and_then(|b| b["size"].as_f64()),
-                                        asks.first().and_then(|a| a["size"].as_f64()),
+                                        bids.first().map(|b| level_size(b)),
+                                        asks.first().map(|a| level_size(a)),
                                         ) {
                                         if top_bid > 0.0 || top_ask > 0.0 {
                                             ui.label(egui::RichText::new(format!(
@@ -560,7 +572,7 @@ impl TyphooNApp {
 
                                         // max size for bar scaling (use per level or global)
                                 let max_sz = bids.iter().chain(asks.iter())
-                                    .filter_map(|e| e["size"].as_f64())
+                                    .map(|e| level_size(e))
                                     .fold(0.0_f64, f64::max).max(1.0);
                                 let avail_w = ui.available_width().min(320.0);
 
@@ -571,8 +583,8 @@ impl TyphooNApp {
                                 egui::ScrollArea::vertical().auto_shrink(false).max_height(340.0).show(ui, |ui| {
                                     ui.label(egui::RichText::new("Asks (sell side) — richer L2").color(ob_ask).small().strong());
                                     for ask in asks.iter().rev().take(25) {
-                                        let price = ask["price"].as_f64().unwrap_or(0.0);
-                                        let size  = ask["size"].as_f64().unwrap_or(0.0);
+                                        let price = level_price(ask);
+                                        let size  = level_size(ask);
                                         cum_ask += size;
                                         let frac  = (size / max_sz) as f32;
                                         ui.horizontal(|ui| {
@@ -587,8 +599,8 @@ impl TyphooNApp {
                                     ui.separator();
                                     ui.label(egui::RichText::new("Bids (buy side) — richer L2").color(ob_bid).small().strong());
                                     for bid in bids.iter().take(25) {
-                                        let price = bid["price"].as_f64().unwrap_or(0.0);
-                                        let size  = bid["size"].as_f64().unwrap_or(0.0);
+                                        let price = level_price(bid);
+                                        let size  = level_size(bid);
                                         cum_bid += size;
                                         let frac  = (size / max_sz) as f32;
                                         ui.horizontal(|ui| {

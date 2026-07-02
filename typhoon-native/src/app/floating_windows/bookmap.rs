@@ -98,8 +98,8 @@ pub(super) fn render_live_orderbook_heatmap(
         .max(1.0);
     let ts = v["timestamp"].as_str().unwrap_or("live");
     // Follow-up polish: staleness + top rich L1 sizes
-    let top_bid_size = bids.first().and_then(|b| b["size"].as_f64()).unwrap_or(0.0);
-    let top_ask_size = asks.first().and_then(|a| a["size"].as_f64()).unwrap_or(0.0);
+    let top_bid_size = bids.first().map(get_size).unwrap_or(0.0);
+    let top_ask_size = asks.first().map(get_size).unwrap_or(0.0);
     let header = if is_l3 {
         format!(
             "Live L3 per-order — {} ({} orders bid, {} ask)",
