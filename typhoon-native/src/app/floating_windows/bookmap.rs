@@ -250,7 +250,19 @@ pub(super) fn render_live_orderbook_heatmap(
     // Richer Bookmap L3: order list pane with age coloring + interactions (click = copy + select note)
     if is_l3 {
         ui.separator();
-        ui.label(egui::RichText::new("L3 orders (age-colored, top 5/side)").small());
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("L3 orders (age-colored, top 5/side)").small());
+            if let Some(selected) = selected_order_id.as_deref() {
+                ui.label(
+                    egui::RichText::new(format!("selected {}", &selected[..selected.len().min(8)]))
+                        .small()
+                        .color(egui::Color32::YELLOW),
+                );
+                if ui.small_button("clear").clicked() {
+                    selected_order_id.take();
+                }
+            }
+        });
         egui::ScrollArea::vertical()
             .max_height(100.0)
             .show(ui, |ui| {
