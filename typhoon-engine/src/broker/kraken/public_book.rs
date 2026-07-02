@@ -129,7 +129,8 @@ pub(super) fn kraken_public_book_snapshot_json(
             .collect()
     };
     serde_json::json!({
-        "source": "kraken_ws",
+        "source": "kraken",
+        "transport": "websocket",
         "symbol": display_symbol,
         "ws_pair": ws_pair,
         "timestamp": chrono::Utc::now().to_rfc3339(),
@@ -145,7 +146,8 @@ pub(super) fn kraken_public_book_status_message(
     status: &str,
 ) -> String {
     serde_json::json!({
-        "source": "kraken_ws",
+        "source": "kraken",
+        "transport": "websocket",
         "symbol": display_symbol,
         "ws_pair": ws_pair,
         "status": status,
@@ -162,7 +164,8 @@ pub(super) fn kraken_public_book_error_message(
     error: &str,
 ) -> String {
     serde_json::json!({
-        "source": "kraken_ws",
+        "source": "kraken",
+        "transport": "websocket",
         "symbol": display_symbol,
         "ws_pair": ws_pair,
         "status": "error",
@@ -238,7 +241,8 @@ mod tests {
         let json =
             kraken_public_book_snapshot_json("BTCUSD", "XBT/USD", &[(99.0, 1.0)], &[(101.0, 2.0)]);
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["source"], "kraken_ws");
+        assert_eq!(parsed["source"], "kraken");
+        assert_eq!(parsed["transport"], "websocket");
         assert_eq!(parsed["symbol"], "BTCUSD");
         assert_eq!(parsed["ws_pair"], "XBT/USD");
         assert_eq!(parsed["bids"][0]["price"], 99.0);
@@ -249,11 +253,15 @@ mod tests {
     fn status_and_error_messages_have_empty_levels() {
         let status = kraken_public_book_status_message("BTCUSD", "XBT/USD", "connecting");
         let parsed: serde_json::Value = serde_json::from_str(&status).unwrap();
+        assert_eq!(parsed["source"], "kraken");
+        assert_eq!(parsed["transport"], "websocket");
         assert_eq!(parsed["status"], "connecting");
         assert_eq!(parsed["bids"].as_array().unwrap().len(), 0);
 
         let err = kraken_public_book_error_message("BTCUSD", "XBT/USD", "timeout");
         let parsed: serde_json::Value = serde_json::from_str(&err).unwrap();
+        assert_eq!(parsed["source"], "kraken");
+        assert_eq!(parsed["transport"], "websocket");
         assert_eq!(parsed["status"], "error");
         assert_eq!(parsed["error"], "timeout");
     }

@@ -96,6 +96,7 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
   - [x] DOM top-of-book sizes feeding L1 paths.
   - [x] Broker-specific DOM badges ("Kraken WS L2", "Kraken WS L3", "Kraken L3 demo", "Kraken snapshot", "Alpaca snapshot").
   - [x] Snapshot/stream payloads carry normalized `source`/`transport` metadata so DOM badges do not rely on symbol suffix heuristics.
+  - [x] Legacy Kraken public-book WS status/update/error payloads use `source=kraken`, `transport=websocket` like v2 L2/L3.
   - [x] Bookmap and DOM L3 labels share one detector for explicit `is_l3` flags or per-order `order_id` fields on bids/asks.
   - Verification harness updates as each cut lands.
   - ADR cross-refs and status bumps as implementation changes.
