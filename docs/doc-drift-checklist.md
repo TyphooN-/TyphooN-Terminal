@@ -3,7 +3,7 @@
 **Purpose**: Track mismatches between current implementation (code + runtime behavior) and documentation.  
 **Style**: Prefer semantic names over old "feature parity" sequencing. Update on changes.  
 **Maintenance**: Before major work, run searches for "stub|pending|not yet|parity|future|missing" in docs/ + cross-check key code areas. Mark items [x] when fixed and re-commit.  
-**Last full sweep**: 2026-07 (broader sweep + L3 foundation + living checklist generation)  
+**Last full sweep**: 2026-07-02 (broker-modular capability model + typed provenance + WS self-heal doc sync; ARCHITECTURE crate-structure + ADR-count corrections; README ADR index + RESEARCH_PACKET broker-scope/key drift). Prior: 2026-07 (broader sweep + L3 foundation + living checklist generation).  
 **Status legend**:
 - [ ] Open drift (code ahead or doc outdated)
 - [x] Fixed / in sync
@@ -19,6 +19,9 @@
 - [x] MTF Grid, depth profile, Bookmap — added explicit bullets to ROADMAP Phase 4 (floating windows + depth profile overlay).
 - [x] Symbol Explorer described as catalog browser (not full scanner) — still accurate in ARCHITECTURE.
 - [x] Research packet / indicator surfaces — matches code.
+- [x] ARCHITECTURE Project Structure lists the 6-crate workspace (added `typhoon-broker-runtime` / `typhoon-chart-ui` / `typhoon-research-ui` per ADR-125 Complete) + engine `broker/protocol.rs` + `capabilities.rs`; ADR count corrected 115→106 (2026-07-02).
+- [x] docs/adr/README.md ADR count corrected 120→106; recent ADRs (121–124, 127–129) added to thematic groups; README ADR index extended 126→129 (2026-07-02).
+- [x] RESEARCH_PACKET.md: dropped removed `DARWINEX`/`TASTY` scope labels, fixed D1 bar-key probe (`mt5:`→`kraken-equities:`), and empty-cache/data-source hints (MT5SYNC→BARDATA) per ADR-111 scope reduction (2026-07-02).
 
 ## 2. Broker & Market Data (L1/L2/L3, Sync, Tiers)
 
@@ -31,6 +34,8 @@
 - [x] Sync schedulers / O(1) / coverage-first / AIMD / pending-work (ADRs 029, 087, 094, 098, 102, 107, 128) — language generally aligns with current bounded queues, backfill-complete markers, etc.
 - [~] Many "pending work", "missing bars", "gap fill" references in sync ADRs — mostly accurate descriptions of ongoing mechanisms, not outdated claims.
 - [x] v1 public_book.rs kept for legacy/compat — correctly noted in ADR-109.
+- [x] Typed broker capability model (`typhoon-engine::broker::capabilities` — `MarketDataSupport`/`DepthAssetScope`/`BrokerMarketDataCapabilities`, exhaustive over `OrderBroker`) + typed `MarketDataProvenance`/`MarketDataTransport` — documented in ADR-129 ("Broker Capability Model (code)") and reflected in ARCHITECTURE data-sources note (2026-07-02).
+- [x] Self-healing reconnect + heartbeat half-open watchdog across all four Kraken WS lanes (ticker/book/trade/level3) — documented in ADR-129 reconnect/half-open bullets (2026-07-02).
 
 ## 3. Charts, UI & Visualization
 

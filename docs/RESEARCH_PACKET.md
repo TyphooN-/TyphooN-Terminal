@@ -81,8 +81,9 @@ Symbols: CC, NCLH
 ```
 
 - **Scope** comes from `self.broker_scope_label()` — reflects the active
-  event/data scope (`ALL`, `ALPACA`, `DARWINEX`, `TASTY`, `KRAKEN`, or
-  `POSITIONS`) when the packet was built.
+  event/data scope (`ALL`, `ALPACA`, `KRAKEN`, or `POSITIONS`) when the packet
+  was built. (`DARWINEX`/`TASTY` scopes were removed with the Kraken + Alpaca
+  scope reduction — ADR-111.)
 - **Generated** is a UTC ISO-8601 timestamp taken at packet-build time.
 - **Symbols** is the joined list the user passed.
 
@@ -188,8 +189,8 @@ trades**. Form-4 transaction codes `P` and `S` are treated as buy and sell.
 
 Source: daily OHLCV bars from the bar cache. Key probed in this order:
 
-1. `mt5:{sym}:1Day`    — MT5 (BarCacheWriter sole producer, 3-part key)
-2. `alpaca:{sym}:1Day` — Alpaca daily bars
+1. `kraken-equities:{sym}:1Day` — Kraken Securities / xStocks daily bars
+2. `alpaca:{sym}:1Day`          — Alpaca daily bars
 
 The first key with **≥20 bars** wins. Emitted metrics: last close, 20d / 60d /
 252d returns, ATR(14) (Wilder-smoothed), VaR 95% (from
@@ -1428,8 +1429,7 @@ INSUFFICIENT_DATA). Body reports bars_used, up/down day counts,
 ratio, avg/median up & down volume, and the single largest
 up-day and down-day volume bars in the window. Gracefully emits
 INSUFFICIENT_DATA when the HP cache was populated without volume
-(some MT5 symbols have the volume field at 0) — the first broker
-to populate volume on an LAN peer backfills the whole network.
+(some sources leave the volume field at 0).
 Complements RSTATS / AUTOCOR / DAYRANGE (all price-only) with
 the one volume-derived HP surface in this feature family.
 Source: ADR-079 VOLRATIO window.
@@ -6269,7 +6269,7 @@ otherwise treat each `--print` invocation as a fresh conversation.
 | `research::get_skspec` | SQLite `research_skspec` | ADR-079 SKSPEC window (30-bar rolling skewness spectrum: mean/std/min/max/range — first skewness-stability diagnostic, complements RETQUANT full-window skew) |
 | `research::get_automi` | SQLite `research_automi` | ADR-079 AUTOMI window (auto-mutual-information at lags 1/5/10 via k=8 equiprobable histogram binning — first information-theoretic ACF, catches nonlinear dependence invisible to classical ACF) |
 | `research::get_ingested_articles` | SQLite `research_web_articles` | ADR-080 INGEST_RESEARCH window + packet Return Path footer; ADR-096 built-in AI auto-ingest (FIFO bag of web-search articles echoed back from AI agents, URL-deduped, timestamp-wins, capped at 50 per symbol) |
-| `cache.get_bars_raw` | SQLite bar cache | MT5SYNC, BARDATA, chart loads |
+| `cache.get_bars_raw` | SQLite bar cache | BARDATA, chart loads, broker sync |
 | `self.broker_scope_label()` | in-memory | active broker flags |
 
 If a given source is empty, the corresponding sub-block is silently omitted
@@ -6293,7 +6293,7 @@ If a given source is empty, the corresponding sub-block is silently omitted
 - **Missing `--session-id` UUID** — if for any reason `claude_code_session_id`
   is empty, a fresh UUID is generated on the next Send.
 - **Empty bar cache** — price & volatility sub-block is replaced with a
-  "run MT5SYNC or BARDATA" hint; everything else still emits.
+  "Run BARDATA to populate" hint; everything else still emits.
 
 ---
 

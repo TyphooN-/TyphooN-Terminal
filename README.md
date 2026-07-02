@@ -311,6 +311,9 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [124](docs/adr/124-depth-era-promotion-must-not-redefine-price-scale.md) | Depth-Era Promotion Must Not Redefine the Price Scale |
 | [125](docs/adr/125-native-crate-boundary-plan.md) | Native Crate Boundary Plan |
 | [126](docs/adr/126-primary-assist-broker-selection.md) | Primary / Assist Broker Selection |
+| [127](docs/adr/127-broker-message-protocol-decoupling.md) | Broker Message Protocol Decoupling |
+| [128](docs/adr/128-sync-coverage-levers.md) | Sync Coverage Levers (Market-Closed Gate + Reachable %) |
+| [129](docs/adr/129-l1-l2-l3-market-data-support.md) | L1 / L2 / L3 Market Data Support (Broker-Modular) |
 
 ---
 
