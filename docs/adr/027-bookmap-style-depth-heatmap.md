@@ -31,7 +31,7 @@ Kraken depth streaming is guarded to Kraken spot-pair symbols only. The UI
 checks the loaded Kraken spot universe before enabling every live stream entrypoint
 (Start Stream, Apply to Stream, Bookmap Stream Depth, and L3 start), so equity
 symbols and unsupported broker symbols cannot accidentally start Kraken L2/L3
-streams.
+streams. Snapshot fetch controls remain available separately from live-stream gates.
 
 Retained streaming L2/L3 history is not part of the current Bookmap window scope.
 The implemented view is a live/latest-depth visualizer with interaction state,

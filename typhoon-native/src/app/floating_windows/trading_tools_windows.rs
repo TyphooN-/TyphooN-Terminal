@@ -28,17 +28,18 @@ impl TyphooNApp {
                         .unwrap_or_default();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("Order Flow: {}", sym)).strong());
-                        let l2_supported =
-                            kraken_bookmap_stream_supported(&sym, &self.kraken_pairs);
-                        if ui
-                            .add_enabled(l2_supported, egui::Button::new("Fetch L2"))
-                            .clicked()
-                            && !sym.is_empty()
-                        {
+                        let fetch_button = ui.add_enabled(
+                            !sym.is_empty(),
+                            egui::Button::new("Fetch L2 Snapshot"),
+                        );
+                        if fetch_button.clicked() {
                             let _ = self.broker_tx.send(BrokerCmd::GetOrderbook {
                                 symbol: sym.clone(),
                             });
                         }
+                        fetch_button.on_hover_text(
+                            "Fetch a one-shot L2 snapshot when available; live Kraken streaming remains spot-pair gated.",
+                        );
                         let stream_supported =
                             kraken_bookmap_stream_supported(&sym, &self.kraken_pairs);
                         let stream_button =
