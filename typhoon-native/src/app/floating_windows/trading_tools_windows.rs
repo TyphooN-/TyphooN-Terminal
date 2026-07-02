@@ -612,10 +612,14 @@ impl TyphooNApp {
                                 let provider_note =
                                     orderbook_provider_badge(&v, &sym, checksum_status, is_l3);
                                 let l3_note = if is_l3 { " · per-order" } else { "" };
+                                // Density note (parity with Bookmap top-% warning)
+                                let max_top = bids.iter().chain(asks.iter()).map(|e| level_size(e)).fold(0.0_f64, f64::max).max(1e-9);
+                                let top_dens = ((bids.first().map(level_size).unwrap_or(0.0).max(asks.first().map(level_size).unwrap_or(0.0)) / max_top) * 100.0).round() as i32;
+                                let dens_note = if top_dens >= 40 { format!(" · top {}% dense", top_dens) } else { String::new() };
                                 ui.label(
                                     egui::RichText::new(format!(
-                                        "Levels: B{} A{} · {} {}{}",
-                                        bid_cnt, ask_cnt, provider_note, age_note, l3_note
+                                        "Levels: B{} A{} · {} {}{}{}",
+                                        bid_cnt, ask_cnt, provider_note, age_note, l3_note, dens_note
                                     ))
                                     .small()
                                     .color(ob_dim),
