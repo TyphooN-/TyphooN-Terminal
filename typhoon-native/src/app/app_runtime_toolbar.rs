@@ -293,7 +293,7 @@ impl TyphooNApp {
                                     self.kraken_orderbook_ws_symbol = orderbook_symbol.clone();
                                     let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
                                         symbol: orderbook_symbol.clone(),
-                                        depth: 100,
+                                        depth: self.dom_depth,
                                         publish_dom: true,
                                     });
                                 }

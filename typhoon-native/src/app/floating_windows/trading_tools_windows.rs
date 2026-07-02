@@ -46,7 +46,7 @@ impl TyphooNApp {
                         if stream_button.clicked() && !sym.is_empty() {
                             let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
                                 symbol: sym.clone(),
-                                depth: 100,
+                                depth: self.dom_depth,
                                 publish_dom: true,
                             });
                         }
@@ -447,7 +447,7 @@ impl TyphooNApp {
                                 ui.label("Depth:");
                                 let mut d = self.dom_depth as i32;
                                 ui.add(egui::Slider::new(&mut d, 10..=250).step_by(10.0));
-                                self.dom_depth = d.clamp(10, 500) as usize;
+                                self.dom_depth = d.clamp(10, 250) as usize;
                                 if ui.button("Apply to Stream").clicked() && !dom_sym.is_empty() {
                                     // Use preferred depth when (re)starting
                                     let _ = self.broker_tx.send(BrokerCmd::KrakenStartOrderbookWs {
