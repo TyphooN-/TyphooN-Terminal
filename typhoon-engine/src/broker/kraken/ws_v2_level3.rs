@@ -7,7 +7,10 @@
 
 use std::time::Duration;
 
-use super::ws_v2::{KRAKEN_WS_V2_LEVEL3_URL, build_ws_v2_subscribe_frame};
+use super::ws_v2::{
+    KRAKEN_WS_V2_LEVEL3_URL, KRAKEN_WS_V2_STALE_AFTER, build_ws_v2_subscribe_frame,
+    ws_v2_connection_is_stale,
+};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -116,6 +119,9 @@ async fn run_level3_streamer_once(
     // (provides implicit aggregated L2 projection for cross-check / downstream consumers, per ADR-109 Phase 5).
     // Fall back to sim if no token or empty.
     let mut tick = 0u64;
+    // Half-open watchdog (auth path): refreshed by any received frame; a lapse
+    // past KRAKEN_WS_V2_STALE_AFTER forces a reconnect via the outer loop.
+    let mut last_frame = std::time::Instant::now();
     loop {
         if l3_tx.is_closed() {
             return Ok(());
@@ -125,6 +131,7 @@ async fn run_level3_streamer_once(
         let received = tokio::time::timeout(Duration::from_millis(1500), stream.next()).await;
         match received {
             Ok(Some(Ok(Message::Text(text)))) => {
+                last_frame = std::time::Instant::now();
                 for delta in parse_l3_message(&text) {
                     // Full real-feed CRC on live deltas (when checksum present; applies to real auth + sim test paths)
                     let validated = if delta.checksum.is_some() {
@@ -150,6 +157,18 @@ async fn run_level3_streamer_once(
                     }
                 }
             }
+            // Auth path: any non-text frame (heartbeat/ping/pong) is liveness.
+            Ok(Some(Ok(_))) if token.is_some() => {
+                last_frame = std::time::Instant::now();
+            }
+            // Auth path: surface hard failures so the outer loop reconnects
+            // (mirrors ticker/book/trade). The demo/sim branch below is untouched.
+            Ok(Some(Err(e))) if token.is_some() => {
+                return Err(format!("L3 ws read error: {e}"));
+            }
+            Ok(None) if token.is_some() => {
+                return Err("L3 ws stream ended".into());
+            }
             _ => {
                 // Fallback/demo sim when no real data or no token -- route through CRC validation for full path test
                 if token.is_none() {
@@ -170,6 +189,12 @@ async fn run_level3_streamer_once(
                     tick += 1;
                     tokio::time::sleep(Duration::from_millis(300)).await;
                     continue;
+                }
+                // Real auth path with no frame this interval (timeout). Kraken v2
+                // heartbeats keep an alive feed non-silent, so a lapse past the
+                // window means a half-open socket — reconnect.
+                if ws_v2_connection_is_stale(last_frame.elapsed(), KRAKEN_WS_V2_STALE_AFTER) {
+                    return Err("L3 ws stale: no frame within window; reconnecting".into());
                 }
             }
         }
