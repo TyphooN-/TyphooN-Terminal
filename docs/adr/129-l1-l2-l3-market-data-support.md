@@ -9,7 +9,7 @@
 - bookmap richer: per-order markers + scroll list pane (order_id, price/qty, side color, copy id); runtime `received_at_ms` for age persistence.
 - depth profile: "L3 depth" label (with distinct tint) when L3-like data detected; explicit distinction from L2.
 - Unit test for L3 state/apply/checksum. All prior + this deeper slice verified.
-- This slice (continue): full real-feed CRC on live deltas, order-age coloring (bars+list), list interactions (clickable + age), MTF parity (propagation + comments). Verified.
+- Continued polish: public-trade live execution markers on chart/right axis, watchlist L1 size freshness parity, Bookmap L3 selected-order persistence/header/heatmap highlight, shared DOM depth preference across stream entrypoints, L3-aware DOM metrics, and L3 entitlement/status surfacing.
 ---
 **Date:** 2026-07-01 (updated during implementation)
 
@@ -67,27 +67,27 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
 ### L2 (Level 2 — Depth/Orderbook)
 - [x] Kraken v2 `book` with CRC, exact wire tokens, bounded resub.
 - [x] Alpaca crypto snapshots wired to DOM.
-- Polish 3: DOM + Bookmap — update age, level count, top-N control, volume-weighted imbalance, spread/mid, top sizes (DOM enhanced; Bookmap minimal updates).
+- Polish 3: DOM + Bookmap — update age, level count, top-N control, volume-weighted imbalance, spread/mid, top sizes, hover tooltips, density scaling, provider/status badges.
 - Polish 5: Alpaca crypto L2 freshness + auto-refresh on symbol focus.
-- Extensions: "Top N" slider, one-click stream start (added), cumulative/imbalance visuals hardened.
+- Extensions completed: shared DOM depth slider/preference used by toolbar L2, Order Flow Stream L2, Bookmap Stream Depth, and Orderbook DOM Apply/Start Stream; cumulative/imbalance visuals hardened; DOM metrics read L3 `limit_price`/`order_qty` as well as L2 `price`/`size`.
 
 ### L3 (Level 3)
-|- [x] Full `ws_v2_level3.rs`: `KrakenL3Level`/`Delta`/`State`, `parse_l3_message`, `run_level3_streamer` + `run_level3_streamer_once`.
-|- [x] Token/auth wiring (Option<String> passed to subscribe; real WS path vs sim fallback for demo).
-|- [x] Real-feed CRC32: `compute_l3_checksum`, `KrakenL3ChecksumError`, `apply_delta_with_checksum` (candidate clone + commit only on match; full on live deltas when present).
-|- [x] Per-order state: `KrakenL3State` with add/mod/delete by order_id; maintained in streamer + runtime/commands; exposed via status events.
-|- [x] Real WS consume + emit same `KrakenOrderbookUpdate` + `KrakenBookQuoteTick` paths for zero-delta downstream (DOM/Bookmap/charts).
-|- [x] Bookmap richer: per-order markers, scroll list pane (order_id/price/qty/side + copy), age coloring (newer = brighter; uses wire timestamp + runtime `received_at_ms` for persistence even if wire ts absent), clickable row interactions + age labels ("new/mid/old").
-|- [x] Depth profile integration: 25 levels propagated, L3 detection/heuristic, "L3 depth" label with distinct tint in overlay.
-|- [x] MTF parity: depth/L3 updates flow to all matching charts (incl. MTF Grid) via `chart_by_bare`; comments + notes.
-|- [x] Status + events: checksum OK/MISMATCH, connected/subscribed, "L3 (real-feed CRC + age + MTF)".
-|- [x] Unit test: `l3_state_apply_and_checksum_basic` (snapshot → modify → delete; CRC exercise).
-|- Polish 6 / limits: Clear docs (auth + entitlements required for real; sim for demo); no auto-start.
+- [x] Full `ws_v2_level3.rs`: `KrakenL3Level`/`Delta`/`State`, `parse_l3_message`, `run_level3_streamer` + `run_level3_streamer_once`.
+- [x] Token/auth wiring (Option<String> passed to subscribe; real WS path vs sim fallback for demo).
+- [x] Real-feed CRC32: `compute_l3_checksum`, `KrakenL3ChecksumError`, `apply_delta_with_checksum` (candidate clone + commit only on match; full on live deltas when present).
+- [x] Per-order state: `KrakenL3State` with add/mod/delete by order_id; maintained in streamer + runtime/commands; exposed via status events.
+- [x] Real WS consume + emit same `KrakenOrderbookUpdate` + `KrakenBookQuoteTick` paths for zero-delta downstream (DOM/Bookmap/charts).
+- [x] Bookmap richer: per-order bid+ask markers, selected-order persistence on the Bookmap window, selected id in header with clear action, heatmap marker highlight/ring, scroll list pane (order_id/price/qty/side + copy), age coloring (newer = brighter; uses wire timestamp + runtime `received_at_ms` for persistence even if wire ts absent), clickable row interactions + age labels ("new/mid/old").
+- [x] Depth profile integration: 25 levels propagated, L3 detection/heuristic, "L3 depth" label with distinct tint in overlay.
+- [x] MTF parity: depth/L3 updates flow to all matching charts (incl. MTF Grid) via `chart_by_bare`; comments + notes.
+- [x] Status + events: checksum OK/MISMATCH, connected/subscribed, "L3 (real-feed CRC + age + MTF)", explicit no-token/auth-entitlement messages, and native `kraken_l3_status` tracking from broker OrderResult messages.
+- [x] Unit test: `l3_state_apply_and_checksum_basic` (snapshot → modify → delete; CRC exercise).
+- Polish 6 / limits: Clear docs + UI status (auth + entitlements required for real; sim for demo); no auto-start.
 
 ### Cross-cutting (Polish 4, 7 + more)
-|- Polish 4: Wire Kraken book sizes into richer `KrakenBookQuoteTick` (or direct chart path) + use in apply_live_quote.
-|- Polish 7: Performance (throttle rich updates), persisting depth pref (simple egui state or config), better staleness badges.
-|- Additional completeness: 
+- Polish 4: Wire Kraken book sizes into richer `KrakenBookQuoteTick` (or direct chart path) + use in apply_live_quote.
+- Polish 7: Performance (throttle rich updates), persisting depth pref (simple egui state or config), better staleness badges.
+- Additional completeness: 
   - Chart tooltips with full rich L1.
   - DOM top-of-book sizes feeding L1 paths.
   - Broker-specific badges ("Kraken WS L2", "Alpaca Snapshot").
@@ -119,6 +119,6 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
 ## Conclusion
 With this cut, L1/L2 presentation is substantially richer for both brokers. L3 has a complete foundation: full per-order parser/streamer (real + sim), CRC32 validation on live deltas, per-order state maintenance, auth token wiring, Bookmap per-order viz + age coloring + interactions, depth profile integration, MTF parity via shared propagation, and tests. Real L3 remains gated by Kraken entitlements (sim/demo path always available).
 
-Future work is incremental (deeper live-only features once entitled, full dedicated L3 status panel, order-age persistence, more interactions like highlight-to-chart).
+Future work is incremental: deeper live-only features once entitled, a dedicated L3 status/budget panel if real L3 becomes routinely used, retained depth-history/ring-buffer heatmap only after feed entitlement + texture budget exist, and optional click-to-chart/focus affordances from selected L3 orders.
 
 Status: **Accepted / implemented (2026-07)**. L1/L2/L3 foundation + listed polish complete and verified.

@@ -670,7 +670,11 @@ pub async fn handle_kraken_ws_command(
             };
             if let Some(ref t) = maybe_token {
                 let _ = update_msg_tx.send(BrokerMsg::OrderResult(format!(
-                    "Kraken L3: token obtained (len={}), using auth path", t.len()
+                    "Kraken L3: token obtained for {display_symbol} (len={}), using auth-entitled path", t.len()
+                )));
+            } else {
+                let _ = update_msg_tx.send(BrokerMsg::OrderResult(format!(
+                    "Kraken L3: no websocket token for {display_symbol}; real L3 requires auth entitlements, keeping L1/L2 preferred"
                 )));
             }
             tokio::spawn(async move {
@@ -692,7 +696,7 @@ pub async fn handle_kraken_ws_command(
                         .await;
                     });
                     let _ = update_msg_tx.send(BrokerMsg::OrderResult(format!(
-                        "Kraken L3 streamer starting for {} (real wiring + token path)", display_symbol
+                        "Kraken L3 streamer starting for {} (CRC state + entitlement-gated real feed)", display_symbol
                     )));
                     let mut l3_state = typhoon_engine::broker::kraken::KrakenL3State::default();
                     let mut retry = false;

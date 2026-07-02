@@ -57,7 +57,7 @@ No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
 
 Broker & data scope is **Kraken + Alpaca only** (ADR-111). Equity bars merge a trusted tier against an independent corroborator (ADR-112/113), with known stock splits back-adjusted from a curated fallback when the FMP split feed is unavailable (ADR-122).
 
-Recent market data work (ADR-129/109): Strong L1 (ticker/quotes with sizes) for both brokers. Kraken L2 (v2 book with atomic CRC32, exact wire tokens). L3 foundation (per-order `ws_v2_level3.rs`, real/sim streamer + token, CRC, KrakenL3State). Depth profile (live bins + overlay) and richer Bookmap (per-order list, markers, age coloring, interactions) on focused symbols. M1/M5 are valid low-TF targets for Kraken Spot and Equities (assist rows like Alpaca/Yahoo remain non-target/stale for those TFs).
+Recent market data work (ADR-129/109): Strong L1 (ticker/quotes/trades with sizes and freshness guards) for both brokers. Kraken L2 (v2 book with atomic CRC32, exact wire tokens, shared DOM depth preference across toolbar/DOM/Order Flow/Bookmap stream entrypoints). L3 foundation (per-order `ws_v2_level3.rs`, real/sim streamer + token/no-token entitlement status, CRC, KrakenL3State). Depth profile (live bins + overlay) and richer Bookmap (per-order bid/ask markers, selected-order persistence/highlight, age coloring, interactions) on focused symbols. M1/M5 are valid low-TF targets for Kraken Spot and Equities (assist rows like Alpaca/Yahoo remain non-target/stale for those TFs).
 
 | Tier | Source | Coverage |
 |------|--------|----------|

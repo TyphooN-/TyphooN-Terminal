@@ -197,6 +197,10 @@ impl TyphooNApp {
             let _ = self.broker_tx.send(BrokerCmd::KrakenGetBalance);
         }
 
+        if msg_lc.starts_with("kraken l3:") || msg_lc.contains("kraken l3 streamer") {
+            self.kraken_l3_status = msg.clone();
+        }
+
         if msg_lc.contains("limit") || msg_lc.contains("406") || msg_lc.contains("subscription limit") {
             self.alpaca_sub_limit_hit_at = Some(std::time::Instant::now());
         }

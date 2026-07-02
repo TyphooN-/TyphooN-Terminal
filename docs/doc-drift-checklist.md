@@ -22,9 +22,9 @@
 
 ## 2. Broker & Market Data (L1/L2/L3, Sync, Tiers)
 
-- [x] L3 foundation (ws_v2_level3.rs, streamer with token/real/sim, CRC32 apply_with_checksum, KrakenL3State, received_at_ms, per-order, status, projection to same paths, Bookmap/depth integration, tests) — well covered in ADR-129 + ADR-109 Update sections.
-- [x] L2 v2 book (CRC, exact tokens, 25 levels, v1 kept for compat) — documented; historical "pending" status lines in ADR-109 cleaned in 2026-07.
-- [x] L1 (ticker/quotes with sizes, O(1) dispatch) — consistent.
+- [x] L3 foundation (ws_v2_level3.rs, streamer with token/real/sim, CRC32 apply_with_checksum, KrakenL3State, received_at_ms, per-order, token/no-token entitlement status, projection to same paths, Bookmap/depth integration, tests) — covered in ADR-129 + ADR-109 Update sections.
+- [x] L2 v2 book (CRC, exact tokens, 25 levels, shared DOM depth preference across user-facing stream entrypoints, v1 kept for compat) — documented; historical "pending" status lines in ADR-109 cleaned in 2026-07.
+- [x] L1 (ticker/quotes/public trades with sizes, O(1) dispatch, watchlist/chart freshness parity) — consistent.
 - [x] Kraken Futures bars/sync — present in code (bar_fetch) and docs.
 - [x] Alpaca as assist/fallback + trading (tier-autotuning, catalog-breadth) — matches ADRs 087/112/113.
 - [x] M1/M5 rules (Kraken Spot/Equities valid low-TF targets; assist rows non-target) — live public trades WS + forming vol + WS-fresh + sync priority now wired for low-TF MTF. Referenced + implemented in code paths.

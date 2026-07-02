@@ -16,22 +16,27 @@
 The terminal has per-symbol Bookmap windows, `/bookmap SYMBOL` command routing,
 an orderbook DOM, and an Alpaca crypto orderbook snapshot path
 (`AlpacaBroker::get_orderbook`). The current Bookmap view supports richer per-order
-rendering for L3 (markers, scroll list with order_id/price/qty/age, clickable
-interactions), live depth profile overlays (25 bins + "L3 depth" label with tint
-distinction), and renders the latest live orderbook snapshot only when the snapshot
-symbol matches the target Bookmap window. Kraken L3 foundation (ws_v2_level3 with
-CRC, KrakenL3State, received_at_ms for age) feeds the same update paths.
+rendering for L3 (bid/ask markers, selected-order persistence, selected marker
+highlight/ring, header selected-id + clear action, scroll list with
+order_id/price/qty/age, click-to-copy/select interactions), live depth profile
+overlays (25 bins + "L3 depth" label with tint distinction), and renders the
+latest live orderbook snapshot only when the snapshot symbol matches the target
+Bookmap window. Kraken L3 foundation (ws_v2_level3 with CRC, KrakenL3State,
+received_at_ms for age) feeds the same update paths. Bookmap `Stream Depth`, the
+Orderbook DOM, toolbar L2, and Order Flow Stream L2 share the same session
+`dom_depth` preference instead of hardcoded depth values.
 
 Kraken depth streaming is guarded to Kraken spot-pair symbols only. The UI
 checks the loaded Kraken spot universe before enabling live depth, so equity
 symbols and unsupported broker symbols cannot accidentally start Kraken L2
 streams.
 
-Retained streaming L2 history is not part of the current Bookmap window scope.
-It requires broker data entitlements and a dedicated ring-buffer/texture pipeline
-that is separate from the normal chart renderer, so it should be reopened as a
-new implementation ADR only when the feed entitlement and texture budget are
-available.
+Retained streaming L2/L3 history is not part of the current Bookmap window scope.
+The implemented view is a live/latest-depth visualizer with interaction state,
+not a historical heatmap texture. Retained history requires broker data
+entitlements and a dedicated ring-buffer/texture pipeline that is separate from
+the normal chart renderer, so it should be reopened as a new implementation ADR
+only when the feed entitlement and texture budget are available.
 
 ## Original Decision
 
