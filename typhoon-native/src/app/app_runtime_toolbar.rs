@@ -271,11 +271,29 @@ impl TyphooNApp {
                         let orderbook_symbol = bare_symbol_from_key(&source_state.0)
                             .trim_end_matches(".EQ")
                             .to_ascii_uppercase();
-                        let orderbook_symbol_is_public_kraken =
-                            typhoon_engine::core::kraken::to_kraken_pair_lossy(&orderbook_symbol).is_some();
-                        let show_kraken_l2 = self.kraken_enabled
-                            && !orderbook_symbol.is_empty()
-                            && orderbook_symbol_is_public_kraken;
+                        let orderbook_symbol_key = typhoon_engine::core::kraken::normalize_pair_symbol(
+                            &normalize_market_data_symbol(&orderbook_symbol),
+                        )
+                        .replace('/', "");
+                        let orderbook_symbol_is_public_kraken = !orderbook_symbol.is_empty()
+                            && (self.kraken_pairs.iter().any(|(pair, display)| {
+                                typhoon_engine::core::kraken::normalize_pair_symbol(
+                                    &normalize_market_data_symbol(pair),
+                                )
+                                .replace('/', "")
+                                .eq_ignore_ascii_case(&orderbook_symbol_key)
+                                    || typhoon_engine::core::kraken::normalize_pair_symbol(
+                                        &normalize_market_data_symbol(display),
+                                    )
+                                    .replace('/', "")
+                                    .eq_ignore_ascii_case(&orderbook_symbol_key)
+                            })
+                                || (self.kraken_pairs.is_empty()
+                                    && typhoon_engine::core::kraken::to_kraken_pair_lossy(
+                                        &orderbook_symbol,
+                                    )
+                                    .is_some()));
+                        let show_kraken_l2 = self.kraken_enabled && orderbook_symbol_is_public_kraken;
                         if show_kraken_l2 {
                             let is_streaming = self
                                 .kraken_orderbook_ws_symbol
@@ -639,19 +657,28 @@ mod session_colour_tests {
     fn session_colour_handles_alpaca_and_kraken_vocabularies() {
         // Alpaca US-equities clock.
         assert_eq!(session_status_color("US equities OPEN · closes in 3h"), UP);
-        assert_eq!(session_status_color("US equities PRE-MARKET · Core in 1h"), EXTENDED);
+        assert_eq!(
+            session_status_color("US equities PRE-MARKET · Core in 1h"),
+            EXTENDED
+        );
         assert_eq!(
             session_status_color("US equities AFTER-HOURS · closes in 3h 19m"),
             EXTENDED
         );
-        assert_eq!(session_status_color("US equities CLOSED · opens in 10h 30m"), DOWN);
+        assert_eq!(
+            session_status_color("US equities CLOSED · opens in 10h 30m"),
+            DOWN
+        );
         // Kraken xStocks — CORE is the open session; the "next after-hours"
         // countdown after the · must NOT pull it into the extended bucket.
         assert_eq!(
             session_status_color("Kraken xStocks CORE · next after-hours in 2h"),
             UP
         );
-        assert_eq!(session_status_color("Kraken xStocks PRE · next core in 30m"), EXTENDED);
+        assert_eq!(
+            session_status_color("Kraken xStocks PRE · next core in 30m"),
+            EXTENDED
+        );
         assert_eq!(
             session_status_color("Kraken xStocks AFTER · next overnight in 3h 19m"),
             EXTENDED

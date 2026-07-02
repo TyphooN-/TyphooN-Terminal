@@ -69,7 +69,7 @@ Update and implement the full plan below (covering previous "1-7" polish list + 
 - [x] Alpaca crypto snapshots wired to DOM.
 - [x] Polish 3: DOM + Bookmap — update age, level count, top-N control, volume-weighted imbalance, spread/mid, top sizes, hover tooltips, density scaling, provider/status badges.
 - [x] Polish 5: Alpaca crypto L2 snapshots remain snapshot-scoped and Order Flow/DOM snapshot fetch controls stay available; Kraken streaming L2 is focused/on-demand and spot-pair gated only.
-- [x] Extensions completed: shared DOM depth slider/preference used by toolbar L2, Order Flow Stream L2, Bookmap Stream Depth, and Orderbook DOM Apply/Start Stream; cumulative/imbalance visuals hardened; DOM metrics read L3 `limit_price`/`order_qty` as well as L2 `price`/`size`.
+- [x] Extensions completed: shared DOM depth slider/preference used by toolbar L2, Order Flow Stream L2, Bookmap Stream Depth, and Orderbook DOM Apply/Start Stream; toolbar L2 uses the same loaded Kraken-pair support guard as the floating windows; cumulative/imbalance visuals hardened; DOM metrics read L3 `limit_price`/`order_qty` as well as L2 `price`/`size`.
 
 ### L3 (Level 3)
 - [x] Full `ws_v2_level3.rs`: `KrakenL3Level`/`Delta`/`State`, `parse_l3_message`, `run_level3_streamer` + `run_level3_streamer_once`.
