@@ -246,6 +246,7 @@ impl TyphooNApp {
         for window in std::mem::take(&mut self.bookmap_windows) {
             let sym = window.symbol;
             let mut open = window.open;
+            let mut selected_order_id = window.selected_order_id;
             let title = format!("Bookmap Heatmap — {sym}");
             egui::Window::new(title)
                         .id(egui::Id::new(("bookmap_heatmap", sym.as_str())))
@@ -287,6 +288,7 @@ impl TyphooNApp {
                                 && render_live_orderbook_heatmap(
                                     ui,
                                     &self.orderbook_result,
+                                    &mut selected_order_id,
                                     bm_green,
                                     bm_red,
                                     bm_dim,
@@ -408,7 +410,11 @@ impl TyphooNApp {
                             }
                         });
             if open {
-                open_bookmaps.push(BookmapWindowState { symbol: sym, open, selected_order_id: None });
+                open_bookmaps.push(BookmapWindowState {
+                    symbol: sym,
+                    open,
+                    selected_order_id,
+                });
             }
         }
         self.bookmap_windows = open_bookmaps;
@@ -816,7 +822,7 @@ impl TyphooNApp {
                                 }
                             });
                         if ui.button("Transpile").clicked() && !self.compiler_source.is_empty() {
-                            use typhoon_transpiler::transpile::{SourceLanguage, transpile};
+                            use typhoon_transpiler::transpile::{transpile, SourceLanguage};
                             let from = match self.compiler_language {
                                 0 => SourceLanguage::Mql5,
                                 1 => SourceLanguage::Mql4,

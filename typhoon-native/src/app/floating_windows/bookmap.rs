@@ -39,6 +39,7 @@ pub(super) fn kraken_bookmap_stream_supported(
 pub(super) fn render_live_orderbook_heatmap(
     ui: &mut egui::Ui,
     orderbook_json: &str,
+    selected_order_id: &mut Option<String>,
     bid_color: egui::Color32,
     ask_color: egui::Color32,
     dim_color: egui::Color32,
@@ -54,20 +55,38 @@ pub(super) fn render_live_orderbook_heatmap(
 
     // Support both L2 ("price"/"size") and L3 ("limit_price"/"order_qty", "order_id")
     let get_price = |level: &serde_json::Value| -> f64 {
-        level["limit_price"].as_f64().or_else(|| level["price"].as_f64()).unwrap_or(0.0)
+        level["limit_price"]
+            .as_f64()
+            .or_else(|| level["price"].as_f64())
+            .unwrap_or(0.0)
     };
     let get_size = |level: &serde_json::Value| -> f64 {
-        level["order_qty"].as_f64().or_else(|| level["size"].as_f64()).unwrap_or(0.0)
+        level["order_qty"]
+            .as_f64()
+            .or_else(|| level["size"].as_f64())
+            .unwrap_or(0.0)
     };
 
     // Order-age for L3 coloring/interactions: parse ts -> age secs (smaller = newer)
     let get_age_secs = |level: &serde_json::Value| -> f64 {
-        level.get("timestamp").and_then(|t| t.as_str()).and_then(|s| s.parse::<f64>().ok()).map(|ts| (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64() - ts).max(0.0)).unwrap_or(8.0)
+        level
+            .get("timestamp")
+            .and_then(|t| t.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|ts| {
+                (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs_f64()
+                    - ts)
+                    .max(0.0)
+            })
+            .unwrap_or(8.0)
     };
 
-    let is_l3 = v.get("is_l3").and_then(|b| b.as_bool()).unwrap_or(false) ||
-                bids.iter().any(|b| b.get("order_id").is_some()) ||
-                asks.iter().any(|a| a.get("order_id").is_some());
+    let is_l3 = v.get("is_l3").and_then(|b| b.as_bool()).unwrap_or(false)
+        || bids.iter().any(|b| b.get("order_id").is_some())
+        || asks.iter().any(|a| a.get("order_id").is_some());
     let order_count_bid: usize = if is_l3 { bids.len() } else { 0 };
     let order_count_ask: usize = if is_l3 { asks.len() } else { 0 };
 
@@ -82,9 +101,15 @@ pub(super) fn render_live_orderbook_heatmap(
     let top_bid_size = bids.first().and_then(|b| b["size"].as_f64()).unwrap_or(0.0);
     let top_ask_size = asks.first().and_then(|a| a["size"].as_f64()).unwrap_or(0.0);
     let header = if is_l3 {
-        format!("Live L3 per-order — {} ({} orders bid, {} ask)", ts, order_count_bid, order_count_ask)
+        format!(
+            "Live L3 per-order — {} ({} orders bid, {} ask)",
+            ts, order_count_bid, order_count_ask
+        )
     } else if top_bid_size > 0.0 || top_ask_size > 0.0 {
-        format!("Live L2 depth — {}  (top b{:.2} a{:.2})", ts, top_bid_size, top_ask_size)
+        format!(
+            "Live L2 depth — {}  (top b{:.2} a{:.2})",
+            ts, top_bid_size, top_ask_size
+        )
     } else {
         format!("Live L2 depth — {}", ts)
     };
@@ -183,7 +208,10 @@ pub(super) fn render_live_orderbook_heatmap(
     // Hover tooltip with top levels + sizes (rich L2/L3)
     if resp.hovered() {
         let mut tip = if is_l3 {
-            format!("L3 per-order snapshot {}\nOrders bid: {} ask: {}\n", ts, order_count_bid, order_count_ask)
+            format!(
+                "L3 per-order snapshot {}\nOrders bid: {} ask: {}\n",
+                ts, order_count_bid, order_count_ask
+            )
         } else {
             format!("L2 snapshot {}\n", ts)
         };
@@ -191,17 +219,31 @@ pub(super) fn render_live_orderbook_heatmap(
             let p = get_price(b);
             let s = get_size(b);
             let oid = b.get("order_id").and_then(|o| o.as_str()).unwrap_or("");
-            tip.push_str(&format!("Top Bid: {} x {} {}
-", format_price(p), s, oid));
+            tip.push_str(&format!(
+                "Top Bid: {} x {} {}
+",
+                format_price(p),
+                s,
+                oid
+            ));
         }
         if let Some(a) = asks.first() {
             let p = get_price(a);
             let s = get_size(a);
             let oid = a.get("order_id").and_then(|o| o.as_str()).unwrap_or("");
-            tip.push_str(&format!("Top Ask: {} x {} {}
-", format_price(p), s, oid));
+            tip.push_str(&format!(
+                "Top Ask: {} x {} {}
+",
+                format_price(p),
+                s,
+                oid
+            ));
         }
-        tip.push_str(if is_l3 { "Per-order markers shown" } else { "Hover for live depth density" });
+        tip.push_str(if is_l3 {
+            "Per-order markers shown"
+        } else {
+            "Hover for live depth density"
+        });
         resp.on_hover_text(tip);
     }
 
@@ -209,33 +251,57 @@ pub(super) fn render_live_orderbook_heatmap(
     if is_l3 {
         ui.separator();
         ui.label(egui::RichText::new("L3 orders (age-colored, top 5/side)").small());
-        egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
-            for (side, col, levs) in [("BID", bid_color, bids), ("ASK", ask_color, asks)] {
-                for lev in levs.iter().take(5) {
-                    let oid = lev.get("order_id").and_then(|o| o.as_str()).unwrap_or("?");
-                    let p = get_price(lev);
-                    let q = get_size(lev);
-                    let age = get_age_secs(lev);
-                    let age_txt = if age < 5.0 { "new" } else if age < 30.0 { "mid" } else { "old" };
-                    let txt = format!("{} {} @ {:.4} x {:.4} ({})", side, &oid[..oid.len().min(8)], p, q, age_txt);
-                    // Selection for L3 (demo/sim works; useful for gated real L3 too)
-                    // Using local for now to keep scope simple; full wiring via window.selected_order_id possible in caller
-                    let is_selected = false;
-                    let label = if is_selected { egui::RichText::new(txt).strong().color(egui::Color32::YELLOW) } else { egui::RichText::new(txt) };
-                    let resp = ui.colored_label(col, label);
-                    if resp.clicked() {
-                        // update selection on the window state (passed in)
-                        // Note: in real use the caller would mutate the window in the vec
-                        ui.ctx().copy_text(oid.to_string());
-                        // Better highlight feedback for chart focus (stub improved for demo)
-                        ui.label(egui::RichText::new(format!("selected {} for chart (L3 order)", &oid[..oid.len().min(6)])).small().color(egui::Color32::YELLOW));
-                    }
-                    if ui.small_button("copy").clicked() {
-                        ui.ctx().copy_text(oid.to_string());
+        egui::ScrollArea::vertical()
+            .max_height(100.0)
+            .show(ui, |ui| {
+                for (side, col, levs) in [("BID", bid_color, bids), ("ASK", ask_color, asks)] {
+                    for lev in levs.iter().take(5) {
+                        let oid = lev.get("order_id").and_then(|o| o.as_str()).unwrap_or("?");
+                        let p = get_price(lev);
+                        let q = get_size(lev);
+                        let age = get_age_secs(lev);
+                        let age_txt = if age < 5.0 {
+                            "new"
+                        } else if age < 30.0 {
+                            "mid"
+                        } else {
+                            "old"
+                        };
+                        let txt = format!(
+                            "{} {} @ {:.4} x {:.4} ({})",
+                            side,
+                            &oid[..oid.len().min(8)],
+                            p,
+                            q,
+                            age_txt
+                        );
+                        let is_selected = selected_order_id.as_deref() == Some(oid);
+                        let label = if is_selected {
+                            egui::RichText::new(txt)
+                                .strong()
+                                .color(egui::Color32::YELLOW)
+                        } else {
+                            egui::RichText::new(txt)
+                        };
+                        let resp = ui.colored_label(col, label);
+                        if resp.clicked() {
+                            *selected_order_id = Some(oid.to_string());
+                            ui.ctx().copy_text(oid.to_string());
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "selected {} for chart (L3 order)",
+                                    &oid[..oid.len().min(6)]
+                                ))
+                                .small()
+                                .color(egui::Color32::YELLOW),
+                            );
+                        }
+                        if ui.small_button("copy").clicked() {
+                            ui.ctx().copy_text(oid.to_string());
+                        }
                     }
                 }
-            }
-        });
+            });
     }
 
     true
