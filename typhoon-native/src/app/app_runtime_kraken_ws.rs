@@ -41,8 +41,9 @@ impl TyphooNApp {
                     .kraken_equity_universe_symbols
                     .binary_search_by(|symbol| symbol.trim_end_matches(".EQ").cmp(&bare))
                     .is_ok();
+            let l2_supported = kraken_depth_stream_supported(&bare, &self.kraken_pairs);
             if kraken_chart
-                && !bare.is_empty()
+                && l2_supported
                 && !self.kraken_chart_l2_ws_symbol.eq_ignore_ascii_case(&bare)
             {
                 self.kraken_chart_l2_last_start_attempt = now_instant;
@@ -53,7 +54,9 @@ impl TyphooNApp {
                     publish_dom: false,
                 });
                 // Also start rich L1 ticker for the same symbol (complements book top)
-                let _ = self.broker_tx.send(BrokerCmd::KrakenStartTickerWs { symbol: bare });
+                let _ = self
+                    .broker_tx
+                    .send(BrokerCmd::KrakenStartTickerWs { symbol: bare });
             }
         }
     }
