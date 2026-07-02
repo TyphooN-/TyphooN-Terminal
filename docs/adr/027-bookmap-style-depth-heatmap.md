@@ -17,7 +17,7 @@ The terminal has per-symbol Bookmap windows, `/bookmap SYMBOL` command routing,
 an orderbook DOM, and an Alpaca crypto orderbook snapshot path
 (`AlpacaBroker::get_orderbook`). The current Bookmap view supports richer per-order
 rendering for L3 (bid/ask markers, selected-order persistence, selected marker
-highlight/ring, header selected-id + clear action, scroll list with
+highlight/ring, header selected side/price/quantity + clear action, scroll list with
 order_id/price/qty/age, click-to-copy/select interactions), live depth profile
 overlays (25 bins + "L3 depth" label with tint distinction), and renders the
 latest live orderbook snapshot only when the snapshot symbol matches the target

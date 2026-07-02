@@ -501,8 +501,21 @@ impl TyphooNApp {
                                 }
                                 if ui.button("L3 Demo (entitled sim)").clicked() && !dom_sym.is_empty() {
                                     self.kraken_l3_status = format!("L3 demo active for {} (simulated per-order depth — assume entitlements)", dom_sym);
-                                    // Sample L3-style data to exercise parser, Bookmap L3 viz, and chart depth binning
-                                    self.orderbook_result = format!(r#"{{"symbol":"{}","timestamp":"sim-l3","checksum":123456,"bids":[{{"order_id":"O1","limit_price":123.45,"order_qty":1.2,"timestamp":"now"}},{{"order_id":"O2","limit_price":123.40,"order_qty":0.8}}],"asks":[{{"order_id":"A1","limit_price":123.55,"order_qty":2.5}}]}}"#, dom_sym);
+                                    let now_s = chrono::Utc::now().timestamp_millis() as f64 / 1000.0;
+                                    // Sample L3-style data to exercise parser, Bookmap L3 viz, selected-order header details, and age coloring.
+                                    self.orderbook_result = serde_json::json!({
+                                        "symbol": dom_sym,
+                                        "timestamp": "sim-l3",
+                                        "checksum": 123456,
+                                        "is_l3": true,
+                                        "bids": [
+                                            {"order_id":"O1","limit_price":123.45,"order_qty":1.2,"timestamp":format!("{now_s:.3}")},
+                                            {"order_id":"O2","limit_price":123.40,"order_qty":0.8,"timestamp":format!("{:.3}", now_s - 12.0)}
+                                        ],
+                                        "asks": [
+                                            {"order_id":"A1","limit_price":123.55,"order_qty":2.5,"timestamp":format!("{:.3}", now_s - 45.0)}
+                                        ]
+                                    }).to_string();
                                     // window already open via outer logic / user can open; avoid double-borrow on the open flag inside closure
                                 }
                             });

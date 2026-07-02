@@ -62,7 +62,7 @@
 - [x] Kraken Futures trading vs market-data depth — clarified in API_KEYS.md (primarily data for Futures; full private trading for crypto/xStocks).
 - [x] Persistence (session.json, SQLite zstd, kv_cache) — matches.
 - [x] AI surfaces / research packet ingestion — well covered but check for drift on new surfaces.
-- Code work on gated items (sim/demo side): L3 sim/demo remains available for entitlement-free testing; Bookmap L3 selection is now real per-window state with row/header/heatmap marker highlighting, not a local stub.
+- Code work on gated items (sim/demo side): L3 sim/demo remains available for entitlement-free testing; Bookmap L3 selection is now real per-window state with row/header detail/heatmap marker highlighting, not a local stub.
 
 ## How to Use This Checklist
 1. Run: `grep -rE 'stub|pending|not yet|parity|future work|in progress' docs/ --include="*.md" | head -30`
