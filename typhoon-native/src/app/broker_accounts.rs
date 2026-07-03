@@ -13,26 +13,20 @@ pub(crate) const MAX_BROKER_ACCOUNT_SLOTS: usize = 4;
 
 pub(crate) fn default_alpaca_extra_accounts() -> Vec<ExtraAccountConfig> {
     (2..=MAX_BROKER_ACCOUNT_SLOTS)
-        .map(|slot| ExtraAccountConfig {
-            label: format!("Paper {slot}"),
+        .map(|_| ExtraAccountConfig {
             api_key: String::new(),
             secret: String::new(),
             paper: true,
-            trade_enabled: true,
-            data_sync_enabled: true,
         })
         .collect()
 }
 
 pub(crate) fn default_kraken_extra_accounts() -> Vec<ExtraAccountConfig> {
     (2..=MAX_BROKER_ACCOUNT_SLOTS)
-        .map(|slot| ExtraAccountConfig {
-            label: format!("Kraken {slot}"),
+        .map(|_| ExtraAccountConfig {
             api_key: String::new(),
             secret: String::new(),
             paper: false,
-            trade_enabled: true,
-            data_sync_enabled: false,
         })
         .collect()
 }
@@ -68,6 +62,30 @@ pub(crate) fn kraken_slot_keyring_keys(slot: usize) -> (String, String) {
 }
 
 impl TyphooNApp {
+    /// Persist one credential field to the keyring + SQLite `cred:` fallback as
+    /// soon as it is edited in Settings (a non-empty value stores, an emptied
+    /// field deletes). Runs off the render thread; previously slot creds were
+    /// only written by the Connect click / quit sweep, so keys typed while
+    /// already connected were silently lost on an unclean exit.
+    pub(crate) fn persist_credential_async(&self, key_name: String, value: String) {
+        let cache_clone = self.cache.clone();
+        self.rt_handle.spawn_blocking(move || {
+            if value.trim().is_empty() {
+                let _ = keyring::delete(&key_name);
+                if let Some(ref cache) = cache_clone {
+                    // Loaders treat an empty value as absent, so an empty
+                    // put_kv tombstones the SQLite fallback copy too.
+                    let _ = cache.put_kv(&format!("cred:{}", key_name), "");
+                }
+            } else {
+                let _ = keyring::store(&key_name, &value);
+                if let Some(ref cache) = cache_clone {
+                    let _ = cache.put_kv(&format!("cred:{}", key_name), &value);
+                }
+            }
+        });
+    }
+
     /// Every configured Alpaca account (slot 1 + populated extras) as connect
     /// specs. Empty-credential slots are skipped.
     pub(crate) fn alpaca_account_specs(&self) -> Vec<BrokerAccountSpec> {
@@ -94,16 +112,18 @@ impl TyphooNApp {
             let slot = idx + 2;
             specs.push(BrokerAccountSpec {
                 id: format!("alpaca{slot}"),
-                label: if acct.label.trim().is_empty() {
-                    format!("Alpaca {slot}")
+                label: if acct.paper {
+                    format!("Alpaca {slot} (Paper)")
                 } else {
-                    acct.label.clone()
+                    format!("Alpaca {slot} (Live)")
                 },
                 api_key: acct.api_key.clone(),
                 secret: acct.secret.clone(),
                 paper: acct.paper,
-                trade_enabled: acct.trade_enabled,
-                data_sync_enabled: acct.data_sync_enabled,
+                // Every configured slot syncs data and can trade — slots are
+                // uniform; TradeCopy target selection happens in its own window.
+                trade_enabled: true,
+                data_sync_enabled: true,
             });
         }
         specs
@@ -118,15 +138,11 @@ impl TyphooNApp {
             let slot = idx + 2;
             specs.push(BrokerAccountSpec {
                 id: format!("kraken{slot}"),
-                label: if acct.label.trim().is_empty() {
-                    format!("Kraken {slot}")
-                } else {
-                    acct.label.clone()
-                },
+                label: format!("Kraken {slot}"),
                 api_key: acct.api_key.clone(),
                 secret: acct.secret.clone(),
                 paper: false,
-                trade_enabled: acct.trade_enabled,
+                trade_enabled: true,
                 data_sync_enabled: false,
             });
         }
@@ -352,6 +368,7 @@ impl TyphooNApp {
             roster.iter().filter(|a| a.connected).collect();
         let mut copy_request: Option<(String, Vec<String>, bool)> = None;
         let mut mirror_toggled: Option<bool> = None;
+        let mut targets_changed = false;
         egui::Window::new("TradeCopy")
             .open(&mut show)
             .resizable(true)
@@ -419,15 +436,14 @@ impl TyphooNApp {
                     let mut checked = self.tradecopy_target_ids.contains(&a.id);
                     let live_locked = !a.paper && !self.tradecopy_allow_live_targets;
                     let label = format!(
-                        "{} ({}, ${:.0}){}{}",
+                        "{} ({}, ${:.0}){}",
                         a.label,
                         if a.paper { "paper" } else { "LIVE" },
                         a.equity,
-                        if a.trade_enabled { "" } else { " — trading disabled" },
                         if live_locked { " — enable live targets below" } else { "" }
                     );
                     let resp = ui.add_enabled(
-                        a.trade_enabled && !live_locked,
+                        !live_locked,
                         egui::Checkbox::new(&mut checked, label),
                     );
                     if resp.changed() {
@@ -436,9 +452,10 @@ impl TyphooNApp {
                         } else {
                             self.tradecopy_target_ids.remove(&a.id);
                         }
+                        targets_changed = true;
                     }
-                    if live_locked {
-                        self.tradecopy_target_ids.remove(&a.id);
+                    if live_locked && self.tradecopy_target_ids.remove(&a.id) {
+                        targets_changed = true;
                     }
                 }
                 ui.add_space(4.0);
@@ -479,16 +496,23 @@ impl TyphooNApp {
                 }
                 ui.add_space(6.0);
                 let mut mirror = self.tradecopy_mirror_orders;
+                // Opt-in only: the checkbox is disabled until at least one
+                // target is checked (it stays clickable while ON so mirroring
+                // can always be turned off). Never persisted across restarts.
                 if ui
-                    .checkbox(
-                        &mut mirror,
-                        "Live mirroring: replicate app-placed Alpaca orders to all other \
-                         trade-enabled accounts",
+                    .add_enabled(
+                        can_copy || mirror,
+                        egui::Checkbox::new(
+                            &mut mirror,
+                            "Live mirroring: replicate app-placed Alpaca orders to the checked \
+                             target accounts (opt-in, resets on restart)",
+                        ),
                     )
                     .on_hover_text(
                         "While enabled, every order placed from this app on the primary \
-                         account is also submitted to each other connected trade-enabled \
-                         account (cancels/modifies excluded — order ids differ per account).",
+                         account is also submitted to each checked target account \
+                         (cancels/modifies excluded — order ids differ per account). \
+                         Mirroring is always off at startup.",
                     )
                     .changed()
                 {
@@ -508,12 +532,40 @@ impl TyphooNApp {
                 flatten_extra: flatten,
             });
         }
+        // Sync the runtime whenever the toggle flips or the opted-in target
+        // set changes while mirroring is on. Mirroring with an empty opt-in
+        // set turns itself off — copying is opt-in, never opt-out.
+        let mirror_targets: Vec<String> = self
+            .tradecopy_target_ids
+            .iter()
+            .filter(|id| **id != self.tradecopy_source_id)
+            .cloned()
+            .collect();
         if let Some(enabled) = mirror_toggled {
-            self.tradecopy_mirror_orders = enabled;
-            let _ = self
-                .broker_tx
-                .send(BrokerCmd::SetOrderMirroring { enabled });
+            let effective = enabled && !mirror_targets.is_empty();
+            if enabled && !effective {
+                self.log.push_back(LogEntry::warn(
+                    "TradeCopy mirroring stays OFF — check at least one target account first",
+                ));
+            }
+            self.tradecopy_mirror_orders = effective;
+            let _ = self.broker_tx.send(BrokerCmd::SetOrderMirroring {
+                enabled: effective,
+                target_ids: mirror_targets,
+            });
             self.save_session();
+        } else if targets_changed && self.tradecopy_mirror_orders {
+            let effective = !mirror_targets.is_empty();
+            if !effective {
+                self.log.push_back(LogEntry::warn(
+                    "TradeCopy mirroring disabled — no target accounts remain opted in",
+                ));
+            }
+            self.tradecopy_mirror_orders = effective;
+            let _ = self.broker_tx.send(BrokerCmd::SetOrderMirroring {
+                enabled: effective,
+                target_ids: mirror_targets,
+            });
         }
     }
 }
@@ -555,9 +607,9 @@ mod tests {
     fn default_extra_account_slots_cover_slots_2_to_4() {
         let alpaca = default_alpaca_extra_accounts();
         assert_eq!(alpaca.len(), 3);
-        assert!(alpaca.iter().all(|a| a.paper && a.data_sync_enabled));
+        assert!(alpaca.iter().all(|a| a.paper));
         let kraken = default_kraken_extra_accounts();
         assert_eq!(kraken.len(), 3);
-        assert!(kraken.iter().all(|a| !a.data_sync_enabled));
+        assert!(kraken.iter().all(|a| !a.paper));
     }
 }

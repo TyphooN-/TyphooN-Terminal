@@ -143,10 +143,14 @@ pub enum BrokerCmd {
         broker: OrderBroker,
         account_id: String,
     },
-    /// Mirror app-placed Alpaca orders onto every other trade-enabled account
-    /// in the pool (TradeCopy live mode).
+    /// Mirror app-placed Alpaca orders onto explicitly selected accounts
+    /// (TradeCopy live mode). Strictly opt-in: `target_ids` is the checked
+    /// target set from the TradeCopy window, and an empty set mirrors nothing.
+    /// Neither the flag nor the set persists across restarts — copying is
+    /// always disabled by default.
     SetOrderMirroring {
         enabled: bool,
+        target_ids: Vec<String>,
     },
     /// One-shot TradeCopy: replicate the source account's open positions onto
     /// each target account by submitting market orders for the per-symbol qty

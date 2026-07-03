@@ -43,6 +43,9 @@ impl TyphooNApp {
                 self.save_session();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
+            "TRADECOPY" | "TRADE_COPY" | "COPYTRADE" => {
+                self.show_tradecopy = true;
+            }
             "REG_SHO" | "REGSHO" => {
                 self.show_reg_sho_window = true;
             }

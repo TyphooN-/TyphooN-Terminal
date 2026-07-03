@@ -26,40 +26,68 @@ impl TyphooNApp {
                     // app won't use. Toggle the broker on under "Broker modules" below
                     // to expose its fields.
                     if self.alpaca_enabled {
-                        ui.label("Alpaca API Key:");
-                        ui.add(egui::TextEdit::singleline(&mut self.broker_api_key).desired_width(250.0).password(true));
-                        ui.end_row();
-                        ui.label("Alpaca Secret:");
-                        ui.add(egui::TextEdit::singleline(&mut self.broker_secret).desired_width(250.0).password(true));
-                        ui.end_row();
-                        ui.label("Alpaca Mode:");
-                        ui.horizontal(|ui| {
-                            ui.radio_value(&mut self.broker_paper, true, "Paper");
-                            ui.radio_value(&mut self.broker_paper, false, "Live");
-                        });
-                        ui.end_row();
-                        // Extra Alpaca accounts (slots 2–4, ADR-130): the free
-                        // tier allows 1 live + 3 paper accounts, and every
-                        // account with data-sync on multiplies historical bar
-                        // sync throughput (independent per-account rate limits).
-                        for (idx, acct) in self.alpaca_extra_accounts.iter_mut().enumerate() {
-                            let slot = idx + 2;
-                            ui.label(format!("Alpaca #{slot} Label:"));
+                        // Alpaca account slots 1–4 (ADR-130) render identically:
+                        // Key / Secret / Paper-or-Live. Every configured slot
+                        // joins the bar-sync rotation and can trade; TradeCopy
+                        // targets are picked in the TradeCopy window (TRADECOPY).
+                        // Credentials persist to the keyring on field edit —
+                        // no Connect click required.
+                        {
+                            let key_resp = {
+                                ui.label("Alpaca #1 Key:");
+                                let r = ui.add(egui::TextEdit::singleline(&mut self.broker_api_key).desired_width(250.0).password(true));
+                                ui.end_row();
+                                r
+                            };
+                            if key_resp.lost_focus() {
+                                self.persist_credential_async(keyring::keys::ALPACA_API_KEY.into(), self.broker_api_key.clone());
+                                settings_save_after = true;
+                            }
+                            let secret_resp = {
+                                ui.label("Alpaca #1 Secret:");
+                                let r = ui.add(egui::TextEdit::singleline(&mut self.broker_secret).desired_width(250.0).password(true));
+                                ui.end_row();
+                                r
+                            };
+                            if secret_resp.lost_focus() {
+                                self.persist_credential_async(keyring::keys::ALPACA_SECRET.into(), self.broker_secret.clone());
+                                settings_save_after = true;
+                            }
+                            ui.label("Alpaca #1 Mode:");
                             ui.horizontal(|ui| {
-                                ui.add(egui::TextEdit::singleline(&mut acct.label).desired_width(90.0).hint_text(format!("Paper {slot}")));
-                                ui.checkbox(&mut acct.paper, "Paper")
-                                    .on_hover_text("Paper vs live endpoint for this account slot.");
-                                ui.checkbox(&mut acct.trade_enabled, "Trade")
-                                    .on_hover_text("Allow this account as a TradeCopy/mirror target.");
-                                ui.checkbox(&mut acct.data_sync_enabled, "Data")
-                                    .on_hover_text("Include this account in the historical bar-sync rotation (each account has its own rate limit — more accounts sync faster).");
+                                let a = ui.radio_value(&mut self.broker_paper, true, "Paper").changed();
+                                let b = ui.radio_value(&mut self.broker_paper, false, "Live").changed();
+                                if a || b {
+                                    settings_save_after = true;
+                                }
                             });
                             ui.end_row();
+                        }
+                        for idx in 0..self.alpaca_extra_accounts.len() {
+                            let slot = idx + 2;
+                            let (key_name, secret_name) = super::broker_accounts::alpaca_slot_keyring_keys(slot);
                             ui.label(format!("Alpaca #{slot} Key:"));
-                            ui.add(egui::TextEdit::singleline(&mut acct.api_key).desired_width(250.0).password(true));
+                            let key_resp = ui.add(egui::TextEdit::singleline(&mut self.alpaca_extra_accounts[idx].api_key).desired_width(250.0).password(true));
                             ui.end_row();
+                            if key_resp.lost_focus() {
+                                self.persist_credential_async(key_name, self.alpaca_extra_accounts[idx].api_key.clone());
+                                settings_save_after = true;
+                            }
                             ui.label(format!("Alpaca #{slot} Secret:"));
-                            ui.add(egui::TextEdit::singleline(&mut acct.secret).desired_width(250.0).password(true));
+                            let secret_resp = ui.add(egui::TextEdit::singleline(&mut self.alpaca_extra_accounts[idx].secret).desired_width(250.0).password(true));
+                            ui.end_row();
+                            if secret_resp.lost_focus() {
+                                self.persist_credential_async(secret_name, self.alpaca_extra_accounts[idx].secret.clone());
+                                settings_save_after = true;
+                            }
+                            ui.label(format!("Alpaca #{slot} Mode:"));
+                            ui.horizontal(|ui| {
+                                let a = ui.radio_value(&mut self.alpaca_extra_accounts[idx].paper, true, "Paper").changed();
+                                let b = ui.radio_value(&mut self.alpaca_extra_accounts[idx].paper, false, "Live").changed();
+                                if a || b {
+                                    settings_save_after = true;
+                                }
+                            });
                             ui.end_row();
                         }
                     }
@@ -73,36 +101,53 @@ impl TyphooNApp {
                     ui.add(egui::TextEdit::singleline(&mut self.cryptopanic_key).desired_width(250.0).password(true).hint_text("free at cryptopanic.com → API"));
                     ui.end_row();
                     if self.kraken_enabled {
+                        // Kraken slot 1 keeps separate REST + WS credential
+                        // pairs; extra slots 2–4 are uniform Key/Secret trading
+                        // identities for primary cycling (Kraken market data is
+                        // public, so extra accounts don't join bar sync). All
+                        // fields persist to the keyring on edit.
+                        let mut kraken_main_edits: Vec<(&'static str, String)> = Vec::new();
                         ui.label("Kraken REST API Key:");
-                        ui.add(egui::TextEdit::singleline(&mut self.kraken_api_key).desired_width(250.0).password(true));
+                        if ui.add(egui::TextEdit::singleline(&mut self.kraken_api_key).desired_width(250.0).password(true)).lost_focus() {
+                            kraken_main_edits.push((keyring::keys::KRAKEN_API_KEY, self.kraken_api_key.clone()));
+                        }
                         ui.end_row();
                         ui.label("Kraken REST API Secret:");
-                        ui.add(egui::TextEdit::singleline(&mut self.kraken_api_secret).desired_width(250.0).password(true));
+                        if ui.add(egui::TextEdit::singleline(&mut self.kraken_api_secret).desired_width(250.0).password(true)).lost_focus() {
+                            kraken_main_edits.push((keyring::keys::KRAKEN_API_SECRET, self.kraken_api_secret.clone()));
+                        }
                         ui.end_row();
                         ui.label("Kraken WS API Key:");
-                        ui.add(egui::TextEdit::singleline(&mut self.kraken_ws_api_key).desired_width(250.0).password(true));
+                        if ui.add(egui::TextEdit::singleline(&mut self.kraken_ws_api_key).desired_width(250.0).password(true)).lost_focus() {
+                            kraken_main_edits.push((keyring::keys::KRAKEN_WS_API_KEY, self.kraken_ws_api_key.clone()));
+                        }
                         ui.end_row();
                         ui.label("Kraken WS API Secret:");
-                        ui.add(egui::TextEdit::singleline(&mut self.kraken_ws_api_secret).desired_width(250.0).password(true));
+                        if ui.add(egui::TextEdit::singleline(&mut self.kraken_ws_api_secret).desired_width(250.0).password(true)).lost_focus() {
+                            kraken_main_edits.push((keyring::keys::KRAKEN_WS_API_SECRET, self.kraken_ws_api_secret.clone()));
+                        }
                         ui.end_row();
-                        // Extra Kraken accounts (slots 2–4, ADR-130): trading
-                        // identities for primary cycling; Kraken market data is
-                        // public so extra accounts don't join bar sync.
-                        for (idx, acct) in self.kraken_extra_accounts.iter_mut().enumerate() {
+                        for (key_name, value) in kraken_main_edits {
+                            self.persist_credential_async(key_name.into(), value);
+                            settings_save_after = true;
+                        }
+                        for idx in 0..self.kraken_extra_accounts.len() {
                             let slot = idx + 2;
-                            ui.label(format!("Kraken #{slot} Label:"));
-                            ui.horizontal(|ui| {
-                                ui.add(egui::TextEdit::singleline(&mut acct.label).desired_width(90.0).hint_text(format!("Kraken {slot}")));
-                                ui.checkbox(&mut acct.trade_enabled, "Trade")
-                                    .on_hover_text("Allow this account as an order target when account-level routing lands for Kraken.");
-                            });
-                            ui.end_row();
+                            let (key_name, secret_name) = super::broker_accounts::kraken_slot_keyring_keys(slot);
                             ui.label(format!("Kraken #{slot} Key:"));
-                            ui.add(egui::TextEdit::singleline(&mut acct.api_key).desired_width(250.0).password(true));
+                            let key_resp = ui.add(egui::TextEdit::singleline(&mut self.kraken_extra_accounts[idx].api_key).desired_width(250.0).password(true));
                             ui.end_row();
+                            if key_resp.lost_focus() {
+                                self.persist_credential_async(key_name, self.kraken_extra_accounts[idx].api_key.clone());
+                                settings_save_after = true;
+                            }
                             ui.label(format!("Kraken #{slot} Secret:"));
-                            ui.add(egui::TextEdit::singleline(&mut acct.secret).desired_width(250.0).password(true));
+                            let secret_resp = ui.add(egui::TextEdit::singleline(&mut self.kraken_extra_accounts[idx].secret).desired_width(250.0).password(true));
                             ui.end_row();
+                            if secret_resp.lost_focus() {
+                                self.persist_credential_async(secret_name, self.kraken_extra_accounts[idx].secret.clone());
+                                settings_save_after = true;
+                            }
                         }
                     }
                     ui.label("Gemini API Key:");

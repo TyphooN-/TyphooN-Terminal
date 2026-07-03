@@ -45,11 +45,20 @@ impl TyphooNApp {
             // periodic REST poll stays as a safety net for the reconnect window.
             let _ = self.broker_tx.send(BrokerCmd::AlpacaStartTradeStream);
             // A (re)connect builds a fresh account pool whose mirror flag
-            // defaults off — re-assert the UI's TradeCopy mirroring state.
+            // defaults off — re-assert the UI's TradeCopy mirroring state
+            // together with the explicit opt-in target set (opt-in only:
+            // an empty set keeps mirroring off).
             if self.tradecopy_mirror_orders {
-                let _ = self
-                    .broker_tx
-                    .send(BrokerCmd::SetOrderMirroring { enabled: true });
+                let target_ids: Vec<String> = self
+                    .tradecopy_target_ids
+                    .iter()
+                    .filter(|id| **id != self.tradecopy_source_id)
+                    .cloned()
+                    .collect();
+                let _ = self.broker_tx.send(BrokerCmd::SetOrderMirroring {
+                    enabled: !target_ids.is_empty(),
+                    target_ids,
+                });
             }
         }
         if is_routine_market_data_status(&s) {

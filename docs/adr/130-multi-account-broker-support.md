@@ -31,9 +31,12 @@ rate-walled regardless (see ADR-112/-128 — do not try to make iapi fast).
 
 - `AlpacaAccountPool` — owns one `AlpacaBroker` **per account** (each with its
   own `RateLimiter`s), a `primary_idx`, an atomic round-robin `data_cursor`,
-  and the live-mirroring flag. Roles per account (`BrokerAccountSpec`):
-  `trade_enabled` (TradeCopy/mirror target) and `data_sync_enabled` (bar-sync
-  rotation member).
+  the live-mirroring flag, and the explicit mirror-target opt-in set. The
+  protocol roles per account (`BrokerAccountSpec`): `trade_enabled`
+  (TradeCopy/mirror eligibility) and `data_sync_enabled` (bar-sync rotation
+  member). Since 2026-07-03 the native UI no longer exposes per-slot toggles —
+  every configured Alpaca slot is sent with both flags on, so all slots behave
+  identically (see Update below).
 - `KrakenAccountPool` — trading identities only; holds the WS-token override
   for account 1.
 
@@ -71,10 +74,19 @@ and after every primary switch.
 - Keyring slots: slot 1 keeps the legacy `alpaca_api_key`/`alpaca_secret`
   (backward compatible); slots 2–4 use `alpaca_api_key_N`/`alpaca_secret_N`
   and `kraken_api_key_N`/`kraken_api_secret_N`, with the same SQLite `cred:`
-  fallback. Settings → API Keys exposes label/Paper/Trade/Data toggles plus
-  key/secret per slot; Connect stores or deletes slot credentials.
-- Account metadata (labels, flags) and the per-broker primary account id
-  persist in session sync-preferences; secrets never leave the keyring
+  fallback.
+- Settings → API Keys renders the four Alpaca slots **identically**: Key,
+  Secret, and a Paper/Live mode choice per slot — no per-slot label or
+  Trade/Data checkboxes. Kraken slots 2–4 are Key/Secret only (identities).
+  Account labels are auto-derived (`Alpaca 2 (Paper)`, `Kraken 3`).
+- Credential fields persist to the keyring (+ SQLite `cred:` fallback)
+  **as soon as the field is edited** (`persist_credential_async`, off the
+  render thread); clearing a field deletes the stored entry. The Connect
+  click and the explicit quit sweep remain as belt-and-braces. Previously
+  slot keys were only written inside a successful Connect click — keys typed
+  while already connected were silently lost on an unclean exit.
+- The per-slot Paper/Live mode and the per-broker primary account id persist
+  in session sync-preferences; secrets never leave the keyring
   (`#[serde(skip)]` on the credential fields).
 
 ### 4. Primary cycling (top bar)
@@ -87,7 +99,7 @@ lane) fire only when the *broker* changes; an intra-broker account change sends
 accounts exist. The toolbar/account panels show the **primary account's**
 paper/live mode (`alpaca_primary_is_paper()`), not the slot-1 flag.
 
-### 5. TradeCopy (Trading → TradeCopy…)
+### 5. TradeCopy (`TRADECOPY` console command or Trading → TradeCopy…)
 
 Two modes, Alpaca-first (testable on paper accounts; Kraken copy is future
 work — no paper environment, spot-balance semantics differ):
@@ -97,16 +109,20 @@ work — no paper environment, spot-balance semantics differ):
   (`trade_copy_deltas`, unit-tested; shorts negative), submit market orders on
   each target; optional *flatten extra* closes target symbols the source
   doesn't hold. Results stream to the Log as `TradeCopy → <account>` lines.
-- **Live mirroring** (`BrokerCmd::SetOrderMirroring`): while on, every
-  app-placed Alpaca order (market/notional/limit/stop/stop-limit/bracket/OCO/
-  trailing, position closes, exit syncs) is replicated to every other
-  connected trade-enabled account, tagged `[mirror → <account>]`.
+- **Live mirroring** (`BrokerCmd::SetOrderMirroring { enabled, target_ids }`):
+  while on, every app-placed Alpaca order (market/notional/limit/stop/
+  stop-limit/bracket/OCO/trailing, position closes, exit syncs) is replicated
+  to **each explicitly checked target account**, tagged `[mirror → <account>]`.
   Cancels/modifies are **not** replicated (order ids are account-specific;
-  a log note says so). Mirroring resets to OFF each session by design.
+  a log note says so).
 
-Safety rails: targets default to none; **live** accounts are locked out as
-targets unless "Allow LIVE accounts as targets" is explicitly checked;
-disconnected or trade-disabled targets are skipped with errors.
+Trade copying is **strictly opt-in, never opt-out**: the mirror toggle stays
+disabled until at least one target account is checked, the runtime refuses to
+enable mirroring with an empty target set, unchecking the last target
+auto-disables mirroring, and neither the flag nor the target set persists
+across restarts — every session starts with copying OFF. Additional rails:
+**live** accounts are locked out as targets unless "Allow LIVE accounts as
+targets" is explicitly checked; disconnected targets are skipped with errors.
 
 ### 6. Sync Status honesty for disabled timeframes
 
@@ -166,4 +182,26 @@ Requested alongside this change; findings (no scheduler rewrite needed):
   builds requests. Copy correctness is bounded by market-order fills (no
   limit-price preservation in the one-shot copy — deltas are qty-based).
 - Kraken multi-account is identity-only for now; private-WS follow-on-switch
-  and Kraken TradeCopy are explicitly deferred.
+  and Kraken TradeCopy are explicitly deferred (no paper environment,
+  spot-balance semantics differ — blocked on a product decision, not on
+  plumbing; the pool seam is already in place).
+
+## Update (2026-07-03) — uniform slots, on-edit keyring persistence, opt-in mirroring
+
+User-driven comb-over of the multi-account settings surface:
+
+- **Uniform Alpaca slots.** Slots 1–4 render identically (Key / Secret /
+  Paper|Live). The per-slot Label, Trade, and Data controls were removed;
+  `ExtraAccountConfig` shrank to `{api_key, secret, paper}` and specs always
+  ship `trade_enabled = data_sync_enabled = true`. Four accounts total —
+  slot 1 (legacy keyring names) plus slots 2–4.
+- **Keyring persistence bug fixed.** Slot credentials were only stored inside
+  the "Connect Alpaca" click handler, which is a no-op while already
+  connected — extra-account keys entered mid-session were lost on an unclean
+  exit. All credential fields (Alpaca 1–4, Kraken main REST/WS pair, Kraken
+  slots 2–4) now persist on field edit via `persist_credential_async`.
+- **TradeCopy from the console.** `TRADECOPY` / `TRADE_COPY` / `COPYTRADE`
+  opens the TradeCopy window; the Trading-menu entry remains.
+- **Opt-in mirroring.** `SetOrderMirroring` now carries the explicit
+  `target_ids` opt-in set (see §5); mirroring can never fan out to accounts
+  that were not individually checked, and it always starts disabled.

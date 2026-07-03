@@ -30,6 +30,9 @@ pub struct AlpacaAccountPool {
     primary_idx: usize,
     data_cursor: Arc<AtomicUsize>,
     mirror_orders: bool,
+    /// Explicit opt-in set for live order mirroring (TradeCopy window
+    /// checkboxes). Always starts empty — never persisted.
+    mirror_target_ids: std::collections::BTreeSet<String>,
 }
 
 impl AlpacaAccountPool {
@@ -44,6 +47,7 @@ impl AlpacaAccountPool {
             primary_idx,
             data_cursor: Arc::new(AtomicUsize::new(0)),
             mirror_orders: false,
+            mirror_target_ids: std::collections::BTreeSet::new(),
         }
     }
 
@@ -105,12 +109,19 @@ impl AlpacaAccountPool {
         n.max(usize::from(!self.is_empty()))
     }
 
-    /// Trade-enabled accounts other than the primary (mirror/TradeCopy targets).
+    /// Explicitly opted-in mirror targets: accounts the user checked in the
+    /// TradeCopy window, minus the primary. An empty opt-in set yields no
+    /// targets — mirroring never fans out to accounts by default.
     pub fn mirror_targets(&self) -> Vec<(&BrokerAccountSpec, &AlpacaBroker)> {
         self.accounts
             .iter()
             .enumerate()
-            .filter(|(idx, a)| *idx != self.primary_idx && a.connected && a.spec.trade_enabled)
+            .filter(|(idx, a)| {
+                *idx != self.primary_idx
+                    && a.connected
+                    && a.spec.trade_enabled
+                    && self.mirror_target_ids.contains(&a.spec.id)
+            })
             .map(|(_, a)| (&a.spec, &a.broker))
             .collect()
     }
@@ -121,8 +132,10 @@ impl AlpacaAccountPool {
             .find(|a| a.spec.id == account_id && a.connected)
     }
 
-    pub fn set_mirror_orders(&mut self, enabled: bool) {
-        self.mirror_orders = enabled;
+    pub fn set_mirror_orders(&mut self, enabled: bool, target_ids: Vec<String>) {
+        self.mirror_target_ids = target_ids.into_iter().collect();
+        // Enabling with nothing opted in is a no-op kept off for safety.
+        self.mirror_orders = enabled && !self.mirror_target_ids.is_empty();
     }
 
     pub fn mirror_orders(&self) -> bool {
@@ -327,8 +340,8 @@ mod tests {
     }
 
     #[test]
-    fn mirror_targets_exclude_primary_and_non_trade_accounts() {
-        let pool = AlpacaAccountPool::new(
+    fn mirror_targets_are_strictly_opt_in() {
+        let mut pool = AlpacaAccountPool::new(
             vec![
                 handle("alpaca1", true, true, true),
                 handle("alpaca2", true, true, true),
@@ -336,6 +349,18 @@ mod tests {
             ],
             "alpaca1",
         );
+        // Nothing opted in → nothing mirrors, even with trade-enabled accounts.
+        assert!(pool.mirror_targets().is_empty());
+        assert!(!pool.mirror_orders());
+
+        // Enabling with an empty opt-in set stays off for safety.
+        pool.set_mirror_orders(true, Vec::new());
+        assert!(!pool.mirror_orders());
+
+        // Opting in alpaca2 mirrors exactly alpaca2; the primary and
+        // non-opted-in accounts stay excluded.
+        pool.set_mirror_orders(true, vec!["alpaca1".into(), "alpaca2".into()]);
+        assert!(pool.mirror_orders());
         let targets: Vec<&str> = pool
             .mirror_targets()
             .into_iter()

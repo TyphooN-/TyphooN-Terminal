@@ -100,12 +100,23 @@ pub fn spawn_broker_message_processor(
                         .await;
                     }
                 }
-                BrokerCmd::SetOrderMirroring { enabled } => {
-                    alpaca_pool.set_mirror_orders(enabled);
-                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
-                        "TradeCopy live mirroring {}",
-                        if enabled { "ENABLED — app-placed Alpaca orders replicate to all other trade-enabled accounts" } else { "disabled" }
-                    )));
+                BrokerCmd::SetOrderMirroring {
+                    enabled,
+                    target_ids,
+                } => {
+                    let n_targets = target_ids.len();
+                    alpaca_pool.set_mirror_orders(enabled, target_ids);
+                    let msg = if alpaca_pool.mirror_orders() {
+                        format!(
+                            "TradeCopy live mirroring ENABLED — app-placed Alpaca orders replicate to {} opted-in account(s)",
+                            n_targets
+                        )
+                    } else if enabled {
+                        "TradeCopy live mirroring stays OFF — no target accounts opted in".to_string()
+                    } else {
+                        "TradeCopy live mirroring disabled".to_string()
+                    };
+                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(msg));
                 }
                 BrokerCmd::AlpacaTradeCopy {
                     source_id,

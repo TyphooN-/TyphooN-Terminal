@@ -27,6 +27,10 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "Application settings",
     },
     Command {
+        name: "TRADECOPY",
+        desc: "Copy positions / mirror orders between broker accounts (ADR-130)",
+    },
+    Command {
         name: "RELOAD",
         desc: "Reload bars from cache",
     },
