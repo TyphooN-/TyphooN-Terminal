@@ -370,21 +370,16 @@ pub fn compute_l3_checksum(bids: &[KrakenL3Level], asks: &[KrakenL3Level]) -> u3
 }
 
 fn push_l3_checksum_level(payload: &mut String, level: &KrakenL3Level) {
-    let p_owned = level.price_text.clone().unwrap_or_else(|| level.limit_price.to_string());
-    let q_owned = level.qty_text.clone().unwrap_or_else(|| level.order_qty.to_string());
-    let p = p_owned.as_str();
-    let q = q_owned.as_str();
-    payload.push_str(&checksum_decimal_component(p));
-    payload.push_str(&checksum_decimal_component(q));
-}
-
-fn checksum_decimal_component(raw: &str) -> String {
-    let normalized = if raw.contains(['e', 'E']) {
-        raw.parse::<f64>().ok().map(|v| if v.fract() == 0.0 { format!("{v:.1}") } else { v.to_string() }).unwrap_or_else(|| raw.to_string())
-    } else { raw.to_string() };
-    let mut compact = normalized.trim().trim_start_matches('+').replace('.', "");
-    while compact.starts_with('0') && compact.len() > 1 { compact.remove(0); }
-    if compact.is_empty() { "0".to_string() } else { compact }
+    // Borrow the wire text when present — this runs 40× per delta, so avoid
+    // cloning two Strings per level just to read them.
+    match level.price_text.as_deref() {
+        Some(p) => super::helpers::push_book_checksum_component(payload, p),
+        None => super::helpers::push_book_checksum_component(payload, &level.limit_price.to_string()),
+    }
+    match level.qty_text.as_deref() {
+        Some(q) => super::helpers::push_book_checksum_component(payload, q),
+        None => super::helpers::push_book_checksum_component(payload, &level.order_qty.to_string()),
+    }
 }
 
 fn apply_l3_levels(levels: &mut Vec<KrakenL3Level>, updates: &[KrakenL3Level]) {

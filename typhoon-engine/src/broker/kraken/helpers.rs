@@ -155,6 +155,51 @@ pub(super) fn kraken_private_rest_counter_cost(path: &str) -> f64 {
     }
 }
 
+/// Append one decimal component in Kraken's WS-v2 book-checksum normal form:
+/// strip a leading '+', drop the '.', strip leading zeros, and emit "0" when
+/// no digits remain. Shared by the L2 book and L3 order-feed checksums so the
+/// (live-debugged) normalisation exists exactly once. Runs 40× per book delta
+/// (2 sides × 10 levels × price+qty), so it appends into `payload` without
+/// allocating; only rare scientific-notation inputs take a re-format path.
+pub(super) fn push_book_checksum_component(payload: &mut String, raw: &str) {
+    if raw.contains(['e', 'E']) {
+        let normalized = raw
+            .parse::<f64>()
+            .ok()
+            .map(|v| {
+                if v.fract() == 0.0 {
+                    format!("{v:.1}")
+                } else {
+                    v.to_string()
+                }
+            })
+            .unwrap_or_else(|| raw.to_string());
+        push_book_checksum_digits(payload, &normalized);
+    } else {
+        push_book_checksum_digits(payload, raw);
+    }
+}
+
+fn push_book_checksum_digits(payload: &mut String, raw: &str) {
+    let trimmed = raw.trim().trim_start_matches('+');
+    let mut seen_leading_digit = false;
+    let mut pushed_any = false;
+    for ch in trimmed.chars() {
+        if ch == '.' {
+            continue;
+        }
+        if !seen_leading_digit && ch == '0' {
+            continue;
+        }
+        seen_leading_digit = true;
+        payload.push(ch);
+        pushed_any = true;
+    }
+    if !pushed_any {
+        payload.push('0');
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

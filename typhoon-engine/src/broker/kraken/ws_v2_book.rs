@@ -421,31 +421,8 @@ pub fn compute_book_checksum(bids: &[KrakenWsBookLevel], asks: &[KrakenWsBookLev
 }
 
 fn push_checksum_level(payload: &mut String, level: &KrakenWsBookLevel) {
-    payload.push_str(&checksum_decimal_component(&level.price_text));
-    payload.push_str(&checksum_decimal_component(&level.qty_text));
-}
-
-fn checksum_decimal_component(raw: &str) -> String {
-    let normalized_source = if raw.contains(['e', 'E']) {
-        raw.parse::<f64>()
-            .ok()
-            .map(format_decimal_for_book_level)
-            .unwrap_or_else(|| raw.to_string())
-    } else {
-        raw.to_string()
-    };
-    let mut compact = normalized_source
-        .trim()
-        .trim_start_matches('+')
-        .replace('.', "");
-    while compact.starts_with('0') && compact.len() > 1 {
-        compact.remove(0);
-    }
-    if compact.is_empty() {
-        "0".to_string()
-    } else {
-        compact
-    }
+    super::helpers::push_book_checksum_component(payload, &level.price_text);
+    super::helpers::push_book_checksum_component(payload, &level.qty_text);
 }
 
 fn format_decimal_for_book_level(value: f64) -> String {
@@ -577,9 +554,17 @@ mod tests {
 
     #[test]
     fn checksum_decimal_component_preserves_wire_precision() {
-        assert_eq!(checksum_decimal_component("0.05000000"), "5000000");
-        assert_eq!(checksum_decimal_component("67100.0"), "671000");
-        assert_eq!(checksum_decimal_component("+001.2300"), "12300");
+        let component = |raw: &str| {
+            let mut payload = String::new();
+            super::super::helpers::push_book_checksum_component(&mut payload, raw);
+            payload
+        };
+        assert_eq!(component("0.05000000"), "5000000");
+        assert_eq!(component("67100.0"), "671000");
+        assert_eq!(component("+001.2300"), "12300");
+        assert_eq!(component("0.0"), "0");
+        assert_eq!(component("1e-7"), "1");
+        assert_eq!(component("2.5e3"), "25000");
     }
 
     #[test]

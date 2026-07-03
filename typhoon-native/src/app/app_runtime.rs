@@ -130,7 +130,6 @@ impl eframe::App for TyphooNApp {
             "state_caches",
             _tt_state_caches.elapsed().as_secs_f32() * 1000.0,
         ));
-        ctx.set_visuals(Self::dark_visuals());
         // Bound log size to prevent unbounded memory growth.
         // 200 is a steady-state cap — small enough that pop_front is amortized O(1)
         // even during bulk imports that push dozens of lines per frame.
@@ -172,6 +171,13 @@ impl eframe::App for TyphooNApp {
 
         // ── Global font/spacing to match old WebKit (Consolas 11px) ──────
         if self.frame_count == 1 {
+            // Apply the dark visuals once, then layer the widget overrides below
+            // on top. This used to run set_visuals(dark_visuals()) every frame,
+            // which both rebuilt the global Style Arc per frame and wholesale
+            // replaced style.visuals — silently clobbering the corner-radius and
+            // bg_stroke overrides in this block from frame 2 onward (rounded
+            // widgets despite the ALL SQUARE spec).
+            ctx.set_visuals(Self::dark_visuals());
             let mut style = (*ctx.global_style()).clone();
             // ── AESTHETIC: Godel Terminal + old WebKit ──
             // Monospace everything, compact, square, green accents
