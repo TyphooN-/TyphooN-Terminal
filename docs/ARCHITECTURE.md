@@ -145,7 +145,7 @@ TyphooN-Terminal/
 │   └── Cargo.toml
 ├── typhoon-broker-runtime/         # Broker command processor + handlers + research compute (ADR-125 Target 3, unblocked by ADR-127)
 ├── typhoon-chart-ui/               # Chart types, state, indicators, drawing, egui chart render (ADR-125 Target 2)
-├── typhoon-research-ui/            # Research packet formatter + window shell + packet section tree (ADR-125 Target 1)
+├── typhoon-research-ui/            # Research snapshot renderers (render/ segment modules, ADR-108) + packet formatter + window shell + packet section tree (ADR-125 Target 1)
 ├── typhoon-transpiler/             # Multi-language indicator transpiler + WASM/WGSL codegen
 └── docs/
     ├── adr/                # Architecture Decision Records (106)

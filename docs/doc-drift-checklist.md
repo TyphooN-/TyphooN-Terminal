@@ -3,7 +3,7 @@
 **Purpose**: Track mismatches between current implementation (code + runtime behavior) and documentation.  
 **Style**: Prefer semantic names over old "feature parity" sequencing. Update on changes.  
 **Maintenance**: Before major work, run searches for "stub|pending|not yet|parity|future|missing" in docs/ + cross-check key code areas. Mark items [x] when fixed and re-commit.  
-**Last full sweep**: 2026-07-02 (broker-modular capability model + typed provenance + WS self-heal doc sync; ARCHITECTURE crate-structure + ADR-count corrections; README ADR index + RESEARCH_PACKET broker-scope/key drift). Prior: 2026-07 (broader sweep + L3 foundation + living checklist generation).  
+**Last full sweep**: 2026-07-02 pm (dependency currency pass: ADR-031/088 follow-up sections — nightly 2026-07-01, rusqlite 0.40/SQLite 3.53.2, aes-gcm 0.11, egui 0.35 `App::ui` migration, wgpu-follows-egui-wgpu rule, `.cargo/audit.toml` acceptance practice; ADR-108 research-ui render segmentation; ARCHITECTURE research-ui line). Prior same-day: broker-modular capability model + typed provenance + WS self-heal doc sync; ARCHITECTURE crate-structure + ADR-count corrections; README ADR index + RESEARCH_PACKET broker-scope/key drift.  
 **Status legend**:
 - [ ] Open drift (code ahead or doc outdated)
 - [x] Fixed / in sync

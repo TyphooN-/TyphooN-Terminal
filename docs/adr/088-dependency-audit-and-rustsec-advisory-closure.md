@@ -1,7 +1,7 @@
 # ADR-088: Dependency Audit and RustSec Advisory Closure
 
 **Date:** 2026-04-25
-**Updated:** 2026-05-06
+**Updated:** 2026-07-02
 **Status:** Implemented
 **Related:** `Cargo.toml`, `typhoon-engine/Cargo.toml`, `cli/Cargo.toml`, `typhoon-transpiler/Cargo.toml`, `typhoon-native/Cargo.toml`, `vendor/thirtyfour/Cargo.toml`, `Cargo.lock`, ADR-031 (dependency alignment), ADR-044 (performance security audit)
 
@@ -131,3 +131,37 @@ No dependency-audit items are intentionally deferred after Phase 3.
 - `cargo test --workspace --lib` — 1932 passed, 0 failed, 3 ignored.
 - `Cargo.lock` re-locked with 740 crate dependencies after Phase 3
   (was 783 after the original audit pass).
+
+## Follow-up audit (2026-07-02)
+
+Monthly-cadence pass per the shape above. `cargo audit` opened with three
+vulnerabilities and two unsound warnings against the resolved tree:
+
+- **RUSTSEC-2026-0185** (HIGH) — `quinn-proto 0.11.14`: remote memory
+  exhaustion via unbounded out-of-order stream reassembly; reachable through
+  `reqwest → quinn`. Closed by `cargo update` → 0.11.15.
+- **RUSTSEC-2026-0186** (unsound) — `memmap2 0.9.10` unchecked pointer
+  offset, via winit/smithay. Closed by `cargo update` → 0.9.11.
+- **RUSTSEC-2026-0190** (unsound) — `anyhow 1.0.102` `Error::downcast_mut`.
+  Left the tree entirely: its only path was wit-bindgen tooling that
+  deduplication removed (lockfile 615 → 600 crates).
+- **RUSTSEC-2026-0194 / RUSTSEC-2026-0195** (HIGH) — `quick-xml 0.39.4`
+  quadratic duplicate-attribute scan and unbounded `NsReader` namespace
+  allocation. **Accepted, not fixed**: the only consumer is
+  `wayland-scanner 0.31.10`, a build-time code generator parsing the vendored
+  Wayland protocol XML inside `wayland-protocols` crates; quick-xml is never
+  linked into the runtime binary. The fix landed in quick-xml 0.41, but
+  wayland-scanner (latest published) still pins `^0.39`, so no
+  semver-compatible closure exists. Recorded in `.cargo/audit.toml` with the
+  full rationale so `cargo audit` runs stay clean-by-default and every
+  acceptance is documented in-repo. Revisit on the next wayland-rs release
+  (the egui/winit stack bumps are the natural trigger).
+
+New practice this pass establishes: **advisory acceptances live in
+`.cargo/audit.toml`, each with why-safe and when-to-revisit comments.** An
+un-annotated ignore is a policy violation.
+
+Validation: `cargo audit` exits clean; full workspace suite 2403 passed /
+0 failed (test count grew from 1932 with the research/test expansion since
+the original pass). Semver-major closures from the same session are recorded
+in ADR-031's 2026-07-02 alignment section.

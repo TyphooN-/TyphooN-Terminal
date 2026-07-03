@@ -74,3 +74,44 @@ Security-first refresh:
 - Remaining duplicates unchanged from prior ADR (transitive only).
 
 This keeps the policy: latest possible without breaking the build or introducing known-unstable crates.
+
+## Follow-up alignment (2026-07-02)
+
+Latest-stable refresh; every blocker documented in the 2026-06-10 pass was
+re-tested and cleared:
+
+- **Toolchain**: `rustup update nightly` — rustc 1.95.0-nightly (2026-01-25)
+  → 1.98.0-nightly (2026-07-01). The five-month-stale nightly was itself the
+  `rusqlite 0.40` blocker (`libsqlite3-sys 0.38` uses the since-stabilized
+  `cfg_select!` in its build script). The workspace intentionally has no
+  `rust-toolchain.toml`; the default nightly channel is expected to be kept
+  current as part of this policy.
+- **`rusqlite` 0.39 → 0.40.1** — bundled SQLite 3.51.3 → **3.53.2** for the
+  research cache / bar store / KV. No API breakage.
+- **`aes-gcm` 0.10 → 0.11** — no longer rc; aligns the AEAD path with the
+  RustCrypto hybrid-array line already in tree (`sha2` 0.11 / `hmac` 0.13).
+  Two `Nonce::from_slice` call sites in `typhoon-engine/src/core/cache.rs`
+  moved to `From<[u8; 12]>` / `TryFrom<&[u8]>`. `generic-array 0.14` now
+  survives only under `dbus-secret-service` (Secret Service keyring), no
+  longer under TyphooN's own crypto path.
+- **egui stack 0.34.3 → 0.35.0** (`eframe`/`egui`/`egui_extras` 0.35,
+  `egui_plot` 0.36, `egui_commonmark` 0.24) — eframe 0.35 removed the
+  deprecated `App::update`; the native frame body moved to `App::ui` with
+  chrome panels rendering through the root `Ui`. Deliberately kept as one
+  body (no `logic()`/`ui()` split): eframe 0.34 already gated `update()`
+  behind `is_visible`, so a hidden window pausing the pump is long-standing
+  shipped behavior, and one body preserves it exactly.
+- **`wasm-encoder` 0.250 → 0.252** — transpiler codegen; no source edits.
+- **Durable rule (new): the direct `wgpu` major must follow `egui-wgpu`'s,
+  not crates.io latest.** wgpu 30 is published, but egui-wgpu 0.35 pins
+  wgpu 29; bumping the direct dep ahead of eframe creates a dual-major wgpu
+  tree whose types cannot unify with eframe's render state. wgpu 30 arrives
+  with the egui release that adopts it.
+
+Residual constraints after this pass: `generic-array 0.14.7` and
+`matchit 0.8.4` remain transitive exact-version holds (unchanged owners);
+`quick-xml 0.39.4` remains behind its 0.41 advisory fix pending a
+wayland-scanner release — acceptance documented in `.cargo/audit.toml` and
+ADR-088. `winit` stays 0.30.x with eframe 0.35.
+
+`cargo audit` clean; full workspace suite 2403 passed / 0 failed.

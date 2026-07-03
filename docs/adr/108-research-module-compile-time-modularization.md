@@ -154,3 +154,43 @@ Tradeoffs:
 - This first slice is not enough to solve engine-wide invalidation by itself.
 - `mod.rs` remains large and needs more semantic extractions.
 - Crate extraction is deferred until dependency cycles are resolved deliberately rather than by whack-a-mole call-site rewrites.
+
+## Update (2026-07-02) — research-ui snapshot-renderer segmentation
+
+The same program applied to the UI side of research:
+`typhoon-research-ui/src/render.rs` had grown to **23,312 lines** (64% of the
+crate, 5× the largest remaining file in the workspace) holding 259 uniform,
+self-contained `pub fn render_*_snapshot(&mut egui::Ui, &Snapshot)` free
+functions. It was split mechanically, preserving file order, into eight
+segment modules `render/s01_avgprice.rs` … `render/s08_updm.rs` (~2.9k lines,
+32–33 renderers each; each stem names its first renderer so the numbered
+files stay self-indexing), glob re-exported from `render.rs` — callers keep
+the `render::render_*_snapshot` paths unchanged. Segment boundaries are
+mechanical, not semantic: hand-sorting 259 quant surfaces into families
+risks miscategorization that would mislead more than neutral chunking.
+
+Measured honestly (warm incremental caches, 44-core workstation): a
+touch-only `cargo check -p typhoon-research-ui` is ~0.8s both before and
+after the split — rustc's incremental system already handled that case — and
+a real one-function edit checks in ~1.9s after the split. The win is
+edit/review/diff locality, not check latency. The cold-cache check of the
+crate (~44s) is unchanged by intra-crate splitting because a crate is still
+one rustc invocation.
+
+That points at the actual compile-time lever, consistent with this ADR's
+crate-split caution: the segmented renderer corpus is now the cleanest
+**leaf-crate extraction candidate** in the workspace (pure functions over
+`egui` + `typhoon_engine` research DTOs + the small `theme` constants; no
+`TyphooNApp`, no storage). Extracting it would take the renderer corpus out
+of every non-render `typhoon-research-ui` rebuild. Prerequisite to resolve
+deliberately: `theme` placement (shared by `window_shell`/`packet`), and the
+same rule as the deferred engine research crate — extract only when the
+dependency direction is clean, not to relocate a hotspot.
+
+### Next targets (unchanged order, engine + native)
+
+The ADR's earlier native/runtime hotspot list stands: `state.rs`,
+`trade_ops.rs`, `market_data_sync.rs`, `app_runtime_central_panel.rs`, and
+the broker-runtime research-compute children. `typhoon-engine/src/broker/alpaca.rs`
+(4.7k lines) and `core/cache.rs` (2.6k) are the engine-side files most likely
+to warrant the ADR-118 treatment when next touched semantically.
