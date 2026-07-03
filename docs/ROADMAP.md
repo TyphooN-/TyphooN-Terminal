@@ -34,7 +34,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] NNFX default preset (SMA200 + KAMA + Fisher + ATR Proj + BetterVol + PrevLevels + S/D Zones)
 
 ### Phase 4: UI Panels
-- [x] Console (`~`) with 260+ commands
+- [x] Console (`~`) with 225 palette commands (+ research-surface commands/aliases)
 - [x] Tab bar with drag-and-drop reordering (Ctrl+N/W/Tab)
 - [x] MTF grid (2×2 to 4×4, up to 16 charts)
 - [x] Right panel: tabbed (Trade/Pos/Ord/WL/Risk), TradingView-style watchlist
@@ -193,3 +193,12 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Documented Kraken Spot public/private rate-limit pacing, cache-depth-aware window sizing
 - [x] No-data symbol skip set
 - [x] Dependency audit + RustSec advisory closure (ADR-088)
+
+### Phase 21: Multi-Account, Session & Data-Integrity Follow-Through (2026-07)
+- [x] Multi-account broker pools: 4 uniform Alpaca slots (Key/Secret/Paper|Live each, all in the bar-sync rotation) + Kraken trading identities, account-primary cycling (ADR-130)
+- [x] Credentials persist to keyring on field edit (no Connect click required); SQLite `cred:` fallback
+- [x] TradeCopy via `TRADECOPY` console command; live order mirroring strictly opt-in per target account, never persisted
+- [x] Holiday-aware Kraken xStocks session status (rule-based NYSE holiday calendar, ADR-110)
+- [x] General stock-split feed: bulk research scrape populates `research_stock_splits` via FMP + keyless Yahoo for every scraped symbol (ADR-122/123)
+- [x] SL/TP trade lines active-chart-scoped with exact painted-geometry dragging (ADR-132)
+- [x] SMA Outfit Intelligence window (`SMA_INTELLIGENCE`, ADR-131)

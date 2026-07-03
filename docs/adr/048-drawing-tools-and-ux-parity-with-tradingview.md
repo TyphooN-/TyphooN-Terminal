@@ -78,23 +78,25 @@ Applied to: HLine, TrendLine, VLine, Rectangle, Ray, Channel, ExtendedLine, HRay
 - `draw_width`, `draw_line_style`, `snap_enabled` saved/restored
 - `drawing_styles: Vec<(f32, LineStyle)>` parallel to `drawings` vec
 
-## Deferred Drawing Work
+## Formerly Deferred Drawing Work
 
-### Gap #1 & #2: Hit-testing + drag
-1. On mouse click in chart area (not on existing drawing): check distance to each drawing
-2. Point-to-line distance < threshold (8px) → `selected_drawing = Some(idx)`
-3. On drag of selected drawing: update all point coordinates by delta
-4. ESC key → `selected_drawing = None`
+### Gap #1 & #2: Hit-testing + drag — DONE
+Implemented: click hit-testing selects the nearest drawing
+(`chart.selected_drawing`, `app_runtime_central_panel.rs`), dragging a
+selected drawing moves all its points, and Esc/click-away deselects.
 
-### Gap #3: Control points
-1. For selected drawing, render small squares at each endpoint
-2. Mouse down on a control point → enter resize mode
-3. Drag updates that specific point only
+### Gap #3: Control points — DONE
+Implemented: selected drawings render small square drag handles at each
+endpoint (`typhoon-chart-ui/src/render/chart_helpers/planning_overlays.rs`),
+and `drag_control_point` (`typhoon-chart-ui/src/state.rs`) resizes that
+specific point while `None` means whole-drawing drag.
 
-### Gap #7: Cross-TF drawings
+### Gap #7: Cross-TF drawings — still open (design sketch)
 - Requires storing drawings as `HashMap<String, Vec<Drawing>>` keyed by symbol
 - All charts for the same symbol share the drawing store
 - Coordinate mapping: bar_idx stored as timestamp offset, converted per-TF
+- Open because it changes drawing ownership/persistence semantics for every
+  existing session; revisit if per-symbol shared drawings become a real ask.
 
 ### 8. Pre-Placement Color Picker — DONE (2026-04-05)
 - [x] 8-color palette in drawing toolbar (W/Y/G/R/C/M/O/B)

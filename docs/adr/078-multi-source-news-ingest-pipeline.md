@@ -1,5 +1,11 @@
 # ADR-078: Multi-source News Ingest Pipeline
 
+> **⚠️ Partially superseded (2026-06).** LAN sync (including the
+> `research_news` sync-whitelist section below) and the MT5/Darwinex symbol
+> universe were removed with the broker scope reduction (ADR-111); the news
+> universe is now the Kraken/Alpaca catalog. The multi-source ingest,
+> dedup-by-url cache, FTS5 search, and reader remain the active architecture.
+
 **Status:** Implemented
 **Date:** 2026-04-13
 
@@ -239,9 +245,10 @@ that may require a paid/provider-specific policy later.
   specific runtime topology.
 - **Per-source SQLite tables.** Rejected — dedup by URL across sources is the
   whole point of having one table keyed by `url_hash`.
-- **Polling loop.** Rejected — the bulk scrape is a manual button for now.
-  An automatic hook alongside `FundamentalsScrape` is the natural next step
-  once users confirm the scrape cadence they want.
+- **Polling loop.** Rejected — the bulk scrape stays a manual button by
+  design. An automatic hook alongside `FundamentalsScrape` remains possible,
+  but it is deliberately not built until a user actually wants a fixed
+  cadence (free-tier provider quotas make an always-on poller easy to burn).
 
 ## Consequences
 

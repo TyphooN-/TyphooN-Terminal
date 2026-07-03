@@ -165,9 +165,13 @@ Every dispatch replies via `web_msg_tx` with a `WebMsg::OrderResult { ok, messag
 
 ## Deferred / Out of Scope
 
+> **2026-07 note:** every phone/WASM item below is moot — the web client and
+> LAN stack were removed entirely (ADR-111/115; code preserved on
+> `deprecated/web-client` / `deprecated/lan-sync`). Kept for the record.
+
 - **Phase 2 indicators/drawing tools/MTF grid on phone** — each would significantly grow the WASM bundle (the existing client is 3.7 MB). Phase 1 UI remains intentionally minimal.
 - **DARWIN analytics on phone** — requires porting the GPU DARWIN computations to a server-rendered preview. Out of scope.
-- **Push notifications to phone** — requires a push service (FCM / APNS / WebPush). Out of scope.
+- **Push notifications to phone** — requires a push service (FCM / APNS / WebPush). Out of scope. (Pushover/ntfy.sh mobile alerts exist natively — ADR-053.)
 - ~~**Phone order form (HTML)** — wiring the new protocol commands into the WASM client UI.~~ **Shipped** in the same pass: `Trade` tab + Close/Cancel row buttons. See the trade-offs section above.
 - **EasyLanguage Buy/Sell trade signals** — would need a backtesting/paper-trading harness on the compiler runtime side. Separate feature.
 

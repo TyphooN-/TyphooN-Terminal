@@ -12,13 +12,17 @@ Optional API keys and broker credentials that unlock additional features.
 - **Data:** IEX (free) or SIP (paid) market data feeds
 - **Rate limit:** 200 requests/minute (free plan), enforced **per account key**
 - **Multiple accounts (ADR-130):** the free tier allows 1 live + 3 paper
-  accounts. Settings → API Keys exposes 4 Alpaca slots (label + key/secret +
-  Paper/Trade/Data flags). Every slot with **Data** on joins the historical
-  bar-sync rotation — 4 accounts ≈ 4× sync throughput. Slot 1 uses the legacy
-  `alpaca_api_key`/`alpaca_secret` keyring entries; slots 2–4 store under
-  `alpaca_api_key_N`/`alpaca_secret_N`. The top-bar `Primary:` chip cycles
-  accounts; Trading → TradeCopy… copies positions between accounts and can
-  mirror new app-placed orders across all trade-enabled accounts.
+  accounts. Settings → API Keys exposes 4 identical Alpaca slots — Key,
+  Secret, and a Paper/Live mode each. Every configured slot joins the
+  historical bar-sync rotation (4 accounts ≈ 4× sync throughput) and can
+  trade. Slot 1 uses the legacy `alpaca_api_key`/`alpaca_secret` keyring
+  entries; slots 2–4 store under `alpaca_api_key_N`/`alpaca_secret_N`.
+  Credentials save to the keyring as soon as the field is edited — no
+  Connect click needed. The top-bar `Primary:` chip cycles accounts; the
+  `TRADECOPY` console command (or Trading → TradeCopy…) copies positions
+  between accounts and can mirror new app-placed orders — mirroring is
+  strictly opt-in per target account, never persists across restarts, and
+  live accounts must additionally be unlocked as targets.
 
 ## FRED (Federal Reserve Economic Data)
 
@@ -40,17 +44,19 @@ Optional API keys and broker credentials that unlock additional features.
 - **Note:** Public Spot OHLCV, Kraken Equities/xStocks iapi market data, Kraken Futures instrument discovery, and Kraken Futures chart candles do not require credentials. The terminal syncs these bars asynchronously but paces Spot OHLC requests to Kraken's documented public limits and Kraken iapi requests through the AIMD limiter; authenticated keys are only needed for trading/account features. Kraken market-data credentials do not expand news coverage — news comes from the separate multi-source research pipeline in ADR-078.
 - **Multiple accounts (ADR-130):** Settings exposes Kraken slots 2–4
   (`kraken_api_key_N`/`kraken_api_secret_N`) as additional trading identities
-  for the top-bar `Primary:` account cycler. Because Kraken market data is
-  public, extra Kraken accounts do **not** increase sync speed, and the
-  private ownTrades/openOrders WebSocket keeps following the previous account
-  until the next app restart after a primary switch.
+  for the top-bar `Primary:` account cycler — Key and Secret per slot, saved
+  to the keyring on edit. Because Kraken market data is public, extra Kraken
+  accounts do **not** increase sync speed, and the private
+  ownTrades/openOrders WebSocket keeps following the previous account until
+  the next app restart after a primary switch.
 
 ## Anthropic (Claude AI)
 
 **Used for:** AI chat — natural language queries about market data, position analysis
 
 - **Sign up:** https://console.anthropic.com/
-- **Cost:** Pay-per-use (Haiku ~$0.25/1M tokens, Sonnet ~$3/1M tokens)
+- **Cost:** Pay-per-use (input, per 1M tokens: Haiku 4.5 ~$1, Sonnet 5 ~$3,
+  Opus 4.8 ~$5 — see https://platform.claude.com/docs/en/pricing for current rates)
 - **Key format:** `sk-ant-...`
 
 ## OpenAI (GPT)
@@ -58,8 +64,36 @@ Optional API keys and broker credentials that unlock additional features.
 **Used for:** AI chat — alternative to Claude
 
 - **Sign up:** https://platform.openai.com/signup
-- **Cost:** Pay-per-use (GPT-4o-mini ~$0.15/1M tokens)
+- **Cost:** Pay-per-use — see https://openai.com/api/pricing for current rates
 - **Key format:** `sk-...`
+
+## Gemini (Google), Grok (xAI), Mistral, Perplexity
+
+**Used for:** AI chat — alternative hosted providers selectable in the AI
+Assistant window (Settings has a key field for each; local Ollama / LM Studio
+need no key)
+
+- **Sign up:** https://aistudio.google.com/ (Gemini), https://console.x.ai/
+  (Grok), https://console.mistral.ai/ (Mistral), https://www.perplexity.ai/settings/api
+  (Perplexity)
+- **Cost:** Pay-per-use per provider
+- **Key format:** provider-specific token string
+
+## CryptoPanic
+
+**Used for:** Crypto news headlines in the multi-source news pipeline (ADR-078)
+
+- **Sign up:** https://cryptopanic.com/developers/api/ (free tier)
+- **Key format:** API token string
+
+## Matrix (Community Chat)
+
+**Used for:** `CHAT` command — Matrix-protocol community chat and Matrix
+notifications (ADR-053)
+
+- **Setup:** paste a Matrix access token + user id in Settings ("Save Matrix
+  Token" stores them in the keyring); any homeserver account works
+- **Cost:** Free
 
 ## Pushover (Mobile Push Notifications)
 

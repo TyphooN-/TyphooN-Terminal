@@ -17,7 +17,7 @@ performed by Claude / Gemini CLIs (or the hosted provider's search tool) —
 the system prompt explicitly instructs the model to cross-reference the packet
 with real-time news, prices, and sentiment when the question calls for it.
 
-> Source of truth: `typhoon-native/src/app.rs::investigate_symbols()`
+> Source of truth: `typhoon-native/src/app/symbol_investigation.rs::investigate_symbols()`
 
 ---
 
@@ -6046,7 +6046,7 @@ agent tag.
 
 ### Prompt builder
 
-`typhoon-native/src/app.rs::build_claude_prompt(packet, history, latest)` assembles
+`typhoon-native/src/app/ai_processes.rs::build_claude_prompt(packet, history, latest)` assembles
 the full prompt string for both subprocess paths:
 
 ```
@@ -6299,11 +6299,11 @@ If a given source is empty, the corresponding sub-block is silently omitted
 
 ## Related
 
-- `typhoon-native/src/app.rs::investigate_symbols()` — the builder
-- `typhoon-native/src/app.rs::parse_ask_args()` — argument parser
-- `typhoon-native/src/app.rs::build_claude_prompt()` — prompt assembler for subprocess paths
-- `typhoon-native/src/app.rs::maybe_queue_ingest_from_ai_response()` — ADR-096 Return Path auto-ingest hook
-- `typhoon-native/src/app.rs::new_uuid()` — UUID v4 generator for session ids
+- `typhoon-native/src/app/symbol_investigation.rs::investigate_symbols()` — the builder
+- `typhoon-native/src/app/ai_processes.rs::parse_ask_args()` — argument parser
+- `typhoon-native/src/app/ai_processes.rs::build_claude_prompt()` — prompt assembler for subprocess paths
+- `typhoon-native/src/app/ai_processes.rs::maybe_queue_ingest_from_ai_response()` — ADR-096 Return Path auto-ingest hook
+- `typhoon-native/src/app/ai_processes.rs::new_uuid()` — UUID v4 generator for session ids
 - `docs/API_KEYS.md` — free-tier provider keys
 - ADR-073 — SEC filing expansion
 - ADR-078 — Multi-source news ingest

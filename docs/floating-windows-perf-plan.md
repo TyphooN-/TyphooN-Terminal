@@ -26,11 +26,17 @@ Implemented and verified in code:
 
 The old file contained obsolete transient chores, verification-pass reminders, and repeated progress-log notes. Those are not durable project tasks and have been removed.
 
-The old M1/M5 note is also outdated. Current policy is:
+The old M1/M5 note is also outdated. Current policy (see ADR-112/-128 and the
+doc-drift checklist for the authoritative statement) is:
 
-- M1/M5 are not part of the critical MTF Grid/live-priority foreground sync lane.
-- Broader sync defaults may still include lower timeframes when data exists and the provider supports them.
-- Kraken Spot M1/M5 remains constrained by provider data availability; logic must not assume those low-timeframe inputs are always available.
+- M1/M5 are valid low-TF targets for Kraken Spot and Kraken Equities: live
+  public-trades WS + forming-bar volume + WS-freshness + sync priority are
+  wired for low-TF MTF use. Assist rows (Alpaca/Yahoo) remain non-target for
+  those TFs.
+- Sync Status drops rows for timeframes unchecked in *Enabled Sync TFs* from
+  both the view and the percentages (ADR-130 §6).
+- Logic must still not assume low-timeframe inputs are always available —
+  provider data availability governs.
 
 ## Remaining real work
 

@@ -16,7 +16,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  │ - Sub-panes (Fisher, RSI, MACD, ADX, etc.)  ││
 │  ├─────────────────────────────────────────────┤│
 │  │ egui Panels                                 ││
-│  │ - Console (~) with 260+ commands             ││
+│  │ - Console (~) with 225 palette commands      ││
 │  │ - Positions / Orders / TradingView Watchlist││
 │  │ - Risk calculator, VaR, Margin monitor      ││
 │  │ - Risk / VaR / margin + research analytics  ││
@@ -148,7 +148,7 @@ TyphooN-Terminal/
 ├── typhoon-research-ui/            # Research snapshot renderers (render/ segment modules, ADR-108) + packet formatter + window shell + packet section tree (ADR-125 Target 1)
 ├── typhoon-transpiler/             # Multi-language indicator transpiler + WASM/WGSL codegen
 └── docs/
-    ├── adr/                # Architecture Decision Records (106)
+    ├── adr/                # Architecture Decision Records (109)
     ├── API_KEYS.md
     ├── INDICATORS.md
     ├── PERFORMANCE.md
@@ -179,11 +179,15 @@ The `STORAGE` command opens a cache storage manager with:
 
 ### SQLite Multi-Connection Architecture
 
-`SqliteCache` uses multiple connection types under WAL mode: `conn` (write Mutex), `read_conn` (UI-exclusive Mutex), BG thread (own connection, reopened each cycle), and scoped sync threads (each opens its own connection). WAL allows unlimited concurrent readers. BG thread reopens its connection every 3s for WAL freshness. `maybe_decompress()` transparently handles both raw TTBR and zstd-compressed bar blobs.
+`SqliteCache` uses multiple connection types under WAL mode: `conn` (write Mutex), `read_conn` (a **read-connection pool**, `ReadConnPool`, so UI reads no longer serialize on one exclusive mutex), BG thread (own connection, reopened each cycle), and scoped sync threads (each opens its own connection). WAL allows unlimited concurrent readers. BG thread reopens its connection every 3s for WAL freshness. `maybe_decompress()` transparently handles both raw TTBR and zstd-compressed bar blobs. Cold per-chart loads run off the render thread through the deferred chart loader, and bulk cache compaction streams by key cursor with `incremental_vacuum` (never load-all + full VACUUM), keeping the render thread clear of write contention. Note `SqliteCache::try_connection` is non-reentrant — nesting it silently no-ops the inner caller; pass `&Connection` down or use `open_bg_read_connection`.
 
 ### Multi-Window Support
 
 The `NEW_WINDOW` / `POPOUT` command spawns a new terminal process, enabling multi-monitor setups. Each window is an independent process with its own state.
+
+### Prometheus Metrics
+
+`typhoon-native/src/metrics.rs` serves application metrics on a hand-rolled HTTP `/metrics` endpoint (default port 9090; no web framework — axum was dropped in the 2026-07 dependency lean sweep). Exported gauges cover account equity/positions/VaR/drawdown, cache size and symbol counts, per-symbol bar counts, sync freshness, broker connectivity, and alert counts, in Prometheus text format for Grafana/Prometheus scraping.
 
 ### Collapsible Right Panel
 

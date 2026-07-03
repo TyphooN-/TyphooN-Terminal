@@ -1,6 +1,6 @@
 # UI Responsiveness & Sync — Implementation Status
 
-_Last updated: 2026-06-08_
+_Last updated: 2026-07-03_
 
 > **Historical (2026-06):** the MT5 `BarCacheWriter` external writer referenced below was removed with the broker rip-out (ADR-111). The SQLite write-contention insight still applies — the contending writers are now the Rust bulk bar-sync tasks, not the MT5 EA.
 
@@ -71,12 +71,19 @@ Shipped above. Pro: removes a real render-thread full-table scan. Con: the Sync
 Status window may show stale/partial rows for up to one ~3s BG cycle at startup
 (acceptable vs. a multi-second freeze).
 
-### Secondary, not yet done
-- `pre_broker_ms` steady ~290ms tax: profile what runs before broker-drain each
-  frame (likely a per-frame full scan); throttle/cache it.
-- 12–16s `floating_windows` spikes: blocked on the P2 instrumentation naming the
-  window; fix is likely `ScrollArea::show_rows` virtualization or an off-thread
-  query for that specific window.
+### Secondary — since resolved (2026-06/07)
+- ~~`pre_broker_ms` steady ~290ms tax~~ **Fixed:** the cause was the full
+  12k-catalog bar-sync coverage matrix scan running as pure CPU on the render
+  thread (~500ms spikes every ~120s under heavy sync). It now runs on a
+  `spawn_blocking` worker with an mpsc result poll.
+- ~~12–16s `floating_windows` spikes~~ **Fixed structurally:** the spikes were
+  SQLite contention — render-thread `put_kv`/DB walks blocking on the single
+  connection mutex held by bulk bar-sync writers. Cold per-chart loads moved
+  off the render thread (deferred chart loader + result-cache restore,
+  2026-06-30), `read_conn` became a read-connection pool (`ReadConnPool`),
+  and cache compaction now streams by key cursor with `incremental_vacuum`
+  under a heavy-sync gate instead of load-all + full VACUUM. The `timed_window!`
+  diagnostic (P2) remains in place to attribute any recurrence.
 
 ## Related
 - ADR-107 (no user-interacting sync throttle), `docs/PERFORMANCE.md`,

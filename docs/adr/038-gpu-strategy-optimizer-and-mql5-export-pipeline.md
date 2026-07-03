@@ -261,11 +261,11 @@ fn eval_strategy(@builtin(global_invocation_id) id: vec3<u32>) {
 - [x] Compile DSL → GPU compute shader dispatch — WGSL codegen backend
 - Visual strategy builder in egui — deferred (text-based MQL5/PineScript input works)
 
-**Phase 4: MQL5 Export** *(Implemented)*
+**Phase 4: MQL5 Export** *(Implemented, then removed 2026-06 — see banner)*
 - [x] Generate .mqh/.mq5/.mq4 indicator source — mql5_export module + full 10-language transpiler matrix
-- Generate EA source with optimal parameters
-- Export .set files for MT5 tester
-- Validation report generation
+- ~~Generate EA source with optimal parameters~~ — moot; the MQL5 export pipeline was removed with the MT5 scope reduction (ADR-111)
+- ~~Export .set files for MT5 tester~~ — moot (same removal)
+- ~~Validation report generation~~ — moot (same removal)
 
 **Phase 5: OMS Feature Parity**
 - Parameter sensitivity heatmaps

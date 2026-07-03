@@ -11,13 +11,13 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **GUI Binary** | ~25MB native (egui + wgpu) |
 | **Memory Usage** | ~50-100MB (vs thinkorswim ~2GB+) |
 | **Startup Time** | < 2 seconds |
-| **Lines of Code** | 170K+ native GUI + 135K+ typhoon-engine/research (pure Rust) |
+| **Lines of Code** | ~165K GUI (native + chart-ui + research-ui) + ~140K engine/broker-runtime + ~11K transpiler (pure Rust) |
 | **Indicators** | 46+ chart indicators plus ~375 TA-Lib/Godel research surfaces |
-| **Commands** | 260+ Quake-console style (~) |
+| **Commands** | 225 palette commands (~) plus hundreds of research-surface commands and aliases |
 | **Drawing Tools** | 89 drawing and annotation types |
 | **Harmonic Patterns** | 10 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives) |
 | **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
-| **Data Sources** | Alpaca, Kraken Spot/xStocks, Kraken Futures |
+| **Data Sources** | Alpaca, Kraken Spot/xStocks, Kraken Futures (+ Yahoo Chart corroborator) |
 | **Cost** | Free for personal use ([commercial licensing](COMMERCIAL.md) available) |
 
 ---
@@ -43,7 +43,7 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Workspace Profiles** | Save/load entire layout (tabs, indicators, pane sizes) |
 | **Drawing Tools** | 89 types: trend, fib, ray, ruler, rectangle, channel, pitchfork, Elliott, Gann, regression, arrows, labels + GPU rendering |
 | **Multi-Chart Layouts** | MTF grid (2-5 timeframes with full NNFX indicators per cell) |
-| **Screenshot Export** | Ctrl+Shift+S to clipboard with toast notification |
+| **Screenshot Export** | `SCREENSHOT` command captures the chart to `typhoon_chart_*.webp` (~/Pictures), with an in-app screenshots browser |
 | **Push Notifications** | Pushover + ntfy.sh for mobile alerts |
 | **CSV Export** | Export trade history as CSV |
 | **Chart Types** | Candlestick, Heikin-Ashi, Line, OHLC Bar, and Renko chart rendering |
@@ -58,7 +58,6 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Portfolio Heat Map** | Finviz-style colored boxes by P&L (~ →HEATMAP) |
 | **Bracket Order UI** | Visual OCO/bracket order placement (~ →BRACKET) |
 | **Alert Dashboard** | Cross-watchlist alert monitoring (~ →ALERTBOARD) |
-| **Custom Timeframes** | 2H, 3H, 6H, 2D, 3D via bar aggregation |
 | **Renko Charts** | ATR-based Renko brick charting |
 | **GUI Menu Bar** | File/View/Trading/Tools/Research/Analysis dropdown menus |
 | **Draggable Tabs** | Drag-and-drop tab reordering (unique — no competitor has this) |
@@ -78,14 +77,14 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Drawing Properties** | Right-click drawings: color picker, line width, delete |
 | **Earnings Calendar** | Corporate actions table via command palette |
 | **FRED Economic Data** | Fed Funds, CPI, GDP, Treasury yields, VIX, M2 Supply (free API key) |
-| **AI Trading Assistant** | Claude (Anthropic) or GPT (OpenAI) with market context |
+| **AI Trading Assistant** | Claude / GPT / Gemini / Grok / Mistral / Perplexity / local Ollama-LM Studio with market context |
 | **NNFX Strategy** | KAMA + Fisher Transform backtesting strategy — optimized for D1/W1/MN1 |
 | **Options P&L Calc** | Multi-leg payoff diagram with canvas rendering (~ →OPTCALC) |
 | **Sector Rotation** | S&P 500 sector ETF heatmap with daily/weekly % (~ →SECTORS) |
 | **Options Strategy** | Live chain viewer, presets (spreads, condors), aggregate Greeks (~ →OPTSTRAT) |
 | **Community Chat** | Matrix protocol chat via ~ (tilde) → CHAT, no server needed |
 | **Broker Abstraction** | BrokerTrait — extensible to any broker via single Rust file |
-| **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS-native keyring credential storage |
+| **Multi-Account** | 4 uniform Alpaca slots (Paper/Live each, pooled ~4× bar-sync fan-out) + Kraken trading identities, account-primary cycling, opt-in TradeCopy (`TRADECOPY`), OS-native keyring storage saved on edit |
 | **Indicators** | 46+ chart indicators: NNFX system, standard overlays/oscillators, Ehlers DSP, MTF overlays, volume/supply-demand, and GPU/CPU parity paths |
 | **Security** | 21-pass audit (97 findings): OS-native keyring credentials, input validation, HTTP timeouts, path traversal, CSP, config bounds, zeroize, async lock optimization |
 | **Analyst Ratings** | Finnhub consensus: stacked buy/hold/sell chart + price targets (~ →ANR) |
@@ -108,7 +107,7 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Multi-Signal Anomaly Scanner** | 4-dimensional scan: VaR + EV + ATR + SEC with tradability indicators (~ →ANOMALY) |
 | **MTF Grid Visibility** | Per-tab checkboxes to show/hide individual timeframes in multi-timeframe grid |
 | **Storage Pagination** | Paginated storage manager for large cache databases |
-| **260+ Commands** | Quake-console command palette with fuzzy search |
+| **Command Console** | Quake-console palette with fuzzy search over 225 commands (plus research-surface commands/aliases) |
 
 ---
 
@@ -167,19 +166,21 @@ Unit tests cover margin math, lot sizing, VaR, and broker position calculations.
 
 | Key | Action |
 |---|---|
-| `b` | Buy Lines (SL = low, TP = high) |
-| `s` | Sell Lines (SL = high, TP = low) |
-| `d` | Destroy Lines |
-| `t` | Open Trade |
-| `c` | Close All |
-| `p` | Close Partial |
-| `l` | Draw trend line (click 2 points) |
-| `f` | Draw Fibonacci retracement (click high/low) |
-| `x` | Delete last drawing |
-| `g` | Toggle MTF grid view (Alt+G to tile floating windows) |
-| `a` | Set price alert at current price |
-| `h` | Refresh trade history |
-| `Esc` | Clear SL/TP lines |
+| `~` | Open the command console |
+| `Ctrl+N` / `Ctrl+W` | New / close chart tab |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
+| `Ctrl+1..9` | Jump to tab by number |
+| `Alt+1..9` | Switch timeframe on the active chart |
+| `Alt+T` / `Alt+F` / `Alt+H` / `Alt+V` / `Alt+R` | Draw trend line / Fibonacci / horizontal / vertical / rectangle |
+| `Alt+E` | Eraser mode |
+| `Alt+C` | Cycle chart type |
+| `Alt+L` | Toggle log price scale |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo drawing |
+| `Delete` / `Backspace` | Remove last drawing |
+| `F5` | Refresh analytics |
+| `Esc` | Close palette / cancel drawing / dismiss card |
+
+See [KEYBOARD_SHORTCUTS.md](docs/KEYBOARD_SHORTCUTS.md) for the full reference.
 
 ---
 
@@ -269,7 +270,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [076](docs/adr/076-table-wiring-and-o-1-optimization-passes.md) | Table Wiring and O(1) Optimization Passes _(→ merged into ADR-098)_ |
 | [077](docs/adr/077-mimalloc-custom-allocator-optimal-release-profile.md) | mimalloc Custom Allocator + Optimal Release Profile |
 | [078](docs/adr/078-multi-source-news-ingest-pipeline.md) | Multi-source News Ingest Pipeline |
-| [079](docs/adr/079-godel-ta-lib-parity-program.md) | Godel / TA-Lib Parity Program |
+| [079](docs/adr/079-research-indicator-parity-program.md) | Research & Indicator Parity Program (Godel / TA-Lib) |
 | [080](docs/adr/080-web-research-ingestion-from-ai-agents-research-packet-viewer.md) | Web Research Ingestion from AI Agents + RESEARCH_PACKET Viewer |
 | [082](docs/adr/082-ai-chat-session-persistence-resume-slash-commands.md) | AI chat session persistence + resume slash commands |
 | [083](docs/adr/083-cross-client-ai-response-cache.md) | Cross-Client AI Response Cache |
@@ -349,8 +350,12 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 ### Native GUI
 
 ```bash
-cd native && cargo run          # development
-cd native && cargo build --release  # production
+./launch.sh          # release thin-LTO build + run
+./launch.sh dev      # debug build + run (faster compile)
+./launch.sh build    # release build only (binary: target/release/typhoon)
+./launch.sh max      # release-max full-LTO build + run
+# or directly:
+cargo run -p typhoon-native --release
 ```
 
 ### Deprecated CLI / TUI
