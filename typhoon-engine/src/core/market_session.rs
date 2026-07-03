@@ -42,6 +42,127 @@ fn us_eastern_offset_seconds(now_utc: chrono::DateTime<chrono::Utc>) -> i64 {
     }
 }
 
+/// Easter Sunday (Gregorian) via the anonymous computus algorithm. Needed for
+/// Good Friday, the one US market holiday that is not a fixed date or an
+/// nth-weekday rule.
+fn easter_sunday(year: i32) -> Option<chrono::NaiveDate> {
+    let a = year % 19;
+    let b = year / 100;
+    let c = year % 100;
+    let d = b / 4;
+    let e = b % 4;
+    let f = (b + 8) / 25;
+    let g = (b - f + 1) / 3;
+    let h = (19 * a + b - d - g + 15) % 30;
+    let i = c / 4;
+    let k = c % 4;
+    let l = (32 + 2 * e + 2 * i - h - k) % 7;
+    let m = (a + 11 * h + 22 * l) / 451;
+    let month = (h + l - 7 * m + 114) / 31;
+    let day = ((h + l - 7 * m + 114) % 31) + 1;
+    chrono::NaiveDate::from_ymd_opt(year, month as u32, day as u32)
+}
+
+fn nth_weekday_of_month(
+    year: i32,
+    month: u32,
+    weekday: chrono::Weekday,
+    nth: u32,
+) -> Option<chrono::NaiveDate> {
+    use chrono::Datelike;
+    let first = chrono::NaiveDate::from_ymd_opt(year, month, 1)?;
+    let offset = (7 + weekday.num_days_from_monday() as i64
+        - first.weekday().num_days_from_monday() as i64)
+        % 7;
+    first.checked_add_signed(chrono::Duration::days(offset + (nth as i64 - 1) * 7))
+}
+
+fn last_weekday_of_month(
+    year: i32,
+    month: u32,
+    weekday: chrono::Weekday,
+) -> Option<chrono::NaiveDate> {
+    use chrono::Datelike;
+    let last_day = if month == 12 {
+        chrono::NaiveDate::from_ymd_opt(year + 1, 1, 1)?
+    } else {
+        chrono::NaiveDate::from_ymd_opt(year, month + 1, 1)?
+    }
+    .pred_opt()?;
+    let offset = (7 + last_day.weekday().num_days_from_monday() as i64
+        - weekday.num_days_from_monday() as i64)
+        % 7;
+    last_day.checked_sub_signed(chrono::Duration::days(offset))
+}
+
+/// NYSE/NASDAQ full-day market holiday for the given ET calendar date, with the
+/// exchange observation rule for fixed-date holidays (Saturday → the Friday
+/// before, Sunday → the Monday after). Rule-based rather than a year table so
+/// it needs no annual maintenance (ADR-110 interim holiday awareness for the
+/// xStocks session calculator; the US-equities calculator stays driven by
+/// Alpaca's authoritative clock). Early-close half days (Jul 3, day after
+/// Thanksgiving, Christmas Eve) are deliberately not modeled here.
+pub fn us_market_holiday(date: chrono::NaiveDate) -> Option<&'static str> {
+    use chrono::{Datelike, Weekday};
+    let year = date.year();
+    // Observed date for a fixed-date holiday: Sat → Fri before, Sun → Mon after.
+    let observed = |m: u32, d: u32| -> Option<chrono::NaiveDate> {
+        let actual = chrono::NaiveDate::from_ymd_opt(year, m, d)?;
+        Some(match actual.weekday() {
+            Weekday::Sat => actual.pred_opt()?,
+            Weekday::Sun => actual.succ_opt()?,
+            _ => actual,
+        })
+    };
+    // A Jan 1 that falls on Saturday is observed the prior Dec 31 — check the
+    // *next* year's New Year against this date too.
+    if let Some(ny) = chrono::NaiveDate::from_ymd_opt(year + 1, 1, 1) {
+        if ny.weekday() == Weekday::Sat && ny.pred_opt() == Some(date) {
+            return Some("New Year's Day (observed)");
+        }
+    }
+    if observed(1, 1) == Some(date) {
+        return Some("New Year's Day");
+    }
+    if nth_weekday_of_month(year, 1, Weekday::Mon, 3) == Some(date) {
+        return Some("Martin Luther King Jr. Day");
+    }
+    if nth_weekday_of_month(year, 2, Weekday::Mon, 3) == Some(date) {
+        return Some("Washington's Birthday");
+    }
+    if easter_sunday(year).and_then(|e| e.checked_sub_signed(chrono::Duration::days(2)))
+        == Some(date)
+    {
+        return Some("Good Friday");
+    }
+    if last_weekday_of_month(year, 5, Weekday::Mon) == Some(date) {
+        return Some("Memorial Day");
+    }
+    if year >= 2022 && observed(6, 19) == Some(date) {
+        return Some("Juneteenth");
+    }
+    if observed(7, 4) == Some(date) {
+        return Some("Independence Day");
+    }
+    if nth_weekday_of_month(year, 9, Weekday::Mon, 1) == Some(date) {
+        return Some("Labor Day");
+    }
+    if nth_weekday_of_month(year, 11, Weekday::Thu, 4) == Some(date) {
+        return Some("Thanksgiving Day");
+    }
+    if observed(12, 25) == Some(date) {
+        return Some("Christmas Day");
+    }
+    None
+}
+
+/// True when the given ET calendar date is a regular US equities trading day
+/// (weekday and not a full-day market holiday).
+pub fn is_us_market_trading_day(date: chrono::NaiveDate) -> bool {
+    use chrono::{Datelike, Weekday};
+    !matches!(date.weekday(), Weekday::Sat | Weekday::Sun) && us_market_holiday(date).is_none()
+}
+
 /// Coarse, clock-free check for whether the US-equities *extended* session
 /// (pre-market 04:00 ET through after-hours 20:00 ET, Mon–Fri) could be live.
 /// Used to back off transient-data refreshers (trading halts / LULD) on weekends
@@ -146,6 +267,46 @@ mod tests {
         chrono::DateTime::parse_from_rfc3339(ts)
             .unwrap()
             .with_timezone(&chrono::Utc)
+    }
+
+    fn d(s: &str) -> chrono::NaiveDate {
+        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn us_market_holidays_cover_fixed_observed_and_rule_based_dates() {
+        // 2026: Jul 4 is a Saturday → observed Friday Jul 3.
+        assert_eq!(us_market_holiday(d("2026-07-03")), Some("Independence Day"));
+        assert_eq!(us_market_holiday(d("2026-07-04")), None); // Saturday itself
+        assert_eq!(
+            us_market_holiday(d("2026-01-19")),
+            Some("Martin Luther King Jr. Day")
+        );
+        assert_eq!(us_market_holiday(d("2026-02-16")), Some("Washington's Birthday"));
+        assert_eq!(us_market_holiday(d("2026-04-03")), Some("Good Friday"));
+        assert_eq!(us_market_holiday(d("2026-05-25")), Some("Memorial Day"));
+        assert_eq!(us_market_holiday(d("2026-06-19")), Some("Juneteenth"));
+        assert_eq!(us_market_holiday(d("2026-09-07")), Some("Labor Day"));
+        assert_eq!(us_market_holiday(d("2026-11-26")), Some("Thanksgiving Day"));
+        assert_eq!(us_market_holiday(d("2026-12-25")), Some("Christmas Day"));
+        assert_eq!(us_market_holiday(d("2026-01-01")), Some("New Year's Day"));
+        // Jan 1 2028 is a Saturday → observed Friday 2027-12-31.
+        assert_eq!(
+            us_market_holiday(d("2027-12-31")),
+            Some("New Year's Day (observed)")
+        );
+        // Juneteenth predates observance before 2022.
+        assert_eq!(us_market_holiday(d("2021-06-18")), None);
+        // An ordinary Wednesday.
+        assert_eq!(us_market_holiday(d("2026-06-10")), None);
+    }
+
+    #[test]
+    fn trading_day_check_excludes_weekends_and_holidays() {
+        assert!(is_us_market_trading_day(d("2026-06-10"))); // Wed
+        assert!(!is_us_market_trading_day(d("2026-06-06"))); // Sat
+        assert!(!is_us_market_trading_day(d("2026-09-07"))); // Labor Day
+        assert!(!is_us_market_trading_day(d("2026-07-03"))); // observed Jul 4
     }
 
     #[test]

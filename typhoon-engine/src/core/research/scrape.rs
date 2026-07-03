@@ -140,22 +140,6 @@ pub async fn scrape_and_cache_symbol(
         }
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 
-        // stock split history (FMP).
-        match fetch_fmp_stock_splits(client, &sym, fmp_key).await {
-            Ok(rows) => {
-                if !rows.is_empty() {
-                    let _ = upsert_stock_splits(conn, &sym, &rows);
-                    cb(&format!(
-                        "research/splits: {} cached ({} rows)",
-                        sym,
-                        rows.len()
-                    ));
-                }
-            }
-            Err(e) => cb(&format!("research/splits {} failed: {}", sym, e)),
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-
         // ETF holdings (FMP). No-op for non-ETF tickers (empty result).
         match fetch_fmp_etf_holdings(client, &sym, fmp_key).await {
             Ok(rows) => {
@@ -188,6 +172,26 @@ pub async fn scrape_and_cache_symbol(
         }
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     }
+
+    // Stock split history — deliberately outside the FMP gate. The combined
+    // fetcher uses FMP when a key exists and always tries Yahoo's keyless
+    // chart-events feed, so `research_stock_splits` is populated generally and
+    // the exact back-adjust path (ADR-122) is fed for every scraped symbol,
+    // not just curated ones (ADR-113/123 follow-up).
+    match fetch_stock_splits(client, &sym, fmp_key).await {
+        Ok(rows) => {
+            if !rows.is_empty() {
+                let _ = upsert_stock_splits(conn, &sym, &rows);
+                cb(&format!(
+                    "research/splits: {} cached ({} rows)",
+                    sym,
+                    rows.len()
+                ));
+            }
+        }
+        Err(e) => cb(&format!("research/splits {} failed: {}", sym, e)),
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 
     // Finnhub executives (separate from FMP block; needs Finnhub key).
     if !finnhub_key.is_empty() {

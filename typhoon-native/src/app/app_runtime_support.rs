@@ -249,6 +249,7 @@ pub(super) fn kraken_xstocks_session_status_at(
     overnight_enabled: bool,
 ) -> String {
     use chrono::{Datelike, Timelike};
+    use typhoon_engine::core::market_session::{is_us_market_trading_day, us_market_holiday};
 
     let now_et =
         now_utc.naive_utc() + chrono::Duration::seconds(us_eastern_offset_seconds(now_utc));
@@ -261,6 +262,22 @@ pub(super) fn kraken_xstocks_session_status_at(
 
     let day_start = now_et.date().and_hms_opt(0, 0, 0).unwrap_or(now_et);
     let boundary_today = |minutes: i64| day_start + chrono::Duration::minutes(minutes);
+    // First regular trading date strictly after `from` (skips weekends and
+    // full-day US market holidays — ADR-110 interim holiday awareness).
+    let next_trading_date_after = |from: chrono::NaiveDate| {
+        let mut date = from;
+        for _ in 0..14 {
+            if let Some(next) = date.succ_opt() {
+                date = next;
+            } else {
+                break;
+            }
+            if is_us_market_trading_day(date) {
+                return date;
+            }
+        }
+        date
+    };
     let next_sunday_open = || {
         let days_until_sunday = (7 - weekday.num_days_from_sunday()) % 7;
         let mut target = day_start
@@ -272,16 +289,64 @@ pub(super) fn kraken_xstocks_session_status_at(
         target
     };
 
+    // Full-day US market holiday: xStocks track the underlying US venues (and
+    // the Blue Ocean overnight session pauses too), so the whole ET date is
+    // CLOSED. Conservative by design — the session resumes at the next trading
+    // day's 04:00 ET pre-market rather than guessing at overnight resumption.
+    if let Some(name) = us_market_holiday(now_et.date()) {
+        let next = next_trading_date_after(now_et.date());
+        let target = next.and_hms_opt(4, 0, 0).map(|t| t - now_et);
+        return match target {
+            Some(t) => format!(
+                "Kraken xStocks CLOSED · US market holiday ({name}) · opens in {}",
+                format_session_countdown(t)
+            ),
+            None => format!("Kraken xStocks CLOSED · US market holiday ({name})"),
+        };
+    }
+
     if (weekday == chrono::Weekday::Fri && minute_of_day >= OVERNIGHT)
         || weekday == chrono::Weekday::Sat
         || (weekday == chrono::Weekday::Sun && minute_of_day < OVERNIGHT)
     {
-        let target = next_sunday_open();
-        return format!(
-            "Kraken xStocks CLOSED · opens Sun 8:00 PM ET in {}",
-            format_session_countdown(target - now_et)
-        );
+        // The Sunday 20:00 ET weekend open only happens when Monday is a
+        // trading day; a Monday holiday pushes the open to that day's 04:00 ET
+        // pre-market on the next trading date (e.g. Labor Day → Tuesday).
+        let sunday_open = next_sunday_open();
+        let monday = sunday_open.date().succ_opt().unwrap_or(sunday_open.date());
+        if is_us_market_trading_day(monday) {
+            return format!(
+                "Kraken xStocks CLOSED · opens Sun 8:00 PM ET in {}",
+                format_session_countdown(sunday_open - now_et)
+            );
+        }
+        let next = next_trading_date_after(monday);
+        let target = next.and_hms_opt(4, 0, 0).map(|t| t - now_et);
+        return match target {
+            Some(t) => format!(
+                "Kraken xStocks CLOSED · US market holiday Monday · opens in {}",
+                format_session_countdown(t)
+            ),
+            None => "Kraken xStocks CLOSED · US market holiday Monday".to_string(),
+        };
     }
+
+    let tomorrow_trades = is_us_market_trading_day(
+        now_et
+            .date()
+            .succ_opt()
+            .unwrap_or(now_et.date()),
+    );
+    // Next pre-market start, skipping a holiday tomorrow.
+    let next_pre_market = || {
+        if tomorrow_trades {
+            boundary_today(PRE) + chrono::Duration::days(1)
+        } else {
+            let next = next_trading_date_after(now_et.date());
+            next.and_hms_opt(4, 0, 0)
+                .unwrap_or(boundary_today(PRE) + chrono::Duration::days(1))
+        }
+    };
 
     // Symbols without overnight (Blue Ocean ATS) support are CLOSED during the
     // 20:00–04:00 ET overnight window — they trade pre/core/after only. Driven by
@@ -291,11 +356,20 @@ pub(super) fn kraken_xstocks_session_status_at(
         let target = if minute_of_day < PRE {
             boundary_today(PRE)
         } else {
-            boundary_today(PRE) + chrono::Duration::days(1)
+            next_pre_market()
         };
         return format!(
             "Kraken xStocks CLOSED · opens pre-market in {}",
             format_session_countdown(target - now_et)
+        );
+    }
+
+    // The evening overnight session only runs into a trading day; before a
+    // holiday it is CLOSED (the Blue Ocean session pauses with the US venues).
+    if minute_of_day >= OVERNIGHT && !tomorrow_trades {
+        return format!(
+            "Kraken xStocks CLOSED · US market holiday next · opens in {}",
+            format_session_countdown(next_pre_market() - now_et)
         );
     }
 
@@ -307,7 +381,7 @@ pub(super) fn kraken_xstocks_session_status_at(
         ("CORE", "after-hours", boundary_today(AFTER))
     } else if minute_of_day < OVERNIGHT {
         // No overnight session ⇒ the next boundary is the 8 PM close, not overnight.
-        let label = if weekday == chrono::Weekday::Fri || !overnight_enabled {
+        let label = if weekday == chrono::Weekday::Fri || !overnight_enabled || !tomorrow_trades {
             "close"
         } else {
             "overnight"

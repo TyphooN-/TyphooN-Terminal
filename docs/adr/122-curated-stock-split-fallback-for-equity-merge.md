@@ -59,11 +59,17 @@ effect on the next symbol load with no manual cache clear.
   offline, and without an FMP key — closing the gap ADR-113's exact path left
   open when its data source is empty.
 - The curated table is opt-in per symbol; it covers only what is listed. It is a
-  fallback, not a replacement for the FMP feed.
-- **Follow-up (not addressed here):** general coverage still depends on populating
-  `research_stock_splits` — i.e. running the FMP split scrape (FMP key) and
-  including that table in the LAN sync set. Until then every non-curated split
-  symbol relies on the inferred path alone.
+  fallback, not a replacement for the provider split feeds.
+- **Follow-up — resolved (2026-07-03):** `research_stock_splits` is now
+  populated generally. The combined fetcher (`fetch_stock_splits`) uses FMP
+  when a key exists and **always** tries Yahoo's keyless chart-events split
+  feed; the bulk research scrape (`scrape_and_cache_symbol`) runs that step
+  outside the FMP-key gate, so every scraped symbol gets split rows even on
+  keyless setups, and the per-symbol `FetchStockSplits` command already used
+  the combined path. Non-curated split symbols now get the exact back-adjust
+  once they have been research-scraped; symbols never scraped still rely on
+  the inferred path or a curated entry. (An earlier note about including the
+  table in the LAN sync set is moot — LAN sync was removed with ADR-111.)
 - New entries must be verified against the issuer's actual corporate action
   (wrong date/factor mis-scales bars near the ex-date). Covered by
   `curated_known_splits_supply_wok_reverse_split`.

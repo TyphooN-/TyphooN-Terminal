@@ -159,6 +159,48 @@ fn kraken_xstocks_session_status_closes_overnight_window_without_overnight_suppo
 }
 
 #[test]
+fn kraken_xstocks_session_status_is_holiday_aware() {
+    let at = |ts: &str| {
+        chrono::DateTime::parse_from_rfc3339(ts)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    };
+    // 2026-07-03 (Fri) is observed Independence Day: noon ET reads CLOSED with
+    // the holiday name, not a normal CORE session (ADR-110).
+    let holiday_noon = kraken_xstocks_session_status_at(at("2026-07-03T16:00:00Z"), true);
+    assert!(
+        holiday_noon
+            .starts_with("Kraken xStocks CLOSED · US market holiday (Independence Day)"),
+        "got {holiday_noon}"
+    );
+    // Labor Day 2026-09-07 (Mon): the weekend Sunday-20:00-ET open must not
+    // fire; the market opens Tuesday pre-market instead.
+    let sunday_before_labor_day =
+        kraken_xstocks_session_status_at(at("2026-09-06T16:00:00Z"), true);
+    assert!(
+        sunday_before_labor_day.starts_with("Kraken xStocks CLOSED · US market holiday Monday"),
+        "got {sunday_before_labor_day}"
+    );
+    // Thursday 21:00 ET before Good Friday 2026-04-03: no overnight session
+    // into a holiday — closed until the next trading day's pre-market (Monday).
+    let overnight_into_good_friday =
+        kraken_xstocks_session_status_at(at("2026-04-03T01:00:00Z"), true);
+    assert!(
+        overnight_into_good_friday
+            .starts_with("Kraken xStocks CLOSED · US market holiday next"),
+        "got {overnight_into_good_friday}"
+    );
+    // Thursday afternoon before Good Friday: after-hours counts down to the
+    // 8 PM close instead of promising an overnight session.
+    let after_before_good_friday =
+        kraken_xstocks_session_status_at(at("2026-04-02T21:00:00Z"), true);
+    assert!(
+        after_before_good_friday.starts_with("Kraken xStocks AFTER · closes"),
+        "got {after_before_good_friday}"
+    );
+}
+
+#[test]
 fn kraken_xstocks_session_status_closes_only_for_weekend_window() {
     let friday_after = chrono::DateTime::parse_from_rfc3339("2026-06-05T23:00:00Z")
         .unwrap()

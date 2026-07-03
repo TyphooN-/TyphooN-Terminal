@@ -67,15 +67,38 @@ Data sources for correctness:
 - Per-symbol overnight: `overnight_trading` plumbed engine→native; the toolbar
   passes `overnight_enabled` per symbol.
 
+## Implemented (2026-07-03) — interim US-market holiday awareness
+
+The "small hard-coded NYSE/NASDAQ holiday table" interim option shipped, as a
+**rule-based** calendar rather than a maintained year list (no annual upkeep):
+`typhoon_engine::core::market_session::us_market_holiday` computes New Year's
+(with the Dec-31 observed case), MLK Day, Washington's Birthday, Good Friday
+(Easter computus), Memorial Day, Juneteenth (≥2022), Independence Day, Labor
+Day, Thanksgiving, and Christmas, applying the exchange Sat→Fri / Sun→Mon
+observation rule; `is_us_market_trading_day` combines it with the weekday
+check. The xStocks calculator (`kraken_xstocks_session_status_at`) now:
+
+- labels a holiday ET date `CLOSED · US market holiday (<name>)` instead of a
+  normal session, opening at the next trading day's 04:00 ET pre-market;
+- skips the Sunday 20:00 ET weekend open when Monday is a holiday (e.g. Labor
+  Day weekend opens Tuesday pre-market);
+- refuses to promise an overnight session into a holiday (Thursday evening
+  before Good Friday reads CLOSED; Thursday after-hours counts down to the
+  8 PM close). Conservative by design — prefer CLOSED over falsely OPEN.
+
+Unit-tested in engine (`us_market_holidays_cover_fixed_observed_and_rule_based_dates`)
+and native (`kraken_xstocks_session_status_is_holiday_aware`). Early-close
+**half days** (Jul 3 as a trading half-day year-dependent, day after
+Thanksgiving, Christmas Eve) are deliberately not modeled — still below.
+
 ## Deferred — needs the real iapi schedule endpoint (plan later)
 
 Capture the undocumented per-symbol schedule endpoint from Kraken Pro DevTools,
 then wire it (cached, low-frequency) to provide:
 
-1. **Authoritative xStock holidays.** The xStocks calculator is currently pure-ET
-   (holiday-unaware) and would label a holiday as a normal session; the
-   US-equities calculator is already holiday-aware via Alpaca. Interim option: a
-   small hard-coded NYSE/NASDAQ holiday table.
+1. ~~**Authoritative xStock holidays.**~~ Interim rule-based holiday table
+   shipped 2026-07-03 (above); the endpoint would still be more authoritative
+   for exchange-specific one-off closures (e.g. mourning days).
 2. **24/7 tier.** The ~10 weekend-trading symbols are not distinguishable from
    the catalog flags, so they still show weekend-CLOSED. Needs the endpoint (or a
    maintained list) to flag them.

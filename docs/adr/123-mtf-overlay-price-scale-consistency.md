@@ -93,17 +93,18 @@ prefix-resolution blocks.
   It is a render-time guard: the deeper cause is the unadjusted intraday merge
   with no corroborator, which a populated split feed (ADR-122) would back-adjust.
 
-## Future work (#3 — not addressed here)
+## Future work (#3 — cause fix)
 
 The robust *cause* fix is correct back-adjustment, which needs split data we do
 not always have:
 
-- Populate `research_stock_splits` generally — run the FMP split scrape (FMP key)
-  and include that table in the data set — so the exact back-adjust path
-  (ADR-122) is fed for every symbol, not just curated ones.
+- ~~Populate `research_stock_splits` generally~~ **Done (2026-07-03,
+  ADR-122):** the bulk research scrape now runs the combined FMP + keyless
+  Yahoo split fetch for every scraped symbol, outside the FMP-key gate, so
+  the exact back-adjust path is fed without an FMP key.
 - Ensure `merged:` coverage exists for **every** overlay timeframe (notably
   4Hour, missing for CDLX) so source consistency keeps the line instead of
-  dropping it.
-- Until then, CDLX-class symbols can be added to the curated split table
+  dropping it — still open; depends on provider TF coverage per symbol.
+- CDLX-class symbols can still be added to the curated split table
   (`chart_curated_known_splits`, ADR-122) once their corporate actions are
-  verified.
+  verified, covering symbols that have never been research-scraped.

@@ -136,30 +136,10 @@ impl TyphooNApp {
             }
 
             // ADR-094: Analytics keyboard shortcuts (Alt+key)
-            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::V)) {
-                self.command_input = "VAR".to_string();
-                self.log.push_back(LogEntry::info("Shortcut: Alt+V → VAR"));
-            }
-            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::C)) {
-                self.command_input = "CORRELATION".to_string();
-                self.log
-                    .push_back(LogEntry::info("Shortcut: Alt+C → CORRELATION"));
-            }
-            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::S)) {
-                self.command_input = "SCREENER".to_string();
-                self.log
-                    .push_back(LogEntry::info("Shortcut: Alt+S → SCREENER"));
-            }
-            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::R)) {
-                self.command_input = "RISK_CALC".to_string();
-                self.log
-                    .push_back(LogEntry::info("Shortcut: Alt+R → RISK_CALC"));
-            }
-            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::B)) {
-                self.command_input = "BACKTEST".to_string();
-                self.log
-                    .push_back(LogEntry::info("Shortcut: Alt+B → BACKTEST"));
-            }
+            // (The old Alt+V/C/S/R/B "prefill the console" shortcuts were
+            // removed: they only wrote text into the closed palette input and
+            // Alt+V/C/R double-fired against the drawing / chart-type
+            // shortcuts below, which execute immediately and win.)
             if ctx.input(|i| i.key_pressed(egui::Key::F5)) {
                 self.log
                     .push_back(LogEntry::info("F5: Refreshing all analytics..."));
