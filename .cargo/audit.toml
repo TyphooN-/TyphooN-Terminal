@@ -1,0 +1,16 @@
+# cargo-audit configuration — documented advisory acceptances only.
+# Every entry must say WHY it is safe to defer and WHEN to revisit.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2026-0194 + RUSTSEC-2026-0195: quick-xml < 0.41 (quadratic dup-attr
+    # scan / unbounded NsReader namespace allocation). Reached only through
+    # wayland-scanner 0.31.10, a build-time code generator that parses the
+    # vendored Wayland protocol XML shipped inside wayland-protocols crates;
+    # quick-xml is never linked into the runtime binary. wayland-scanner (latest
+    # published) pins quick-xml ^0.39, so no semver-compatible fix exists yet.
+    # Revisit: drop these entries when wayland-rs publishes a release on
+    # quick-xml >= 0.41 (check `cargo audit` after egui/winit stack bumps).
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]
