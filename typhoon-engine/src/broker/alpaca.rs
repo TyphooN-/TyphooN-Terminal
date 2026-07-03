@@ -1050,7 +1050,9 @@ impl AlpacaBroker {
             .map_err(|e| format!("{context} body read failed: {e}"))?;
         let json: serde_json::Value = match serde_json::from_str(&text) {
             Ok(json) => json,
-            Err(e) if !status.is_success() => {
+            // Error-status bodies are often proxy HTML/plaintext; the HTTP
+            // status + snippet is the signal there, not the JSON parse error.
+            Err(_) if !status.is_success() => {
                 let snippet: String = text.chars().take(240).collect();
                 return Err(format!("{context} failed: HTTP {status}: {snippet}"));
             }
