@@ -523,6 +523,11 @@ pub struct TyphooNApp {
     /// SL/TP planning lines (visual, pre-broker).
     pub(crate) sl_price: Option<f64>,
     pub(crate) tp_price: Option<f64>,
+    /// Normalized symbol the SL/TP lines were drawn for. Lines render and
+    /// drag ONLY on the active chart with this symbol, and order paths refuse
+    /// to fire when the active chart's symbol differs — placing lines on one
+    /// chart must never arm a trade on another (MTF risk, ADR-132).
+    pub(crate) trade_lines_symbol: Option<String>,
     /// True while user is dragging the SL line on the chart.
     pub(crate) dragging_sl: bool,
     /// True while user is dragging the TP line on the chart.

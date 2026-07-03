@@ -152,6 +152,7 @@ impl TyphooNApp {
                         );
                         if resp.lost_focus() && self.sl_enabled {
                             self.sl_price = self.sl_input.parse().ok();
+                            self.mark_trade_lines_owner();
                             self.sync_trade_line_inputs();
                         }
                     });
@@ -166,6 +167,7 @@ impl TyphooNApp {
                         );
                         if resp.lost_focus() && self.tp_enabled {
                             self.tp_price = self.tp_input.parse().ok();
+                            self.mark_trade_lines_owner();
                             self.sync_trade_line_inputs();
                         }
                     });

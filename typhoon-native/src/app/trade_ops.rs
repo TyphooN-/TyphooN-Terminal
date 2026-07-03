@@ -1034,11 +1034,110 @@ impl TyphooNApp {
         self.tp_price = tp;
         self.sl_enabled = sl.is_some();
         self.tp_enabled = tp.is_some();
+        self.mark_trade_lines_owner();
         self.sync_trade_line_inputs();
+    }
+
+    /// Record which symbol the current SL/TP lines belong to (the active
+    /// chart's). Call after ANY path mutates sl_price/tp_price directly.
+    /// Lines only render/drag on the active chart for this symbol, and the
+    /// order paths hard-refuse on mismatch (ADR-132).
+    pub(super) fn mark_trade_lines_owner(&mut self) {
+        self.trade_lines_symbol = if self.sl_price.is_some() || self.tp_price.is_some() {
+            self.active_trade_symbol_and_price().map(|(s, _)| s)
+        } else {
+            None
+        };
+    }
+
+    /// True when the SL/TP lines belong on this chart right now: it is the
+    /// active chart AND its normalized symbol matches the lines' owner.
+    pub(super) fn trade_lines_active_on(&self, chart_idx: usize) -> bool {
+        if chart_idx != self.active_tab {
+            return false;
+        }
+        let Some(owner) = self.trade_lines_symbol.as_deref() else {
+            return false;
+        };
+        self.charts
+            .get(chart_idx)
+            .map(|c| normalize_market_data_symbol(&c.symbol) == owner)
+            .unwrap_or(false)
+    }
+
+    /// Error text when the active chart's symbol differs from the lines'
+    /// owner; None when they agree (or no owner is recorded).
+    pub(super) fn trade_lines_symbol_mismatch(&self, context: &str) -> Option<String> {
+        let owner = self.trade_lines_symbol.as_deref()?;
+        let active = self
+            .charts
+            .get(self.active_tab)
+            .map(|c| normalize_market_data_symbol(&c.symbol))?;
+        if active == owner {
+            None
+        } else {
+            Some(format!(
+                "{context}: SL/TP lines were drawn for {owner} but the active chart is {active} — redraw lines on the chart you intend to trade"
+            ))
+        }
     }
 
     pub(super) fn clear_trade_lines(&mut self) {
         self.set_trade_lines(None, None);
+    }
+
+    /// Press hit-test for the SL/TP lines on a chart, using the exact
+    /// geometry that chart painted with last frame. Sets dragging_sl /
+    /// dragging_tp and returns true when the press grabbed a line.
+    pub(super) fn try_begin_sl_tp_drag(&mut self, chart_idx: usize, press_y: f32) -> bool {
+        if self.draw_mode != DrawMode::None || !self.trade_lines_active_on(chart_idx) {
+            return false;
+        }
+        let Some(geometry) = self.charts.get(chart_idx).and_then(|c| c.last_price_geometry)
+        else {
+            return false;
+        };
+        const GRAB_PX: f32 = 8.0;
+        if let Some(sl) = self.sl_price {
+            if (press_y - geometry.price_to_y(sl)).abs() < GRAB_PX {
+                self.dragging_sl = true;
+                return true;
+            }
+        }
+        if let Some(tp) = self.tp_price {
+            if (press_y - geometry.price_to_y(tp)).abs() < GRAB_PX {
+                self.dragging_tp = true;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Apply a vertical drag delta to whichever SL/TP line is being dragged,
+    /// through the same geometry the line is painted with. Returns true when
+    /// a price changed (caller re-syncs the input boxes).
+    pub(super) fn apply_sl_tp_drag(&mut self, chart_idx: usize, dy: f32) -> bool {
+        if !(self.dragging_sl || self.dragging_tp) || dy.abs() <= 0.0 {
+            return false;
+        }
+        let Some(geometry) = self.charts.get(chart_idx).and_then(|c| c.last_price_geometry)
+        else {
+            return false;
+        };
+        let mut changed = false;
+        if self.dragging_sl {
+            if let Some(ref mut sl) = self.sl_price {
+                *sl = geometry.drag_price(*sl, dy);
+                changed = true;
+            }
+        }
+        if self.dragging_tp {
+            if let Some(ref mut tp) = self.tp_price {
+                *tp = geometry.drag_price(*tp, dy);
+                changed = true;
+            }
+        }
+        changed
     }
 
     pub(super) fn set_visible_range_trade_lines(
@@ -1192,6 +1291,9 @@ impl TyphooNApp {
         let symbol = normalize_market_data_symbol(&chart.symbol);
         if symbol.is_empty() {
             return Err("Open Trade: active chart has no normalized symbol".to_string());
+        }
+        if let Some(mismatch) = self.trade_lines_symbol_mismatch("Open Trade") {
+            return Err(mismatch);
         }
         let mut sl = self
             .sl_enabled
@@ -2628,6 +2730,10 @@ impl TyphooNApp {
             self.log.push_back(LogEntry::warn(format!(
                 "{reason}: no SL/TP lines enabled — use Buy Lines or Sell Lines first"
             )));
+            return;
+        }
+        if let Some(mismatch) = self.trade_lines_symbol_mismatch(reason) {
+            self.log.push_back(LogEntry::err(mismatch));
             return;
         }
 

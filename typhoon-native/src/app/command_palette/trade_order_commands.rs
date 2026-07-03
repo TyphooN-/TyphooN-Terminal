@@ -78,6 +78,7 @@ impl TyphooNApp {
                         let sl = last.close * 0.98; // default: 2% below current price
                         self.sl_price = Some(sl);
                         self.sl_enabled = true;
+                        self.mark_trade_lines_owner();
                         self.sync_trade_line_inputs();
                         self.log.push_back(LogEntry::info(format!(
                             "SL set at {} — drag to adjust",
@@ -92,6 +93,7 @@ impl TyphooNApp {
                         let tp = last.close * 1.04; // default: 4% above current price
                         self.tp_price = Some(tp);
                         self.tp_enabled = true;
+                        self.mark_trade_lines_owner();
                         self.sync_trade_line_inputs();
                         self.log.push_back(LogEntry::info(format!(
                             "TP set at {} — drag to adjust",

@@ -222,9 +222,41 @@ impl TyphooNApp {
                 .map(|id| id.order == egui::Order::Middle || id.order == egui::Order::Foreground)
                 .unwrap_or(false);
 
+        // ── SL/TP line grab + drag — ACTIVE chart only, single AND MTF ──────
+        // One owner for the whole gesture: hit-test against the exact
+        // PriceViewGeometry the active chart painted with last frame (the old
+        // per-loop re-derivation ignored sub-panes/time-axis/log-scale/camera,
+        // so grabs missed — "dragging is broken"), and only when the lines
+        // actually belong to the active chart's symbol (ADR-132). The chart
+        // body-drag paths below yield while a line drag is live.
+        if pointer.primary_released() {
+            self.dragging_sl = false;
+            self.dragging_tp = false;
+        }
+        if self.draw_mode == DrawMode::None {
+            if pointer.primary_pressed() && !pointer_over_window {
+                if let Some(press_pos) = pointer.press_origin() {
+                    let in_active_pane = self
+                        .charts
+                        .get(self.active_tab)
+                        .and_then(|c| c.last_price_geometry)
+                        .map(|g| g.chart_rect.contains(press_pos))
+                        .unwrap_or(false);
+                    if in_active_pane {
+                        let _ = self.try_begin_sl_tp_drag(self.active_tab, press_pos.y);
+                    }
+                }
+            }
+            if (self.dragging_sl || self.dragging_tp)
+                && self.apply_sl_tp_drag(self.active_tab, drag_delta.y)
+            {
+                self.sync_trade_line_inputs();
+            }
+        }
+        let sl_tp_line_drag_live = self.dragging_sl || self.dragging_tp;
+
         // Skip drag in MTF mode — individual cells handle their own interaction
         if !self.mtf_enabled {
-            let mut sync_trade_inputs = false;
             for (chart_idx, chart) in self.charts.iter_mut().enumerate() {
                 if chart_idx != self.active_tab {
                     continue;
@@ -240,42 +272,10 @@ impl TyphooNApp {
                     if price_axis_rect.contains(press_pos) {
                         // No-op: widget owns the scale gesture.
                     } else if available.contains(press_pos) && !pointer_over_window {
-                        // Check if press is near SL or TP line (draggable)
-                        let mut sl_tp_drag = false;
-                        if self.draw_mode == DrawMode::None {
-                            let (si, ei) = chart.visible_range();
-                            if ei > si && !chart.bars.is_empty() {
-                                let vis = &chart.bars[si..ei];
-                                let p_min = vis.iter().map(|b| b.low).fold(f64::MAX, f64::min);
-                                let p_max = vis.iter().map(|b| b.high).fold(f64::MIN, f64::max);
-                                let pad = (p_max - p_min) * 0.05;
-                                let centre = (p_max + p_min + 2.0 * pad) * 0.5 + chart.price_pan;
-                                let half = (p_max - p_min + 2.0 * pad) * 0.5 / chart.price_zoom;
-                                let pm = centre - half;
-                                let px = centre + half;
-                                let price_to_y_drag = |p: f64| -> f32 {
-                                    let frac = (px - p) / (px - pm);
-                                    available.top() + frac as f32 * available.height()
-                                };
-                                if let Some(sl) = self.sl_price {
-                                    let sl_y = price_to_y_drag(sl);
-                                    if (press_pos.y - sl_y).abs() < 8.0 {
-                                        self.dragging_sl = true;
-                                        sl_tp_drag = true;
-                                    }
-                                }
-                                if !sl_tp_drag {
-                                    if let Some(tp) = self.tp_price {
-                                        let tp_y = price_to_y_drag(tp);
-                                        if (press_pos.y - tp_y).abs() < 8.0 {
-                                            self.dragging_tp = true;
-                                            sl_tp_drag = true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if sl_tp_drag {
+                        // SL/TP line grabs are handled by the unified pre-pass
+                        // above (exact painted geometry); when it claimed the
+                        // press, just clear any competing chart drag state.
+                        if sl_tp_line_drag_live {
                             chart.is_dragging = false;
                             chart.is_drawing_drag = false;
                             chart.is_scaling_price = false;
@@ -385,31 +385,8 @@ impl TyphooNApp {
                     chart.drag_start = None;
                 }
 
-                // SL/TP line drag → update price from mouse Y position
-                if (self.dragging_sl || self.dragging_tp) && drag_delta.y.abs() > 0.0 {
-                    let (si, ei) = chart.visible_range();
-                    if ei > si && !chart.bars.is_empty() {
-                        let vis = &chart.bars[si..ei];
-                        let p_min = vis.iter().map(|b| b.low).fold(f64::MAX, f64::min);
-                        let p_max = vis.iter().map(|b| b.high).fold(f64::MIN, f64::max);
-                        let pad = (p_max - p_min) * 0.05;
-                        let range = p_max - p_min + 2.0 * pad;
-                        let price_delta = -drag_delta.y as f64 * range
-                            / available.height() as f64
-                            / chart.price_zoom;
-                        if self.dragging_sl {
-                            if let Some(ref mut sl) = self.sl_price {
-                                *sl += price_delta;
-                            }
-                        }
-                        if self.dragging_tp {
-                            if let Some(ref mut tp) = self.tp_price {
-                                *tp += price_delta;
-                            }
-                        }
-                        sync_trade_inputs = true;
-                    }
-                }
+                // SL/TP line drag price updates happen in the unified pre-pass
+                // above (exact painted geometry, active chart only).
 
                 // Price axis drag → handled by the dedicated `single_chart_price_axis`
                 // widget below. Don't re-apply zoom here or every drag delta double-counts.
@@ -719,9 +696,6 @@ impl TyphooNApp {
                 // SL/TP and drawing-object drags; applying camera pan here races
                 // the widget-owned gesture and can move the active chart twice.
             }
-            if sync_trade_inputs {
-                self.sync_trade_line_inputs();
-            }
         } // end !mtf_enabled drag guard
 
         // Console is rendered as egui::Window after CentralPanel (see below)
@@ -756,8 +730,13 @@ impl TyphooNApp {
         let show_ehlers_cg = self.show_ehlers_cg;
         let show_ehlers_roof = self.show_ehlers_roof;
         let render_cache = self.cache.clone();
+        // SL/TP lines render ONLY on the active chart whose symbol owns them
+        // (ADR-132) — painting the global lines into every MTF cell invited
+        // reading them as levels for other symbols/timeframes.
         let sl_price = self.sl_price;
         let tp_price = self.tp_price;
+        let trade_lines_on_active = self.trade_lines_active_on(self.active_tab);
+        let trade_lines_tab = self.active_tab;
         for chart in &mut self.charts {
             let symbol = regulatory_alerts::normalize_regulatory_symbol(&chart.symbol);
             chart.regulatory_alerts = self
@@ -960,13 +939,21 @@ impl TyphooNApp {
                         egui::Sense::click_and_drag(),
                     )
                     .on_hover_cursor(egui::CursorIcon::Grab);
+                // Yield to a live SL/TP line drag (unified pre-pass owns it) —
+                // without this the cell camera pans underneath the line drag.
                 let cell_body_started = cell_body_resp.is_pointer_button_down_on()
                     && !scaling_this_cell
-                    && self.draw_mode == DrawMode::None;
+                    && self.draw_mode == DrawMode::None
+                    && !sl_tp_line_drag_live;
                 let cell_body_press = (cell_body_started
                     || (chart.is_dragging && ctx.input(|i| i.pointer.primary_down())))
                     && !scaling_this_cell
-                    && self.draw_mode == DrawMode::None;
+                    && self.draw_mode == DrawMode::None
+                    && !sl_tp_line_drag_live;
+                if sl_tp_line_drag_live && chart.is_dragging {
+                    chart.is_dragging = false;
+                    chart.drag_start = None;
+                }
 
                 if cell_body_resp.double_clicked() {
                     // Body double-click on MTF cell → reset this cell's camera to follow latest (TV/MT5 style)
@@ -1041,7 +1028,13 @@ impl TyphooNApp {
                     }
                 }
                 let painter = ui.painter_at(cell_rect);
-                draw_chart(
+                // Only the active cell that owns the lines gets them (ADR-132).
+                let (cell_sl, cell_tp) = if trade_lines_on_active && vi == trade_lines_tab {
+                    (sl_price, tp_price)
+                } else {
+                    (None, None)
+                };
+                let cell_geometry = draw_chart(
                     &painter,
                     chart,
                     cell_rect,
@@ -1074,8 +1067,8 @@ impl TyphooNApp {
                     show_ehlers_cg,
                     show_ehlers_roof,
                     self.show_squeeze,
-                    sl_price,
-                    tp_price,
+                    cell_sl,
+                    cell_tp,
                     &trade_ov,
                     &self.alerts,
                     &chart.regulatory_alerts,
@@ -1087,8 +1080,10 @@ impl TyphooNApp {
                     )
                     .as_deref(),
                 );
-                // Restore the cached overlay we moved out above.
+                // Restore the cached overlay we moved out above; stash the
+                // painted price geometry for next frame's line hit-testing.
                 self.charts[vi].cached_trade_overlay = trade_ov;
+                self.charts[vi].last_price_geometry = cell_geometry;
 
                 // Border: green for focused, dim for others (WebKit: .mtf-grid-cell:hover outline)
                 let border_color = if is_focused {
@@ -1268,7 +1263,14 @@ impl TyphooNApp {
                 }
                 let trade_ov = std::mem::take(&mut chart.cached_trade_overlay);
                 let painter = ui.painter_at(rect);
-                draw_chart(
+                // Single mode renders the active chart; the lines still only
+                // appear when their owner symbol matches it (ADR-132).
+                let (active_sl, active_tp) = if trade_lines_on_active {
+                    (sl_price, tp_price)
+                } else {
+                    (None, None)
+                };
+                let single_geometry = draw_chart(
                     &painter,
                     chart,
                     rect,
@@ -1301,8 +1303,8 @@ impl TyphooNApp {
                     show_ehlers_cg,
                     show_ehlers_roof,
                     self.show_squeeze,
-                    sl_price,
-                    tp_price,
+                    active_sl,
+                    active_tp,
                     &trade_ov,
                     &self.alerts,
                     &chart.regulatory_alerts,
@@ -1315,6 +1317,7 @@ impl TyphooNApp {
                     .as_deref(),
                 );
                 chart.cached_trade_overlay = trade_ov;
+                chart.last_price_geometry = single_geometry;
 
                 // Replay overlay: show bar count and speed
                 if self.replay_active {

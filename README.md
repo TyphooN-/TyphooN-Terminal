@@ -316,6 +316,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [129](docs/adr/129-l1-l2-l3-market-data-support.md) | L1 / L2 / L3 Market Data Support (Broker-Modular) |
 | [130](docs/adr/130-multi-account-broker-support.md) | Multi-Account Broker Support (Pooled Sync Fan-Out, Account-Primary Cycling, TradeCopy) |
 | [131](docs/adr/131-sma-outfit-intelligence.md) | SMA Outfit Intelligence Window (Unfair Market SMA Outfits Concept) |
+| [132](docs/adr/132-sl-tp-lines-active-chart-scope.md) | SL/TP Trade Lines Are Active-Chart-Scoped (Exact-Geometry Dragging) |
 
 ---
 

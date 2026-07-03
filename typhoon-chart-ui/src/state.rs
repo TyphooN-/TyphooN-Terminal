@@ -365,6 +365,9 @@ pub struct ChartState {
     pub last_visible_bar_ts: i64,
     pub last_rendered_gen: u64,
     pub last_rendered_bar_ts: i64,
+    /// The exact price↔y mapping draw_chart used on the last frame this chart
+    /// painted — the authority for input hit-testing (SL/TP line drags).
+    pub last_price_geometry: Option<crate::render::PriceViewGeometry>,
 }
 
 impl ChartState {
@@ -740,6 +743,7 @@ impl ChartState {
             last_visible_bar_ts: 0,
             last_rendered_gen: 0,
             last_rendered_bar_ts: 0,
+            last_price_geometry: None,
         }
     }
 

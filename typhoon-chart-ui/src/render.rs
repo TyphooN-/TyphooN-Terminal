@@ -18,6 +18,57 @@ pub use time_axis::{format_price, format_price_buf, format_ts, format_ts_buf};
 
 // ─── chart rendering ─────────────────────────────────────────────────────────
 
+/// The exact price↔y mapping `draw_chart` painted with on its last frame:
+/// the price-pane rect (sub-panes and time axis already excluded) plus the
+/// final price range after live-quote/indicator extension, padding, and the
+/// manual-camera override. Stored per chart so input hit-testing (SL/TP line
+/// drags) uses the rendered pixels, not a re-derived approximation — the old
+/// legacy re-derivation ignored sub-panes, the time axis, log scale, and the
+/// free-look camera, which is why line grabs missed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PriceViewGeometry {
+    pub chart_rect: egui::Rect,
+    pub price_min: f64,
+    pub price_max: f64,
+    pub log_scale: bool,
+}
+
+impl PriceViewGeometry {
+    pub fn price_to_y(&self, p: f64) -> f32 {
+        let frac = if self.log_scale {
+            let log_max = self.price_max.ln();
+            let log_min = self.price_min.ln();
+            let log_range = log_max - log_min;
+            if log_range.abs() < f64::EPSILON {
+                0.5
+            } else {
+                (log_max - p.max(0.001).ln()) / log_range
+            }
+        } else {
+            (self.price_max - p) / (self.price_max - self.price_min)
+        };
+        self.chart_rect.top() + frac as f32 * self.chart_rect.height()
+    }
+
+    pub fn price_from_y(&self, y: f32) -> f64 {
+        let h = self.chart_rect.height().max(f32::EPSILON);
+        let frac = ((y - self.chart_rect.top()) / h) as f64;
+        if self.log_scale {
+            let log_max = self.price_max.ln();
+            let log_min = self.price_min.ln();
+            (log_max - frac * (log_max - log_min)).exp()
+        } else {
+            self.price_max - frac * (self.price_max - self.price_min)
+        }
+    }
+
+    /// New price after dragging a horizontal line at `price` by `dy` pixels —
+    /// exact under both linear and log scales.
+    pub fn drag_price(&self, price: f64, dy: f32) -> f64 {
+        self.price_from_y(self.price_to_y(price) + dy)
+    }
+}
+
 /// Draw a single chart viewport into `rect` using `painter`.
 pub fn draw_chart(
     painter: &egui::Painter,
@@ -59,7 +110,7 @@ pub fn draw_chart(
     regulatory_alerts: &[typhoon_engine::core::regulatory_alerts::RegulatoryAlert],
     draw_mode: &DrawMode,
     company_name: Option<&str>,
-) {
+) -> Option<PriceViewGeometry> {
     // Do not early-return for a stable chart. egui is immediate-mode: if this
     // function skips painting for a frame, the chart area can be left blank or
     // appear to flicker when the closed-market/auto-source chart is merely being
@@ -69,7 +120,7 @@ pub fn draw_chart(
     // Heavy sync early-out: do near-O(1) work only during backfill
     if chart.heavy_sync_in_progress {
         painter.rect_filled(rect, 0.0, BG);
-        return;
+        return None;
     }
     // Update the "last rendered" snapshot for next frame
     // (we mutate through &mut via interior mutability or by accepting &mut ChartState
@@ -102,7 +153,7 @@ pub fn draw_chart(
             egui::FontId::proportional(12.0),
             egui::Color32::from_rgb(110, 110, 130),
         );
-        return;
+        return None;
     }
 
     // Allocate sub-pane space at bottom
@@ -299,7 +350,7 @@ pub fn draw_chart(
     }
 
     if (price_max - price_min).abs() < f64::EPSILON {
-        return;
+        return None;
     }
 
     let use_log = chart.log_scale && price_min > 0.0; // log scale requires positive prices
@@ -324,6 +375,15 @@ pub fn draw_chart(
             (price_max - p) / linear_range
         };
         chart_top + frac as f32 * chart_h
+    };
+    // The exact mapping this frame paints with — returned so input hit-testing
+    // (SL/TP line drags) can agree with the rendered pixels instead of
+    // re-deriving an approximation.
+    let price_geometry = PriceViewGeometry {
+        chart_rect,
+        price_min,
+        price_max,
+        log_scale: use_log,
     };
 
     // ── bar width ────────────────────────────────────────────────────────────
@@ -1783,17 +1843,46 @@ pub fn draw_chart(
         bars,
         format_price,
     ) {
-        return;
+        return Some(price_geometry);
     }
 
     draw_drawing_preview(
         painter, chart_rect, data_left, bar_w, start_idx, end_idx, price_min, price_max, crosshair,
         draw_mode, price_to_y,
     );
+    Some(price_geometry)
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn price_view_geometry_round_trips_linear_and_log() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(800.0, 400.0));
+        for log_scale in [false, true] {
+            let g = super::PriceViewGeometry {
+                chart_rect: rect,
+                price_min: 50.0,
+                price_max: 150.0,
+                log_scale,
+            };
+            // Top of the pane is price_max, bottom is price_min.
+            assert!((g.price_to_y(150.0) - 100.0).abs() < 0.001, "log={log_scale}");
+            assert!((g.price_to_y(50.0) - 500.0).abs() < 0.001, "log={log_scale}");
+            for p in [50.0, 75.0, 100.0, 149.0] {
+                let back = g.price_from_y(g.price_to_y(p));
+                // y is f32 pixels, so the round trip carries float error well
+                // under the 8px grab tolerance the mapping serves.
+                assert!(
+                    ((back - p) / p).abs() < 1e-4,
+                    "round trip failed log={log_scale} p={p} back={back}"
+                );
+            }
+            // Dragging down (positive dy) lowers the price on both scales.
+            assert!(g.drag_price(100.0, 40.0) < 100.0, "log={log_scale}");
+            assert!(g.drag_price(100.0, -40.0) > 100.0, "log={log_scale}");
+        }
+    }
+
     #[test]
     fn format_size_is_compact_not_price_padded() {
         use super::time_axis::format_size;

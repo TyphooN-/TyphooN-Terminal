@@ -404,6 +404,7 @@ impl TyphooNApp {
             cryptopanic_key: String::new(),
             sl_price: None,
             tp_price: None,
+            trade_lines_symbol: None,
             dragging_sl: false,
             dragging_tp: false,
             rc_equity: "10000".to_string(),
