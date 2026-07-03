@@ -15,6 +15,12 @@ ignore = [
     # Deliberately NOT patching to that unmerged fork branch — pulling
     # unreviewed third-party code onto the build path is a worse supply-chain
     # posture than this build-time-only acceptance.
+    # Master-tracking was canary-tested (2026-07-03, scratch worktree): a
+    # [patch] of wayland-scanner to Smithay master does not even build — the
+    # master scanner emits codegen for unreleased wayland-backend symbols
+    # (CWlMessage/CWlInterface), so following master would mean running the
+    # ENTIRE unreleased wayland stack. Upstream releases the workspace as a
+    # coherent set, so the eventual release lands via plain `cargo update`.
     # Revisit: drop these entries when #938 merges and a wayland-scanner
     # release ships (check `cargo audit` after egui/winit stack bumps).
     "RUSTSEC-2026-0194",
