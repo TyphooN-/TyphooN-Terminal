@@ -71,13 +71,14 @@ impl ChartState {
         // Activate manual free-look on user pan start (TV/MT5 style).
         // Ensures MTF cell body drags + single-chart parity set manual_view_override
         // so live forming/trade updates (price/vol/ts) do not auto-recenter.
+        let was_manual = self.manual_view_override;
         self.manual_view_override = true;
-        // Do not rebuild the camera from rounded legacy fields once manual
-        // free-look is active. `view_offset` is integer compatibility state;
+        // Seed the camera from legacy fields only on the follow→manual
+        // transition. `view_offset` is integer compatibility state;
         // `ChartCamera` is the authoritative fractional bar/price camera.
         // Reconstructing from legacy at every drag start caused the visible
         // snap-back between recenter gestures.
-        if !self.manual_view_override {
+        if !was_manual {
             self.reset_camera_from_legacy();
         }
         let (natural_center, natural_span) =
