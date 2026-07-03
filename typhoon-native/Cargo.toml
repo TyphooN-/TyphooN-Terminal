@@ -37,11 +37,9 @@ egui_commonmark = { version = "0.24", default-features = false, features = ["loa
 wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "vulkan", "wgsl"] }  # Must match egui-wgpu (eframe 0.35 → wgpu 29); Linux-native only, no web/DX/Metal backends
 
 # Async runtime (shared with engine). net + io-util serve the hand-rolled
-# /metrics HTTP responder (metrics.rs) that replaced axum.
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "fs", "net", "io-util"] }
-
-# Concurrent future combinators (join_all for the news-body hydrator)
-futures-util = "0.3"
+# /metrics HTTP responder (metrics.rs) that replaced axum. No tokio::fs use
+# in this crate (broker-runtime owns the async file I/O).
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }
 
 # Regex filter for the News window — lets the user search article headlines
 # with /pattern/ syntax in addition to the keyword and comma-separated

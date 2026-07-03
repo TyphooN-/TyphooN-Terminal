@@ -20,10 +20,16 @@ reqwest = { workspace = true, features = ["json", "query", "cookies", "rustls"] 
 chrono = { workspace = true }
 tracing = { workspace = true }
 zstd = { workspace = true }
-zeroize = { workspace = true, features = ["derive"] }
+# Zeroizing<String> + the Zeroize trait only — no derives, so the
+# zeroize_derive proc-macro stays out of this crate's build graph.
+zeroize = { workspace = true }
 aes-gcm = { workspace = true }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
-futures-util = "0.3"
+# Declared minimal: StreamExt (std) + SinkExt (sink) for the WS lanes.
+# `sink` was previously only enabled transitively by tokio-tungstenite's own
+# futures-util dep — declare what we call so a tungstenite feature change
+# can't silently break the build.
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 # Alpaca's streaming APIs frame payloads as MessagePack; decode binary frames
 # into serde_json::Value so the existing JSON parsers can consume them.
 rmp-serde = "1"

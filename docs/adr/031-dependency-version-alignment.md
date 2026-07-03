@@ -174,3 +174,36 @@ Confirmed immovable (upstream-final):
   still builds on the old RustCrypto line. The whole old-line duplicate
   family (`aes` 0.8, `cipher` 0.4, `digest` 0.10, `hmac` 0.12, …) unifies
   only when that crate migrates.
+
+## Lean sweep, round 2 (2026-07-03 pm)
+
+Re-verified the whole surface a day after the first sweep, then took the
+feature trims deliberately deferred from it. Version state: `cargo update
+--dry-run --verbose` shows **zero** compatible updates pending — the tree is
+at ceiling — and the three upstream blockers were re-checked against
+crates.io and are unchanged (egui-wgpu 0.35.0 is still the latest and pins
+wgpu 29; dbus-secret-service 4.1.0 is still the latest and still on the old
+RustCrypto line; wayland-scanner 0.31.10 still pins quick-xml ^0.39).
+`cargo audit` clean. Lockfile 580 → **579**.
+
+- **`futures-util` declared minimal per crate** (was bare `"0.3"` with
+  defaults in three crates): engine `["std", "sink"]` (StreamExt + SinkExt
+  for the WS lanes — `sink` was previously enabled only transitively by
+  tokio-tungstenite, i.e. one upstream feature change from a build break);
+  broker-runtime `["alloc"]` (join_all only); **typhoon-native's dependency
+  removed outright** — its only "futures" matches were the
+  `core::kraken_futures` module. Drops the `futures-macro` proc-macro from
+  the tree entirely.
+- **`aes-gcm`**: `default-features = false, features = ["aes", "alloc"]` —
+  backup-encryption nonces come from `rand::random`, so the AEAD's
+  `getrandom` default was dead weight.
+- **`zeroize`**: dropped the `derive` feature — the engine uses
+  `Zeroizing<String>` and the `Zeroize` trait, no derives. (zeroize_derive
+  remains in the tree via another dependent, but is out of the engine's
+  build graph.)
+- **`tokio`**: native drops `fs` (no `tokio::fs` use; broker-runtime owns
+  async file I/O and keeps it).
+- Checked and already minimal: `egui_plot` (default = []), `rand` 0.10
+  defaults (exactly the `rand::random` requirements), rusqlite
+  (`bundled` only), scraper/image/wgpu/eframe/reqwest per-crate sets from
+  the first sweep.
