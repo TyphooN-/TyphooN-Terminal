@@ -1043,8 +1043,8 @@ fn nav_typography_helpers_exist() {
     let fonts = egui::FontDefinitions::default();
     ctx.set_fonts(fonts);
 
-    let _ = ctx.run(Default::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let _ = ctx.run_ui(Default::default(), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             nav_primary(ui, "TEST");
             nav_secondary(ui, "123.45");
             nav_muted(ui, "Yahoo");
@@ -1120,8 +1120,8 @@ fn market_depth_and_volume_profile_render_helpers_are_callable() {
     };
 
     let ctx = egui::Context::default();
-    let _ = ctx.run(Default::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let _ = ctx.run_ui(Default::default(), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 120.0));
             let painter = ui.painter();
             draw_market_depth(painter, &depth, rect);

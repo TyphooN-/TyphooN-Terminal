@@ -2,7 +2,7 @@ use super::*;
 
 impl TyphooNApp {
     #[allow(deprecated)]
-    pub(crate) fn render_drawing_toolbar(&mut self, ctx: &egui::Context) {
+    pub(crate) fn render_drawing_toolbar(&mut self, root_ui: &mut egui::Ui) {
         // ── Drawing toolbar (horizontal top bar, TradingView style) ─────────
         egui::Panel::top("drawing_toolbar")
             .max_size(24.0)
@@ -11,7 +11,7 @@ impl TyphooNApp {
                     .fill(egui::Color32::from_rgb(18, 18, 25))
                     .inner_margin(egui::Margin::symmetric(4, 1)),
             )
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
                     let dm = self.draw_mode;

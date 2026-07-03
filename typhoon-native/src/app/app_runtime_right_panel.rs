@@ -2,7 +2,7 @@ use super::*;
 
 #[allow(deprecated)]
 impl TyphooNApp {
-    pub(super) fn render_right_panel(&mut self, ctx: &egui::Context) {
+    pub(super) fn render_right_panel(&mut self, root_ui: &mut egui::Ui) {
         // ── right panel (collapsible sections — all visible, individually expandable) ──
         egui::Panel::right("right_panel")
             .min_size(220.0)
@@ -11,7 +11,7 @@ impl TyphooNApp {
             // collapse manually; individual sections handle narrower layouts.
             .default_size(500.0)
             .resizable(true)
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink(false)
                     .show(ui, |ui| {

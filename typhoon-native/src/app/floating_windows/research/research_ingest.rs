@@ -162,7 +162,7 @@ impl TyphooNApp {
                                 .resizable(true)
                                 .default_size(280.0)
                                 .size_range(180.0..=420.0)
-                                .show_inside(ui, |ui| {
+                                .show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new(format!("{} sections · {} bytes", tree_snapshot.len(), text_len)).color(AXIS_TEXT).small());
                                         if self.packet_viewer_selected.is_some() {
@@ -194,7 +194,7 @@ impl TyphooNApp {
                                         });
                                 });
 
-                            egui::CentralPanel::default().show_inside(ui, |ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
                                 // If a section is selected, slice the text from its byte offset to
                                 // the start of the next section with depth <= the selected section's
                                 // depth (so selecting an H2 shows its H3/H4 children, selecting an H3

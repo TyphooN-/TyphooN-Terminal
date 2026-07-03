@@ -28,9 +28,6 @@ fn report_slow_pre_broker_ticks(ticks: &[(&'static str, f32)]) {
         .join(" ");
     tracing::warn!("Slow pre_broker tick: {name} took {ms:.1}ms — breakdown: {breakdown}");
 }
-// egui 0.34: Panel::show(ctx) deprecated in favor of show_inside(ui).
-// Full migration to ui() pattern is deferred while this runtime pass focuses on module boundaries.
-#[allow(deprecated)]
 impl eframe::App for TyphooNApp {
     fn on_exit(&mut self) {
         self.save_session();
@@ -42,12 +39,14 @@ impl eframe::App for TyphooNApp {
         }
     }
 
-    fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Panels rendered in update() via ctx — egui 0.34 migration to ui() pattern is deferred
-        // since our 16K-line update() mixes panel rendering with floating windows + state logic
-    }
-
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    // eframe 0.35 removed App::update; the whole frame body lives in ui().
+    // Deliberately NOT split into logic()+ui(): eframe 0.34 already gated
+    // update() behind is_visible, so a hidden window pausing the data pump is
+    // the long-standing shipped behavior, and keeping one body preserves it
+    // exactly. Chrome panels render through the root `ui`; floating
+    // egui::Window/Area code keeps using `ctx`.
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = &ui.ctx().clone();
         self.frame_count += 1;
         let now_instant = std::time::Instant::now();
         let perf_pre_broker_ms;
@@ -258,14 +257,14 @@ impl eframe::App for TyphooNApp {
         perf_post_broker_setup_ms = post_broker_setup_started.elapsed().as_secs_f64() * 1000.0;
 
         let chrome_panels_started = std::time::Instant::now();
-        self.render_menu_bar(ctx);
-        self.render_symbol_timeframe_toolbar(ctx);
+        self.render_menu_bar(ui);
+        self.render_symbol_timeframe_toolbar(ui);
         self.render_symbol_autocomplete_dropdown(ctx);
 
-        self.render_tab_bar(ctx);
-        self.render_bottom_panels(ctx);
+        self.render_tab_bar(ui);
+        self.render_bottom_panels(ui);
 
-        self.render_right_panel(ctx);
+        self.render_right_panel(ui);
         perf_chrome_panels_ms = chrome_panels_started.elapsed().as_secs_f64() * 1000.0;
 
         // ── floating windows ─────────────────────────────────────────────────
@@ -278,9 +277,9 @@ impl eframe::App for TyphooNApp {
         self.render_regulatory_alert_windows(ctx);
 
         // ── central panel (chart area) ────────────────────────────────────────
-        self.render_drawing_toolbar(ctx);
+        self.render_drawing_toolbar(ui);
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             let pointer_over_floating = self.handle_runtime_input(ctx);
             self.render_central_panel(ctx, ui, pointer_over_floating);
         });
@@ -659,7 +658,7 @@ impl eframe::App for TyphooNApp {
                 let now_utc = chrono::Utc::now();
                 let eastern = now_utc.with_timezone(
                     &chrono::FixedOffset::west_opt(5 * 3600)
-                        .unwrap_or(chrono::FixedOffset::east(0)),
+                        .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap()),
                 );
                 use chrono::Datelike;
                 let is_weekend = matches!(

@@ -3,9 +3,10 @@ use crate::app::app_runtime_tabs::tab_bar_chart_indices;
 
 #[allow(deprecated)]
 impl TyphooNApp {
-    pub(super) fn render_menu_bar(&mut self, ctx: &egui::Context) {
+    pub(super) fn render_menu_bar(&mut self, root_ui: &mut egui::Ui) {
+        let ctx = &root_ui.ctx().clone();
         // ── top menu bar ─────────────────────────────────────────────────────
-        egui::Panel::top("menu_bar").show(ctx, |ui| {
+        egui::Panel::top("menu_bar").show(root_ui, |ui| {
                     egui::MenuBar::new().ui(ui, |ui| {
                         ui.menu_button("File", |ui| {
                             if ui.button("Settings").clicked() {

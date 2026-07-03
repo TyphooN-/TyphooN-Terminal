@@ -22,16 +22,16 @@ typhoon-broker-runtime = { workspace = true }
 typhoon-transpiler = { workspace = true }
 
 # Native GPU UI — latest stable egui ecosystem (2026-03-27)
-eframe = { version = "0.34.3", default-features = false, features = ["default_fonts", "wayland", "wgpu_no_default_features", "x11"] }
-egui = { version = "0.34.3", default-features = false, features = ["default_fonts"] }
-egui_plot = "0.35"
+eframe = { version = "0.35", default-features = false, features = ["default_fonts", "wayland", "wgpu_no_default_features", "x11"] }
+egui = { version = "0.35", default-features = false, features = ["default_fonts"] }
+egui_plot = "0.36"
 # News article rendering: markdown viewer (paragraphs/links/headings/inline images)
 # plus the egui_extras image loader so hero images and inline <img>s decode from URL.
 # Deliberately NOT a full HTML/JS renderer (no webview, no wry/tao) — see ADR for the
 # threat model on remote-content engines inside a financial terminal.
-egui_extras = { version = "0.34.3", default-features = false, features = ["image", "all_loaders"] }
-egui_commonmark = { version = "0.23", default-features = false, features = ["load-images"] }
-wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "vulkan", "wgsl"] }  # Aligned with eframe 0.34; Linux-native only, no web/DX/Metal backends
+egui_extras = { version = "0.35", default-features = false, features = ["image", "all_loaders"] }
+egui_commonmark = { version = "0.24", default-features = false, features = ["load-images"] }
+wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "vulkan", "wgsl"] }  # Must match egui-wgpu (eframe 0.35 → wgpu 29); Linux-native only, no web/DX/Metal backends
 
 # Async runtime (shared with engine)
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "fs"] }

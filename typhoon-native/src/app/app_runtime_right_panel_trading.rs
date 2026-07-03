@@ -11,7 +11,9 @@ impl TyphooNApp {
                     // ── Trading Buttons Grid (exact WebKit CSS: #button-grid) ──
                     let trading_enabled = true;
                     self.resolve_order_broker();
-                    ui.set_enabled(trading_enabled);
+                    if !trading_enabled {
+                        ui.disable();
+                    }
                     ui.add_space(8.0);
                     ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                     let btn_w = (ui.available_width() - 4.0) / 2.0;

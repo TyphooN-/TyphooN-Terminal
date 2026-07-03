@@ -36,9 +36,10 @@ pub(super) fn session_status_color(session: &str) -> egui::Color32 {
 
 #[allow(deprecated)]
 impl TyphooNApp {
-    pub(super) fn render_symbol_timeframe_toolbar(&mut self, ctx: &egui::Context) {
+    pub(super) fn render_symbol_timeframe_toolbar(&mut self, root_ui: &mut egui::Ui) {
+        let ctx = &root_ui.ctx().clone();
         // ── symbol + timeframe toolbar ───────────────────────────────────────
-        egui::Panel::top("toolbar").show(ctx, |ui| {
+        egui::Panel::top("toolbar").show(root_ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT).small());
                         let resp = ui.add(

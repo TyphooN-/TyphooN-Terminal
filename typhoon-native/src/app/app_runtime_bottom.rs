@@ -47,7 +47,8 @@ fn chart_data_source_status_label(chart: &ChartState, cache: Option<&SqliteCache
 
 #[allow(deprecated)]
 impl TyphooNApp {
-    pub(super) fn render_bottom_panels(&mut self, ctx: &egui::Context) {
+    pub(super) fn render_bottom_panels(&mut self, root_ui: &mut egui::Ui) {
+        let ctx = &root_ui.ctx().clone();
         // ── bottom panel (log / volume) ──────────────────────────────────────
         // ── ADR-094: Result card rendering (above log) ─────────────
         // Auto-dismiss after 30 seconds
@@ -61,7 +62,7 @@ impl TyphooNApp {
             .resizable(true)
             .min_size(80.0)
             .default_size(140.0)
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 // ── Result card (above log) ──
                 if let Some((card, _)) = &self.result_card {
                     ui.group(|ui| {
@@ -281,7 +282,7 @@ impl TyphooNApp {
                         egui::Frame::popup(ui.style())
                             .fill(egui::Color32::from_rgb(30, 30, 40))
                             .inner_margin(8.0)
-                            .rounding(6.0)
+                            .corner_radius(6.0)
                             .stroke(egui::Stroke::new(1.0, toast.color))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
@@ -303,7 +304,7 @@ impl TyphooNApp {
         // ── bottom status bar ────────────────────────────────────────────────
         egui::Panel::bottom("status_bar")
             .exact_size(20.0)
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
                     // Footer tracks the chart you're actually viewing (focused
                     // MTF cell, else the active tab) — not charts[0]. Symbol/TF/

@@ -117,7 +117,7 @@ fn encrypt_backup_payload(compressed: &[u8], passphrase: &str) -> Result<Vec<u8>
     };
     let encrypted = cipher
         .encrypt(
-            Nonce::from_slice(&nonce_bytes),
+            &Nonce::from(nonce_bytes),
             Payload {
                 msg: compressed,
                 aad: &header,
@@ -148,9 +148,18 @@ fn decrypt_backup_payload(encrypted: &[u8], passphrase: &str) -> Result<Vec<u8>,
             return Err("Create encrypted backup cipher failed".to_string());
         }
     };
+    // Length is validated against ENCRYPTED_BACKUP_NONCE_LEN by the header parser.
+    let nonce = Nonce::try_from(nonce_bytes).map_err(|_| {
+        key.zeroize();
+        "Unsupported encrypted backup salt/nonce length".to_string()
+    });
+    let nonce = match nonce {
+        Ok(nonce) => nonce,
+        Err(e) => return Err(e),
+    };
     let decrypted = cipher
         .decrypt(
-            Nonce::from_slice(nonce_bytes),
+            &nonce,
             Payload {
                 msg: ciphertext,
                 aad: header,

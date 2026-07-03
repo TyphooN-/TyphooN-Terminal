@@ -185,9 +185,12 @@ fn main() -> eframe::Result {
     // Keep runtime alive for the lifetime of the app
     let _rt_guard = runtime;
 
+    // eframe 0.35: present-mode/latency moved into WgpuConfiguration::surface;
+    // NativeOptions::vsync is gone (present_mode owns it on the wgpu backend)
+    // and hardware_acceleration was a glow-only knob, never consulted by wgpu.
     let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration::default();
-    wgpu_options.present_mode = eframe::wgpu::PresentMode::AutoVsync;
-    wgpu_options.desired_maximum_frame_latency = Some(1);
+    wgpu_options.surface.present_mode = eframe::wgpu::PresentMode::AutoVsync;
+    wgpu_options.surface.desired_maximum_frame_latency = Some(1);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -195,8 +198,6 @@ fn main() -> eframe::Result {
             .with_inner_size([1920.0, 1080.0])
             .with_min_inner_size([800.0, 600.0]),
         renderer: eframe::Renderer::Wgpu,
-        vsync: true,
-        hardware_acceleration: eframe::HardwareAcceleration::Required,
         wgpu_options,
         ..Default::default()
     };

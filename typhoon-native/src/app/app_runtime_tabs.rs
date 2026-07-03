@@ -10,7 +10,8 @@ pub(super) fn tab_bar_chart_indices(charts: &[ChartState]) -> Vec<usize> {
 
 #[allow(deprecated)]
 impl TyphooNApp {
-    pub(super) fn render_tab_bar(&mut self, ctx: &egui::Context) {
+    pub(super) fn render_tab_bar(&mut self, root_ui: &mut egui::Ui) {
+        let ctx = &root_ui.ctx().clone();
         // ── tab bar ───────────────────────────────────────────────────────────
         // Snapshot the per-tab data up front so the tab loop can live inside a
         // horizontal ScrollArea closure without borrowing `self` — every action
@@ -50,7 +51,7 @@ impl TyphooNApp {
 
         egui::Panel::top("tab_bar")
             .exact_size(26.0) // WebKit: height: 26px
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     let mut switch_to: Option<usize> = None;
@@ -82,7 +83,10 @@ impl TyphooNApp {
                         // Dragging a tab reorders it — don't let the scroll area
                         // hijack that as a drag-to-scroll gesture. Wheel + scrollbar
                         // still scroll the strip.
-                        .drag_to_scroll(false)
+                        .scroll_source(egui::containers::scroll_area::ScrollSource {
+                            drag: egui::containers::scroll_area::DragScroll::Never,
+                            ..Default::default()
+                        })
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 0.0;
