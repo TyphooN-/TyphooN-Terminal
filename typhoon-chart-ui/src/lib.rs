@@ -16,5 +16,6 @@ pub mod drawing;
 pub mod indicators;
 pub mod models;
 pub mod render;
+pub mod sma_outfits;
 pub mod state;
 pub mod types;

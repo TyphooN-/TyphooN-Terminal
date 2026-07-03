@@ -311,6 +311,7 @@ impl eframe::App for TyphooNApp {
                     "NNFX",
                     "RESET_IND",
                     "SESSIONS",
+                    "SMA_INTELLIGENCE",
                     "SUPERTREND",
                     "DONCHIAN",
                     "KELTNER",

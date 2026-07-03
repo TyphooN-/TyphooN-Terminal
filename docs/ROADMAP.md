@@ -65,6 +65,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Walk-forward optimizer (70/30 in-sample/out-of-sample, 5 strategies)
 - [x] Seasonals (monthly return patterns from bar data)
 - [x] Volume Profile (POC, Value Area High/Low)
+- [x] SMA Outfit Intelligence (`SMA_INTELLIGENCE` — stack/trigger analysis per outfit, ADR-131)
 - [x] Monte Carlo VaR (from DARWIN daily returns)
 - [x] Stress test (8 historical scenarios)
 - [x] VaR multiplier (per-DARWIN corridor status)

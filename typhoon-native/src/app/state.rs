@@ -895,6 +895,12 @@ pub struct TyphooNApp {
     pub(crate) event_filter_exdiv: bool,
     pub(crate) event_filter_divpay: bool,
     pub(crate) show_confluence: bool,
+    /// SMA Intelligence window (SMA-outfit stack/trigger analysis; ADR-131).
+    pub(crate) show_sma_intelligence: bool,
+    /// Configured SMA outfits (each = ascending periods, 1..=999); persisted.
+    pub(crate) sma_outfits: Vec<Vec<usize>>,
+    /// Editor buffer for adding an outfit ("10/50/200").
+    pub(crate) sma_outfit_input: String,
     pub(crate) show_stat_arb: bool,
     pub(crate) show_risk_budget: bool,
     pub(crate) show_order_flow: bool,

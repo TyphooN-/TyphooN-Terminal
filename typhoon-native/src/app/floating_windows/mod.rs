@@ -18,6 +18,7 @@ mod scope;
 mod scrape_status_windows;
 mod screenshots;
 mod sec_calendar_windows;
+mod sma_intelligence;
 mod storage_sync_windows;
 mod symbol_explorer;
 mod symbol_screener;
@@ -219,6 +220,9 @@ impl TyphooNApp {
 
         // Market analytics, calendars, screeners, and portfolio risk windows
         self.render_market_analytics_windows(ctx);
+
+        // SMA outfit stack/trigger intelligence (ADR-131)
+        self.render_sma_intelligence_window(ctx);
 
         // Order flow, bookmap, orderbook DOM, and indicator compiler windows
         self.render_trading_tools_windows(ctx);

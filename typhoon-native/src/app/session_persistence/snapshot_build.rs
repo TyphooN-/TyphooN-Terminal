@@ -127,6 +127,7 @@ impl TyphooNApp {
                 .map(|section| serde_json::json!(section.as_str()))
                 .collect::<Vec<_>>(),
             "user_watchlist": self.user_watchlist,
+            "sma_outfits": self.sma_outfits,
             "workspaces": serde_json::Value::Object(
                 self.workspaces.iter()
                     .map(|(k, v)| (k.clone(), serde_json::json!(v)))

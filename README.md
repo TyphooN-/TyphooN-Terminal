@@ -315,6 +315,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [128](docs/adr/128-sync-coverage-levers.md) | Sync Coverage Levers (Market-Closed Gate + Reachable %) |
 | [129](docs/adr/129-l1-l2-l3-market-data-support.md) | L1 / L2 / L3 Market Data Support (Broker-Modular) |
 | [130](docs/adr/130-multi-account-broker-support.md) | Multi-Account Broker Support (Pooled Sync Fan-Out, Account-Primary Cycling, TradeCopy) |
+| [131](docs/adr/131-sma-outfit-intelligence.md) | SMA Outfit Intelligence Window (Unfair Market SMA Outfits Concept) |
 
 ---
 

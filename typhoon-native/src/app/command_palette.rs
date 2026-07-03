@@ -124,6 +124,7 @@ impl TyphooNApp {
             }
             "SEC" => self.show_sec = true,
             "INSIDER" => self.show_insider = true,
+            "SMA_INTELLIGENCE" => self.show_sma_intelligence = true,
             "CONFLUENCE" => self.show_confluence = true,
             "STAT_ARB" => self.show_stat_arb = true,
             "RISK_BUDGET" => self.show_risk_budget = true,

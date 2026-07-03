@@ -1461,6 +1461,27 @@ impl TyphooNApp {
                         .collect();
                     self.user_watchlist_set = self.user_watchlist.iter().cloned().collect();
                 }
+                // Restore SMA outfits (ADR-131) — re-validate through the
+                // spec parser so a hand-edited session can't smuggle
+                // out-of-range periods; empty/absent falls back to defaults.
+                if let Some(outfits) = v["sma_outfits"].as_array() {
+                    let restored: Vec<Vec<usize>> = outfits
+                        .iter()
+                        .filter_map(|o| {
+                            let spec = o
+                                .as_array()?
+                                .iter()
+                                .filter_map(|p| p.as_u64())
+                                .map(|p| p.to_string())
+                                .collect::<Vec<_>>()
+                                .join("/");
+                            typhoon_chart_ui::sma_outfits::parse_outfit_spec(&spec)
+                        })
+                        .collect();
+                    if !restored.is_empty() {
+                        self.sma_outfits = restored;
+                    }
+                }
                 if let Some(obj) = v["workspaces"].as_object() {
                     self.workspaces = obj
                         .iter()

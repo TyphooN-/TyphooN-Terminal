@@ -59,6 +59,7 @@ impl TyphooNApp {
         self.show_calendar = false;
         self.show_sec = false;
         self.show_insider = false;
+        self.show_sma_intelligence = false;
         self.show_fundamentals = false;
         self.show_analyst = false;
         self.show_holders = false;

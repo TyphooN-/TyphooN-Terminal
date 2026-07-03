@@ -1998,3 +1998,32 @@ fn mtf_overlay_drops_misscaled_intraday_source_but_keeps_lagging_average() {
         &host, &misscaled
     ));
 }
+
+// ── SMA Intelligence (ADR-131) ───────────────────────────────────────────
+
+#[test]
+fn sma_intelligence_command_is_registered() {
+    let cmd = crate::app::commands::COMMANDS
+        .iter()
+        .find(|c| c.name == "SMA_INTELLIGENCE")
+        .expect("SMA_INTELLIGENCE must be in the palette");
+    assert!(
+        cmd.desc.to_lowercase().contains("outfit"),
+        "description should name the SMA-outfit concept: {}",
+        cmd.desc
+    );
+}
+
+#[test]
+fn sma_default_outfits_round_trip_through_the_spec_parser() {
+    // The session-restore path re-validates persisted outfits through
+    // parse_outfit_spec; the shipped defaults must always survive it.
+    for outfit in typhoon_chart_ui::sma_outfits::default_sma_outfits() {
+        let spec = typhoon_chart_ui::sma_outfits::outfit_label(&outfit);
+        assert_eq!(
+            typhoon_chart_ui::sma_outfits::parse_outfit_spec(&spec),
+            Some(outfit),
+            "default outfit {spec} failed re-validation"
+        );
+    }
+}

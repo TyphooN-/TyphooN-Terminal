@@ -155,6 +155,10 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "Insider trades (Form 4)",
     },
     Command {
+        name: "SMA_INTELLIGENCE",
+        desc: "SMA outfit stack/trigger intelligence (Unfair Market SMA Outfits)",
+    },
+    Command {
         name: "REG_SHO",
         desc: "Reg SHO threshold list — naked-short / fail-to-deliver watch",
     },
