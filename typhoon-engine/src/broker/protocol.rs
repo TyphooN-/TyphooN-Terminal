@@ -543,6 +543,11 @@ pub enum BrokerCmd {
         symbol: String,
         finnhub_key: String,
     },
+    /// Fetch keyless Reddit mention snapshot across the finance subreddits
+    /// (ADR-117 Reddit lane).
+    FetchRedditMentions {
+        symbol: String,
+    },
     /// Fetch StockTwits public symbol stream sentiment snapshot.
     FetchStockTwitsSentiment {
         symbol: String,
@@ -2801,6 +2806,8 @@ pub enum BrokerMsg {
     SocialSentiment(String, Vec<crate::core::research::SocialSentimentRow>),
     /// StockTwits public-stream sentiment snapshot for a symbol.
     StockTwitsSentiment(String, crate::core::research::StockTwitsSentimentSnapshot),
+    /// Keyless Reddit mention snapshot for a symbol (ADR-117 Reddit lane).
+    RedditMentions(String, crate::core::research::RedditMentionSnapshot),
     /// FMP transcript metadata list.
     TranscriptList(String, Vec<crate::core::research::TranscriptMeta>),
     /// FMP full transcript body.

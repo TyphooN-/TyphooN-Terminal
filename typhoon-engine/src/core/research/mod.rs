@@ -66,8 +66,8 @@ pub use fundamental_risk_types::{
 
 mod transcripts_sentiment;
 pub use transcripts_sentiment::{
-    PressRelease, SocialSentimentRow, StockTwitsMessage, StockTwitsSentimentSnapshot, Transcript,
-    TranscriptMeta,
+    PressRelease, RedditMentionSnapshot, RedditPost, SocialHistoryPoint, SocialSentimentRow,
+    StockTwitsMessage, StockTwitsSentimentSnapshot, Transcript, TranscriptMeta,
 };
 
 mod financials;
@@ -78,8 +78,9 @@ mod providers;
 pub use providers::{
     fetch_finnhub_company_snapshot, fetch_finnhub_earnings, fetch_finnhub_ipo_calendar,
     fetch_finnhub_peers, fetch_finnhub_press, fetch_finnhub_profile, fetch_finnhub_social,
-    fetch_fmp_transcript, fetch_fmp_transcript_list, fetch_stocktwits_sentiment,
-    fetch_yahoo_quotes, parse_stocktwits_symbol_stream,
+    fetch_fmp_transcript, fetch_fmp_transcript_list, fetch_reddit_mentions,
+    fetch_stocktwits_sentiment, fetch_yahoo_quotes, parse_reddit_search,
+    parse_stocktwits_symbol_stream,
 };
 mod fetchers;
 pub use fetchers::*;

@@ -228,6 +228,7 @@ impl TyphooNApp {
                 | BrokerMsg::PressReleases(_, _)
                 | BrokerMsg::SocialSentiment(_, _)
                 | BrokerMsg::StockTwitsSentiment(_, _)
+                | BrokerMsg::RedditMentions(_, _)
                 | BrokerMsg::TranscriptList(_, _)
                 | BrokerMsg::TranscriptBody(_)
                 | BrokerMsg::CommoditiesQuotes(_)

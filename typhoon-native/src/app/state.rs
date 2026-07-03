@@ -1228,6 +1228,16 @@ pub struct TyphooNApp {
     pub(crate) sentiment_symbol: String,
     pub(crate) sentiment_rows: Vec<typhoon_engine::core::research::SocialSentimentRow>,
     pub(crate) sentiment_loading: bool,
+    /// Latest StockTwits snapshot shown in the SENTIMENT window (ADR-117).
+    pub(crate) stocktwits_snapshot:
+        Option<typhoon_engine::core::research::StockTwitsSentimentSnapshot>,
+    /// Latest keyless Reddit mention snapshot (ADR-117 Reddit lane).
+    pub(crate) reddit_snapshot: Option<typhoon_engine::core::research::RedditMentionSnapshot>,
+    /// Stored social-history points backing the SENTIMENT window sparkline.
+    pub(crate) social_history: Vec<typhoon_engine::core::research::SocialHistoryPoint>,
+    /// Set when new social data lands so the window re-reads history/cached
+    /// snapshots on its next frame.
+    pub(crate) social_history_dirty: bool,
     pub(crate) sentiment_sort_col: usize,
     pub(crate) sentiment_sort_asc: bool,
 

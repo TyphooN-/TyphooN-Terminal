@@ -1,6 +1,7 @@
 use super::{
-    CompanyProfile, EarningRow, IpoEvent, PressRelease, SocialSentimentRow, StockTwitsMessage,
-    StockTwitsSentimentSnapshot, Transcript, TranscriptMeta,
+    CompanyProfile, EarningRow, IpoEvent, PressRelease, RedditMentionSnapshot, RedditPost,
+    SocialSentimentRow, StockTwitsMessage, StockTwitsSentimentSnapshot, Transcript,
+    TranscriptMeta,
 };
 
 pub async fn fetch_finnhub_profile(
@@ -351,6 +352,85 @@ pub fn parse_stocktwits_symbol_stream(
     Ok(snapshot)
 }
 
+/// Finance subreddits the keyless Reddit mention lane searches (ADR-117).
+pub const REDDIT_FINANCE_SUBS: &str = "wallstreetbets+stocks+investing+StockMarket";
+
+/// Keyless Reddit mention scan for one symbol: exact-phrase search across the
+/// finance subreddits over the trailing day via the public `search.json`
+/// endpoint. Local-cache only, user-triggered, no rebroadcast — same terms
+/// posture as the StockTwits lane. Reddit has no bull/bear tags, so the
+/// snapshot is mention counts + engagement with provenance.
+pub async fn fetch_reddit_mentions(
+    client: &reqwest::Client,
+    symbol: &str,
+) -> Result<RedditMentionSnapshot, String> {
+    let symbol = symbol.trim().to_uppercase();
+    if symbol.is_empty() {
+        return Err("Reddit symbol required".into());
+    }
+    let url = format!(
+        "https://www.reddit.com/r/{}/search.json?q=%22{}%22&restrict_sr=1&sort=new&t=day&limit=100&raw_json=1",
+        REDDIT_FINANCE_SUBS, symbol
+    );
+    let resp = client
+        .get(&url)
+        // Reddit rejects generic client UAs; a descriptive one is required.
+        .header(
+            "User-Agent",
+            "desktop:typhoon-terminal:v1.0 (research mentions)",
+        )
+        .send()
+        .await
+        .map_err(|e| format!("Reddit failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Reddit: HTTP {}", resp.status()));
+    }
+    let text = resp.text().await.map_err(|e| format!("Reddit body: {e}"))?;
+    parse_reddit_search(&symbol, &text)
+}
+
+pub fn parse_reddit_search(symbol: &str, payload: &str) -> Result<RedditMentionSnapshot, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(payload).map_err(|e| format!("Reddit parse: {e}"))?;
+    let children = v
+        .pointer("/data/children")
+        .and_then(|c| c.as_array())
+        .ok_or_else(|| "Reddit parse: missing data.children".to_string())?;
+    let mut snapshot = RedditMentionSnapshot {
+        symbol: symbol.trim().to_uppercase(),
+        fetched_at: chrono::Utc::now().to_rfc3339(),
+        ..Default::default()
+    };
+    let mut posts: Vec<RedditPost> = Vec::new();
+    for child in children {
+        let data = &child["data"];
+        let title = data["title"].as_str().unwrap_or("").trim().to_string();
+        if title.is_empty() {
+            continue;
+        }
+        let post = RedditPost {
+            title,
+            subreddit: data["subreddit"].as_str().unwrap_or("").to_string(),
+            score: data["score"].as_i64().unwrap_or_default(),
+            num_comments: data["num_comments"].as_i64().unwrap_or_default(),
+            created_utc: data["created_utc"]
+                .as_f64()
+                .map(|f| f as i64)
+                .or_else(|| data["created_utc"].as_i64())
+                .unwrap_or_default(),
+            permalink: data["permalink"].as_str().unwrap_or("").to_string(),
+        };
+        snapshot.mentions_24h += 1;
+        snapshot.score_sum_24h += post.score.max(0);
+        snapshot.comments_sum_24h += post.num_comments.max(0);
+        posts.push(post);
+    }
+    posts.sort_by(|a, b| b.score.cmp(&a.score));
+    posts.truncate(5);
+    snapshot.top_posts = posts;
+    Ok(snapshot)
+}
+
 // ── FMP fetchers ───────────────────────────────────────────────────────────
 
 /// FMP /earning_call_transcript/{symbol} list endpoint — returns available [year, quarter, date] triples.
@@ -495,7 +575,35 @@ pub async fn fetch_yahoo_quotes(
 
 #[cfg(test)]
 mod tests {
+    use super::parse_reddit_search;
     use super::parse_stocktwits_symbol_stream;
+
+    #[test]
+    fn parse_reddit_search_counts_mentions_and_ranks_top_posts() {
+        let payload = r#"
+        {
+          "data": {
+            "children": [
+              { "data": { "title": "WOK to the moon", "subreddit": "wallstreetbets",
+                          "score": 420, "num_comments": 69, "created_utc": 1780000000.0,
+                          "permalink": "/r/wallstreetbets/comments/abc/wok/" } },
+              { "data": { "title": "WOK earnings discussion", "subreddit": "stocks",
+                          "score": 12, "num_comments": 4, "created_utc": 1780000100,
+                          "permalink": "/r/stocks/comments/def/wok/" } },
+              { "data": { "title": "", "subreddit": "stocks", "score": 99 } }
+            ]
+          }
+        }"#;
+        let snap = parse_reddit_search("wok", payload).unwrap();
+        assert_eq!(snap.symbol, "WOK");
+        assert_eq!(snap.mentions_24h, 2); // empty-title row dropped
+        assert_eq!(snap.score_sum_24h, 432);
+        assert_eq!(snap.comments_sum_24h, 73);
+        assert_eq!(snap.top_posts.len(), 2);
+        assert_eq!(snap.top_posts[0].score, 420); // ranked by score
+        assert_eq!(snap.top_posts[0].subreddit, "wallstreetbets");
+        assert!(parse_reddit_search("WOK", "{}").is_err());
+    }
 
     #[test]
     fn parse_stocktwits_symbol_stream_counts_sentiment_and_preserves_top_messages() {

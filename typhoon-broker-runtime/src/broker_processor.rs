@@ -375,6 +375,7 @@ pub fn spawn_broker_message_processor(
                 | BrokerCmd::FetchPressReleases { .. }
                 | BrokerCmd::FetchSocialSentiment { .. }
                 | BrokerCmd::FetchStockTwitsSentiment { .. }
+                | BrokerCmd::FetchRedditMentions { .. }
                 | BrokerCmd::FetchTranscriptList { .. }
                 | BrokerCmd::FetchTranscriptBody { .. }
                 | BrokerCmd::FetchCommoditiesQuotes

@@ -166,6 +166,24 @@ pub fn handle_research_fetch_command(
                 }
             });
         }
+        BrokerCmd::FetchRedditMentions { symbol } => {
+            use typhoon_engine::core::research;
+            let msg_tx = broker_msg_tx_clone.clone();
+            tokio::spawn(async move {
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(15))
+                    .build()
+                    .unwrap_or_default();
+                match research::fetch_reddit_mentions(&client, &symbol).await {
+                    Ok(snapshot) => {
+                        let _ = msg_tx.send(BrokerMsg::RedditMentions(symbol, snapshot));
+                    }
+                    Err(e) => {
+                        let _ = msg_tx.send(BrokerMsg::Error(format!("REDDIT: {}", e)));
+                    }
+                }
+            });
+        }
         BrokerCmd::FetchTranscriptList { symbol, fmp_key } => {
             use typhoon_engine::core::research;
             let msg_tx = broker_msg_tx_clone.clone();

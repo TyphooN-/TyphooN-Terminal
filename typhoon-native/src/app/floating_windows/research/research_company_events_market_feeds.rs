@@ -825,6 +825,173 @@ impl TyphooNApp {
                             ui.spinner();
                         }
                     });
+                    // ── ADR-117: keyless social lanes (StockTwits + Reddit) ──
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("Fetch StockTwits")
+                            .on_hover_text("Keyless public symbol stream — bull/bear tagged messages.")
+                            .clicked()
+                        {
+                            let sym = self.sentiment_symbol.trim().to_uppercase();
+                            if !sym.is_empty() {
+                                let _ = self
+                                    .broker_tx
+                                    .send(BrokerCmd::FetchStockTwitsSentiment { symbol: sym });
+                            }
+                        }
+                        if ui
+                            .button("Fetch Reddit")
+                            .on_hover_text(
+                                "Keyless mention scan across r/wallstreetbets, r/stocks,                                  r/investing, r/StockMarket (trailing day).",
+                            )
+                            .clicked()
+                        {
+                            let sym = self.sentiment_symbol.trim().to_uppercase();
+                            if !sym.is_empty() {
+                                let _ = self
+                                    .broker_tx
+                                    .send(BrokerCmd::FetchRedditMentions { symbol: sym });
+                            }
+                        }
+                        if ui.button("Load Cached Social").clicked() {
+                            self.social_history_dirty = true;
+                        }
+                    });
+                    if self.social_history_dirty {
+                        self.social_history_dirty = false;
+                        let sym = self.sentiment_symbol.trim().to_uppercase();
+                        if let Some(ref cache) = self.cache {
+                            if let Ok(conn) = cache.connection() {
+                                self.stocktwits_snapshot =
+                                    typhoon_engine::core::research::get_stocktwits_sentiment(
+                                        &conn, &sym,
+                                    )
+                                    .ok()
+                                    .flatten();
+                                self.reddit_snapshot =
+                                    typhoon_engine::core::research::get_reddit_mentions(
+                                        &conn, &sym,
+                                    )
+                                    .ok()
+                                    .flatten();
+                                self.social_history =
+                                    typhoon_engine::core::research::get_social_history(
+                                        &conn, &sym, 120,
+                                    )
+                                    .unwrap_or_default();
+                            }
+                        }
+                    }
+                    if let Some(st) = &self.stocktwits_snapshot {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "StockTwits {} (as of {}): {} msgs · {} bull / {} bear / {} neutral · B/B {:.2} · 24h velocity {}",
+                                st.symbol,
+                                st.fetched_at,
+                                st.message_count,
+                                st.bullish,
+                                st.bearish,
+                                st.neutral,
+                                st.bull_bear_ratio,
+                                st.velocity_24h
+                            ))
+                            .color(AXIS_TEXT)
+                            .small(),
+                        );
+                    }
+                    if let Some(rd) = &self.reddit_snapshot {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Reddit {} (as of {}): {} mention(s) 24h · score Σ {} · comments Σ {} — counts + provenance only, no derived signal",
+                                rd.symbol,
+                                rd.fetched_at,
+                                rd.mentions_24h,
+                                rd.score_sum_24h,
+                                rd.comments_sum_24h
+                            ))
+                            .color(AXIS_TEXT)
+                            .small(),
+                        );
+                        for post in rd.top_posts.iter().take(3) {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "  r/{} ▲{} 💬{} — {}",
+                                    post.subreddit, post.score, post.num_comments, post.title
+                                ))
+                                .color(AXIS_TEXT)
+                                .small(),
+                            );
+                        }
+                    }
+                    // Bull/bear + mention history sparkline from stored points.
+                    if !self.social_history.is_empty() {
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), 44.0),
+                            egui::Sense::hover(),
+                        );
+                        let painter = ui.painter_at(rect);
+                        let st_points: Vec<_> = self
+                            .social_history
+                            .iter()
+                            .filter(|pt| pt.source == "stocktwits")
+                            .collect();
+                        let rd_points: Vec<_> = self
+                            .social_history
+                            .iter()
+                            .filter(|pt| pt.source == "reddit")
+                            .collect();
+                        let max_mentions = rd_points
+                            .iter()
+                            .map(|pt| pt.messages)
+                            .max()
+                            .unwrap_or(0)
+                            .max(1) as f32;
+                        let n = st_points.len().max(rd_points.len()).max(1) as f32;
+                        let bar_w = (rect.width() / n).clamp(2.0, 14.0);
+                        for (i, pt) in st_points.iter().enumerate() {
+                            let total = (pt.bullish + pt.bearish).max(1) as f32;
+                            let bull_frac = pt.bullish as f32 / total;
+                            let x = rect.left() + i as f32 * bar_w;
+                            let h = rect.height() - 14.0;
+                            let split = rect.top() + h * (1.0 - bull_frac);
+                            painter.rect_filled(
+                                egui::Rect::from_min_max(
+                                    egui::pos2(x, split),
+                                    egui::pos2(x + bar_w - 1.0, rect.top() + h),
+                                ),
+                                0.0,
+                                UP,
+                            );
+                            painter.rect_filled(
+                                egui::Rect::from_min_max(
+                                    egui::pos2(x, rect.top()),
+                                    egui::pos2(x + bar_w - 1.0, split),
+                                ),
+                                0.0,
+                                DOWN,
+                            );
+                        }
+                        for (i, pt) in rd_points.iter().enumerate() {
+                            let x = rect.left() + i as f32 * bar_w;
+                            let frac = (pt.messages as f32 / max_mentions).clamp(0.0, 1.0);
+                            let y0 = rect.bottom() - 12.0 * frac;
+                            painter.rect_filled(
+                                egui::Rect::from_min_max(
+                                    egui::pos2(x, y0),
+                                    egui::pos2(x + bar_w - 1.0, rect.bottom()),
+                                ),
+                                0.0,
+                                egui::Color32::from_rgb(90, 140, 255),
+                            );
+                        }
+                        painter.text(
+                            rect.left_top(),
+                            egui::Align2::LEFT_TOP,
+                            "bull/bear history · blue = Reddit mentions",
+                            egui::FontId::proportional(9.0),
+                            AXIS_TEXT,
+                        );
+                    }
                     ui.separator();
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])

@@ -100,9 +100,31 @@ impl TyphooNApp {
                         );
                     }
                 }
+                if self.sentiment_symbol.eq_ignore_ascii_case(&sym_u) {
+                    self.stocktwits_snapshot = Some(snapshot.clone());
+                    self.social_history_dirty = true;
+                }
                 self.log.push_back(LogEntry::info(format!(
                     "StockTwits sentiment cached for {}: {} bullish / {} bearish / {} neutral",
                     sym_u, snapshot.bullish, snapshot.bearish, snapshot.neutral
+                )));
+            }
+            BrokerMsg::RedditMentions(sym, snapshot) => {
+                let sym_u = sym.to_uppercase();
+                if let Some(ref cache) = self.cache {
+                    if let Ok(conn) = cache.connection() {
+                        let _ = typhoon_engine::core::research::upsert_reddit_mentions(
+                            &conn, &sym_u, &snapshot,
+                        );
+                    }
+                }
+                if self.sentiment_symbol.eq_ignore_ascii_case(&sym_u) {
+                    self.reddit_snapshot = Some(snapshot.clone());
+                    self.social_history_dirty = true;
+                }
+                self.log.push_back(LogEntry::info(format!(
+                    "Reddit mentions cached for {}: {} post(s) in 24h across finance subs",
+                    sym_u, snapshot.mentions_24h
                 )));
             }
             BrokerMsg::TranscriptList(sym, rows) => {

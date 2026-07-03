@@ -47,6 +47,21 @@ pub fn create_research_tables(conn: &Connection) -> Result<(), String> {
             snapshot_json TEXT NOT NULL DEFAULT '{}',
             updated_at INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS research_reddit_mentions (
+            symbol TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS research_social_history (
+            symbol TEXT NOT NULL,
+            source TEXT NOT NULL,
+            fetched_at_ts INTEGER NOT NULL,
+            bullish INTEGER NOT NULL DEFAULT 0,
+            bearish INTEGER NOT NULL DEFAULT 0,
+            neutral INTEGER NOT NULL DEFAULT 0,
+            messages INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(symbol, source, fetched_at_ts)
+        );
         CREATE TABLE IF NOT EXISTS research_transcript_list (
             symbol TEXT PRIMARY KEY,
             rows_json TEXT NOT NULL DEFAULT '[]',
@@ -386,7 +401,126 @@ pub fn upsert_stocktwits_sentiment(
          ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
         params![symbol.to_uppercase(), json, now_ts()],
     ).map_err(|e| format!("upsert stocktwits sentiment: {e}"))?;
+    append_social_history(
+        conn,
+        symbol,
+        "stocktwits",
+        snapshot.bullish,
+        snapshot.bearish,
+        snapshot.neutral,
+        snapshot.message_count,
+    )
+}
+
+/// Bound per (symbol, source) so the local history series never grows without
+/// limit (ADR-121 retention discipline applied to the social lane).
+const SOCIAL_HISTORY_KEEP: i64 = 500;
+
+/// Append one point to the local social-history series (drives the ADR-117
+/// bull/bear + mention sparkline) and prune to the retention bound.
+pub fn append_social_history(
+    conn: &Connection,
+    symbol: &str,
+    source: &str,
+    bullish: u32,
+    bearish: u32,
+    neutral: u32,
+    messages: u32,
+) -> Result<(), String> {
+    let _ = create_research_tables(conn);
+    let symbol = symbol.to_uppercase();
+    conn.execute(
+        "INSERT OR REPLACE INTO research_social_history
+         (symbol, source, fetched_at_ts, bullish, bearish, neutral, messages)
+         VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        params![symbol, source, now_ts(), bullish, bearish, neutral, messages],
+    )
+    .map_err(|e| format!("append social history: {e}"))?;
+    conn.execute(
+        "DELETE FROM research_social_history
+         WHERE symbol = ?1 AND source = ?2 AND fetched_at_ts NOT IN (
+             SELECT fetched_at_ts FROM research_social_history
+             WHERE symbol = ?1 AND source = ?2
+             ORDER BY fetched_at_ts DESC LIMIT ?3
+         )",
+        params![symbol, source, SOCIAL_HISTORY_KEEP],
+    )
+    .map_err(|e| format!("prune social history: {e}"))?;
     Ok(())
+}
+
+/// Stored social-history points for a symbol, oldest-first, across sources.
+pub fn get_social_history(
+    conn: &Connection,
+    symbol: &str,
+    limit: usize,
+) -> Result<Vec<SocialHistoryPoint>, String> {
+    let _ = create_research_tables(conn);
+    let mut stmt = conn
+        .prepare(
+            "SELECT symbol, source, fetched_at_ts, bullish, bearish, neutral, messages
+             FROM research_social_history WHERE symbol = ?1
+             ORDER BY fetched_at_ts DESC LIMIT ?2",
+        )
+        .map_err(|e| format!("prepare social history: {e}"))?;
+    let mut rows: Vec<SocialHistoryPoint> = stmt
+        .query_map(params![symbol.to_uppercase(), limit as i64], |row| {
+            Ok(SocialHistoryPoint {
+                symbol: row.get(0)?,
+                source: row.get(1)?,
+                fetched_at_ts: row.get(2)?,
+                bullish: row.get::<_, i64>(3)? as u32,
+                bearish: row.get::<_, i64>(4)? as u32,
+                neutral: row.get::<_, i64>(5)? as u32,
+                messages: row.get::<_, i64>(6)? as u32,
+            })
+        })
+        .map_err(|e| format!("query social history: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+    rows.reverse();
+    Ok(rows)
+}
+
+pub fn upsert_reddit_mentions(
+    conn: &Connection,
+    symbol: &str,
+    snapshot: &RedditMentionSnapshot,
+) -> Result<(), String> {
+    let _ = create_research_tables(conn);
+    let mut normalized = snapshot.clone();
+    normalized.symbol = symbol.to_uppercase();
+    let json = serde_json::to_string(&normalized).map_err(|e| format!("reddit json: {e}"))?;
+    conn.execute(
+        "INSERT INTO research_reddit_mentions(symbol, snapshot_json, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(symbol) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at",
+        params![symbol.to_uppercase(), json, now_ts()],
+    ).map_err(|e| format!("upsert reddit mentions: {e}"))?;
+    // Reddit has no bull/bear tags — history carries mention count only.
+    append_social_history(conn, symbol, "reddit", 0, 0, 0, snapshot.mentions_24h)
+}
+
+pub fn get_reddit_mentions(
+    conn: &Connection,
+    symbol: &str,
+) -> Result<Option<RedditMentionSnapshot>, String> {
+    let _ = create_research_tables(conn);
+    let mut stmt = conn
+        .prepare("SELECT snapshot_json FROM research_reddit_mentions WHERE symbol = ?1")
+        .map_err(|e| format!("prepare get_reddit_mentions: {e}"))?;
+    let mut rows = stmt
+        .query(params![symbol.to_uppercase()])
+        .map_err(|e| format!("query get_reddit_mentions: {e}"))?;
+    if let Some(row) = rows
+        .next()
+        .map_err(|e| format!("row get_reddit_mentions: {e}"))?
+    {
+        let json: String = row.get(0).unwrap_or_default();
+        let snapshot: RedditMentionSnapshot = serde_json::from_str(&json).unwrap_or_default();
+        Ok(Some(snapshot))
+    } else {
+        Ok(None)
+    }
 }
 
 pub fn get_stocktwits_sentiment(

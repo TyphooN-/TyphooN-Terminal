@@ -76,6 +76,49 @@ fn open_mem_conn() -> Connection {
 }
 
 #[test]
+fn social_snapshots_roundtrip_and_feed_history() {
+    let c = open_mem_conn();
+    let st = StockTwitsSentimentSnapshot {
+        symbol: "WOK".into(),
+        fetched_at: "2026-07-03T12:00:00Z".into(),
+        bullish: 7,
+        bearish: 3,
+        neutral: 2,
+        message_count: 12,
+        bull_bear_ratio: 7.0 / 3.0,
+        velocity_24h: 12,
+        top_messages: Vec::new(),
+    };
+    upsert_stocktwits_sentiment(&c, "wok", &st).unwrap();
+    let rd = RedditMentionSnapshot {
+        symbol: "WOK".into(),
+        fetched_at: "2026-07-03T12:00:05Z".into(),
+        mentions_24h: 9,
+        score_sum_24h: 431,
+        comments_sum_24h: 88,
+        top_posts: vec![RedditPost {
+            title: "WOK squeeze".into(),
+            subreddit: "wallstreetbets".into(),
+            score: 400,
+            num_comments: 80,
+            created_utc: 1_780_000_000,
+            permalink: "/r/wallstreetbets/x".into(),
+        }],
+    };
+    upsert_reddit_mentions(&c, "wok", &rd).unwrap();
+
+    let got_rd = get_reddit_mentions(&c, "WOK").unwrap().unwrap();
+    assert_eq!(got_rd.mentions_24h, 9);
+    assert_eq!(got_rd.top_posts.len(), 1);
+
+    // Both upserts appended history points (per-second PK: same-second
+    // duplicates replace, so >=1 per source is the guarantee here).
+    let history = get_social_history(&c, "WOK", 50).unwrap();
+    assert!(history.iter().any(|p| p.source == "stocktwits" && p.bullish == 7));
+    assert!(history.iter().any(|p| p.source == "reddit" && p.messages == 9));
+}
+
+#[test]
 fn dividend_record_roundtrip() {
     let c = open_mem_conn();
     let rows = vec![DividendRecord {

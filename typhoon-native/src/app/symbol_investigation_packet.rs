@@ -67,6 +67,8 @@ impl TyphooNApp {
                         &ctx, p, &sym_upper,
                     );
 
+                    reddit_mentions::write_symbol_reddit_mentions_section(&ctx, p, &sym_upper);
+
                     ownership_price_history::write_symbol_ownership_price_history_sections(
                         &ctx, p, &sym_upper,
                     );

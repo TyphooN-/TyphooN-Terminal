@@ -54,9 +54,26 @@ Add a **StockTwits ingest lane** as a new research data source feeding the resea
 
 - [x] Engine fetcher + `StockTwitsSentimentSnapshot` type + storage helper.
 - [x] Research-packet `### Social Sentiment — StockTwits` section.
-- [ ] Optional floating **Social Sentiment** window: bull/bear sparkline over time from stored snapshots. Current implementation logs successful fetches and renders cached data in the research packet.
-- [ ] Optional **sentiment-v2** endpoint for a historical sentiment/volume series (needs access check).
-- [ ] Extend the same social lane to **Reddit** (e.g. r/wallstreetbets, r/stocks) as a second source — closes the Reddit gap noted in ADR-092.
+- [x] **Social Sentiment surface with history (2026-07-03):** the `SENTIMENT`
+  window gained keyless "Fetch StockTwits" / "Fetch Reddit" lanes, latest
+  snapshot summaries, top-post/message provenance, and a bull/bear + mention
+  sparkline drawn from `research_social_history` — every snapshot upsert
+  appends a history point (bounded to 500 per symbol × source, ADR-121-style
+  retention), so the series accumulates locally with zero extra API calls.
+- [x] ~~**sentiment-v2** endpoint~~ **Superseded (2026-07-03):** the purpose
+  of the gated historical endpoint was a sentiment/volume time series; the
+  local `research_social_history` accumulation now provides that durable
+  series from the public stream alone, so the undocumented/gated v2 endpoint
+  is deliberately not integrated.
+- [x] **Reddit lane (2026-07-03):** keyless `fetch_reddit_mentions` searches
+  r/wallstreetbets + r/stocks + r/investing + r/StockMarket (public
+  `search.json`, trailing day, descriptive UA) into `RedditMentionSnapshot`
+  (`research_reddit_mentions` + history). Per the signal-quality rule above
+  it presents **raw mention counts + engagement + post provenance, never a
+  derived buy/sell signal** (Reddit has no bull/bear tags). Packet section
+  `### Social Sentiment — Reddit mentions`; `FetchRedditMentions` command;
+  same local-cache-only / user-triggered / no-rebroadcast posture. This
+  closes the Reddit gap noted in ADR-092.
 
 ## Consequences
 
