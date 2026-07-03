@@ -46,9 +46,11 @@ Optional API keys and broker credentials that unlock additional features.
   (`kraken_api_key_N`/`kraken_api_secret_N`) as additional trading identities
   for the top-bar `Primary:` account cycler — Key and Secret per slot, saved
   to the keyring on edit. Because Kraken market data is public, extra Kraken
-  accounts do **not** increase sync speed, and the private
-  ownTrades/openOrders WebSocket keeps following the previous account until
-  the next app restart after a primary switch.
+  accounts do **not** increase sync speed. The private ownTrades/openOrders
+  WebSocket re-authenticates to the new account automatically on a primary
+  switch, and `TRADECOPY` can one-shot copy spot xStock holdings between
+  Kraken accounts (margin positions are skipped; every Kraken account is
+  treated as LIVE by the safety rails).
 
 ## Anthropic (Claude AI)
 

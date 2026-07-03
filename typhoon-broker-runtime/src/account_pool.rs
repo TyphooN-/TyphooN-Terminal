@@ -229,6 +229,12 @@ impl KrakenAccountPool {
             .map(|a| a.spec.id.as_str())
     }
 
+    pub fn broker_by_id(&self, account_id: &str) -> Option<&KrakenAccountHandle> {
+        self.accounts
+            .iter()
+            .find(|a| a.spec.id == account_id && a.connected)
+    }
+
     pub fn set_primary(&mut self, account_id: &str) -> bool {
         if let Some(idx) = self
             .accounts

@@ -133,10 +133,89 @@ fn resolve_kraken_chart_book_ws_symbol(symbol: &str) -> Option<String> {
     Some(format!("{bare}x/USD"))
 }
 
+/// Connect the Kraken private WS (ownTrades/openOrders) and spawn the message
+/// reader. Returns the reader task's handle so the processor can abort it —
+/// e.g. to re-authenticate to a different account on a primary switch
+/// (ADR-130). Aborting the reader drops the channel receiver, which terminates
+/// the engine-side connection loop on its next forward.
+pub(crate) async fn spawn_kraken_private_ws_reader(
+    kb: &typhoon_engine::broker::kraken::KrakenBroker,
+    broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
+) -> Result<tokio::task::JoinHandle<()>, String> {
+    let mut rx = kb.start_private_ws().await?;
+    let value = broker_msg_tx.clone();
+    Ok(tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            // Try to parse as ownTrades update
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg) {
+                if parsed.get("event").and_then(|v| v.as_str()) == Some("heartbeat") {
+                    continue;
+                }
+                let trades = typhoon_engine::broker::kraken::parse_own_trades_messages(&parsed);
+                if !trades.is_empty() {
+                    for trade in trades {
+                        let _ = value.send(BrokerMsg::KrakenLiveTrade(trade));
+                    }
+                    continue;
+                }
+                if parsed.get("event").and_then(|v| v.as_str()) == Some("systemStatus")
+                    || parsed.get("event").and_then(|v| v.as_str()) == Some("subscriptionStatus")
+                {
+                    let status = parsed
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("info")
+                        .to_string();
+                    let channel = parsed
+                        .get("subscription")
+                        .and_then(|v| v.get("name"))
+                        .and_then(|v| v.as_str());
+                    let exchange_message = parsed
+                        .get("errorMessage")
+                        .or_else(|| parsed.get("message"))
+                        .and_then(|v| v.as_str());
+                    let message = match (channel, exchange_message) {
+                        (Some(channel), Some(detail)) => {
+                            format!("{channel}: {detail}")
+                        }
+                        (Some(channel), None) => channel.to_string(),
+                        (None, Some(detail)) => detail.to_string(),
+                        (None, None) => "Kraken private WebSocket status".to_string(),
+                    };
+                    let _ = value.send(BrokerMsg::KrakenWsStatus { status, message });
+                    continue;
+                }
+                let orders = typhoon_engine::broker::kraken::parse_open_orders_message(&parsed);
+                if !orders.is_empty() {
+                    let _ = value.send(BrokerMsg::KrakenOpenOrders(orders));
+                    continue;
+                }
+            }
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg) {
+                let kind = parsed
+                    .get("event")
+                    .or_else(|| parsed.get("channelName"))
+                    .or_else(|| parsed.get("channel"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("private-update");
+                tracing::debug!(
+                    "Unhandled Kraken private WebSocket message suppressed from UI log: {}",
+                    kind
+                );
+            } else {
+                tracing::debug!(
+                    "Unhandled non-JSON Kraken private WebSocket message suppressed from UI log"
+                );
+            }
+        }
+    }))
+}
+
 pub async fn handle_kraken_ws_command(
     cmd: BrokerCmd,
     kraken_broker: Option<&typhoon_engine::broker::kraken::KrakenBroker>,
     kraken_ws_broker: Option<&typhoon_engine::broker::kraken::KrakenBroker>,
+    kraken_private_ws_task: &mut Option<tokio::task::JoinHandle<()>>,
     broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
     shared_cache_broker: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
     kraken_public_client: reqwest::Client,
@@ -146,89 +225,15 @@ pub async fn handle_kraken_ws_command(
             let ws_client = kraken_ws_broker.as_ref().or(kraken_broker.as_ref());
             if let Some(kb) = ws_client {
                 let msg_tx = broker_msg_tx.clone();
-                match kb.start_private_ws().await {
-                    Ok(mut rx) => {
-                        let value = msg_tx.clone();
-                        tokio::spawn(async move {
-                            while let Some(msg) = rx.recv().await {
-                                // Try to parse as ownTrades update
-                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg)
-                                {
-                                    if parsed.get("event").and_then(|v| v.as_str())
-                                        == Some("heartbeat")
-                                    {
-                                        continue;
-                                    }
-                                    let trades =
-                                        typhoon_engine::broker::kraken::parse_own_trades_messages(
-                                            &parsed,
-                                        );
-                                    if !trades.is_empty() {
-                                        for trade in trades {
-                                            let _ = value.send(BrokerMsg::KrakenLiveTrade(trade));
-                                        }
-                                        continue;
-                                    }
-                                    if parsed.get("event").and_then(|v| v.as_str())
-                                        == Some("systemStatus")
-                                        || parsed.get("event").and_then(|v| v.as_str())
-                                            == Some("subscriptionStatus")
-                                    {
-                                        let status = parsed
-                                            .get("status")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("info")
-                                            .to_string();
-                                        let channel = parsed
-                                            .get("subscription")
-                                            .and_then(|v| v.get("name"))
-                                            .and_then(|v| v.as_str());
-                                        let exchange_message = parsed
-                                            .get("errorMessage")
-                                            .or_else(|| parsed.get("message"))
-                                            .and_then(|v| v.as_str());
-                                        let message = match (channel, exchange_message) {
-                                            (Some(channel), Some(detail)) => {
-                                                format!("{channel}: {detail}")
-                                            }
-                                            (Some(channel), None) => channel.to_string(),
-                                            (None, Some(detail)) => detail.to_string(),
-                                            (None, None) => {
-                                                "Kraken private WebSocket status".to_string()
-                                            }
-                                        };
-                                        let _ = value
-                                            .send(BrokerMsg::KrakenWsStatus { status, message });
-                                        continue;
-                                    }
-                                    let orders =
-                                        typhoon_engine::broker::kraken::parse_open_orders_message(
-                                            &parsed,
-                                        );
-                                    if !orders.is_empty() {
-                                        let _ = value.send(BrokerMsg::KrakenOpenOrders(orders));
-                                        continue;
-                                    }
-                                }
-                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg)
-                                {
-                                    let kind = parsed
-                                        .get("event")
-                                        .or_else(|| parsed.get("channelName"))
-                                        .or_else(|| parsed.get("channel"))
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("private-update");
-                                    tracing::debug!(
-                                        "Unhandled Kraken private WebSocket message suppressed from UI log: {}",
-                                        kind
-                                    );
-                                } else {
-                                    tracing::debug!(
-                                        "Unhandled non-JSON Kraken private WebSocket message suppressed from UI log"
-                                    );
-                                }
-                            }
-                        });
+                // A restart replaces any existing reader so there is never a
+                // second subscription racing the first (also the teardown path
+                // for account-primary switches, ADR-130).
+                if let Some(task) = kraken_private_ws_task.take() {
+                    task.abort();
+                }
+                match spawn_kraken_private_ws_reader(kb, broker_msg_tx).await {
+                    Ok(handle) => {
+                        *kraken_private_ws_task = Some(handle);
                         let _ = msg_tx.send(BrokerMsg::OrderResult(
                             "Kraken private WebSocket started".into(),
                         ));

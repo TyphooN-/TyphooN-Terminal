@@ -203,11 +203,9 @@ pub async fn handle_connection_command(
                             )));
                         }
                     }
-                    let _ = broker_msg_tx.send(BrokerMsg::OrderResult(
-                        "Kraken primary switched — private WS (ownTrades/openOrders) still \
-                         follows the previous account until the next app restart"
-                            .into(),
-                    ));
+                    // The private ownTrades/openOrders WS follow happens in the
+                    // processor loop right after this handler returns (it owns
+                    // the reader task handle) — see broker_processor.rs.
                 } else {
                     let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
                         "Kraken primary switch failed: account '{}' is not connected",

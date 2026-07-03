@@ -358,14 +358,20 @@ impl TyphooNApp {
 
     /// TradeCopy window: pick a source account, target accounts, and copy open
     /// positions across; optionally enable live order mirroring (ADR-130).
+    /// Broker-aware: Alpaca copies net positions; Kraken copies spot xStock
+    /// holdings (margin positions are skipped). Targets are always the same
+    /// broker as the source.
     pub(crate) fn render_tradecopy_window(&mut self, ctx: &egui::Context) {
         if !self.show_tradecopy {
             return;
         }
         let mut show = self.show_tradecopy;
-        let roster = self.alpaca_account_roster.clone();
-        let connected: Vec<&AccountRosterEntry> =
-            roster.iter().filter(|a| a.connected).collect();
+        let alpaca_roster = self.alpaca_account_roster.clone();
+        let kraken_roster = self.kraken_account_roster.clone();
+        let alpaca_connected: Vec<&AccountRosterEntry> =
+            alpaca_roster.iter().filter(|a| a.connected).collect();
+        let kraken_connected: Vec<&AccountRosterEntry> =
+            kraken_roster.iter().filter(|a| a.connected).collect();
         let mut copy_request: Option<(String, Vec<String>, bool)> = None;
         let mut mirror_toggled: Option<bool> = None;
         let mut targets_changed = false;
@@ -374,12 +380,15 @@ impl TyphooNApp {
             .resizable(true)
             .default_size([420.0, 360.0])
             .show(ctx, |ui| {
-                if connected.len() < 2 {
+                // A copy needs ≥2 connected accounts on the same broker.
+                let alpaca_ok = alpaca_connected.len() >= 2;
+                let kraken_ok = kraken_connected.len() >= 2;
+                if !alpaca_ok && !kraken_ok {
                     ui.label(
                         egui::RichText::new(
-                            "TradeCopy needs at least two connected Alpaca accounts. Add paper \
-                             account credentials under Settings → API Keys (slots 2–4), then \
-                             reconnect.",
+                            "TradeCopy needs at least two connected accounts of the same \
+                             broker. Add account credentials under Settings → API Keys \
+                             (slots 2–4), then reconnect.",
                         )
                         .color(AXIS_TEXT),
                     );
@@ -389,21 +398,38 @@ impl TyphooNApp {
                     egui::RichText::new(
                         "Copies open positions from the source account to each selected target \
                          by submitting market orders for the per-symbol quantity delta. Results \
-                         land in the Log.",
+                         land in the Log. Kraken copies spot xStock holdings only (margin \
+                         positions are skipped; every Kraken account is LIVE).",
                     )
                     .color(AXIS_TEXT)
                     .small(),
                 );
                 ui.separator();
-                if !connected.iter().any(|a| a.id == self.tradecopy_source_id) {
-                    self.tradecopy_source_id = connected
+                // Sources come from brokers that actually have a same-broker
+                // target available.
+                let sources: Vec<&AccountRosterEntry> = alpaca_connected
+                    .iter()
+                    .filter(|_| alpaca_ok)
+                    .chain(kraken_connected.iter().filter(|_| kraken_ok))
+                    .copied()
+                    .collect();
+                if !sources.iter().any(|a| a.id == self.tradecopy_source_id) {
+                    self.tradecopy_source_id = sources
                         .iter()
                         .find(|a| a.is_primary)
-                        .or(connected.first())
+                        .or(sources.first())
                         .map(|a| a.id.clone())
                         .unwrap_or_default();
                 }
-                let source_label = connected
+                let source_is_kraken = self.tradecopy_source_id.starts_with("kraken");
+                // Targets are the source's broker only — cross-broker copy is
+                // out of scope (symbols and settlement semantics differ).
+                let connected: &Vec<&AccountRosterEntry> = if source_is_kraken {
+                    &kraken_connected
+                } else {
+                    &alpaca_connected
+                };
+                let source_label = sources
                     .iter()
                     .find(|a| a.id == self.tradecopy_source_id)
                     .map(|a| a.label.clone())
@@ -413,7 +439,7 @@ impl TyphooNApp {
                     egui::ComboBox::from_id_salt("tradecopy_source")
                         .selected_text(source_label)
                         .show_ui(ui, |ui| {
-                            for a in &connected {
+                            for a in &sources {
                                 ui.selectable_value(
                                     &mut self.tradecopy_source_id,
                                     a.id.clone(),
@@ -429,7 +455,7 @@ impl TyphooNApp {
                 });
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new("Target accounts").strong().small());
-                for a in &connected {
+                for a in connected.iter() {
                     if a.id == self.tradecopy_source_id {
                         continue;
                     }
@@ -468,10 +494,14 @@ impl TyphooNApp {
                     "Allow LIVE accounts as targets (danger: real orders)",
                 );
                 ui.separator();
+                // Only same-broker targets count — a stale check from the
+                // other broker (source switched since) must not ride along.
+                let broker_prefix = if source_is_kraken { "kraken" } else { "alpaca" };
                 let target_ids: Vec<String> = self
                     .tradecopy_target_ids
                     .iter()
                     .filter(|id| **id != self.tradecopy_source_id)
+                    .filter(|id| id.starts_with(broker_prefix))
                     .cloned()
                     .collect();
                 let can_copy = !target_ids.is_empty();
@@ -494,29 +524,33 @@ impl TyphooNApp {
                         self.tradecopy_flatten_extra,
                     ));
                 }
-                ui.add_space(6.0);
-                let mut mirror = self.tradecopy_mirror_orders;
-                // Opt-in only: the checkbox is disabled until at least one
-                // target is checked (it stays clickable while ON so mirroring
-                // can always be turned off). Never persisted across restarts.
-                if ui
-                    .add_enabled(
-                        can_copy || mirror,
-                        egui::Checkbox::new(
-                            &mut mirror,
-                            "Live mirroring: replicate app-placed Alpaca orders to the checked \
-                             target accounts (opt-in, resets on restart)",
-                        ),
-                    )
-                    .on_hover_text(
-                        "While enabled, every order placed from this app on the primary \
-                         account is also submitted to each checked target account \
-                         (cancels/modifies excluded — order ids differ per account). \
-                         Mirroring is always off at startup.",
-                    )
-                    .changed()
-                {
-                    mirror_toggled = Some(mirror);
+                // Live order mirroring is Alpaca-only: Kraken's copy is the
+                // one-shot spot replication above.
+                if !source_is_kraken {
+                    ui.add_space(6.0);
+                    let mut mirror = self.tradecopy_mirror_orders;
+                    // Opt-in only: the checkbox is disabled until at least one
+                    // target is checked (it stays clickable while ON so mirroring
+                    // can always be turned off). Never persisted across restarts.
+                    if ui
+                        .add_enabled(
+                            can_copy || mirror,
+                            egui::Checkbox::new(
+                                &mut mirror,
+                                "Live mirroring: replicate app-placed Alpaca orders to the checked \
+                                 target accounts (opt-in, resets on restart)",
+                            ),
+                        )
+                        .on_hover_text(
+                            "While enabled, every order placed from this app on the primary \
+                             account is also submitted to each checked target account \
+                             (cancels/modifies excluded — order ids differ per account). \
+                             Mirroring is always off at startup.",
+                        )
+                        .changed()
+                    {
+                        mirror_toggled = Some(mirror);
+                    }
                 }
             });
         self.show_tradecopy = show;
@@ -526,19 +560,30 @@ impl TyphooNApp {
                 source,
                 targets.len()
             )));
-            let _ = self.broker_tx.send(BrokerCmd::AlpacaTradeCopy {
-                source_id: source,
-                target_ids: targets,
-                flatten_extra: flatten,
-            });
+            let cmd = if source.starts_with("kraken") {
+                BrokerCmd::KrakenTradeCopy {
+                    source_id: source,
+                    target_ids: targets,
+                    flatten_extra: flatten,
+                }
+            } else {
+                BrokerCmd::AlpacaTradeCopy {
+                    source_id: source,
+                    target_ids: targets,
+                    flatten_extra: flatten,
+                }
+            };
+            let _ = self.broker_tx.send(cmd);
         }
         // Sync the runtime whenever the toggle flips or the opted-in target
         // set changes while mirroring is on. Mirroring with an empty opt-in
-        // set turns itself off — copying is opt-in, never opt-out.
+        // set turns itself off — copying is opt-in, never opt-out. Mirroring
+        // is an Alpaca-pool feature, so only Alpaca ids are valid targets.
         let mirror_targets: Vec<String> = self
             .tradecopy_target_ids
             .iter()
             .filter(|id| **id != self.tradecopy_source_id)
+            .filter(|id| id.starts_with("alpaca"))
             .cloned()
             .collect();
         if let Some(enabled) = mirror_toggled {

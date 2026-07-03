@@ -1,4 +1,183 @@
+use std::collections::BTreeMap;
+
+use typhoon_engine::broker::kraken::KrakenBroker;
 use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
+
+use crate::account_pool::KrakenAccountPool;
+use crate::alpaca_order_ops::trade_copy_deltas;
+
+/// Kraken spot AddOrder pair for a bare xStock ticker — the tradeable
+/// `{TICKER}x/USD` form the WS book/OHLC lanes and the native order path use.
+fn kraken_xstock_order_pair(ticker: &str) -> String {
+    format!("{}x/USD", ticker.trim().to_ascii_uppercase())
+}
+
+/// The app's Kraken position definition split for TradeCopy: signed qty per
+/// bare xStock ticker (equity-balance positions, always long) plus the count
+/// of margin positions, which spot market orders cannot replicate.
+async fn kraken_equity_position_map(
+    kb: &KrakenBroker,
+) -> Result<(BTreeMap<String, f64>, usize), String> {
+    let all = kb.get_all_position_summaries().await?;
+    let mut map = BTreeMap::new();
+    let mut margin = 0usize;
+    for p in all {
+        if p.asset_id.starts_with("equity_balance:") {
+            let signed = if p.side.eq_ignore_ascii_case("short") {
+                -p.qty
+            } else {
+                p.qty
+            };
+            if signed.abs() > 0.0 {
+                map.insert(p.symbol, signed);
+            }
+        } else {
+            margin += 1;
+        }
+    }
+    Ok((map, margin))
+}
+
+/// One-shot Kraken TradeCopy (ADR-130): replicate the source account's xStock
+/// equity holdings onto each opted-in target with spot market orders for the
+/// per-ticker deltas. Margin positions are reported and skipped. Pairs are
+/// checked against the live AssetPairs catalog when it is reachable so a
+/// Securities-only holding with no Spot pair warns instead of placing a
+/// doomed order.
+pub async fn handle_kraken_trade_copy(
+    source_id: String,
+    target_ids: Vec<String>,
+    flatten_extra: bool,
+    pool: &KrakenAccountPool,
+    broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
+) {
+    let Some(source) = pool.broker_by_id(&source_id) else {
+        let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+            "TradeCopy: Kraken source account '{}' is not connected",
+            source_id
+        )));
+        return;
+    };
+    let (source_map, source_margin) = match kraken_equity_position_map(&source.broker).await {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                "TradeCopy: Kraken source positions failed: {}",
+                e
+            )));
+            return;
+        }
+    };
+    if source_margin > 0 {
+        let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+            "TradeCopy: {} margin position(s) on {} skipped — only spot xStock holdings copy",
+            source_margin, source.spec.label
+        )));
+    }
+    let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+        "TradeCopy: source {} holds {} xStock position(s)",
+        source.spec.label,
+        source_map.len()
+    )));
+    // Live catalog as a doomed-order guard; an unreachable catalog degrades to
+    // the constructed pair (AddOrder still validates server-side).
+    let catalog: Option<Vec<String>> = source
+        .broker
+        .get_tradeable_pairs()
+        .await
+        .ok()
+        .map(|pairs| {
+            pairs
+                .into_iter()
+                .flat_map(|(name, wsname)| [name, wsname])
+                .map(|p| p.trim().to_ascii_uppercase())
+                .collect()
+        });
+    let pair_listed = |pair: &str| -> bool {
+        match &catalog {
+            Some(entries) if !entries.is_empty() => {
+                let want = pair.to_ascii_uppercase();
+                entries.iter().any(|p| p == &want)
+            }
+            _ => true,
+        }
+    };
+
+    for target_id in target_ids {
+        if target_id == source_id {
+            continue;
+        }
+        let Some(target) = pool.broker_by_id(&target_id) else {
+            let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                "TradeCopy: Kraken target '{}' is not connected — skipped",
+                target_id
+            )));
+            continue;
+        };
+        if !target.spec.trade_enabled {
+            let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                "TradeCopy: Kraken target '{}' is not trade-enabled — skipped",
+                target.spec.label
+            )));
+            continue;
+        }
+        let target_map = match kraken_equity_position_map(&target.broker).await {
+            Ok((m, _)) => m,
+            Err(e) => {
+                let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                    "TradeCopy: {} positions failed: {} — skipped",
+                    target.spec.label, e
+                )));
+                continue;
+            }
+        };
+        let deltas = trade_copy_deltas(&source_map, &target_map, flatten_extra);
+        if deltas.is_empty() {
+            let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                "TradeCopy → {}: already in sync",
+                target.spec.label
+            )));
+            continue;
+        }
+        let mut placed = 0usize;
+        let mut failed = 0usize;
+        for (ticker, side, qty) in deltas {
+            let pair = kraken_xstock_order_pair(&ticker);
+            if !pair_listed(&pair) {
+                failed += 1;
+                let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                    "TradeCopy → {}: {} has no tradeable Spot pair ({}) — skipped",
+                    target.spec.label, ticker, pair
+                )));
+                continue;
+            }
+            match target
+                .broker
+                .place_order(&pair, &side, "market", qty, None)
+                .await
+            {
+                Ok(_) => {
+                    placed += 1;
+                    let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                        "TradeCopy → {}: {} {} {} @ market",
+                        target.spec.label, side, qty, pair
+                    )));
+                }
+                Err(e) => {
+                    failed += 1;
+                    let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                        "TradeCopy → {}: {} {} {} failed: {}",
+                        target.spec.label, side, qty, pair, e
+                    )));
+                }
+            }
+        }
+        let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+            "TradeCopy → {}: {} order(s) placed, {} failed",
+            target.spec.label, placed, failed
+        )));
+    }
+}
 
 pub async fn handle_kraken_order_command(
     cmd: BrokerCmd,

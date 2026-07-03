@@ -53,6 +53,7 @@ impl TyphooNApp {
                     .tradecopy_target_ids
                     .iter()
                     .filter(|id| **id != self.tradecopy_source_id)
+                    .filter(|id| id.starts_with("alpaca"))
                     .cloned()
                     .collect();
                 let _ = self.broker_tx.send(BrokerCmd::SetOrderMirroring {

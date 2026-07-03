@@ -40,6 +40,10 @@ pub fn spawn_broker_message_processor(
         // overwriting the new account's state.
         let mut alpaca_trade_stream_task: Option<tokio::task::JoinHandle<()>> = None;
         let mut kraken_ws_broker: Option<typhoon_engine::broker::kraken::KrakenBroker> = None;
+        // Private ownTrades/openOrders WS reader for the current Kraken
+        // primary; aborted and restarted on a primary switch so the stream
+        // re-authenticates to the new account (ADR-130).
+        let mut kraken_private_ws_task: Option<tokio::task::JoinHandle<()>> = None;
         // Pre-acquire and per-endpoint spacing are now owned by the
         // engine-side `iapi_limiter` (token bucket + escalating backoff,
         // shared across all iapi endpoints). The handler below just
@@ -76,6 +80,8 @@ pub fn spawn_broker_message_processor(
                             ..
                         }
                     );
+                    let prior_kraken_primary =
+                        kraken_pool.primary_id().map(|id| id.to_string());
                     connection_commands::handle_connection_command(
                         cmd,
                         &mut alpaca_pool,
@@ -98,6 +104,52 @@ pub fn spawn_broker_message_processor(
                             &broker_msg_tx_clone,
                         )
                         .await;
+                    } else if kraken_pool.primary_id().map(|id| id.to_string())
+                        != prior_kraken_primary
+                    {
+                        // The private ownTrades/openOrders WS must follow the
+                        // new Kraken primary too (ADR-130 follow-on-switch):
+                        // abort the old reader and re-authenticate with the
+                        // rebuilt WS-token broker. Only restart if a private
+                        // WS was running — starting it remains an explicit
+                        // action on connect.
+                        if let Some(task) = kraken_private_ws_task.take() {
+                            task.abort();
+                            match kraken_ws_broker.as_ref() {
+                                Some(kb) => {
+                                    match kraken_ws_commands::spawn_kraken_private_ws_reader(
+                                        kb,
+                                        &broker_msg_tx_clone,
+                                    )
+                                    .await
+                                    {
+                                        Ok(handle) => {
+                                            kraken_private_ws_task = Some(handle);
+                                            let _ = broker_msg_tx_clone.send(
+                                                BrokerMsg::OrderResult(
+                                                    "Kraken private WS re-authenticated to the new primary account"
+                                                        .into(),
+                                                ),
+                                            );
+                                        }
+                                        Err(e) => {
+                                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
+                                                format!(
+                                                    "Kraken private WS restart for new primary failed: {}",
+                                                    e
+                                                ),
+                                            ));
+                                        }
+                                    }
+                                }
+                                None => {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
+                                        "Kraken private WS stopped — no WS credentials for the new primary"
+                                            .into(),
+                                    ));
+                                }
+                            }
+                        }
                     }
                 }
                 BrokerCmd::SetOrderMirroring {
@@ -117,6 +169,20 @@ pub fn spawn_broker_message_processor(
                         "TradeCopy live mirroring disabled".to_string()
                     };
                     let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(msg));
+                }
+                BrokerCmd::KrakenTradeCopy {
+                    source_id,
+                    target_ids,
+                    flatten_extra,
+                } => {
+                    kraken_order_ops::handle_kraken_trade_copy(
+                        source_id,
+                        target_ids,
+                        flatten_extra,
+                        &kraken_pool,
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
                 }
                 BrokerCmd::AlpacaTradeCopy {
                     source_id,
@@ -824,6 +890,7 @@ pub fn spawn_broker_message_processor(
                         cmd,
                         kraken_pool.primary_broker(),
                         kraken_ws_broker.as_ref(),
+                        &mut kraken_private_ws_task,
                         &broker_msg_tx_clone,
                         shared_cache_broker.clone(),
                         kraken_public_client.clone(),

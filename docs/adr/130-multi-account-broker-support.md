@@ -52,8 +52,12 @@ and after every primary switch.
   `SetPrimaryAccount` re-points it at runtime, re-emits account state
   (account, positions, open orders, recent fills), and **aborts + restarts the
   Alpaca trade-updates WS** so the old account's fills stop overwriting the
-  new account's state. (Kraken caveat: the private ownTrades/openOrders WS
-  still follows the previous account until restart; surfaced as a log line.)
+  new account's state. Since 2026-07-03 the **Kraken private
+  ownTrades/openOrders WS follows too**: the processor keeps the reader task
+  handle (`kraken_private_ws_task`, mirroring `alpaca_trade_stream_task`),
+  aborts it on a Kraken primary switch, and re-authenticates with the rebuilt
+  WS-token broker — no restart required. If no private WS was running, the
+  switch does not start one (starting it stays an explicit connect action).
 - *Historical bar fetches* (`AlpacaFetchBars`, `AlpacaFetchBarsBatch`,
   `FetchAllBars`) → `pool.next_data_broker()`, round-robin over data-sync
   accounts. The scheduler assigns each (symbol, TF) task once; accounts only
@@ -101,20 +105,31 @@ paper/live mode (`alpaca_primary_is_paper()`), not the slot-1 flag.
 
 ### 5. TradeCopy (`TRADECOPY` console command or Trading → TradeCopy…)
 
-Two modes, Alpaca-first (testable on paper accounts; Kraken copy is future
-work — no paper environment, spot-balance semantics differ):
+Broker-aware (targets are always the source's broker; cross-broker copy is
+out of scope — symbols and settlement semantics differ):
 
 - **One-shot position copy** (`BrokerCmd::AlpacaTradeCopy`): fetch source +
   target positions, compute per-symbol **signed qty deltas**
   (`trade_copy_deltas`, unit-tested; shorts negative), submit market orders on
   each target; optional *flatten extra* closes target symbols the source
   doesn't hold. Results stream to the Log as `TradeCopy → <account>` lines.
+- **One-shot Kraken copy** (`BrokerCmd::KrakenTradeCopy`, 2026-07-03):
+  replicates the source account's **xStock equity-balance positions** — the
+  app's own Kraken position definition — onto each target with spot market
+  orders on the `{TICKER}x/USD` pair, resolving the "spot-balance semantics"
+  question by copying exactly what the positions panel shows. Margin
+  positions are counted and skipped (leverage/short semantics cannot be
+  replicated with spot market orders); pairs are checked against the live
+  AssetPairs catalog when reachable so Securities-only holdings warn instead
+  of placing doomed orders. Every Kraken account is LIVE, so the
+  "Allow LIVE accounts as targets" rail always applies.
 - **Live mirroring** (`BrokerCmd::SetOrderMirroring { enabled, target_ids }`):
   while on, every app-placed Alpaca order (market/notional/limit/stop/
   stop-limit/bracket/OCO/trailing, position closes, exit syncs) is replicated
   to **each explicitly checked target account**, tagged `[mirror → <account>]`.
   Cancels/modifies are **not** replicated (order ids are account-specific;
-  a log note says so).
+  a log note says so). Mirroring remains Alpaca-only; Kraken's copy is the
+  one-shot spot replication above.
 
 Trade copying is **strictly opt-in, never opt-out**: the mirror toggle stays
 disabled until at least one target account is checked, the runtime refuses to
@@ -181,10 +196,11 @@ Requested alongside this change; findings (no scheduler rewrite needed):
 - TradeCopy centralizes cross-account replication in the runtime; the UI only
   builds requests. Copy correctness is bounded by market-order fills (no
   limit-price preservation in the one-shot copy — deltas are qty-based).
-- Kraken multi-account is identity-only for now; private-WS follow-on-switch
-  and Kraken TradeCopy are explicitly deferred (no paper environment,
-  spot-balance semantics differ — blocked on a product decision, not on
-  plumbing; the pool seam is already in place).
+- ~~Kraken multi-account is identity-only~~ **Completed (2026-07-03):**
+  private-WS follow-on-switch and Kraken TradeCopy both shipped (see §1
+  routing rules and §5). The spot-balance semantics question was resolved by
+  copying the app's own Kraken position definition (xStock equity holdings);
+  margin positions are reported-skipped by design.
 
 ## Update (2026-07-03) — uniform slots, on-edit keyring persistence, opt-in mirroring
 

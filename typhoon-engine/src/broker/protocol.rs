@@ -160,6 +160,17 @@ pub enum BrokerCmd {
         target_ids: Vec<String>,
         flatten_extra: bool,
     },
+    /// One-shot Kraken TradeCopy (ADR-130): replicate the source account's
+    /// **xStock equity-balance positions** (the app's Kraken position
+    /// definition minus margin positions) onto each target via spot market
+    /// orders on the `{TICKER}x/USD` pair. Margin positions are reported and
+    /// skipped — leverage/short semantics cannot be replicated with spot
+    /// market orders. Same opt-in target rules as the Alpaca copy.
+    KrakenTradeCopy {
+        source_id: String,
+        target_ids: Vec<String>,
+        flatten_extra: bool,
+    },
     ConfigureAlpacaSync {
         bar_requests_per_minute: u32,
         fetch_permits: usize,
