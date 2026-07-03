@@ -448,6 +448,113 @@ pub async fn refresh_trade_halt_alerts(conn: &Connection) -> Result<usize, Strin
     replace_trade_halt_alerts(conn, &rows)
 }
 
+// ── SSR (Short Sale Restriction, SEC Rule 201) — computed, no feed ─────────
+//
+// SSR triggers when a covered US equity trades ≥10% below the prior day's
+// close intraday, and stays in effect for the remainder of that day plus the
+// next trading day. No feed is needed: the terminal already holds last +
+// prior close for watched symbols, so this is a computed state machine
+// (ADR-120 "next free extension"). Alerts use kind='ssr', source='computed';
+// `as_of` is the ET trigger date, and expiry derives from the trading
+// calendar (`market_session::is_us_market_trading_day`), so weekends and
+// holidays extend the restriction exactly like the real rule.
+
+/// SEC Rule 201 trigger ratio: at or below 90% of the prior close.
+pub const SSR_TRIGGER_RATIO: f64 = 0.90;
+
+/// True when an intraday price satisfies the Rule 201 trigger versus the
+/// prior close (≥10% decline). Non-positive inputs never trigger.
+pub fn ssr_triggered(last: f64, prev_close: f64) -> bool {
+    last > 0.0
+        && prev_close > 0.0
+        && last.is_finite()
+        && prev_close.is_finite()
+        && last <= prev_close * SSR_TRIGGER_RATIO
+}
+
+/// Last ET calendar date the restriction covers for a trigger on
+/// `triggered_date` (YYYY-MM-DD): the next US trading day after the trigger.
+pub fn ssr_active_through(triggered_date: &str) -> Option<chrono::NaiveDate> {
+    let date = chrono::NaiveDate::parse_from_str(triggered_date.trim(), "%Y-%m-%d").ok()?;
+    let mut next = date;
+    for _ in 0..14 {
+        next = next.succ_opt()?;
+        if crate::core::market_session::is_us_market_trading_day(next) {
+            return Some(next);
+        }
+    }
+    None
+}
+
+/// Record (or refresh) a computed SSR alert for `symbol`. Idempotent per
+/// (symbol, kind, source); a re-trigger on a later date advances `as_of`.
+pub fn upsert_ssr_alert(
+    conn: &Connection,
+    symbol: &str,
+    triggered_date: &str,
+    drop_pct: f64,
+    prev_close: f64,
+) -> Result<(), String> {
+    create_regulatory_alert_tables(conn)?;
+    let symbol = normalize_regulatory_symbol(symbol);
+    if symbol.is_empty() {
+        return Err("SSR alert: empty symbol".into());
+    }
+    let through = ssr_active_through(triggered_date)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "next trading day".to_string());
+    let details = format!(
+        "Short Sale Restriction (Rule 201): {:.1}% below prior close ${:.2} on {} · active through {}",
+        -drop_pct.abs(),
+        prev_close,
+        triggered_date.trim(),
+        through
+    );
+    conn.execute(
+        "INSERT OR REPLACE INTO regulatory_alerts
+         (symbol, kind, label, source, as_of, details, updated_at)
+         VALUES (?1, 'ssr', '! SSR !', 'computed', ?2, ?3, ?4)",
+        params![symbol, triggered_date.trim(), details, now_secs()],
+    )
+    .map_err(|e| format!("insert ssr alert: {e}"))?;
+    Ok(())
+}
+
+/// Delete computed SSR alerts whose restriction window has ended as of the
+/// ET date `today` (YYYY-MM-DD). Returns how many were purged.
+pub fn purge_expired_ssr_alerts(conn: &Connection, today: &str) -> Result<usize, String> {
+    create_regulatory_alert_tables(conn)?;
+    let Ok(today) = chrono::NaiveDate::parse_from_str(today.trim(), "%Y-%m-%d") else {
+        return Err(format!("SSR purge: bad date '{today}'"));
+    };
+    let mut stmt = conn
+        .prepare("SELECT symbol, as_of FROM regulatory_alerts WHERE kind = 'ssr' AND source = 'computed'")
+        .map_err(|e| format!("prepare ssr purge: {e}"))?;
+    let rows: Vec<(String, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| format!("query ssr purge: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stmt);
+    let mut purged = 0usize;
+    for (symbol, as_of) in rows {
+        let expired = match ssr_active_through(&as_of) {
+            Some(through) => today > through,
+            // Unparseable as_of: keep one day, then drop via this arm.
+            None => true,
+        };
+        if expired {
+            conn.execute(
+                "DELETE FROM regulatory_alerts WHERE symbol = ?1 AND kind = 'ssr' AND source = 'computed'",
+                params![symbol],
+            )
+            .map_err(|e| format!("delete ssr alert: {e}"))?;
+            purged += 1;
+        }
+    }
+    Ok(purged)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,6 +566,62 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].symbol, "WOK");
         assert_eq!(rows[0].reg_sho_threshold_flag, "Y");
+    }
+
+    #[test]
+    fn ssr_trigger_fires_at_ten_percent_decline() {
+        assert!(ssr_triggered(9.0, 10.0)); // exactly -10%
+        assert!(ssr_triggered(8.5, 10.0));
+        assert!(!ssr_triggered(9.01, 10.0));
+        assert!(!ssr_triggered(0.0, 10.0));
+        assert!(!ssr_triggered(9.0, 0.0));
+        assert!(!ssr_triggered(f64::NAN, 10.0));
+    }
+
+    #[test]
+    fn ssr_active_through_skips_weekends_and_holidays() {
+        // Friday trigger → restriction runs through Monday.
+        assert_eq!(
+            ssr_active_through("2026-06-12").unwrap().to_string(),
+            "2026-06-15"
+        );
+        // Trigger the Thursday before Good Friday 2026-04-03 → through Monday.
+        assert_eq!(
+            ssr_active_through("2026-04-02").unwrap().to_string(),
+            "2026-04-06"
+        );
+        // Midweek trigger → through the next day.
+        assert_eq!(
+            ssr_active_through("2026-06-10").unwrap().to_string(),
+            "2026-06-11"
+        );
+        assert!(ssr_active_through("garbage").is_none());
+    }
+
+    #[test]
+    fn ssr_upsert_and_purge_lifecycle() {
+        let conn = Connection::open_in_memory().unwrap();
+        upsert_ssr_alert(&conn, "wok", "2026-06-12", -12.5, 4.20).unwrap();
+        let alerts = get_regulatory_alerts(&conn).unwrap();
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].symbol, "WOK");
+        assert_eq!(alerts[0].kind, "ssr");
+        assert!(alerts[0].details.contains("active through 2026-06-15"));
+
+        // Still active on the trigger Friday, the weekend, and Monday.
+        assert_eq!(purge_expired_ssr_alerts(&conn, "2026-06-12").unwrap(), 0);
+        assert_eq!(purge_expired_ssr_alerts(&conn, "2026-06-14").unwrap(), 0);
+        assert_eq!(purge_expired_ssr_alerts(&conn, "2026-06-15").unwrap(), 0);
+        assert_eq!(get_regulatory_alerts(&conn).unwrap().len(), 1);
+
+        // Expired Tuesday.
+        assert_eq!(purge_expired_ssr_alerts(&conn, "2026-06-16").unwrap(), 1);
+        assert!(get_regulatory_alerts(&conn).unwrap().is_empty());
+
+        // Re-trigger after expiry re-inserts cleanly (idempotent upsert).
+        upsert_ssr_alert(&conn, "WOK", "2026-06-16", -11.0, 3.10).unwrap();
+        upsert_ssr_alert(&conn, "WOK", "2026-06-16", -14.0, 3.10).unwrap();
+        assert_eq!(get_regulatory_alerts(&conn).unwrap().len(), 1);
     }
 
     #[test]

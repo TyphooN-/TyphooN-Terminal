@@ -853,6 +853,10 @@ pub struct TyphooNApp {
     /// Throttle anchor for the periodic off-thread regulatory price re-read while
     /// either window is open; `None` forces an immediate read next frame.
     pub(crate) regulatory_price_read_at: Option<std::time::Instant>,
+    /// Wall-clock gate for the computed SSR (Rule 201) scan tick (ADR-120).
+    pub(crate) last_ssr_scan_s: i64,
+    /// ET date (YYYY-MM-DD) the SSR expiry purge last ran for.
+    pub(crate) ssr_purge_done_for: String,
     pub(crate) reg_sho_sort: Option<(usize, bool)>,
     pub(crate) halts_sort: Option<(usize, bool)>,
     pub(crate) kraken_equity_universe_retry_after_ts: i64,

@@ -106,6 +106,7 @@ mod state;
 mod storage;
 mod strategy_windows;
 mod style_scope;
+mod ssr_scan;
 mod symbol_investigation;
 mod symbol_investigation_global;
 mod symbol_investigation_packet;
@@ -578,6 +579,8 @@ impl TyphooNApp {
             regulatory_prices: std::collections::HashMap::new(),
             regulatory_prices_rx: None,
             regulatory_prices_loaded: false,
+            last_ssr_scan_s: 0,
+            ssr_purge_done_for: String::new(),
             regulatory_price_read_at: None,
             reg_sho_sort: None,
             halts_sort: None,

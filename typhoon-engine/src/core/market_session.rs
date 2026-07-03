@@ -22,6 +22,13 @@ fn nth_sunday(year: i32, month: u32, nth: u32) -> Option<chrono::NaiveDate> {
     ))
 }
 
+/// The US-Eastern calendar date for a UTC instant (DST-aware). Shared by the
+/// session calculators and the SSR state machine so "today" always means the
+/// same trading date.
+pub fn us_eastern_date(now_utc: chrono::DateTime<chrono::Utc>) -> chrono::NaiveDate {
+    (now_utc.naive_utc() + chrono::Duration::seconds(us_eastern_offset_seconds(now_utc))).date()
+}
+
 fn us_eastern_offset_seconds(now_utc: chrono::DateTime<chrono::Utc>) -> i64 {
     use chrono::Datelike;
     let year = now_utc.date_naive().year();

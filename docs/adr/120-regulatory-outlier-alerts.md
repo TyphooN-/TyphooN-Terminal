@@ -138,19 +138,29 @@ daily-derived columns only.
 
 Status of the remaining candidates (free sources only, per project policy):
 
-- **Short Sale Restriction (Reg SHO Rule 201 / SSR)** — free: derivable from
-  data already held (a ≥10% drop from the prior daily close arms SSR for the
-  rest of that day plus the next trading day). No feed needed; the open work is
-  an intraday trigger + next-trading-day expiry state machine feeding a
-  `kind = 'ssr'` alert. Next free extension to build.
+- **Short Sale Restriction (Reg SHO Rule 201 / SSR)** — **SHIPPED
+  (2026-07-03).** Computed state machine, no feed:
+  `regulatory_alerts.rs` gains `ssr_triggered` (last ≤ 90% of prior close),
+  `upsert_ssr_alert` (`kind='ssr'`, `source='computed'`, `as_of` = ET trigger
+  date), `ssr_active_through` (next US trading day via the holiday-aware
+  calendar — a Friday or pre-holiday trigger correctly spans the gap), and
+  `purge_expired_ssr_alerts`. The native `tick_ssr_scan` (30s wall-clock
+  gate) walks the watchlist's US-equity rows (`alpaca:` /
+  `kraken-equities:` / `merged:` / `yahoo-chart:` cache keys; crypto and
+  futures excluded) during possible US extended sessions, logs a warning per
+  new trigger, and writes on a blocking worker; a once-per-ET-date purge
+  retires expired flags. Badges appear through the existing BG
+  `regulatory_alerts_by_symbol` refresh with zero extra UI plumbing.
 - **SEC Fails-to-Deliver / FINRA daily short-sale volume** — free, public,
-  machine-readable, but bulk + delayed (semi-monthly / T+1); better as an
-  enrichment metric than a real-time badge.
+  machine-readable, but bulk + delayed (semi-monthly / T+1). **Decision:
+  intentionally not a badge** — a T+1/semi-monthly datum rendered next to
+  live halts/SSR would read as current when it is not; it belongs as a
+  research-packet enrichment column if ever ingested.
 - **Exchange delisting / non-compliance notices** — no reliable free
-  machine-readable consolidated feed identified; deferred pending a source.
-- **Hard-to-borrow / borrow-rate feeds** — **deferred: requires a paid data
-  source** (IBKR account / Ortex / S3 etc.). Out of scope per the free-source
-  policy.
+  machine-readable consolidated feed identified (Nasdaq/NYSE publish HTML
+  lists without stable schemas); **blocked on a source**, not on plumbing.
+- **Hard-to-borrow / borrow-rate feeds** — **requires a paid data source**
+  (IBKR account / Ortex / S3 etc.). Out of scope per the free-source policy.
 
 Each new free source should feed the same `regulatory_alerts` table and render
 as compact chart-header / watchlist badges.

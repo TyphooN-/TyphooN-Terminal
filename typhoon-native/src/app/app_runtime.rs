@@ -154,6 +154,7 @@ impl eframe::App for TyphooNApp {
             self.tick_positions_orders_refresh(now_instant)
         );
         timed_tick!("bar_sync_status_refresh", self.tick_bar_sync_status_refresh());
+        timed_tick!("ssr_scan", self.tick_ssr_scan());
         timed_tick!(
             "kraken_universe_schedulers",
             self.tick_kraken_universe_schedulers(now_instant)
