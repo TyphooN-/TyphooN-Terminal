@@ -29,12 +29,16 @@ egui_plot = "0.36"
 # plus the egui_extras image loader so hero images and inline <img>s decode from URL.
 # Deliberately NOT a full HTML/JS renderer (no webview, no wry/tao) — see ADR for the
 # threat model on remote-content engines inside a financial terminal.
-egui_extras = { version = "0.35", default-features = false, features = ["image", "all_loaders"] }
+# Loaders kept minimal: image (png/jpeg via the image crate below) + webp +
+# http (ehttp URL fetch). svg (resvg/usvg/tiny-skia) and gif are off — finance
+# news imagery is raster; re-enable a loader only with a concrete need.
+egui_extras = { version = "0.35", default-features = false, features = ["image", "webp", "http"] }
 egui_commonmark = { version = "0.24", default-features = false, features = ["load-images"] }
 wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "vulkan", "wgsl"] }  # Must match egui-wgpu (eframe 0.35 → wgpu 29); Linux-native only, no web/DX/Metal backends
 
-# Async runtime (shared with engine)
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "fs"] }
+# Async runtime (shared with engine). net + io-util serve the hand-rolled
+# /metrics HTTP responder (metrics.rs) that replaced axum.
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "fs", "net", "io-util"] }
 
 # Concurrent future combinators (join_all for the news-body hydrator)
 futures-util = "0.3"
@@ -64,9 +68,11 @@ serde_json = { workspace = true }
 # Safe byte casting for GPU buffer I/O (replaces unsafe custom Pod trait)
 bytemuck = { version = "1", features = ["derive"] }
 
-# Prometheus metrics
-prometheus = "0.14"
-axum = "0.8"
+# Prometheus metrics — text exposition only, so the default protobuf
+# encoder stays off. The /metrics endpoint is a minimal hand-rolled
+# HTTP responder in metrics.rs (axum and its tower/matchit subtree were
+# removed; the framework served exactly one GET route).
+prometheus = { version = "0.14", default-features = false }
 
 # Image encoding (lossless WebP screenshot export + news article hero images
 # loaded via egui_extras → needs png/jpeg decode too).

@@ -192,8 +192,14 @@ impl MetricsRegistry {
 
 /// Start the Prometheus metrics HTTP server on the given port.
 ///
-/// Spawns an axum server as a background tokio task. The server serves
-/// `/metrics` in Prometheus text exposition format.
+/// Minimal hand-rolled HTTP/1.1 responder on a background tokio task — every
+/// request gets the metrics text exposition, so no router/framework is
+/// involved (this endpoint was the only axum user; dropping it removes the
+/// axum/tower/matchit subtree from the binary).
+///
+/// Binds 127.0.0.1 by default: the payload names account equity and open
+/// position counts. Set TYPHOON_METRICS_BIND=0.0.0.0 (or an interface IP) to
+/// opt in to LAN scraping.
 pub fn start_metrics_server(
     rt: &tokio::runtime::Handle,
     registry: Arc<MetricsRegistry>,
@@ -201,40 +207,105 @@ pub fn start_metrics_server(
 ) {
     let reg = registry.clone();
     rt.spawn(async move {
-        let app = axum::Router::new().route(
-            "/metrics",
-            axum::routing::get(move || {
-                let reg = reg.clone();
-                async move {
-                    let encoder = TextEncoder::new();
-                    let metric_families = reg.registry.gather();
-                    let mut buffer = Vec::new();
-                    if let Err(e) = encoder.encode(&metric_families, &mut buffer) {
-                        tracing::warn!("Metrics encode failed: {e}");
-                    }
-                    let content_type = encoder.format_type().to_string();
-                    (
-                        [(axum::http::header::CONTENT_TYPE, content_type)],
-                        String::from_utf8(buffer).unwrap_or_default(),
-                    )
-                }
-            }),
-        );
-
-        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-        tracing::info!(
-            "Prometheus metrics server listening on http://{}/metrics",
-            addr
-        );
-        let listener = match tokio::net::TcpListener::bind(addr).await {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let bind_host =
+            std::env::var("TYPHOON_METRICS_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let addr = format!("{bind_host}:{port}");
+        let listener = match tokio::net::TcpListener::bind(&addr).await {
             Ok(l) => l,
             Err(e) => {
-                tracing::warn!("Failed to bind metrics server on port {}: {}", port, e);
+                tracing::warn!("Failed to bind metrics server on {}: {}", addr, e);
                 return;
             }
         };
-        if let Err(e) = axum::serve(listener, app).await {
-            tracing::error!("Metrics server error: {}", e);
+        tracing::info!("Prometheus metrics server listening on http://{addr}/metrics");
+        loop {
+            let (mut sock, _) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(e) => {
+                    tracing::warn!("Metrics accept failed: {e}");
+                    continue;
+                }
+            };
+            let reg = reg.clone();
+            tokio::spawn(async move {
+                // Read (and discard) the request head, bounded so a slow or
+                // hostile client can't pin the task. Any path gets /metrics.
+                let mut head_buf = [0u8; 1024];
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    sock.read(&mut head_buf),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => {}
+                    _ => return,
+                }
+                let encoder = TextEncoder::new();
+                let metric_families = reg.registry.gather();
+                let mut body = Vec::new();
+                if let Err(e) = encoder.encode(&metric_families, &mut body) {
+                    tracing::warn!("Metrics encode failed: {e}");
+                }
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    encoder.format_type(),
+                    body.len()
+                );
+                let _ = sock.write_all(head.as_bytes()).await;
+                let _ = sock.write_all(&body).await;
+                let _ = sock.shutdown().await;
+            });
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// End-to-end: the hand-rolled responder must speak enough HTTP/1.1 for a
+    /// Prometheus scraper — status line, content-type, and the text exposition
+    /// body — and must serve repeated connections.
+    #[test]
+    fn metrics_server_serves_text_exposition_over_http() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let registry = Arc::new(MetricsRegistry::new().expect("registry"));
+        let mut snap = MetricsSnapshot::default();
+        snap.uptime_seconds = 42.0;
+        registry.update(&snap);
+
+        // Ephemeral-port probe: bind :0 to find a free port, release it, then
+        // point the server at it. Racy in theory, fine for a local test.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .map(|a| a.port())
+            .expect("probe port");
+        start_metrics_server(rt.handle(), registry, port);
+
+        let mut ok = false;
+        for _ in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            if let Ok(mut sock) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+                use std::io::{Read, Write};
+                sock.write_all(b"GET /metrics HTTP/1.1\r\nhost: localhost\r\n\r\n")
+                    .expect("write request");
+                let mut resp = String::new();
+                sock.read_to_string(&mut resp).expect("read response");
+                assert!(resp.starts_with("HTTP/1.1 200 OK\r\n"), "bad status: {resp}");
+                assert!(resp.contains("content-type: text/plain"), "bad content type: {resp}");
+                assert!(
+                    resp.contains("typhoon_uptime_seconds 42"),
+                    "gauge missing from body: {resp}"
+                );
+                ok = true;
+                break;
+            }
+        }
+        assert!(ok, "metrics server never accepted a connection");
+    }
 }

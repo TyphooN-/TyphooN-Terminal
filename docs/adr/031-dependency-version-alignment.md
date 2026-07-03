@@ -115,3 +115,62 @@ wayland-scanner release — acceptance documented in `.cargo/audit.toml` and
 ADR-088. `winit` stays 0.30.x with eframe 0.35.
 
 `cargo audit` clean; full workspace suite 2403 passed / 0 failed.
+
+## Lean sweep (2026-07-03) — minimal features, unused deps, framework removal
+
+Full pass over every direct dependency's feature flags plus a
+`cargo-udeps` scan. Lockfile: **609 → 580 crates**. Suite green (2404),
+`cargo audit` clean.
+
+Removed outright:
+
+- **`axum` (and with it `axum-core`, `matchit`, `tower`, `tower-layer`,
+  `serde_path_to_error`, …)** — the framework served exactly one GET route,
+  the Prometheus `/metrics` text endpoint. Replaced by a ~60-line hand-rolled
+  HTTP/1.1 responder on `tokio::net::TcpListener` (`typhoon-native/src/metrics.rs`,
+  covered by an end-to-end socket test). This also retires the
+  `matchit =0.8.4` exact-pin from the "behind latest" list — the crate is no
+  longer in the tree. **Security tightening in the same change: the metrics
+  server now binds `127.0.0.1` by default** (the payload names account equity
+  and open-position counts); `TYPHOON_METRICS_BIND=0.0.0.0` opts back in to
+  LAN scraping.
+- **Unused dependencies (cargo-udeps verified by grep):** `typhoon-engine` no
+  longer declares `tracing-subscriber` (only `tracing` is used; subscriber
+  init lives in the binary) or `typhoon-transpiler` — dropping that edge also
+  removes engine→transpiler from the build graph, so the two build in
+  parallel. `typhoon-transpiler` drops unused `serde_json` and
+  `pretty_assertions`.
+
+Feature minimization (each verified against actual usage):
+
+- **`egui_extras`**: `all_loaders` → `["image", "webp", "http"]`. Drops the
+  svg loader (`resvg`/`usvg`/`tiny-skia`/`kurbo` + a duplicate `png 0.17`)
+  and the gif decoder; finance-news imagery is raster over URLs. `http`
+  (ehttp/ureq/ring) stays — it is what fetches article images.
+- **`prometheus`**: `default-features = false` — text exposition only, drops
+  `protobuf`/`protobuf-support`.
+- **`zstd`**: `default-features = false, features = ["arrays"]` — cache blobs
+  are modern zstd frames; the legacy v0.5–0.7 format support and the
+  dictionary builder never compile.
+- **`keyring-core`**: the `sample` (in-memory test store) feature moved to
+  dev-dependencies; the shipped binary carries only Entry/Error + the Secret
+  Service backend.
+
+Kept deliberately, with reasons recorded at the declaration site:
+
+- `serde_json` `preserve_order` — `indexmap` remains in-tree via wgpu/naga
+  regardless, and dropping it would reorder every `Value` iteration
+  (research-packet/session display order) for zero tree savings. `raw_value`
+  is load-bearing (exact wire tokens for the Kraken book checksum).
+- `reqwest` `cookies` — the Yahoo crumb/consent flow requires a cookie jar.
+- `rfd` defaults (`xdg-portal` + `wayland`) — correct minimal set for this
+  desktop; no gtk in tree.
+
+Confirmed immovable (upstream-final):
+
+- `wgpu` 30 — blocked by the egui-wgpu pairing rule above.
+- `generic-array 0.14.7` — `crypto-common 0.1` pins `=0.14.7`; reached only
+  through `dbus-secret-service 4.1.0`, which is the **latest** release and
+  still builds on the old RustCrypto line. The whole old-line duplicate
+  family (`aes` 0.8, `cipher` 0.4, `digest` 0.10, `hmac` 0.12, …) unifies
+  only when that crate migrates.
