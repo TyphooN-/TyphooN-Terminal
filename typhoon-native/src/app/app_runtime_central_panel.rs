@@ -1141,6 +1141,21 @@ impl TyphooNApp {
                 ui.id().with(("single_chart_body_drag", self.active_tab)),
                 egui::Sense::click_and_drag(),
             );
+            if resp.double_clicked()
+                && self.draw_mode == DrawMode::None
+                && !self.mtf_enabled
+                && self.charts.len() > 1
+            {
+                // Use the actual single-chart body response, not only the
+                // frame-global pointer test above. egui can mark the chart
+                // body as owning the pointer on the double-click frame, which
+                // makes the early `on_chart_body` guard miss the click and
+                // leaves the focused MTF chart stuck in single mode.
+                self.mtf_enabled = true;
+                self.mtf_focused = None;
+                self.queue_empty_charts_for_load();
+                self.log.push_back(LogEntry::info("MTF grid restored"));
+            }
             if let Some(chart) = self.charts.get_mut(self.active_tab) {
                 let scale_press = price_axis_resp.is_pointer_button_down_on();
                 if scale_press && !chart.is_scaling_price {
