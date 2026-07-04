@@ -392,7 +392,13 @@ impl TyphooNApp {
                                 let online = self.broker_connected || self.kraken_connected;
                                 let mut sources: Vec<String> = Vec::new();
                                 if self.broker_connected {
-                                    sources.push("Alpaca (REST)".into());
+                                    let alpaca_data_accounts = self.alpaca_data_account_count();
+                                    let suffix = if alpaca_data_accounts > 1 {
+                                        format!(" x{alpaca_data_accounts}")
+                                    } else {
+                                        String::new()
+                                    };
+                                    sources.push(format!("Alpaca (REST + WS){suffix}"));
                                 }
                                 if self.kraken_connected {
                                     sources.push("Kraken (REST + WS)".into());
@@ -500,34 +506,48 @@ impl TyphooNApp {
                                         .small(),
                                     );
                                 }
-                                if let Some(ref acct) = self.live_account {
-                                    // Mode reflects the *primary* Alpaca account
-                                    // (ADR-130 pools can mix live + paper).
-                                    let primary_paper = self.alpaca_primary_is_paper();
-                                    let mode = if primary_paper { "Paper" } else { "Live" };
-                                    let color = if primary_paper {
-                                        egui::Color32::WHITE
-                                    } else {
-                                        UP
-                                    };
-                                    let extra_accounts = self
+                                if self.broker_connected && !self.alpaca_account_roster.is_empty() {
+                                    // Show every enabled Alpaca account explicitly. The old
+                                    // "primary +2" chip hid per-account balances/status, which
+                                    // made multi-account sync/trading state look opaque.
+                                    let mut accounts: Vec<_> = self
                                         .alpaca_account_roster
                                         .iter()
-                                        .filter(|a| a.connected)
-                                        .count()
-                                        .saturating_sub(1);
-                                    let suffix = if extra_accounts > 0 {
-                                        format!(" +{extra_accounts}")
-                                    } else {
-                                        String::new()
-                                    };
+                                        .filter(|a| a.trade_enabled || a.data_sync_enabled || a.connected)
+                                        .collect();
+                                    accounts.sort_by(|a, b| a.id.cmp(&b.id));
+                                    for account in accounts.into_iter().rev() {
+                                        let primary = if account.is_primary { "*" } else { "" };
+                                        let (text, color) = if account.connected {
+                                            (
+                                                format!(
+                                                    "[{}{} ${:.0}]",
+                                                    account.label, primary, account.equity
+                                                ),
+                                                if account.paper { egui::Color32::WHITE } else { UP },
+                                            )
+                                        } else {
+                                            let detail = if account.detail.trim().is_empty() {
+                                                "offline"
+                                            } else {
+                                                account.detail.trim()
+                                            };
+                                            (
+                                                format!("[{}{} {}]", account.label, primary, detail),
+                                                egui::Color32::from_rgb(255, 80, 80),
+                                            )
+                                        };
+                                        ui.label(egui::RichText::new(text).color(color).small());
+                                    }
+                                } else if let Some(ref acct) = self.live_account {
+                                    // Fallback while the pooled roster message is still in flight.
+                                    let primary_paper = self.alpaca_primary_is_paper();
+                                    let mode = if primary_paper { "Paper" } else { "Live" };
+                                    let color = if primary_paper { egui::Color32::WHITE } else { UP };
                                     ui.label(
-                                        egui::RichText::new(format!(
-                                            "[Alpaca ({}) ${:.0}{}]",
-                                            mode, acct.equity, suffix
-                                        ))
-                                        .color(color)
-                                        .small(),
+                                        egui::RichText::new(format!("[Alpaca 1 ({}) ${:.0}]", mode, acct.equity))
+                                            .color(color)
+                                            .small(),
                                     );
                                 }
                             } else {
