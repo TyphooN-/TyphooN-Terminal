@@ -1225,6 +1225,18 @@ pub struct TyphooNApp {
 
     /// SENTIMENT command — Reddit + Twitter social sentiment.
     pub(crate) show_sentiment: bool,
+    /// Finviz-style fundamentals screen (ADR-116): active registry filters,
+    /// composer inputs, results, and saved screens (kv `screener:saved_screens`).
+    pub(crate) fund_screen_filters: Vec<typhoon_engine::core::screener::FieldFilter>,
+    pub(crate) fund_screen_field_idx: usize,
+    pub(crate) fund_screen_min: String,
+    pub(crate) fund_screen_max: String,
+    pub(crate) fund_screen_results: Vec<typhoon_engine::core::fundamentals::Fundamentals>,
+    pub(crate) fund_screen_name: String,
+    pub(crate) saved_screens: Vec<typhoon_engine::core::screener::SavedScreen>,
+    pub(crate) saved_screens_loaded: bool,
+    /// Finviz-style market treemap window (ADR-116 Maps/Groups).
+    pub(crate) show_market_map: bool,
     pub(crate) sentiment_symbol: String,
     pub(crate) sentiment_rows: Vec<typhoon_engine::core::research::SocialSentimentRow>,
     pub(crate) sentiment_loading: bool,

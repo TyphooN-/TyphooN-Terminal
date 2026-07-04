@@ -21,6 +21,7 @@ mod sec_calendar_windows;
 mod sma_intelligence;
 mod storage_sync_windows;
 mod symbol_explorer;
+mod market_map;
 mod symbol_screener;
 mod trading_tools_windows;
 mod workspace_reference_windows;
@@ -193,6 +194,7 @@ impl TyphooNApp {
 
         // Screener — uses cached symbol data
         timed_window!("symbol_screener", self.render_symbol_screener_window(ctx));
+        timed_window!("market_map", self.render_market_map_window(ctx));
 
         // Symbols Explorer — all-encompassing symbol browser with broker hierarchy
         timed_window!("symbol_explorer", self.render_symbol_explorer_window(ctx));

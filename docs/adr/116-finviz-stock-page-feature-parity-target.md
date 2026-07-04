@@ -74,16 +74,37 @@ Legend: **Have** = present today · **Derive** = computable from data already he
 4. **Exceed finviz** with social sentiment (ADR-117), the deep TA-Lib/research surfaces (ADR-079), and native risk analytics finviz does not offer.
 5. **All derived fields obey ADR-098 O(1) hot-path discipline** — compute on snapshot/refresh into a cached struct, never per-frame.
 
-## Gap-closure TODOs (future)
+## Gap-closure TODOs — closed 2026-07-04
 
-- [ ] `FinvizSnapshot` aggregate struct + research-packet section `### Finviz-Style Snapshot` consolidating the matrix into one table.
-- [ ] Derive perf-window returns (W/M/Q/H/YTD/Y/3Y/5Y/10Y) from cached bars into the snapshot.
-- [ ] Derive P/C, P/FCF, EV/Sales, ROIC, Book/sh, Cash/sh, current/quick ratio, payout from held financials.
-- [ ] Derive Sales/EPS Y/Y & Q/Q & past-3/5Y growth from `QuarterlyFinancial` history.
-- [ ] Add Employees + Optionable/Shortable flags from FMP/Yahoo profile + broker asset metadata.
-- [ ] Headline intraday impact % (price move at headline timestamp) for the news section.
-- [ ] Optional finviz-style **treemap heatmap** window (market-cap × perf) and **sector/industry groups** view.
-- [ ] Grow the screener (ADR-056) toward finviz's 70+ filter registry with saved screens.
+- [x] `FinvizSnapshot` (`typhoon-engine/src/core/research/finviz.rs`) +
+  research-packet section `### Finviz-Style Snapshot` consolidating perf /
+  valuation / growth / technicals / profile extras into one set of tables.
+- [x] Perf-window returns (W/M/Q/½Y/YTD/Y/3Y/5Y/10Y) derived from stored
+  daily closes (`perf_windows`); windows deeper than the stored history
+  render `—` rather than guessing.
+- [x] P/C, P/FCF, EV/Sales, ROIC (TTM NOPAT / invested capital with a
+  clamped effective tax rate), Book/sh, Cash/sh, current/quick ratio, and
+  payout derived from held fundamentals + statements.
+- [x] Sales/EPS Y/Y-TTM, Q/Q, and 3Y/5Y sales CAGR from quarterly income
+  history (negative-base EPS comparisons suppressed).
+- [x] Employees now ingested (Finnhub `employeeTotal` → `research_profile`
+  with a guarded column migration); **Optionable** inferred from a cached
+  options chain; **Shortable** is plumbed through the snapshot but renders
+  `—` until asset metadata retains the Alpaca `shortable` flag natively
+  (the flag exists in `AssetInfo`; the native asset catalog keeps only
+  symbol/name/class today).
+- [x] Headline day-impact: the packet's Recent News section prints
+  `Day move: ±X.XX%` per article from the stored daily closes on the
+  publication date.
+- [x] `MARKET_MAP` window: finviz-style treemap (sector bands sized by
+  cached market cap, symbols sized by cap and colored by daily change,
+  click-to-chart) plus the cap-weighted **sector groups** table.
+- [x] Screener registry: `ScreenerField` enum (21 descriptive/fundamental
+  range fields — every fundamentals-backed field is a filter, which is the
+  finviz registry model without 70 hand-written struct fields) +
+  `FieldFilter`/`screen_symbols_with_fields`, a Fundamentals-Screen section
+  in the Symbol Screener window, and **saved screens** persisted as one kv
+  blob (`screener:saved_screens`).
 
 ## Consequences
 

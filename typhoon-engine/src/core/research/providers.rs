@@ -40,6 +40,10 @@ pub async fn fetch_finnhub_profile(
         description: v["description"].as_str().unwrap_or("").to_string(),
         market_cap: v["marketCapitalization"].as_f64().unwrap_or(0.0),
         shares_outstanding: v["shareOutstanding"].as_f64().unwrap_or(0.0),
+        employees: v["employeeTotal"]
+            .as_f64()
+            .or_else(|| v["employeeTotal"].as_str().and_then(|s| s.parse().ok()))
+            .unwrap_or(0.0),
     })
 }
 

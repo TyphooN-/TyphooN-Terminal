@@ -46,6 +46,9 @@ impl TyphooNApp {
             "TRADECOPY" | "TRADE_COPY" | "COPYTRADE" => {
                 self.show_tradecopy = true;
             }
+            "MARKET_MAP" | "MARKETMAP" | "MAP" | "TREEMAP" => {
+                self.show_market_map = true;
+            }
             "REG_SHO" | "REGSHO" => {
                 self.show_reg_sho_window = true;
             }

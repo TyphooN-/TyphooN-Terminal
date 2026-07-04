@@ -2442,6 +2442,19 @@ pub fn write_recent_news(cache: &SqliteCache, p: &mut String, sym_upper: &str) {
     if let Ok(articles) =
         typhoon_engine::core::news::get_news_by_symbol(&conn, sym_upper, NEWS_ARTICLE_COUNT)
     {
-        super::recent_news::write_symbol_recent_news_section(p, &articles);
+        // Headline day-impact from stored daily closes (ADR-116).
+        let mut day_move_by_date = std::collections::HashMap::new();
+        if let Ok(Some(rows)) =
+            typhoon_engine::core::research::get_historical_price(&conn, sym_upper)
+        {
+            for r in rows.iter().take(400) {
+                day_move_by_date.insert(r.date.clone(), r.change_pct);
+            }
+        }
+        super::recent_news::write_symbol_recent_news_section_with_impact(
+            p,
+            &articles,
+            &day_move_by_date,
+        );
     }
 }

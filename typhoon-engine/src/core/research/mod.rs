@@ -74,6 +74,8 @@ mod financials;
 pub use financials::{BalanceSheet, CashFlowStatement, FinancialStatements, IncomeStatement};
 mod technical;
 pub use technical::compute_technical_indicators;
+mod finviz;
+pub use finviz::{FinvizSnapshot, PerfWindows, build_finviz_snapshot, perf_windows};
 mod providers;
 pub use providers::{
     fetch_finnhub_company_snapshot, fetch_finnhub_earnings, fetch_finnhub_ipo_calendar,

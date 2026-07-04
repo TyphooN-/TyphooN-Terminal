@@ -134,6 +134,17 @@ pub fn upsert_options_chain(
     Ok(())
 }
 
+/// True when a cached options chain exists for the symbol — the ADR-116
+/// "Optionable" flag is inferred from data already ingested.
+pub fn has_cached_options_chain(conn: &Connection, symbol: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM research_options_chain WHERE symbol = ?1 LIMIT 1",
+        rusqlite::params![symbol.to_uppercase()],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
 pub fn get_options_chain(
     conn: &Connection,
     symbol: &str,

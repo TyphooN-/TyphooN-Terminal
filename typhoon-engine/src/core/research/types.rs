@@ -19,6 +19,9 @@ pub struct CompanyProfile {
     pub description: String,     // long "About" text
     pub market_cap: f64,         // in USD millions (Finnhub native unit)
     pub shares_outstanding: f64, // in millions
+    /// Total employees (Finnhub `employeeTotal`); 0.0 = unknown (ADR-116).
+    #[serde(default)]
+    pub employees: f64,
 }
 
 /// One row in the earnings history (actual vs estimate EPS).

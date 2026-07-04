@@ -20,6 +20,7 @@ pub fn create_research_tables(conn: &Connection) -> Result<(), String> {
             description TEXT NOT NULL DEFAULT '',
             market_cap REAL NOT NULL DEFAULT 0,
             shares_outstanding REAL NOT NULL DEFAULT 0,
+            employees REAL NOT NULL DEFAULT 0,
             updated_at INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS research_peers (
@@ -102,6 +103,12 @@ pub fn create_research_tables(conn: &Connection) -> Result<(), String> {
         "description",
         "ALTER TABLE research_profile ADD COLUMN description TEXT NOT NULL DEFAULT ''",
     )?;
+    ensure_column(
+        conn,
+        "research_profile",
+        "employees",
+        "ALTER TABLE research_profile ADD COLUMN employees REAL NOT NULL DEFAULT 0",
+    )?;
     Ok(())
 }
 
@@ -141,18 +148,19 @@ pub fn upsert_profile(conn: &Connection, p: &CompanyProfile) -> Result<(), Strin
     let _ = create_research_tables(conn);
     conn.execute(
         "INSERT INTO research_profile
-         (symbol, name, exchange, country, currency, industry, sector, website, logo, phone, ipo_date, description, market_cap, shares_outstanding, updated_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+         (symbol, name, exchange, country, currency, industry, sector, website, logo, phone, ipo_date, description, market_cap, shares_outstanding, employees, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
          ON CONFLICT(symbol) DO UPDATE SET
             name=excluded.name, exchange=excluded.exchange, country=excluded.country,
             currency=excluded.currency, industry=excluded.industry, sector=excluded.sector,
             website=excluded.website, logo=excluded.logo, phone=excluded.phone,
             ipo_date=excluded.ipo_date, description=excluded.description, market_cap=excluded.market_cap,
-            shares_outstanding=excluded.shares_outstanding, updated_at=excluded.updated_at",
+            shares_outstanding=excluded.shares_outstanding, employees=excluded.employees,
+            updated_at=excluded.updated_at",
         params![
             p.symbol.to_uppercase(), p.name, p.exchange, p.country, p.currency,
             p.industry, p.sector, p.website, p.logo, p.phone, p.ipo_date,
-            p.description, p.market_cap, p.shares_outstanding, now_ts(),
+            p.description, p.market_cap, p.shares_outstanding, p.employees, now_ts(),
         ],
     ).map_err(|e| format!("upsert profile: {e}"))?;
     Ok(())
@@ -162,7 +170,7 @@ pub fn get_profile(conn: &Connection, symbol: &str) -> Result<Option<CompanyProf
     let _ = create_research_tables(conn);
     let sym = symbol.to_uppercase();
     let mut stmt = conn.prepare(
-        "SELECT symbol, name, exchange, country, currency, industry, sector, website, logo, phone, ipo_date, description, market_cap, shares_outstanding
+        "SELECT symbol, name, exchange, country, currency, industry, sector, website, logo, phone, ipo_date, description, market_cap, shares_outstanding, employees
          FROM research_profile WHERE symbol = ?1"
     ).map_err(|e| format!("prepare get_profile: {e}"))?;
     let mut rows = stmt
@@ -184,6 +192,7 @@ pub fn get_profile(conn: &Connection, symbol: &str) -> Result<Option<CompanyProf
             description: row.get(11).unwrap_or_default(),
             market_cap: row.get(12).unwrap_or(0.0),
             shares_outstanding: row.get(13).unwrap_or(0.0),
+            employees: row.get(14).unwrap_or(0.0),
         }))
     } else {
         Ok(None)

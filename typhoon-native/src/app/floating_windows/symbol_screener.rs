@@ -1,15 +1,255 @@
 use super::*;
 
+use typhoon_engine::core::screener::{FieldFilter, SavedScreen, ScreenerField};
+
 impl TyphooNApp {
+    /// Finviz-style fundamentals screen (ADR-116): registry filters over the
+    /// cached fundamentals universe, with kv-persisted saved screens.
+    fn render_fundamentals_screen_section(&mut self, ui: &mut egui::Ui) -> SymbolAction {
+        let mut pending_action = SymbolAction::None;
+        // Saved screens load once per session (single kv blob).
+        if !self.saved_screens_loaded {
+            self.saved_screens_loaded = true;
+            if let Some(ref cache) = self.cache {
+                if let Ok(Some(json)) = cache.get_kv("screener:saved_screens") {
+                    self.saved_screens = serde_json::from_str(&json).unwrap_or_default();
+                }
+            }
+        }
+        egui::CollapsingHeader::new("Fundamentals Screen (Finviz-style)")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} symbols with cached fundamentals — every registry field is a \
+                         range filter (ADR-116).",
+                        self.bg.all_fundamentals.len()
+                    ))
+                    .color(AXIS_TEXT)
+                    .small(),
+                );
+                // Filter composer.
+                ui.horizontal(|ui| {
+                    let current = ScreenerField::ALL
+                        .get(self.fund_screen_field_idx)
+                        .copied()
+                        .unwrap_or(ScreenerField::MarketCap);
+                    egui::ComboBox::from_id_salt("fund_screen_field")
+                        .selected_text(current.label())
+                        .show_ui(ui, |ui| {
+                            for (idx, f) in ScreenerField::ALL.iter().enumerate() {
+                                ui.selectable_value(
+                                    &mut self.fund_screen_field_idx,
+                                    idx,
+                                    f.label(),
+                                );
+                            }
+                        });
+                    ui.label("min");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.fund_screen_min).desired_width(70.0),
+                    );
+                    ui.label("max");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.fund_screen_max).desired_width(70.0),
+                    );
+                    if ui.button("Add filter").clicked() {
+                        let min = self.fund_screen_min.trim().parse::<f64>().ok();
+                        let max = self.fund_screen_max.trim().parse::<f64>().ok();
+                        if min.is_some() || max.is_some() {
+                            self.fund_screen_filters.push(FieldFilter {
+                                field: current,
+                                min,
+                                max,
+                            });
+                        }
+                    }
+                });
+                // Active filters.
+                let mut remove_idx: Option<usize> = None;
+                for (idx, f) in self.fund_screen_filters.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} ∈ [{}, {}]",
+                                f.field.label(),
+                                f.min.map(|v| v.to_string()).unwrap_or_else(|| "-∞".into()),
+                                f.max.map(|v| v.to_string()).unwrap_or_else(|| "+∞".into()),
+                            ))
+                            .monospace()
+                            .small(),
+                        );
+                        if ui.small_button("✕").clicked() {
+                            remove_idx = Some(idx);
+                        }
+                    });
+                }
+                if let Some(idx) = remove_idx {
+                    self.fund_screen_filters.remove(idx);
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Run Screen").clicked() {
+                        self.fund_screen_results = self
+                            .bg
+                            .all_fundamentals
+                            .iter()
+                            .filter(|f| {
+                                // Descriptive row: watchlist quote when the
+                                // symbol is watched, else the fundamentals'
+                                // own stored price.
+                                let wl = self
+                                    .watchlist_rows
+                                    .iter()
+                                    .find(|w| w.symbol.eq_ignore_ascii_case(&f.symbol));
+                                let s = typhoon_engine::core::screener::ScreenerSymbol {
+                                    symbol: f.symbol.clone(),
+                                    name: f.company_name.clone(),
+                                    asset_class: "stock".into(),
+                                    price: wl
+                                        .map(|w| w.last)
+                                        .or(f.stock_price)
+                                        .unwrap_or(0.0),
+                                    volume: wl.map(|w| w.volume).unwrap_or(0.0),
+                                    change_pct: wl.map(|w| w.change_pct).unwrap_or(0.0),
+                                    tradable: true,
+                                    shortable: false,
+                                    fractionable: false,
+                                    sector: Some(f.sector.clone()),
+                                };
+                                self.fund_screen_filters
+                                    .iter()
+                                    .all(|filter| filter.matches(&s, Some(f)))
+                            })
+                            .cloned()
+                            .collect();
+                    }
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} match(es)",
+                            self.fund_screen_results.len()
+                        ))
+                        .color(AXIS_TEXT)
+                        .small(),
+                    );
+                    ui.separator();
+                    // Saved screens (single kv blob `screener:saved_screens`).
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.fund_screen_name)
+                            .desired_width(110.0)
+                            .hint_text("screen name"),
+                    );
+                    if ui.button("Save").clicked() && !self.fund_screen_name.trim().is_empty() {
+                        let name = self.fund_screen_name.trim().to_string();
+                        self.saved_screens.retain(|s| s.name != name);
+                        self.saved_screens.push(SavedScreen {
+                            name,
+                            filter: Default::default(),
+                            field_filters: self.fund_screen_filters.clone(),
+                        });
+                        if let Some(ref cache) = self.cache {
+                            if let Ok(json) = serde_json::to_string(&self.saved_screens) {
+                                let _ = cache.put_kv("screener:saved_screens", &json);
+                            }
+                        }
+                    }
+                });
+                if !self.saved_screens.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new("Saved:").color(AXIS_TEXT).small());
+                        let mut delete_name: Option<String> = None;
+                        for screen in self.saved_screens.clone() {
+                            if ui.small_button(&screen.name).clicked() {
+                                self.fund_screen_filters = screen.field_filters.clone();
+                                self.fund_screen_name = screen.name.clone();
+                            }
+                            if ui
+                                .small_button(egui::RichText::new("🗑").small())
+                                .on_hover_text(format!("Delete '{}'", screen.name))
+                                .clicked()
+                            {
+                                delete_name = Some(screen.name.clone());
+                            }
+                        }
+                        if let Some(name) = delete_name {
+                            self.saved_screens.retain(|s| s.name != name);
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(json) = serde_json::to_string(&self.saved_screens) {
+                                    let _ = cache.put_kv("screener:saved_screens", &json);
+                                }
+                            }
+                        }
+                    });
+                }
+                if !self.fund_screen_results.is_empty() {
+                    egui::ScrollArea::vertical()
+                        .id_salt("fund_screen_results")
+                        .max_height(180.0)
+                        .show(ui, |ui| {
+                            egui::Grid::new("fund_screen_grid").striped(true).show(
+                                ui,
+                                |ui| {
+                                    for h in
+                                        ["Symbol", "Sector", "MCap", "P/E", "ROE", "Div %", ""]
+                                    {
+                                        ui.strong(h);
+                                    }
+                                    ui.end_row();
+                                    for f in self.fund_screen_results.iter().take(200) {
+                                        ui.label(egui::RichText::new(&f.symbol).monospace());
+                                        ui.label(
+                                            egui::RichText::new(&f.sector).small(),
+                                        );
+                                        ui.label(
+                                            f.market_cap
+                                                .map(|m| format!("${:.1}B", m / 1e9))
+                                                .unwrap_or_else(|| "—".into()),
+                                        );
+                                        ui.label(
+                                            f.pe_ratio
+                                                .map(|v| format!("{v:.1}"))
+                                                .unwrap_or_else(|| "—".into()),
+                                        );
+                                        ui.label(
+                                            f.roe
+                                                .map(|v| format!("{v:.1}%"))
+                                                .unwrap_or_else(|| "—".into()),
+                                        );
+                                        ui.label(
+                                            f.dividend_yield
+                                                .map(|v| format!("{v:.2}%"))
+                                                .unwrap_or_else(|| "—".into()),
+                                        );
+                                        if ui
+                                            .small_button("+")
+                                            .on_hover_text("Open new chart")
+                                            .clicked()
+                                        {
+                                            pending_action =
+                                                SymbolAction::OpenChart(f.symbol.clone());
+                                        }
+                                        ui.end_row();
+                                    }
+                                },
+                            );
+                        });
+                }
+            });
+        pending_action
+    }
+
     pub(super) fn render_symbol_screener_window(&mut self, ctx: &egui::Context) {
         // Screener — uses cached symbol data
         if self.show_screener {
             let mut pending_action = SymbolAction::None;
+            let mut fund_action = SymbolAction::None;
+            let mut open = self.show_screener;
             egui::Window::new("Symbol Screener")
-                .open(&mut self.show_screener)
+                .open(&mut open)
                 .resizable(true)
                 .default_size([700.0, 480.0])
                 .show(ctx, |ui| {
+                    fund_action = self.render_fundamentals_screen_section(ui);
+                    ui.separator();
                     let details = &self.bg.detailed_stats;
                     ui.horizontal(|ui| {
                         ui.label(format!("{} cached entries", details.len()));
@@ -200,7 +440,9 @@ impl TyphooNApp {
                                 });
                         });
                 });
+            self.show_screener = open;
             self.apply_symbol_action(pending_action);
+            self.apply_symbol_action(fund_action);
         }
     }
 }

@@ -57,6 +57,201 @@ pub struct ScreenerResult {
     pub total_scanned: usize,
 }
 
+// ── Finviz-style filter registry (ADR-116 gap closure) ─────────────────────
+//
+// Finviz's screener is ~70 descriptive/fundamental/technical range filters.
+// Rather than 70 hand-written struct fields, the registry is one enum of
+// filterable fields × a numeric range — every fundamentals-backed field is a
+// filter, and saved screens serialize as plain JSON.
+
+/// A filterable numeric field. Descriptive fields come from `ScreenerSymbol`;
+/// the rest read the symbol's cached `Fundamentals` row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScreenerField {
+    Price,
+    Volume,
+    ChangePct,
+    MarketCap,
+    EnterpriseValue,
+    PeRatio,
+    ForwardPe,
+    PegRatio,
+    PriceToBook,
+    PriceToSales,
+    EvToEbitda,
+    ProfitMargin,
+    OperatingMargin,
+    Roe,
+    Roa,
+    Beta,
+    ShortRatio,
+    ShortPercentFloat,
+    DividendYield,
+    SharesOutstanding,
+    McapEvRatio,
+}
+
+impl ScreenerField {
+    /// Every registry field, for UI pickers.
+    pub const ALL: &'static [ScreenerField] = &[
+        ScreenerField::Price,
+        ScreenerField::Volume,
+        ScreenerField::ChangePct,
+        ScreenerField::MarketCap,
+        ScreenerField::EnterpriseValue,
+        ScreenerField::PeRatio,
+        ScreenerField::ForwardPe,
+        ScreenerField::PegRatio,
+        ScreenerField::PriceToBook,
+        ScreenerField::PriceToSales,
+        ScreenerField::EvToEbitda,
+        ScreenerField::ProfitMargin,
+        ScreenerField::OperatingMargin,
+        ScreenerField::Roe,
+        ScreenerField::Roa,
+        ScreenerField::Beta,
+        ScreenerField::ShortRatio,
+        ScreenerField::ShortPercentFloat,
+        ScreenerField::DividendYield,
+        ScreenerField::SharesOutstanding,
+        ScreenerField::McapEvRatio,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            ScreenerField::Price => "Price",
+            ScreenerField::Volume => "Volume",
+            ScreenerField::ChangePct => "Change %",
+            ScreenerField::MarketCap => "Market Cap",
+            ScreenerField::EnterpriseValue => "Enterprise Value",
+            ScreenerField::PeRatio => "P/E",
+            ScreenerField::ForwardPe => "Forward P/E",
+            ScreenerField::PegRatio => "PEG",
+            ScreenerField::PriceToBook => "P/B",
+            ScreenerField::PriceToSales => "P/S",
+            ScreenerField::EvToEbitda => "EV/EBITDA",
+            ScreenerField::ProfitMargin => "Profit Margin",
+            ScreenerField::OperatingMargin => "Operating Margin",
+            ScreenerField::Roe => "ROE",
+            ScreenerField::Roa => "ROA",
+            ScreenerField::Beta => "Beta",
+            ScreenerField::ShortRatio => "Short Ratio",
+            ScreenerField::ShortPercentFloat => "Short % Float",
+            ScreenerField::DividendYield => "Dividend Yield",
+            ScreenerField::SharesOutstanding => "Shares Outstanding",
+            ScreenerField::McapEvRatio => "MCap/EV",
+        }
+    }
+
+    /// Field value for one symbol, from the descriptive row and (when needed)
+    /// the cached fundamentals. `None` = not available → the filter rejects.
+    pub fn value(
+        &self,
+        s: &ScreenerSymbol,
+        fund: Option<&crate::core::fundamentals::Fundamentals>,
+    ) -> Option<f64> {
+        match self {
+            ScreenerField::Price => Some(s.price),
+            ScreenerField::Volume => Some(s.volume),
+            ScreenerField::ChangePct => Some(s.change_pct),
+            ScreenerField::MarketCap => fund?.market_cap,
+            ScreenerField::EnterpriseValue => fund?.enterprise_value,
+            ScreenerField::PeRatio => fund?.pe_ratio,
+            ScreenerField::ForwardPe => fund?.forward_pe,
+            ScreenerField::PegRatio => fund?.peg_ratio,
+            ScreenerField::PriceToBook => fund?.price_to_book,
+            ScreenerField::PriceToSales => fund?.price_to_sales,
+            ScreenerField::EvToEbitda => fund?.ev_to_ebitda,
+            ScreenerField::ProfitMargin => fund?.profit_margin,
+            ScreenerField::OperatingMargin => fund?.operating_margin,
+            ScreenerField::Roe => fund?.roe,
+            ScreenerField::Roa => fund?.roa,
+            ScreenerField::Beta => fund?.beta,
+            ScreenerField::ShortRatio => fund?.short_ratio,
+            ScreenerField::ShortPercentFloat => fund?.short_percent_of_float,
+            ScreenerField::DividendYield => fund?.dividend_yield,
+            ScreenerField::SharesOutstanding => fund?.shares_outstanding,
+            ScreenerField::McapEvRatio => fund?.mcap_ev_ratio,
+        }
+    }
+}
+
+/// One registry filter: keep symbols whose `field` value lies in `[min, max]`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FieldFilter {
+    pub field: ScreenerField,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+}
+
+impl FieldFilter {
+    pub fn matches(
+        &self,
+        s: &ScreenerSymbol,
+        fund: Option<&crate::core::fundamentals::Fundamentals>,
+    ) -> bool {
+        let Some(v) = self.field.value(s, fund) else {
+            return false;
+        };
+        if !v.is_finite() {
+            return false;
+        }
+        if let Some(min) = self.min {
+            if v < min {
+                return false;
+            }
+        }
+        if let Some(max) = self.max {
+            if v > max {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// A saved screen: the base descriptive filter plus registry filters,
+/// serializable as one JSON blob (kv key `screener:saved:{name}`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SavedScreen {
+    pub name: String,
+    #[serde(default)]
+    pub filter: ScreenerFilter,
+    #[serde(default)]
+    pub field_filters: Vec<FieldFilter>,
+}
+
+/// Registry-aware screen: base descriptive filtering, then every field filter
+/// against the symbol's cached fundamentals (keyed by uppercase symbol).
+pub fn screen_symbols_with_fields(
+    filters: &ScreenerFilter,
+    field_filters: &[FieldFilter],
+    symbols: &[ScreenerSymbol],
+    fundamentals_by_symbol: &std::collections::HashMap<
+        String,
+        crate::core::fundamentals::Fundamentals,
+    >,
+) -> ScreenerResult {
+    let base = screen_symbols(filters, symbols);
+    if field_filters.is_empty() {
+        return base;
+    }
+    let total_scanned = base.total_scanned;
+    let matched: Vec<ScreenerSymbol> = base
+        .symbols
+        .into_iter()
+        .filter(|s| {
+            let fund = fundamentals_by_symbol.get(&s.symbol.to_uppercase());
+            field_filters.iter().all(|f| f.matches(s, fund))
+        })
+        .collect();
+    ScreenerResult {
+        total_matched: matched.len(),
+        symbols: matched,
+        total_scanned,
+    }
+}
+
 /// Filter cached symbol data by the given filters.
 pub fn screen_symbols(filters: &ScreenerFilter, symbols: &[ScreenerSymbol]) -> ScreenerResult {
     let total_scanned = symbols.len();

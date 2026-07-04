@@ -31,6 +31,10 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "Copy positions / mirror orders between broker accounts (ADR-130)",
     },
     Command {
+        name: "MARKET_MAP",
+        desc: "Finviz-style market treemap + sector groups (ADR-116)",
+    },
+    Command {
         name: "RELOAD",
         desc: "Reload bars from cache",
     },
