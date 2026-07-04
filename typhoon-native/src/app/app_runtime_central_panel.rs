@@ -179,19 +179,9 @@ impl TyphooNApp {
                 }
             } else if on_chart_body {
                 if self.mtf_enabled {
-                    // Double-click in MTF grid → toggle single chart focus
-                    self.mtf_enabled = false;
-                    self.log.push_back(LogEntry::info(format!(
-                        "Focused: {} [{}] — double-click to return to MTF grid",
-                        self.charts
-                            .get(self.active_tab)
-                            .map(|c| c.symbol.as_str())
-                            .unwrap_or("?"),
-                        self.charts
-                            .get(self.active_tab)
-                            .map(|c| c.timeframe.label())
-                            .unwrap_or("?")
-                    )));
+                    // MTF body double-clicks are handled per-cell below so the
+                    // clicked chart, not the previously active chart, becomes
+                    // the single-chart focus.
                 } else if self.charts.len() > 1 {
                     // Double-click in single mode with multiple tabs → return to MTF grid.
                     // Queue empty cells for the off-thread deferred loader instead of a
@@ -956,8 +946,18 @@ impl TyphooNApp {
                 }
 
                 if cell_body_resp.double_clicked() {
-                    // Body double-click on MTF cell → reset this cell's camera to follow latest (TV/MT5 style)
-                    chart.reset_to_follow_latest();
+                    // Body double-click on an MTF cell → focus exactly that
+                    // chart in single-chart mode. The global double-click path
+                    // cannot know which MTF tile was clicked early enough, so
+                    // doing it here avoids falling back to the old active tab.
+                    self.mtf_focused = Some(vi);
+                    self.active_tab = vi;
+                    self.mtf_enabled = false;
+                    self.log.push_back(LogEntry::info(format!(
+                        "Focused: {} [{}] — double-click to return to MTF grid",
+                        chart.symbol,
+                        chart.timeframe.label()
+                    )));
                 }
 
                 if cell_body_started && !chart.is_dragging {
