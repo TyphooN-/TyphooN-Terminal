@@ -91,12 +91,18 @@ endpoint (`typhoon-chart-ui/src/render/chart_helpers/planning_overlays.rs`),
 and `drag_control_point` (`typhoon-chart-ui/src/state.rs`) resizes that
 specific point while `None` means whole-drawing drag.
 
-### Gap #7: Cross-TF drawings — still open (design sketch)
+### Gap #7: Cross-TF drawings — still open (assessed 2026-07-04, deliberately not rushed)
 - Requires storing drawings as `HashMap<String, Vec<Drawing>>` keyed by symbol
 - All charts for the same symbol share the drawing store
 - Coordinate mapping: bar_idx stored as timestamp offset, converted per-TF
-- Open because it changes drawing ownership/persistence semantics for every
-  existing session; revisit if per-symbol shared drawings become a real ask.
+- **Why it stays open:** the `Drawing` enum stores **absolute bar indices**
+  (`usize`) in every one of the 89 variants (`typhoon-chart-ui/src/drawing.rs`).
+  Cross-TF sharing needs a timestamp coordinate model, which means migrating
+  every variant, every render + hit-test + drag path, and the
+  session-persisted drawing data users already have (a bad migration corrupts
+  saved drawings — user data). That refactor deserves its own dedicated pass
+  with a session-migration plan and drawing-by-drawing render verification,
+  not a tail-end change. Every other gap in this ADR is closed.
 
 ### 8. Pre-Placement Color Picker — DONE (2026-04-05)
 - [x] 8-color palette in drawing toolbar (W/Y/G/R/C/M/O/B)

@@ -183,10 +183,13 @@ tokens on identical data for every symbol.
   QUARTERLY arm only triggers in the unusual case where a non-TW
   quarterly happens. Kept the arm explicit for future
   extensibility (e.g. quarterly SPX expirations that aren't TW).
-- **No "max pain" strike calculation yet.** The AI can eyeball
-  the highest-OI strike from the Option Chain window, but an
-  explicit max-pain calculation per expiration would be a natural
-  extension. Deferred to avoid scope creep on this ADR.
+- ~~**No "max pain" strike calculation yet.**~~ **Shipped
+  (2026-07-04):** `max_pain_strike` / `max_pain_by_expiration`
+  (engine, OI-weighted intrinsic-payout minimization over the
+  union of chain strikes, unit-tested) and the packet's Options
+  Chain section now prints `Max pain (OI-weighted)` per cached
+  expiration, so the AI reads it directly instead of eyeballing
+  the highest-OI strike.
 
 ### Neutral
 

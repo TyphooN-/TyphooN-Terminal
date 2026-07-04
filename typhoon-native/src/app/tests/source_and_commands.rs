@@ -2027,3 +2027,33 @@ fn sma_default_outfits_round_trip_through_the_spec_parser() {
         );
     }
 }
+
+#[test]
+fn live_tick_anchor_clamps_only_gross_divergence_on_newest_bar() {
+    use crate::app::chart::chart_live_tick_anchor_guard;
+    let mk = |c: f64| Bar {
+        ts_ms: 0,
+        open: c,
+        high: c * 1.01,
+        low: c * 0.99,
+        close: c,
+        volume: 1.0,
+    };
+    // 2x bad print vs a live mid of 4.20 → clamped, wick geometry preserved.
+    let mut bars = vec![mk(4.20), mk(8.40)];
+    let div = chart_live_tick_anchor_guard(&mut bars, 4.20);
+    assert!(div.is_some());
+    assert!((bars[1].close - 4.20).abs() < 1e-9);
+    assert!((bars[1].high / bars[1].close - 1.01).abs() < 1e-6);
+    // Older bars untouched.
+    assert!((bars[0].close - 4.20).abs() < 1e-9);
+
+    // Ordinary intraday moves (<1.5x) never clamp.
+    let mut ok_bars = vec![mk(4.20)];
+    assert!(chart_live_tick_anchor_guard(&mut ok_bars, 4.90).is_none());
+    assert!((ok_bars[0].close - 4.20).abs() < 1e-9);
+
+    // Bad inputs never clamp.
+    assert!(chart_live_tick_anchor_guard(&mut ok_bars, 0.0).is_none());
+    assert!(chart_live_tick_anchor_guard(&mut [], 4.2).is_none());
+}

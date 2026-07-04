@@ -8,6 +8,28 @@ use super::*;
 /// glue native without violating the orphan rule, and call sites keep method syntax
 /// (`chart.try_load(…)`) unchanged. Re-exported from `chart` so the `app` glob carries it
 /// into every call site.
+/// ADR-113: apply the live-tick anchor after a merged install. Uses the
+/// chart's own streaming quote — fresh (<2 min), real-time only (delayed iapi
+/// quotes excluded) — and logs when the newest bar was clamped.
+fn chart_apply_live_tick_anchor(
+    chart: &mut ChartState,
+    log: &mut std::collections::VecDeque<LogEntry>,
+) {
+    let fresh = chart
+        .live_quote_at
+        .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(120));
+    if !fresh || chart.live_quote_delayed || chart.live_bid <= 0.0 || chart.live_ask <= 0.0 {
+        return;
+    }
+    let mid = 0.5 * (chart.live_bid + chart.live_ask);
+    if let Some(divergence) = chart_live_tick_anchor_guard(&mut chart.bars, mid) {
+        log.push_back(LogEntry::warn(format!(
+            "Live-tick anchor: newest {} bar diverged {:.2}x from the fresh real-time quote (${:.4}) — clamped (ADR-113)",
+            chart.symbol, divergence, mid
+        )));
+    }
+}
+
 pub(crate) trait ChartDataLoad {
     fn should_reload_for_bar_fetch(&self, symbol: &str, timeframe: &str, source: &str) -> bool;
     fn latest_quote_bar_from_cache(cache: &SqliteCache, symbol: &str) -> Option<Bar>;
@@ -536,6 +558,7 @@ impl ChartDataLoad for ChartState {
             if !merged.is_empty() {
                 self.gap_fill_timestamps.clear();
                 self.bars = merged;
+                chart_apply_live_tick_anchor(self, log);
                 self.primary_source = "merged";
                 self.source_override = source_override;
                 self.primary_first_ts = self.bars.first().map(|bar| bar.ts_ms).unwrap_or(0);
@@ -643,6 +666,7 @@ impl ChartDataLoad for ChartState {
             if !merged.is_empty() {
                 self.gap_fill_timestamps.clear();
                 self.bars = merged;
+                chart_apply_live_tick_anchor(self, log);
                 self.primary_source = "merged";
                 self.primary_first_ts = self.bars.first().map(|bar| bar.ts_ms).unwrap_or(0);
                 if old_bars_empty {
@@ -1066,6 +1090,7 @@ impl ChartDataLoad for ChartState {
             if !merged.is_empty() {
                 self.gap_fill_timestamps.clear();
                 self.bars = merged;
+                chart_apply_live_tick_anchor(self, log);
                 self.primary_source = "merged";
                 self.primary_first_ts = self.bars.first().map(|bar| bar.ts_ms).unwrap_or(0);
                 // PERF DIAG: per-phase timing of the post-load compute so a slow

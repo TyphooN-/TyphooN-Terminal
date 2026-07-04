@@ -45,7 +45,7 @@ pub use fx_beta_valuation_identifier_types::{
 };
 
 mod advanced_valuation_derivatives_types;
-pub use advanced_valuation_derivatives_types::{
+pub use advanced_valuation_derivatives_types::{max_pain_by_expiration, max_pain_strike, 
     DcfSnapshot, DcfYear, HraSnapshot, HraWindow, IvolObservation, IvolSnapshot, OptionContract,
     OptionExpiry, OptionsChainSnapshot, SvmModelRow, SvmSnapshot,
 };

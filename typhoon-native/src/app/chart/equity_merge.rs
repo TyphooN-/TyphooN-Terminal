@@ -792,6 +792,34 @@ fn chart_depth_source_scale_factor(
 /// Note Kraken xStock bars are sourced from Alpaca on the backend, so the
 /// trusted tier (kraken-equities + alpaca) is not self-corroborating — a backend
 /// mis-adjustment hits both identically. Yahoo is the independent reference.
+/// ADR-113 live-tick anchor for the recent-window guard. The corroborator
+/// (Yahoo daily bars) can lag a bad trusted print by a whole session, and a
+/// thin overlap can leave the bar-based guard unable to adjudicate at all —
+/// but the live tape cannot lag. This clamp is deliberately narrow
+/// (merge-path changes carry outsized data-integrity risk): it touches ONLY
+/// the newest merged bar, ONLY when the caller supplies a fresh real-time
+/// (non-delayed) quote, and ONLY on gross divergence (> 1.5×, the same
+/// OUTLIER_RATIO the corroborator guard uses). The whole candle is rescaled
+/// onto the live mid so wick geometry is preserved. Returns the divergence
+/// ratio when it clamped.
+pub(crate) fn chart_live_tick_anchor_guard(bars: &mut [Bar], live_mid: f64) -> Option<f64> {
+    const LIVE_TICK_OUTLIER_RATIO: f64 = 1.5;
+    let last = bars.last_mut()?;
+    if !(live_mid > 0.0 && live_mid.is_finite()) || last.close <= 0.0 {
+        return None;
+    }
+    let divergence = (last.close / live_mid).max(live_mid / last.close);
+    if divergence <= LIVE_TICK_OUTLIER_RATIO {
+        return None;
+    }
+    let scale = live_mid / last.close;
+    last.open *= scale;
+    last.high *= scale;
+    last.low *= scale;
+    last.close = live_mid;
+    Some(divergence)
+}
+
 fn chart_recent_overlap_scale(
     trusted: &std::collections::BTreeMap<i64, Bar>,
     depth: &std::collections::BTreeMap<i64, Bar>,

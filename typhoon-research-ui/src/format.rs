@@ -376,6 +376,16 @@ pub fn write_options_chain(p: &mut String, o: &OptionsChainSnapshot) {
             o.underlying_price,
             o.expirations.len()
         );
+        // ADR-084 extension: explicit max pain per expiration (first 4).
+        let pains = typhoon_engine::core::research::max_pain_by_expiration(o);
+        if !pains.is_empty() {
+            let list: Vec<String> = pains
+                .iter()
+                .take(4)
+                .map(|(exp, k)| format!("{exp}: ${k:.2}"))
+                .collect();
+            let _ = writeln!(p, "- Max pain (OI-weighted): {}", list.join(" · "));
+        }
         if let Some(exp) = o.expirations.first() {
             let total_call_vol: f64 = exp.calls.iter().map(|c| c.volume).sum();
             let total_put_vol: f64 = exp.puts.iter().map(|p| p.volume).sum();

@@ -123,11 +123,17 @@ equity-history re-sync.
   (`chart_merge_equity_raw_bars`, `chart_recent_overlap_scale`).
 - **Done:** Yahoo `adjclose` ingestion (§4) rebases each Yahoo bar onto the
   split/dividend-adjusted scale before it participates in corroboration.
-- **Open future work (deliberately deferred):** live-tick anchor for the
-  recent-window guard. Wiring live quotes into the merge guard touches the
-  merge path, where changes carry outsized data-integrity risk (the same
-  reason the merge-dedup consolidation was skipped); revisit only with a
-  reproducible case the bar-based corroborator anchor gets wrong.
+- **Live-tick anchor — shipped (2026-07-04), deliberately narrow:**
+  `chart_live_tick_anchor_guard` clamps ONLY the newest merged bar, ONLY
+  when the chart holds a fresh (<2 min) real-time (non-delayed) quote, and
+  ONLY on gross divergence (>1.5×, the corroborator guard's OUTLIER_RATIO).
+  The whole candle rescales onto the live mid so wick geometry is
+  preserved; applied at the three merged-install sites in `load_cache.rs`
+  and logged when it fires. This covers the case the bar-based anchor
+  cannot: the corroborator's daily bars lag a bad trusted print by a
+  session, but the live tape does not. The merge internals themselves are
+  untouched (merge-path risk posture unchanged); unit-tested
+  (`live_tick_anchor_clamps_only_gross_divergence_on_newest_bar`).
 - **General split coverage (2026-07-03):** `research_stock_splits` is now fed
   by the bulk scrape for every symbol via the combined FMP + keyless-Yahoo
   fetcher (ADR-122), strengthening the exact back-adjust leg this ADR's

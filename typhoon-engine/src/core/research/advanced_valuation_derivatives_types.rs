@@ -129,6 +129,96 @@ pub struct OptionsChainSnapshot {
     pub note: String,
 }
 
+/// ADR-084 extension: the max-pain strike for one expiration — the strike
+/// minimizing the total intrinsic payout to option holders at expiry
+/// (Σ call OI·max(S−K,0) + Σ put OI·max(K−S,0) over candidate strikes).
+/// Returns `(strike, total_payout_at_strike)`; `None` without open interest.
+pub fn max_pain_strike(expiry: &OptionExpiry) -> Option<(f64, f64)> {
+    let mut strikes: Vec<f64> = expiry
+        .calls
+        .iter()
+        .chain(expiry.puts.iter())
+        .map(|c| c.strike)
+        .filter(|k| k.is_finite() && *k > 0.0)
+        .collect();
+    strikes.sort_by(|a, b| a.total_cmp(b));
+    strikes.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    if strikes.is_empty() {
+        return None;
+    }
+    let has_oi = expiry
+        .calls
+        .iter()
+        .chain(expiry.puts.iter())
+        .any(|c| c.open_interest > 0.0);
+    if !has_oi {
+        return None;
+    }
+    let mut best: Option<(f64, f64)> = None;
+    for &s in &strikes {
+        let call_pay: f64 = expiry
+            .calls
+            .iter()
+            .map(|c| c.open_interest * (s - c.strike).max(0.0))
+            .sum();
+        let put_pay: f64 = expiry
+            .puts
+            .iter()
+            .map(|c| c.open_interest * (c.strike - s).max(0.0))
+            .sum();
+        let total = call_pay + put_pay;
+        if best.map(|(_, b)| total < b).unwrap_or(true) {
+            best = Some((s, total));
+        }
+    }
+    best
+}
+
+/// Max-pain strike per cached expiration: `(expiration, strike)`.
+pub fn max_pain_by_expiration(chain: &OptionsChainSnapshot) -> Vec<(String, f64)> {
+    chain
+        .expirations
+        .iter()
+        .filter_map(|exp| max_pain_strike(exp).map(|(k, _)| (exp.expiration.clone(), k)))
+        .collect()
+}
+
+#[cfg(test)]
+mod max_pain_tests {
+    use super::*;
+
+    fn contract(kind: &str, strike: f64, oi: f64) -> OptionContract {
+        OptionContract {
+            option_type: kind.into(),
+            strike,
+            open_interest: oi,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn max_pain_minimizes_holder_payout() {
+        // Heavy call OI at 100 and put OI at 100 pins pain at 100; a stray
+        // 120 call and 80 put don't move it.
+        let expiry = OptionExpiry {
+            expiration: "2026-08-21".into(),
+            days_to_expiry: 48,
+            calls: vec![contract("CALL", 100.0, 1000.0), contract("CALL", 120.0, 50.0)],
+            puts: vec![contract("PUT", 100.0, 1000.0), contract("PUT", 80.0, 50.0)],
+        };
+        let (strike, _) = max_pain_strike(&expiry).unwrap();
+        assert!((strike - 100.0).abs() < 1e-9);
+
+        // No OI → no answer.
+        let empty = OptionExpiry {
+            calls: vec![contract("CALL", 100.0, 0.0)],
+            puts: vec![],
+            ..Default::default()
+        };
+        assert!(max_pain_strike(&empty).is_none());
+    }
+}
+
 /// IVOL — one ATM IV observation over time (52-week history bucket).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IvolObservation {
