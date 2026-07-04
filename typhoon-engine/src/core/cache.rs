@@ -26,23 +26,47 @@ pub const DEFAULT_BAR_ZSTD_LEVEL: i32 = 3;
 pub const MIN_ZSTD_LEVEL: i32 = 1;
 pub const MAX_ZSTD_LEVEL: i32 = 22;
 static BAR_ZSTD_LEVEL: AtomicI32 = AtomicI32::new(DEFAULT_BAR_ZSTD_LEVEL);
+/// kv_cache key holding the rolling data-sanity audit history (JSON array of
+/// `BarSanityHistoryEntry`, oldest first).
+const SANITY_HISTORY_KV_KEY: &str = "sanity_audit:history";
+/// Number of audit runs kept in the persisted history ring.
+const SANITY_HISTORY_CAP: usize = 24;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum BarCacheSanitySeverity {
     Info,
     Warn,
     Error,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct BarCacheSanityIssue {
     pub severity: BarCacheSanitySeverity,
     pub code: String,
     pub key: String,
     pub detail: String,
+    /// Per-row hit count for aggregated codes (e.g. how many bars in this row
+    /// had invalid OHLC). Always >= 1; the issue itself counts once.
+    pub occurrences: usize,
 }
 
-#[derive(Debug, Clone, Default)]
+/// One persisted audit run — the compact summary kept in kv_cache so
+/// consecutive runs can be diffed (new vs resolved issues per code).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BarSanityHistoryEntry {
+    pub finished_at_ms: i64,
+    pub duration_ms: u64,
+    pub rows_scanned: usize,
+    pub bars_scanned: usize,
+    pub error_count: usize,
+    pub warn_count: usize,
+    pub info_count: usize,
+    pub code_counts: std::collections::BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct BarCacheSanityReport {
     pub rows_scanned: usize,
     pub bars_scanned: usize,
@@ -52,10 +76,30 @@ pub struct BarCacheSanityReport {
     pub info_count: usize,
     pub issue_code_counts: std::collections::BTreeMap<String, usize>,
     pub issues: Vec<BarCacheSanityIssue>,
+    /// True when the scan was cancelled mid-run; counts cover only the rows
+    /// scanned so far and cross-source checks were skipped.
+    pub cancelled: bool,
+    pub duration_ms: u64,
+    pub finished_at_ms: i64,
+    /// Rows whose metadata columns (bar_count/last_ts/second_last_ts/zstd_level)
+    /// disagree with the blob — fixable in place by `repair_bar_cache` with
+    /// `fix_metadata` (no bar data touched).
+    pub metadata_repairable_rows: usize,
+    /// Rows whose blob content needs a rewrite (invalid/duplicate/future bars,
+    /// or legacy JSON rows convertible to TTBR) — fixable by `rewrite_bad_rows`.
+    pub rewritable_rows: usize,
+    /// Rows that cannot be decoded at all (bad header/truncated/undecompressable)
+    /// — only fixable by `delete_corrupt_rows`; the next sync re-fetches them.
+    pub corrupt_rows: usize,
+    /// `merged:SYM:TF` keys whose recent bars disagree with a raw source beyond
+    /// the mismatch threshold. Deleting them is safe: the merge pipeline
+    /// re-materialises merged rows from raw sources on next load/sync.
+    pub merged_mismatch_keys: std::collections::BTreeSet<String>,
 }
 
 impl BarCacheSanityReport {
-    const MAX_ISSUES: usize = 2_000;
+    const MAX_ISSUES: usize = 5_000;
+    const MAX_ISSUES_PER_CODE: usize = 500;
 
     pub fn has_code(&self, code: &str) -> bool {
         self.issue_code_count(code) > 0
@@ -66,14 +110,16 @@ impl BarCacheSanityReport {
     }
 
     pub fn summary_line(&self) -> String {
+        let cancelled = if self.cancelled { " [CANCELLED]" } else { "" };
         format!(
-            "Data sanity: {} rows / {} bars scanned, {} cross-source pairs checked — {} errors, {} warnings, {} info",
+            "Data sanity: {} rows / {} bars scanned, {} cross-source pairs checked — {} errors, {} warnings, {} info ({:.1}s){cancelled}",
             self.rows_scanned,
             self.bars_scanned,
             self.source_pairs_checked,
             self.error_count,
             self.warn_count,
-            self.info_count
+            self.info_count,
+            self.duration_ms as f64 / 1000.0,
         )
     }
 
@@ -81,12 +127,7 @@ impl BarCacheSanityReport {
         self.issues
             .iter()
             .take(limit)
-            .map(|issue| {
-                format!(
-                    "{:?} {} {} — {}",
-                    issue.severity, issue.code, issue.key, issue.detail
-                )
-            })
+            .map(issue_display_line)
             .collect()
     }
 
@@ -100,6 +141,57 @@ impl BarCacheSanityReport {
             .collect()
     }
 
+    /// Compact history form of this report for kv persistence.
+    pub fn to_history_entry(&self) -> BarSanityHistoryEntry {
+        BarSanityHistoryEntry {
+            finished_at_ms: self.finished_at_ms,
+            duration_ms: self.duration_ms,
+            rows_scanned: self.rows_scanned,
+            bars_scanned: self.bars_scanned,
+            error_count: self.error_count,
+            warn_count: self.warn_count,
+            info_count: self.info_count,
+            code_counts: self.issue_code_counts.clone(),
+        }
+    }
+
+    /// Human-readable per-code delta vs a previous run, largest movement first
+    /// (e.g. "vs last run: -774 last_ts_missing, +2 invalid_ohlc"). None when
+    /// nothing changed.
+    pub fn delta_line(&self, prev: &BarSanityHistoryEntry) -> Option<String> {
+        let mut deltas: Vec<(i64, &str)> = Vec::new();
+        let codes: std::collections::BTreeSet<&str> = self
+            .issue_code_counts
+            .keys()
+            .chain(prev.code_counts.keys())
+            .map(|s| s.as_str())
+            .collect();
+        for code in codes {
+            let now = self.issue_code_counts.get(code).copied().unwrap_or(0) as i64;
+            let before = prev.code_counts.get(code).copied().unwrap_or(0) as i64;
+            if now != before {
+                deltas.push((now - before, code));
+            }
+        }
+        if deltas.is_empty() {
+            return None;
+        }
+        deltas.sort_by_key(|(d, code)| (-d.abs(), *code));
+        let shown = deltas
+            .iter()
+            .take(6)
+            .map(|(d, code)| format!("{d:+} {code}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = deltas.len().saturating_sub(6);
+        let suffix = if more > 0 {
+            format!(" (+{more} more codes changed)")
+        } else {
+            String::new()
+        };
+        Some(format!("vs last run: {shown}{suffix}"))
+    }
+
     fn push_issue(
         &mut self,
         severity: BarCacheSanitySeverity,
@@ -107,22 +199,156 @@ impl BarCacheSanityReport {
         key: impl Into<String>,
         detail: impl Into<String>,
     ) {
+        self.push_issue_n(severity, code, key, detail, 1);
+    }
+
+    /// Push one aggregated issue that represents `occurrences` per-bar hits in
+    /// a single row. Counts count the issue once — `occurrences` is context.
+    fn push_issue_n(
+        &mut self,
+        severity: BarCacheSanitySeverity,
+        code: impl Into<String>,
+        key: impl Into<String>,
+        detail: impl Into<String>,
+        occurrences: usize,
+    ) {
         let code = code.into();
-        *self.issue_code_counts.entry(code.clone()).or_insert(0) += 1;
+        let code_count = self.issue_code_counts.entry(code.clone()).or_insert(0);
+        *code_count += 1;
+        let stored_for_code = *code_count;
         match severity {
             BarCacheSanitySeverity::Info => self.info_count += 1,
             BarCacheSanitySeverity::Warn => self.warn_count += 1,
             BarCacheSanitySeverity::Error => self.error_count += 1,
         }
-        if self.issues.len() < Self::MAX_ISSUES {
+        // Per-code cap keeps one noisy code from crowding every other code out
+        // of the stored list; total counts above are never capped.
+        if self.issues.len() < Self::MAX_ISSUES && stored_for_code <= Self::MAX_ISSUES_PER_CODE {
             self.issues.push(BarCacheSanityIssue {
                 severity,
                 code,
                 key: key.into(),
                 detail: detail.into(),
+                occurrences: occurrences.max(1),
             });
         }
     }
+
+    /// Order the stored issue list most-severe-first (then code/key) so display
+    /// truncation shows errors before warnings before info.
+    fn finalize_issue_order(&mut self) {
+        self.issues.sort_by(|a, b| {
+            b.severity
+                .cmp(&a.severity)
+                .then_with(|| a.code.cmp(&b.code))
+                .then_with(|| a.key.cmp(&b.key))
+        });
+    }
+}
+
+/// One display line for an issue (shared by the report's top lines and the UI
+/// issue browser).
+pub fn issue_display_line(issue: &BarCacheSanityIssue) -> String {
+    let times = if issue.occurrences > 1 {
+        format!(" ×{}", issue.occurrences)
+    } else {
+        String::new()
+    };
+    format!(
+        "{:?} {} {} — {}{times}",
+        issue.severity, issue.code, issue.key, issue.detail
+    )
+}
+
+/// Which repair classes `repair_bar_cache` may apply. All default off so a
+/// zero-value struct is a no-op.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BarCacheRepairOptions {
+    /// Recompute bar_count/last_ts/second_last_ts from the blob and clamp an
+    /// out-of-range zstd_level tag. Metadata only — bar data is untouched.
+    pub fix_metadata: bool,
+    /// Rewrite blobs whose content violates write-path invariants: drops
+    /// invalid-OHLC bars, duplicate/out-of-order buckets (later wins, same as
+    /// the write path), bars more than 2 days in the future, and converts
+    /// legacy JSON rows to TTBR binary.
+    pub rewrite_bad_rows: bool,
+    /// Delete rows that cannot be decoded at all (undecompressable, bad
+    /// header, truncated). Destructive: the next bar sync re-fetches them.
+    pub delete_corrupt_rows: bool,
+}
+
+impl BarCacheRepairOptions {
+    pub fn any(&self) -> bool {
+        self.fix_metadata || self.rewrite_bad_rows || self.delete_corrupt_rows
+    }
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct BarCacheRepairOutcome {
+    pub rows_scanned: usize,
+    pub metadata_fixed: usize,
+    pub rows_rewritten: usize,
+    pub legacy_rows_converted: usize,
+    pub bars_dropped: usize,
+    pub rows_deleted: usize,
+    pub cancelled: bool,
+    pub duration_ms: u64,
+    /// Per-key failures (capped) — a failed row never aborts the pass.
+    pub errors: Vec<String>,
+}
+
+impl BarCacheRepairOutcome {
+    const MAX_ERRORS: usize = 50;
+
+    pub fn summary_line(&self) -> String {
+        let cancelled = if self.cancelled { " [CANCELLED]" } else { "" };
+        format!(
+            "Cache repair: {} rows scanned — {} metadata fixed, {} rewritten ({} legacy converted, {} bars dropped), {} deleted, {} errors ({:.1}s){cancelled}",
+            self.rows_scanned,
+            self.metadata_fixed,
+            self.rows_rewritten,
+            self.legacy_rows_converted,
+            self.bars_dropped,
+            self.rows_deleted,
+            self.errors.len(),
+            self.duration_ms as f64 / 1000.0,
+        )
+    }
+
+    pub fn changed_rows(&self) -> usize {
+        self.metadata_fixed + self.rows_rewritten + self.rows_deleted
+    }
+
+    fn push_error(&mut self, err: String) {
+        if self.errors.len() < Self::MAX_ERRORS {
+            self.errors.push(err);
+        }
+    }
+}
+
+/// Planned write for one row, produced off-lock and applied in a short
+/// per-chunk write transaction.
+enum RowFix {
+    Metadata {
+        key: String,
+        bar_count: i64,
+        last_ts: Option<String>,
+        second_last_ts: Option<String>,
+        zstd_level: Option<i32>,
+    },
+    Rewrite {
+        key: String,
+        compressed: Vec<u8>,
+        bar_count: i64,
+        last_ts: Option<String>,
+        second_last_ts: Option<String>,
+        zstd_level: i32,
+        bars_dropped: usize,
+        legacy_converted: bool,
+    },
+    Delete {
+        key: String,
+    },
 }
 
 pub fn sanitize_zstd_level(level: i32) -> i32 {
@@ -514,12 +740,12 @@ struct AuditKeyParts {
     timeframe: String,
 }
 
+/// Only the close survives into the cross-source/merged overlap phase — those
+/// checks compare closes by design (single degenerate high/low fields on one
+/// provider must not read as scale mismatches).
 #[derive(Debug, Clone, Copy)]
 struct AuditBar {
     bucket_ts_ms: i64,
-    open: f64,
-    high: f64,
-    low: f64,
     close: f64,
 }
 
@@ -573,20 +799,6 @@ fn bar_close_ratio(a: f64, b: f64) -> Option<f64> {
     }
 }
 
-fn max_ohlc_ratio(a: AuditBar, b: AuditBar) -> Option<f64> {
-    [
-        bar_close_ratio(a.open, b.open),
-        bar_close_ratio(a.high, b.high),
-        bar_close_ratio(a.low, b.low),
-        bar_close_ratio(a.close, b.close),
-    ]
-    .into_iter()
-    .flatten()
-    .fold(None, |acc, ratio| {
-        Some(acc.map(|v: f64| v.max(ratio)).unwrap_or(ratio))
-    })
-}
-
 fn stable_scale_delta(scales: &[f64], threshold: f64, tolerance: f64) -> Option<f64> {
     if scales.len() < 2 {
         return None;
@@ -608,6 +820,649 @@ fn stable_scale_delta(scales: &[f64], threshold: f64, tolerance: f64) -> Option<
     }
     let symmetric = p50.max(1.0 / p50);
     (symmetric >= threshold).then_some(p50)
+}
+
+/// Bar rows the audit/repair scans pull per key-cursor chunk.
+struct AuditRow {
+    key: String,
+    data: Vec<u8>,
+    meta_count: Option<i64>,
+    meta_last_ts: Option<String>,
+    meta_second_last_ts: Option<String>,
+    zstd_level: i32,
+}
+
+/// Read the next `limit` bar_cache rows after `cursor` (exclusive) in key
+/// order. Chunked iteration keeps each read statement short so the WAL
+/// snapshot is released between chunks.
+fn read_audit_rows_after(
+    conn: &Connection,
+    cursor: &str,
+    limit: usize,
+) -> Result<Vec<AuditRow>, String> {
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT key, data, bar_count, last_ts, second_last_ts, zstd_level FROM bar_cache WHERE key > ?1 ORDER BY key LIMIT ?2",
+        )
+        .map_err(|e| format!("SQLite prepare failed: {e}"))?;
+    let rows = stmt
+        .query_map(params![cursor, limit as i64], |row| {
+            Ok(AuditRow {
+                key: row.get::<_, String>(0)?,
+                data: row.get::<_, Vec<u8>>(1)?,
+                meta_count: row.get::<_, Option<i64>>(2)?,
+                meta_last_ts: row.get::<_, Option<String>>(3)?,
+                meta_second_last_ts: row.get::<_, Option<String>>(4)?,
+                zstd_level: row.get::<_, i32>(5).unwrap_or(DEFAULT_BAR_ZSTD_LEVEL),
+            })
+        })
+        .map_err(|e| format!("SQLite query failed: {e}"))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| format!("SQLite row failed: {e}"))?);
+    }
+    Ok(out)
+}
+
+/// Keys whose (symbol, timeframe) group can participate in cross-source or
+/// merged-vs-raw overlap checks: ≥2 raw sources, or a merged row plus ≥1 raw
+/// source. Only these keys keep in-memory bar tails during the scan.
+fn cross_check_key_set(keys: &[String]) -> std::collections::HashSet<String> {
+    let mut groups: std::collections::BTreeMap<
+        (String, String),
+        (std::collections::BTreeSet<String>, Vec<usize>),
+    > = std::collections::BTreeMap::new();
+    for (i, key) in keys.iter().enumerate() {
+        if key.contains(":__") {
+            continue;
+        }
+        let Some(parts) = parse_bar_cache_key(key) else {
+            continue;
+        };
+        let entry = groups
+            .entry((parts.symbol, parts.timeframe))
+            .or_default();
+        entry.0.insert(parts.source);
+        entry.1.push(i);
+    }
+    let mut set = std::collections::HashSet::new();
+    for (_, (sources, idxs)) in groups {
+        let has_merged = sources.contains("merged");
+        let raw_sources = sources.len() - usize::from(has_merged);
+        if raw_sources >= 2 || (has_merged && raw_sources >= 1) {
+            for i in idxs {
+                set.insert(keys[i].clone());
+            }
+        }
+    }
+    set
+}
+
+fn is_intraday_timeframe(timeframe: &str) -> bool {
+    matches!(
+        timeframe,
+        "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour"
+    )
+}
+
+fn fmt_date_ms(ts_ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ts_ms)
+        .map(|dt| dt.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| ts_ms.to_string())
+}
+
+/// Per-row audit checks. Aggregates per-bar findings (invalid OHLC, future
+/// timestamps, non-monotonic buckets, body-outside-range) into one issue per
+/// row with an occurrence count instead of one issue per bar, and tracks
+/// which repair each row would need via the report's repairable counters.
+fn audit_bar_row(
+    report: &mut BarCacheSanityReport,
+    series: &mut Vec<AuditSeries>,
+    row: AuditRow,
+    now_ms: i64,
+    keep_series: bool,
+) {
+    let AuditRow {
+        key,
+        data,
+        meta_count,
+        meta_last_ts,
+        meta_second_last_ts,
+        zstd_level,
+    } = row;
+    report.rows_scanned += 1;
+
+    // Internal metadata rows (`<prefix>:__<NAME>__…`) are not bar blobs;
+    // repair_bar_counts skips them for the same reason.
+    if key.contains(":__") {
+        return;
+    }
+
+    let Some(parts) = parse_bar_cache_key(&key) else {
+        report.push_issue(
+            BarCacheSanitySeverity::Warn,
+            "malformed_key",
+            key,
+            "bar_cache key is not source:symbol:timeframe",
+        );
+        return;
+    };
+    let mut metadata_repairable = false;
+    if !(MIN_ZSTD_LEVEL..=MAX_ZSTD_LEVEL).contains(&zstd_level) {
+        report.push_issue(
+            BarCacheSanitySeverity::Warn,
+            "zstd_level_out_of_range",
+            &key,
+            format!("zstd_level={zstd_level}"),
+        );
+        metadata_repairable = true;
+    }
+
+    let binary = match maybe_decompress(data) {
+        Ok(binary) => binary,
+        Err(e) => {
+            report.push_issue(BarCacheSanitySeverity::Error, "decompress_failed", key, e);
+            report.corrupt_rows += 1;
+            return;
+        }
+    };
+    if binary.len() < 8 || &binary[0..4] != BAR_BINARY_MAGIC {
+        // Legacy pre-TTBR rows stored raw JSON; the read path still accepts
+        // them, so they are convertible (rewrite), not corrupt (delete).
+        let legacy_json = serde_json::from_slice::<Vec<serde_json::Value>>(&binary)
+            .map(|bars| !bars.is_empty())
+            .unwrap_or(false);
+        if legacy_json {
+            report.push_issue(
+                BarCacheSanitySeverity::Warn,
+                "legacy_json_row",
+                key,
+                "legacy JSON bar row — rewrite converts it to TTBR binary",
+            );
+            report.rewritable_rows += 1;
+        } else {
+            report.push_issue(
+                BarCacheSanitySeverity::Error,
+                "bad_binary_header",
+                key,
+                "bar blob is neither TTBR binary nor legacy JSON",
+            );
+            report.corrupt_rows += 1;
+        }
+        return;
+    }
+    let header_count =
+        u32::from_le_bytes(binary[4..8].try_into().unwrap_or([0u8; 4])) as usize;
+    let expected = match header_count
+        .checked_mul(BYTES_PER_BAR)
+        .and_then(|n| n.checked_add(8))
+    {
+        Some(n) => n,
+        None => {
+            report.push_issue(
+                BarCacheSanitySeverity::Error,
+                "bar_count_overflow",
+                key,
+                format!("header_count={header_count}"),
+            );
+            report.corrupt_rows += 1;
+            return;
+        }
+    };
+    if binary.len() < expected {
+        report.push_issue(
+            BarCacheSanitySeverity::Error,
+            "truncated_blob",
+            key,
+            format!("expected {expected} bytes, got {}", binary.len()),
+        );
+        report.corrupt_rows += 1;
+        return;
+    }
+    if let Some(meta_count) = meta_count
+        && (meta_count < 0 || meta_count as usize != header_count)
+    {
+        report.push_issue(
+            BarCacheSanitySeverity::Error,
+            "bar_count_mismatch",
+            &key,
+            format!("metadata={meta_count}, header={header_count}"),
+        );
+        metadata_repairable = true;
+    }
+    if header_count == 0 {
+        let severity = if parts.source == "yahoo-chart" {
+            BarCacheSanitySeverity::Warn
+        } else {
+            BarCacheSanitySeverity::Info
+        };
+        report.push_issue(severity, "zero_bar_row", key, "bar_cache row contains no bars");
+        report.metadata_repairable_rows += usize::from(metadata_repairable);
+        return;
+    }
+
+    let raw = match unpack_bars_raw(&binary) {
+        Ok(raw) => raw,
+        Err(e) => {
+            report.push_issue(BarCacheSanitySeverity::Error, "unpack_failed", key, e);
+            report.corrupt_rows += 1;
+            return;
+        }
+    };
+    report.bars_scanned += raw.len();
+    let (computed_second, computed_last) = get_last_two_bar_timestamps(&binary, raw.len());
+    if meta_last_ts.is_none() {
+        report.push_issue(
+            BarCacheSanitySeverity::Warn,
+            "last_ts_missing",
+            &key,
+            "positive bar_count row has NULL last_ts metadata",
+        );
+        metadata_repairable = true;
+    } else if meta_last_ts != computed_last {
+        report.push_issue(
+            BarCacheSanitySeverity::Warn,
+            "last_ts_mismatch",
+            &key,
+            format!("metadata={meta_last_ts:?}, computed={computed_last:?}"),
+        );
+        metadata_repairable = true;
+    }
+    if raw.len() > 1 && meta_second_last_ts != computed_second {
+        report.push_issue(
+            BarCacheSanitySeverity::Warn,
+            "second_last_ts_mismatch",
+            &key,
+            format!("metadata={meta_second_last_ts:?}, computed={computed_second:?}"),
+        );
+        metadata_repairable = true;
+    }
+
+    let future_slop_ms = 2 * 24 * 60 * 60 * 1000i64;
+    let mut prev_bucket: Option<i64> = None;
+    let series_from = raw.len().saturating_sub(512);
+    let mut audit_bars = if keep_series {
+        Vec::with_capacity(raw.len() - series_from)
+    } else {
+        Vec::new()
+    };
+    let gap_warn_ms = expected_gap_warn_ms(&parts.timeframe);
+    // The still-forming candle of the current session/week/month may
+    // transiently have its close outside a lagging high/low on coarse
+    // provider feeds — classify that separately from settled-bar violations.
+    let forming_bucket = normalized_bar_timestamp_ms(&key, now_ms);
+    let mut invalid: Option<(usize, String)> = None;
+    let mut invalid_count = 0usize;
+    let mut future: Option<(usize, String)> = None;
+    let mut future_count = 0usize;
+    let mut non_monotonic: Option<(usize, String)> = None;
+    let mut non_monotonic_count = 0usize;
+    let mut body_first: Option<String> = None;
+    let mut body_open_only = 0usize;
+    let mut body_close_forming = 0usize;
+    let mut body_close_settled = 0usize;
+    let mut largest_gap: Option<(i64, usize, i64, i64)> = None;
+    let mut gap_count = 0usize;
+    for (idx, (ts, o, h, l, c, v)) in raw.iter().copied().enumerate() {
+        let bucket = normalized_bar_timestamp_ms(&key, ts).unwrap_or(ts);
+        let invalid_price = ts <= 0
+            || !o.is_finite()
+            || !h.is_finite()
+            || !l.is_finite()
+            || !c.is_finite()
+            || !v.is_finite()
+            || o <= 0.0
+            || h <= 0.0
+            || l <= 0.0
+            || c <= 0.0
+            || v < 0.0
+            || h < l;
+        if invalid_price {
+            invalid_count += 1;
+            if invalid.is_none() {
+                invalid = Some((idx, format!("idx={idx} ts={ts} o={o} h={h} l={l} c={c} v={v}")));
+            }
+        }
+        if h >= l && l > 0.0 && h > 0.0 {
+            let close_out = c > h * 1.05 || c < l * 0.95;
+            let open_out = o > h * 1.05 || o < l * 0.95;
+            if close_out || open_out {
+                if body_first.is_none() {
+                    body_first = Some(format!("idx={idx} ts={ts} o={o} h={h} l={l} c={c}"));
+                }
+                if close_out {
+                    let forming = idx + 1 == raw.len() && Some(bucket) == forming_bucket;
+                    if forming {
+                        body_close_forming += 1;
+                    } else {
+                        body_close_settled += 1;
+                    }
+                } else {
+                    body_open_only += 1;
+                }
+            }
+        }
+        if ts > now_ms + future_slop_ms {
+            future_count += 1;
+            if future.is_none() {
+                future = Some((
+                    idx,
+                    format!("idx={idx} ts={}", fmt_ts_ms(ts).unwrap_or_else(|| ts.to_string())),
+                ));
+            }
+        }
+        if let Some(prev) = prev_bucket {
+            if bucket <= prev {
+                non_monotonic_count += 1;
+                if non_monotonic.is_none() {
+                    non_monotonic = Some((idx, format!("idx={idx} prev={prev} bucket={bucket}")));
+                }
+            } else if let Some(max_gap) = gap_warn_ms {
+                let gap = bucket.saturating_sub(prev);
+                if gap > max_gap {
+                    gap_count += 1;
+                    match largest_gap {
+                        Some((prev_gap, _, _, _)) if prev_gap >= gap => {}
+                        _ => largest_gap = Some((gap, idx, prev, bucket)),
+                    }
+                }
+            }
+        }
+        prev_bucket = Some(bucket);
+        if keep_series && idx >= series_from {
+            audit_bars.push(AuditBar {
+                bucket_ts_ms: bucket,
+                close: c,
+            });
+        }
+    }
+    let mut rewrite_repairable = false;
+    if let Some((_, detail)) = invalid {
+        report.push_issue_n(
+            BarCacheSanitySeverity::Error,
+            "invalid_ohlc",
+            &key,
+            detail,
+            invalid_count,
+        );
+        rewrite_repairable = true;
+    }
+    if let Some((_, detail)) = future {
+        report.push_issue_n(
+            BarCacheSanitySeverity::Warn,
+            "future_timestamp",
+            &key,
+            detail,
+            future_count,
+        );
+        rewrite_repairable = true;
+    }
+    if let Some((_, detail)) = non_monotonic {
+        report.push_issue_n(
+            BarCacheSanitySeverity::Error,
+            "non_monotonic_or_duplicate_bucket",
+            &key,
+            detail,
+            non_monotonic_count,
+        );
+        rewrite_repairable = true;
+    }
+    if let Some(first) = body_first {
+        let total_body = body_open_only + body_close_forming + body_close_settled;
+        if body_close_settled > 0 {
+            // A settled bar whose close sits outside its own high/low is a
+            // genuinely malformed candle from the provider.
+            report.push_issue_n(
+                BarCacheSanitySeverity::Warn,
+                "body_outside_range",
+                &key,
+                format!(
+                    "{first} settled_close_out={body_close_settled} open_only={body_open_only} forming_close_out={body_close_forming}"
+                ),
+                total_body,
+            );
+        } else {
+            // Open-only violations are provider carried-forward opens (open =
+            // previous close on sparse markets, e.g. Kraken OHLC); a
+            // close-outside-range hit confined to the forming candle is a
+            // coarse feed's lagging high/low. Both are semantics, not damage.
+            report.push_issue_n(
+                BarCacheSanitySeverity::Info,
+                "carried_open_range",
+                &key,
+                format!(
+                    "{first} open_only={body_open_only} forming_close_out={body_close_forming} (carried-forward open / forming-candle drift)"
+                ),
+                total_body,
+            );
+        }
+    }
+    if let Some((gap, idx, from_ms, to_ms)) = largest_gap {
+        // A hole that ends recently on an intraday series is an actionable
+        // sync problem (stalled fetch lane); ancient gaps are usually
+        // provider history boundaries, halts, or delistings. The 7-day floor
+        // keeps ordinary market closures out of the warning: a 4–5 day
+        // holiday long-weekend clears the 15Min/30Min gap thresholds on every
+        // healthy equity series, while a genuinely stalled lane is missing
+        // weeks of bars.
+        let day_ms = 24 * 60 * 60 * 1000i64;
+        let recent_cutoff_ms = now_ms - 30 * day_ms;
+        let severity = if is_intraday_timeframe(&parts.timeframe)
+            && to_ms >= recent_cutoff_ms
+            && gap >= 7 * day_ms
+        {
+            BarCacheSanitySeverity::Warn
+        } else {
+            BarCacheSanitySeverity::Info
+        };
+        report.push_issue_n(
+            severity,
+            "large_time_gap",
+            &key,
+            format!(
+                "idx={idx} max_gap_days={:.1} from={} to={} gaps={gap_count}",
+                gap as f64 / 86_400_000.0,
+                fmt_date_ms(from_ms),
+                fmt_date_ms(to_ms),
+            ),
+            gap_count,
+        );
+    }
+    report.metadata_repairable_rows += usize::from(metadata_repairable);
+    report.rewritable_rows += usize::from(rewrite_repairable);
+    if keep_series && !audit_bars.is_empty() {
+        series.push(AuditSeries {
+            key,
+            parts,
+            bars: audit_bars,
+        });
+    }
+}
+
+/// Decide what repair (if any) one row needs under `opts`. Runs off-lock —
+/// all CPU (decompress, normalize, recompress) happens here, never inside the
+/// write transaction. Rows that are broken but not fixable under the enabled
+/// options return `Ok(None)`; `Err` is reserved for unexpected failures.
+fn plan_row_repair(
+    row: AuditRow,
+    opts: BarCacheRepairOptions,
+    now_ms: i64,
+) -> Result<Option<RowFix>, String> {
+    let AuditRow {
+        key,
+        data,
+        meta_count,
+        meta_last_ts,
+        meta_second_last_ts,
+        zstd_level,
+    } = row;
+
+    let Ok(bytes) = maybe_decompress(data) else {
+        return Ok(opts
+            .delete_corrupt_rows
+            .then_some(RowFix::Delete { key }));
+    };
+    let is_ttbr = bytes.len() >= 8 && &bytes[0..4] == BAR_BINARY_MAGIC;
+    if !is_ttbr {
+        // Legacy pre-TTBR JSON row: convert through the normal write-path
+        // packer (which drops invalid bars and dedups buckets). Anything that
+        // fails UTF-8/JSON or packs to zero bars is corrupt.
+        if opts.rewrite_bad_rows
+            && let Ok(text) = std::str::from_utf8(&bytes)
+            && let Ok(binary) = pack_bars_for_key(&key, text)
+        {
+            let packed_count =
+                u32::from_le_bytes(binary[4..8].try_into().unwrap_or([0u8; 4])) as usize;
+            if packed_count > 0 {
+                let source_count = serde_json::from_str::<Vec<serde_json::Value>>(text)
+                    .map(|bars| bars.len())
+                    .unwrap_or(packed_count);
+                return build_rewrite_fix(
+                    key,
+                    binary,
+                    source_count.saturating_sub(packed_count),
+                    zstd_level,
+                    true,
+                )
+                .map(Some);
+            }
+        }
+        return Ok(opts
+            .delete_corrupt_rows
+            .then_some(RowFix::Delete { key }));
+    }
+
+    let header_count = u32::from_le_bytes(bytes[4..8].try_into().unwrap_or([0u8; 4])) as usize;
+    let decodable = header_count
+        .checked_mul(BYTES_PER_BAR)
+        .and_then(|n| n.checked_add(8))
+        .map(|expected| bytes.len() >= expected)
+        .unwrap_or(false);
+    if !decodable {
+        return Ok(opts
+            .delete_corrupt_rows
+            .then_some(RowFix::Delete { key }));
+    }
+    let Ok(raw) = unpack_bars_raw(&bytes) else {
+        return Ok(opts
+            .delete_corrupt_rows
+            .then_some(RowFix::Delete { key }));
+    };
+
+    if opts.rewrite_bad_rows {
+        // Re-apply write-path invariants: drop invalid/future bars, normalize
+        // D/W/M session buckets, dedup duplicate buckets (later wins — same
+        // rule pack_bars_for_key uses for provider re-sends).
+        let future_cutoff_ms = now_ms + 2 * 24 * 60 * 60 * 1000i64;
+        let mut by_bucket: std::collections::BTreeMap<i64, (f64, f64, f64, f64, f64)> =
+            std::collections::BTreeMap::new();
+        for (ts, o, h, l, c, v) in raw.iter().copied() {
+            let valid = ts > 0
+                && ts <= future_cutoff_ms
+                && o.is_finite()
+                && h.is_finite()
+                && l.is_finite()
+                && c.is_finite()
+                && v.is_finite()
+                && o > 0.0
+                && h > 0.0
+                && l > 0.0
+                && c > 0.0
+                && v >= 0.0
+                && h >= l;
+            if !valid {
+                continue;
+            }
+            let Some(bucket) = normalized_bar_timestamp_ms(&key, ts) else {
+                continue;
+            };
+            if bucket <= 0 {
+                continue;
+            }
+            by_bucket.insert(bucket, (o, h, l, c, v));
+        }
+        let changed = by_bucket.len() != raw.len()
+            || by_bucket
+                .iter()
+                .zip(raw.iter())
+                .any(|((bts, (o, h, l, c, v)), (rts, ro, rh, rl, rc, rv))| {
+                    bts != rts || o != ro || h != rh || l != rl || c != rc || v != rv
+                });
+        if changed {
+            if by_bucket.is_empty() {
+                // Every bar was invalid — nothing worth keeping.
+                return Ok(opts
+                    .delete_corrupt_rows
+                    .then_some(RowFix::Delete { key }));
+            }
+            let mut binary = Vec::with_capacity(8 + by_bucket.len() * BYTES_PER_BAR);
+            binary.extend_from_slice(BAR_BINARY_MAGIC);
+            binary.extend_from_slice(&(by_bucket.len() as u32).to_le_bytes());
+            for (ts, (o, h, l, c, v)) in &by_bucket {
+                binary.extend_from_slice(&ts.to_le_bytes());
+                binary.extend_from_slice(&o.to_le_bytes());
+                binary.extend_from_slice(&h.to_le_bytes());
+                binary.extend_from_slice(&l.to_le_bytes());
+                binary.extend_from_slice(&c.to_le_bytes());
+                binary.extend_from_slice(&v.to_le_bytes());
+            }
+            let dropped = raw.len().saturating_sub(by_bucket.len());
+            return build_rewrite_fix(key, binary, dropped, zstd_level, false).map(Some);
+        }
+    }
+
+    if opts.fix_metadata {
+        let (second_last_ts, last_ts) = get_last_two_bar_timestamps(&bytes, raw.len());
+        let want_count = raw.len() as i64;
+        let zstd_fix = (!(MIN_ZSTD_LEVEL..=MAX_ZSTD_LEVEL).contains(&zstd_level))
+            .then_some(MIN_ZSTD_LEVEL);
+        let count_bad = meta_count != Some(want_count);
+        let last_bad = meta_last_ts != last_ts;
+        // Mirrors the audit: a 1-bar row has no meaningful second_last_ts, so
+        // only flag it when there are ≥2 bars.
+        let second_bad = raw.len() > 1 && meta_second_last_ts != second_last_ts;
+        if count_bad || last_bad || second_bad || zstd_fix.is_some() {
+            return Ok(Some(RowFix::Metadata {
+                key,
+                bar_count: want_count,
+                last_ts,
+                second_last_ts,
+                zstd_level: zstd_fix,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+/// Compress a rebuilt TTBR blob and produce its rewrite fix with fresh
+/// metadata. Reuses the row's stored zstd level when sane so a repaired row
+/// keeps its compaction state; falls back to the configured base level.
+fn build_rewrite_fix(
+    key: String,
+    binary: Vec<u8>,
+    bars_dropped: usize,
+    stored_zstd_level: i32,
+    legacy_converted: bool,
+) -> Result<RowFix, String> {
+    let bar_count = u32::from_le_bytes(binary[4..8].try_into().unwrap_or([0u8; 4])) as usize;
+    let (second_last_ts, last_ts) = get_last_two_bar_timestamps(&binary, bar_count);
+    let level = if (MIN_ZSTD_LEVEL..=MAX_ZSTD_LEVEL).contains(&stored_zstd_level) {
+        stored_zstd_level
+    } else {
+        bar_zstd_level()
+    };
+    let compressed = zstd::encode_all(binary.as_slice(), level)
+        .map_err(|e| format!("{key}: recompress failed: {e}"))?;
+    Ok(RowFix::Rewrite {
+        key,
+        compressed,
+        bar_count: bar_count as i64,
+        last_ts,
+        second_last_ts,
+        zstd_level: level,
+        bars_dropped,
+        legacy_converted,
+    })
 }
 
 /// Unpack only the last `tail` bars from binary format — avoids converting 50K bars when only 500 needed.
@@ -1397,263 +2252,84 @@ impl SqliteCache {
     /// OHLC values, suspicious gaps, and recent cross-source price mismatches.
     /// Read-only by design: this reports; it never repairs or deletes.
     pub fn audit_bar_cache_sanity(&self) -> Result<BarCacheSanityReport, String> {
-        let conn = self
-            .read_conn
-            .lock()
-            .map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn
-            .prepare_cached(
-                "SELECT key, data, timestamp, bar_count, last_ts, second_last_ts, zstd_level FROM bar_cache ORDER BY key",
-            )
-            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, Option<i64>>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                    row.get::<_, i32>(6).unwrap_or(DEFAULT_BAR_ZSTD_LEVEL),
-                ))
-            })
-            .map_err(|e| format!("SQLite query failed: {e}"))?;
+        self.audit_bar_cache_sanity_with(None, None)
+    }
+
+    /// Full read-only bar-cache audit with optional progress and cancellation.
+    ///
+    /// Runs on its own dedicated read connection (never a shared pool conn — a
+    /// multi-minute scan would otherwise pin 1 of the 4 UI read connections)
+    /// and walks the table in key-cursor chunks so no single read statement
+    /// spans the whole scan (a long-lived statement pins the WAL snapshot and
+    /// blocks checkpointing while bulk sync writes). `progress` receives
+    /// `(rows_done, rows_total)` once per chunk. Raising `cancel` finishes the
+    /// current chunk, marks the report `cancelled`, and skips the
+    /// cross-source phase.
+    pub fn audit_bar_cache_sanity_with(
+        &self,
+        progress: Option<&dyn Fn(usize, usize)>,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<BarCacheSanityReport, String> {
+        let started = std::time::Instant::now();
+        let conn = self.open_bg_read_connection()?;
+
+        // Pass 1: keys only (no blobs). Decides which (symbol, timeframe)
+        // groups can participate in cross-source checks so pass 2 keeps
+        // in-memory bar tails only for those keys — retaining a 512-bar tail
+        // for every row of a 50k-row cache costs hundreds of MB for nothing.
+        let mut all_keys: Vec<String> = Vec::new();
+        {
+            let mut stmt = conn
+                .prepare("SELECT key FROM bar_cache ORDER BY key")
+                .map_err(|e| format!("SQLite prepare failed: {e}"))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| format!("SQLite query failed: {e}"))?;
+            for row in rows {
+                all_keys.push(row.map_err(|e| format!("SQLite row failed: {e}"))?);
+            }
+        }
+        let rows_total = all_keys.len();
+        let cross_check_keys = cross_check_key_set(&all_keys);
+        drop(all_keys);
 
         let mut report = BarCacheSanityReport::default();
         let mut series: Vec<AuditSeries> = Vec::new();
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let future_slop_ms = 2 * 24 * 60 * 60 * 1000i64;
 
-        for row in rows {
-            let (key, data, _timestamp, meta_count, meta_last_ts, meta_second_last_ts, zstd_level) =
-                row.map_err(|e| format!("SQLite row failed: {e}"))?;
-            report.rows_scanned += 1;
-
-            let Some(parts) = parse_bar_cache_key(&key) else {
-                report.push_issue(
-                    BarCacheSanitySeverity::Warn,
-                    "malformed_key",
-                    key,
-                    "bar_cache key is not source:symbol:timeframe",
-                );
-                continue;
+        const SCAN_CHUNK: usize = 256;
+        let mut cursor = String::new();
+        let mut rows_done = 0usize;
+        loop {
+            let chunk = read_audit_rows_after(&conn, &cursor, SCAN_CHUNK)?;
+            let Some(last) = chunk.last() else {
+                break;
             };
-            if !(MIN_ZSTD_LEVEL..=MAX_ZSTD_LEVEL).contains(&zstd_level) {
-                report.push_issue(
-                    BarCacheSanitySeverity::Warn,
-                    "zstd_level_out_of_range",
-                    &key,
-                    format!("zstd_level={zstd_level}"),
-                );
+            cursor = last.key.clone();
+            for row in chunk {
+                rows_done += 1;
+                let keep_series = cross_check_keys.contains(&row.key);
+                audit_bar_row(&mut report, &mut series, row, now_ms, keep_series);
             }
-
-            let binary = match maybe_decompress(data) {
-                Ok(binary) => binary,
-                Err(e) => {
-                    report.push_issue(
-                        BarCacheSanitySeverity::Error,
-                        "decompress_failed",
-                        key,
-                        e,
-                    );
-                    continue;
-                }
-            };
-            if binary.len() < 8 || &binary[0..4] != BAR_BINARY_MAGIC {
-                report.push_issue(
-                    BarCacheSanitySeverity::Error,
-                    "bad_binary_header",
-                    key,
-                    "bar blob is not TTBR binary format",
-                );
-                continue;
+            if let Some(cb) = progress {
+                cb(rows_done, rows_total.max(rows_done));
             }
-            let header_count = u32::from_le_bytes(
-                binary[4..8]
-                    .try_into()
-                    .map_err(|_| "Failed to read bar_count from binary header")?,
-            ) as usize;
-            let expected = match header_count
-                .checked_mul(BYTES_PER_BAR)
-                .and_then(|n| n.checked_add(8))
+            if cancel
+                .map(|c| c.load(Ordering::Relaxed))
+                .unwrap_or(false)
             {
-                Some(n) => n,
-                None => {
-                    report.push_issue(
-                        BarCacheSanitySeverity::Error,
-                        "bar_count_overflow",
-                        key,
-                        format!("header_count={header_count}"),
-                    );
-                    continue;
-                }
-            };
-            if binary.len() < expected {
-                report.push_issue(
-                    BarCacheSanitySeverity::Error,
-                    "truncated_blob",
-                    key,
-                    format!("expected {expected} bytes, got {}", binary.len()),
-                );
-                continue;
-            }
-            if let Some(meta_count) = meta_count {
-                if meta_count < 0 || meta_count as usize != header_count {
-                    report.push_issue(
-                        BarCacheSanitySeverity::Error,
-                        "bar_count_mismatch",
-                        &key,
-                        format!("metadata={meta_count}, header={header_count}"),
-                    );
-                }
-            }
-            if header_count == 0 {
-                let severity = if parts.source == "yahoo-chart" {
-                    BarCacheSanitySeverity::Warn
-                } else {
-                    BarCacheSanitySeverity::Info
-                };
-                report.push_issue(
-                    severity,
-                    "zero_bar_row",
-                    key,
-                    "bar_cache row contains no bars",
-                );
-                continue;
-            }
-
-            let raw = match unpack_bars_raw(&binary) {
-                Ok(raw) => raw,
-                Err(e) => {
-                    report.push_issue(BarCacheSanitySeverity::Error, "unpack_failed", key, e);
-                    continue;
-                }
-            };
-            report.bars_scanned += raw.len();
-            let (computed_second, computed_last) = get_last_two_bar_timestamps(&binary, raw.len());
-            if meta_last_ts.is_none() {
-                report.push_issue(
-                    BarCacheSanitySeverity::Warn,
-                    "last_ts_missing",
-                    &key,
-                    "positive bar_count row has NULL last_ts metadata",
-                );
-            } else if meta_last_ts != computed_last {
-                report.push_issue(
-                    BarCacheSanitySeverity::Warn,
-                    "last_ts_mismatch",
-                    &key,
-                    format!("metadata={meta_last_ts:?}, computed={computed_last:?}"),
-                );
-            }
-            if raw.len() > 1 && meta_second_last_ts != computed_second {
-                report.push_issue(
-                    BarCacheSanitySeverity::Warn,
-                    "second_last_ts_mismatch",
-                    &key,
-                    format!("metadata={meta_second_last_ts:?}, computed={computed_second:?}"),
-                );
-            }
-
-            let mut prev_bucket: Option<i64> = None;
-            let mut audit_bars = Vec::with_capacity(raw.len().min(512));
-            let gap_warn_ms = expected_gap_warn_ms(&parts.timeframe);
-            let mut largest_gap: Option<(i64, usize)> = None;
-            let mut body_outside_range: Option<(usize, i64, f64, f64, f64, f64)> = None;
-            for (idx, (ts, o, h, l, c, v)) in raw.iter().copied().enumerate() {
-                let invalid_price = ts <= 0
-                    || !o.is_finite()
-                    || !h.is_finite()
-                    || !l.is_finite()
-                    || !c.is_finite()
-                    || !v.is_finite()
-                    || o <= 0.0
-                    || h <= 0.0
-                    || l <= 0.0
-                    || c <= 0.0
-                    || v < 0.0
-                    || h < l;
-                if invalid_price {
-                    report.push_issue(
-                        BarCacheSanitySeverity::Error,
-                        "invalid_ohlc",
-                        &key,
-                        format!("idx={idx} ts={ts} o={o} h={h} l={l} c={c} v={v}"),
-                    );
-                }
-                if h >= l && l > 0.0 && h > 0.0 {
-                    let outside = o.max(c) > h * 1.05 || o.min(c) < l * 0.95;
-                    if outside && body_outside_range.is_none() {
-                        body_outside_range = Some((idx, ts, o, h, l, c));
-                    }
-                }
-                if ts > now_ms + future_slop_ms {
-                    report.push_issue(
-                        BarCacheSanitySeverity::Warn,
-                        "future_timestamp",
-                        &key,
-                        format!("idx={idx} ts={}", fmt_ts_ms(ts).unwrap_or_else(|| ts.to_string())),
-                    );
-                }
-                let bucket = normalized_bar_timestamp_ms(&key, ts).unwrap_or(ts);
-                if let Some(prev) = prev_bucket {
-                    if bucket <= prev {
-                        report.push_issue(
-                            BarCacheSanitySeverity::Error,
-                            "non_monotonic_or_duplicate_bucket",
-                            &key,
-                            format!("idx={idx} prev={prev} bucket={bucket}"),
-                        );
-                    } else if let Some(max_gap) = gap_warn_ms {
-                        let gap = bucket.saturating_sub(prev);
-                        if gap > max_gap {
-                            match largest_gap {
-                                Some((prev_gap, _)) if prev_gap >= gap => {}
-                                _ => largest_gap = Some((gap, idx)),
-                            }
-                        }
-                    }
-                }
-                prev_bucket = Some(bucket);
-                if audit_bars.len() >= 512 {
-                    audit_bars.remove(0);
-                }
-                audit_bars.push(AuditBar {
-                    bucket_ts_ms: bucket,
-                    open: o,
-                    high: h,
-                    low: l,
-                    close: c,
-                });
-            }
-            if let Some((idx, ts, o, h, l, c)) = body_outside_range {
-                report.push_issue(
-                    BarCacheSanitySeverity::Warn,
-                    "body_outside_range",
-                    &key,
-                    format!("idx={idx} ts={ts} o={o} h={h} l={l} c={c}"),
-                );
-            }
-            if let Some((gap, idx)) = largest_gap {
-                report.push_issue(
-                    BarCacheSanitySeverity::Info,
-                    "large_time_gap",
-                    &key,
-                    format!("idx={idx} max_gap_days={:.1}", gap as f64 / 86_400_000.0),
-                );
-            }
-            if !audit_bars.is_empty() {
-                series.push(AuditSeries {
-                    key,
-                    parts,
-                    bars: audit_bars,
-                });
+                report.cancelled = true;
+                break;
             }
         }
 
-        self.audit_cross_source_overlap(&mut report, &series);
-        self.audit_merged_source_overlap(&mut report, &series);
+        if !report.cancelled {
+            self.audit_cross_source_overlap(&mut report, &series);
+            self.audit_merged_source_overlap(&mut report, &series);
+        }
+        report.finalize_issue_order();
+        report.duration_ms = started.elapsed().as_millis() as u64;
+        report.finished_at_ms = chrono::Utc::now().timestamp_millis();
         Ok(report)
     }
 
@@ -1692,12 +2368,16 @@ impl SqliteCache {
                     let mut recent_worst = 1.0f64;
                     let mut ratios_by_recency = Vec::new();
                     let mut worst: Option<(f64, i64, f64, f64)> = None;
+                    // Compare closes only: a single degenerate high/low on one
+                    // provider's candle (carried opens, lagging ranges) would
+                    // otherwise report a huge "mismatch" while both sources
+                    // agree on price.
                     for abar in a.bars.iter().rev().take(160) {
                         let Some(bbar) = b_by_bucket.get(&abar.bucket_ts_ms) else {
                             continue;
                         };
                         overlap += 1;
-                        let Some(ratio) = max_ohlc_ratio(*abar, *bbar) else {
+                        let Some(ratio) = bar_close_ratio(abar.close, bbar.close) else {
                             continue;
                         };
                         ratios_by_recency.push(ratio);
@@ -1726,6 +2406,28 @@ impl SqliteCache {
                                 format!(
                                     "{} vs {} overlap={} recent_overlap={} recent_worst={recent_worst:.2} historical_worst={ratio:.2}",
                                     a.key, b.key, overlap, recent_overlap
+                                ),
+                            );
+                            continue;
+                        }
+                        // ≥100× is not a plausible corporate action — it is the
+                        // runaway-back-adjust class (e.g. Yahoo compounding
+                        // reverse splits into 10^6+ scales). The equity merge
+                        // quarantines those via the trusted-scale rule
+                        // (ADR-124), so record as context rather than a warning.
+                        if ratio >= 100.0 {
+                            report.push_issue(
+                                BarCacheSanitySeverity::Info,
+                                "cross_source_scale_blowout",
+                                format!("{symbol}:{timeframe}"),
+                                format!(
+                                    "{} vs {} overlap={} worst_ratio={ratio:.2} at {} close {:.6} vs {:.6} (runaway provider back-adjust; merge keeps trusted scale)",
+                                    a.key,
+                                    b.key,
+                                    overlap,
+                                    fmt_ts_ms(bucket).unwrap_or_else(|| bucket.to_string()),
+                                    a_close,
+                                    b_close
                                 ),
                             );
                             continue;
@@ -1805,7 +2507,10 @@ impl SqliteCache {
                         {
                             close_scales.push(merged_bar.close / raw_bar.close);
                         }
-                        let Some(ratio) = max_ohlc_ratio(*merged_bar, *raw_bar) else {
+                        // Close-based for the same reason as the cross-source
+                        // check: one provider's malformed high/low must not
+                        // read as merged-output drift.
+                        let Some(ratio) = bar_close_ratio(merged_bar.close, raw_bar.close) else {
                             continue;
                         };
                         ratios_by_recency.push(ratio);
@@ -1855,6 +2560,7 @@ impl SqliteCache {
                             );
                             continue;
                         }
+                        report.merged_mismatch_keys.insert(merged.key.clone());
                         report.push_issue(
                             BarCacheSanitySeverity::Warn,
                             "merged_source_overlap_mismatch",
@@ -2990,6 +3696,189 @@ impl SqliteCache {
             );
         }
         Ok(count)
+    }
+
+    /// Apply the repair classes enabled in `opts` across the whole bar cache.
+    ///
+    /// Works like the audit scan: reads key-cursor chunks on a dedicated
+    /// background connection, plans fixes off-lock, then applies each chunk's
+    /// fixes in one short write transaction so bulk sync writers and chart
+    /// reads interleave between chunks. The row's `timestamp` column (last
+    /// fetch time) is deliberately preserved — repairs do not make data
+    /// fresher, and sync staleness logic depends on it.
+    pub fn repair_bar_cache(
+        &self,
+        opts: BarCacheRepairOptions,
+        progress: Option<&dyn Fn(usize, usize)>,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<BarCacheRepairOutcome, String> {
+        let started = std::time::Instant::now();
+        let mut outcome = BarCacheRepairOutcome::default();
+        if !opts.any() {
+            return Ok(outcome);
+        }
+        let read = self.open_bg_read_connection()?;
+        let rows_total = read
+            .query_row("SELECT COUNT(*) FROM bar_cache", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as usize;
+        let now_ms = chrono::Utc::now().timestamp_millis();
+
+        const REPAIR_CHUNK: usize = 128;
+        let mut cursor = String::new();
+        loop {
+            let chunk = read_audit_rows_after(&read, &cursor, REPAIR_CHUNK)?;
+            let Some(last) = chunk.last() else {
+                break;
+            };
+            cursor = last.key.clone();
+            let mut fixes: Vec<RowFix> = Vec::new();
+            for row in chunk {
+                outcome.rows_scanned += 1;
+                if row.key.contains(":__") {
+                    continue;
+                }
+                match plan_row_repair(row, opts, now_ms) {
+                    Ok(Some(fix)) => fixes.push(fix),
+                    Ok(None) => {}
+                    Err(e) => outcome.push_error(e),
+                }
+            }
+            if !fixes.is_empty() {
+                self.apply_row_fixes(&fixes, &mut outcome)?;
+            }
+            if let Some(cb) = progress {
+                cb(outcome.rows_scanned, rows_total.max(outcome.rows_scanned));
+            }
+            if cancel
+                .map(|c| c.load(Ordering::Relaxed))
+                .unwrap_or(false)
+            {
+                outcome.cancelled = true;
+                break;
+            }
+        }
+        outcome.duration_ms = started.elapsed().as_millis() as u64;
+        Ok(outcome)
+    }
+
+    /// Apply one chunk's planned fixes in a single short write transaction.
+    fn apply_row_fixes(
+        &self,
+        fixes: &[RowFix],
+        outcome: &mut BarCacheRepairOutcome,
+    ) -> Result<(), String> {
+        let mut conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("SQLite transaction failed: {e}"))?;
+        for fix in fixes {
+            let applied = match fix {
+                RowFix::Metadata {
+                    key,
+                    bar_count,
+                    last_ts,
+                    second_last_ts,
+                    zstd_level,
+                } => tx
+                    .execute(
+                        "UPDATE bar_cache SET bar_count = ?2, last_ts = ?3, second_last_ts = ?4, zstd_level = COALESCE(?5, zstd_level) WHERE key = ?1",
+                        params![key, bar_count, last_ts, second_last_ts, zstd_level],
+                    )
+                    .map(|n| {
+                        outcome.metadata_fixed += usize::from(n > 0);
+                    }),
+                RowFix::Rewrite {
+                    key,
+                    compressed,
+                    bar_count,
+                    last_ts,
+                    second_last_ts,
+                    zstd_level,
+                    bars_dropped,
+                    legacy_converted,
+                } => tx
+                    .execute(
+                        "UPDATE bar_cache SET data = ?2, bar_count = ?3, last_ts = ?4, second_last_ts = ?5, zstd_level = ?6 WHERE key = ?1",
+                        params![key, compressed, bar_count, last_ts, second_last_ts, zstd_level],
+                    )
+                    .map(|n| {
+                        if n > 0 {
+                            outcome.rows_rewritten += 1;
+                            outcome.bars_dropped += bars_dropped;
+                            outcome.legacy_rows_converted += usize::from(*legacy_converted);
+                        }
+                    }),
+                RowFix::Delete { key } => tx
+                    .execute("DELETE FROM bar_cache WHERE key = ?1", params![key])
+                    .map(|n| {
+                        let _ = tx.execute("DELETE FROM bar_track WHERE key = ?1", params![key]);
+                        outcome.rows_deleted += usize::from(n > 0);
+                    }),
+            };
+            if let Err(e) = applied {
+                outcome.push_error(format!("apply failed: {e}"));
+            }
+        }
+        tx.commit().map_err(|e| format!("SQLite commit failed: {e}"))
+    }
+
+    /// Bulk-delete bar rows (plus their bar_track rows) WITHOUT the
+    /// WAL-checkpoint + VACUUM that `delete_keys` runs. Repair actions delete
+    /// a handful of rows on a multi-GB cache where a full VACUUM would starve
+    /// the UI for minutes; freed pages are reclaimed later by auto-compact.
+    pub fn delete_keys_light(&self, keys: &[String]) -> Result<u64, String> {
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("SQLite transaction failed: {e}"))?;
+        let mut deleted = 0u64;
+        for chunk in keys.chunks(500) {
+            let placeholders = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!("DELETE FROM bar_cache WHERE key IN ({placeholders})");
+            deleted += tx
+                .execute(&sql, rusqlite::params_from_iter(chunk.iter()))
+                .map_err(|e| format!("SQLite bulk delete failed: {e}"))? as u64;
+            let track_sql = format!("DELETE FROM bar_track WHERE key IN ({placeholders})");
+            let _ = tx.execute(&track_sql, rusqlite::params_from_iter(chunk.iter()));
+        }
+        tx.commit()
+            .map_err(|e| format!("SQLite commit failed: {e}"))?;
+        Ok(deleted)
+    }
+
+    /// Append a finished (non-cancelled) audit to the persisted history ring
+    /// (kv_cache, capped) so consecutive runs can be diffed. Call from the
+    /// audit worker thread — never the render thread (write-lock contention).
+    pub fn record_bar_sanity_history(
+        &self,
+        report: &BarCacheSanityReport,
+    ) -> Result<(), String> {
+        if report.cancelled {
+            return Ok(());
+        }
+        let mut history = self.load_bar_sanity_history();
+        history.push(report.to_history_entry());
+        let excess = history.len().saturating_sub(SANITY_HISTORY_CAP);
+        if excess > 0 {
+            history.drain(0..excess);
+        }
+        let json = serde_json::to_string(&history)
+            .map_err(|e| format!("sanity history serialize failed: {e}"))?;
+        self.put_kv(SANITY_HISTORY_KV_KEY, &json)
+    }
+
+    /// Load the persisted audit history, oldest first. Empty when none.
+    pub fn load_bar_sanity_history(&self) -> Vec<BarSanityHistoryEntry> {
+        self.get_kv(SANITY_HISTORY_KV_KEY)
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default()
     }
 
     /// LRU eviction: if total bar_cache size exceeds `max_bytes`, delete oldest entries

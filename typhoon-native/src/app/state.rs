@@ -28,6 +28,30 @@ pub(crate) use typhoon_engine::core::watchlist::{
     yahoo_market_state_allows_extended_quote,
 };
 
+/// Messages from the storage sanity worker thread (audit, repair, merged
+/// rebuild, or report export — one job at a time).
+pub(crate) enum SanityWorkerMsg {
+    Progress {
+        phase: &'static str,
+        done: usize,
+        total: usize,
+    },
+    AuditDone {
+        result: Result<typhoon_engine::core::cache::BarCacheSanityReport, String>,
+        delta: Option<String>,
+    },
+    RepairDone(Result<typhoon_engine::core::cache::BarCacheRepairOutcome, String>),
+    MergedRebuildDone(Result<u64, String>),
+    ExportDone(Result<String, String>),
+}
+
+/// Destructive sanity actions gated behind a second confirming click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SanityConfirmAction {
+    DeleteCorrupt,
+    RebuildMerged,
+}
+
 pub struct TyphooNApp {
     /// Shared cache handle — opened once at startup.
     pub(crate) cache: Option<Arc<SqliteCache>>,
@@ -986,11 +1010,24 @@ pub struct TyphooNApp {
     /// every bar row.
     pub(crate) storage_sanity_report:
         Option<typhoon_engine::core::cache::BarCacheSanityReport>,
-    pub(crate) storage_sanity_rx: Option<
-        std::sync::mpsc::Receiver<
-            Result<typhoon_engine::core::cache::BarCacheSanityReport, String>,
-        >,
-    >,
+    /// Live worker channel for the sanity audit / repair / rebuild / export
+    /// jobs (one job at a time; buttons are disabled while `Some`).
+    pub(crate) storage_sanity_rx: Option<std::sync::mpsc::Receiver<SanityWorkerMsg>>,
+    /// Cooperative cancel flag for the running sanity job.
+    pub(crate) storage_sanity_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// (phase label, rows done, rows total) for the running sanity job.
+    pub(crate) storage_sanity_progress: Option<(&'static str, usize, usize)>,
+    /// Per-code delta line vs the previous persisted audit run.
+    pub(crate) storage_sanity_delta: Option<String>,
+    /// Outcome line of the most recent repair/rebuild/export action.
+    pub(crate) storage_sanity_last_action: Option<String>,
+    /// Substring filter for the sanity issue browser.
+    pub(crate) storage_sanity_filter: String,
+    /// Destructive sanity action awaiting its second (confirm) click.
+    pub(crate) storage_sanity_confirm: Option<SanityConfirmAction>,
+    /// Re-run the audit automatically when the in-flight repair job finishes,
+    /// so the report always reflects post-repair reality.
+    pub(crate) storage_sanity_reaudit_after: bool,
     /// Bar-sync % per broker/TF window. Counted from `bg.detailed_stats`,
     /// with freshness derived from `bg.bar_ts_cache` when available.
     pub(crate) show_sync_status: bool,

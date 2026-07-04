@@ -1404,3 +1404,599 @@ fn data_sanity_audit_allows_historical_merged_source_scale_delta_when_recent_agr
 
     let _ = std::fs::remove_file(db_path);
 }
+
+/// Build a TTBR binary blob from raw bar tuples (ts_ms, o, h, l, c, v).
+fn ttbr_binary(bars: &[(i64, f64, f64, f64, f64, f64)]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(8 + bars.len() * BYTES_PER_BAR);
+    buf.extend_from_slice(BAR_BINARY_MAGIC);
+    buf.extend_from_slice(&(bars.len() as u32).to_le_bytes());
+    for (ts, o, h, l, c, v) in bars {
+        buf.extend_from_slice(&ts.to_le_bytes());
+        buf.extend_from_slice(&o.to_le_bytes());
+        buf.extend_from_slice(&h.to_le_bytes());
+        buf.extend_from_slice(&l.to_le_bytes());
+        buf.extend_from_slice(&c.to_le_bytes());
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    buf
+}
+
+/// Fixed `timestamp` column value used by raw-inserted test rows so tests can
+/// assert repairs preserve the last-fetch time.
+const TEST_ROW_TIMESTAMP: i64 = 1_700_000_000;
+
+/// Insert a raw blob row directly, bypassing the write path's normalization.
+fn insert_raw_row(
+    cache: &SqliteCache,
+    key: &str,
+    blob: &[u8],
+    bar_count: Option<i64>,
+    last_ts: Option<&str>,
+    second_last_ts: Option<&str>,
+) {
+    let compressed = zstd::encode_all(blob, DEFAULT_BAR_ZSTD_LEVEL).unwrap();
+    let conn = cache.conn.lock().unwrap();
+    conn.execute(
+        "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, last_ts, second_last_ts, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![key, compressed, TEST_ROW_TIMESTAMP, bar_count, last_ts, second_last_ts, DEFAULT_BAR_ZSTD_LEVEL],
+    )
+    .unwrap();
+}
+
+fn row_timestamp(cache: &SqliteCache, key: &str) -> i64 {
+    let conn = cache.conn.lock().unwrap();
+    conn.query_row(
+        "SELECT timestamp FROM bar_cache WHERE key = ?1",
+        params![key],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+#[test]
+fn data_sanity_repair_fixes_metadata_and_preserves_fetch_timestamp() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let day = 86_400_000i64;
+    let blob = ttbr_binary(&[
+        (day, 1.0, 2.0, 0.5, 1.5, 10.0),
+        (2 * day, 1.5, 2.5, 1.0, 2.0, 12.0),
+    ]);
+    insert_raw_row(&cache, "alpaca:META:1Day", &blob, Some(99), None, Some("wrong"));
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(report.has_code("bar_count_mismatch"), "{report:#?}");
+    assert!(report.has_code("last_ts_missing"), "{report:#?}");
+    assert!(report.has_code("second_last_ts_mismatch"), "{report:#?}");
+    assert_eq!(report.metadata_repairable_rows, 1, "{report:#?}");
+
+    let outcome = cache
+        .repair_bar_cache(
+            BarCacheRepairOptions {
+                fix_metadata: true,
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(outcome.metadata_fixed, 1, "{outcome:#?}");
+    assert_eq!(outcome.rows_rewritten, 0, "{outcome:#?}");
+    assert_eq!(outcome.rows_deleted, 0, "{outcome:#?}");
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(!report.has_code("bar_count_mismatch"), "{report:#?}");
+    assert!(!report.has_code("last_ts_missing"), "{report:#?}");
+    assert!(!report.has_code("second_last_ts_mismatch"), "{report:#?}");
+    assert_eq!(report.metadata_repairable_rows, 0, "{report:#?}");
+    assert_eq!(
+        row_timestamp(&cache, "alpaca:META:1Day"),
+        TEST_ROW_TIMESTAMP,
+        "metadata repair must not touch the last-fetch timestamp"
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_repair_rewrites_invalid_duplicate_and_future_bars() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let day = 86_400_000i64;
+    let d1 = now_ms - 3 * day;
+    let d2 = now_ms - 2 * day;
+    let bars = [
+        (d1, 1.0, 2.0, 0.5, 1.5, 10.0),          // valid
+        (d2, 1.5, 2.5, 1.0, 2.0, 12.0),          // valid, superseded by dup below
+        (d2 + 3_600_000, 9.0, 9.5, 8.5, 9.2, 5.0), // same 1Day bucket — later wins
+        (d2 + 7_200_000, 5.0, 4.0, 6.0, 5.0, 5.0), // invalid: high < low
+        (now_ms + 10 * day, 1.0, 2.0, 0.5, 1.5, 1.0), // future
+    ];
+    let blob = ttbr_binary(&bars);
+    insert_raw_row(&cache, "alpaca:RW:1Day", &blob, Some(5), None, None);
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(report.has_code("invalid_ohlc"), "{report:#?}");
+    assert!(report.has_code("future_timestamp"), "{report:#?}");
+    assert!(
+        report.has_code("non_monotonic_or_duplicate_bucket"),
+        "{report:#?}"
+    );
+    assert!(report.rewritable_rows >= 1, "{report:#?}");
+
+    let outcome = cache
+        .repair_bar_cache(
+            BarCacheRepairOptions {
+                rewrite_bad_rows: true,
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(outcome.rows_rewritten, 1, "{outcome:#?}");
+    assert_eq!(outcome.bars_dropped, 3, "{outcome:#?}");
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(!report.has_code("invalid_ohlc"), "{report:#?}");
+    assert!(!report.has_code("future_timestamp"), "{report:#?}");
+    assert!(
+        !report.has_code("non_monotonic_or_duplicate_bucket"),
+        "{report:#?}"
+    );
+    assert!(!report.has_code("bar_count_mismatch"), "{report:#?}");
+    assert!(!report.has_code("last_ts_missing"), "{report:#?}");
+
+    let kept = cache.get_bars_raw("alpaca:RW:1Day").unwrap().unwrap();
+    assert_eq!(kept.len(), 2, "{kept:#?}");
+    assert!(
+        (kept[1].4 - 9.2).abs() < 1e-9,
+        "later duplicate-bucket bar must win: {kept:#?}"
+    );
+    assert_eq!(row_timestamp(&cache, "alpaca:RW:1Day"), TEST_ROW_TIMESTAMP);
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_repair_converts_legacy_json_rows() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let legacy = br#"[{"timestamp":"2024-01-02T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10.0}]"#;
+    insert_raw_row(&cache, "alpaca:LEG:1Day", legacy, Some(1), None, None);
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(report.has_code("legacy_json_row"), "{report:#?}");
+    assert!(!report.has_code("bad_binary_header"), "{report:#?}");
+    assert_eq!(report.rewritable_rows, 1, "{report:#?}");
+    assert_eq!(report.corrupt_rows, 0, "{report:#?}");
+
+    let outcome = cache
+        .repair_bar_cache(
+            BarCacheRepairOptions {
+                rewrite_bad_rows: true,
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(outcome.legacy_rows_converted, 1, "{outcome:#?}");
+    assert_eq!(outcome.rows_rewritten, 1, "{outcome:#?}");
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(!report.has_code("legacy_json_row"), "{report:#?}");
+    let kept = cache.get_bars_raw("alpaca:LEG:1Day").unwrap().unwrap();
+    assert_eq!(kept.len(), 1, "{kept:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_repair_deletes_undecodable_rows() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    insert_raw_row(
+        &cache,
+        "alpaca:BADBLOB:1Day",
+        b"garbage neither ttbr nor json",
+        Some(1),
+        None,
+        None,
+    );
+    let good = r#"[{"timestamp":"2024-01-02T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10.0}]"#;
+    cache.put_bars("alpaca:GOOD:1Day", good).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(report.has_code("bad_binary_header"), "{report:#?}");
+    assert_eq!(report.corrupt_rows, 1, "{report:#?}");
+
+    let outcome = cache
+        .repair_bar_cache(
+            BarCacheRepairOptions {
+                delete_corrupt_rows: true,
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(outcome.rows_deleted, 1, "{outcome:#?}");
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(!report.has_code("bad_binary_header"), "{report:#?}");
+    assert_eq!(report.rows_scanned, 1, "{report:#?}");
+    assert!(
+        cache.get_bars_raw("alpaca:GOOD:1Day").unwrap().is_some(),
+        "healthy row must survive corrupt-row deletion"
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_audit_collects_merged_mismatch_keys() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let source = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":50.0,"high":51.0,"low":49.0,"close":50.0,"volume":100.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":51.0,"high":52.0,"low":50.0,"close":51.0,"volume":100.0}
+    ]"#;
+    let merged = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":50.0,"high":51.0,"low":49.0,"close":50.0,"volume":100.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":150.0,"high":155.0,"low":145.0,"close":150.0,"volume":100.0}
+    ]"#;
+    cache.put_bars("alpaca:WOK:1Day", source).unwrap();
+    cache.put_bars("merged:WOK:1Day", merged).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(
+        report.merged_mismatch_keys.contains("merged:WOK:1Day"),
+        "{report:#?}"
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_audit_orders_issues_most_severe_first() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    // Info issue on a key that sorts first…
+    cache.put_bars("alpaca:AAA:1Day", "[]").unwrap();
+    // …and an Error issue on a key that sorts last.
+    let day = 86_400_000i64;
+    let blob = ttbr_binary(&[(day, 5.0, 4.0, 6.0, 5.0, 1.0)]); // high < low
+    insert_raw_row(&cache, "alpaca:ZZZ:1Day", &blob, Some(1), None, None);
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    let first = report.issues.first().expect("issues expected");
+    assert_eq!(first.severity, BarCacheSanitySeverity::Error, "{report:#?}");
+    assert!(first.key.contains("ZZZ"), "{report:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_audit_aggregates_per_bar_hits_into_one_issue_per_row() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let day = 86_400_000i64;
+    let blob = ttbr_binary(&[
+        (day, 5.0, 4.0, 6.0, 5.0, 1.0),     // invalid: high < low
+        (2 * day, 1.0, 2.0, 0.5, 1.5, 1.0), // valid
+        (3 * day, -1.0, 2.0, 0.5, 1.5, 1.0), // invalid: open <= 0
+        (4 * day, 1.0, 2.0, 0.5, 1.5, -5.0), // invalid: volume < 0
+    ]);
+    insert_raw_row(&cache, "alpaca:AGG:1Day", &blob, Some(4), None, None);
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert_eq!(report.issue_code_count("invalid_ohlc"), 1, "{report:#?}");
+    let issue = report
+        .issues
+        .iter()
+        .find(|i| i.code == "invalid_ohlc")
+        .expect("invalid_ohlc issue");
+    assert_eq!(issue.occurrences, 3, "{report:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_audit_gap_details_have_dates_and_recent_intraday_gaps_warn() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let now = chrono::Utc::now();
+    let fmt = |dt: chrono::DateTime<chrono::Utc>| dt.to_rfc3339();
+    // 15Min series with a 40-day hole that ends within the last 30 days.
+    let recent_gap = format!(
+        r#"[
+        {{"timestamp":"{}","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":1.0}},
+        {{"timestamp":"{}","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":1.0}},
+        {{"timestamp":"{}","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":1.0}}
+    ]"#,
+        fmt(now - chrono::Duration::days(40)),
+        fmt(now - chrono::Duration::minutes(60)),
+        fmt(now - chrono::Duration::minutes(45)),
+    );
+    cache.put_bars("alpaca:GAPNEW:15Min", &recent_gap).unwrap();
+    // Daily series whose hole ended years ago.
+    let old_gap = r#"[
+        {"timestamp":"2019-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":1.0},
+        {"timestamp":"2019-01-02T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":1.0},
+        {"timestamp":"2020-06-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":1.0}
+    ]"#;
+    cache.put_bars("alpaca:GAPOLD:1Day", old_gap).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    let recent = report
+        .issues
+        .iter()
+        .find(|i| i.code == "large_time_gap" && i.key.contains("GAPNEW"))
+        .expect("recent intraday gap issue");
+    assert_eq!(
+        recent.severity,
+        BarCacheSanitySeverity::Warn,
+        "recent intraday hole should be an actionable warning: {report:#?}"
+    );
+    assert!(recent.detail.contains("from="), "{recent:?}");
+    assert!(recent.detail.contains("to="), "{recent:?}");
+    let old = report
+        .issues
+        .iter()
+        .find(|i| i.code == "large_time_gap" && i.key.contains("GAPOLD"))
+        .expect("old daily gap issue");
+    assert_eq!(old.severity, BarCacheSanitySeverity::Info, "{report:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_audit_keeps_holiday_weekend_intraday_gaps_informational() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let now = chrono::Utc::now();
+    let fmt = |dt: chrono::DateTime<chrono::Utc>| dt.to_rfc3339();
+    // A 4-day market closure (holiday long weekend) ending recently clears the
+    // 15Min gap threshold on every healthy series — must stay Info, not Warn.
+    let bars = format!(
+        r#"[
+        {{"timestamp":"{}","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":1.0}},
+        {{"timestamp":"{}","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":1.0}},
+        {{"timestamp":"{}","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":1.0}}
+    ]"#,
+        fmt(now - chrono::Duration::days(6)),
+        fmt(now - chrono::Duration::days(2)),
+        fmt(now - chrono::Duration::minutes(30)),
+    );
+    cache.put_bars("alpaca:HOLIDAY:15Min", &bars).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    let gap = report
+        .issues
+        .iter()
+        .find(|i| i.code == "large_time_gap" && i.key.contains("HOLIDAY"))
+        .expect("holiday gap issue");
+    assert_eq!(
+        gap.severity,
+        BarCacheSanitySeverity::Info,
+        "a sub-week closure must not read as a stalled sync lane: {report:#?}"
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_history_roundtrip_and_delta_line() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let good = r#"[{"timestamp":"2024-01-02T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10.0}]"#;
+    cache.put_bars("alpaca:HIST:1Day", good).unwrap();
+
+    let first = cache.audit_bar_cache_sanity().unwrap();
+    cache.record_bar_sanity_history(&first).unwrap();
+    assert_eq!(cache.load_bar_sanity_history().len(), 1);
+
+    // Introduce a metadata problem, re-audit, and diff against run 1.
+    {
+        let conn = cache.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE bar_cache SET last_ts = NULL WHERE key = ?1",
+            params!["alpaca:HIST:1Day"],
+        )
+        .unwrap();
+    }
+    let second = cache.audit_bar_cache_sanity().unwrap();
+    let prev = cache.load_bar_sanity_history().pop().unwrap();
+    let delta = second.delta_line(&prev).expect("delta expected");
+    assert!(delta.contains("+1 last_ts_missing"), "{delta}");
+    cache.record_bar_sanity_history(&second).unwrap();
+    assert_eq!(cache.load_bar_sanity_history().len(), 2);
+
+    // Identical runs produce no delta.
+    let third = cache.audit_bar_cache_sanity().unwrap();
+    let prev = cache.load_bar_sanity_history().pop().unwrap();
+    assert!(third.delta_line(&prev).is_none());
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_audit_cancel_skips_cross_source_checks() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let bars = r#"[{"timestamp":"2024-01-02T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10.0}]"#;
+    cache.put_bars("alpaca:CXL:1Day", bars).unwrap();
+    cache.put_bars("yahoo-chart:CXL:1Day", bars).unwrap();
+
+    let cancel = std::sync::atomic::AtomicBool::new(true);
+    let calls = std::cell::Cell::new(0usize);
+    let progress = |_done: usize, _total: usize| calls.set(calls.get() + 1);
+    let report = cache
+        .audit_bar_cache_sanity_with(Some(&progress), Some(&cancel))
+        .unwrap();
+    assert!(report.cancelled, "{report:#?}");
+    assert_eq!(report.source_pairs_checked, 0, "{report:#?}");
+    assert!(calls.get() >= 1, "progress callback should have fired");
+    assert!(report.summary_line().contains("CANCELLED"));
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_audit_classifies_carried_open_as_info() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    // Sparse-market candle: open carried from previous close sits far above
+    // the traded range, but the close is inside. Kraken OHLC semantics.
+    let bars = r#"[
+        {"timestamp":"2019-01-01T00:00:00+00:00","open":1.0,"high":1.1,"low":0.9,"close":1.0,"volume":1.0},
+        {"timestamp":"2019-01-02T00:00:00+00:00","open":1.0,"high":0.7,"low":0.5,"close":0.6,"volume":1.0}
+    ]"#;
+    cache.put_bars("kraken:ACHUSD:1Day", bars).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(report.has_code("carried_open_range"), "{report:#?}");
+    assert!(!report.has_code("body_outside_range"), "{report:#?}");
+    let issue = report
+        .issues
+        .iter()
+        .find(|i| i.code == "carried_open_range")
+        .unwrap();
+    assert_eq!(issue.severity, BarCacheSanitySeverity::Info, "{report:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_audit_warns_on_settled_close_outside_range() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    // Historical bar whose close is outside its own high/low — malformed.
+    let bars = r#"[
+        {"timestamp":"2015-05-04T00:00:00+00:00","open":10.0,"high":10.2,"low":9.8,"close":10.0,"volume":1.0},
+        {"timestamp":"2015-05-05T00:00:00+00:00","open":10.16,"high":10.16,"low":10.16,"close":10.69,"volume":1.0}
+    ]"#;
+    cache.put_bars("yahoo-chart:SEC:1Day", bars).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(report.has_code("body_outside_range"), "{report:#?}");
+    let issue = report
+        .issues
+        .iter()
+        .find(|i| i.code == "body_outside_range")
+        .unwrap();
+    assert_eq!(issue.severity, BarCacheSanitySeverity::Warn, "{report:#?}");
+    assert!(issue.detail.contains("settled_close_out=1"), "{issue:?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_audit_treats_forming_candle_close_drift_as_info() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let now = chrono::Utc::now();
+    // The current month's still-forming candle: live close has moved below a
+    // lagging high/low (Yahoo coarse-feed behavior). Not settled damage.
+    let month_start = chrono::NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
+    let prev_month = month_start - chrono::Duration::days(15);
+    let bars = format!(
+        r#"[
+        {{"timestamp":"{}","open":30.0,"high":31.0,"low":29.0,"close":30.0,"volume":1.0}},
+        {{"timestamp":"{}","open":29.4,"high":30.6,"low":29.4,"close":25.5,"volume":1.0}}
+    ]"#,
+        prev_month.to_rfc3339(),
+        month_start.to_rfc3339(),
+    );
+    cache.put_bars("yahoo-chart:ACLZ:1Month", &bars).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(!report.has_code("body_outside_range"), "{report:#?}");
+    assert!(report.has_code("carried_open_range"), "{report:#?}");
+    let issue = report
+        .issues
+        .iter()
+        .find(|i| i.code == "carried_open_range")
+        .unwrap();
+    assert!(issue.detail.contains("forming_close_out=1"), "{issue:?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_audit_ignores_single_field_range_noise_across_sources() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    // Closes agree on every bar; one provider has a degenerate low. The old
+    // max-over-OHLC comparison reported a 90× "mismatch" here.
+    let a = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":13.9,"high":14.0,"low":13.8,"close":13.92,"volume":1.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":13.9,"high":14.0,"low":13.8,"close":13.90,"volume":1.0}
+    ]"#;
+    let b = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":13.9,"high":14.0,"low":0.154,"close":13.80,"volume":1.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":13.9,"high":14.0,"low":13.8,"close":13.85,"volume":1.0}
+    ]"#;
+    cache.put_bars("alpaca:DCX:1Day", a).unwrap();
+    cache.put_bars("yahoo-chart:DCX:1Day", b).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(!report.has_code("cross_source_overlap_mismatch"), "{report:#?}");
+    assert!(!report.has_code("cross_source_scale_blowout"), "{report:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_audit_classifies_runaway_scale_blowout_as_info() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    // Recent closes disagree by 1000× — runaway provider back-adjust, not a
+    // plausible corporate action. Merge quarantines it; audit records context.
+    let trusted = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":0.8,"high":0.9,"low":0.7,"close":0.80,"volume":1.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":0.8,"high":0.9,"low":0.7,"close":0.81,"volume":1.0}
+    ]"#;
+    let runaway = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":800.0,"high":900.0,"low":700.0,"close":800.0,"volume":1.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":800.0,"high":900.0,"low":700.0,"close":810.0,"volume":1.0}
+    ]"#;
+    cache.put_bars("alpaca:ADTX:1Day", trusted).unwrap();
+    cache.put_bars("yahoo-chart:ADTX:1Day", runaway).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(report.has_code("cross_source_scale_blowout"), "{report:#?}");
+    assert!(!report.has_code("cross_source_overlap_mismatch"), "{report:#?}");
+    let issue = report
+        .issues
+        .iter()
+        .find(|i| i.code == "cross_source_scale_blowout")
+        .unwrap();
+    assert_eq!(issue.severity, BarCacheSanitySeverity::Info, "{report:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn delete_keys_light_removes_rows_without_reclaim() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let bars = r#"[{"timestamp":"2024-01-02T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10.0}]"#;
+    cache.put_bars("merged:LIT:1Day", bars).unwrap();
+    cache.put_bars("alpaca:LIT:1Day", bars).unwrap();
+
+    let deleted = cache
+        .delete_keys_light(&["merged:LIT:1Day".to_string()])
+        .unwrap();
+    assert_eq!(deleted, 1);
+    assert!(cache.get_bars_raw("merged:LIT:1Day").unwrap().is_none());
+    assert!(cache.get_bars_raw("alpaca:LIT:1Day").unwrap().is_some());
+
+    let _ = std::fs::remove_file(db_path);
+}

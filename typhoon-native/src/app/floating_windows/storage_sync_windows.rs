@@ -4,25 +4,105 @@ impl TyphooNApp {
     pub(super) fn render_storage_sync_windows(&mut self, ctx: &egui::Context) {
         self.render_cache_stats_window(ctx);
 
-        if let Some(rx) = self.storage_sanity_rx.as_ref() {
-            if let Ok(result) = rx.try_recv() {
-                self.storage_sanity_rx = None;
-                match result {
-                    Ok(report) => {
-                        let summary = report.summary_line();
-                        let warn = report.error_count > 0 || report.warn_count > 0;
-                        self.storage_sanity_report = Some(report);
-                        if warn {
-                            self.log.push_back(LogEntry::warn(summary));
-                        } else {
-                            self.log.push_back(LogEntry::info(summary));
+        // Storage-sanity worker pump (audit / repair / merged rebuild / export
+        // — one job at a time). Take the receiver so the drain loop can mutate
+        // self; hand it back if the job is still running.
+        if let Some(rx) = self.storage_sanity_rx.take() {
+            let mut finished = false;
+            while let Ok(msg) = rx.try_recv() {
+                match msg {
+                    SanityWorkerMsg::Progress { phase, done, total } => {
+                        self.storage_sanity_progress = Some((phase, done, total));
+                    }
+                    SanityWorkerMsg::AuditDone { result, delta } => {
+                        finished = true;
+                        match result {
+                            Ok(report) => {
+                                let summary = report.summary_line();
+                                let warn = report.error_count > 0 || report.warn_count > 0;
+                                self.storage_sanity_delta = delta;
+                                self.storage_sanity_report = Some(report);
+                                if warn {
+                                    self.log.push_back(LogEntry::warn(summary));
+                                } else {
+                                    self.log.push_back(LogEntry::info(summary));
+                                }
+                                if let Some(delta) = self.storage_sanity_delta.clone() {
+                                    self.log.push_back(LogEntry::info(delta));
+                                }
+                            }
+                            Err(e) => {
+                                self.log
+                                    .push_back(LogEntry::err(format!("Data sanity audit failed: {e}")));
+                            }
                         }
                     }
-                    Err(e) => {
-                        self.log
-                            .push_back(LogEntry::err(format!("Data sanity audit failed: {e}")));
+                    SanityWorkerMsg::RepairDone(result) => {
+                        finished = true;
+                        match result {
+                            Ok(outcome) => {
+                                for err in outcome.errors.iter().take(5) {
+                                    self.log.push_back(LogEntry::warn(format!("repair: {err}")));
+                                }
+                                let line = outcome.summary_line();
+                                if outcome.errors.is_empty() {
+                                    self.log.push_back(LogEntry::info(line.clone()));
+                                } else {
+                                    self.log.push_back(LogEntry::warn(line.clone()));
+                                }
+                                self.storage_sanity_last_action = Some(line);
+                            }
+                            Err(e) => {
+                                self.storage_sanity_reaudit_after = false;
+                                self.log
+                                    .push_back(LogEntry::err(format!("Cache repair failed: {e}")));
+                            }
+                        }
+                    }
+                    SanityWorkerMsg::MergedRebuildDone(result) => {
+                        finished = true;
+                        match result {
+                            Ok(deleted) => {
+                                let line = format!(
+                                    "Deleted {deleted} stale merged rows — they re-materialize from raw sources on next chart load/sync"
+                                );
+                                self.log.push_back(LogEntry::info(line.clone()));
+                                self.storage_sanity_last_action = Some(line);
+                            }
+                            Err(e) => {
+                                self.storage_sanity_reaudit_after = false;
+                                self.log
+                                    .push_back(LogEntry::err(format!("Merged-row rebuild failed: {e}")));
+                            }
+                        }
+                    }
+                    SanityWorkerMsg::ExportDone(result) => {
+                        finished = true;
+                        match result {
+                            Ok(path) => {
+                                let line = format!("Sanity report exported to {path}");
+                                self.log.push_back(LogEntry::info(line.clone()));
+                                self.storage_sanity_last_action = Some(line);
+                            }
+                            Err(e) => {
+                                self.log
+                                    .push_back(LogEntry::err(format!("Sanity report export failed: {e}")));
+                            }
+                        }
                     }
                 }
+            }
+            if finished {
+                self.storage_sanity_cancel = None;
+                self.storage_sanity_progress = None;
+                if std::mem::take(&mut self.storage_sanity_reaudit_after) {
+                    self.start_sanity_audit();
+                }
+            } else {
+                self.storage_sanity_rx = Some(rx);
+                // Keep frames coming while a worker runs so progress and
+                // completion land without waiting for user input.
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
             }
         }
 
@@ -142,10 +222,10 @@ impl TyphooNApp {
                                     ui.label(egui::RichText::new("Recompress cold rows at max level; disabled during heavy sync.").color(AXIS_TEXT).small());
                                 });
                                 ui.horizontal(|ui| {
-                                    let audit_running = self.storage_sanity_rx.is_some();
+                                    let job_running = self.storage_sanity_rx.is_some();
                                     if ui
                                         .add_enabled(
-                                            self.cache.is_some() && !audit_running,
+                                            self.cache.is_some() && !job_running,
                                             egui::Button::new(
                                                 egui::RichText::new("Run data sanity audit").small(),
                                             ),
@@ -155,56 +235,30 @@ impl TyphooNApp {
                                         )
                                         .clicked()
                                     {
-                                        if let Some(cache) = self.cache.clone() {
-                                            let (tx, rx) = std::sync::mpsc::channel();
-                                            std::thread::spawn(move || {
-                                                let _ = tx.send(cache.audit_bar_cache_sanity());
-                                            });
-                                            self.storage_sanity_rx = Some(rx);
-                                            self.log.push_back(LogEntry::info(
-                                                "Data sanity audit started (read-only full bar-cache scan)",
-                                            ));
-                                        }
+                                        self.start_sanity_audit();
                                     }
-                                    if audit_running {
+                                    if let Some((phase, done, total)) = self.storage_sanity_progress {
                                         ui.label(
-                                            egui::RichText::new("audit running…")
+                                            egui::RichText::new(format!(
+                                                "{phase} running… {done}/{total} rows"
+                                            ))
+                                            .color(AXIS_TEXT)
+                                            .small(),
+                                        );
+                                        if let Some(cancel) = self.storage_sanity_cancel.as_ref() {
+                                            if ui.small_button("Cancel").clicked() {
+                                                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                                            }
+                                        }
+                                    } else if job_running {
+                                        ui.label(
+                                            egui::RichText::new("job running…")
                                                 .color(AXIS_TEXT)
                                                 .small(),
                                         );
                                     }
                                 });
-                                if let Some(report) = self.storage_sanity_report.as_ref() {
-                                    let color = if report.error_count > 0 {
-                                        egui::Color32::from_rgb(231, 76, 60)
-                                    } else if report.warn_count > 0 {
-                                        egui::Color32::from_rgb(241, 196, 15)
-                                    } else {
-                                        egui::Color32::from_rgb(26, 188, 156)
-                                    };
-                                    ui.label(
-                                        egui::RichText::new(report.summary_line())
-                                            .color(color)
-                                            .small()
-                                            .monospace(),
-                                    );
-                                    for line in report.top_code_lines(6) {
-                                        ui.label(
-                                            egui::RichText::new(format!("count {line}"))
-                                                .color(AXIS_TEXT)
-                                                .small()
-                                                .monospace(),
-                                        );
-                                    }
-                                    for line in report.top_issue_lines(8) {
-                                        ui.label(
-                                            egui::RichText::new(line)
-                                                .color(AXIS_TEXT)
-                                                .small()
-                                                .monospace(),
-                                        );
-                                    }
-                                }
+                                self.render_sanity_report_panel(ui);
                                 // Auto-compact controls + readout (ADR-089). Manual compact
                                 // ignores the auto-enable setting but still respects the
                                 // in-progress/heavy-sync safety gates above.
@@ -860,5 +914,366 @@ impl TyphooNApp {
         // brokers always get a row even when their cache slice is empty,
         // so "0% Kraken" is visible before the first bar sync lands.
         self.render_sync_status_window(ctx);
+    }
+
+    /// Report body under the audit button: summary, run-over-run delta, per-code
+    /// counts, repair action row, and a filterable severity-sorted issue browser.
+    fn render_sanity_report_panel(&mut self, ui: &mut egui::Ui) {
+        use typhoon_engine::core::cache::{
+            BarCacheRepairOptions, BarCacheSanitySeverity, issue_display_line,
+        };
+        // Copy everything the panel displays out of the report first so the
+        // click handlers below can borrow self mutably.
+        let filter_lc = self.storage_sanity_filter.to_lowercase();
+        let Some(report) = self.storage_sanity_report.as_ref() else {
+            return;
+        };
+        let summary = report.summary_line();
+        let summary_color = if report.error_count > 0 {
+            egui::Color32::from_rgb(231, 76, 60)
+        } else if report.warn_count > 0 {
+            egui::Color32::from_rgb(241, 196, 15)
+        } else {
+            egui::Color32::from_rgb(26, 188, 156)
+        };
+        let code_lines = report.top_code_lines(6);
+        let meta_n = report.metadata_repairable_rows;
+        let rewrite_n = report.rewritable_rows;
+        let corrupt_n = report.corrupt_rows;
+        let merged_n = report.merged_mismatch_keys.len();
+        let stored_issues = report.issues.len();
+        let issue_lines: Vec<(BarCacheSanitySeverity, String)> = report
+            .issues
+            .iter()
+            .filter(|issue| {
+                filter_lc.is_empty()
+                    || issue.key.to_lowercase().contains(&filter_lc)
+                    || issue.code.contains(&filter_lc)
+                    || issue.detail.to_lowercase().contains(&filter_lc)
+            })
+            .take(300)
+            .map(|issue| (issue.severity, issue_display_line(issue)))
+            .collect();
+
+        ui.label(
+            egui::RichText::new(summary)
+                .color(summary_color)
+                .small()
+                .monospace(),
+        );
+        if let Some(delta) = self.storage_sanity_delta.as_ref() {
+            ui.label(
+                egui::RichText::new(delta)
+                    .color(AXIS_TEXT)
+                    .small()
+                    .monospace(),
+            );
+        }
+        if let Some(action) = self.storage_sanity_last_action.as_ref() {
+            ui.label(
+                egui::RichText::new(action)
+                    .color(AXIS_TEXT)
+                    .small()
+                    .monospace(),
+            );
+        }
+        for line in code_lines {
+            ui.label(
+                egui::RichText::new(format!("count {line}"))
+                    .color(AXIS_TEXT)
+                    .small()
+                    .monospace(),
+            );
+        }
+
+        // Repair actions — each scoped to what the audit proved fixable, all
+        // re-verified by an automatic follow-up audit.
+        let job_running = self.storage_sanity_rx.is_some();
+        let actions_enabled = self.cache.is_some() && !job_running;
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    actions_enabled && meta_n > 0,
+                    egui::Button::new(
+                        egui::RichText::new(format!("Fix metadata ({meta_n})")).small(),
+                    ),
+                )
+                .on_hover_text(
+                    "Recompute bar_count/last_ts/second_last_ts metadata from blob contents and clamp bad zstd tags. Safe: bar data untouched; re-audits when done.",
+                )
+                .clicked()
+            {
+                self.start_sanity_repair(
+                    BarCacheRepairOptions {
+                        fix_metadata: true,
+                        ..Default::default()
+                    },
+                    "fix metadata",
+                );
+            }
+            if ui
+                .add_enabled(
+                    actions_enabled && rewrite_n > 0,
+                    egui::Button::new(
+                        egui::RichText::new(format!("Rewrite bad rows ({rewrite_n})")).small(),
+                    ),
+                )
+                .on_hover_text(
+                    "Re-pack rows that violate write-path invariants: drops invalid-OHLC bars, duplicate/out-of-order buckets, bars >2 days in the future; converts legacy JSON rows to binary. Re-audits when done.",
+                )
+                .clicked()
+            {
+                self.start_sanity_repair(
+                    BarCacheRepairOptions {
+                        rewrite_bad_rows: true,
+                        ..Default::default()
+                    },
+                    "rewrite bad rows",
+                );
+            }
+            let delete_armed =
+                self.storage_sanity_confirm == Some(SanityConfirmAction::DeleteCorrupt);
+            let delete_text = if delete_armed {
+                format!("Confirm delete {corrupt_n} corrupt rows")
+            } else {
+                format!("Delete corrupt rows ({corrupt_n})")
+            };
+            let mut delete_rich = egui::RichText::new(delete_text).small();
+            if delete_armed {
+                delete_rich = delete_rich.color(egui::Color32::from_rgb(231, 76, 60));
+            }
+            if ui
+                .add_enabled(actions_enabled && corrupt_n > 0, egui::Button::new(delete_rich))
+                .on_hover_text(
+                    "Delete rows that cannot be decoded at all (undecompressable/bad header/truncated). Destructive: the next bar sync re-fetches them. Click twice.",
+                )
+                .clicked()
+            {
+                if delete_armed {
+                    self.storage_sanity_confirm = None;
+                    self.start_sanity_repair(
+                        BarCacheRepairOptions {
+                            delete_corrupt_rows: true,
+                            ..Default::default()
+                        },
+                        "delete corrupt rows",
+                    );
+                } else {
+                    self.storage_sanity_confirm = Some(SanityConfirmAction::DeleteCorrupt);
+                }
+            }
+            let merged_armed =
+                self.storage_sanity_confirm == Some(SanityConfirmAction::RebuildMerged);
+            let merged_text = if merged_armed {
+                format!("Confirm rebuild {merged_n} merged rows")
+            } else {
+                format!("Rebuild merged ({merged_n})")
+            };
+            let mut merged_rich = egui::RichText::new(merged_text).small();
+            if merged_armed {
+                merged_rich = merged_rich.color(egui::Color32::from_rgb(231, 76, 60));
+            }
+            if ui
+                .add_enabled(actions_enabled && merged_n > 0, egui::Button::new(merged_rich))
+                .on_hover_text(
+                    "Delete merged rows whose recent bars disagree with their raw sources; they re-materialize from raw sources (with current merge logic) on next chart load/sync. Click twice.",
+                )
+                .clicked()
+            {
+                if merged_armed {
+                    self.storage_sanity_confirm = None;
+                    self.start_sanity_merged_rebuild();
+                } else {
+                    self.storage_sanity_confirm = Some(SanityConfirmAction::RebuildMerged);
+                }
+            }
+            if ui
+                .add_enabled(
+                    actions_enabled,
+                    egui::Button::new(egui::RichText::new("Export JSON").small()),
+                )
+                .on_hover_text(
+                    "Write the full report (all stored issues + repair counters) to a JSON file next to the cache DB for offline analysis.",
+                )
+                .clicked()
+            {
+                self.start_sanity_export();
+            }
+        });
+
+        // Issue browser: severity-sorted (errors first), substring filter on
+        // key/code/detail.
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Filter").color(AXIS_TEXT).small());
+            ui.add(
+                egui::TextEdit::singleline(&mut self.storage_sanity_filter)
+                    .desired_width(160.0)
+                    .hint_text("symbol / code / text"),
+            );
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} of {stored_issues} stored issues",
+                    issue_lines.len()
+                ))
+                .color(AXIS_TEXT)
+                .small(),
+            );
+        });
+        egui::ScrollArea::vertical()
+            .id_salt("sanity_issue_browser")
+            .max_height(180.0)
+            .show(ui, |ui| {
+                for (severity, line) in &issue_lines {
+                    let color = match severity {
+                        BarCacheSanitySeverity::Error => egui::Color32::from_rgb(231, 76, 60),
+                        BarCacheSanitySeverity::Warn => egui::Color32::from_rgb(241, 196, 15),
+                        BarCacheSanitySeverity::Info => AXIS_TEXT,
+                    };
+                    ui.label(egui::RichText::new(line).color(color).small().monospace());
+                }
+            });
+    }
+
+    /// Kick off the background data-sanity audit; results land through
+    /// `storage_sanity_rx`. History is persisted (and the run-over-run delta
+    /// computed) on the worker thread so the render thread never writes.
+    pub(crate) fn start_sanity_audit(&mut self) {
+        if self.storage_sanity_rx.is_some() {
+            return;
+        }
+        let Some(cache) = self.cache.clone() else {
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_worker = cancel.clone();
+        std::thread::spawn(move || {
+            let progress_tx = tx.clone();
+            let progress = move |done: usize, total: usize| {
+                let _ = progress_tx.send(SanityWorkerMsg::Progress {
+                    phase: "audit",
+                    done,
+                    total,
+                });
+            };
+            let result = cache.audit_bar_cache_sanity_with(Some(&progress), Some(&cancel_worker));
+            let delta = match &result {
+                Ok(report) if !report.cancelled => {
+                    let prev = cache.load_bar_sanity_history().pop();
+                    let delta = prev.and_then(|p| report.delta_line(&p));
+                    if let Err(e) = cache.record_bar_sanity_history(report) {
+                        tracing::warn!("sanity history persist failed: {e}");
+                    }
+                    delta
+                }
+                _ => None,
+            };
+            let _ = tx.send(SanityWorkerMsg::AuditDone { result, delta });
+        });
+        self.storage_sanity_rx = Some(rx);
+        self.storage_sanity_cancel = Some(cancel);
+        self.storage_sanity_progress = Some(("audit", 0, 0));
+        self.storage_sanity_confirm = None;
+        self.log.push_back(LogEntry::info(
+            "Data sanity audit started (read-only full bar-cache scan)",
+        ));
+    }
+
+    /// Run one repair class in the background, then re-audit to verify.
+    fn start_sanity_repair(
+        &mut self,
+        opts: typhoon_engine::core::cache::BarCacheRepairOptions,
+        label: &'static str,
+    ) {
+        if self.storage_sanity_rx.is_some() {
+            return;
+        }
+        let Some(cache) = self.cache.clone() else {
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_worker = cancel.clone();
+        std::thread::spawn(move || {
+            let progress_tx = tx.clone();
+            let progress = move |done: usize, total: usize| {
+                let _ = progress_tx.send(SanityWorkerMsg::Progress {
+                    phase: "repair",
+                    done,
+                    total,
+                });
+            };
+            let result = cache.repair_bar_cache(opts, Some(&progress), Some(&cancel_worker));
+            let _ = tx.send(SanityWorkerMsg::RepairDone(result));
+        });
+        self.storage_sanity_rx = Some(rx);
+        self.storage_sanity_cancel = Some(cancel);
+        self.storage_sanity_progress = Some(("repair", 0, 0));
+        self.storage_sanity_confirm = None;
+        self.storage_sanity_reaudit_after = true;
+        self.log
+            .push_back(LogEntry::info(format!("Cache repair started ({label})")));
+    }
+
+    /// Delete the merged rows the last audit flagged as disagreeing with
+    /// their raw sources. Light delete (no VACUUM) — freed pages are
+    /// reclaimed by auto-compact; rows re-materialize from raw sources.
+    fn start_sanity_merged_rebuild(&mut self) {
+        if self.storage_sanity_rx.is_some() {
+            return;
+        }
+        let Some(cache) = self.cache.clone() else {
+            return;
+        };
+        let keys: Vec<String> = self
+            .storage_sanity_report
+            .as_ref()
+            .map(|r| r.merged_mismatch_keys.iter().cloned().collect())
+            .unwrap_or_default();
+        if keys.is_empty() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let count = keys.len();
+        std::thread::spawn(move || {
+            let result = cache.delete_keys_light(&keys);
+            let _ = tx.send(SanityWorkerMsg::MergedRebuildDone(result));
+        });
+        self.storage_sanity_rx = Some(rx);
+        self.storage_sanity_confirm = None;
+        self.storage_sanity_reaudit_after = true;
+        self.log.push_back(LogEntry::info(format!(
+            "Rebuilding {count} stale merged rows (delete + re-materialize)"
+        )));
+    }
+
+    /// Write the full last report to a timestamped JSON file next to the DB.
+    fn start_sanity_export(&mut self) {
+        if self.storage_sanity_rx.is_some() {
+            return;
+        }
+        let Some(report) = self.storage_sanity_report.clone() else {
+            return;
+        };
+        let dir = cache_db_path()
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let path = dir.join(format!(
+            "sanity-report-{}.json",
+            chrono::Utc::now().format("%Y%m%d-%H%M%S")
+        ));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = serde_json::to_string_pretty(&report)
+                .map_err(|e| format!("serialize failed: {e}"))
+                .and_then(|json| {
+                    std::fs::write(&path, json)
+                        .map_err(|e| format!("write {} failed: {e}", path.display()))
+                        .map(|_| path.display().to_string())
+                });
+            let _ = tx.send(SanityWorkerMsg::ExportDone(result));
+        });
+        self.storage_sanity_rx = Some(rx);
     }
 }
