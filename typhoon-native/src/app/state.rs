@@ -1247,6 +1247,10 @@ pub struct TyphooNApp {
     pub(crate) saved_screens_loaded: bool,
     /// Finviz-style market treemap window (ADR-116 Maps/Groups).
     pub(crate) show_market_map: bool,
+    /// `draw_mode` as of the END of the previous frame — placement clicks
+    /// only count once the tool was armed on an earlier frame, so the
+    /// menu-item click that armed it can never also place a point.
+    pub(crate) prev_draw_mode: DrawMode,
     pub(crate) sentiment_symbol: String,
     pub(crate) sentiment_rows: Vec<typhoon_engine::core::research::SocialSentimentRow>,
     pub(crate) sentiment_loading: bool,

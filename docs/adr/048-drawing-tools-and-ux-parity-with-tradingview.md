@@ -173,20 +173,27 @@ despite the per-gap checkmarks above. Root causes and fixes, all shipped:
    placement AND clears pending multi-click buffers (they used to leak into
    the next pattern tool); Delete guards against a drifted styles vec.
 
-**Follow-up fix (same day):** placement clicks now read **raw pointer input**
-(`primary_clicked()` + a layer/`egui_wants_pointer_input` exclusion for
-floating windows and the menu click that armed the tool) instead of the
-widget-routed `resp.clicked()` + `self.crosshair` chain. The old chain had
-three independent ways to drop an armed click — widget interaction
-bookkeeping (`potential_click_id` stolen by an overlapping widget, drag
-classification), the crosshair variable being suppressed to `None` by the
-input handler's pointer-use test, and (post-comb-over) a too-strict
-`chart_rect.contains` that rejected clicks over sub-panes/time axis — which
-presented as "the first click of a tool does nothing." Placement now accepts
-the whole chart body left of the painted axis and extrapolates price for
-sub-pane clicks, like the original behavior. Also unified `PRICE_AXIS_W`
-(98px): the interact-side widget split assumed 70px, leaving a 28px strip of
-painted price axis that panned the chart instead of scaling it.
+**Follow-up fix (same day) — placement clicks dead; root cause PROVEN by a
+headless probe (`armed_click_gate_over_central_panel`):** in egui 0.35,
+`egui_wants_pointer_input()` is TRUE on **every frame** over a
+`CentralPanel` (panel widgets register a Background layer, and the
+root-rect test classifies that as "over egui"). The app used that method —
+plus `egui_is_using_pointer()`, which is true on the chart-body widget's
+own press frames — as an "over floating UI" test in four places, silently
+disabling, since the egui upgrade: the crosshair (input handler nulled
+`self.crosshair` every frame — which also starved the old placement gate),
+scroll-zoom / `on_chart_body` hover gating, the whole pre-render press
+routing (drawing grab, SL/TP claim clearing), and finally the placement
+guard added in the first follow-up attempt. Fixes: floating UI is detected
+by **layer order only** (windows = Middle, popups/menus = Foreground; the
+chart is Background) plus `dragged_id()` for in-flight widget drags;
+placement reads the raw `primary_clicked()` with the arming click excluded
+via a `prev_draw_mode` frame check (tool must have been armed on an earlier
+frame) instead of any wants-pointer test. The probe test permanently
+documents the 0.35 behavior so the gate cannot be reintroduced. Also
+unified `PRICE_AXIS_W` (98px): the interact-side widget split assumed 70px,
+leaving a 28px strip of painted price axis that panned the chart instead of
+scaling it.
 
 Regression guards: `drawing_interaction` unit tests (geometry round-trip
 including off-screen bars, off-screen-endpoint hit-testing, anchor/translate

@@ -34,10 +34,16 @@ impl TyphooNApp {
         );
 
         let hover_pos = ctx.input(|i| i.pointer.hover_pos().unwrap_or_default());
-        // Don't interact with chart when pointer is over a floating window or egui wants pointer
-        let egui_hover = ctx.egui_wants_pointer_input()
-            || ctx.egui_is_using_pointer()
-            || ctx.dragged_id().is_some();
+        // Don't interact with chart when pointer is over a floating window.
+        // NEVER gate this on `egui_wants_pointer_input()`: in egui 0.35 panel
+        // widgets register a Background layer and the root-rect test makes
+        // that method return TRUE on every frame over a CentralPanel (proven
+        // by the `armed_click_gate_over_central_panel` probe) — it silently
+        // killed scroll-zoom, crosshair, and drawing placement. Floating UI
+        // is detected by layer order (windows are Middle, popups/menus are
+        // Foreground; the chart body is Background), plus an active drag of
+        // some other widget.
+        let egui_hover = ctx.dragged_id().is_some();
         let layer_at_hover = ctx.layer_id_at(hover_pos);
         let hover_over_window = egui_hover
             || layer_at_hover
@@ -201,12 +207,16 @@ impl TyphooNApp {
         // Drag interactions — only when pointer is NOT over a floating window
         let pointer = ctx.input(|i| i.pointer.clone());
         let drag_delta = ctx.input(|i| i.pointer.delta());
-        // Block chart interaction when ANY egui widget/window is using the pointer
-        let egui_wants_pointer = ctx.egui_wants_pointer_input() || ctx.egui_is_using_pointer();
+        // Block chart interaction when the pointer is over floating UI or a
+        // widget drag is in flight. `egui_wants_pointer_input()`/
+        // `egui_is_using_pointer()` are deliberately NOT consulted: the
+        // former is always true over a CentralPanel in egui 0.35, and the
+        // latter is true on the press frame of the chart-body widget itself
+        // — both made this flag permanently true and disabled the whole
+        // pre-render press routing (drawing grab, SL/TP claim clearing).
         let anything_dragged = ctx.dragged_id().is_some();
         let layer_id_at_pointer = ctx.layer_id_at(pointer.hover_pos().unwrap_or_default());
-        let pointer_over_window = egui_wants_pointer
-            || anything_dragged
+        let pointer_over_window = anything_dragged
             || layer_id_at_pointer
                 .map(|id| id.order == egui::Order::Middle || id.order == egui::Order::Foreground)
                 .unwrap_or(false);
@@ -1178,10 +1188,13 @@ impl TyphooNApp {
                 if self.draw_mode != DrawMode::None
                     && self.draw_mode != DrawMode::Eraser
                     && ctx.input(|i| i.pointer.primary_clicked())
-                    // Not the click that armed the tool from a menu popup
-                    // (pointer is over the popup Area on that release frame),
-                    // and not a click egui claims for one of its areas.
-                    && !ctx.egui_wants_pointer_input()
+                    // Not the click that armed the tool this very frame (the
+                    // menu-item click that set draw_mode): placement only
+                    // accepts clicks once the mode was already armed on a
+                    // previous frame. (`egui_wants_pointer_input()` must NOT
+                    // be used here — it is always true over a CentralPanel in
+                    // egui 0.35 and ate every placement click.)
+                    && self.draw_mode == self.prev_draw_mode
                 {
                     let click_pos = ctx.input(|i| i.pointer.interact_pos()).or(crosshair);
                     if let (Some(pos), Some(g)) = (click_pos, chart.last_price_geometry) {

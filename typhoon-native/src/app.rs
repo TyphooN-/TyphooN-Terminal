@@ -834,6 +834,7 @@ impl TyphooNApp {
             saved_screens: Vec::new(),
             saved_screens_loaded: false,
             show_market_map: false,
+            prev_draw_mode: DrawMode::None,
             sentiment_symbol: String::new(),
             stocktwits_snapshot: None,
             reddit_snapshot: None,

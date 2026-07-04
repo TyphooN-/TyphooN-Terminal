@@ -288,6 +288,9 @@ impl eframe::App for TyphooNApp {
             let pointer_over_floating = self.handle_runtime_input(ctx);
             self.render_central_panel(ctx, ui, pointer_over_floating);
         });
+        // Snapshot for the next frame: placement clicks only count when the
+        // tool was armed on a previous frame (see prev_draw_mode).
+        self.prev_draw_mode = self.draw_mode;
 
         // ── Console (egui::Window for proper focus/interaction on Wayland) ────
         if self.command_open {

@@ -77,9 +77,14 @@ impl TyphooNApp {
 
         // ── crosshair from pointer ───────────────────────────────────────────
         // Suppress crosshair when pointer is over a floating window (dragging, resizing, scrolling)
-        let pointer_over_ui = ctx.egui_wants_pointer_input()
-            || ctx.egui_is_using_pointer()
-            || ctx.dragged_id().is_some();
+        // `egui_wants_pointer_input()` is always true over a CentralPanel in
+        // egui 0.35 (Background layer + root-rect test), and
+        // `egui_is_using_pointer()` is true whenever the chart-body widget
+        // itself is pressed — using them here suppressed the crosshair (and
+        // with it drawing placement) on every frame. Only an actual foreign
+        // widget drag suppresses; floating windows are handled by the layer
+        // test below.
+        let pointer_over_ui = ctx.dragged_id().is_some();
         let pointer_over_floating = if !pointer_over_ui {
             let hp = ctx.input(|i| i.pointer.hover_pos().unwrap_or_default());
             ctx.layer_id_at(hp)

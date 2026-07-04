@@ -1484,3 +1484,104 @@ pub async fn fetch_last_price_with_fallback(symbol: &str) -> Option<(f64, String
     }
     None
 }
+
+/// Headless reproduction of the armed-tool click gate (egui 0.35): a press +
+/// release over a CentralPanel body widget must surface as a raw
+/// `primary_clicked()` with `egui_wants_pointer_input()` false, and the
+/// widget-routed `clicked()` should agree. Pins down exactly which gate eats
+/// the first placement click.
+#[test]
+fn armed_click_gate_over_central_panel() {
+    let ctx = egui::Context::default();
+    let click_pos = egui::pos2(400.0, 300.0);
+    let mut release_frame_report = None;
+    let mut per_phase = Vec::new();
+    for phase in 0..4 {
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(800.0, 600.0),
+            )),
+            ..Default::default()
+        };
+        match phase {
+            0 => input.events.push(egui::Event::PointerMoved(click_pos)),
+            1 => input.events.push(egui::Event::PointerButton {
+                pos: click_pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            }),
+            2 => input.events.push(egui::Event::PointerButton {
+                pos: click_pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            }),
+            _ => {}
+        }
+        let _ = ctx.run_ui(input, |root_ui| {
+            let ctx = root_ui.ctx().clone();
+            egui::Panel::top("toolbar").show(root_ui, |ui| {
+                ui.label("toolbar");
+            });
+            egui::CentralPanel::default().show(root_ui, |ui| {
+                let (rect, _hover) =
+                    ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+                let body = egui::Rect::from_min_max(
+                    rect.min,
+                    egui::pos2(rect.right() - 98.0, rect.bottom()),
+                );
+                let resp = ui.interact(
+                    body,
+                    ui.id().with("single_chart_body_drag"),
+                    egui::Sense::click_and_drag(),
+                );
+                per_phase.push((
+                    phase,
+                    ctx.egui_wants_pointer_input(),
+                    ctx.egui_is_using_pointer(),
+                    ctx.layer_id_at(click_pos).map(|l| l.order),
+                ));
+                if phase == 2 {
+                    release_frame_report = Some((
+                        ctx.input(|i: &egui::InputState| i.pointer.primary_clicked()),
+                        ctx.egui_wants_pointer_input(),
+                        ctx.input(|i| i.pointer.interact_pos()),
+                        ctx.layer_id_at(click_pos).map(|l| l.order),
+                        resp.clicked(),
+                    ));
+                }
+            });
+        });
+    }
+    println!("per-phase (phase, wants_pointer, is_using, layer): {per_phase:?}");
+    let (raw_clicked, wants_pointer, interact_pos, layer, widget_clicked) =
+        release_frame_report.expect("release frame ran");
+    // The raw click + its position must surface on the release frame — this
+    // is what the placement gate consumes.
+    assert!(raw_clicked, "primary_clicked() false on release frame");
+    assert!(interact_pos.is_some(), "interact_pos None on release frame");
+    assert!(widget_clicked, "widget-routed clicked() false on release frame");
+    // The chart body sits on the Background layer — the "over floating UI"
+    // test used by chart input gating (windows = Middle, popups = Foreground)
+    // must NOT fire here.
+    assert_eq!(layer, Some(egui::Order::Background));
+    // TRAP (egui 0.35): `egui_wants_pointer_input()` is TRUE on EVERY frame
+    // over a CentralPanel (panel widgets register a Background layer and the
+    // root-rect test classifies that as "over egui"). It must never be used
+    // to gate chart clicks/hover — doing so silently killed drawing
+    // placement, the crosshair, and scroll-zoom. This assertion documents
+    // the behavior so nobody reintroduces the gate believing it means
+    // "pointer over a floating window".
+    assert!(
+        wants_pointer,
+        "egui_wants_pointer_input() became false over a CentralPanel — if \
+         egui's semantics changed back, the layer-order gating in \
+         app_runtime_central_panel/app_runtime_input can be revisited"
+    );
+    // And `egui_is_using_pointer()` is only true while the button is held
+    // (press frame) — false on hover and release frames.
+    let is_using_by_phase: Vec<bool> = per_phase.iter().map(|(_, _, u, _)| *u).collect();
+    assert_eq!(is_using_by_phase, vec![false, true, false, false]);
+}
