@@ -173,6 +173,21 @@ despite the per-gap checkmarks above. Root causes and fixes, all shipped:
    placement AND clears pending multi-click buffers (they used to leak into
    the next pattern tool); Delete guards against a drifted styles vec.
 
+**Follow-up fix (same day):** placement clicks now read **raw pointer input**
+(`primary_clicked()` + a layer/`egui_wants_pointer_input` exclusion for
+floating windows and the menu click that armed the tool) instead of the
+widget-routed `resp.clicked()` + `self.crosshair` chain. The old chain had
+three independent ways to drop an armed click — widget interaction
+bookkeeping (`potential_click_id` stolen by an overlapping widget, drag
+classification), the crosshair variable being suppressed to `None` by the
+input handler's pointer-use test, and (post-comb-over) a too-strict
+`chart_rect.contains` that rejected clicks over sub-panes/time axis — which
+presented as "the first click of a tool does nothing." Placement now accepts
+the whole chart body left of the painted axis and extrapolates price for
+sub-pane clicks, like the original behavior. Also unified `PRICE_AXIS_W`
+(98px): the interact-side widget split assumed 70px, leaving a 28px strip of
+painted price axis that panned the chart instead of scaling it.
+
 Regression guards: `drawing_interaction` unit tests (geometry round-trip
 including off-screen bars, off-screen-endpoint hit-testing, anchor/translate
 invariants per shape family, slope/position `set_anchor` semantics, preview

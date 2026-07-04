@@ -23,7 +23,7 @@ impl TyphooNApp {
         );
 
         // ── Price axis rect (right 70px of chart — TradingView-style scale) ──
-        let price_axis_w = 70.0_f32;
+        let price_axis_w = typhoon_chart_ui::render::PRICE_AXIS_W;
         let price_axis_rect = egui::Rect::from_min_max(
             egui::pos2(available.right() - price_axis_w, available.top()),
             available.max,
@@ -608,7 +608,7 @@ impl TyphooNApp {
                 // Price-axis vertical scaling for this cell — same pattern as the
                 // single-chart path so MTF grid cells also respond to dragging the
                 // right scale strip.
-                let cell_price_axis_w = 70.0_f32;
+                let cell_price_axis_w = typhoon_chart_ui::render::PRICE_AXIS_W;
                 let cell_price_axis_rect = egui::Rect::from_min_max(
                     egui::pos2(cell_rect.right() - cell_price_axis_w, cell_rect.top()),
                     cell_rect.max,
@@ -825,7 +825,7 @@ impl TyphooNApp {
             // own it, which regressed TradingView-style scale dragging.
             let (rect, _chart_alloc_resp) =
                 ui.allocate_exact_size(available.size(), egui::Sense::hover());
-            let price_axis_w = 70.0_f32;
+            let price_axis_w = typhoon_chart_ui::render::PRICE_AXIS_W;
             let price_axis_rect = egui::Rect::from_min_max(
                 egui::pos2(rect.right() - price_axis_w, rect.top()),
                 rect.max,
@@ -1167,16 +1167,41 @@ impl TyphooNApp {
                 }
 
                 // ── drawing mode click handling ──────────────────────
-                if resp.clicked()
-                    && self.draw_mode != DrawMode::None
+                // Placement reads the RAW click, not widget routing: an armed
+                // tool must never lose a click to interaction bookkeeping.
+                // The widget path (`resp.clicked()`) additionally required
+                // `self.crosshair`, which the input handler sets to None
+                // whenever egui reports pointer use — so a click could pass
+                // widget routing and still be dropped by the crosshair gate.
+                // Floating windows are excluded via the layer test below;
+                // popups/toolbars are Areas, so they never reach this branch.
+                if self.draw_mode != DrawMode::None
                     && self.draw_mode != DrawMode::Eraser
+                    && ctx.input(|i| i.pointer.primary_clicked())
+                    // Not the click that armed the tool from a menu popup
+                    // (pointer is over the popup Area on that release frame),
+                    // and not a click egui claims for one of its areas.
+                    && !ctx.egui_wants_pointer_input()
                 {
-                    if let (Some(pos), Some(g)) = (crosshair, chart.last_price_geometry) {
-                        // Bar/price from the exact painted geometry — the old
-                        // recomputation ignored log scale and the free-look
-                        // camera, so drawings landed offset from the cursor
-                        // whenever the view wasn't the legacy autoscale.
-                        if !chart.bars.is_empty() && g.chart_rect.contains(pos) {
+                    let click_pos = ctx.input(|i| i.pointer.interact_pos()).or(crosshair);
+                    if let (Some(pos), Some(g)) = (click_pos, chart.last_price_geometry) {
+                        let over_float = ctx
+                            .layer_id_at(pos)
+                            .map(|id| {
+                                id.order == egui::Order::Middle
+                                    || id.order == egui::Order::Foreground
+                            })
+                            .unwrap_or(false);
+                        // Accept the whole chart body left of the painted
+                        // price axis (clicks over sub-panes / the time axis
+                        // extrapolate the price, matching the old behavior —
+                        // the previous `g.chart_rect.contains` gate silently
+                        // rejected them).
+                        let body = egui::Rect::from_min_max(
+                            rect.min,
+                            egui::pos2(g.chart_rect.right(), rect.bottom()),
+                        );
+                        if !over_float && !chart.bars.is_empty() && body.contains(pos) {
                             let max_bar = chart.bars.len().saturating_sub(1);
                             let abs_idx = g.x_to_bar(pos.x, max_bar);
                             let raw_price = g.price_from_y(pos.y);

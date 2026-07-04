@@ -25,6 +25,11 @@ pub use time_axis::{format_price, format_price_buf, format_ts, format_ts_buf};
 /// drags) uses the rendered pixels, not a re-derived approximation — the old
 /// legacy re-derivation ignored sub-panes, the time axis, log scale, and the
 /// free-look camera, which is why line grabs missed.
+/// Painted price-axis width. Interaction code (widget splits, hit regions)
+/// must use this same constant — a mismatched split leaves a dead strip of
+/// painted axis that pans the chart instead of scaling it.
+pub const PRICE_AXIS_W: f32 = 98.0;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PriceViewGeometry {
     pub chart_rect: egui::Rect,
@@ -227,7 +232,7 @@ pub fn draw_chart(
     );
 
     // Price axis margins
-    let price_axis_w = 98.0_f32;
+    let price_axis_w = PRICE_AXIS_W;
     let time_axis_h = 24.0_f32;
     let chart_rect = egui::Rect::from_min_max(
         main_rect.min,
