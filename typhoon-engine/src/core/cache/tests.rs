@@ -1307,3 +1307,100 @@ fn data_sanity_audit_flags_merged_source_overlap_mismatch() {
 
     let _ = std::fs::remove_file(db_path);
 }
+
+#[test]
+fn data_sanity_audit_allows_stable_merged_source_scale_delta() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let raw = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":1.1,"high":1.1,"low":1.1,"close":1.1,"volume":100.0},
+        {"timestamp":"2024-01-03T00:00:00+00:00","open":1.2,"high":1.2,"low":1.2,"close":1.2,"volume":100.0}
+    ]"#;
+    let merged = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":10.0,"high":10.0,"low":10.0,"close":10.0,"volume":100.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":11.0,"high":11.0,"low":11.0,"close":11.0,"volume":100.0},
+        {"timestamp":"2024-01-03T00:00:00+00:00","open":12.0,"high":12.0,"low":12.0,"close":12.0,"volume":100.0}
+    ]"#;
+    cache.put_bars("alpaca:WOK:1Day", raw).unwrap();
+    cache.put_bars("merged:WOK:1Day", merged).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert_eq!(
+        report.issue_code_count("merged_source_overlap_mismatch"),
+        0,
+        "stable split/corporate-action scale deltas should not be treated as corrupt merged drift: {report:#?}"
+    );
+    assert!(
+        report.issue_code_count("merged_source_stable_scale_delta") >= 1,
+        "stable scale delta should still be visible as informational audit context: {report:#?}"
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_audit_allows_historical_cross_source_scale_delta_when_recent_agrees() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let compact = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0},
+        {"timestamp":"2024-01-03T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0},
+        {"timestamp":"2024-01-04T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0}
+    ]"#;
+    let split_adjusted = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":100.0,"high":100.0,"low":100.0,"close":100.0,"volume":100.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":100.0,"high":100.0,"low":100.0,"close":100.0,"volume":100.0},
+        {"timestamp":"2024-01-03T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0},
+        {"timestamp":"2024-01-04T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0}
+    ]"#;
+    cache.put_bars("alpaca:WOK:1Day", compact).unwrap();
+    cache.put_bars("yahoo-chart:WOK:1Day", split_adjusted).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert_eq!(
+        report.issue_code_count("cross_source_overlap_mismatch"),
+        0,
+        "historical split-era source differences with recent agreement should not be flagged as corrupt overlap drift: {report:#?}"
+    );
+    assert!(
+        report.issue_code_count("cross_source_historical_scale_delta") >= 1,
+        "historical scale delta should still be visible as informational audit context: {report:#?}"
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_audit_allows_historical_merged_source_scale_delta_when_recent_agrees() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let merged = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0},
+        {"timestamp":"2024-01-03T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0},
+        {"timestamp":"2024-01-04T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0}
+    ]"#;
+    let raw = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":100.0,"high":100.0,"low":100.0,"close":100.0,"volume":100.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":100.0,"high":100.0,"low":100.0,"close":100.0,"volume":100.0},
+        {"timestamp":"2024-01-03T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0},
+        {"timestamp":"2024-01-04T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0}
+    ]"#;
+    cache.put_bars("alpaca:WOK:1Day", raw).unwrap();
+    cache.put_bars("merged:WOK:1Day", merged).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert_eq!(
+        report.issue_code_count("merged_source_overlap_mismatch"),
+        0,
+        "historical split-era raw differences with recent merged agreement should not be flagged as corrupt merged drift: {report:#?}"
+    );
+    assert!(
+        report.issue_code_count("merged_source_historical_scale_delta") >= 1,
+        "historical merged/source scale delta should still be visible as informational audit context: {report:#?}"
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}

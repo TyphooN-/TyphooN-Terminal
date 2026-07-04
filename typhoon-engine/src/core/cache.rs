@@ -587,6 +587,29 @@ fn max_ohlc_ratio(a: AuditBar, b: AuditBar) -> Option<f64> {
     })
 }
 
+fn stable_scale_delta(scales: &[f64], threshold: f64, tolerance: f64) -> Option<f64> {
+    if scales.len() < 2 {
+        return None;
+    }
+    let mut sorted: Vec<f64> = scales
+        .iter()
+        .copied()
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .collect();
+    if sorted.len() < 2 {
+        return None;
+    }
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p25 = sorted[sorted.len() / 4];
+    let p50 = sorted[sorted.len() / 2];
+    let p75 = sorted[sorted.len() * 3 / 4];
+    if p25 <= 0.0 || p75 / p25 > tolerance {
+        return None;
+    }
+    let symmetric = p50.max(1.0 / p50);
+    (symmetric >= threshold).then_some(p50)
+}
+
 /// Unpack only the last `tail` bars from binary format — avoids converting 50K bars when only 500 needed.
 /// Decompression is still required (zstd doesn't support seeking), but JSON construction is O(tail) not O(n).
 fn unpack_bars_tail(data: &[u8], tail: usize) -> Result<String, String> {
@@ -1665,6 +1688,9 @@ impl SqliteCache {
                     let b_by_bucket: std::collections::BTreeMap<i64, AuditBar> =
                         b.bars.iter().map(|bar| (bar.bucket_ts_ms, *bar)).collect();
                     let mut overlap = 0usize;
+                    let mut recent_overlap = 0usize;
+                    let mut recent_worst = 1.0f64;
+                    let mut ratios_by_recency = Vec::new();
                     let mut worst: Option<(f64, i64, f64, f64)> = None;
                     for abar in a.bars.iter().rev().take(160) {
                         let Some(bbar) = b_by_bucket.get(&abar.bucket_ts_ms) else {
@@ -1674,6 +1700,7 @@ impl SqliteCache {
                         let Some(ratio) = max_ohlc_ratio(*abar, *bbar) else {
                             continue;
                         };
+                        ratios_by_recency.push(ratio);
                         if worst.map(|(r, _, _, _)| ratio > r).unwrap_or(true) {
                             worst = Some((ratio, abar.bucket_ts_ms, abar.close, bbar.close));
                         }
@@ -1681,7 +1708,28 @@ impl SqliteCache {
                     let Some((ratio, bucket, a_close, b_close)) = worst else {
                         continue;
                     };
+                    if !ratios_by_recency.is_empty() {
+                        recent_overlap = (ratios_by_recency.len() / 4)
+                            .clamp(2, 20)
+                            .min(ratios_by_recency.len());
+                        recent_worst = ratios_by_recency
+                            .iter()
+                            .take(recent_overlap)
+                            .fold(1.0f64, |acc, r| acc.max(*r));
+                    }
                     if overlap >= 2 && ratio >= 1.5 {
+                        if recent_overlap >= 2 && recent_worst < 1.5 {
+                            report.push_issue(
+                                BarCacheSanitySeverity::Info,
+                                "cross_source_historical_scale_delta",
+                                format!("{symbol}:{timeframe}"),
+                                format!(
+                                    "{} vs {} overlap={} recent_overlap={} recent_worst={recent_worst:.2} historical_worst={ratio:.2}",
+                                    a.key, b.key, overlap, recent_overlap
+                                ),
+                            );
+                            continue;
+                        }
                         report.push_issue(
                             BarCacheSanitySeverity::Warn,
                             "cross_source_overlap_mismatch",
@@ -1740,15 +1788,27 @@ impl SqliteCache {
                     .collect();
                 for raw in &raw_rows {
                     let mut overlap = 0usize;
+                    let mut recent_overlap = 0usize;
+                    let mut recent_worst = 1.0f64;
+                    let mut ratios_by_recency = Vec::new();
                     let mut worst: Option<(f64, i64, f64, f64)> = None;
+                    let mut close_scales = Vec::new();
                     for raw_bar in raw.bars.iter().rev().take(160) {
                         let Some(merged_bar) = merged_by_bucket.get(&raw_bar.bucket_ts_ms) else {
                             continue;
                         };
                         overlap += 1;
+                        if raw_bar.close > 0.0
+                            && merged_bar.close > 0.0
+                            && raw_bar.close.is_finite()
+                            && merged_bar.close.is_finite()
+                        {
+                            close_scales.push(merged_bar.close / raw_bar.close);
+                        }
                         let Some(ratio) = max_ohlc_ratio(*merged_bar, *raw_bar) else {
                             continue;
                         };
+                        ratios_by_recency.push(ratio);
                         if worst.map(|(r, _, _, _)| ratio > r).unwrap_or(true) {
                             worst = Some((
                                 ratio,
@@ -1761,7 +1821,40 @@ impl SqliteCache {
                     let Some((ratio, bucket, merged_close, raw_close)) = worst else {
                         continue;
                     };
+                    if !ratios_by_recency.is_empty() {
+                        recent_overlap = (ratios_by_recency.len() / 4)
+                            .clamp(2, 20)
+                            .min(ratios_by_recency.len());
+                        recent_worst = ratios_by_recency
+                            .iter()
+                            .take(recent_overlap)
+                            .fold(1.0f64, |acc, r| acc.max(*r));
+                    }
                     if overlap >= 2 && ratio >= 1.5 {
+                        if let Some(scale) = stable_scale_delta(&close_scales, 1.5, 1.25) {
+                            report.push_issue(
+                                BarCacheSanitySeverity::Info,
+                                "merged_source_stable_scale_delta",
+                                format!("{symbol}:{timeframe}"),
+                                format!(
+                                    "{} vs {} overlap={} stable_close_scale={scale:.4} worst_ratio={ratio:.2}",
+                                    merged.key, raw.key, overlap
+                                ),
+                            );
+                            continue;
+                        }
+                        if recent_overlap >= 2 && recent_worst < 1.5 {
+                            report.push_issue(
+                                BarCacheSanitySeverity::Info,
+                                "merged_source_historical_scale_delta",
+                                format!("{symbol}:{timeframe}"),
+                                format!(
+                                    "{} vs {} overlap={} recent_overlap={} recent_worst={recent_worst:.2} historical_worst={ratio:.2}",
+                                    merged.key, raw.key, overlap, recent_overlap
+                                ),
+                            );
+                            continue;
+                        }
                         report.push_issue(
                             BarCacheSanitySeverity::Warn,
                             "merged_source_overlap_mismatch",
