@@ -237,17 +237,29 @@ impl TyphooNApp {
         // ADR-094: Use Trade log level and toast for fills.
         if is_trade {
             self.log.push_back(LogEntry::trade(&msg));
-            self.toasts.push(Toast {
-                message: msg,
-                color: egui::Color32::from_rgb(80, 220, 120),
-                created: std::time::Instant::now(),
-                duration: std::time::Duration::from_secs(5),
-                dismissable: false,
-                dismissed: false,
-            });
+            self.push_toast(
+                msg,
+                egui::Color32::from_rgb(80, 220, 120),
+                std::time::Duration::from_secs(5),
+                false,
+            );
         } else if is_routine_market_data_status(&msg) {
             tracing::debug!("{}", msg);
         } else {
+            let lower = msg.to_ascii_lowercase();
+            if lower.contains("stream connected")
+                || lower.contains("ws connected")
+                || lower.contains("auth ready")
+            {
+                self.push_connection_toast(msg.clone(), true);
+            } else if lower.contains("stream disconnected")
+                || lower.contains("stream failed")
+                || lower.contains("ws error")
+                || lower.contains("ws limit")
+                || lower.contains("rejected")
+            {
+                self.push_connection_toast(msg.clone(), false);
+            }
             self.log.push_back(LogEntry::info(msg));
         }
     }

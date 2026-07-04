@@ -2,6 +2,32 @@ use super::*;
 use crate::app::app_runtime_support::is_routine_market_data_status;
 
 impl TyphooNApp {
+    pub(super) fn push_toast(
+        &mut self,
+        message: impl Into<String>,
+        color: egui::Color32,
+        duration: std::time::Duration,
+        dismissable: bool,
+    ) {
+        self.toasts.push(Toast {
+            message: message.into(),
+            color,
+            created: std::time::Instant::now(),
+            duration,
+            dismissable,
+            dismissed: false,
+        });
+    }
+
+    pub(super) fn push_connection_toast(&mut self, message: impl Into<String>, ok: bool) {
+        let color = if ok {
+            egui::Color32::from_rgb(80, 220, 120)
+        } else {
+            egui::Color32::from_rgb(255, 100, 100)
+        };
+        self.push_toast(message, color, std::time::Duration::from_secs(7), true);
+    }
+
     pub(super) fn handle_broker_connected(&mut self, s: String) {
         if s.contains("Kraken") {
             if !self.kraken_enabled {

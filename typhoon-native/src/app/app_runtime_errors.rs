@@ -49,17 +49,27 @@ impl TyphooNApp {
                 )));
             }
         } else if e.contains("401") || e.contains("Unauthorized") || e.contains("403") {
+            let disconnect_msg = format!("{} — API disconnected (check API keys in Settings)", e);
             if self.broker_connected {
                 self.broker_connected = false;
-                self.log.push_back(LogEntry::err(format!(
-                    "{} — disconnected (check API keys in Settings)",
-                    e
-                )));
+                self.log.push_back(LogEntry::err(disconnect_msg.clone()));
             }
+            if e.to_ascii_lowercase().contains("kraken") {
+                self.kraken_connected = false;
+            }
+            self.push_connection_toast(disconnect_msg, false);
             // Don't log repeated auth failures
         } else if is_routine_market_data_status(&e) {
             tracing::debug!("{}", e);
         } else {
+            let lower = e.to_ascii_lowercase();
+            if lower.contains("disconnect")
+                || lower.contains("connection failed")
+                || lower.contains("auth failed")
+                || lower.contains("stream failed")
+            {
+                self.push_connection_toast(e.clone(), false);
+            }
             self.log.push_back(LogEntry::err(e));
         }
     }

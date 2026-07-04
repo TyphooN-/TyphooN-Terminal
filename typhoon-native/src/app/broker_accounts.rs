@@ -339,6 +339,20 @@ impl TyphooNApp {
             });
         }
         if broker_changed || account_changed {
+            let selected_label = match broker {
+                OrderBroker::Alpaca => self
+                    .alpaca_account_roster
+                    .iter()
+                    .find(|a| a.id == account_id)
+                    .map(|a| a.label.clone())
+                    .unwrap_or_else(|| account_id.to_string()),
+                OrderBroker::Kraken => self
+                    .kraken_account_roster
+                    .iter()
+                    .find(|a| a.id == account_id)
+                    .map(|a| a.label.clone())
+                    .unwrap_or_else(|| account_id.to_string()),
+            };
             let assists = self.assist_brokers();
             let assist_str = if assists.is_empty() {
                 "none".to_string()
@@ -349,12 +363,15 @@ impl TyphooNApp {
                     .collect::<Vec<_>>()
                     .join(", ")
             };
-            self.log.push_back(LogEntry::info(format!(
-                "Primary → {} account '{}' (assist: {})",
+            let message = format!(
+                "Primary → {} ({}) [id: {}] (assist: {})",
+                selected_label,
                 broker.label(),
                 account_id,
                 assist_str
-            )));
+            );
+            self.log.push_back(LogEntry::info(message.clone()));
+            self.push_connection_toast(message, true);
             self.save_session();
         }
     }

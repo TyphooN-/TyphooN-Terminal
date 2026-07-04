@@ -50,6 +50,9 @@ pub async fn handle_alpaca_ws_command(
                         _ => {}
                     }
                 }
+                let _ = tx.send(BrokerMsg::OrderResult(
+                    "Alpaca trade stream disconnected — forwarder ended".into(),
+                ));
                 tracing::info!("Alpaca trade-stream forwarder ended");
             }))
         }
@@ -154,6 +157,9 @@ pub async fn start_alpaca_quote_stream(
                         let _ = tx.send(BrokerMsg::AlpacaQuote(q));
                     }
                 }
+                let _ = tx.send(BrokerMsg::OrderResult(
+                    "Alpaca market-data stream disconnected — forwarder ended".into(),
+                ));
                 tracing::info!("Alpaca data-stream forwarder ended");
             });
             Some(control)

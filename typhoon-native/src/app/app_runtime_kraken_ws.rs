@@ -68,8 +68,18 @@ impl TyphooNApp {
             self.kraken_l3_status = text.clone();
         }
         if matches!(status.as_str(), "error" | "closed") {
-            self.log.push_back(LogEntry::warn(text));
+            self.log.push_back(LogEntry::warn(text.clone()));
+            self.push_connection_toast(text, false);
         } else {
+            let lower = text.to_ascii_lowercase();
+            if lower.contains("disconnected")
+                || lower.contains("subscribe failed")
+                || lower.contains("degraded")
+            {
+                self.push_connection_toast(text.clone(), false);
+            } else if lower.contains("reconnected") || lower.contains(" connected") {
+                self.push_connection_toast(text.clone(), true);
+            }
             self.log.push_back(LogEntry::info(text));
         }
         if should_reconcile && self.kraken_enabled {
@@ -113,7 +123,8 @@ impl TyphooNApp {
                 | "snapshot_disconnected"
                 | "snapshot_subscribe_failed"
         ) {
-            self.log.push_back(LogEntry::warn(msg));
+            self.log.push_back(LogEntry::warn(msg.clone()));
+            self.push_connection_toast(msg, false);
         } else {
             self.log.push_back(LogEntry::info(msg));
         }
