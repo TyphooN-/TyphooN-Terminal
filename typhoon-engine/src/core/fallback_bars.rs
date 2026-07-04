@@ -171,6 +171,7 @@ pub fn yahoo_chart_provider_no_data_error(error: &str) -> bool {
         || error.contains("HTTP 404")
         || error.contains("empty result")
         || error.contains("missing quote arrays")
+        || error.contains("no valid bars")
         || error.contains("Yahoo Chart returned")
 }
 
@@ -335,6 +336,9 @@ pub fn store_fallback_bars(
         return Err(format!("unsupported timeframe {timeframe}"));
     };
     let valid_count = bars.iter().filter(|bar| valid_bar(bar)).count();
+    if valid_count == 0 {
+        return Err(format!("{source} returned no valid bars for {symbol} {tf}"));
+    }
     let json = fallback_bars_to_cache_json(bars)?;
     let cache_key = format!("{source}:{symbol}:{tf}");
     cache

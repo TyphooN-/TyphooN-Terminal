@@ -38,22 +38,30 @@ fn obsolete_nonspot_low_timeframe(broker: &str, timeframe: &str) -> bool {
     )
 }
 
-fn stale_kraken_equity_no_data_mark(entry: &UnresolvablePair, now_s: i64) -> bool {
+fn stale_provider_no_data_mark(entry: &UnresolvablePair, now_s: i64) -> bool {
     pub(crate) const KRAKEN_EQUITY_NO_DATA_TTL_SECS: i64 = 6 * 60 * 60;
-    if !entry.broker.eq_ignore_ascii_case("kraken-equities") {
-        return false;
-    }
+    pub(crate) const YAHOO_CHART_NO_DATA_TTL_SECS: i64 = 6 * 60 * 60;
     let reason = entry.reason.to_ascii_lowercase();
-    if !(reason.contains("no data") || reason.contains("no bars")) {
+    if !(reason.contains("no data")
+        || reason.contains("no bars")
+        || reason.contains("no valid bars"))
+    {
         return false;
     }
-    if matches!(
-        normalize_sync_timeframe_key(&entry.timeframe),
-        Some("1Min" | "5Min")
-    ) {
+    let ttl_secs = if entry.broker.eq_ignore_ascii_case("kraken-equities") {
+        if matches!(
+            normalize_sync_timeframe_key(&entry.timeframe),
+            Some("1Min" | "5Min")
+        ) {
+            return false;
+        }
+        KRAKEN_EQUITY_NO_DATA_TTL_SECS
+    } else if entry.broker.eq_ignore_ascii_case("yahoo-chart") {
+        YAHOO_CHART_NO_DATA_TTL_SECS
+    } else {
         return false;
-    }
-    entry.ts <= 0 || now_s.saturating_sub(entry.ts) > KRAKEN_EQUITY_NO_DATA_TTL_SECS
+    };
+    entry.ts <= 0 || now_s.saturating_sub(entry.ts) > ttl_secs
 }
 
 pub(super) fn build_unresolvable_fetch_key_index(
@@ -302,7 +310,7 @@ impl TyphooNApp {
                             .into_iter()
                             .filter(|entry| {
                                 !obsolete_nonspot_low_timeframe(&entry.broker, &entry.timeframe)
-                                    && !stale_kraken_equity_no_data_mark(entry, now_s)
+                                    && !stale_provider_no_data_mark(entry, now_s)
                             })
                             .map(|entry| {
                                 let key = unresolvable_pair_key(
@@ -333,7 +341,7 @@ impl TyphooNApp {
             .values()
             .filter(|entry| {
                 !obsolete_nonspot_low_timeframe(&entry.broker, &entry.timeframe)
-                    && !stale_kraken_equity_no_data_mark(entry, now_s)
+                    && !stale_provider_no_data_mark(entry, now_s)
             })
             .cloned()
             .collect();
@@ -406,6 +414,24 @@ impl TyphooNApp {
             self.unresolvable_mark_dirty();
         }
         changed
+    }
+
+    pub(super) fn unresolvable_drain(&mut self, broker: &str, symbol: &str, timeframe: &str) {
+        let timeframe = normalize_sync_timeframe_key(timeframe)
+            .unwrap_or(timeframe)
+            .to_string();
+        let symbol = normalize_market_data_symbol(symbol).replace('/', "");
+        let broker = broker.to_ascii_lowercase();
+        let key = unresolvable_pair_key(&broker, &symbol, &timeframe);
+        if self.unresolvable_pairs.remove(&key).is_some() {
+            if let Some(fetch_keys) = self.unresolvable_fetch_keys_by_broker.get_mut(&broker) {
+                fetch_keys.remove(&alpaca_fetch_key(&symbol, &timeframe));
+                if fetch_keys.is_empty() {
+                    self.unresolvable_fetch_keys_by_broker.remove(&broker);
+                }
+            }
+            self.unresolvable_mark_dirty();
+        }
     }
 
     pub(super) fn unresolvable_clear_all(&mut self) {
@@ -2796,7 +2822,7 @@ impl TyphooNApp {
 mod tests {
     use super::{
         kraken_equity_quote_meta_candidates, obsolete_nonspot_low_timeframe,
-        stale_kraken_equity_no_data_mark,
+        stale_provider_no_data_mark,
     };
     use crate::app::UnresolvablePair;
 
@@ -2825,25 +2851,44 @@ mod tests {
                 .to_string(),
             ts: now - 7 * 60 * 60,
         };
-        assert!(stale_kraken_equity_no_data_mark(&stale, now));
+        assert!(stale_provider_no_data_mark(&stale, now));
 
         let fresh = UnresolvablePair {
             ts: now - 60,
             ..stale.clone()
         };
-        assert!(!stale_kraken_equity_no_data_mark(&fresh, now));
+        assert!(!stale_provider_no_data_mark(&fresh, now));
 
         let low_timeframe = UnresolvablePair {
             timeframe: "1Min".to_string(),
             ..stale.clone()
         };
-        assert!(!stale_kraken_equity_no_data_mark(&low_timeframe, now));
+        assert!(!stale_provider_no_data_mark(&low_timeframe, now));
 
         let alpaca = UnresolvablePair {
             broker: "alpaca".to_string(),
             ..stale
         };
-        assert!(!stale_kraken_equity_no_data_mark(&alpaca, now));
+        assert!(!stale_provider_no_data_mark(&alpaca, now));
+    }
+
+    #[test]
+    fn stale_yahoo_chart_no_data_marks_expire() {
+        let now = 10_000;
+        let stale = UnresolvablePair {
+            broker: "yahoo-chart".to_string(),
+            symbol: "DMC".to_string(),
+            timeframe: "1Month".to_string(),
+            reason: "Yahoo Chart returned no valid bars".to_string(),
+            ts: now - 7 * 60 * 60,
+        };
+        assert!(stale_provider_no_data_mark(&stale, now));
+
+        let fresh = UnresolvablePair {
+            ts: now - 60,
+            ..stale
+        };
+        assert!(!stale_provider_no_data_mark(&fresh, now));
     }
 
     #[test]

@@ -154,6 +154,9 @@ pub async fn handle_kraken_market_command(
                         &client, &symbol, &timeframe,
                     )
                     .await?;
+                    if bars.is_empty() {
+                        return Err("Yahoo Chart returned no valid bars".to_string());
+                    }
                     let count =
                         if let Some(cache) = shared_cache.read().ok().and_then(|g| g.clone()) {
                             typhoon_engine::core::fallback_bars::store_fallback_bars(
