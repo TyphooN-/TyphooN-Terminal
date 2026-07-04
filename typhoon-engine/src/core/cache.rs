@@ -27,6 +27,87 @@ pub const MIN_ZSTD_LEVEL: i32 = 1;
 pub const MAX_ZSTD_LEVEL: i32 = 22;
 static BAR_ZSTD_LEVEL: AtomicI32 = AtomicI32::new(DEFAULT_BAR_ZSTD_LEVEL);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BarCacheSanitySeverity {
+    Info,
+    Warn,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+pub struct BarCacheSanityIssue {
+    pub severity: BarCacheSanitySeverity,
+    pub code: String,
+    pub key: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BarCacheSanityReport {
+    pub rows_scanned: usize,
+    pub bars_scanned: usize,
+    pub source_pairs_checked: usize,
+    pub error_count: usize,
+    pub warn_count: usize,
+    pub info_count: usize,
+    pub issues: Vec<BarCacheSanityIssue>,
+}
+
+impl BarCacheSanityReport {
+    const MAX_ISSUES: usize = 2_000;
+
+    pub fn has_code(&self, code: &str) -> bool {
+        self.issues.iter().any(|issue| issue.code == code)
+    }
+
+    pub fn summary_line(&self) -> String {
+        format!(
+            "Data sanity: {} rows / {} bars scanned, {} cross-source pairs checked — {} errors, {} warnings, {} info",
+            self.rows_scanned,
+            self.bars_scanned,
+            self.source_pairs_checked,
+            self.error_count,
+            self.warn_count,
+            self.info_count
+        )
+    }
+
+    pub fn top_issue_lines(&self, limit: usize) -> Vec<String> {
+        self.issues
+            .iter()
+            .take(limit)
+            .map(|issue| {
+                format!(
+                    "{:?} {} {} — {}",
+                    issue.severity, issue.code, issue.key, issue.detail
+                )
+            })
+            .collect()
+    }
+
+    fn push_issue(
+        &mut self,
+        severity: BarCacheSanitySeverity,
+        code: impl Into<String>,
+        key: impl Into<String>,
+        detail: impl Into<String>,
+    ) {
+        match severity {
+            BarCacheSanitySeverity::Info => self.info_count += 1,
+            BarCacheSanitySeverity::Warn => self.warn_count += 1,
+            BarCacheSanitySeverity::Error => self.error_count += 1,
+        }
+        if self.issues.len() < Self::MAX_ISSUES {
+            self.issues.push(BarCacheSanityIssue {
+                severity,
+                code: code.into(),
+                key: key.into(),
+                detail: detail.into(),
+            });
+        }
+    }
+}
+
 pub fn sanitize_zstd_level(level: i32) -> i32 {
     level.clamp(MIN_ZSTD_LEVEL, MAX_ZSTD_LEVEL)
 }
@@ -407,6 +488,72 @@ fn get_last_two_bar_timestamps(binary: &[u8], count: usize) -> (Option<String>, 
             .unwrap_or([0; 8]),
     );
     (fmt(second_ts), fmt(last_ts))
+}
+
+#[derive(Debug, Clone)]
+struct AuditKeyParts {
+    source: String,
+    symbol: String,
+    timeframe: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AuditBar {
+    bucket_ts_ms: i64,
+    open: f64,
+    high: f64,
+    low: f64,
+    close: f64,
+}
+
+#[derive(Debug, Clone)]
+struct AuditSeries {
+    key: String,
+    parts: AuditKeyParts,
+    bars: Vec<AuditBar>,
+}
+
+fn parse_bar_cache_key(key: &str) -> Option<AuditKeyParts> {
+    let (source, rest) = key.split_once(':')?;
+    let (symbol, timeframe) = rest.rsplit_once(':')?;
+    if source.is_empty() || symbol.is_empty() || timeframe.is_empty() {
+        return None;
+    }
+    Some(AuditKeyParts {
+        source: source.to_string(),
+        symbol: symbol.trim_end_matches(".EQ").to_ascii_uppercase(),
+        timeframe: timeframe.to_string(),
+    })
+}
+
+fn expected_gap_warn_ms(timeframe: &str) -> Option<i64> {
+    let minute = 60_000i64;
+    let hour = 60 * minute;
+    let day = 24 * hour;
+    match timeframe {
+        "1Min" => Some(30 * minute),
+        "5Min" => Some(2 * hour),
+        "15Min" => Some(6 * hour),
+        "30Min" => Some(12 * hour),
+        "1Hour" => Some(3 * day),
+        "4Hour" => Some(10 * day),
+        "1Day" => Some(14 * day),
+        "1Week" => Some(70 * day),
+        "1Month" => Some(370 * day),
+        _ => None,
+    }
+}
+
+fn fmt_ts_ms(ts_ms: i64) -> Option<String> {
+    chrono::DateTime::from_timestamp_millis(ts_ms).map(|dt| dt.to_rfc3339())
+}
+
+fn bar_close_ratio(a: f64, b: f64) -> Option<f64> {
+    if a > 0.0 && b > 0.0 && a.is_finite() && b.is_finite() {
+        Some((a / b).max(b / a))
+    } else {
+        None
+    }
 }
 
 /// Unpack only the last `tail` bars from binary format — avoids converting 50K bars when only 500 needed.
@@ -1190,6 +1337,342 @@ impl SqliteCache {
         // allocated until VACUUM rebuilds the DB, so physical size is the user-visible metric.
         let file_size = Self::total_disk_usage_bytes(&self.db_path);
         Ok((bar_count, kv_count, file_size))
+    }
+
+    /// Audit all bar-cache rows for structural corruption, stale metadata, invalid
+    /// OHLC values, suspicious gaps, and recent cross-source price mismatches.
+    /// Read-only by design: this reports; it never repairs or deletes.
+    pub fn audit_bar_cache_sanity(&self) -> Result<BarCacheSanityReport, String> {
+        let conn = self
+            .read_conn
+            .lock()
+            .map_err(|e| format!("Read lock failed: {e}"))?;
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT key, data, timestamp, bar_count, last_ts, second_last_ts, zstd_level FROM bar_cache ORDER BY key",
+            )
+            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, i32>(6).unwrap_or(DEFAULT_BAR_ZSTD_LEVEL),
+                ))
+            })
+            .map_err(|e| format!("SQLite query failed: {e}"))?;
+
+        let mut report = BarCacheSanityReport::default();
+        let mut series: Vec<AuditSeries> = Vec::new();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let future_slop_ms = 2 * 24 * 60 * 60 * 1000i64;
+
+        for row in rows {
+            let (key, data, _timestamp, meta_count, meta_last_ts, meta_second_last_ts, zstd_level) =
+                row.map_err(|e| format!("SQLite row failed: {e}"))?;
+            report.rows_scanned += 1;
+
+            let Some(parts) = parse_bar_cache_key(&key) else {
+                report.push_issue(
+                    BarCacheSanitySeverity::Warn,
+                    "malformed_key",
+                    key,
+                    "bar_cache key is not source:symbol:timeframe",
+                );
+                continue;
+            };
+            if !(MIN_ZSTD_LEVEL..=MAX_ZSTD_LEVEL).contains(&zstd_level) {
+                report.push_issue(
+                    BarCacheSanitySeverity::Warn,
+                    "zstd_level_out_of_range",
+                    &key,
+                    format!("zstd_level={zstd_level}"),
+                );
+            }
+
+            let binary = match maybe_decompress(data) {
+                Ok(binary) => binary,
+                Err(e) => {
+                    report.push_issue(
+                        BarCacheSanitySeverity::Error,
+                        "decompress_failed",
+                        key,
+                        e,
+                    );
+                    continue;
+                }
+            };
+            if binary.len() < 8 || &binary[0..4] != BAR_BINARY_MAGIC {
+                report.push_issue(
+                    BarCacheSanitySeverity::Error,
+                    "bad_binary_header",
+                    key,
+                    "bar blob is not TTBR binary format",
+                );
+                continue;
+            }
+            let header_count = u32::from_le_bytes(
+                binary[4..8]
+                    .try_into()
+                    .map_err(|_| "Failed to read bar_count from binary header")?,
+            ) as usize;
+            let expected = match header_count
+                .checked_mul(BYTES_PER_BAR)
+                .and_then(|n| n.checked_add(8))
+            {
+                Some(n) => n,
+                None => {
+                    report.push_issue(
+                        BarCacheSanitySeverity::Error,
+                        "bar_count_overflow",
+                        key,
+                        format!("header_count={header_count}"),
+                    );
+                    continue;
+                }
+            };
+            if binary.len() < expected {
+                report.push_issue(
+                    BarCacheSanitySeverity::Error,
+                    "truncated_blob",
+                    key,
+                    format!("expected {expected} bytes, got {}", binary.len()),
+                );
+                continue;
+            }
+            if let Some(meta_count) = meta_count {
+                if meta_count < 0 || meta_count as usize != header_count {
+                    report.push_issue(
+                        BarCacheSanitySeverity::Error,
+                        "bar_count_mismatch",
+                        &key,
+                        format!("metadata={meta_count}, header={header_count}"),
+                    );
+                }
+            }
+            if header_count == 0 {
+                let severity = if parts.source == "yahoo-chart" {
+                    BarCacheSanitySeverity::Warn
+                } else {
+                    BarCacheSanitySeverity::Info
+                };
+                report.push_issue(
+                    severity,
+                    "zero_bar_row",
+                    key,
+                    "bar_cache row contains no bars",
+                );
+                continue;
+            }
+
+            let raw = match unpack_bars_raw(&binary) {
+                Ok(raw) => raw,
+                Err(e) => {
+                    report.push_issue(BarCacheSanitySeverity::Error, "unpack_failed", key, e);
+                    continue;
+                }
+            };
+            report.bars_scanned += raw.len();
+            let (computed_second, computed_last) = get_last_two_bar_timestamps(&binary, raw.len());
+            if meta_last_ts.is_none() {
+                report.push_issue(
+                    BarCacheSanitySeverity::Warn,
+                    "last_ts_missing",
+                    &key,
+                    "positive bar_count row has NULL last_ts metadata",
+                );
+            } else if meta_last_ts != computed_last {
+                report.push_issue(
+                    BarCacheSanitySeverity::Warn,
+                    "last_ts_mismatch",
+                    &key,
+                    format!("metadata={meta_last_ts:?}, computed={computed_last:?}"),
+                );
+            }
+            if raw.len() > 1 && meta_second_last_ts != computed_second {
+                report.push_issue(
+                    BarCacheSanitySeverity::Warn,
+                    "second_last_ts_mismatch",
+                    &key,
+                    format!("metadata={meta_second_last_ts:?}, computed={computed_second:?}"),
+                );
+            }
+
+            let mut prev_bucket: Option<i64> = None;
+            let mut audit_bars = Vec::with_capacity(raw.len().min(512));
+            let gap_warn_ms = expected_gap_warn_ms(&parts.timeframe);
+            let mut largest_gap: Option<(i64, usize)> = None;
+            let mut body_outside_range: Option<(usize, i64, f64, f64, f64, f64)> = None;
+            for (idx, (ts, o, h, l, c, v)) in raw.iter().copied().enumerate() {
+                let invalid_price = ts <= 0
+                    || !o.is_finite()
+                    || !h.is_finite()
+                    || !l.is_finite()
+                    || !c.is_finite()
+                    || !v.is_finite()
+                    || o <= 0.0
+                    || h <= 0.0
+                    || l <= 0.0
+                    || c <= 0.0
+                    || v < 0.0
+                    || h < l;
+                if invalid_price {
+                    report.push_issue(
+                        BarCacheSanitySeverity::Error,
+                        "invalid_ohlc",
+                        &key,
+                        format!("idx={idx} ts={ts} o={o} h={h} l={l} c={c} v={v}"),
+                    );
+                }
+                if h >= l && l > 0.0 && h > 0.0 {
+                    let outside = o.max(c) > h * 1.05 || o.min(c) < l * 0.95;
+                    if outside && body_outside_range.is_none() {
+                        body_outside_range = Some((idx, ts, o, h, l, c));
+                    }
+                }
+                if ts > now_ms + future_slop_ms {
+                    report.push_issue(
+                        BarCacheSanitySeverity::Warn,
+                        "future_timestamp",
+                        &key,
+                        format!("idx={idx} ts={}", fmt_ts_ms(ts).unwrap_or_else(|| ts.to_string())),
+                    );
+                }
+                let bucket = normalized_bar_timestamp_ms(&key, ts).unwrap_or(ts);
+                if let Some(prev) = prev_bucket {
+                    if bucket <= prev {
+                        report.push_issue(
+                            BarCacheSanitySeverity::Error,
+                            "non_monotonic_or_duplicate_bucket",
+                            &key,
+                            format!("idx={idx} prev={prev} bucket={bucket}"),
+                        );
+                    } else if let Some(max_gap) = gap_warn_ms {
+                        let gap = bucket.saturating_sub(prev);
+                        if gap > max_gap {
+                            match largest_gap {
+                                Some((prev_gap, _)) if prev_gap >= gap => {}
+                                _ => largest_gap = Some((gap, idx)),
+                            }
+                        }
+                    }
+                }
+                prev_bucket = Some(bucket);
+                if audit_bars.len() >= 512 {
+                    audit_bars.remove(0);
+                }
+                audit_bars.push(AuditBar {
+                    bucket_ts_ms: bucket,
+                    open: o,
+                    high: h,
+                    low: l,
+                    close: c,
+                });
+            }
+            if let Some((idx, ts, o, h, l, c)) = body_outside_range {
+                report.push_issue(
+                    BarCacheSanitySeverity::Warn,
+                    "body_outside_range",
+                    &key,
+                    format!("idx={idx} ts={ts} o={o} h={h} l={l} c={c}"),
+                );
+            }
+            if let Some((gap, idx)) = largest_gap {
+                report.push_issue(
+                    BarCacheSanitySeverity::Info,
+                    "large_time_gap",
+                    &key,
+                    format!("idx={idx} max_gap_days={:.1}", gap as f64 / 86_400_000.0),
+                );
+            }
+            if !audit_bars.is_empty() && parts.source != "merged" {
+                series.push(AuditSeries {
+                    key,
+                    parts,
+                    bars: audit_bars,
+                });
+            }
+        }
+
+        self.audit_cross_source_overlap(&mut report, &series);
+        Ok(report)
+    }
+
+    fn audit_cross_source_overlap(
+        &self,
+        report: &mut BarCacheSanityReport,
+        series: &[AuditSeries],
+    ) {
+        let mut groups: std::collections::BTreeMap<(String, String), Vec<&AuditSeries>> =
+            std::collections::BTreeMap::new();
+        for s in series {
+            groups
+                .entry((s.parts.symbol.clone(), s.parts.timeframe.clone()))
+                .or_default()
+                .push(s);
+        }
+        for ((symbol, timeframe), group) in groups {
+            if group.len() < 2 {
+                continue;
+            }
+            for i in 0..group.len() {
+                for j in (i + 1)..group.len() {
+                    let a = group[i];
+                    let b = group[j];
+                    if a.parts.source == b.parts.source {
+                        continue;
+                    }
+                    report.source_pairs_checked += 1;
+                    let b_by_bucket: std::collections::BTreeMap<i64, AuditBar> =
+                        b.bars.iter().map(|bar| (bar.bucket_ts_ms, *bar)).collect();
+                    let mut overlap = 0usize;
+                    let mut worst: Option<(f64, i64, f64, f64)> = None;
+                    for abar in a.bars.iter().rev().take(160) {
+                        let Some(bbar) = b_by_bucket.get(&abar.bucket_ts_ms) else {
+                            continue;
+                        };
+                        overlap += 1;
+                        let ratios = [
+                            bar_close_ratio(abar.open, bbar.open),
+                            bar_close_ratio(abar.high, bbar.high),
+                            bar_close_ratio(abar.low, bbar.low),
+                            bar_close_ratio(abar.close, bbar.close),
+                        ];
+                        let Some(ratio) = ratios.into_iter().flatten().fold(None, |acc, r| {
+                            Some(acc.map(|v: f64| v.max(r)).unwrap_or(r))
+                        }) else {
+                            continue;
+                        };
+                        if worst.map(|(r, _, _, _)| ratio > r).unwrap_or(true) {
+                            worst = Some((ratio, abar.bucket_ts_ms, abar.close, bbar.close));
+                        }
+                    }
+                    let Some((ratio, bucket, a_close, b_close)) = worst else {
+                        continue;
+                    };
+                    if overlap >= 2 && ratio >= 1.5 {
+                        report.push_issue(
+                            BarCacheSanitySeverity::Warn,
+                            "cross_source_overlap_mismatch",
+                            format!("{symbol}:{timeframe}"),
+                            format!(
+                                "{} vs {} overlap={} worst_ratio={ratio:.2} at {} close {:.6} vs {:.6}",
+                                a.key,
+                                b.key,
+                                overlap,
+                                fmt_ts_ms(bucket).unwrap_or_else(|| bucket.to_string()),
+                                a_close,
+                                b_close
+                            ),
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Get detailed per-key cache stats: returns JSON array of {key, compressed_bytes, timestamp}.

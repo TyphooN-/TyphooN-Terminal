@@ -1219,3 +1219,66 @@ fn delete_kraken_equity_bars_by_tf_empty_list_is_noop() {
     );
     let _ = std::fs::remove_file(db_path);
 }
+
+#[test]
+fn data_sanity_audit_flags_structural_metadata_and_price_errors() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let good = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":10.0,"high":11.0,"low":9.0,"close":10.5,"volume":100.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":10.5,"high":12.0,"low":10.0,"close":11.0,"volume":120.0}
+    ]"#;
+    cache.put_bars("alpaca:AAPL:1Day", good).unwrap();
+    {
+        let mut bad_binary = Vec::new();
+        bad_binary.extend_from_slice(BAR_BINARY_MAGIC);
+        bad_binary.extend_from_slice(&1u32.to_le_bytes());
+        bad_binary.extend_from_slice(&1_704_067_200_000i64.to_le_bytes());
+        for value in [10.0f64, 8.0, 9.0, 10.5, 100.0] {
+            bad_binary.extend_from_slice(&value.to_le_bytes());
+        }
+        let compressed = zstd::encode_all(bad_binary.as_slice(), DEFAULT_BAR_ZSTD_LEVEL).unwrap();
+        let conn = cache.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, last_ts, second_last_ts, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params!["yahoo-chart:BAD:1Day", compressed, chrono::Utc::now().timestamp(), 1i64, "2024-01-01T00:00:00+00:00", Option::<String>::None, DEFAULT_BAR_ZSTD_LEVEL],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE bar_cache SET bar_count = 99, last_ts = NULL, second_last_ts = NULL WHERE key = ?1",
+            params!["alpaca:AAPL:1Day"],
+        )
+        .unwrap();
+    }
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert_eq!(report.rows_scanned, 2);
+    assert!(report.error_count >= 2, "{report:#?}");
+    assert!(report.has_code("bar_count_mismatch"), "{report:#?}");
+    assert!(report.has_code("last_ts_missing"), "{report:#?}");
+    assert!(report.has_code("invalid_ohlc"), "{report:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_audit_flags_cross_source_recent_overlap_mismatch() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let trusted = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":100.0,"high":101.0,"low":99.0,"close":100.0,"volume":100.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":100.0,"high":102.0,"low":99.0,"close":101.0,"volume":100.0}
+    ]"#;
+    let depth = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":100.0,"high":101.0,"low":99.0,"close":100.0,"volume":100.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":190.0,"high":202.0,"low":188.0,"close":200.0,"volume":100.0}
+    ]"#;
+    cache.put_bars("alpaca:WOK:1Day", trusted).unwrap();
+    cache.put_bars("yahoo-chart:WOK:1Day", depth).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(report.has_code("cross_source_overlap_mismatch"), "{report:#?}");
+    assert!(report.warn_count >= 1, "{report:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}

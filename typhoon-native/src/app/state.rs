@@ -981,6 +981,16 @@ pub struct TyphooNApp {
     /// Produced by a worker thread, consumed once in the render loop to
     /// populate `storage_cache_move_result`. `None` = no op in flight.
     pub(crate) storage_cache_move_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// Latest read-only bar-cache data-sanity audit. Triggered manually from
+    /// Storage Manager and computed off the render thread because it decompresses
+    /// every bar row.
+    pub(crate) storage_sanity_report:
+        Option<typhoon_engine::core::cache::BarCacheSanityReport>,
+    pub(crate) storage_sanity_rx: Option<
+        std::sync::mpsc::Receiver<
+            Result<typhoon_engine::core::cache::BarCacheSanityReport, String>,
+        >,
+    >,
     /// Bar-sync % per broker/TF window. Counted from `bg.detailed_stats`,
     /// with freshness derived from `bg.bar_ts_cache` when available.
     pub(crate) show_sync_status: bool,

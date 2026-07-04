@@ -4,6 +4,28 @@ impl TyphooNApp {
     pub(super) fn render_storage_sync_windows(&mut self, ctx: &egui::Context) {
         self.render_cache_stats_window(ctx);
 
+        if let Some(rx) = self.storage_sanity_rx.as_ref() {
+            if let Ok(result) = rx.try_recv() {
+                self.storage_sanity_rx = None;
+                match result {
+                    Ok(report) => {
+                        let summary = report.summary_line();
+                        let warn = report.error_count > 0 || report.warn_count > 0;
+                        self.storage_sanity_report = Some(report);
+                        if warn {
+                            self.log.push_back(LogEntry::warn(summary));
+                        } else {
+                            self.log.push_back(LogEntry::info(summary));
+                        }
+                    }
+                    Err(e) => {
+                        self.log
+                            .push_back(LogEntry::err(format!("Data sanity audit failed: {e}")));
+                    }
+                }
+            }
+        }
+
         // Storage Manager
         if self.show_storage {
             let mut storage_save_after = false;
@@ -119,6 +141,62 @@ impl TyphooNApp {
                                     }
                                     ui.label(egui::RichText::new("Recompress cold rows at max level; disabled during heavy sync.").color(AXIS_TEXT).small());
                                 });
+                                ui.horizontal(|ui| {
+                                    let audit_running = self.storage_sanity_rx.is_some();
+                                    if ui
+                                        .add_enabled(
+                                            self.cache.is_some() && !audit_running,
+                                            egui::Button::new(
+                                                egui::RichText::new("Run data sanity audit").small(),
+                                            ),
+                                        )
+                                        .on_hover_text(
+                                            "Read-only full bar-cache audit: decompresses rows, validates metadata/OHLC/timestamps/gaps, and checks recent cross-source overlap mismatches. Runs off the UI thread.",
+                                        )
+                                        .clicked()
+                                    {
+                                        if let Some(cache) = self.cache.clone() {
+                                            let (tx, rx) = std::sync::mpsc::channel();
+                                            std::thread::spawn(move || {
+                                                let _ = tx.send(cache.audit_bar_cache_sanity());
+                                            });
+                                            self.storage_sanity_rx = Some(rx);
+                                            self.log.push_back(LogEntry::info(
+                                                "Data sanity audit started (read-only full bar-cache scan)",
+                                            ));
+                                        }
+                                    }
+                                    if audit_running {
+                                        ui.label(
+                                            egui::RichText::new("audit running…")
+                                                .color(AXIS_TEXT)
+                                                .small(),
+                                        );
+                                    }
+                                });
+                                if let Some(report) = self.storage_sanity_report.as_ref() {
+                                    let color = if report.error_count > 0 {
+                                        egui::Color32::from_rgb(231, 76, 60)
+                                    } else if report.warn_count > 0 {
+                                        egui::Color32::from_rgb(241, 196, 15)
+                                    } else {
+                                        egui::Color32::from_rgb(26, 188, 156)
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(report.summary_line())
+                                            .color(color)
+                                            .small()
+                                            .monospace(),
+                                    );
+                                    for line in report.top_issue_lines(8) {
+                                        ui.label(
+                                            egui::RichText::new(line)
+                                                .color(AXIS_TEXT)
+                                                .small()
+                                                .monospace(),
+                                        );
+                                    }
+                                }
                                 // Auto-compact controls + readout (ADR-089). Manual compact
                                 // ignores the auto-enable setting but still respects the
                                 // in-progress/heavy-sync safety gates above.

@@ -664,6 +664,8 @@ impl TyphooNApp {
             storage_cache_path_input: String::new(),
             storage_cache_move_result: None,
             storage_cache_move_rx: None,
+            storage_sanity_report: None,
+            storage_sanity_rx: None,
             show_sync_status: false,
             show_help: false,
             help_filter: String::new(),
