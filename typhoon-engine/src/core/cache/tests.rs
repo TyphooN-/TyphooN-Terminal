@@ -1,6 +1,22 @@
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+struct BarZstdLevelGuard(i32);
+
+impl BarZstdLevelGuard {
+    fn set(level: i32) -> Self {
+        let previous = bar_zstd_level();
+        set_bar_zstd_level(level);
+        Self(previous)
+    }
+}
+
+impl Drop for BarZstdLevelGuard {
+    fn drop(&mut self) {
+        set_bar_zstd_level(self.0);
+    }
+}
+
 /// Monotonic counter for unique temp DB paths across parallel tests.
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -13,7 +29,8 @@ fn temp_db_path() -> PathBuf {
 
 #[serial_test::serial]
 #[test]
-fn live_bar_writes_use_fast_zstd_level_not_idle_compaction_level() {
+fn live_bar_writes_use_user_selected_zstd_level() {
+    let _guard = BarZstdLevelGuard::set(22);
     let db_path = temp_db_path();
     let cache = SqliteCache::open(&db_path).unwrap();
     let bars = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10.0}]"#;
@@ -30,7 +47,31 @@ fn live_bar_writes_use_fast_zstd_level_not_idle_compaction_level() {
         )
         .unwrap();
 
-    assert_eq!(level, 3);
+    assert_eq!(level, 22);
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[serial_test::serial]
+#[test]
+fn ws_fast_merge_writes_user_selected_zstd_level() {
+    let _guard = BarZstdLevelGuard::set(22);
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let bars = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10.0}]"#;
+
+    cache.merge_bars_fast("kraken:BTCUSD:1Hour", bars, 0).unwrap();
+    let level: i32 = cache
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT zstd_level FROM bar_cache WHERE key = ?1",
+            params!["kraken:BTCUSD:1Hour"],
+            |row| row.get::<_, i32>(0),
+        )
+        .unwrap();
+
+    assert_eq!(level, 22);
     let _ = std::fs::remove_file(db_path);
 }
 

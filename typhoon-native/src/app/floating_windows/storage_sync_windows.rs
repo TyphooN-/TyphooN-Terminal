@@ -57,7 +57,7 @@ impl TyphooNApp {
                                             .show_value(true),
                                         )
                                         .on_hover_text(
-                                            "Compression level for normal foreground bar-cache writes. Lower = faster sync/import writes; higher = smaller disk. Kraken WS hot writes remain fixed at zstd-3; Compact promotes rows to zstd-22.",
+                                            "Compression level for all foreground bar-cache writes, including Kraken WS. Lower = faster sync/import writes; higher = smaller disk. Compact only catches old rows/stragglers below zstd-22.",
                                         )
                                         .changed()
                                     {

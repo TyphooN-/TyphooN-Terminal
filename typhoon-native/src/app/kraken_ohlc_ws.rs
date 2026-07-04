@@ -45,8 +45,8 @@ impl TyphooNApp {
     /// xStocks get the same treatment now: subscribe the full Kraken Equities
     /// catalog on WS as the fastest fresh-bar source, while REST iapi remains
     /// paced/demand-biased for deep history and Cloudflare safety. The writer
-    /// side gates cache persistence to closed bars and uses the fast zstd path
-    /// so startup snapshots/fresh closes do not block egui.
+    /// side gates cache persistence to closed bars and honors the configured
+    /// bar-cache zstd level so Settings is the single compression policy.
     ///
     /// Idempotent and additive: already-streamed symbols are tracked so Kraken
     /// AssetPairs can start Spot immediately, then full-catalog xStocks can be

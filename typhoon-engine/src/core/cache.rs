@@ -1498,22 +1498,17 @@ impl SqliteCache {
         self.merge_bars_with_level(key, new_json, max_bars, bar_zstd_level())
     }
 
-    /// Hot-path merge for high-frequency writers (Kraken WS bar close). Keeps
-    /// the same zstd-3 level as live REST ingestion. Encoder is ~10–20× faster
-    /// than zstd-22 which is the
-    /// load-bearing fix for first-subscribe snapshot storms (~12k keys × ~700
-    /// closed bars each landing in one flush): zstd-22 turns that into ~30s
-    /// of CPU saturation, zstd-3 into ~3s. Compression ratio drops by ~15%
-    /// (mid-50s KB → low-60s KB per blob) which is irrelevant on disk but
-    /// massive on encode latency. The next REST refetch that touches this
-    /// key can later be repacked at zstd-22 by idle compaction.
+    /// Hot-path merge for high-frequency writers (Kraken WS bar close). This
+    /// still honors the user-selected base bar zstd level: if Settings says
+    /// zstd-22, WS/cache refreshes must write zstd-22 too. The manual compact
+    /// action is only for old rows/stragglers, not a second policy layer.
     pub fn merge_bars_fast(
         &self,
         key: &str,
         new_json: &str,
         max_bars: usize,
     ) -> Result<String, String> {
-        self.merge_bars_with_level(key, new_json, max_bars, 3)
+        self.merge_bars_with_level(key, new_json, max_bars, bar_zstd_level())
     }
 
     fn merge_bars_with_level(
@@ -1581,9 +1576,7 @@ impl SqliteCache {
         Ok(merged_json)
     }
 
-    /// Store bar data with caller-chosen zstd level. Encoder cost varies by
-    /// 10–20× across zstd-3 → zstd-22; this lets WS hot writes pay the
-    /// cheaper level while batch REST writes pay max compression.
+    /// Store bar data with caller-chosen zstd level.
     fn put_bars_with_level(
         &self,
         key: &str,
