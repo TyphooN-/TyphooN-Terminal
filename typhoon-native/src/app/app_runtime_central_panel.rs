@@ -1,4 +1,8 @@
 use super::*;
+
+use typhoon_chart_ui::drawing_interaction::{
+    drawing_anchors, drawing_hit_distance, drawing_set_anchor, translate_drawing,
+};
 use crate::app::chart_ops::{
     chart_company_name_catalog, low_timeframe_no_data_symbols, mtf_canvas_grid_cols,
     mtf_canvas_grid_rows, mtf_flat_chart_indices, mtf_visible_chart_groups_filtered,
@@ -122,28 +126,23 @@ impl TyphooNApp {
                 if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
                     if on_chart_body {
                         if let Some(chart) = self.charts.get(self.active_tab) {
-                            let (si, ei) = chart.visible_range();
-                            let bar_w_f = if ei > si {
-                                chart_body_rect.width() / (ei - si) as f32
-                            } else {
-                                1.0
-                            };
-                            let rel_x = pos.x - chart_body_rect.left();
-                            let bar_float = rel_x / bar_w_f;
-                            let bar_local = bar_float as usize;
-                            let abs_idx = si + bar_local;
-                            let vis = &chart.bars[si..ei];
-                            if !vis.is_empty() {
-                                let hi = vis.iter().map(|b| b.high).fold(f64::MIN, f64::max);
-                                let lo = vis.iter().map(|b| b.low).fold(f64::MAX, f64::min);
-                                let pad = (hi - lo) * 0.05;
-                                let top = hi + pad;
-                                let bot = lo - pad;
-                                let frac = ((pos.y - chart_body_rect.top())
-                                    / chart_body_rect.height())
-                                    as f64;
-                                let price = top - frac * (top - bot);
-                                self.brush_points.push((abs_idx, price));
+                            // Freehand samples come from the exact painted
+                            // geometry (the old mapping ignored pan/zoom/log,
+                            // so strokes landed offset from the cursor).
+                            if let Some(g) = chart.last_price_geometry {
+                                if !chart.bars.is_empty() {
+                                    let max_bar = chart.bars.len().saturating_sub(1);
+                                    let abs_idx = g.x_to_bar(pos.x, max_bar);
+                                    let price = g.price_from_y(pos.y);
+                                    if self
+                                        .brush_points
+                                        .last()
+                                        .map(|last| *last != (abs_idx, price))
+                                        .unwrap_or(true)
+                                    {
+                                        self.brush_points.push((abs_idx, price));
+                                    }
+                                }
                             }
                         }
                     }
@@ -269,83 +268,59 @@ impl TyphooNApp {
                             chart.is_dragging = false;
                             chart.is_drawing_drag = false;
                             chart.is_scaling_price = false;
-                        } else if chart.selected_drawing.is_some()
-                            && self.draw_mode == DrawMode::None
-                        {
-                            // Check if click is near a control point (for resize) vs whole-drawing drag
-                            chart.dragging_cp = None; // reset
-                            if let Some(sel) = chart.selected_drawing {
-                                if let Some(drawing) = chart.drawings.get(sel) {
-                                    let (si, ei) = chart.visible_range();
-                                    let vis_count = (ei - si).max(1) as f32;
-                                    let bw = available.width() / vis_count;
-                                    // Collect control points
-                                    let mut cps: Vec<(usize, f64)> = Vec::new();
-                                    match drawing {
-                                        Drawing::TrendLine { p1, p2, .. }
-                                        | Drawing::ExtendedLine { p1, p2, .. }
-                                        | Drawing::Rectangle { p1, p2, .. }
-                                        | Drawing::Ellipse { p1, p2, .. }
-                                        | Drawing::ArrowLine { p1, p2, .. }
-                                        | Drawing::InfoLine { p1, p2, .. }
-                                        | Drawing::Channel { p1, p2, .. }
-                                        | Drawing::Ruler { p1, p2, .. } => {
-                                            cps.push(*p1);
-                                            cps.push(*p2);
+                        } else if self.draw_mode == DrawMode::None {
+                            // Press directly on a drawing: select it and grab
+                            // it in one gesture (TradingView-style), using the
+                            // exact painted geometry — the old path required a
+                            // separate select click first and re-derived its
+                            // own (buggy) screen mapping for the handles.
+                            chart.dragging_cp = None;
+                            let mut grabbed = false;
+                            if let Some(g) = chart.last_price_geometry {
+                                if g.chart_rect.contains(press_pos) {
+                                    const GRAB_PX: f32 = 8.0;
+                                    let mut best: Option<(usize, f32)> = None;
+                                    for (i, d) in chart.drawings.iter().enumerate() {
+                                        let dist = drawing_hit_distance(d, press_pos, &g);
+                                        if dist <= GRAB_PX
+                                            && best.map(|(_, bd)| dist < bd).unwrap_or(true)
+                                        {
+                                            best = Some((i, dist));
                                         }
-                                        Drawing::Pitchfork { pivot, p2, p3, .. }
-                                        | Drawing::SchiffPitchfork { pivot, p2, p3, .. } => {
-                                            cps.push(*pivot);
-                                            cps.push(*p2);
-                                            cps.push(*p3);
-                                        }
-                                        Drawing::FiboExtension { p1, p2, p3, .. }
-                                        | Drawing::Triangle { p1, p2, p3, .. } => {
-                                            cps.push(*p1);
-                                            cps.push(*p2);
-                                            cps.push(*p3);
-                                        }
-                                        _ => {}
                                     }
-                                    // Check if click is within 10px of any control point
-                                    for (cp_idx, (bi, pr)) in cps.iter().enumerate() {
-                                        if *bi >= si && *bi < ei {
-                                            let cpx =
-                                                available.left() + ((*bi - si) as f32 + 0.5) * bw;
-                                            let cpy = {
-                                                let slice = &chart.bars[si..ei];
-                                                let hi = slice
-                                                    .iter()
-                                                    .map(|b| b.high)
-                                                    .fold(0.0_f64, f64::max);
-                                                let lo = slice
-                                                    .iter()
-                                                    .map(|b| b.low)
-                                                    .fold(f64::MAX, f64::min);
-                                                let pad = (hi - lo) * 0.05;
-                                                let centre =
-                                                    (hi + lo + 2.0 * pad) * 0.5 + chart.price_pan;
-                                                let half =
-                                                    (hi - lo + 2.0 * pad) * 0.5 / chart.price_zoom;
-                                                let px = centre + half;
-                                                let pm = centre - half;
-                                                let frac = (px - pr) / (px - pm);
-                                                available.top() + frac as f32 * available.height()
-                                            };
-                                            let dist = ((press_pos.x - cpx).powi(2)
-                                                + (press_pos.y - cpy).powi(2))
-                                            .sqrt();
-                                            if dist < 10.0 {
-                                                chart.dragging_cp = Some(cp_idx);
-                                                break;
+                                    if let Some((idx, _)) = best {
+                                        chart.selected_drawing = Some(idx);
+                                        // Anchor handle under the press → resize
+                                        // that point; otherwise whole-drawing drag.
+                                        if let Some(d) = chart.drawings.get(idx) {
+                                            for (cp_idx, a) in
+                                                drawing_anchors(d).iter().enumerate()
+                                            {
+                                                let sp = a.to_screen(&g);
+                                                let dist = ((press_pos.x - sp.x).powi(2)
+                                                    + (press_pos.y - sp.y).powi(2))
+                                                .sqrt();
+                                                if dist < 10.0 {
+                                                    chart.dragging_cp = Some(cp_idx);
+                                                    break;
+                                                }
                                             }
                                         }
+                                        chart.drawing_drag_last = Some((
+                                            g.x_to_bar_f(press_pos.x) ,
+                                            g.price_from_y(press_pos.y),
+                                        ));
+                                        grabbed = true;
                                     }
                                 }
                             }
-                            chart.is_drawing_drag = true;
-                            chart.is_dragging = false;
-                            chart.is_scaling_price = false;
+                            if grabbed {
+                                chart.is_drawing_drag = true;
+                                chart.is_dragging = false;
+                                chart.is_scaling_price = false;
+                            }
+                            // No drawing under the press → the dedicated
+                            // body-drag widget owns the camera pan.
                         } else {
                             // Normal chart pan is owned exclusively by the dedicated
                             // `single_chart_body_drag` widget registered after drawing.
@@ -362,6 +337,7 @@ impl TyphooNApp {
                     chart.is_drawing_drag = false;
                     chart.is_scaling_price = false;
                     chart.dragging_cp = None;
+                    chart.drawing_drag_last = None;
                     chart.drag_start = None;
                     self.dragging_sl = false;
                     self.dragging_tp = false;
@@ -381,300 +357,43 @@ impl TyphooNApp {
                 // Price axis drag → handled by the dedicated `single_chart_price_axis`
                 // widget below. Don't re-apply zoom here or every drag delta double-counts.
 
-                // Drawing drag — move selected drawing by delta
+                // Drawing drag — anchor-based on the exact painted geometry.
+                // Resizes place the grabbed anchor directly under the cursor;
+                // whole-drawing moves consume integer bar deltas and carry the
+                // fractional remainder in `drawing_drag_last`, so slow drags
+                // are no longer eaten by per-frame `as i64` truncation, and
+                // log-scale/free-look-camera charts drag 1:1 with the pointer.
                 if chart.is_drawing_drag && (drag_delta.x.abs() > 0.0 || drag_delta.y.abs() > 0.0) {
-                    if let Some(sel) = chart.selected_drawing {
-                        let (si, ei) = chart.visible_range();
-                        let vis_count = (ei - si).max(1) as f32;
-                        // bar_delta: positive = move right (later bars)
-                        let bar_delta = (drag_delta.x / (available.width() / vis_count)) as i64;
-                        // price_delta: drag down = lower price (y increases down, price increases up)
-                        let price_delta = if !chart.bars.is_empty() {
-                            let slice = &chart.bars[si..ei];
-                            let hi = slice.iter().map(|b| b.high).fold(0.0_f64, f64::max);
-                            let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
-                            let range = hi - lo;
-                            -drag_delta.y as f64 * range / available.height() as f64
-                        } else {
-                            0.0
-                        };
-
-                        // Helper to clamp bar index
-                        let move_bar = |idx: usize| -> usize {
-                            let new_idx = idx as i64 + bar_delta;
-                            new_idx.clamp(0, chart.bars.len().saturating_sub(1) as i64) as usize
-                        };
-
-                        // Control point resize: move only the dragged point
-                        if let Some(cp_idx) = chart.dragging_cp {
-                            if let Some(d) = chart.drawings.get_mut(sel) {
-                                let move_pt = |pt: &mut (usize, f64)| {
-                                    pt.0 = (pt.0 as i64 + bar_delta)
-                                        .clamp(0, chart.bars.len().saturating_sub(1) as i64)
-                                        as usize;
-                                    pt.1 += price_delta;
-                                };
-                                match d {
-                                    Drawing::TrendLine { p1, p2, .. }
-                                    | Drawing::ExtendedLine { p1, p2, .. }
-                                    | Drawing::Rectangle { p1, p2, .. }
-                                    | Drawing::Ellipse { p1, p2, .. }
-                                    | Drawing::ArrowLine { p1, p2, .. }
-                                    | Drawing::InfoLine { p1, p2, .. }
-                                    | Drawing::Channel { p1, p2, .. }
-                                    | Drawing::Ruler { p1, p2, .. } => {
-                                        if cp_idx == 0 {
-                                            move_pt(p1);
-                                        } else {
-                                            move_pt(p2);
-                                        }
+                    if let (Some(sel), Some(g), Some(cur)) = (
+                        chart.selected_drawing,
+                        chart.last_price_geometry,
+                        ctx.input(|i| i.pointer.interact_pos()),
+                    ) {
+                        let max_bar = chart.bars.len().saturating_sub(1);
+                        let bar_f = g.x_to_bar_f(cur.x);
+                        let price = g.price_from_y(cur.y);
+                        match chart.drawing_drag_last {
+                            None => chart.drawing_drag_last = Some((bar_f, price)),
+                            Some((last_bar, last_price)) => {
+                                if let Some(cp_idx) = chart.dragging_cp {
+                                    if let Some(d) = chart.drawings.get_mut(sel) {
+                                        drawing_set_anchor(
+                                            d,
+                                            cp_idx,
+                                            g.x_to_bar(cur.x, max_bar),
+                                            price,
+                                            max_bar,
+                                        );
                                     }
-                                    Drawing::Pitchfork { pivot, p2, p3, .. }
-                                    | Drawing::SchiffPitchfork { pivot, p2, p3, .. } => {
-                                        match cp_idx {
-                                            0 => move_pt(pivot),
-                                            1 => move_pt(p2),
-                                            _ => move_pt(p3),
-                                        }
+                                    chart.drawing_drag_last = Some((bar_f, price));
+                                } else {
+                                    let bar_delta = (bar_f - last_bar).round() as i64;
+                                    let price_delta = price - last_price;
+                                    if let Some(d) = chart.drawings.get_mut(sel) {
+                                        translate_drawing(d, bar_delta, price_delta, max_bar);
                                     }
-                                    Drawing::FiboExtension { p1, p2, p3, .. }
-                                    | Drawing::Triangle { p1, p2, p3, .. }
-                                    | Drawing::FibChannel { p1, p2, p3, .. } => match cp_idx {
-                                        0 => move_pt(p1),
-                                        1 => move_pt(p2),
-                                        _ => move_pt(p3),
-                                    },
-                                    // Vec-of-points drawings: index directly into the points vector
-                                    Drawing::Polyline { points, .. }
-                                    | Drawing::PathDraw { points, .. }
-                                    | Drawing::Brush { points, .. }
-                                    | Drawing::ElliottWave { points, .. }
-                                    | Drawing::AbcCorrection { points, .. }
-                                    | Drawing::HeadShoulders { points, .. }
-                                    | Drawing::XabcdPattern { points, .. }
-                                    | Drawing::TrianglePattern { points, .. }
-                                    | Drawing::ThreeDrives { points, .. }
-                                    | Drawing::ElliottDouble { points, .. }
-                                    | Drawing::AbcdPattern { points, .. }
-                                    | Drawing::CypherPattern { points, .. }
-                                    | Drawing::ElliottTriangle { points, .. }
-                                    | Drawing::ElliottTripleCombo { points, .. } => {
-                                        if let Some(pt) = points.get_mut(cp_idx) {
-                                            move_pt(pt);
-                                        }
-                                    }
-                                    _ => {} // fallback: whole-drawing move
-                                }
-                            }
-                        } else if let Some(d) = chart.drawings.get_mut(sel) {
-                            match d {
-                                // Single-price horizontal
-                                Drawing::HLine { price, .. }
-                                | Drawing::MagnetLevel { price, .. }
-                                | Drawing::PriceNote { price, .. } => {
-                                    *price += price_delta;
-                                }
-                                // Single-bar vertical
-                                Drawing::VLine { bar_idx, .. }
-                                | Drawing::AnchoredVwapLine { bar_idx, .. }
-                                | Drawing::SessionBreak { bar_idx, .. }
-                                | Drawing::FibTimeZones { bar_idx, .. } => {
-                                    *bar_idx = move_bar(*bar_idx);
-                                }
-                                // Two-point (p1, p2)
-                                Drawing::TrendLine { p1, p2, .. }
-                                | Drawing::TrendAngle { p1, p2, .. }
-                                | Drawing::ExtendedLine { p1, p2, .. }
-                                | Drawing::Channel { p1, p2, .. }
-                                | Drawing::InfoLine { p1, p2, .. }
-                                | Drawing::ArrowLine { p1, p2, .. }
-                                | Drawing::Ruler { p1, p2, .. }
-                                | Drawing::MeasureTool { p1, p2, .. }
-                                | Drawing::Forecast { p1, p2, .. }
-                                | Drawing::Rectangle { p1, p2, .. }
-                                | Drawing::Highlighter { p1, p2, .. }
-                                | Drawing::Ellipse { p1, p2, .. }
-                                | Drawing::SineWave { p1, p2, .. }
-                                | Drawing::RegressionChannel { p1, p2, .. }
-                                | Drawing::GannBox { p1, p2, .. }
-                                | Drawing::GhostFeed { p1, p2, .. }
-                                | Drawing::FibWedge { p1, p2, .. }
-                                | Drawing::DateRange { p1, p2, .. }
-                                | Drawing::DatePriceRange { p1, p2, .. }
-                                | Drawing::PriceRange { p1, p2, .. }
-                                | Drawing::ParallelChannel { p1, p2, .. }
-                                | Drawing::Circle { p1, p2, .. }
-                                | Drawing::PitchFan { p1, p2, .. }
-                                | Drawing::TrendFibTime { p1, p2, .. }
-                                | Drawing::GannSquare { p1, p2, .. }
-                                | Drawing::GannSquareFixed { p1, p2, .. }
-                                | Drawing::BarsPattern { p1, p2, .. }
-                                | Drawing::Projection { p1, p2, .. }
-                                | Drawing::DoubleCurve { p1, p2, .. } => {
-                                    p1.0 = move_bar(p1.0);
-                                    p1.1 += price_delta;
-                                    p2.0 = move_bar(p2.0);
-                                    p2.1 += price_delta;
-                                }
-                                // bar_idx + price
-                                Drawing::HRay { bar_idx, price, .. }
-                                | Drawing::CrossLine { bar_idx, price, .. }
-                                | Drawing::TextLabel { bar_idx, price, .. }
-                                | Drawing::PriceLabel { bar_idx, price, .. }
-                                | Drawing::Signpost { bar_idx, price, .. }
-                                | Drawing::Flag { bar_idx, price, .. }
-                                | Drawing::ArrowMarker { bar_idx, price, .. }
-                                | Drawing::CrossMarker { bar_idx, price, .. }
-                                | Drawing::AnchorNote { bar_idx, price, .. }
-                                | Drawing::Emoji { bar_idx, price, .. }
-                                | Drawing::AnchoredText { bar_idx, price, .. }
-                                | Drawing::Comment { bar_idx, price, .. }
-                                | Drawing::ArrowMarkerLeft { bar_idx, price, .. }
-                                | Drawing::ArrowMarkerRight { bar_idx, price, .. } => {
-                                    *bar_idx = move_bar(*bar_idx);
-                                    *price += price_delta;
-                                }
-                                // origin + slope
-                                Drawing::Ray { origin, .. } => {
-                                    origin.0 = move_bar(origin.0);
-                                    origin.1 += price_delta;
-                                }
-                                // pivot + p2 + p3 (pitchforks)
-                                Drawing::Pitchfork { pivot, p2, p3, .. }
-                                | Drawing::SchiffPitchfork { pivot, p2, p3, .. }
-                                | Drawing::ModSchiffPitchfork { pivot, p2, p3, .. }
-                                | Drawing::InsidePitchfork { pivot, p2, p3, .. } => {
-                                    pivot.0 = move_bar(pivot.0);
-                                    pivot.1 += price_delta;
-                                    p2.0 = move_bar(p2.0);
-                                    p2.1 += price_delta;
-                                    p3.0 = move_bar(p3.0);
-                                    p3.1 += price_delta;
-                                }
-                                // p1 + p2 + p3
-                                Drawing::FiboExtension { p1, p2, p3, .. }
-                                | Drawing::FibChannel { p1, p2, p3, .. }
-                                | Drawing::TrendChannel { p1, p2, p3, .. }
-                                | Drawing::ArcDraw { p1, p2, p3, .. }
-                                | Drawing::RotatedRectangle { p1, p2, p3, .. }
-                                | Drawing::SpeedResistanceFan { p1, p2, p3, .. }
-                                | Drawing::SpeedResistanceArc { p1, p2, p3, .. }
-                                | Drawing::Triangle { p1, p2, p3, .. } => {
-                                    p1.0 = move_bar(p1.0);
-                                    p1.1 += price_delta;
-                                    p2.0 = move_bar(p2.0);
-                                    p2.1 += price_delta;
-                                    p3.0 = move_bar(p3.0);
-                                    p3.1 += price_delta;
-                                }
-                                // CurveDraw: p1, ctrl1, ctrl2, p2
-                                Drawing::CurveDraw {
-                                    p1,
-                                    ctrl1,
-                                    ctrl2,
-                                    p2,
-                                    ..
-                                } => {
-                                    p1.0 = move_bar(p1.0);
-                                    p1.1 += price_delta;
-                                    ctrl1.0 = move_bar(ctrl1.0);
-                                    ctrl1.1 += price_delta;
-                                    ctrl2.0 = move_bar(ctrl2.0);
-                                    ctrl2.1 += price_delta;
-                                    p2.0 = move_bar(p2.0);
-                                    p2.1 += price_delta;
-                                }
-                                // Bezier path / multi-point
-                                Drawing::Polyline { points, .. }
-                                | Drawing::ElliottWave { points, .. }
-                                | Drawing::AbcCorrection { points, .. }
-                                | Drawing::HeadShoulders { points, .. }
-                                | Drawing::XabcdPattern { points, .. }
-                                | Drawing::Brush { points, .. }
-                                | Drawing::PathDraw { points, .. }
-                                | Drawing::TrianglePattern { points, .. }
-                                | Drawing::ThreeDrives { points, .. }
-                                | Drawing::ElliottDouble { points, .. }
-                                | Drawing::AbcdPattern { points, .. }
-                                | Drawing::CypherPattern { points, .. }
-                                | Drawing::ElliottTriangle { points, .. }
-                                | Drawing::ElliottTripleCombo { points, .. } => {
-                                    for pt in points.iter_mut() {
-                                        pt.0 = move_bar(pt.0);
-                                        pt.1 += price_delta;
-                                    }
-                                }
-                                // center + radius_pt
-                                Drawing::FibCircle {
-                                    center, radius_pt, ..
-                                }
-                                | Drawing::FibSpiral {
-                                    center, radius_pt, ..
-                                } => {
-                                    center.0 = move_bar(center.0);
-                                    center.1 += price_delta;
-                                    radius_pt.0 = move_bar(radius_pt.0);
-                                    radius_pt.1 += price_delta;
-                                }
-                                // anchor + label_pos
-                                Drawing::Callout {
-                                    anchor, label_pos, ..
-                                }
-                                | Drawing::Balloon {
-                                    anchor, label_pos, ..
-                                } => {
-                                    anchor.0 = move_bar(anchor.0);
-                                    anchor.1 += price_delta;
-                                    label_pos.0 = move_bar(label_pos.0);
-                                    label_pos.1 += price_delta;
-                                }
-                                // entry + stop/target (single bar point)
-                                Drawing::LongPosition {
-                                    entry,
-                                    stop,
-                                    target,
-                                }
-                                | Drawing::ShortPosition {
-                                    entry,
-                                    stop,
-                                    target,
-                                }
-                                | Drawing::RiskRewardBox {
-                                    entry,
-                                    stop,
-                                    target,
-                                } => {
-                                    entry.0 = move_bar(entry.0);
-                                    entry.1 += price_delta;
-                                    *stop += price_delta;
-                                    *target += price_delta;
-                                }
-                                // Fib retracement uses high/low/bar_start/bar_end
-                                Drawing::FiboRetrace {
-                                    high,
-                                    low,
-                                    bar_start,
-                                    bar_end,
-                                } => {
-                                    *high += price_delta;
-                                    *low += price_delta;
-                                    *bar_start = move_bar(*bar_start);
-                                    *bar_end = move_bar(*bar_end);
-                                }
-                                // GannFan: origin + scale (scale doesn't change on drag)
-                                Drawing::GannFan { origin, .. } => {
-                                    origin.0 = move_bar(origin.0);
-                                    origin.1 += price_delta;
-                                }
-                                // CyclicLines / TimeCycle: bar_start + bar_end
-                                Drawing::CyclicLines {
-                                    bar_start, bar_end, ..
-                                }
-                                | Drawing::TimeCycle {
-                                    bar_start, bar_end, ..
-                                } => {
-                                    *bar_start = move_bar(*bar_start);
-                                    *bar_end = move_bar(*bar_end);
+                                    chart.drawing_drag_last =
+                                        Some((last_bar + bar_delta as f64, price));
                                 }
                             }
                         }
@@ -1190,18 +909,46 @@ impl TyphooNApp {
                 let body_started = resp.is_pointer_button_down_on()
                     && self.draw_mode == DrawMode::None
                     && !scale_press
-                    && !sl_tp_line_drag_active;
+                    && !sl_tp_line_drag_active
+                    && !chart.is_drawing_drag;
                 let body_press = (body_started
                     || (chart.is_dragging && ctx.input(|i| i.pointer.primary_down())))
                     && self.draw_mode == DrawMode::None
                     && !scale_press
-                    && !sl_tp_line_drag_active;
+                    && !sl_tp_line_drag_active
+                    && !chart.is_drawing_drag;
                 if sl_tp_line_drag_active {
                     chart.is_dragging = false;
                     chart.drag_start = None;
                     ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeVertical);
+                } else if resp.hovered()
+                    && self.draw_mode != DrawMode::None
+                    && self.draw_mode != DrawMode::Eraser
+                {
+                    // Placement armed → crosshair, like TradingView.
+                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Crosshair);
                 } else if resp.hovered() && self.draw_mode == DrawMode::None && !scale_press {
-                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
+                    // Hovering a drawing signals "grabbable" before any click.
+                    let over_drawing = chart
+                        .last_price_geometry
+                        .zip(ctx.input(|i| i.pointer.hover_pos()))
+                        .map(|(g, pos)| {
+                            g.chart_rect.contains(pos)
+                                && chart
+                                    .drawings
+                                    .iter()
+                                    .any(|d| drawing_hit_distance(d, pos, &g) <= 8.0)
+                        })
+                        .unwrap_or(false);
+                    ui.output_mut(|o| {
+                        o.cursor_icon = if over_drawing {
+                            egui::CursorIcon::Move
+                        } else if chart.is_drawing_drag {
+                            egui::CursorIcon::Move
+                        } else {
+                            egui::CursorIcon::Grab
+                        }
+                    });
                 }
                 if body_started && !chart.is_dragging {
                     chart.is_dragging = true;
@@ -1277,6 +1024,20 @@ impl TyphooNApp {
                     );
                 }
                 let trade_ov = std::mem::take(&mut chart.cached_trade_overlay);
+                // Mirror in-progress multi-click placement points so the
+                // render-side live preview can complete them with the cursor.
+                chart.preview_pending_points = if matches!(
+                    self.draw_mode,
+                    DrawMode::PlacingPolyline | DrawMode::PlacingPath
+                ) {
+                    self.polyline_points.clone()
+                } else if self.draw_mode == DrawMode::PlacingBrush {
+                    self.brush_points.clone()
+                } else if self.draw_mode != DrawMode::None {
+                    self.multi_click_points.clone()
+                } else {
+                    Vec::new()
+                };
                 let painter = ui.painter_at(rect);
                 // Single mode renders the active chart; the lines still only
                 // appear when their owner symbol matches it (ADR-132).
@@ -1357,312 +1118,43 @@ impl TyphooNApp {
                 }
 
                 // ── drawing selection via click (DrawMode::None) or eraser delete ─────
+                // Universal hit-test on the exact painted geometry: every
+                // drawing variant is selectable/erasable, including ones with
+                // off-screen endpoints (the old per-variant match required
+                // both endpoints visible and silently missed ~25 tool types).
                 if resp.clicked()
                     && (self.draw_mode == DrawMode::None || self.draw_mode == DrawMode::Eraser)
                 {
-                    if let Some(click_pos) = ctx.input(|i| i.pointer.interact_pos()) {
-                        let price_axis_w = 70.0_f32;
-                        let chart_area = egui::Rect::from_min_max(
-                            rect.min,
-                            egui::pos2(rect.right() - price_axis_w, rect.bottom()),
-                        );
-                        if chart_area.contains(click_pos) {
-                            let (start_idx, end_idx) = chart.visible_range();
-                            let bar_w = chart_area.width() / (end_idx - start_idx).max(1) as f32;
-                            let mut vis_bars_range = None;
-                            if end_idx > start_idx && !chart.bars.is_empty() {
-                                let vis = &chart.bars[start_idx..end_idx];
-                                let price_min = vis.iter().map(|b| b.low).fold(f64::MAX, f64::min);
-                                let price_max = vis.iter().map(|b| b.high).fold(f64::MIN, f64::max);
-                                let padding = (price_max - price_min) * 0.05;
-                                let pmin = price_min - padding;
-                                let pmax = price_max + padding;
-                                let centre = (pmax + pmin) * 0.5 + chart.price_pan;
-                                let half = (pmax - pmin) * 0.5 / chart.price_zoom;
-                                vis_bars_range = Some((centre - half, centre + half));
-                            }
-                            if let Some((pmin, pmax)) = vis_bars_range {
-                                let price_to_y = |p: f64| -> f32 {
-                                    let frac = (pmax - p) / (pmax - pmin);
-                                    chart_area.top() + frac as f32 * chart_area.height()
-                                };
-                                let bar_to_x = |idx: usize| -> f32 {
-                                    chart_area.left() + ((idx - start_idx) as f32 + 0.5) * bar_w
-                                };
-                                const HIT_THRESHOLD: f32 = 8.0;
-                                // Point-to-line-segment distance
-                                let pt_line_dist =
-                                    |p: egui::Pos2, a: egui::Pos2, b: egui::Pos2| -> f32 {
-                                        let ab = egui::vec2(b.x - a.x, b.y - a.y);
-                                        let ap = egui::vec2(p.x - a.x, p.y - a.y);
-                                        let ab_len_sq = ab.x * ab.x + ab.y * ab.y;
-                                        if ab_len_sq < 0.001 {
-                                            return (ap.x * ap.x + ap.y * ap.y).sqrt();
-                                        }
-                                        let t = ((ap.x * ab.x + ap.y * ab.y) / ab_len_sq)
-                                            .clamp(0.0, 1.0);
-                                        let proj = egui::pos2(a.x + t * ab.x, a.y + t * ab.y);
-                                        ((p.x - proj.x).powi(2) + (p.y - proj.y).powi(2)).sqrt()
-                                    };
-                                let mut best_idx: Option<usize> = None;
-                                let mut best_dist = HIT_THRESHOLD;
-                                for (i, drawing) in chart.drawings.iter().enumerate() {
-                                    let dist = match drawing {
-                                        Drawing::HLine { price, .. } => {
-                                            let y = price_to_y(*price);
-                                            (click_pos.y - y).abs()
-                                        }
-                                        Drawing::VLine { bar_idx, .. }
-                                            if *bar_idx >= start_idx && *bar_idx < end_idx =>
-                                        {
-                                            let x = bar_to_x(*bar_idx);
-                                            (click_pos.x - x).abs()
-                                        }
-                                        Drawing::TrendLine { p1, p2, .. }
-                                            if p1.0 >= start_idx
-                                                && p1.0 < end_idx
-                                                && p2.0 >= start_idx
-                                                && p2.0 < end_idx =>
-                                        {
-                                            let a = egui::pos2(bar_to_x(p1.0), price_to_y(p1.1));
-                                            let b = egui::pos2(bar_to_x(p2.0), price_to_y(p2.1));
-                                            pt_line_dist(click_pos, a, b)
-                                        }
-                                        Drawing::HRay { bar_idx, price, .. } => {
-                                            let y = price_to_y(*price);
-                                            let x_start =
-                                                if *bar_idx >= start_idx && *bar_idx < end_idx {
-                                                    bar_to_x(*bar_idx)
-                                                } else {
-                                                    chart_area.left()
-                                                };
-                                            pt_line_dist(
-                                                click_pos,
-                                                egui::pos2(x_start, y),
-                                                egui::pos2(chart_area.right(), y),
-                                            )
-                                        }
-                                        Drawing::Ray { origin, slope, .. }
-                                            if origin.0 >= start_idx && origin.0 < end_idx =>
-                                        {
-                                            let x1 = bar_to_x(origin.0);
-                                            let y1 = price_to_y(origin.1);
-                                            let bars_to_edge =
-                                                ((chart_area.right() - x1) / bar_w) as f64;
-                                            let y2 = price_to_y(origin.1 + slope * bars_to_edge);
-                                            pt_line_dist(
-                                                click_pos,
-                                                egui::pos2(x1, y1),
-                                                egui::pos2(chart_area.right(), y2),
-                                            )
-                                        }
-                                        Drawing::Rectangle { p1, p2, .. }
-                                        | Drawing::Highlighter { p1, p2, .. }
-                                            if p1.0 >= start_idx
-                                                && p1.0 < end_idx
-                                                && p2.0 >= start_idx
-                                                && p2.0 < end_idx =>
-                                        {
-                                            let r = egui::Rect::from_two_pos(
-                                                egui::pos2(bar_to_x(p1.0), price_to_y(p1.1)),
-                                                egui::pos2(bar_to_x(p2.0), price_to_y(p2.1)),
-                                            );
-                                            // Inside rect = select too (not just border)
-                                            if r.contains(click_pos) {
-                                                0.0
-                                            } else {
-                                                let dx = (click_pos.x - r.center().x).abs()
-                                                    - r.width() / 2.0;
-                                                let dy = (click_pos.y - r.center().y).abs()
-                                                    - r.height() / 2.0;
-                                                dx.max(0.0).hypot(dy.max(0.0))
-                                            }
-                                        }
-                                        Drawing::TrendAngle { p1, p2, .. }
-                                        | Drawing::ExtendedLine { p1, p2, .. }
-                                        | Drawing::Channel { p1, p2, .. }
-                                            if p1.0 >= start_idx
-                                                && p1.0 < end_idx
-                                                && p2.0 >= start_idx
-                                                && p2.0 < end_idx =>
-                                        {
-                                            let a = egui::pos2(bar_to_x(p1.0), price_to_y(p1.1));
-                                            let b = egui::pos2(bar_to_x(p2.0), price_to_y(p2.1));
-                                            pt_line_dist(click_pos, a, b)
-                                        }
-                                        Drawing::CrossLine { bar_idx, price, .. }
-                                            if *bar_idx >= start_idx && *bar_idx < end_idx =>
-                                        {
-                                            let x = bar_to_x(*bar_idx);
-                                            let y = price_to_y(*price);
-                                            let dh = (click_pos.y - y).abs();
-                                            let dv = (click_pos.x - x).abs();
-                                            dh.min(dv)
-                                        }
-                                        Drawing::InfoLine { p1, p2, .. }
-                                        | Drawing::ArrowLine { p1, p2, .. }
-                                        | Drawing::Ruler { p1, p2, .. }
-                                        | Drawing::MeasureTool { p1, p2, .. }
-                                        | Drawing::Forecast { p1, p2, .. }
-                                        | Drawing::TrendChannel { p1, p2, .. }
-                                        | Drawing::Circle { p1, p2, .. }
-                                        | Drawing::PitchFan { p1, p2, .. }
-                                        | Drawing::TrendFibTime { p1, p2, .. }
-                                        | Drawing::GannSquare { p1, p2, .. }
-                                        | Drawing::GannSquareFixed { p1, p2, .. }
-                                        | Drawing::BarsPattern { p1, p2, .. }
-                                        | Drawing::Projection { p1, p2, .. }
-                                        | Drawing::DoubleCurve { p1, p2, .. }
-                                            if p1.0 >= start_idx
-                                                && p1.0 < end_idx
-                                                && p2.0 >= start_idx
-                                                && p2.0 < end_idx =>
-                                        {
-                                            let a = egui::pos2(bar_to_x(p1.0), price_to_y(p1.1));
-                                            let b = egui::pos2(bar_to_x(p2.0), price_to_y(p2.1));
-                                            pt_line_dist(click_pos, a, b)
-                                        }
-                                        Drawing::Polyline { points, .. }
-                                        | Drawing::ElliottWave { points, .. }
-                                        | Drawing::AbcCorrection { points, .. }
-                                        | Drawing::HeadShoulders { points, .. }
-                                        | Drawing::XabcdPattern { points, .. }
-                                        | Drawing::TrianglePattern { points, .. }
-                                        | Drawing::ThreeDrives { points, .. }
-                                        | Drawing::ElliottDouble { points, .. }
-                                        | Drawing::AbcdPattern { points, .. }
-                                        | Drawing::CypherPattern { points, .. }
-                                        | Drawing::ElliottTriangle { points, .. }
-                                        | Drawing::ElliottTripleCombo { points, .. } => {
-                                            // Min distance to any segment
-                                            let pts: Vec<egui::Pos2> = points
-                                                .iter()
-                                                .filter(|(idx, _)| {
-                                                    *idx >= start_idx && *idx < end_idx
-                                                })
-                                                .map(|(idx, price)| {
-                                                    egui::pos2(bar_to_x(*idx), price_to_y(*price))
-                                                })
-                                                .collect();
-                                            pts.windows(2)
-                                                .map(|w| pt_line_dist(click_pos, w[0], w[1]))
-                                                .fold(HIT_THRESHOLD + 1.0, f32::min)
-                                        }
-                                        Drawing::TextLabel { bar_idx, price, .. }
-                                        | Drawing::ArrowMarker { bar_idx, price, .. }
-                                        | Drawing::CrossMarker { bar_idx, price, .. }
-                                        | Drawing::PriceLabel { bar_idx, price, .. }
-                                        | Drawing::Signpost { bar_idx, price, .. }
-                                        | Drawing::Flag { bar_idx, price, .. }
-                                        | Drawing::AnchoredText { bar_idx, price, .. }
-                                        | Drawing::Comment { bar_idx, price, .. }
-                                        | Drawing::ArrowMarkerLeft { bar_idx, price, .. }
-                                        | Drawing::ArrowMarkerRight { bar_idx, price, .. }
-                                            if *bar_idx >= start_idx && *bar_idx < end_idx =>
-                                        {
-                                            let x = bar_to_x(*bar_idx);
-                                            let y = price_to_y(*price);
-                                            ((click_pos.x - x).powi(2) + (click_pos.y - y).powi(2))
-                                                .sqrt()
-                                        }
-                                        // Pitchfork family (3-point): min dist to any of the 3 lines
-                                        Drawing::Pitchfork { pivot, p2, p3, .. }
-                                        | Drawing::SchiffPitchfork { pivot, p2, p3, .. }
-                                        | Drawing::ModSchiffPitchfork { pivot, p2, p3, .. }
-                                        | Drawing::InsidePitchfork { pivot, p2, p3, .. } => {
-                                            let pv =
-                                                egui::pos2(bar_to_x(pivot.0), price_to_y(pivot.1));
-                                            let a = egui::pos2(bar_to_x(p2.0), price_to_y(p2.1));
-                                            let b = egui::pos2(bar_to_x(p3.0), price_to_y(p3.1));
-                                            let mid =
-                                                egui::pos2((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
-                                            pt_line_dist(click_pos, pv, mid)
-                                                .min(pt_line_dist(click_pos, a, b))
-                                                .min(pt_line_dist(click_pos, pv, a))
-                                                .min(pt_line_dist(click_pos, pv, b))
-                                        }
-                                        // Ellipse (2-point bounding box): inside = 0, outside = distance to border
-                                        Drawing::Ellipse { p1, p2, .. }
-                                            if p1.0 >= start_idx && p2.0 >= start_idx =>
-                                        {
-                                            let cx = (bar_to_x(p1.0) + bar_to_x(p2.0)) / 2.0;
-                                            let cy = (price_to_y(p1.1) + price_to_y(p2.1)) / 2.0;
-                                            let rx = (bar_to_x(p1.0) - bar_to_x(p2.0)).abs() / 2.0;
-                                            let ry =
-                                                (price_to_y(p1.1) - price_to_y(p2.1)).abs() / 2.0;
-                                            if rx > 0.0 && ry > 0.0 {
-                                                let norm = ((click_pos.x - cx) / rx).powi(2)
-                                                    + ((click_pos.y - cy) / ry).powi(2);
-                                                if norm <= 1.0 {
-                                                    0.0
-                                                } else {
-                                                    (norm.sqrt() - 1.0) * rx.min(ry)
-                                                }
-                                            } else {
-                                                HIT_THRESHOLD + 1.0
-                                            }
-                                        }
-                                        // GannFan (origin point): distance to origin
-                                        Drawing::GannFan { origin, .. } => {
-                                            let x = bar_to_x(origin.0);
-                                            let y = price_to_y(origin.1);
-                                            ((click_pos.x - x).powi(2) + (click_pos.y - y).powi(2))
-                                                .sqrt()
-                                        }
-                                        // FibWedge (3-point): min distance to segments
-                                        Drawing::FibWedge { p1, p2, p3, .. } => {
-                                            let a = egui::pos2(bar_to_x(p1.0), price_to_y(p1.1));
-                                            let b = egui::pos2(bar_to_x(p2.0), price_to_y(p2.1));
-                                            let c = egui::pos2(bar_to_x(p3.0), price_to_y(p3.1));
-                                            pt_line_dist(click_pos, a, b)
-                                                .min(pt_line_dist(click_pos, b, c))
-                                                .min(pt_line_dist(click_pos, a, c))
-                                        }
-                                        // FibCircle (center+radius): distance to circle border
-                                        Drawing::FibCircle {
-                                            center, radius_pt, ..
-                                        } => {
-                                            let cx = bar_to_x(center.0);
-                                            let cy = price_to_y(center.1);
-                                            let rx = bar_to_x(radius_pt.0);
-                                            let ry = price_to_y(radius_pt.1);
-                                            let r = ((cx - rx).powi(2) + (cy - ry).powi(2)).sqrt();
-                                            let d = ((click_pos.x - cx).powi(2)
-                                                + (click_pos.y - cy).powi(2))
-                                            .sqrt();
-                                            (d - r).abs()
-                                        }
-                                        // FibSpiral (center+radius): distance to center
-                                        Drawing::FibSpiral { center, .. } => {
-                                            let cx = bar_to_x(center.0);
-                                            let cy = price_to_y(center.1);
-                                            ((click_pos.x - cx).powi(2)
-                                                + (click_pos.y - cy).powi(2))
-                                            .sqrt()
-                                        }
-                                        _ => HIT_THRESHOLD + 1.0, // remaining niche types
-                                    };
-                                    if dist < best_dist {
-                                        best_dist = dist;
-                                        best_idx = Some(i);
-                                    }
+                    if let (Some(click_pos), Some(g)) = (
+                        ctx.input(|i| i.pointer.interact_pos()),
+                        chart.last_price_geometry,
+                    ) {
+                        if g.chart_rect.contains(click_pos) {
+                            const HIT_THRESHOLD: f32 = 8.0;
+                            let mut best_idx: Option<usize> = None;
+                            let mut best_dist = HIT_THRESHOLD;
+                            for (i, d) in chart.drawings.iter().enumerate() {
+                                let dist = drawing_hit_distance(d, click_pos, &g);
+                                if dist < best_dist {
+                                    best_dist = dist;
+                                    best_idx = Some(i);
                                 }
-                                if self.draw_mode == DrawMode::Eraser {
-                                    // Eraser mode: delete the nearest drawing on click
-                                    if let Some(idx) = best_idx {
-                                        let d = chart.drawings.remove(idx);
-                                        if idx < chart.drawing_styles.len() {
-                                            chart.drawing_styles.remove(idx);
-                                        }
-                                        chart.drawings_undo.push(d);
-                                        chart.selected_drawing = None;
+                            }
+                            if self.draw_mode == DrawMode::Eraser {
+                                // Eraser mode: delete the nearest drawing on click
+                                if let Some(idx) = best_idx {
+                                    let d = chart.drawings.remove(idx);
+                                    if idx < chart.drawing_styles.len() {
+                                        chart.drawing_styles.remove(idx);
                                     }
-                                } else if best_idx != chart.selected_drawing {
-                                    chart.selected_drawing = best_idx;
-                                } else if best_idx.is_none() {
-                                    // Click on empty space → deselect
+                                    chart.drawings_undo.push(d);
                                     chart.selected_drawing = None;
                                 }
+                            } else if best_idx.is_some() && best_idx != chart.selected_drawing {
+                                chart.selected_drawing = best_idx;
+                            } else if best_idx.is_none() {
+                                // Click on empty space → deselect
+                                chart.selected_drawing = None;
                             }
                         }
                     }
@@ -1679,47 +1171,28 @@ impl TyphooNApp {
                     && self.draw_mode != DrawMode::None
                     && self.draw_mode != DrawMode::Eraser
                 {
-                    if let Some(pos) = crosshair {
-                        // Calculate bar index and price from click position
-                        let price_axis_w = 70.0_f32;
-                        let chart_rect = egui::Rect::from_min_max(
-                            rect.min,
-                            egui::pos2(rect.right() - price_axis_w, rect.bottom()),
-                        );
-                        let (start_idx, end_idx) = chart.visible_range();
-                        let vis_bars = &chart.bars[start_idx..end_idx];
-                        if !vis_bars.is_empty() && chart_rect.contains(pos) {
-                            let bar_w = chart_rect.width() / vis_bars.len() as f32;
-                            let rel_idx = ((pos.x - chart_rect.left()) / bar_w) as usize;
-                            let abs_idx = start_idx + rel_idx.min(vis_bars.len().saturating_sub(1));
+                    if let (Some(pos), Some(g)) = (crosshair, chart.last_price_geometry) {
+                        // Bar/price from the exact painted geometry — the old
+                        // recomputation ignored log scale and the free-look
+                        // camera, so drawings landed offset from the cursor
+                        // whenever the view wasn't the legacy autoscale.
+                        if !chart.bars.is_empty() && g.chart_rect.contains(pos) {
+                            let max_bar = chart.bars.len().saturating_sub(1);
+                            let abs_idx = g.x_to_bar(pos.x, max_bar);
+                            let raw_price = g.price_from_y(pos.y);
 
-                            // Price from y position
-                            let mut price_min =
-                                vis_bars.iter().map(|b| b.low).fold(f64::MAX, f64::min);
-                            let mut price_max =
-                                vis_bars.iter().map(|b| b.high).fold(f64::MIN, f64::max);
-                            let padding = (price_max - price_min) * 0.05;
-                            price_min -= padding;
-                            price_max += padding;
-                            let range = price_max - price_min;
-                            let centre = (price_max + price_min) * 0.5 + chart.price_pan;
-                            let half = range * 0.5 / chart.price_zoom;
-                            let pmin = centre - half;
-                            let pmax = centre + half;
-                            let frac = (pos.y - chart_rect.top()) / chart_rect.height();
-                            let raw_price = pmax - frac as f64 * (pmax - pmin);
-
-                            // OHLC Snap (magnet): snap to nearest candlestick OHLC price
-                            // if within threshold. Toggle via snap_enabled.
+                            // OHLC Snap (magnet): snap to the nearest candle
+                            // OHLC level within 8 screen pixels (pixel-based so
+                            // it feels identical at any zoom or on log scale).
                             let price = if self.snap_enabled && abs_idx < chart.bars.len() {
+                                const SNAP_PX: f32 = 8.0;
                                 let bar = &chart.bars[abs_idx];
                                 let ohlc = [bar.open, bar.high, bar.low, bar.close];
-                                let snap_threshold = (pmax - pmin) * 0.015;
                                 let mut best = raw_price;
-                                let mut best_dist = f64::MAX;
+                                let mut best_dist = SNAP_PX;
                                 for &level in &ohlc {
-                                    let dist = (raw_price - level).abs();
-                                    if dist < snap_threshold && dist < best_dist {
+                                    let dist = (pos.y - g.price_to_y(level)).abs();
+                                    if dist < best_dist {
                                         best = level;
                                         best_dist = dist;
                                     }

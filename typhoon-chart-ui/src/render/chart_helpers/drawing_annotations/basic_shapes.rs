@@ -37,16 +37,8 @@ pub(super) fn draw_basic_line_annotation(
         }
         Drawing::TrendLine { p1, p2, color } => {
             // Map bar indices to x positions
-            let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
-            let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
+            let x1 = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
+            let x2 = Some(data_left + ((p2.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
             if let (Some(x1), Some(x2)) = (x1, x2) {
                 let y1 = price_to_y(p1.1);
                 let y2 = price_to_y(p2.1);
@@ -65,16 +57,8 @@ pub(super) fn draw_basic_line_annotation(
             bar_start,
             bar_end,
         } => {
-            let x_start = if *bar_start >= start_idx && *bar_start < end_idx {
-                data_left + ((*bar_start - start_idx) as f32 + 0.5) * bar_w
-            } else {
-                chart_rect.left()
-            };
-            let x_end = if *bar_end >= start_idx && *bar_end < end_idx {
-                data_left + ((*bar_end - start_idx) as f32 + 0.5) * bar_w
-            } else {
-                chart_rect.right()
-            };
+            let x_start = data_left + ((*bar_start as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
+            let x_end = data_left + ((*bar_end as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
             let levels = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
             let range = high - low;
             for &level in &levels {
@@ -96,8 +80,8 @@ pub(super) fn draw_basic_line_annotation(
             }
         }
         Drawing::VLine { bar_idx, color } => {
-            if *bar_idx >= start_idx && *bar_idx < end_idx {
-                let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 draw_styled_line(
                     &painter,
                     egui::pos2(x, chart_rect.top()),
@@ -108,16 +92,8 @@ pub(super) fn draw_basic_line_annotation(
             }
         }
         Drawing::Rectangle { p1, p2, color } => {
-            let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
-            let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
+            let x1 = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
+            let x2 = Some(data_left + ((p2.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
             if let (Some(x1), Some(x2)) = (x1, x2) {
                 let y1 = price_to_y(p1.1);
                 let y2 = price_to_y(p2.1);
@@ -136,8 +112,8 @@ pub(super) fn draw_basic_line_annotation(
             slope,
             color,
         } => {
-            if origin.0 >= start_idx && origin.0 < end_idx {
-                let x1 = data_left + ((origin.0 - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x1 = data_left + ((origin.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let y1 = price_to_y(origin.1);
                 let bars_to_edge = ((chart_rect.right() - x1) / bar_w) as f64;
                 let end_price = origin.1 + slope * bars_to_edge;
@@ -157,16 +133,8 @@ pub(super) fn draw_basic_line_annotation(
             width,
             color,
         } => {
-            let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
-            let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
+            let x1 = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
+            let x2 = Some(data_left + ((p2.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
             if let (Some(x1), Some(x2)) = (x1, x2) {
                 let y1 = price_to_y(p1.1);
                 let y2 = price_to_y(p2.1);
@@ -221,11 +189,7 @@ pub(super) fn draw_basic_line_annotation(
             color,
         } => {
             let y = price_to_y(*price);
-            let x_start = if *bar_idx >= start_idx && *bar_idx < end_idx {
-                data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w
-            } else {
-                chart_rect.left()
-            }; // bar left of view — draw full width
+            let x_start = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w; // bar left of view — draw full width
             draw_styled_line(
                 &painter,
                 egui::pos2(x_start, y),
@@ -239,8 +203,8 @@ pub(super) fn draw_basic_line_annotation(
             price,
             color,
         } => {
-            if *bar_idx >= start_idx && *bar_idx < end_idx {
-                let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let y = price_to_y(*price);
                 let sc = sel_tint(*color);
                 let sw = egui::Stroke::new(effective_width, sc);
@@ -261,16 +225,8 @@ pub(super) fn draw_basic_line_annotation(
             }
         }
         Drawing::ArrowLine { p1, p2, color } => {
-            let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
-            let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
+            let x1 = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
+            let x2 = Some(data_left + ((p2.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
             if let (Some(x1), Some(x2)) = (x1, x2) {
                 let y1 = price_to_y(p1.1);
                 let y2 = price_to_y(p2.1);
@@ -301,16 +257,8 @@ pub(super) fn draw_basic_line_annotation(
             }
         }
         Drawing::InfoLine { p1, p2, color } => {
-            let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
-            let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
+            let x1 = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
+            let x2 = Some(data_left + ((p2.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
             if let (Some(x1), Some(x2)) = (x1, x2) {
                 let y1 = price_to_y(p1.1);
                 let y2 = price_to_y(p2.1);

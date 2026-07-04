@@ -8,10 +8,9 @@ pub(crate) fn draw_planning_and_compare_overlays(
     data_left: f32,
     bar_w: f32,
     bars: &[Bar],
-    start_idx: usize,
-    end_idx: usize,
-    price_min: f64,
-    price_max: f64,
+    _start_idx: usize,
+    _end_idx: usize,
+    price_geometry: &crate::render::PriceViewGeometry,
     sl_price: Option<f64>,
     tp_price: Option<f64>,
     price_to_y: impl Fn(f64) -> f32,
@@ -140,79 +139,23 @@ pub(crate) fn draw_planning_and_compare_overlays(
     }
 
     // ── Drawing control points (drag handles when selected) ────────────────
+    // Handles come from the same `drawing_anchors` registry the grab/resize
+    // input path uses, mapped through the exact painted geometry — every
+    // variant gets handles, and they sit precisely where the grab test looks.
     if let Some(sel) = chart.selected_drawing {
         if let Some(drawing) = chart.drawings.get(sel) {
             let cp_size = 4.0_f32; // half-size of control point square
             let cp_fill = egui::Color32::from_rgb(0, 200, 220);
             let cp_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-            // Collect control points as (bar_idx, price)
-            let mut cps: Vec<(usize, f64)> = Vec::new();
-            match drawing {
-                Drawing::HLine { price, .. } => {
-                    cps.push((start_idx, *price));
-                    cps.push((end_idx.saturating_sub(1), *price));
-                }
-                Drawing::VLine { bar_idx, .. } => {
-                    cps.push((*bar_idx, price_max));
-                    cps.push((*bar_idx, price_min));
-                }
-                Drawing::TrendLine { p1, p2, .. }
-                | Drawing::ExtendedLine { p1, p2, .. }
-                | Drawing::ArrowLine { p1, p2, .. }
-                | Drawing::InfoLine { p1, p2, .. }
-                | Drawing::TrendAngle { p1, p2, .. }
-                | Drawing::Rectangle { p1, p2, .. }
-                | Drawing::Highlighter { p1, p2, .. }
-                | Drawing::Ruler { p1, p2, .. }
-                | Drawing::MeasureTool { p1, p2, .. }
-                | Drawing::Forecast { p1, p2, .. }
-                | Drawing::Ellipse { p1, p2, .. }
-                | Drawing::SineWave { p1, p2, .. } => {
-                    cps.push(*p1);
-                    cps.push(*p2);
-                }
-                Drawing::Pitchfork { pivot, p2, p3, .. }
-                | Drawing::SchiffPitchfork { pivot, p2, p3, .. }
-                | Drawing::ModSchiffPitchfork { pivot, p2, p3, .. }
-                | Drawing::InsidePitchfork { pivot, p2, p3, .. } => {
-                    cps.push(*pivot);
-                    cps.push(*p2);
-                    cps.push(*p3);
-                }
-                Drawing::FiboExtension { p1, p2, p3, .. }
-                | Drawing::FibChannel { p1, p2, p3, .. }
-                | Drawing::TrendChannel { p1, p2, p3, .. }
-                | Drawing::ArcDraw { p1, p2, p3, .. }
-                | Drawing::Triangle { p1, p2, p3, .. }
-                | Drawing::RotatedRectangle { p1, p2, p3, .. } => {
-                    cps.push(*p1);
-                    cps.push(*p2);
-                    cps.push(*p3);
-                }
-                Drawing::Polyline { points, .. }
-                | Drawing::ElliottWave { points, .. }
-                | Drawing::AbcCorrection { points, .. }
-                | Drawing::HeadShoulders { points, .. }
-                | Drawing::XabcdPattern { points, .. }
-                | Drawing::PathDraw { points, .. } => {
-                    for pt in points {
-                        cps.push(*pt);
-                    }
-                }
-                _ => {} // single-point tools: no resize handles needed
-            }
-            for (bi, pr) in &cps {
-                if *bi >= start_idx && *bi < end_idx {
-                    let x = data_left + ((*bi - start_idx) as f32 + 0.5) * bar_w;
-                    let y = price_to_y(*pr);
-                    if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                        let r = egui::Rect::from_center_size(
-                            egui::pos2(x, y),
-                            egui::vec2(cp_size * 2.0, cp_size * 2.0),
-                        );
-                        painter.rect_filled(r, 0.0, cp_fill);
-                        painter.rect_stroke(r, 0.0, cp_stroke, egui::StrokeKind::Outside);
-                    }
+            for a in crate::drawing_interaction::drawing_anchors(drawing) {
+                let p = a.to_screen(price_geometry);
+                if chart_rect.expand(cp_size).contains(p) {
+                    let r = egui::Rect::from_center_size(
+                        p,
+                        egui::vec2(cp_size * 2.0, cp_size * 2.0),
+                    );
+                    painter.rect_filled(r, 0.0, cp_fill);
+                    painter.rect_stroke(r, 0.0, cp_stroke, egui::StrokeKind::Outside);
                 }
             }
         }

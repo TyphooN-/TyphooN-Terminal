@@ -8,7 +8,7 @@ pub(super) fn draw_geometric_label_annotation(
     bar_w: f32,
     price_to_y: impl Fn(f64) -> f32,
     start_idx: usize,
-    end_idx: usize,
+    _end_idx: usize,
     effective_width: f32,
     d_style: LineStyle,
     is_selected: bool,
@@ -21,8 +21,8 @@ pub(super) fn draw_geometric_label_annotation(
             text,
             color,
         } => {
-            if *bar_idx >= start_idx && *bar_idx < end_idx {
-                let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let y = price_to_y(*price);
                 painter.text(
                     egui::pos2(x, y),
@@ -39,8 +39,8 @@ pub(super) fn draw_geometric_label_annotation(
             is_up,
             color,
         } => {
-            if *bar_idx >= start_idx && *bar_idx < end_idx {
-                let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let y = price_to_y(*price);
                 let sz = 8.0_f32;
                 if *is_up {
@@ -61,16 +61,8 @@ pub(super) fn draw_geometric_label_annotation(
             }
         }
         Drawing::Ellipse { p1, p2, color } => {
-            let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
-            let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
+            let x1 = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
+            let x2 = Some(data_left + ((p2.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
             if let (Some(x1), Some(x2)) = (x1, x2) {
                 let y1 = price_to_y(p1.1);
                 let y2 = price_to_y(p2.1);
@@ -96,12 +88,8 @@ pub(super) fn draw_geometric_label_annotation(
         }
         Drawing::Triangle { p1, p2, p3, color } => {
             let to_pt = |idx: usize, price: f64| -> Option<egui::Pos2> {
-                if idx >= start_idx && idx < end_idx {
-                    let x = data_left + ((idx - start_idx) as f32 + 0.5) * bar_w;
-                    Some(egui::pos2(x, price_to_y(price)))
-                } else {
-                    None
-                }
+                let x = data_left + ((idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
+                Some(egui::pos2(x, price_to_y(price)))
             };
             if let (Some(a), Some(b), Some(c)) =
                 (to_pt(p1.0, p1.1), to_pt(p2.0, p2.1), to_pt(p3.0, p3.1))
@@ -116,16 +104,8 @@ pub(super) fn draw_geometric_label_annotation(
             }
         }
         Drawing::TrendAngle { p1, p2, color } => {
-            let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
-            let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
+            let x1 = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
+            let x2 = Some(data_left + ((p2.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
             if let (Some(x1), Some(x2)) = (x1, x2) {
                 let y1 = price_to_y(p1.1);
                 let y2 = price_to_y(p2.1);
@@ -155,16 +135,8 @@ pub(super) fn draw_geometric_label_annotation(
             offset,
             color,
         } => {
-            let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
-            let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
+            let x1 = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
+            let x2 = Some(data_left + ((p2.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
             if let (Some(x1), Some(x2)) = (x1, x2) {
                 let y1 = price_to_y(p1.1);
                 let y2 = price_to_y(p2.1);
@@ -211,11 +183,7 @@ pub(super) fn draw_geometric_label_annotation(
         }
         Drawing::FibChannel { p1, p2, p3, color } => {
             let to_x = |idx: usize| -> Option<f32> {
-                if idx >= start_idx && idx < end_idx {
-                    Some(data_left + ((idx - start_idx) as f32 + 0.5) * bar_w)
-                } else {
-                    None
-                }
+                Some(data_left + ((idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w)
             };
             if let (Some(x1), Some(x2)) = (to_x(p1.0), to_x(p2.0)) {
                 // Channel width from p3 offset perpendicular to the trendline
@@ -271,8 +239,8 @@ pub(super) fn draw_geometric_label_annotation(
             for &f in &fibs {
                 cumulative += f;
                 let idx = bar_idx + cumulative;
-                if idx >= start_idx && idx < end_idx {
-                    let x = data_left + ((idx - start_idx) as f32 + 0.5) * bar_w;
+                {
+                    let x = data_left + ((idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                     let alpha = if f <= 3 { 120 } else { 80 };
                     let sc = sel_tint(*color);
                     let c = egui::Color32::from_rgba_premultiplied(sc.r(), sc.g(), sc.b(), alpha);
@@ -300,14 +268,11 @@ pub(super) fn draw_geometric_label_annotation(
         } => {
             let y = price_to_y(*price);
             if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                // Horizontal line from bar to right edge
-                let x_start = if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w
-                } else if *bar_idx < start_idx {
-                    chart_rect.left()
-                } else {
-                    return Some(true); // bar beyond visible range
-                };
+                // Horizontal line from bar to right edge (signed mapping —
+                // an off-screen anchor clips instead of aborting the whole
+                // annotation pass, which the old `return Some(true)` did).
+                let x_start =
+                    data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let sc = sel_tint(*color);
                 draw_styled_line(
                     &painter,
@@ -346,11 +311,7 @@ pub(super) fn draw_geometric_label_annotation(
             color,
         } => {
             let to_x = |idx: usize| -> Option<f32> {
-                if idx >= start_idx && idx < end_idx {
-                    Some(data_left + ((idx - start_idx) as f32 + 0.5) * bar_w)
-                } else {
-                    None
-                }
+                Some(data_left + ((idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w)
             };
             if let (Some(ax), Some(lx)) = (to_x(anchor.0), to_x(label_pos.0)) {
                 let ay = price_to_y(anchor.1);
@@ -396,16 +357,8 @@ pub(super) fn draw_geometric_label_annotation(
             }
         }
         Drawing::Highlighter { p1, p2, color } => {
-            let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
-            let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
+            let x1 = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
+            let x2 = Some(data_left + ((p2.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
             if let (Some(x1), Some(x2)) = (x1, x2) {
                 let y1 = price_to_y(p1.1);
                 let y2 = price_to_y(p2.1);
@@ -430,8 +383,8 @@ pub(super) fn draw_geometric_label_annotation(
             price,
             color,
         } => {
-            if *bar_idx >= start_idx && *bar_idx < end_idx {
-                let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let y = price_to_y(*price);
                 let sz = 6.0_f32;
                 let sc = sel_tint(*color);
@@ -456,8 +409,8 @@ pub(super) fn draw_geometric_label_annotation(
         Drawing::Polyline { points, color } => {
             let mut screen_pts: Vec<egui::Pos2> = Vec::with_capacity(points.len());
             for &(idx, price) in points.iter() {
-                if idx >= start_idx && idx < end_idx {
-                    let x = data_left + ((idx - start_idx) as f32 + 0.5) * bar_w;
+                {
+                    let x = data_left + ((idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                     screen_pts.push(egui::pos2(x, price_to_y(price)));
                 }
             }
@@ -474,8 +427,8 @@ pub(super) fn draw_geometric_label_annotation(
             text,
             color,
         } => {
-            if *bar_idx >= start_idx && *bar_idx < end_idx {
-                let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let y = price_to_y(*price);
                 let pad = 4.0_f32;
                 let galley =

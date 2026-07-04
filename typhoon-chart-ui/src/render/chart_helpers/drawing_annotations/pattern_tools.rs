@@ -7,7 +7,7 @@ pub(super) fn draw_pattern_annotation(
     bar_w: f32,
     price_to_y: &impl Fn(f64) -> f32,
     start_idx: usize,
-    end_idx: usize,
+    _end_idx: usize,
     effective_width: f32,
     d_style: LineStyle,
     is_selected: bool,
@@ -17,8 +17,8 @@ pub(super) fn draw_pattern_annotation(
         Drawing::ElliottWave { points, color } => {
             let mut screen_pts: Vec<(f32, f32)> = Vec::new();
             for &(bi, pr) in points.iter() {
-                if bi >= start_idx && bi < end_idx {
-                    let x = data_left + ((bi - start_idx) as f32 + 0.5) * bar_w;
+                {
+                    let x = data_left + ((bi as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                     let y = price_to_y(pr);
                     screen_pts.push((x, y));
                 }
@@ -49,8 +49,8 @@ pub(super) fn draw_pattern_annotation(
         Drawing::AbcCorrection { points, color } => {
             let mut screen_pts: Vec<(f32, f32)> = Vec::new();
             for &(bi, pr) in points.iter() {
-                if bi >= start_idx && bi < end_idx {
-                    let x = data_left + ((bi - start_idx) as f32 + 0.5) * bar_w;
+                {
+                    let x = data_left + ((bi as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                     let y = price_to_y(pr);
                     screen_pts.push((x, y));
                 }
@@ -83,8 +83,8 @@ pub(super) fn draw_pattern_annotation(
             // Connect all in order, draw neckline between 0 and 4
             let mut screen_pts: Vec<(f32, f32)> = Vec::new();
             for &(bi, pr) in points.iter() {
-                if bi >= start_idx && bi < end_idx {
-                    let x = data_left + ((bi - start_idx) as f32 + 0.5) * bar_w;
+                {
+                    let x = data_left + ((bi as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                     let y = price_to_y(pr);
                     screen_pts.push((x, y));
                 }
@@ -136,8 +136,8 @@ pub(super) fn draw_pattern_annotation(
         Drawing::XabcdPattern { points, color } => {
             let mut screen_pts: Vec<(f32, f32)> = Vec::new();
             for &(bi, pr) in points.iter() {
-                if bi >= start_idx && bi < end_idx {
-                    let x = data_left + ((bi - start_idx) as f32 + 0.5) * bar_w;
+                {
+                    let x = data_left + ((bi as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                     let y = price_to_y(pr);
                     screen_pts.push((x, y));
                 }
@@ -202,10 +202,9 @@ pub(super) fn draw_pattern_annotation(
             };
             let screen_pts: Vec<(f32, f32)> = points
                 .iter()
-                .filter(|(bi, _)| *bi >= start_idx && *bi < end_idx)
                 .map(|(bi, pr)| {
                     (
-                        data_left + ((*bi - start_idx) as f32 + 0.5) * bar_w,
+                        data_left + ((*bi as i64 - start_idx as i64) as f32 + 0.5) * bar_w,
                         price_to_y(*pr),
                     )
                 })

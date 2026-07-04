@@ -8,7 +8,7 @@ pub(super) fn draw_fallback_annotation(
     bar_w: f32,
     price_to_y: &impl Fn(f64) -> f32,
     start_idx: usize,
-    end_idx: usize,
+    _end_idx: usize,
     effective_width: f32,
     d_style: LineStyle,
     is_selected: bool,
@@ -17,8 +17,8 @@ pub(super) fn draw_fallback_annotation(
     match drawing {
         Drawing::Brush { points, color } => {
             for &(bi, pr) in points.iter() {
-                if bi >= start_idx && bi < end_idx {
-                    let x = data_left + ((bi - start_idx) as f32 + 0.5) * bar_w;
+                {
+                    let x = data_left + ((bi as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                     let y = price_to_y(pr);
                     painter.circle_filled(egui::pos2(x, y), 2.0, *color);
                 }
@@ -29,8 +29,8 @@ pub(super) fn draw_fallback_annotation(
             price,
             emoji,
         } => {
-            if *bar_idx >= start_idx && *bar_idx < end_idx {
-                let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let y = price_to_y(*price);
                 painter.text(
                     egui::pos2(x, y),
@@ -46,8 +46,8 @@ pub(super) fn draw_fallback_annotation(
             price,
             color,
         } => {
-            if *bar_idx >= start_idx && *bar_idx < end_idx {
-                let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let y = price_to_y(*price);
                 let sc = sel_tint(*color);
                 // Pole
@@ -74,11 +74,7 @@ pub(super) fn draw_fallback_annotation(
             color,
         } => {
             let bar_to_x = |b: usize| -> Option<f32> {
-                if b >= start_idx && b < end_idx {
-                    Some(data_left + ((b - start_idx) as f32 + 0.5) * bar_w)
-                } else {
-                    None
-                }
+                Some(data_left + ((b as i64 - start_idx as i64) as f32 + 0.5) * bar_w)
             };
             if let (Some(ax), Some(lx)) = (bar_to_x(anchor.0), bar_to_x(label_pos.0)) {
                 let ay = price_to_y(anchor.1);
@@ -120,8 +116,8 @@ pub(super) fn draw_fallback_annotation(
             price,
             color,
         } => {
-            if *bar_idx >= start_idx && *bar_idx < end_idx {
-                let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let y = price_to_y(*price);
                 let sc = sel_tint(*color);
                 // Pole
@@ -193,7 +189,7 @@ pub(super) fn draw_fallback_annotation(
                     } else {
                         typical
                     };
-                    if i >= start_idx && i < end_idx {
+                    {
                         let x = data_left + ((i as f32 - start_idx as f32) + 0.5) * bar_w;
                         let y = price_to_y(vwap);
                         let pt = egui::pos2(x, y);
@@ -204,8 +200,6 @@ pub(super) fn draw_fallback_annotation(
                             );
                         }
                         prev_pt = Some(pt);
-                    } else {
-                        prev_pt = None;
                     }
                 }
                 // Label
@@ -226,8 +220,8 @@ pub(super) fn draw_fallback_annotation(
             text,
             color,
         } => {
-            if *bar_idx >= start_idx && *bar_idx < end_idx {
-                let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let y = price_to_y(*price);
                 painter.text(
                     egui::pos2(x, y),
@@ -244,8 +238,8 @@ pub(super) fn draw_fallback_annotation(
             text,
             color,
         } => {
-            if *bar_idx >= start_idx && *bar_idx < end_idx {
-                let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let y = price_to_y(*price);
                 let sc = sel_tint(*color);
                 let galley = painter.layout_no_wrap(text.clone(), egui::FontId::monospace(9.0), sc);
@@ -275,8 +269,8 @@ pub(super) fn draw_fallback_annotation(
             price,
             color,
         } => {
-            if *bar_idx >= start_idx && *bar_idx < end_idx {
-                let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let y = price_to_y(*price);
                 let sc = sel_tint(*color);
                 let sz = 8.0_f32;
@@ -296,8 +290,8 @@ pub(super) fn draw_fallback_annotation(
             price,
             color,
         } => {
-            if *bar_idx >= start_idx && *bar_idx < end_idx {
-                let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let y = price_to_y(*price);
                 let sc = sel_tint(*color);
                 let sz = 8.0_f32;
@@ -313,8 +307,8 @@ pub(super) fn draw_fallback_annotation(
             }
         }
         Drawing::Circle { p1, p2, color } => {
-            if p1.0 >= start_idx && p1.0 < end_idx && p2.0 >= start_idx && p2.0 < end_idx {
-                let cx = data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let cx = data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let cy = price_to_y(p1.1);
                 let rx = data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w;
                 let ry = price_to_y(p2.1);
@@ -333,8 +327,8 @@ pub(super) fn draw_fallback_annotation(
         | Drawing::BarsPattern { p1, p2, color }
         | Drawing::Projection { p1, p2, color }
         | Drawing::DoubleCurve { p1, p2, color } => {
-            if p1.0 >= start_idx && p1.0 < end_idx && p2.0 >= start_idx && p2.0 < end_idx {
-                let x1 = data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x1 = data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let y1 = price_to_y(p1.1);
                 let x2 = data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w;
                 let y2 = price_to_y(p2.1);

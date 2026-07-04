@@ -7,7 +7,7 @@ pub(super) fn draw_pitchfork_wedge_annotation(
     bar_w: f32,
     price_to_y: &impl Fn(f64) -> f32,
     start_idx: usize,
-    end_idx: usize,
+    _end_idx: usize,
     effective_width: f32,
     d_style: LineStyle,
     is_selected: bool,
@@ -42,11 +42,7 @@ pub(super) fn draw_pitchfork_wedge_annotation(
             let mid_bar = ((p2.0 as f64 + p3.0 as f64) / 2.0) as usize;
             let mid_price = (p2.1 + p3.1) / 2.0;
             let bar_to_x = |b: usize| -> Option<f32> {
-                if b >= start_idx && b < end_idx {
-                    Some(data_left + ((b - start_idx) as f32 + 0.5) * bar_w)
-                } else {
-                    None
-                }
+                Some(data_left + ((b as i64 - start_idx as i64) as f32 + 0.5) * bar_w)
             };
             let sc = sel_tint(*color);
             // Median line: shifted pivot → midpoint of p2,p3
@@ -88,11 +84,7 @@ pub(super) fn draw_pitchfork_wedge_annotation(
         }
         Drawing::TrendChannel { p1, p2, p3, color } => {
             let to_x = |idx: usize| -> Option<f32> {
-                if idx >= start_idx && idx < end_idx {
-                    Some(data_left + ((idx - start_idx) as f32 + 0.5) * bar_w)
-                } else {
-                    None
-                }
+                Some(data_left + ((idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w)
             };
             if let (Some(x1), Some(x2)) = (to_x(p1.0), to_x(p2.0)) {
                 let y1 = price_to_y(p1.1);
@@ -146,14 +138,10 @@ pub(super) fn draw_pitchfork_wedge_annotation(
             color,
         } => {
             let to_pt = |idx: usize, price: f64| -> Option<egui::Pos2> {
-                if idx >= start_idx && idx < end_idx {
-                    Some(egui::pos2(
-                        data_left + ((idx - start_idx) as f32 + 0.5) * bar_w,
-                        price_to_y(price),
-                    ))
-                } else {
-                    None
-                }
+                Some(egui::pos2(
+                    data_left + ((idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w,
+                    price_to_y(price),
+                ))
             };
             if let (Some(pv), Some(a), Some(b)) = (
                 to_pt(pivot.0, pivot.1),
@@ -210,14 +198,10 @@ pub(super) fn draw_pitchfork_wedge_annotation(
         }
         Drawing::FibWedge { p1, p2, p3, color } => {
             let to_pt = |idx: usize, price: f64| -> Option<egui::Pos2> {
-                if idx >= start_idx && idx < end_idx {
-                    Some(egui::pos2(
-                        data_left + ((idx - start_idx) as f32 + 0.5) * bar_w,
-                        price_to_y(price),
-                    ))
-                } else {
-                    None
-                }
+                Some(egui::pos2(
+                    data_left + ((idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w,
+                    price_to_y(price),
+                ))
             };
             if let (Some(a), Some(b), Some(c)) =
                 (to_pt(p1.0, p1.1), to_pt(p2.0, p2.1), to_pt(p3.0, p3.1))

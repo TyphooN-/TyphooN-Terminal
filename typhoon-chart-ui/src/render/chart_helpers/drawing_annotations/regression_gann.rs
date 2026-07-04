@@ -3,7 +3,7 @@ use super::*;
 pub(super) fn draw_regression_gann_annotation(
     painter: &egui::Painter,
     drawing: &Drawing,
-    chart_rect: egui::Rect,
+    _chart_rect: egui::Rect,
     data_left: f32,
     bar_w: f32,
     price_to_y: impl Fn(f64) -> f32,
@@ -55,16 +55,8 @@ pub(super) fn draw_regression_gann_annotation(
                     }
                     let std_dev = (sum_sq / cn).sqrt();
                     // Draw regression line + 1 StdDev bands
-                    let x_start = if b1 >= start_idx && b1 < end_idx {
-                        data_left + ((b1 - start_idx) as f32 + 0.5) * bar_w
-                    } else {
-                        chart_rect.left()
-                    };
-                    let x_end = if b2 >= start_idx && b2 < end_idx {
-                        data_left + ((b2 - start_idx) as f32 + 0.5) * bar_w
-                    } else {
-                        chart_rect.right()
-                    };
+                    let x_start = data_left + ((b1 as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
+                    let x_end = data_left + ((b2 as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                     let reg_y1 = price_to_y(intercept);
                     let reg_y2 = price_to_y(intercept + slope * n);
                     let sc = sel_tint(*color);
@@ -110,16 +102,8 @@ pub(super) fn draw_regression_gann_annotation(
             }
         }
         Drawing::GannBox { p1, p2, color } => {
-            let x1o = if p1.0 >= start_idx && p1.0 < end_idx {
-                Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
-            let x2o = if p2.0 >= start_idx && p2.0 < end_idx {
-                Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
+            let x1o = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
+            let x2o = Some(data_left + ((p2.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
             if let (Some(x1), Some(x2)) = (x1o, x2o) {
                 let y1 = price_to_y(p1.1);
                 let y2 = price_to_y(p2.1);

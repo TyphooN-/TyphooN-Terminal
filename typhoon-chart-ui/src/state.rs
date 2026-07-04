@@ -318,6 +318,16 @@ pub struct ChartState {
     pub selected_drawing: Option<usize>,
     /// Index of the control point being dragged (for resize). None = whole-drawing drag.
     pub dragging_cp: Option<usize>,
+    /// Anchor-based drawing drag state: last applied cursor position as
+    /// (fractional bar, price) in data coords. Integer bar deltas are
+    /// consumed; the fractional remainder carries so slow drags still move
+    /// (the old per-frame `as i64` truncation ate sub-bar deltas entirely).
+    pub drawing_drag_last: Option<(f64, f64)>,
+    /// Already-clicked points of an in-progress multi-click placement
+    /// (polyline, Elliott waves, harmonic patterns…), mirrored from the app
+    /// each frame so the render-side live preview can complete them with the
+    /// cursor position.
+    pub preview_pending_points: Vec<(usize, f64)>,
     /// True while dragging a selected drawing (suppresses chart pan).
     pub is_drawing_drag: bool,
     /// Cached trade overlay (rebuilt when bg data changes, not every frame).
@@ -722,6 +732,8 @@ impl ChartState {
             drawings_undo: Vec::new(),
             selected_drawing: None,
             dragging_cp: None,
+            drawing_drag_last: None,
+            preview_pending_points: Vec::new(),
             is_drawing_drag: false,
             cached_trade_overlay: TradeOverlay::default(),
             cached_trade_overlay_frame: 0,

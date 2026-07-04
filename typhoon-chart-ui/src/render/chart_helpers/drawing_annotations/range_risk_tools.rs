@@ -18,16 +18,8 @@ pub(super) fn draw_range_risk_annotation(
     let sel_tint = |c: egui::Color32| tint_for_selection(c, is_selected);
     match drawing {
         Drawing::DateRange { p1, p2 } => {
-            let x1o = if p1.0 >= start_idx && p1.0 < end_idx {
-                Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
-            let x2o = if p2.0 >= start_idx && p2.0 < end_idx {
-                Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
+            let x1o = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
+            let x2o = Some(data_left + ((p2.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
             if let (Some(x1), Some(x2)) = (x1o, x2o) {
                 let mid_y = (price_to_y(p1.1) + price_to_y(p2.1)) / 2.0;
                 let col = egui::Color32::from_rgb(100, 200, 255);
@@ -61,16 +53,8 @@ pub(super) fn draw_range_risk_annotation(
             }
         }
         Drawing::DatePriceRange { p1, p2 } => {
-            let x1o = if p1.0 >= start_idx && p1.0 < end_idx {
-                Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
-            let x2o = if p2.0 >= start_idx && p2.0 < end_idx {
-                Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
+            let x1o = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
+            let x2o = Some(data_left + ((p2.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
             if let (Some(x1), Some(x2)) = (x1o, x2o) {
                 let y1 = price_to_y(p1.1);
                 let y2 = price_to_y(p2.1);
@@ -120,8 +104,8 @@ pub(super) fn draw_range_risk_annotation(
             };
             let mut b = *bar_start;
             while b < start_idx + (end_idx - start_idx) + interval * 20 {
-                if b >= start_idx && b < end_idx {
-                    let x = data_left + ((b - start_idx) as f32 + 0.5) * bar_w;
+                {
+                    let x = data_left + ((b as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                     draw_styled_line(
                         &painter,
                         egui::pos2(x, chart_rect.top()),
@@ -134,8 +118,8 @@ pub(super) fn draw_range_risk_annotation(
             }
         }
         Drawing::SessionBreak { bar_idx, color } => {
-            if *bar_idx >= start_idx && *bar_idx < end_idx {
-                let x = data_left + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let sc = sel_tint(*color);
                 // Dashed vertical line — delegate to draw_line for style support
                 draw_styled_line(
@@ -324,7 +308,7 @@ pub(super) fn draw_range_risk_annotation(
             };
             let mut b = *bar_start;
             while b < chart.bars.len() + CHART_RIGHT_MARGIN * 10 {
-                if b >= start_idx && b < end_idx {
+                {
                     let x = data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w;
                     let sc = sel_tint(*color);
                     draw_styled_line(
@@ -337,7 +321,7 @@ pub(super) fn draw_range_risk_annotation(
                 }
                 // Draw semi-circle arc between this line and the next
                 let next_b = b + interval;
-                if b >= start_idx && next_b < end_idx {
+                {
                     let x1 = data_left + ((b as f32 - start_idx as f32) + 0.5) * bar_w;
                     let x2 = data_left + ((next_b as f32 - start_idx as f32) + 0.5) * bar_w;
                     let cx = (x1 + x2) / 2.0;
@@ -412,16 +396,8 @@ pub(super) fn draw_range_risk_annotation(
             }
         }
         Drawing::MeasureTool { p1, p2, color } => {
-            let x1o = if p1.0 >= start_idx && p1.0 < end_idx {
-                Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
-            let x2o = if p2.0 >= start_idx && p2.0 < end_idx {
-                Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
+            let x1o = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
+            let x2o = Some(data_left + ((p2.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
             if let (Some(x1), Some(x2)) = (x1o, x2o) {
                 let y1 = price_to_y(p1.1);
                 let y2 = price_to_y(p2.1);

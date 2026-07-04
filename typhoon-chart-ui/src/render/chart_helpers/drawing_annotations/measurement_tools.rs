@@ -8,7 +8,7 @@ pub(super) fn draw_measurement_annotation(
     bar_w: f32,
     price_to_y: impl Fn(f64) -> f32,
     start_idx: usize,
-    end_idx: usize,
+    _end_idx: usize,
     effective_width: f32,
     d_style: LineStyle,
     is_selected: bool,
@@ -23,11 +23,7 @@ pub(super) fn draw_measurement_annotation(
         } => {
             // Andrews Pitchfork: median line from pivot to midpoint(p2,p3), parallel upper/lower
             let to_x = |idx: usize| -> Option<f32> {
-                if idx >= start_idx && idx < end_idx {
-                    Some(data_left + ((idx - start_idx) as f32 + 0.5) * bar_w)
-                } else {
-                    None
-                }
+                Some(data_left + ((idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w)
             };
             if let (Some(xp), Some(x2), Some(x3)) = (to_x(pivot.0), to_x(p2.0), to_x(p3.0)) {
                 let yp = price_to_y(pivot.1);
@@ -78,11 +74,7 @@ pub(super) fn draw_measurement_annotation(
         }
         Drawing::FiboExtension { p1, p2, p3, color } => {
             let to_x = |idx: usize| -> Option<f32> {
-                if idx >= start_idx && idx < end_idx {
-                    Some(data_left + ((idx - start_idx) as f32 + 0.5) * bar_w)
-                } else {
-                    None
-                }
+                Some(data_left + ((idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w)
             };
             if let Some(x3) = to_x(p3.0) {
                 let range = (p2.1 - p1.1).abs();
@@ -126,8 +118,8 @@ pub(super) fn draw_measurement_annotation(
             scale,
             color,
         } => {
-            if origin.0 >= start_idx && origin.0 < end_idx {
-                let ox = data_left + ((origin.0 - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let ox = data_left + ((origin.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let oy = price_to_y(origin.1);
                 // Gann angles: 1×8, 1×4, 1×3, 1×2, 1×1, 2×1, 3×1, 4×1, 8×1
                 let ratios: &[(f64, &str)] = &[
@@ -185,8 +177,8 @@ pub(super) fn draw_measurement_annotation(
             stop,
             target,
         } => {
-            if entry.0 >= start_idx && entry.0 < end_idx {
-                let x = data_left + ((entry.0 - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((entry.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let ye = price_to_y(entry.1);
                 let ys = price_to_y(*stop);
                 let yt = price_to_y(*target);
@@ -230,8 +222,8 @@ pub(super) fn draw_measurement_annotation(
             stop,
             target,
         } => {
-            if entry.0 >= start_idx && entry.0 < end_idx {
-                let x = data_left + ((entry.0 - start_idx) as f32 + 0.5) * bar_w;
+            {
+                let x = data_left + ((entry.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
                 let ye = price_to_y(entry.1);
                 let ys = price_to_y(*stop);
                 let yt = price_to_y(*target);
@@ -269,16 +261,8 @@ pub(super) fn draw_measurement_annotation(
             }
         }
         Drawing::PriceRange { p1, p2 } => {
-            let x1 = if p1.0 >= start_idx && p1.0 < end_idx {
-                Some(data_left + ((p1.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
-            let x2 = if p2.0 >= start_idx && p2.0 < end_idx {
-                Some(data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w)
-            } else {
-                None
-            };
+            let x1 = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
+            let x2 = Some(data_left + ((p2.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
             if let (Some(x1), Some(x2)) = (x1, x2) {
                 let y1 = price_to_y(p1.1);
                 let y2 = price_to_y(p2.1);

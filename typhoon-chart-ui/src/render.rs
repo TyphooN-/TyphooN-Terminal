@@ -31,9 +31,33 @@ pub struct PriceViewGeometry {
     pub price_min: f64,
     pub price_max: f64,
     pub log_scale: bool,
+    /// x of the first *real* bar's slot left edge (camera-aware: can sit left
+    /// of `chart_rect` when panned past the data edge).
+    pub data_left: f32,
+    /// Painted slot width in pixels (camera viewport, not the data slice).
+    pub bar_w: f32,
+    /// Absolute index of the first bar in the rendered data slice.
+    pub start_idx: usize,
 }
 
 impl PriceViewGeometry {
+    /// Screen x of an absolute bar index's candle center — signed and
+    /// unconditional, so off-viewport bars map to off-viewport pixels instead
+    /// of being unmappable (the painter clips; interactions clamp).
+    pub fn bar_to_x(&self, bar_idx: usize) -> f32 {
+        self.data_left + ((bar_idx as i64 - self.start_idx as i64) as f32 + 0.5) * self.bar_w
+    }
+
+    /// Fractional absolute bar position for a screen x (candle centers land on
+    /// `.0`; may be negative when x is left of bar 0's slot).
+    pub fn x_to_bar_f(&self, x: f32) -> f64 {
+        self.start_idx as f64 + ((x - self.data_left) / self.bar_w.max(f32::EPSILON)) as f64 - 0.5
+    }
+
+    /// Nearest absolute bar index for a screen x, clamped to `[0, max_bar]`.
+    pub fn x_to_bar(&self, x: f32, max_bar: usize) -> usize {
+        self.x_to_bar_f(x).round().clamp(0.0, max_bar as f64) as usize
+    }
     pub fn price_to_y(&self, p: f64) -> f32 {
         let frac = if self.log_scale {
             let log_max = self.price_max.ln();
@@ -379,13 +403,6 @@ pub fn draw_chart(
     // The exact mapping this frame paints with — returned so input hit-testing
     // (SL/TP line drags) can agree with the rendered pixels instead of
     // re-deriving an approximation.
-    let price_geometry = PriceViewGeometry {
-        chart_rect,
-        price_min,
-        price_max,
-        log_scale: use_log,
-    };
-
     // ── bar width ────────────────────────────────────────────────────────────
     // Horizontal camera: visible_slot_count is the full virtual viewport, while
     // `bars` is only the intersecting real-data slice. first_bar_slot offsets
@@ -394,6 +411,15 @@ pub fn draw_chart(
     let n_bars = visible_slot_count.max(1) as f32;
     let bar_w = (chart_rect.width() / n_bars).max(1.0);
     let data_left = chart_rect.left() + first_bar_slot * bar_w;
+    let price_geometry = PriceViewGeometry {
+        chart_rect,
+        price_min,
+        price_max,
+        log_scale: use_log,
+        data_left,
+        bar_w,
+        start_idx,
+    };
     let candle_w = (bar_w * 0.7).max(1.0);
     let half_body = candle_w * 0.5;
     let render_step = chart_render_sample_step(bars.len(), chart_rect.width());
@@ -1787,8 +1813,7 @@ pub fn draw_chart(
         bars,
         start_idx,
         end_idx,
-        price_min,
-        price_max,
+        &price_geometry,
         sl_price,
         tp_price,
         price_to_y,
@@ -1847,8 +1872,19 @@ pub fn draw_chart(
     }
 
     draw_drawing_preview(
-        painter, chart_rect, data_left, bar_w, start_idx, end_idx, price_min, price_max, crosshair,
-        draw_mode, price_to_y,
+        painter,
+        chart,
+        chart_rect,
+        data_left,
+        bar_w,
+        start_idx,
+        end_idx,
+        bars,
+        crosshair,
+        draw_mode,
+        &price_geometry,
+        price_to_y,
+        format_price,
     );
     Some(price_geometry)
 }
@@ -1864,6 +1900,9 @@ mod tests {
                 price_min: 50.0,
                 price_max: 150.0,
                 log_scale,
+                data_left: rect.left(),
+                bar_w: 8.0,
+                start_idx: 100,
             };
             // Top of the pane is price_max, bottom is price_min.
             assert!((g.price_to_y(150.0) - 100.0).abs() < 0.001, "log={log_scale}");

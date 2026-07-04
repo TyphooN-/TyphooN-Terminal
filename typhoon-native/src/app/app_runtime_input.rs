@@ -203,7 +203,9 @@ impl TyphooNApp {
                     if let Some(sel) = chart.selected_drawing {
                         if sel < chart.drawings.len() {
                             let d = chart.drawings.remove(sel);
-                            chart.drawing_styles.remove(sel);
+                            if sel < chart.drawing_styles.len() {
+                                chart.drawing_styles.remove(sel);
+                            }
                             chart.drawings_undo.push(d);
                             chart.selected_drawing = None;
                         }
@@ -243,7 +245,14 @@ impl TyphooNApp {
                     self.replay_playing = false;
                     self.replay_bar_idx = 0;
                 } else {
+                    // Cancel any in-progress placement outright: reset the
+                    // mode AND the pending multi-click buffers — leaking them
+                    // let a cancelled Elliott wave's points reappear inside
+                    // the next pattern tool.
                     self.draw_mode = DrawMode::None;
+                    self.multi_click_points.clear();
+                    self.polyline_points.clear();
+                    self.brush_points.clear();
                 }
             }
 

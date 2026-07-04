@@ -35,6 +35,51 @@ pub(crate) fn draw_drawing_annotations(
     for (draw_idx, drawing) in chart.drawings.iter().enumerate() {
         let (effective_width, d_style) = effective_drawing_width_and_style(chart, draw_idx);
         let is_selected = is_drawing_selected(chart, draw_idx);
+        if draw_one_drawing_annotation(
+            painter,
+            drawing,
+            chart,
+            chart_rect,
+            data_left,
+            bar_w,
+            &price_to_y,
+            start_idx,
+            end_idx,
+            bars,
+            &format_price,
+            effective_width,
+            d_style,
+            is_selected,
+        ) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Render a single drawing through the full annotation chain — shared by the
+/// persisted-drawings loop above and the live placement preview (which renders
+/// the would-be drawing as a ghost). Returns true when legacy draw_chart
+/// control flow should return early.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_one_drawing_annotation(
+    painter: &egui::Painter,
+    drawing: &Drawing,
+    chart: &ChartState,
+    chart_rect: egui::Rect,
+    data_left: f32,
+    bar_w: f32,
+    price_to_y: impl Fn(f64) -> f32,
+    start_idx: usize,
+    end_idx: usize,
+    bars: &[Bar],
+    format_price: impl Fn(f64) -> String,
+    effective_width: f32,
+    d_style: LineStyle,
+    is_selected: bool,
+) -> bool {
+    {
         if draw_basic_line_annotation(
             painter,
             drawing,
@@ -49,7 +94,7 @@ pub(crate) fn draw_drawing_annotations(
             is_selected,
             &format_price,
         ) {
-            continue;
+            return false;
         }
         if draw_measurement_annotation(
             painter,
@@ -64,7 +109,7 @@ pub(crate) fn draw_drawing_annotations(
             d_style,
             is_selected,
         ) {
-            continue;
+            return false;
         }
         if let Some(should_return) = draw_geometric_label_annotation(
             painter,
@@ -82,7 +127,7 @@ pub(crate) fn draw_drawing_annotations(
             if should_return {
                 return true;
             }
-            continue;
+            return false;
         }
         if draw_regression_gann_annotation(
             painter,
@@ -98,7 +143,7 @@ pub(crate) fn draw_drawing_annotations(
             d_style,
             is_selected,
         ) {
-            continue;
+            return false;
         }
         if draw_pattern_annotation(
             painter,
@@ -112,7 +157,7 @@ pub(crate) fn draw_drawing_annotations(
             d_style,
             is_selected,
         ) {
-            continue;
+            return false;
         }
         if draw_range_risk_annotation(
             painter,
@@ -129,7 +174,7 @@ pub(crate) fn draw_drawing_annotations(
             is_selected,
             &format_price,
         ) {
-            continue;
+            return false;
         }
         if draw_projection_curve_annotation(
             painter,
@@ -145,7 +190,7 @@ pub(crate) fn draw_drawing_annotations(
             d_style,
             is_selected,
         ) {
-            continue;
+            return false;
         }
         if draw_pitchfork_wedge_annotation(
             painter,
@@ -159,7 +204,7 @@ pub(crate) fn draw_drawing_annotations(
             d_style,
             is_selected,
         ) {
-            continue;
+            return false;
         }
         if draw_fallback_annotation(
             painter,
@@ -174,9 +219,10 @@ pub(crate) fn draw_drawing_annotations(
             d_style,
             is_selected,
         ) {
-            continue;
+            return false;
         }
     }
 
     false
 }
+

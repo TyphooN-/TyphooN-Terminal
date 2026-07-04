@@ -13,6 +13,7 @@ pub mod auto_fibonacci;
 pub mod cache_keys;
 pub mod camera_controls;
 pub mod drawing;
+pub mod drawing_interaction;
 pub mod indicators;
 pub mod models;
 pub mod render;

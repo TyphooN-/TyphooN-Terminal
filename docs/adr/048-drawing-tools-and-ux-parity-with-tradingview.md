@@ -124,9 +124,66 @@ specific point while `None` means whole-drawing drag.
 - [x] Alt+H = HLine, Alt+V = VLine, Alt+T = Trendline, Alt+F = Fibo, Alt+R = Rectangle
 - [x] Alt+E = Eraser, Alt+C = Cycle chart type
 
+## 2026-07-04 comb-over: unified painted-geometry interaction layer
+
+A full audit found the drawing system's interaction paths structurally broken
+despite the per-gap checkmarks above. Root causes and fixes, all shipped:
+
+1. **Every interaction re-derived its own screen mapping** (selection
+   hit-test, control-point pick, drag deltas, placement, brush sampling —
+   five different hand-rolled mappings), and none matched the painted pixels:
+   no log scale, no free-look camera (`visible_slot_count`/`first_bar_slot`),
+   and the control-point centre had a padding-math bug. Any pan/zoom made
+   placement land offset from the cursor and made handles/grabs miss.
+   **Fix:** `PriceViewGeometry` (the exact geometry each frame paints,
+   already used for SL/TP drags per ADR-132) now carries the bar mapping
+   (`data_left`/`bar_w`/`start_idx`, `bar_to_x`/`x_to_bar_f`/`x_to_bar`) and
+   is the *only* source for every drawing interaction.
+2. **Renderers hid drawings whose endpoints scrolled off-viewport** (~75
+   `>= start_idx && < end_idx` gates across the 9 annotation files — a long
+   trendline vanished when you zoomed into its middle; one PriceLabel gate
+   even aborted the whole annotation pass via `return Some(true)`).
+   **Fix:** unconditional signed bar→x mapping everywhere; the painter clips.
+3. **Partial per-variant interaction coverage**: hit-testing covered ~55/80
+   variants (`_ =>` miss arm), control points 8/80, with a second divergent
+   copy in the handle overlay. **Fix:** new `typhoon-chart-ui/src/
+   drawing_interaction.rs` — `drawing_hit_distance`, `drawing_anchors` +
+   `AnchorPos` (Data/PriceOnly/BarOnly), `drawing_set_anchor`,
+   `translate_drawing`, `preview_drawing` — all **exhaustive matches with no
+   wildcard arm**, so adding a Drawing variant fails compilation until its
+   interaction is defined. Slope tools (Ray/GannFan) get a slope handle;
+   channels get a width handle; position tools get entry/stop/target handles.
+4. **Drag quantization**: per-frame `(dx/bar_w) as i64` truncated sub-bar
+   deltas to zero — slow horizontal drags never moved; vertical used an
+   unpadded/unzoomed range so drawings slipped under the cursor. **Fix:**
+   anchor-based drag (`drawing_drag_last`): integer bars are consumed, the
+   fractional remainder carries, resize places the anchor exactly under the
+   cursor, and log-scale drags are exact.
+5. **Dragging a drawing also panned the camera** (the body-drag widget never
+   checked `is_drawing_drag`). **Fix:** gated; plus press-on-drawing now
+   selects and grabs in one gesture (no select-click-first required).
+6. **Live preview existed for only 4 of ~80 tools** — and parsed `Debug`
+   strings per frame to guess pending points. **Fix:** every placement mode
+   renders a dashed ghost of the exact would-be drawing through the same
+   annotation chain (`draw_one_drawing_annotation` + `preview_drawing`),
+   multi-click tools included (`preview_pending_points` mirror).
+7. **UX polish:** crosshair cursor while a tool is armed; Move cursor when
+   hovering a grabbable drawing; OHLC magnet snap is now pixel-based (8px)
+   so it feels identical at any zoom and works on log scale; Esc cancels a
+   placement AND clears pending multi-click buffers (they used to leak into
+   the next pattern tool); Delete guards against a drifted styles vec.
+
+Regression guards: `drawing_interaction` unit tests (geometry round-trip
+including off-screen bars, off-screen-endpoint hit-testing, anchor/translate
+invariants per shape family, slope/position `set_anchor` semantics, preview
+completion for multi-click tools) + the existing render tests.
+
 ## Consequences
 - All 7 original UX gaps complete (Gaps 1-7)
 - 4 additional UX features added (color picker, property editor, follow toggle, shortcuts)
 - 89 drawing tools with full TradingView-style support + 7 bonus tools
 - All drawing colors user-configurable pre-placement
 - Per-drawing right-click editing of color/width/style
+- 2026-07-04: interaction layer unified on the painted geometry (see above) —
+  select/drag/resize/erase work for every variant, drawings never vanish
+  off-viewport, and every tool has a live placement preview

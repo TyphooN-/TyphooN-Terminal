@@ -2,6 +2,7 @@ use super::*;
 
 mod drawing_annotations;
 pub(super) use drawing_annotations::draw_drawing_annotations;
+pub(crate) use drawing_annotations::draw_one_drawing_annotation;
 mod smart_money_zones;
 pub(super) use smart_money_zones::{
     draw_fair_value_gaps, draw_order_blocks, draw_supply_demand_zones,
