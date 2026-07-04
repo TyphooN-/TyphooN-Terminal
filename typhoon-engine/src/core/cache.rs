@@ -50,6 +50,7 @@ pub struct BarCacheSanityReport {
     pub error_count: usize,
     pub warn_count: usize,
     pub info_count: usize,
+    pub issue_code_counts: std::collections::BTreeMap<String, usize>,
     pub issues: Vec<BarCacheSanityIssue>,
 }
 
@@ -57,7 +58,11 @@ impl BarCacheSanityReport {
     const MAX_ISSUES: usize = 2_000;
 
     pub fn has_code(&self, code: &str) -> bool {
-        self.issues.iter().any(|issue| issue.code == code)
+        self.issue_code_count(code) > 0
+    }
+
+    pub fn issue_code_count(&self, code: &str) -> usize {
+        self.issue_code_counts.get(code).copied().unwrap_or(0)
     }
 
     pub fn summary_line(&self) -> String {
@@ -85,6 +90,16 @@ impl BarCacheSanityReport {
             .collect()
     }
 
+    pub fn top_code_lines(&self, limit: usize) -> Vec<String> {
+        let mut counts: Vec<_> = self.issue_code_counts.iter().collect();
+        counts.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        counts
+            .into_iter()
+            .take(limit)
+            .map(|(code, count)| format!("{count}× {code}"))
+            .collect()
+    }
+
     fn push_issue(
         &mut self,
         severity: BarCacheSanitySeverity,
@@ -92,6 +107,8 @@ impl BarCacheSanityReport {
         key: impl Into<String>,
         detail: impl Into<String>,
     ) {
+        let code = code.into();
+        *self.issue_code_counts.entry(code.clone()).or_insert(0) += 1;
         match severity {
             BarCacheSanitySeverity::Info => self.info_count += 1,
             BarCacheSanitySeverity::Warn => self.warn_count += 1,
@@ -100,7 +117,7 @@ impl BarCacheSanityReport {
         if self.issues.len() < Self::MAX_ISSUES {
             self.issues.push(BarCacheSanityIssue {
                 severity,
-                code: code.into(),
+                code,
                 key: key.into(),
                 detail: detail.into(),
             });
@@ -554,6 +571,20 @@ fn bar_close_ratio(a: f64, b: f64) -> Option<f64> {
     } else {
         None
     }
+}
+
+fn max_ohlc_ratio(a: AuditBar, b: AuditBar) -> Option<f64> {
+    [
+        bar_close_ratio(a.open, b.open),
+        bar_close_ratio(a.high, b.high),
+        bar_close_ratio(a.low, b.low),
+        bar_close_ratio(a.close, b.close),
+    ]
+    .into_iter()
+    .flatten()
+    .fold(None, |acc, ratio| {
+        Some(acc.map(|v: f64| v.max(ratio)).unwrap_or(ratio))
+    })
 }
 
 /// Unpack only the last `tail` bars from binary format — avoids converting 50K bars when only 500 needed.
@@ -1589,7 +1620,7 @@ impl SqliteCache {
                     format!("idx={idx} max_gap_days={:.1}", gap as f64 / 86_400_000.0),
                 );
             }
-            if !audit_bars.is_empty() && parts.source != "merged" {
+            if !audit_bars.is_empty() {
                 series.push(AuditSeries {
                     key,
                     parts,
@@ -1599,6 +1630,7 @@ impl SqliteCache {
         }
 
         self.audit_cross_source_overlap(&mut report, &series);
+        self.audit_merged_source_overlap(&mut report, &series);
         Ok(report)
     }
 
@@ -1623,7 +1655,10 @@ impl SqliteCache {
                 for j in (i + 1)..group.len() {
                     let a = group[i];
                     let b = group[j];
-                    if a.parts.source == b.parts.source {
+                    if a.parts.source == b.parts.source
+                        || a.parts.source == "merged"
+                        || b.parts.source == "merged"
+                    {
                         continue;
                     }
                     report.source_pairs_checked += 1;
@@ -1636,15 +1671,7 @@ impl SqliteCache {
                             continue;
                         };
                         overlap += 1;
-                        let ratios = [
-                            bar_close_ratio(abar.open, bbar.open),
-                            bar_close_ratio(abar.high, bbar.high),
-                            bar_close_ratio(abar.low, bbar.low),
-                            bar_close_ratio(abar.close, bbar.close),
-                        ];
-                        let Some(ratio) = ratios.into_iter().flatten().fold(None, |acc, r| {
-                            Some(acc.map(|v: f64| v.max(r)).unwrap_or(r))
-                        }) else {
+                        let Some(ratio) = max_ohlc_ratio(*abar, *bbar) else {
                             continue;
                         };
                         if worst.map(|(r, _, _, _)| ratio > r).unwrap_or(true) {
@@ -1667,6 +1694,86 @@ impl SqliteCache {
                                 fmt_ts_ms(bucket).unwrap_or_else(|| bucket.to_string()),
                                 a_close,
                                 b_close
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn audit_merged_source_overlap(
+        &self,
+        report: &mut BarCacheSanityReport,
+        series: &[AuditSeries],
+    ) {
+        let mut groups: std::collections::BTreeMap<(String, String), Vec<&AuditSeries>> =
+            std::collections::BTreeMap::new();
+        for s in series {
+            groups
+                .entry((s.parts.symbol.clone(), s.parts.timeframe.clone()))
+                .or_default()
+                .push(s);
+        }
+        for ((symbol, timeframe), group) in groups {
+            let merged_rows: Vec<_> = group
+                .iter()
+                .copied()
+                .filter(|s| s.parts.source == "merged")
+                .collect();
+            if merged_rows.is_empty() {
+                continue;
+            }
+            let raw_rows: Vec<_> = group
+                .iter()
+                .copied()
+                .filter(|s| s.parts.source != "merged")
+                .collect();
+            if raw_rows.is_empty() {
+                continue;
+            }
+            for merged in merged_rows {
+                let merged_by_bucket: std::collections::BTreeMap<i64, AuditBar> = merged
+                    .bars
+                    .iter()
+                    .map(|bar| (bar.bucket_ts_ms, *bar))
+                    .collect();
+                for raw in &raw_rows {
+                    let mut overlap = 0usize;
+                    let mut worst: Option<(f64, i64, f64, f64)> = None;
+                    for raw_bar in raw.bars.iter().rev().take(160) {
+                        let Some(merged_bar) = merged_by_bucket.get(&raw_bar.bucket_ts_ms) else {
+                            continue;
+                        };
+                        overlap += 1;
+                        let Some(ratio) = max_ohlc_ratio(*merged_bar, *raw_bar) else {
+                            continue;
+                        };
+                        if worst.map(|(r, _, _, _)| ratio > r).unwrap_or(true) {
+                            worst = Some((
+                                ratio,
+                                raw_bar.bucket_ts_ms,
+                                merged_bar.close,
+                                raw_bar.close,
+                            ));
+                        }
+                    }
+                    let Some((ratio, bucket, merged_close, raw_close)) = worst else {
+                        continue;
+                    };
+                    if overlap >= 2 && ratio >= 1.5 {
+                        report.push_issue(
+                            BarCacheSanitySeverity::Warn,
+                            "merged_source_overlap_mismatch",
+                            format!("{symbol}:{timeframe}"),
+                            format!(
+                                "{} vs {} overlap={} worst_ratio={ratio:.2} at {} close {:.6} vs {:.6}",
+                                merged.key,
+                                raw.key,
+                                overlap,
+                                fmt_ts_ms(bucket).unwrap_or_else(|| bucket.to_string()),
+                                merged_close,
+                                raw_close
                             ),
                         );
                     }

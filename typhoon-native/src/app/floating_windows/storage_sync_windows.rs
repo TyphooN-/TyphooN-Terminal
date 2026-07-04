@@ -188,6 +188,14 @@ impl TyphooNApp {
                                             .small()
                                             .monospace(),
                                     );
+                                    for line in report.top_code_lines(6) {
+                                        ui.label(
+                                            egui::RichText::new(format!("count {line}"))
+                                                .color(AXIS_TEXT)
+                                                .small()
+                                                .monospace(),
+                                        );
+                                    }
                                     for line in report.top_issue_lines(8) {
                                         ui.label(
                                             egui::RichText::new(line)

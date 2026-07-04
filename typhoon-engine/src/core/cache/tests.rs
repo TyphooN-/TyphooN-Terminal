@@ -1282,3 +1282,28 @@ fn data_sanity_audit_flags_cross_source_recent_overlap_mismatch() {
 
     let _ = std::fs::remove_file(db_path);
 }
+
+#[test]
+fn data_sanity_audit_flags_merged_source_overlap_mismatch() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let source = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":50.0,"high":51.0,"low":49.0,"close":50.0,"volume":100.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":51.0,"high":52.0,"low":50.0,"close":51.0,"volume":100.0}
+    ]"#;
+    let merged = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":50.0,"high":51.0,"low":49.0,"close":50.0,"volume":100.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":150.0,"high":155.0,"low":145.0,"close":150.0,"volume":100.0}
+    ]"#;
+    cache.put_bars("alpaca:WOK:1Day", source).unwrap();
+    cache.put_bars("merged:WOK:1Day", merged).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(report.has_code("merged_source_overlap_mismatch"), "{report:#?}");
+    assert!(
+        report.issue_code_count("merged_source_overlap_mismatch") >= 1,
+        "{report:#?}"
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}
