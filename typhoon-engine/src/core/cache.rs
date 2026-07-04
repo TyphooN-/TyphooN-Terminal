@@ -376,7 +376,7 @@ pub fn unpack_bars_raw(data: &[u8]) -> Result<Vec<(i64, f64, f64, f64, f64, f64)
 }
 
 /// Extract last and second-to-last bar timestamps from binary data (for metadata columns).
-/// Returns (second_last_ts_rfc3339, last_ts_rfc3339) or empty strings if not enough bars.
+/// A one-bar row still has a valid `last_ts`; only `second_last_ts` is absent.
 fn get_last_two_bar_timestamps(binary: &[u8], count: usize) -> (Option<String>, Option<String>) {
     let required = match count
         .checked_mul(BYTES_PER_BAR)
@@ -385,24 +385,27 @@ fn get_last_two_bar_timestamps(binary: &[u8], count: usize) -> (Option<String>, 
         Some(n) => n,
         None => return (None, None),
     };
-    if count < 2 || binary.len() < required {
+    if count == 0 || binary.len() < required {
         return (None, None);
     }
     let last_offset = 8 + (count - 1) * BYTES_PER_BAR;
-    let second_offset = 8 + (count - 2) * BYTES_PER_BAR;
     let last_ts = i64::from_le_bytes(
         binary[last_offset..last_offset + 8]
-            .try_into()
-            .unwrap_or([0; 8]),
-    );
-    let second_ts = i64::from_le_bytes(
-        binary[second_offset..second_offset + 8]
             .try_into()
             .unwrap_or([0; 8]),
     );
     let fmt = |ms: i64| -> Option<String> {
         chrono::DateTime::from_timestamp_millis(ms).map(|dt| dt.to_rfc3339())
     };
+    if count < 2 {
+        return (None, fmt(last_ts));
+    }
+    let second_offset = 8 + (count - 2) * BYTES_PER_BAR;
+    let second_ts = i64::from_le_bytes(
+        binary[second_offset..second_offset + 8]
+            .try_into()
+            .unwrap_or([0; 8]),
+    );
     (fmt(second_ts), fmt(last_ts))
 }
 

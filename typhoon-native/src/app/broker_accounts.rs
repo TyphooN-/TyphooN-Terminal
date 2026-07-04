@@ -187,6 +187,7 @@ impl TyphooNApp {
         let n_data = specs.iter().filter(|s| s.data_sync_enabled).count().max(1);
         let n_total = specs.len();
         let capacity = self.alpaca_sync_capacity();
+        let aggregate_rpm = self.alpaca_effective_historical_rpm() as usize * n_data;
         let primary_id = if specs.iter().any(|s| s.id == self.alpaca_primary_account_id) {
             self.alpaca_primary_account_id.clone()
         } else {
@@ -199,11 +200,13 @@ impl TyphooNApp {
             fetch_permits: capacity.fetch_permits,
         });
         self.log.push_back(LogEntry::info(format!(
-            "Alpaca connecting {} account(s) — {} in data-sync rotation (~{} req/min aggregate), {} workers",
+            "Alpaca connecting {} account(s) — {} in data-sync rotation (~{} req/min aggregate), {} workers, queue {}, batch {}",
             n_total,
             n_data,
-            self.alpaca_effective_historical_rpm() as usize * n_data,
-            capacity.fetch_permits
+            aggregate_rpm,
+            capacity.fetch_permits,
+            capacity.queue_window,
+            capacity.batch_size
         )));
         true
     }

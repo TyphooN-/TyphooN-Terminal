@@ -366,7 +366,31 @@ fn extract_tail_timestamps_single_bar_returns_none() {
     let binary = make_binary_bars(&bars);
     let (second, last) = get_last_two_bar_timestamps(&binary, 1);
     assert!(second.is_none());
-    assert!(last.is_none());
+    let last_dt = chrono::DateTime::parse_from_rfc3339(&last.unwrap()).unwrap();
+    assert_eq!(last_dt.timestamp_millis(), 1_705_000_000_000);
+}
+
+#[test]
+fn sqlite_cache_single_bar_rows_persist_last_timestamp_metadata() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let json = r#"[{"timestamp":"2024-06-01T00:00:00+00:00","open":50.0,"high":55.0,"low":49.0,"close":53.0,"volume":1000.0}]"#;
+
+    cache.put_bars("yahoo-chart:ONE:1Month", json).unwrap();
+    let (last_ts, second_last_ts): (Option<String>, Option<String>) = cache
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT last_ts, second_last_ts FROM bar_cache WHERE key = ?1",
+            params!["yahoo-chart:ONE:1Month"],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+
+    assert_eq!(last_ts.as_deref(), Some("2024-06-01T00:00:00+00:00"));
+    assert!(second_last_ts.is_none());
+    let _ = std::fs::remove_file(db_path);
 }
 
 #[test]

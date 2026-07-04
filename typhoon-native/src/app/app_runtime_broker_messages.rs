@@ -858,10 +858,14 @@ impl TyphooNApp {
                     if historical_rpm > 0 && self.alpaca_historical_rpm_observed != historical_rpm {
                         self.alpaca_historical_rpm_observed = historical_rpm;
                         let capacity = self.alpaca_sync_capacity();
+                        let accounts = self.alpaca_data_account_count();
+                        let aggregate_rpm = self.alpaca_aggregate_historical_rpm();
                         self.push_alpaca_sync_runtime_config();
                         self.log.push_back(LogEntry::info(format!(
-                            "Alpaca sync speed: detected {} req/min historical tier — {} workers, queue {}, batch {}",
+                            "Alpaca sync speed: detected {} req/min per data account × {} account(s) = ~{} req/min aggregate — {} workers, queue {}, batch {}",
                             historical_rpm,
+                            accounts,
+                            aggregate_rpm,
                             capacity.fetch_permits,
                             capacity.queue_window,
                             capacity.batch_size
