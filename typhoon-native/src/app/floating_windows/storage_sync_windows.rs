@@ -82,11 +82,13 @@ impl TyphooNApp {
                                     }
                                 });
                                 ui.horizontal(|ui| {
-                                    // Guard against double-launch: the button stays
-                                    // clickable across frames, so two quick clicks used to
-                                    // queue two concurrent compacts (interleaved progress at
-                                    // different totals, fighting for the write conn). Disable
-                                    // it while any compact — manual or auto — is in progress.
+                                    // Guard against double-launch and sync starvation: compaction
+                                    // recompresses cache blobs and competes with historical bar
+                                    // writers. During broad catch-up it can make Storage look like
+                                    // sync has stopped, so keep manual compact out of the hot path
+                                    // just like the auto-compact gate does.
+                                    let compact_available = !self.auto_compact_in_progress
+                                        && !self.heavy_sync_in_progress;
                                     let compact_btn = egui::Button::new(
                                         egui::RichText::new(format!(
                                             "Compact (zstd-{})",
@@ -95,7 +97,12 @@ impl TyphooNApp {
                                         .small(),
                                     );
                                     if ui
-                                        .add_enabled(!self.auto_compact_in_progress, compact_btn)
+                                        .add_enabled(compact_available, compact_btn)
+                                        .on_disabled_hover_text(if self.auto_compact_in_progress {
+                                            "Compaction is already running."
+                                        } else {
+                                            "Broad market-data sync is active; wait until catch-up settles so compaction does not starve bar writes."
+                                        })
                                         .clicked()
                                     {
                                         let db_path = cache_db_path();
@@ -110,10 +117,11 @@ impl TyphooNApp {
                                             size_before as f64 / 1024.0 / 1024.0
                                         )));
                                     }
-                                    ui.label(egui::RichText::new("Recompress all data at max level. No impact on load speed.").color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new("Recompress cold rows at max level; disabled during heavy sync.").color(AXIS_TEXT).small());
                                 });
-                                // Auto-compact controls + readout (ADR-089). Manual button above always works
-                                // regardless of this setting.
+                                // Auto-compact controls + readout (ADR-089). Manual compact
+                                // ignores the auto-enable setting but still respects the
+                                // in-progress/heavy-sync safety gates above.
                                 ui.horizontal(|ui| {
                                     let auto_label = format!(
                                         "Auto-compact ({})",
