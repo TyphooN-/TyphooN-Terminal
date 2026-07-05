@@ -95,6 +95,17 @@ pub struct BarCacheSanityReport {
     /// the mismatch threshold. Deleting them is safe: the merge pipeline
     /// re-materialises merged rows from raw sources on next load/sync.
     pub merged_mismatch_keys: std::collections::BTreeSet<String>,
+    /// Rows that decode to zero bars on the yahoo-chart source — an empty row
+    /// occupies the key (sync coverage sees it as fetched) while holding
+    /// nothing. Fixable by `purge_empty_rows`; the next sync re-fetches.
+    pub purgeable_empty_rows: usize,
+    /// Stored-list bookkeeping for the per-(code, severity) caps. Unlike
+    /// `issue_code_counts` this counts only what landed in `issues`.
+    #[serde(skip)]
+    stored_issue_counts: std::collections::BTreeMap<(String, BarCacheSanitySeverity), usize>,
+    /// Stored-list totals per severity (Info/Warn/Error), same bookkeeping.
+    #[serde(skip)]
+    stored_severity_counts: std::collections::BTreeMap<BarCacheSanitySeverity, usize>,
 }
 
 impl BarCacheSanityReport {
@@ -213,17 +224,24 @@ impl BarCacheSanityReport {
         occurrences: usize,
     ) {
         let code = code.into();
-        let code_count = self.issue_code_counts.entry(code.clone()).or_insert(0);
-        *code_count += 1;
-        let stored_for_code = *code_count;
+        *self.issue_code_counts.entry(code.clone()).or_insert(0) += 1;
         match severity {
             BarCacheSanitySeverity::Info => self.info_count += 1,
             BarCacheSanitySeverity::Warn => self.warn_count += 1,
             BarCacheSanitySeverity::Error => self.error_count += 1,
         }
-        // Per-code cap keeps one noisy code from crowding every other code out
-        // of the stored list; total counts above are never capped.
-        if self.issues.len() < Self::MAX_ISSUES && stored_for_code <= Self::MAX_ISSUES_PER_CODE {
+        // Caps are per (code, severity) plus a per-severity total, so an info
+        // flood on a noisy mixed-severity code (large_time_gap emits both)
+        // can never crowd warnings/errors — the actionable tiers — out of
+        // the stored list. Total counts above are never capped.
+        let stored_for_code = self
+            .stored_issue_counts
+            .entry((code.clone(), severity))
+            .or_insert(0);
+        let stored_for_severity = self.stored_severity_counts.entry(severity).or_insert(0);
+        if *stored_for_code < Self::MAX_ISSUES_PER_CODE && *stored_for_severity < Self::MAX_ISSUES {
+            *stored_for_code += 1;
+            *stored_for_severity += 1;
             self.issues.push(BarCacheSanityIssue {
                 severity,
                 code,
@@ -269,17 +287,25 @@ pub struct BarCacheRepairOptions {
     pub fix_metadata: bool,
     /// Rewrite blobs whose content violates write-path invariants: drops
     /// invalid-OHLC bars, duplicate/out-of-order buckets (later wins, same as
-    /// the write path), bars more than 2 days in the future, and converts
+    /// the write path), bars more than 2 days in the future, clamps settled
+    /// candles whose close sits outside their own high/low, and converts
     /// legacy JSON rows to TTBR binary.
     pub rewrite_bad_rows: bool,
     /// Delete rows that cannot be decoded at all (undecompressable, bad
     /// header, truncated). Destructive: the next bar sync re-fetches them.
     pub delete_corrupt_rows: bool,
+    /// Delete yahoo-chart rows that decode to zero bars — an empty row
+    /// occupies the key (sync coverage sees it as fetched) while holding
+    /// nothing. The next bar sync re-fetches the range.
+    pub purge_empty_rows: bool,
 }
 
 impl BarCacheRepairOptions {
     pub fn any(&self) -> bool {
-        self.fix_metadata || self.rewrite_bad_rows || self.delete_corrupt_rows
+        self.fix_metadata
+            || self.rewrite_bad_rows
+            || self.delete_corrupt_rows
+            || self.purge_empty_rows
     }
 }
 
@@ -799,6 +825,107 @@ fn bar_close_ratio(a: f64, b: f64) -> Option<f64> {
     }
 }
 
+/// Load every known split event (symbol → [(ex_ts_ms, pre_split_factor)],
+/// ascending ex-date) from `research_stock_splits` for split-aware
+/// cross-source classification. A node that never scraped splits (missing
+/// table) or unparseable rows read as empty — mismatches then simply cannot
+/// be explained by splits and stay warnings.
+fn load_split_events_for_audit(
+    conn: &Connection,
+) -> std::collections::BTreeMap<String, Vec<(i64, f64)>> {
+    let mut out = std::collections::BTreeMap::new();
+    let Ok(mut stmt) = conn.prepare("SELECT symbol, rows_json FROM research_stock_splits") else {
+        return out;
+    };
+    let Ok(rows) = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) else {
+        return out;
+    };
+    for (symbol, json) in rows.flatten() {
+        let Ok(parsed) =
+            serde_json::from_str::<Vec<crate::core::research::StockSplit>>(&json)
+        else {
+            continue;
+        };
+        let mut events: Vec<(i64, f64)> = parsed
+            .iter()
+            .filter_map(|s| {
+                if s.numerator <= 0.0 || s.denominator <= 0.0 {
+                    return None;
+                }
+                let date = chrono::NaiveDate::parse_from_str(&s.date, "%Y-%m-%d").ok()?;
+                let ts = date.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis();
+                Some((ts, s.denominator / s.numerator))
+            })
+            .collect();
+        if events.is_empty() {
+            continue;
+        }
+        events.sort_by_key(|(ts, _)| *ts);
+        out.insert(symbol.trim().to_ascii_uppercase(), events);
+    }
+    out
+}
+
+/// Test whether known split events fully explain the close disagreement
+/// between two overlapping series: one side split-adjusted, the other raw,
+/// so the expected close ratio at bucket `ts` is the product of
+/// `pre_split_factor` over events with ex-date after `ts`. Stacked splits
+/// compound and forward splits contribute factors < 1 by construction; both
+/// orientations are tried since either source may be the adjusted one.
+/// Returns `(largest cumulative factor, worst residual)` when every
+/// overlapping close lands within the mismatch threshold of its expected
+/// ratio for at least one orientation.
+fn split_explained_scale(
+    a_bars: &[AuditBar],
+    b_by_bucket: &std::collections::BTreeMap<i64, AuditBar>,
+    events: &[(i64, f64)],
+) -> Option<(f64, f64)> {
+    if events.is_empty() {
+        return None;
+    }
+    let mut worst_a_adjusted = 1.0f64;
+    let mut worst_b_adjusted = 1.0f64;
+    let mut max_factor = 1.0f64;
+    let mut split_buckets = 0usize;
+    let mut checked = 0usize;
+    for abar in a_bars.iter().rev().take(160) {
+        let Some(bbar) = b_by_bucket.get(&abar.bucket_ts_ms) else {
+            continue;
+        };
+        if !(abar.close.is_finite()
+            && bbar.close.is_finite()
+            && abar.close > 0.0
+            && bbar.close > 0.0)
+        {
+            continue;
+        }
+        let expected: f64 = events
+            .iter()
+            .filter(|(ex_ts, _)| *ex_ts > abar.bucket_ts_ms)
+            .map(|(_, factor)| *factor)
+            .product();
+        if !(expected.is_finite() && expected > 0.0) {
+            return None;
+        }
+        checked += 1;
+        if (expected - 1.0).abs() > 1e-9 {
+            split_buckets += 1;
+            max_factor = max_factor.max(expected.max(1.0 / expected));
+        }
+        let observed = abar.close / bbar.close;
+        worst_a_adjusted = worst_a_adjusted.max((observed / expected).max(expected / observed));
+        let inverse = 1.0 / observed;
+        worst_b_adjusted = worst_b_adjusted.max((inverse / expected).max(expected / inverse));
+    }
+    if checked < 2 || split_buckets == 0 {
+        return None;
+    }
+    let residual = worst_a_adjusted.min(worst_b_adjusted);
+    (residual < 1.5).then_some((max_factor, residual))
+}
+
 fn stable_scale_delta(scales: &[f64], threshold: f64, tolerance: f64) -> Option<f64> {
     if scales.len() < 2 {
         return None;
@@ -1032,6 +1159,7 @@ fn audit_bar_row(
     }
     if header_count == 0 {
         let severity = if parts.source == "yahoo-chart" {
+            report.purgeable_empty_rows += 1;
             BarCacheSanitySeverity::Warn
         } else {
             BarCacheSanitySeverity::Info
@@ -1211,7 +1339,8 @@ fn audit_bar_row(
         let total_body = body_open_only + body_close_forming + body_close_settled;
         if body_close_settled > 0 {
             // A settled bar whose close sits outside its own high/low is a
-            // genuinely malformed candle from the provider.
+            // genuinely malformed candle from the provider; the rewrite
+            // repair extends the range to contain the close.
             report.push_issue_n(
                 BarCacheSanitySeverity::Warn,
                 "body_outside_range",
@@ -1221,6 +1350,7 @@ fn audit_bar_row(
                 ),
                 total_body,
             );
+            rewrite_repairable = true;
         } else {
             // Open-only violations are provider carried-forward opens (open =
             // previous close on sparse markets, e.g. Kraken OHLC); a
@@ -1349,14 +1479,26 @@ fn plan_row_repair(
             .then_some(RowFix::Delete { key }));
     };
 
+    // Mirror of the audit's Warn-severity zero_bar_row scope: only the
+    // yahoo-chart source treats an empty row as purge-worthy.
+    if opts.purge_empty_rows
+        && raw.is_empty()
+        && parse_bar_cache_key(&key)
+            .map(|parts| parts.source == "yahoo-chart")
+            .unwrap_or(false)
+    {
+        return Ok(Some(RowFix::Delete { key }));
+    }
+
     if opts.rewrite_bad_rows {
         // Re-apply write-path invariants: drop invalid/future bars, normalize
         // D/W/M session buckets, dedup duplicate buckets (later wins — same
         // rule pack_bars_for_key uses for provider re-sends).
         let future_cutoff_ms = now_ms + 2 * 24 * 60 * 60 * 1000i64;
+        let forming_bucket = normalized_bar_timestamp_ms(&key, now_ms);
         let mut by_bucket: std::collections::BTreeMap<i64, (f64, f64, f64, f64, f64)> =
             std::collections::BTreeMap::new();
-        for (ts, o, h, l, c, v) in raw.iter().copied() {
+        for (idx, (ts, o, h, l, c, v)) in raw.iter().copied().enumerate() {
             let valid = ts > 0
                 && ts <= future_cutoff_ms
                 && o.is_finite()
@@ -1378,6 +1520,17 @@ fn plan_row_repair(
             };
             if bucket <= 0 {
                 continue;
+            }
+            // A settled candle whose close sits outside its own high/low
+            // (audit: body_outside_range) gets the range extended to contain
+            // the close — same forming-candle exemption and 5% slop as the
+            // audit. Carried-forward opens (open outside range) are provider
+            // semantics, not damage, and stay untouched.
+            let (mut h, mut l) = (h, l);
+            let forming = idx + 1 == raw.len() && Some(bucket) == forming_bucket;
+            if !forming && (c > h * 1.05 || c < l * 0.95) {
+                h = h.max(c);
+                l = l.min(c);
             }
             by_bucket.insert(bucket, (o, h, l, c, v));
         }
@@ -2324,7 +2477,8 @@ impl SqliteCache {
         }
 
         if !report.cancelled {
-            self.audit_cross_source_overlap(&mut report, &series);
+            let split_events = load_split_events_for_audit(&conn);
+            self.audit_cross_source_overlap(&mut report, &series, &split_events);
             self.audit_merged_source_overlap(&mut report, &series);
         }
         report.finalize_issue_order();
@@ -2337,6 +2491,7 @@ impl SqliteCache {
         &self,
         report: &mut BarCacheSanityReport,
         series: &[AuditSeries],
+        split_events: &std::collections::BTreeMap<String, Vec<(i64, f64)>>,
     ) {
         let mut groups: std::collections::BTreeMap<(String, String), Vec<&AuditSeries>> =
             std::collections::BTreeMap::new();
@@ -2428,6 +2583,29 @@ impl SqliteCache {
                                     fmt_ts_ms(bucket).unwrap_or_else(|| bucket.to_string()),
                                     a_close,
                                     b_close
+                                ),
+                            );
+                            continue;
+                        }
+                        // A raw-vs-adjusted pair straddling known split
+                        // ex-dates is EXPECTED to disagree by the cumulative
+                        // split factor. When that explains every overlapping
+                        // close, record context instead of a warning — the
+                        // merge back-adjusts via the known-split path
+                        // (ADR-122), so the chart already paints one scale.
+                        if let Some((factor, residual)) = split_events
+                            .get(&symbol.to_ascii_uppercase())
+                            .and_then(|events| {
+                                split_explained_scale(&a.bars, &b_by_bucket, events)
+                            })
+                        {
+                            report.push_issue(
+                                BarCacheSanitySeverity::Info,
+                                "cross_source_split_adjustment_delta",
+                                format!("{symbol}:{timeframe}"),
+                                format!(
+                                    "{} vs {} overlap={} worst_ratio={ratio:.2} explained by known splits (cumulative factor {factor:.2}, residual {residual:.2})",
+                                    a.key, b.key, overlap
                                 ),
                             );
                             continue;

@@ -2000,3 +2000,177 @@ fn delete_keys_light_removes_rows_without_reclaim() {
 
     let _ = std::fs::remove_file(db_path);
 }
+
+#[test]
+fn data_sanity_issue_caps_do_not_crowd_out_warnings() {
+    let mut report = BarCacheSanityReport::default();
+    // An info flood on a mixed-severity code (large_time_gap emits both)
+    // must not evict the warn tier from the stored list.
+    for i in 0..(BarCacheSanityReport::MAX_ISSUES_PER_CODE + 50) {
+        report.push_issue(
+            BarCacheSanitySeverity::Info,
+            "large_time_gap",
+            format!("alpaca:SYM{i}:15Min"),
+            "ancient hole",
+        );
+    }
+    report.push_issue(
+        BarCacheSanitySeverity::Warn,
+        "large_time_gap",
+        "alpaca:STALLED:15Min",
+        "recent hole on an intraday series",
+    );
+    report.finalize_issue_order();
+    assert_eq!(report.warn_count, 1);
+    assert_eq!(
+        report.issue_code_count("large_time_gap"),
+        BarCacheSanityReport::MAX_ISSUES_PER_CODE + 51
+    );
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|i| i.severity == BarCacheSanitySeverity::Warn
+                && i.key == "alpaca:STALLED:15Min"),
+        "warn must be stored despite the info flood on the same code"
+    );
+    assert_eq!(
+        report.issues.first().map(|i| i.severity),
+        Some(BarCacheSanitySeverity::Warn),
+        "severity ordering puts the warn first"
+    );
+}
+
+#[test]
+fn data_sanity_audit_explains_cross_source_split_adjustment_delta() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    // Raw source: pre-split closes ~5, jumping to ~100 after a fresh
+    // 1-for-20 reverse split on the LAST overlap day, so the disagreement
+    // sits inside the recent window (the HUBC-class shape).
+    let mut raw_rows = Vec::new();
+    let mut adj_rows = Vec::new();
+    for day in 1..=8 {
+        let raw_close = if day == 8 { 100.0 } else { 5.0 };
+        raw_rows.push(format!(
+            r#"{{"timestamp":"2024-01-{day:02}T00:00:00+00:00","open":{o},"high":{h},"low":{l},"close":{c},"volume":100.0}}"#,
+            o = raw_close,
+            h = raw_close * 1.01,
+            l = raw_close * 0.99,
+            c = raw_close,
+        ));
+        adj_rows.push(format!(
+            r#"{{"timestamp":"2024-01-{day:02}T00:00:00+00:00","open":100.0,"high":101.0,"low":99.0,"close":100.0,"volume":100.0}}"#
+        ));
+    }
+    cache
+        .put_bars("alpaca:SPLT:1Day", &format!("[{}]", raw_rows.join(",")))
+        .unwrap();
+    cache
+        .put_bars("yahoo-chart:SPLT:1Day", &format!("[{}]", adj_rows.join(",")))
+        .unwrap();
+
+    // Without split knowledge the recent-window mismatch is a warning.
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(report.has_code("cross_source_overlap_mismatch"), "{report:#?}");
+
+    // Teach the audit the split; the same disagreement becomes context.
+    {
+        let conn = cache.conn.lock().unwrap();
+        crate::core::research::upsert_stock_splits(
+            &conn,
+            "SPLT",
+            &[crate::core::research::StockSplit {
+                date: "2024-01-08".into(),
+                label: "1:20".into(),
+                numerator: 1.0,
+                denominator: 20.0,
+            }],
+        )
+        .unwrap();
+    }
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(
+        !report.has_code("cross_source_overlap_mismatch"),
+        "{report:#?}"
+    );
+    assert!(
+        report.has_code("cross_source_split_adjustment_delta"),
+        "{report:#?}"
+    );
+    assert_eq!(report.warn_count, 0, "{report:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_repair_clamps_settled_close_outside_range() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    // Settled candle whose close sits >5% above its own high (the
+    // ATON/SEC-class provider malformation).
+    let bars = r#"[
+        {"timestamp":"2024-01-01T00:00:00+00:00","open":10.0,"high":11.0,"low":9.0,"close":10.5,"volume":100.0},
+        {"timestamp":"2024-01-02T00:00:00+00:00","open":10.0,"high":10.0,"low":10.0,"close":12.0,"volume":100.0}
+    ]"#;
+    cache.put_bars("yahoo-chart:CLMP:1Day", bars).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(report.has_code("body_outside_range"), "{report:#?}");
+    assert!(report.rewritable_rows >= 1, "{report:#?}");
+
+    let outcome = cache
+        .repair_bar_cache(
+            BarCacheRepairOptions {
+                rewrite_bad_rows: true,
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(outcome.rows_rewritten, 1, "{outcome:#?}");
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(!report.has_code("body_outside_range"), "{report:#?}");
+    assert_eq!(report.rewritable_rows, 0, "{report:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_repair_purges_empty_yahoo_rows() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    cache.put_bars("yahoo-chart:EMPTY:1Month", "[]").unwrap();
+    cache.put_bars("alpaca:EMPTY:1Month", "[]").unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert_eq!(report.purgeable_empty_rows, 1, "{report:#?}");
+    assert!(report.has_code("zero_bar_row"), "{report:#?}");
+
+    let outcome = cache
+        .repair_bar_cache(
+            BarCacheRepairOptions {
+                purge_empty_rows: true,
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(outcome.rows_deleted, 1, "{outcome:#?}");
+    assert!(
+        cache
+            .get_bars_raw("yahoo-chart:EMPTY:1Month")
+            .unwrap()
+            .is_none()
+    );
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert_eq!(report.purgeable_empty_rows, 0, "{report:#?}");
+    // The alpaca empty row is informational context and stays.
+    assert!(report.has_code("zero_bar_row"), "{report:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}

@@ -90,6 +90,20 @@ impl TyphooNApp {
                             }
                         }
                     }
+                    SanityWorkerMsg::SplitsBackfillDone(result) => {
+                        finished = true;
+                        match result {
+                            Ok(line) => {
+                                self.log.push_back(LogEntry::info(line.clone()));
+                                self.storage_sanity_last_action = Some(line);
+                            }
+                            Err(e) => {
+                                self.storage_sanity_reaudit_after = false;
+                                self.log
+                                    .push_back(LogEntry::err(format!("Splits backfill failed: {e}")));
+                            }
+                        }
+                    }
                 }
             }
             if finished {
@@ -941,6 +955,8 @@ impl TyphooNApp {
         let rewrite_n = report.rewritable_rows;
         let corrupt_n = report.corrupt_rows;
         let merged_n = report.merged_mismatch_keys.len();
+        let purge_n = report.purgeable_empty_rows;
+        let backfill_n = sanity_split_backfill_symbols(report).len();
         let stored_issues = report.issues.len();
         let issue_lines: Vec<(BarCacheSanitySeverity, String)> = report
             .issues
@@ -1019,7 +1035,7 @@ impl TyphooNApp {
                     ),
                 )
                 .on_hover_text(
-                    "Re-pack rows that violate write-path invariants: drops invalid-OHLC bars, duplicate/out-of-order buckets, bars >2 days in the future; converts legacy JSON rows to binary. Re-audits when done.",
+                    "Re-pack rows that violate write-path invariants: drops invalid-OHLC bars, duplicate/out-of-order buckets, bars >2 days in the future; clamps settled candles whose close lies outside high/low; converts legacy JSON rows to binary. Re-audits when done.",
                 )
                 .clicked()
             {
@@ -1062,6 +1078,26 @@ impl TyphooNApp {
                     self.storage_sanity_confirm = Some(SanityConfirmAction::DeleteCorrupt);
                 }
             }
+            if ui
+                .add_enabled(
+                    actions_enabled && purge_n > 0,
+                    egui::Button::new(
+                        egui::RichText::new(format!("Purge empty rows ({purge_n})")).small(),
+                    ),
+                )
+                .on_hover_text(
+                    "Delete yahoo-chart rows that decode to zero bars — an empty row occupies the key while holding nothing, so sync never re-fetches the range. Nothing is lost; the next bar sync re-fetches. Re-audits when done.",
+                )
+                .clicked()
+            {
+                self.start_sanity_repair(
+                    BarCacheRepairOptions {
+                        purge_empty_rows: true,
+                        ..Default::default()
+                    },
+                    "purge empty rows",
+                );
+            }
             let merged_armed =
                 self.storage_sanity_confirm == Some(SanityConfirmAction::RebuildMerged);
             let merged_text = if merged_armed {
@@ -1086,6 +1122,20 @@ impl TyphooNApp {
                 } else {
                     self.storage_sanity_confirm = Some(SanityConfirmAction::RebuildMerged);
                 }
+            }
+            if ui
+                .add_enabled(
+                    actions_enabled && backfill_n > 0,
+                    egui::Button::new(
+                        egui::RichText::new(format!("Backfill splits ({backfill_n})")).small(),
+                    ),
+                )
+                .on_hover_text(
+                    "Fetch split history (keyless Yahoo chart events + FMP when a key is set) into research_stock_splits for every symbol the cross-source checks flagged. Feeds the merge's known-split back-adjust (ADR-122) and lets the audit reclassify split-explained mismatches as context. Re-audits when done.",
+                )
+                .clicked()
+            {
+                self.start_sanity_splits_backfill();
             }
             if ui
                 .add_enabled(
@@ -1276,4 +1326,139 @@ impl TyphooNApp {
         });
         self.storage_sanity_rx = Some(rx);
     }
+
+    /// Fetch split history for every symbol the last audit's cross-source
+    /// checks flagged, into `research_stock_splits` — keyless Yahoo chart
+    /// events always, FMP too when a key is set (same combined fetcher the
+    /// research scrape uses). Feeds the merge's known-split back-adjust
+    /// (ADR-122) and the audit's split-aware mismatch classification without
+    /// waiting for a full-catalog research scrape.
+    fn start_sanity_splits_backfill(&mut self) {
+        if self.storage_sanity_rx.is_some() {
+            return;
+        }
+        let Some(cache) = self.cache.clone() else {
+            return;
+        };
+        let symbols: Vec<String> = self
+            .storage_sanity_report
+            .as_ref()
+            .map(sanity_split_backfill_symbols)
+            .unwrap_or_default();
+        if symbols.is_empty() {
+            return;
+        }
+        let fmp_key = self.fmp_key.clone();
+        let with_fmp = if fmp_key.is_empty() { "" } else { " + FMP" };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_worker = cancel.clone();
+        let total = symbols.len();
+        std::thread::spawn(move || {
+            let result = (|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| format!("tokio runtime init failed: {e}"))?;
+                rt.block_on(async {
+                    use typhoon_engine::core::research;
+                    let client = reqwest::Client::builder()
+                        .user_agent("TyphooN-Terminal/1.0")
+                        .timeout(std::time::Duration::from_secs(15))
+                        .build()
+                        .map_err(|e| format!("http client init failed: {e}"))?;
+                    let mut with_splits = 0usize;
+                    let mut failed = 0usize;
+                    let mut done = 0usize;
+                    for symbol in &symbols {
+                        if cancel_worker.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+                        match research::fetch_stock_splits(&client, symbol, &fmp_key).await {
+                            Ok(rows) => match cache.connection() {
+                                Ok(conn) => {
+                                    let existing_nonempty = rows.is_empty()
+                                        && research::get_stock_splits(&conn, symbol)
+                                            .ok()
+                                            .flatten()
+                                            .is_some_and(|old| !old.is_empty());
+                                    if existing_nonempty {
+                                        // Provider returned nothing but the table
+                                        // already knows splits (e.g. curated WOK)
+                                        // — a fetch gap must not erase known
+                                        // actions.
+                                        with_splits += 1;
+                                    } else {
+                                        match research::upsert_stock_splits(&conn, symbol, &rows)
+                                        {
+                                            Ok(()) if !rows.is_empty() => with_splits += 1,
+                                            Ok(()) => {}
+                                            Err(e) => {
+                                                tracing::warn!("splits backfill {symbol}: {e}");
+                                                failed += 1;
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(_) => failed += 1,
+                            },
+                            Err(e) => {
+                                tracing::debug!("splits backfill {symbol}: {e}");
+                                failed += 1;
+                            }
+                        }
+                        done += 1;
+                        let _ = tx.send(SanityWorkerMsg::Progress {
+                            phase: "splits backfill",
+                            done,
+                            total,
+                        });
+                        tokio::time::sleep(std::time::Duration::from_millis(450)).await;
+                    }
+                    let cancelled = if done < total { " [CANCELLED]" } else { "" };
+                    Ok(format!(
+                        "Splits backfill: {done}/{total} symbols checked — {with_splits} with split history, {failed} failed{cancelled}"
+                    ))
+                })
+            })();
+            let _ = tx.send(SanityWorkerMsg::SplitsBackfillDone(result));
+        });
+        self.storage_sanity_rx = Some(rx);
+        self.storage_sanity_cancel = Some(cancel);
+        self.storage_sanity_progress = Some(("splits backfill", 0, total));
+        self.storage_sanity_confirm = None;
+        self.storage_sanity_reaudit_after = true;
+        self.log.push_back(LogEntry::info(format!(
+            "Stock-split backfill started ({total} audit-flagged symbols; keyless Yahoo{with_fmp})"
+        )));
+    }
+}
+
+/// Unique symbols from the last audit whose cross-source/merged scale checks
+/// flagged a disagreement — the set worth fetching split history for.
+/// Split-explained mismatches are excluded: their splits are already known.
+fn sanity_split_backfill_symbols(
+    report: &typhoon_engine::core::cache::BarCacheSanityReport,
+) -> Vec<String> {
+    const CODES: &[&str] = &[
+        "cross_source_overlap_mismatch",
+        "cross_source_historical_scale_delta",
+        "cross_source_scale_blowout",
+        "merged_source_overlap_mismatch",
+        "merged_source_historical_scale_delta",
+        "merged_source_stable_scale_delta",
+    ];
+    let mut symbols = std::collections::BTreeSet::new();
+    for issue in &report.issues {
+        if !CODES.contains(&issue.code.as_str()) {
+            continue;
+        }
+        // Cross-source issue keys are "SYMBOL:TIMEFRAME".
+        if let Some(symbol) = issue.key.split(':').next()
+            && !symbol.is_empty()
+        {
+            symbols.insert(symbol.to_string());
+        }
+    }
+    symbols.into_iter().collect()
 }

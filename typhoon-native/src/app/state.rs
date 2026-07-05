@@ -43,6 +43,8 @@ pub(crate) enum SanityWorkerMsg {
     RepairDone(Result<typhoon_engine::core::cache::BarCacheRepairOutcome, String>),
     MergedRebuildDone(Result<u64, String>),
     ExportDone(Result<String, String>),
+    /// Summary line (or error) from the stock-split backfill worker.
+    SplitsBackfillDone(Result<String, String>),
 }
 
 /// Destructive sanity actions gated behind a second confirming click.
