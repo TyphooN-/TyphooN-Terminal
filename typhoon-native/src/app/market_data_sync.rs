@@ -1037,6 +1037,9 @@ impl TyphooNApp {
     }
 
     pub(super) fn schedule_kraken_universe_sectors(&mut self) -> usize {
+        if !self.broad_sync_state_ready() {
+            return 0;
+        }
         if !self.kraken_enabled
             || !self.kraken_full_bar_sync_enabled
             || !self.kraken_any_spot_scrape_enabled()
@@ -1062,7 +1065,20 @@ impl TyphooNApp {
         dispatched
     }
 
+    /// True once the BG worker's first detailed-stats pass has landed in
+    /// `self.bg`. Before that, every (symbol, timeframe) reads as Missing, so a
+    /// broad-universe scheduler tick would re-dispatch full-history fetches for
+    /// the ENTIRE catalog — the observed session-start storm (6.8k Alpaca +
+    /// 7.8k Yahoo full 1Month pulls inside one hour). Broad lanes wait for the
+    /// snapshot; focus/chart-demand paths are deliberately not gated.
+    pub(super) fn broad_sync_state_ready(&self) -> bool {
+        self.bg.sync_state_ready
+    }
+
     pub(super) fn schedule_kraken_equities_universe(&mut self) -> usize {
+        if !self.broad_sync_state_ready() {
+            return 0;
+        }
         let catalog_symbols = self.kraken_equity_catalog_symbols_cached();
         let demand_symbols = self.kraken_equity_demand_symbols();
         let native_symbols =
@@ -1158,6 +1174,15 @@ impl TyphooNApp {
                 .filter_map(|key| key.strip_prefix("equity:").map(str::to_string))
                 .collect();
             let mut cursor = self.kraken_equities_sync_cursor;
+            // Mirrors queue_kraken_equity_fetch's symbol normalization so the
+            // cooldown probe hits the same key mark_fetch_queued recorded.
+            let equities_dispatch_blocked = |symbol: &str, tf: &str| {
+                let symbol = normalize_market_data_symbol(symbol)
+                    .replace('/', "")
+                    .trim_end_matches(".EQ")
+                    .to_ascii_uppercase();
+                self.is_fetch_on_cooldown("kraken-equities", &symbol, tf)
+            };
             // Tier priority (MTF Grid > Active > Background) + high-TF-first is applied inside the workset selector
             let candidates = select_alpaca_sync_workset_rotating_with_stale_multiplier(
                 &native_symbols,
@@ -1174,6 +1199,7 @@ impl TyphooNApp {
                 now_s,
                 1,
                 kraken_equities_sync_target_bars,
+                &equities_dispatch_blocked,
             );
             self.kraken_equities_sync_cursor = cursor;
             for candidate in candidates {
@@ -1224,6 +1250,11 @@ impl TyphooNApp {
                             .map(|retry| alpaca_fetch_key(&retry.symbol, &retry.timeframe)),
                     );
                     let mut cursor = self.kraken_equities_alpaca_sync_cursor;
+                    // Mirrors queue_alpaca_fetch's symbol normalization.
+                    let alpaca_dispatch_blocked = |symbol: &str, tf: &str| {
+                        let symbol = normalize_market_data_symbol(symbol).replace('/', "");
+                        self.is_fetch_on_cooldown("alpaca", &symbol, tf)
+                    };
                     let candidates = select_alpaca_sync_workset_rotating(
                         &fallback_symbols,
                         &alpaca_timeframes,
@@ -1242,6 +1273,7 @@ impl TyphooNApp {
                         &mut cursor,
                         now_s,
                         alpaca_sync_target_bars,
+                        &alpaca_dispatch_blocked,
                     );
                     self.kraken_equities_alpaca_sync_cursor = cursor;
                     dispatched += self.queue_alpaca_batch_fetches_from_candidates(candidates);
@@ -1288,19 +1320,36 @@ impl TyphooNApp {
                         self.cached_yahoo_chart_sync_state = rebuilt;
                         self.cached_yahoo_chart_sync_state_rev = Some(self.bg_rev);
                     }
+                    if !self.yahoo_chart_backfill_complete_loaded {
+                        self.yahoo_chart_backfill_complete_load();
+                    }
                     let no_data = self
                         .unresolvable_fetch_keys_by_broker
                         .get("yahoo-chart")
                         .cloned()
                         .unwrap_or_default();
                     let mut cursor = self.yahoo_chart_sync_cursor;
+                    // Mirrors queue_yahoo_chart_fetch's symbol normalization.
+                    let yahoo_dispatch_blocked = |symbol: &str, tf: &str| {
+                        let symbol = normalize_market_data_symbol(symbol)
+                            .replace('/', "")
+                            .trim_end_matches(".EQ")
+                            .to_ascii_uppercase();
+                        self.is_fetch_on_cooldown("yahoo-chart", &symbol, tf)
+                    };
+                    // Every Yahoo chart fetch pulls full period1=0 history, so a
+                    // pair marked complete never needs Backfill re-selection —
+                    // without this map the u32::MAX target made every (symbol,
+                    // 1Month) an eternal Backfill candidate and Yahoo re-pulled
+                    // the whole catalog's monthly history forever, starving
+                    // 1Week/1Day (observed 8.3k 1Month rewrites in one night).
                     let candidates = select_alpaca_sync_workset_rotating(
                         &fallback_symbols,
                         &yahoo_timeframes,
                         &self.cached_yahoo_chart_sync_state,
                         &focus_symbols,
                         &no_data,
-                        &empty_backfill,
+                        &self.yahoo_chart_backfill_complete_pairs,
                         &self.pending_yahoo_chart_fetches,
                         available_slots,
                         yahoo_foreground_slots,
@@ -1308,6 +1357,7 @@ impl TyphooNApp {
                         &mut cursor,
                         now_s,
                         alpaca_sync_target_bars,
+                        &yahoo_dispatch_blocked,
                     );
                     self.yahoo_chart_sync_cursor = cursor;
                     for candidate in candidates {
@@ -1323,6 +1373,9 @@ impl TyphooNApp {
     }
 
     pub(super) fn schedule_kraken_futures_universe_sectors(&mut self) -> usize {
+        if !self.broad_sync_state_ready() {
+            return 0;
+        }
         if !self.kraken_enabled || !self.kraken_full_bar_sync_enabled || !self.kraken_scrape_futures
         {
             return 0;
@@ -1426,11 +1479,34 @@ impl TyphooNApp {
         }
     }
 
+    /// Depth of a full provider-history batch pull, in bars. Chunks at this
+    /// depth are the coverage path (Missing/Backfill buckets); the engine also
+    /// treats a Complete-outcome symbol omission at this depth as authoritative
+    /// "provider has nothing" and tombstones it.
+    pub(super) const ALPACA_BATCH_DEEP_HISTORY_BARS: u32 = 10_000;
+
+    /// Bars of lookback a stale top-up chunk actually needs: the widest gap in
+    /// the chunk (candidate score = seconds since that symbol's last bar) plus
+    /// 50% headroom. Before this, every batch re-pulled the full 10k-bar server
+    /// history per symbol, so a routine post-close 1Day refresh of the 12.4k
+    /// catalog burned the entire aggregate RPM budget on already-cached bars —
+    /// the reason 3 Alpaca lanes performed like one.
+    fn alpaca_batch_topup_limit_bars(timeframe: &str, max_age_s: i64) -> u32 {
+        let period_s = sync_timeframe_period_secs(timeframe).unwrap_or(60).max(1);
+        let gap_bars = (max_age_s.max(0) / period_s).max(1) as u32;
+        gap_bars
+            .saturating_add((gap_bars / 2).max(8))
+            .clamp(64, Self::ALPACA_BATCH_DEEP_HISTORY_BARS)
+    }
+
     fn queue_alpaca_batch_fetches_from_candidates(
         &mut self,
         candidates: Vec<AlpacaSyncCandidate>,
     ) -> usize {
-        let mut by_tf: std::collections::BTreeMap<String, Vec<String>> =
+        // Split per (timeframe, deep): Missing/Backfill chunks need full
+        // provider history; Stale chunks only need the gap since their oldest
+        // cached tail. Value = (symbols, max stale age seen in the group).
+        let mut by_tf: std::collections::BTreeMap<(String, bool), (Vec<String>, i64)> =
             std::collections::BTreeMap::new();
         let mut dispatched = 0usize;
         for candidate in candidates {
@@ -1459,15 +1535,27 @@ impl TyphooNApp {
                 continue;
             }
             self.mark_fetch_queued("alpaca", &symbol, tf);
-            by_tf.entry(tf.to_string()).or_default().push(symbol);
+            let deep = candidate.bucket != AlpacaSyncBucket::Stale;
+            let entry = by_tf.entry((tf.to_string(), deep)).or_default();
+            entry.0.push(symbol);
+            if !deep {
+                // Stale candidates carry score = age of the last cached bar.
+                entry.1 = entry.1.max(candidate.score);
+            }
             dispatched += 1;
         }
-        for (timeframe, symbols) in by_tf {
+        for ((timeframe, deep), (symbols, max_age_s)) in by_tf {
+            let limit = if deep {
+                Self::ALPACA_BATCH_DEEP_HISTORY_BARS
+            } else {
+                Self::alpaca_batch_topup_limit_bars(&timeframe, max_age_s)
+            };
             let chunk_symbols = Self::alpaca_batch_fetch_chunk_symbols(&timeframe);
             for chunk in symbols.chunks(chunk_symbols) {
                 let _ = self.broker_tx.send(BrokerCmd::AlpacaFetchBarsBatch {
                     symbols: chunk.to_vec(),
                     timeframe: timeframe.clone(),
+                    limit,
                 });
             }
         }
@@ -1898,6 +1986,9 @@ impl TyphooNApp {
     }
 
     pub(super) fn schedule_alpaca_pairs(&mut self, symbols: &[String]) -> usize {
+        if !self.broad_sync_state_ready() {
+            return 0;
+        }
         if !self.alpaca_enabled
             || !self.broker_connected
             || !self.alpaca_full_bar_sync_enabled
@@ -1947,6 +2038,16 @@ impl TyphooNApp {
                 .map(|retry| alpaca_fetch_key(&retry.symbol, &retry.timeframe)),
         );
         let mut cursor = self.alpaca_sync_cursor;
+        let scan_limit = if self.full_tilt_sync_enabled() {
+            ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT
+        } else {
+            ALPACA_BACKGROUND_SCAN_LIMIT
+        };
+        // Mirrors queue_alpaca_fetch's symbol normalization.
+        let alpaca_dispatch_blocked = |symbol: &str, tf: &str| {
+            let symbol = normalize_market_data_symbol(symbol).replace('/', "");
+            self.is_fetch_on_cooldown("alpaca", &symbol, tf)
+        };
         let candidates = select_alpaca_sync_workset_rotating(
             symbols,
             &timeframes,
@@ -1957,14 +2058,11 @@ impl TyphooNApp {
             &self.pending_alpaca_fetches,
             available_slots,
             capacity.foreground_reserve,
-            if self.full_tilt_sync_enabled() {
-                ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT
-            } else {
-                ALPACA_BACKGROUND_SCAN_LIMIT
-            },
+            scan_limit,
             &mut cursor,
             now_s,
             alpaca_sync_target_bars,
+            &alpaca_dispatch_blocked,
         );
         self.alpaca_sync_cursor = cursor;
 
@@ -2034,6 +2132,11 @@ impl TyphooNApp {
         let now_s = chrono::Utc::now().timestamp();
         let cursor_idx = sector_idx.min(self.kraken_spot_sync_cursors.len().saturating_sub(1));
         let mut cursor = self.kraken_spot_sync_cursors[cursor_idx];
+        // Mirrors queue_kraken_fetch's symbol normalization.
+        let kraken_dispatch_blocked = |symbol: &str, tf: &str| {
+            let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
+            self.is_fetch_on_cooldown("kraken", &symbol, tf)
+        };
         let candidates = select_alpaca_sync_workset_rotating(
             symbols,
             &timeframes,
@@ -2048,6 +2151,7 @@ impl TyphooNApp {
             &mut cursor,
             now_s,
             kraken_sync_target_bars,
+            &kraken_dispatch_blocked,
         );
         self.kraken_spot_sync_cursors[cursor_idx] = cursor;
         let mut dispatched = 0usize;
@@ -2120,6 +2224,11 @@ impl TyphooNApp {
         let now_s = chrono::Utc::now().timestamp();
         let cursor_idx = sector_idx.min(self.kraken_futures_sync_cursors.len().saturating_sub(1));
         let mut cursor = self.kraken_futures_sync_cursors[cursor_idx];
+        // Mirrors queue_kraken_futures_fetch's symbol normalization.
+        let futures_dispatch_blocked = |symbol: &str, tf: &str| {
+            let symbol = typhoon_engine::core::kraken_futures::normalize_futures_symbol(symbol);
+            self.is_fetch_on_cooldown("kraken-futures", &symbol, tf)
+        };
         let candidates = select_alpaca_sync_workset_rotating(
             symbols,
             &timeframes,
@@ -2134,6 +2243,7 @@ impl TyphooNApp {
             &mut cursor,
             now_s,
             kraken_futures_sync_target_bars,
+            &futures_dispatch_blocked,
         );
         self.kraken_futures_sync_cursors[cursor_idx] = cursor;
         let mut dispatched = 0usize;
@@ -2382,6 +2492,27 @@ mod tests {
             kraken_equity_symbols_for_timeframe(&catalog, &demand, "1Month"),
             symbols(&["AAPL", "MSFT"]),
             "assist/merged broad lanes (Alpaca/Yahoo) still rotate over the catalog"
+        );
+    }
+
+    #[test]
+    fn batch_topup_limit_covers_gap_with_headroom_and_stays_bounded() {
+        // 3-day gap on 1Day bars: gap 3 + headroom 8 = 11, floored at 64 so a
+        // batch is never pointlessly narrow.
+        assert_eq!(
+            TyphooNApp::alpaca_batch_topup_limit_bars("1Day", 3 * 86_400),
+            64
+        );
+        // 200-day gap: 200 + 100 headroom = 300 — a bounded window instead of
+        // the old full 10k-bar history re-pull.
+        assert_eq!(
+            TyphooNApp::alpaca_batch_topup_limit_bars("1Day", 200 * 86_400),
+            300
+        );
+        // Pathological ages clamp at the deep-history ceiling.
+        assert_eq!(
+            TyphooNApp::alpaca_batch_topup_limit_bars("15Min", 400 * 86_400),
+            TyphooNApp::ALPACA_BATCH_DEEP_HISTORY_BARS
         );
     }
 

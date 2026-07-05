@@ -79,6 +79,7 @@ impl TyphooNApp {
         self.flush_unresolvable_marks(false);
         self.flush_alpaca_backfill_complete_marks(false);
         self.flush_kraken_backfill_complete_marks(false);
+        self.flush_yahoo_chart_backfill_complete_marks(false);
         if self.heavy_sync_in_progress {
             // build_session_json() walks a large amount of UI/session state and
             // write_session_json()/sync_preferences_save() hit disk/SQLite. During
@@ -155,6 +156,7 @@ impl TyphooNApp {
         self.flush_unresolvable_marks(true);
         self.flush_alpaca_backfill_complete_marks(true);
         self.flush_kraken_backfill_complete_marks(true);
+        self.flush_yahoo_chart_backfill_complete_marks(true);
         // Persist credentials to keyring + SQLite fallback — on background thread to avoid UI freeze
         // (each keyring::store can take 50-200ms on Linux due to DBUS roundtrip × 11 keys = 1-2s freeze)
         let cred_pairs: Vec<(String, String)> = vec![

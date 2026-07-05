@@ -111,6 +111,11 @@ impl TyphooNApp {
                 .keys()
                 .cloned()
                 .collect(),
+            yahoo_chart_backfill_keys: self
+                .yahoo_chart_backfill_complete_pairs
+                .keys()
+                .cloned()
+                .collect(),
             no_data_keys_by_source: {
                 // Mirror the scheduler's no-data view: the unresolvable index per
                 // broker, plus the persisted Alpaca no-data tombstones folded into
@@ -359,6 +364,7 @@ pub(super) struct BarSyncInputs {
     alpaca_backfill_keys: std::collections::HashSet<String>,
     kraken_backfill_keys: std::collections::HashSet<String>,
     kraken_futures_backfill_keys: std::collections::HashSet<String>,
+    yahoo_chart_backfill_keys: std::collections::HashSet<String>,
     /// Per-source provider-no-data tombstones (`source` → set of `SYM:TF` fetch
     /// keys). Used by the Merged classifier to mark a fully-tombstoned cell
     /// Unreachable. `alpaca` folds in both the unresolvable index and the
@@ -410,6 +416,7 @@ impl BarSyncInputs {
                 "alpaca" => self.alpaca_backfill_keys.contains(&fetch_key),
                 "kraken" | "kraken-equities" => self.kraken_backfill_keys.contains(&fetch_key),
                 "kraken-futures" => self.kraken_futures_backfill_keys.contains(&fetch_key),
+                "yahoo-chart" => self.yahoo_chart_backfill_keys.contains(&fetch_key),
                 _ => false,
             }
         };
@@ -864,6 +871,7 @@ mod tests {
             alpaca_backfill_keys: std::collections::HashSet::new(),
             kraken_backfill_keys: std::collections::HashSet::new(),
             kraken_futures_backfill_keys: std::collections::HashSet::new(),
+            yahoo_chart_backfill_keys: std::collections::HashSet::new(),
             no_data_keys_by_source: std::collections::HashMap::new(),
         };
         let result = inputs.compute();

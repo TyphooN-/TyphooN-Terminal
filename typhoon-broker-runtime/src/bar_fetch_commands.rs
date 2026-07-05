@@ -58,7 +58,11 @@ pub async fn handle_bar_fetch_command(
                 });
             }
         }
-        BrokerCmd::AlpacaFetchBarsBatch { symbols, timeframe } => {
+        BrokerCmd::AlpacaFetchBarsBatch {
+            symbols,
+            timeframe,
+            limit,
+        } => {
             if let Some(broker) = alpaca_pool.next_data_broker() {
                 let msg_tx = broker_msg_tx.clone();
                 let shared_cache = shared_cache_broker.clone();
@@ -80,6 +84,7 @@ pub async fn handle_bar_fetch_command(
                         msg_tx,
                         symbols,
                         timeframe,
+                        limit,
                     )
                     .await;
                 });

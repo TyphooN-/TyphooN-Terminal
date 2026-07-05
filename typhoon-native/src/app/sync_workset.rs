@@ -613,6 +613,7 @@ pub(super) fn select_alpaca_sync_workset(
     selected
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn select_alpaca_sync_workset_rotating(
     symbols: &[String],
     timeframes: &[String],
@@ -627,6 +628,7 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     cursor: &mut usize,
     now_s: i64,
     target_bars_for_tf: fn(&str) -> Option<u32>,
+    is_dispatch_blocked: &dyn Fn(&str, &str) -> bool,
 ) -> Vec<AlpacaSyncCandidate> {
     select_alpaca_sync_workset_rotating_with_stale_multiplier(
         symbols,
@@ -643,9 +645,19 @@ pub(super) fn select_alpaca_sync_workset_rotating(
         now_s,
         24,
         target_bars_for_tf,
+        is_dispatch_blocked,
     )
 }
 
+/// `is_dispatch_blocked(raw_symbol, tf)` mirrors the per-lane queue-time gates the
+/// selector cannot otherwise see (chiefly the `is_fetch_on_cooldown` window, which
+/// spans half a TF period — 3.5 DAYS for 1Week, 15 for 1Month). Without it, a
+/// timeframe whose remaining candidates are all cooldown-armed still fills every
+/// batch with them; the queue path then drops 100% at dispatch, and the strict
+/// high-TF-first descent never reaches the lower timeframes. That is exactly the
+/// overnight "lane goes silent for 8h while 1Day sits at 1.8%" wedge: blocked
+/// candidates must neither consume batch slots nor hold the TF descent hostage.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn select_alpaca_sync_workset_rotating_with_stale_multiplier(
     symbols: &[String],
     timeframes: &[String],
@@ -661,6 +673,7 @@ pub(super) fn select_alpaca_sync_workset_rotating_with_stale_multiplier(
     now_s: i64,
     background_stale_periods: i64,
     target_bars_for_tf: fn(&str) -> Option<u32>,
+    is_dispatch_blocked: &dyn Fn(&str, &str) -> bool,
 ) -> Vec<AlpacaSyncCandidate> {
     if batch_size == 0 || symbols.is_empty() || timeframes.is_empty() {
         return Vec::new();
@@ -711,6 +724,7 @@ pub(super) fn select_alpaca_sync_workset_rotating_with_stale_multiplier(
                     now_s,
                     background_stale_periods,
                     target_bars_for_tf,
+                    is_dispatch_blocked,
                     &mut missing,
                     &mut stale,
                     &mut backfill,
@@ -734,6 +748,7 @@ pub(super) fn select_alpaca_sync_workset_rotating_with_stale_multiplier(
                     now_s,
                     background_stale_periods,
                     target_bars_for_tf,
+                    is_dispatch_blocked,
                     &mut missing,
                     &mut stale,
                     &mut backfill,
@@ -774,6 +789,7 @@ fn collect_sync_candidate_for_timeframe(
     now_s: i64,
     background_stale_periods: i64,
     target_bars_for_tf: fn(&str) -> Option<u32>,
+    is_dispatch_blocked: &dyn Fn(&str, &str) -> bool,
     missing: &mut Vec<AlpacaSyncCandidate>,
     stale: &mut Vec<AlpacaSyncCandidate>,
     backfill: &mut Vec<AlpacaSyncCandidate>,
@@ -804,6 +820,13 @@ fn collect_sync_candidate_for_timeframe(
     if candidate.bucket == AlpacaSyncBucket::Backfill
         && backfill_complete_pairs.contains_key(&fetch_key)
     {
+        return;
+    }
+    // Probed only for actionable candidates (post-classify) so the common
+    // no-work case stays allocation-free. Pass the RAW symbol: each lane's
+    // predicate applies its own queue-fn normalization (pair/futures/market)
+    // so the probe key matches what `mark_fetch_queued` recorded.
+    if is_dispatch_blocked(symbol, tf) {
         return;
     }
     match candidate.bucket {

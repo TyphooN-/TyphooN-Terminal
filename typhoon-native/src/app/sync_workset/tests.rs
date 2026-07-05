@@ -407,6 +407,8 @@ fn select_alpaca_sync_workset_rotating_bounds_background_scan() {
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
+    
+        &|_, _| false,
     );
 
     assert_eq!(first.len(), 1);
@@ -427,6 +429,8 @@ fn select_alpaca_sync_workset_rotating_bounds_background_scan() {
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
+    
+        &|_, _| false,
     );
 
     assert_eq!(second.len(), 1);
@@ -456,6 +460,8 @@ fn select_alpaca_sync_workset_rotating_prioritizes_focus_before_background_scan(
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
+    
+        &|_, _| false,
     );
 
     assert_eq!(selected.len(), 1);
@@ -489,6 +495,8 @@ fn select_alpaca_sync_workset_rotating_walks_all_symbols_mn1_before_lower_timefr
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
+    
+        &|_, _| false,
     );
     assert_eq!(
         first
@@ -520,6 +528,8 @@ fn select_alpaca_sync_workset_rotating_walks_all_symbols_mn1_before_lower_timefr
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
+    
+        &|_, _| false,
     );
     assert_eq!(
         second
@@ -552,6 +562,8 @@ fn select_alpaca_sync_workset_rotating_walks_all_symbols_mn1_before_lower_timefr
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
+    
+        &|_, _| false,
     );
     assert_eq!(
         third
@@ -601,6 +613,8 @@ fn select_alpaca_sync_workset_rotating_advances_cursor_by_actual_tail_window() {
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
+    
+        &|_, _| false,
     );
 
     assert_eq!(selected.len(), 1);
@@ -649,6 +663,8 @@ fn select_alpaca_sync_workset_rotating_keeps_global_high_tf_priority_across_slic
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
+    
+        &|_, _| false,
     );
 
     assert_eq!(
@@ -687,6 +703,8 @@ fn select_alpaca_sync_workset_rotating_gives_focus_the_full_batch() {
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
+    
+        &|_, _| false,
     );
 
     assert_eq!(selected.len(), 3);
@@ -718,6 +736,8 @@ fn select_alpaca_sync_workset_rotating_does_not_foreground_m1_m5() {
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
+    
+        &|_, _| false,
     );
 
     assert_eq!(selected.len(), 1);
@@ -792,6 +812,8 @@ fn select_alpaca_sync_workset_rotating_skips_pending_without_advancing_priority(
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
+    
+        &|_, _| false,
     );
 
     assert_eq!(
@@ -846,6 +868,8 @@ fn high_timeframe_backfill_preempts_lower_timeframe_stale_refresh() {
         &mut cursor,
         now_s,
         |_| Some(100),
+    
+        &|_, _| false,
     );
 
     assert_eq!(selected.len(), 1);
@@ -922,4 +946,107 @@ fn select_alpaca_sync_candidates_skips_backfill_complete_pairs() {
     );
 
     assert!(selected.is_empty());
+}
+
+#[test]
+fn rotating_selector_descends_past_timeframe_whose_candidates_are_dispatch_blocked() {
+    // The overnight wedge: every (symbol, 1Month) classifies Backfill forever
+    // (unbounded target, no completion marks) but sits on a multi-day fetch
+    // cooldown. Without the dispatch-blocked probe the selector spends every
+    // batch on those undispatchable 1Month candidates and 1Day never syncs.
+    let now_s = 1_700_000_000i64;
+    let symbols = vec!["AAPL".to_string(), "MSFT".to_string()];
+    let timeframes = vec!["1Month".to_string(), "1Day".to_string()];
+    let mut state_map = HashMap::new();
+    for symbol in &symbols {
+        state_map.insert(
+            (symbol.clone(), "1Month".to_string()),
+            SyncCacheState {
+                last_bar_ts_s: now_s - 3_600,
+                write_ts_s: now_s - 3_600,
+                bar_count: 120,
+            },
+        );
+    }
+
+    let mut cursor = 0usize;
+    let wedged = select_alpaca_sync_workset_rotating(
+        &symbols,
+        &timeframes,
+        &state_map,
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashMap::new(),
+        &HashSet::new(),
+        2,
+        0,
+        2,
+        &mut cursor,
+        now_s,
+        alpaca_sync_target_bars,
+        &|_, _| false,
+    );
+    assert!(
+        wedged.iter().all(|c| c.timeframe == "1Month"),
+        "without blocking, the 1Month Backfill bucket owns the batch"
+    );
+
+    let mut cursor = 0usize;
+    let descended = select_alpaca_sync_workset_rotating(
+        &symbols,
+        &timeframes,
+        &state_map,
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashMap::new(),
+        &HashSet::new(),
+        2,
+        0,
+        2,
+        &mut cursor,
+        now_s,
+        alpaca_sync_target_bars,
+        &|_, tf| tf == "1Month",
+    );
+    assert_eq!(descended.len(), 2);
+    assert!(
+        descended.iter().all(|c| c.timeframe == "1Day"),
+        "blocked 1Month candidates must not hold the TF descent: {descended:?}"
+    );
+    assert!(
+        descended
+            .iter()
+            .all(|c| c.bucket == AlpacaSyncBucket::Missing)
+    );
+}
+
+#[test]
+fn rotating_selector_blocked_candidates_do_not_consume_batch_slots() {
+    let now_s = 1_700_000_000i64;
+    let symbols = vec!["AAPL".to_string(), "MSFT".to_string()];
+    let timeframes = vec!["1Day".to_string()];
+    let mut cursor = 0usize;
+
+    let selected = select_alpaca_sync_workset_rotating(
+        &symbols,
+        &timeframes,
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashMap::new(),
+        &HashSet::new(),
+        1,
+        0,
+        2,
+        &mut cursor,
+        now_s,
+        alpaca_sync_target_bars,
+        &|symbol, _| symbol == "AAPL",
+    );
+
+    assert_eq!(selected.len(), 1);
+    assert_eq!(
+        selected[0].symbol, "MSFT",
+        "the blocked candidate must not eat the only batch slot"
+    );
 }

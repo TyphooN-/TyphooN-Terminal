@@ -296,6 +296,7 @@ pub(super) fn spawn_background_refresh(
                             &data.detailed_stats,
                             &data.bar_ts_cache,
                         );
+                        data.sync_state_ready = true;
                     }
                     // Fundamentals come from research tables (synced via LAN) — query locally on both
                     data.all_fundamentals =
@@ -589,7 +590,13 @@ impl TyphooNApp {
                 // (instead of dropping the snapshot during heavy sync) now that it
                 // no longer has a synchronous render-thread refresh fallback.
                 || self.show_sync_status;
-            if !self.heavy_sync_in_progress || bg_window_visible {
+            // The first snapshot carrying a completed detailed-stats pass must
+            // always apply: the broad sync lanes are gated on
+            // `bg.sync_state_ready`, and dropping every snapshot while e.g.
+            // news_loading holds heavy_sync would leave them gated (and the
+            // scheduler blind) indefinitely.
+            let first_ready_snapshot = data.sync_state_ready && !self.bg.sync_state_ready;
+            if !self.heavy_sync_in_progress || bg_window_visible || first_ready_snapshot {
                 self.replace_bg_snapshot_off_ui_drop(data);
             } else {
                 tracing::debug!(

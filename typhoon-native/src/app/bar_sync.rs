@@ -340,6 +340,7 @@ pub(super) fn apply_storage_snapshot(
     // sync scheduler keys its rebuild on.
     bg.source_sync_state =
         super::market_data_sync::build_source_sync_state_maps(&bg.detailed_stats, &bg.bar_ts_cache);
+    bg.sync_state_ready = true;
 }
 
 pub(super) fn format_bytes_human(bytes: i64) -> String {

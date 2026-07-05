@@ -590,6 +590,57 @@ impl TyphooNApp {
         self.kraken_futures_backfill_complete_dirty_since = None;
     }
 
+    pub(super) fn yahoo_chart_backfill_complete_load(&mut self) {
+        self.yahoo_chart_backfill_complete_pairs =
+            self.load_backfill_complete_pairs_from_kv("yahoo-chart:backfill_complete_pairs");
+        self.yahoo_chart_backfill_complete_loaded = true;
+        self.yahoo_chart_backfill_complete_dirty_since = None;
+    }
+
+    /// Every Yahoo Chart fetch pulls full `period1=0` history, so any
+    /// successful non-empty store saturates the provider window for that
+    /// (symbol, timeframe): only Stale refresh should re-select it afterwards,
+    /// never Backfill. Symbol normalization mirrors `queue_yahoo_chart_fetch`.
+    pub(super) fn yahoo_chart_backfill_complete_mark(
+        &mut self,
+        symbol: &str,
+        timeframe: &str,
+        bar_count: usize,
+    ) -> bool {
+        if !self.yahoo_chart_backfill_complete_loaded {
+            self.yahoo_chart_backfill_complete_load();
+        }
+        let timeframe = normalize_sync_timeframe_key(timeframe)
+            .unwrap_or(timeframe)
+            .to_string();
+        let symbol = normalize_market_data_symbol(symbol)
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .to_ascii_uppercase();
+        if symbol.is_empty() {
+            return false;
+        }
+        let key = alpaca_fetch_key(&symbol, &timeframe);
+        let entry = AlpacaBackfillCompletePair {
+            symbol,
+            timeframe,
+            marked_at: chrono::Utc::now().timestamp(),
+            bar_count: bar_count as i64,
+            target_bars: bar_count as i64,
+        };
+        let changed = match self.yahoo_chart_backfill_complete_pairs.get(&key) {
+            Some(existing) => existing.bar_count != entry.bar_count,
+            None => true,
+        };
+        if changed {
+            self.yahoo_chart_backfill_complete_pairs.insert(key, entry);
+            if self.yahoo_chart_backfill_complete_dirty_since.is_none() {
+                self.yahoo_chart_backfill_complete_dirty_since = Some(std::time::Instant::now());
+            }
+        }
+        changed
+    }
+
     pub(super) fn kraken_backfill_complete_mark(
         &mut self,
         symbol: &str,
@@ -690,6 +741,22 @@ impl TyphooNApp {
                 self.kraken_futures_backfill_complete_dirty_since = None;
             }
         }
+    }
+
+    pub(super) fn flush_yahoo_chart_backfill_complete_marks(&mut self, force: bool) {
+        let Some(dirty_since) = self.yahoo_chart_backfill_complete_dirty_since else {
+            return;
+        };
+        let age = std::time::Instant::now().saturating_duration_since(dirty_since);
+        if !force && (age < std::time::Duration::from_secs(2) || self.heavy_sync_in_progress) {
+            return;
+        }
+        self.save_backfill_complete_pairs_to_kv(
+            "yahoo-chart:backfill_complete_pairs",
+            &self.yahoo_chart_backfill_complete_pairs,
+            !force,
+        );
+        self.yahoo_chart_backfill_complete_dirty_since = None;
     }
 
     /// Upsert a (symbol, timeframe) pair into the retry queue. Called when

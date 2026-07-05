@@ -72,6 +72,14 @@ pub(crate) struct BgData {
         &'static str,
         std::collections::HashMap<(String, String), SyncCacheState>,
     >,
+    /// True once at least one full detailed-stats pass has populated
+    /// `source_sync_state` (BG Phase 1c or a synchronous storage refresh).
+    /// Broad-universe sync lanes gate on this: before the first pass every
+    /// (symbol, timeframe) reads as Missing, and scheduling against that
+    /// cold map re-dispatches full-history fetches for the entire catalog
+    /// on every session start. True even when the pass found zero rows —
+    /// a genuinely fresh install must still start broad backfill.
+    pub(in crate::app) sync_state_ready: bool,
 
     // ── SEC / Insider ──
     pub(crate) insider_trades: std::collections::HashMap<String, Vec<sec_filing::InsiderTrade>>,

@@ -311,9 +311,14 @@ pub enum BrokerCmd {
         backfill_complete: bool,
     },
     /// Fetch bars for several stock symbols through Alpaca's batch bars endpoint.
+    /// `limit` is the lookback depth in bars: 10_000 requests full provider
+    /// history (coverage/backfill chunks); smaller values bound a stale top-up
+    /// to the gap actually missing instead of re-pulling every symbol's entire
+    /// history on each refresh.
     AlpacaFetchBarsBatch {
         symbols: Vec<String>,
         timeframe: String,
+        limit: u32,
     },
     /// Kraken public Spot/xStocks backfill via the public OHLC API.
     KrakenBackfill {

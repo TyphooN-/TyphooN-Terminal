@@ -110,6 +110,12 @@ impl TyphooNApp {
             // isolated 429 recovers in ~45s instead of compounding toward 10m.
             self.yahoo_chart_consecutive_429 = 0;
         }
+        if source == "yahoo-chart" && count > 0 {
+            // Yahoo fetches always request full period1=0 history, so a
+            // non-empty store saturates the provider window: suppress future
+            // Backfill re-selection for this pair (Stale refresh still runs).
+            self.yahoo_chart_backfill_complete_mark(&symbol, &timeframe, count);
+        }
 
         if should_reload {
             self.queue_chart_reload(self.active_tab);

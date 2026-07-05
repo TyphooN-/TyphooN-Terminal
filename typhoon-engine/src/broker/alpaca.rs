@@ -2840,14 +2840,19 @@ impl AlpacaBroker {
     /// endpoint. This is intentionally stock-only and targeted at high-timeframe
     /// Kraken-equities assist work where one request can return many symbols
     /// without collapsing provenance into the Kraken cache namespace.
+    /// `lookback_bars` bounds the request window (how far back `start` reaches);
+    /// the page-size `limit` sent to Alpaca stays at the API maximum so a
+    /// shallow top-up still lands in as few paginated requests as possible.
+    /// Conflating the two (the old single `limit`) made every batch a
+    /// full-history pull: depth 10k bars per symbol on every routine refresh.
     pub async fn get_stock_bars_batch_targeted(
         &self,
         symbols: &[String],
         timeframe: &str,
-        limit: u32,
+        lookback_bars: u32,
     ) -> Result<(HashMap<String, Vec<Bar>>, FetchOutcome), String> {
         Self::require_nonblank(timeframe, "Batch bars", "timeframe")?;
-        let actual_limit = Self::normalize_bar_limit(limit);
+        let actual_limit = Self::normalize_bar_limit(10_000);
         let symbols = normalize_stock_batch_symbols(symbols);
         if symbols.is_empty() {
             return Ok((HashMap::new(), FetchOutcome::Complete));
@@ -2856,7 +2861,7 @@ impl AlpacaBroker {
             - chrono::Duration::days(lookback_days_for_request(
                 false,
                 timeframe,
-                actual_limit,
+                Self::normalize_bar_limit(lookback_bars),
                 BarsLookbackMode::Targeted,
             ));
         let symbol_csv = symbols.join(",");

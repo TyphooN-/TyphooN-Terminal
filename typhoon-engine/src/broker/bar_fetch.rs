@@ -124,12 +124,19 @@ fn alpaca_batch_missing_symbol_retry_reason(
     }
 }
 
+/// Depth (bars) at and above which a batch request means "full provider
+/// history". Only at this depth is a Complete-outcome symbol omission
+/// authoritative evidence that Alpaca has no rows at all for the pair —
+/// a shallow top-up window can legitimately miss an illiquid symbol.
+const ALPACA_BATCH_DEEP_HISTORY_BARS: u32 = 10_000;
+
 pub async fn run_alpaca_batch_fetch_task(
     broker: AlpacaBroker,
     shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
     broker_msg_tx: tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
     symbols: Vec<String>,
     timeframe: String,
+    lookback_bars: u32,
 ) {
     let Some(tf) = normalize_sync_timeframe_key(&timeframe) else {
         return;
@@ -155,11 +162,10 @@ pub async fn run_alpaca_batch_fetch_task(
     if symbols.is_empty() {
         return;
     }
-    let limit = alpaca_sync_target_bars(&timeframe)
-        .unwrap_or(1500)
-        .min(10_000);
+    let lookback_bars = lookback_bars.clamp(1, ALPACA_BATCH_DEEP_HISTORY_BARS);
+    let deep_window = lookback_bars >= ALPACA_BATCH_DEEP_HISTORY_BARS;
     let result = broker
-        .get_stock_bars_batch_targeted(&symbols, tf_alpaca, limit)
+        .get_stock_bars_batch_targeted(&symbols, tf_alpaca, lookback_bars)
         .await;
     match result {
         Ok((mut bars_by_symbol, outcome)) => {
@@ -194,6 +200,19 @@ pub async fn run_alpaca_batch_fetch_task(
                             symbol: symbol.clone(),
                             timeframe: timeframe.clone(),
                             reason: reason.into(),
+                        });
+                    } else if deep_window {
+                        // Complete outcome over the full-history window: Alpaca
+                        // definitively has no rows for this pair. Tombstone it,
+                        // or it stays an eternal Missing candidate the scheduler
+                        // re-selects every tick (and, with multi-day cooldowns
+                        // blocking dispatch, wedges the whole timeframe's
+                        // high-TF-first descent). A future successful fetch via
+                        // any path drains the tombstone.
+                        let _ = broker_msg_tx.send(BrokerMsg::AlpacaNoData {
+                            symbol: symbol.clone(),
+                            timeframe: timeframe.clone(),
+                            reason: "batch full-history window returned no rows".into(),
                         });
                     }
                     let _ = broker_msg_tx.send(BrokerMsg::AlpacaFetchSettled {

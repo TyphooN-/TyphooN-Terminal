@@ -1109,6 +1109,15 @@ pub struct TyphooNApp {
         std::collections::HashMap<String, AlpacaBackfillCompletePair>,
     pub(crate) kraken_futures_backfill_complete_loaded: bool,
     pub(crate) kraken_futures_backfill_complete_dirty_since: Option<std::time::Instant>,
+    /// Yahoo Chart pulls full `period1=0` history on every fetch, so one
+    /// successful non-empty fetch per (symbol, timeframe) IS provider-window
+    /// saturation. Persisted so the broad Yahoo assist lane stops re-selecting
+    /// completed pairs as Backfill work (the unbounded target otherwise made
+    /// every catalog×1Month cell an eternal candidate).
+    pub(super) yahoo_chart_backfill_complete_pairs:
+        std::collections::HashMap<String, AlpacaBackfillCompletePair>,
+    pub(crate) yahoo_chart_backfill_complete_loaded: bool,
+    pub(crate) yahoo_chart_backfill_complete_dirty_since: Option<std::time::Instant>,
     pub(crate) show_connect: bool,
     pub(crate) show_indicators_panel: bool,
     pub(crate) show_data_window: bool,
