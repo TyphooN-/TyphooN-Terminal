@@ -181,12 +181,27 @@ pub async fn scrape_and_cache_symbol(
     match fetch_stock_splits(client, &sym, fmp_key).await {
         Ok(rows) => {
             if !rows.is_empty() {
+                // Snapshot the prior set before upsert so a newly-discovered
+                // recent split (reverse OR forward, ≥2×) can purge the stale
+                // equity cache — an incremental merge keeps pre-split rows and
+                // any ex-date carry poison forever (ADR-122).
+                let existing = get_stock_splits(conn, &sym).ok().flatten().unwrap_or_default();
                 let _ = upsert_stock_splits(conn, &sym, &rows);
                 cb(&format!(
                     "research/splits: {} cached ({} rows)",
                     sym,
                     rows.len()
                 ));
+                if stock_splits_need_bar_cache_invalidation(&existing, &rows) {
+                    match crate::core::cache::delete_equity_bar_cache_for_symbol_conn(conn, &sym) {
+                        Ok(n) if n > 0 => cb(&format!(
+                            "research/splits: {} corporate-action cache reset ({} bar rows purged)",
+                            sym, n
+                        )),
+                        Ok(_) => {}
+                        Err(e) => cb(&format!("research/splits {} cache reset failed: {}", sym, e)),
+                    }
+                }
             }
         }
         Err(e) => cb(&format!("research/splits {} failed: {}", sym, e)),

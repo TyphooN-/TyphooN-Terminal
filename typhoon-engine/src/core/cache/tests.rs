@@ -326,6 +326,106 @@ fn pack_bars_for_key_normalizes_daily_weekly_monthly_sessions() {
     assert_eq!(raw[0].0, 1_777_593_600_000);
 }
 
+// ---- carry-bar poison scrub tests ----
+
+/// Build a daily-bar JSON array from (date "YYYY-MM-DD", o, h, l, c, v) tuples.
+fn daily_bars_json(rows: &[(&str, f64, f64, f64, f64, f64)]) -> String {
+    let items: Vec<String> = rows
+        .iter()
+        .map(|(d, o, h, l, c, v)| {
+            format!(
+                r#"{{"timestamp":"{d}T00:00:00+00:00","open":{o},"high":{h},"low":{l},"close":{c},"volume":{v}}}"#
+            )
+        })
+        .collect();
+    format!("[{}]", items.join(","))
+}
+
+fn packed_closes(key: &str, json: &str) -> Vec<f64> {
+    unpack_bars_raw(&pack_bars_for_key(key, json).unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|b| b.4)
+        .collect()
+}
+
+#[test]
+fn carry_poison_single_bar_dropped() {
+    // AKTX 1:40 ex 2026-03-31: unadjusted zero-volume carry wedged between
+    // adjusted neighbors must be scrubbed.
+    let json = daily_bars_json(&[
+        ("2026-03-30", 5.168, 5.46, 4.916, 4.916, 56.0),
+        ("2026-03-31", 0.1229, 0.1229, 0.1229, 0.1229, 0.0),
+        ("2026-04-01", 5.46, 5.46, 5.25, 5.25, 200.0),
+    ]);
+    assert_eq!(packed_closes("alpaca:AKTX:1Day", &json), vec![4.916, 5.25]);
+}
+
+#[test]
+fn benign_zero_volume_carry_kept() {
+    // No-trade day that repeats the prior close carries no scale error — keep it
+    // so higher-TF aggregation sees a continuous series.
+    let json = daily_bars_json(&[
+        ("2026-03-30", 5.0, 5.1, 4.9, 5.0, 56.0),
+        ("2026-03-31", 5.0, 5.0, 5.0, 5.0, 0.0),
+        ("2026-04-01", 5.0, 5.2, 4.95, 5.1, 200.0),
+    ]);
+    assert_eq!(packed_closes("alpaca:AKTX:1Day", &json), vec![5.0, 5.0, 5.1]);
+}
+
+#[test]
+fn carry_poison_chain_dropped() {
+    let json = daily_bars_json(&[
+        ("2026-03-27", 5.0, 5.1, 4.9, 5.0, 56.0),
+        ("2026-03-30", 0.12, 0.12, 0.12, 0.12, 0.0),
+        ("2026-03-31", 0.12, 0.12, 0.12, 0.12, 0.0),
+        ("2026-04-01", 5.0, 5.2, 4.95, 5.2, 200.0),
+    ]);
+    assert_eq!(packed_closes("alpaca:AKTX:1Day", &json), vec![5.0, 5.2]);
+}
+
+#[test]
+fn carry_poison_at_series_edge_kept() {
+    // Leading off-scale zero-volume bar has no earlier neighbor to bracket it —
+    // poison can't be confirmed, so keep it rather than risk trimming real
+    // leading history.
+    let json = daily_bars_json(&[
+        ("2026-03-30", 0.12, 0.12, 0.12, 0.12, 0.0),
+        ("2026-03-31", 5.0, 5.1, 4.9, 5.0, 56.0),
+        ("2026-04-01", 5.0, 5.2, 4.95, 5.1, 200.0),
+    ]);
+    assert_eq!(packed_closes("alpaca:AKTX:1Day", &json), vec![0.12, 5.0, 5.1]);
+}
+
+#[test]
+fn carry_poison_crypto_key_never_scrubbed() {
+    // Crypto trades continuously; a flat zero-volume bar is not a carry glitch
+    // and the '/' key is exempt.
+    let json = daily_bars_json(&[
+        ("2026-03-30", 5.0, 5.1, 4.9, 5.0, 56.0),
+        ("2026-03-31", 0.12, 0.12, 0.12, 0.12, 0.0),
+        ("2026-04-01", 5.0, 5.2, 4.95, 5.1, 200.0),
+    ]);
+    assert_eq!(
+        packed_closes("alpaca:BTC/USD:1Day", &json),
+        vec![5.0, 0.12, 5.1]
+    );
+}
+
+#[test]
+fn real_off_scale_move_with_volume_kept() {
+    // A genuine >1.5x move carries volume (not degenerate) and must survive.
+    let json = daily_bars_json(&[
+        ("2026-03-30", 5.0, 5.1, 4.9, 5.0, 56.0),
+        ("2026-03-31", 0.3, 0.35, 0.1, 0.12, 9000.0),
+        ("2026-04-01", 0.12, 0.2, 0.1, 0.15, 200.0),
+    ]);
+    assert_eq!(
+        packed_closes("alpaca:AKTX:1Day", &json),
+        vec![5.0, 0.12, 0.15]
+    );
+}
+
 #[test]
 fn unpack_bars_wrong_magic() {
     let result = unpack_bars(&[0, 0, 0, 0, 0, 0, 0, 0]);
@@ -2104,6 +2204,67 @@ fn data_sanity_audit_explains_cross_source_split_adjustment_delta() {
 }
 
 #[test]
+fn data_sanity_split_explains_mid_bucket_ex_date_on_monthly() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    // 1-for-20 reverse split effective mid-May (ex 2026-05-16). Raw monthly
+    // closes are ~5 through April then ~100 in May (May's settled close is
+    // post-split); the adjusted feed back-adjusts every month to ~100. The
+    // disagreement reaches the recent window (April is 20x off), so it is not
+    // a historical delta — only the bucket-END split test explains it, since
+    // the mid-May ex-date is already baked into May's close.
+    let months = ["2026-01", "2026-02", "2026-03", "2026-04", "2026-05"];
+    let mut raw_rows = Vec::new();
+    let mut adj_rows = Vec::new();
+    for (i, m) in months.iter().enumerate() {
+        let raw_close = if i == months.len() - 1 { 100.0 } else { 5.0 };
+        raw_rows.push(format!(
+            r#"{{"timestamp":"{m}-01T00:00:00+00:00","open":{o},"high":{h},"low":{l},"close":{c},"volume":100.0}}"#,
+            o = raw_close,
+            h = raw_close * 1.01,
+            l = raw_close * 0.99,
+            c = raw_close,
+        ));
+        adj_rows.push(format!(
+            r#"{{"timestamp":"{m}-01T00:00:00+00:00","open":100.0,"high":101.0,"low":99.0,"close":100.0,"volume":100.0}}"#
+        ));
+    }
+    cache
+        .put_bars("alpaca:MMID:1Month", &format!("[{}]", raw_rows.join(",")))
+        .unwrap();
+    cache
+        .put_bars("yahoo-chart:MMID:1Month", &format!("[{}]", adj_rows.join(",")))
+        .unwrap();
+    {
+        let conn = cache.conn.lock().unwrap();
+        crate::core::research::upsert_stock_splits(
+            &conn,
+            "MMID",
+            &[crate::core::research::StockSplit {
+                date: "2026-05-16".into(),
+                label: "1:20".into(),
+                numerator: 1.0,
+                denominator: 20.0,
+            }],
+        )
+        .unwrap();
+    }
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(
+        report.has_code("cross_source_split_adjustment_delta"),
+        "mid-bucket ex-date must be split-explained: {report:#?}"
+    );
+    assert!(
+        !report.has_code("cross_source_overlap_mismatch"),
+        "{report:#?}"
+    );
+    assert_eq!(report.warn_count, 0, "{report:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn data_sanity_repair_clamps_settled_close_outside_range() {
     let db_path = temp_db_path();
     let cache = SqliteCache::open(&db_path).unwrap();
@@ -2134,6 +2295,132 @@ fn data_sanity_repair_clamps_settled_close_outside_range() {
     let report = cache.audit_bar_cache_sanity().unwrap();
     assert!(!report.has_code("body_outside_range"), "{report:#?}");
     assert_eq!(report.rewritable_rows, 0, "{report:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+/// Insert a pre-built binary bar blob directly, bypassing the write-path carry
+/// scrub — simulates a legacy row poisoned before the scrub shipped.
+fn insert_raw_bars(cache: &SqliteCache, key: &str, bars: &[(i64, f64, f64, f64, f64, f64)]) {
+    let binary = make_binary_bars(bars);
+    let compressed = zstd::encode_all(binary.as_slice(), 3).unwrap();
+    let (second_last, last) = get_last_two_bar_timestamps(&binary, bars.len());
+    let conn = cache.connection().unwrap();
+    conn.execute(
+        "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, last_ts, second_last_ts, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![key, compressed, 0i64, bars.len() as i64, last, second_last, 3],
+    )
+    .unwrap();
+}
+
+#[test]
+fn data_sanity_classifies_no_trade_carry_disagreement_as_context() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    // Alpaca's illiquid IEX tail repeats a stale last print at zero volume
+    // (kept by the scrub — it matches its own neighbors) while the consolidated
+    // Yahoo close moved on. The disagreement is feed staleness, not a scale
+    // conflict, so it must read as Info context, never a Warn.
+    let alpaca = r#"[
+        {"timestamp":"2026-03-02T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0},
+        {"timestamp":"2026-03-03T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0},
+        {"timestamp":"2026-03-04T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":0.0}
+    ]"#;
+    let yahoo = r#"[
+        {"timestamp":"2026-03-02T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0},
+        {"timestamp":"2026-03-03T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0},
+        {"timestamp":"2026-03-04T00:00:00+00:00","open":2.0,"high":2.0,"low":2.0,"close":2.0,"volume":100.0}
+    ]"#;
+    cache.put_bars("alpaca:ILQD:1Day", alpaca).unwrap();
+    cache.put_bars("yahoo-chart:ILQD:1Day", yahoo).unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(
+        report.has_code("cross_source_stale_carry_delta"),
+        "{report:#?}"
+    );
+    assert!(
+        !report.has_code("cross_source_overlap_mismatch"),
+        "{report:#?}"
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_repairs_carry_poison_and_rederives_higher_tfs() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let d = 86_400_000i64;
+    let mar1 = 1_772_323_200_000i64; // 2026-03-01 00:00 UTC
+    let mar27 = mar1 + 26 * d;
+    let mar30 = mar1 + 29 * d;
+    let mar31 = mar1 + 30 * d;
+    let apr1 = mar1 + 31 * d;
+
+    // Legacy daily row: an unadjusted ex-date carry on 03-31 (zero volume,
+    // 0.1229 wedged between adjusted neighbors) — injected raw so it survives
+    // into the cache the way a pre-scrub build stored it.
+    insert_raw_bars(
+        &cache,
+        "alpaca:AKTX:1Day",
+        &[
+            (mar27, 5.0, 5.1, 4.9, 5.0, 100.0),
+            (mar30, 4.9, 5.0, 4.8, 4.916, 56.0),
+            (mar31, 0.1229, 0.1229, 0.1229, 0.1229, 0.0), // poison
+            (apr1, 5.4, 5.5, 5.2, 5.25, 200.0),
+        ],
+    );
+    // Native monthly rollup already carrying the poison (March close/low pulled
+    // down to 0.1229 by the same carry).
+    insert_raw_bars(
+        &cache,
+        "alpaca:AKTX:1Month",
+        &[
+            (mar1, 5.0, 5.1, 0.1229, 0.1229, 1077.0),
+            (apr1, 5.4, 5.5, 5.2, 5.25, 200.0),
+        ],
+    );
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(report.has_code("zero_volume_carry_poison"), "{report:#?}");
+    assert!(report.rewritable_rows >= 1, "{report:#?}");
+
+    let outcome = cache
+        .repair_bar_cache(
+            BarCacheRepairOptions {
+                rewrite_bad_rows: true,
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    assert!(outcome.rows_rewritten >= 1, "{outcome:#?}");
+    assert!(outcome.higher_tfs_rederived >= 1, "{outcome:#?}");
+
+    // Daily poison dropped.
+    let daily = cache.get_bars_raw("alpaca:AKTX:1Day").unwrap().unwrap();
+    assert_eq!(daily.len(), 3, "poison bar dropped: {daily:?}");
+    assert!(
+        daily.iter().all(|b| (b.4 - 0.1229).abs() > 1e-6),
+        "no 0.1229 close survives: {daily:?}"
+    );
+
+    // Monthly March re-derived from cleaned daily: close is the last real March
+    // print (03-30 = 4.916), not the poison.
+    let monthly = cache.get_bars_raw("alpaca:AKTX:1Month").unwrap().unwrap();
+    let march = monthly
+        .iter()
+        .find(|b| b.0 == mar1)
+        .expect("March monthly bucket present");
+    assert!(
+        (march.4 - 4.916).abs() < 1e-6,
+        "March monthly close re-derived clean: {march:?}"
+    );
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(!report.has_code("zero_volume_carry_poison"), "{report:#?}");
 
     let _ = std::fs::remove_file(db_path);
 }

@@ -1369,6 +1369,7 @@ impl TyphooNApp {
                         .map_err(|e| format!("http client init failed: {e}"))?;
                     let mut with_splits = 0usize;
                     let mut failed = 0usize;
+                    let mut invalidated = 0usize;
                     let mut done = 0usize;
                     for symbol in &symbols {
                         if cancel_worker.load(std::sync::atomic::Ordering::Relaxed) {
@@ -1377,12 +1378,11 @@ impl TyphooNApp {
                         match research::fetch_stock_splits(&client, symbol, &fmp_key).await {
                             Ok(rows) => match cache.connection() {
                                 Ok(conn) => {
-                                    let existing_nonempty = rows.is_empty()
-                                        && research::get_stock_splits(&conn, symbol)
-                                            .ok()
-                                            .flatten()
-                                            .is_some_and(|old| !old.is_empty());
-                                    if existing_nonempty {
+                                    let existing = research::get_stock_splits(&conn, symbol)
+                                        .ok()
+                                        .flatten()
+                                        .unwrap_or_default();
+                                    if rows.is_empty() && !existing.is_empty() {
                                         // Provider returned nothing but the table
                                         // already knows splits (e.g. curated WOK)
                                         // — a fetch gap must not erase known
@@ -1391,7 +1391,27 @@ impl TyphooNApp {
                                     } else {
                                         match research::upsert_stock_splits(&conn, symbol, &rows)
                                         {
-                                            Ok(()) if !rows.is_empty() => with_splits += 1,
+                                            Ok(()) if !rows.is_empty() => {
+                                                with_splits += 1;
+                                                // A newly-discovered recent
+                                                // material split (either
+                                                // direction) means the cached
+                                                // bars predate the provider's
+                                                // restatement — purge so the
+                                                // next sync rebuilds cleanly.
+                                                if research::stock_splits_need_bar_cache_invalidation(
+                                                    &existing, &rows,
+                                                ) {
+                                                    drop(conn);
+                                                    if let Ok(n) = cache
+                                                        .delete_equity_bar_cache_for_symbol(symbol)
+                                                    {
+                                                        if n > 0 {
+                                                            invalidated += 1;
+                                                        }
+                                                    }
+                                                }
+                                            }
                                             Ok(()) => {}
                                             Err(e) => {
                                                 tracing::warn!("splits backfill {symbol}: {e}");
@@ -1417,7 +1437,7 @@ impl TyphooNApp {
                     }
                     let cancelled = if done < total { " [CANCELLED]" } else { "" };
                     Ok(format!(
-                        "Splits backfill: {done}/{total} symbols checked — {with_splits} with split history, {failed} failed{cancelled}"
+                        "Splits backfill: {done}/{total} symbols checked — {with_splits} with split history, {invalidated} cache-reset (new split), {failed} failed{cancelled}"
                     ))
                 })
             })();

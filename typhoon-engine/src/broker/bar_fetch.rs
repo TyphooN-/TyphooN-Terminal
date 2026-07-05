@@ -588,152 +588,6 @@ fn merged_equity_materialize_target_from_cache_key(cache_key: &str) -> Option<(S
     Some((symbol, timeframe.to_string()))
 }
 
-/// How a derived higher timeframe buckets its base bars.
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Rollup {
-    /// Fixed-second intraday period: bucket on UTC multiples of `secs`.
-    Fixed(i64),
-    /// Calendar week, Monday 00:00 UTC start.
-    Week,
-    /// Calendar month, 1st 00:00 UTC start.
-    Month,
-}
-
-/// Higher timeframes derivable from a freshly-stored base timeframe by aggregation,
-/// instead of spending a separate rate-limited request on each. Window-safe: each
-/// base TF's provider window already spans the derived one, so the aggregate is as
-/// deep as a direct fetch. 30m←15m and 4h←1h bucket on fixed UTC periods; 1W and 1M
-/// ←1D bucket on calendar boundaries.
-fn tf_derivations(base_tf: &str) -> &'static [(&'static str, Rollup)] {
-    match base_tf {
-        "15Min" => &[("30Min", Rollup::Fixed(1_800))],
-        "1Hour" => &[("4Hour", Rollup::Fixed(14_400))],
-        "1Day" => &[("1Week", Rollup::Week), ("1Month", Rollup::Month)],
-        _ => &[],
-    }
-}
-
-/// Bucket-start epoch (seconds, UTC) for a bar at `ts_ms` under `rollup` — the
-/// timestamp the aggregated bar carries, chosen to land on the same boundary a native
-/// bar of that timeframe would, so derived and native rows dedup rather than double.
-fn rollup_bucket_start_secs(ts_ms: i64, rollup: Rollup) -> Option<i64> {
-    use chrono::Datelike;
-    let epoch_s = ts_ms.div_euclid(1_000);
-    match rollup {
-        Rollup::Fixed(period) if period > 0 => Some(epoch_s - epoch_s.rem_euclid(period)),
-        Rollup::Fixed(_) => None,
-        Rollup::Week => {
-            let date = chrono::DateTime::from_timestamp(epoch_s, 0)?.date_naive();
-            let back = date.weekday().num_days_from_monday() as u64;
-            let monday = date.checked_sub_days(chrono::Days::new(back))?;
-            Some(monday.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
-        }
-        Rollup::Month => {
-            let date = chrono::DateTime::from_timestamp(epoch_s, 0)?.date_naive();
-            let first = chrono::NaiveDate::from_ymd_opt(date.year(), date.month(), 1)?;
-            Some(first.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
-        }
-    }
-}
-
-/// True for the merged-equity assist lanes where a high-timeframe row is a separate
-/// rate-limited request worth deriving instead of fetching. Native crypto lanes
-/// (kraken/kraken-futures) already return every timeframe directly, so they are not
-/// derived.
-fn source_derives_higher_tfs(source: &str) -> bool {
-    matches!(source, "alpaca" | "yahoo-chart" | "kraken-equities")
-}
-
-/// Aggregate a raw bar series (ts_ms, o, h, l, c, v) into `rollup` buckets, emitting
-/// cache-shaped JSON bars timestamped at each bucket start (RFC3339). Open = first bar
-/// in the bucket, close = last, high/low = extremes, volume = sum. Bars with
-/// non-positive prices or `high < low` are skipped; input order is irrelevant.
-fn aggregate_raw_to_rollup(
-    raw: &[(i64, f64, f64, f64, f64, f64)],
-    rollup: Rollup,
-) -> Vec<serde_json::Value> {
-    let mut sorted: Vec<&(i64, f64, f64, f64, f64, f64)> = raw.iter().collect();
-    sorted.sort_by_key(|b| b.0);
-    let mut buckets: std::collections::BTreeMap<i64, (f64, f64, f64, f64, f64)> =
-        std::collections::BTreeMap::new();
-    for &(ts_ms, o, h, l, c, v) in sorted {
-        if o <= 0.0 || h <= 0.0 || l <= 0.0 || c <= 0.0 || h < l {
-            continue;
-        }
-        let Some(bucket) = rollup_bucket_start_secs(ts_ms, rollup) else {
-            continue;
-        };
-        let entry = buckets.entry(bucket).or_insert((o, h, l, c, 0.0));
-        if h > entry.1 {
-            entry.1 = h;
-        }
-        if l < entry.2 {
-            entry.2 = l;
-        }
-        entry.3 = c;
-        entry.4 += v;
-    }
-    buckets
-        .into_iter()
-        .filter_map(|(bucket, (o, h, l, c, v))| {
-            let ts = chrono::DateTime::from_timestamp(bucket, 0)?.to_rfc3339();
-            Some(serde_json::json!({
-                "timestamp": ts, "open": o, "high": h, "low": l, "close": c, "volume": v,
-            }))
-        })
-        .collect()
-}
-
-/// After a base timeframe is written, derive its window-safe higher timeframes from
-/// the full cached series and store them under the same source prefix. The derived
-/// rows are assist-priority — a native higher-timeframe row outranks them in the
-/// merge — so this only *fills* timeframes the provider would otherwise be fetched
-/// for, never clobbers native data. One re-read + aggregation per base write, all on
-/// the cache's blocking pool. Returns the derived `(timeframe, bar_count)` pairs.
-fn derive_and_store_higher_tfs(
-    cache: &SqliteCache,
-    cache_key: &str,
-) -> Vec<(&'static str, usize)> {
-    let mut parts = cache_key.splitn(3, ':');
-    let (Some(source), Some(symbol), Some(base_tf)) =
-        (parts.next(), parts.next(), parts.next())
-    else {
-        return Vec::new();
-    };
-    if !source_derives_higher_tfs(source) {
-        return Vec::new();
-    }
-    let derivations = tf_derivations(base_tf);
-    if derivations.is_empty() {
-        return Vec::new();
-    }
-    let Some(base_raw) = cache.get_bars_raw(cache_key).ok().flatten() else {
-        return Vec::new();
-    };
-    if base_raw.is_empty() {
-        return Vec::new();
-    }
-    let mut derived = Vec::new();
-    for &(derived_tf, rollup) in derivations {
-        let agg = aggregate_raw_to_rollup(&base_raw, rollup);
-        if agg.is_empty() {
-            continue;
-        }
-        let derived_key = format!("{source}:{symbol}:{derived_tf}");
-        let json = serde_json::to_string(&agg).unwrap_or_default();
-        // Always merge (never overwrite): the cache normalizes every bar to a
-        // canonical timeframe bucket on write — 1Week → Monday 00:00, 1Month → 1st
-        // 00:00, intraday → UTC multiples — so a derived bar and any existing native
-        // bar for the same period collapse to one bucket (newer wins). Purely
-        // additive: it can't double a candle and can't drop a native week a gap in
-        // the base would miss. No existing KV needs purging.
-        if cache.merge_bars(&derived_key, &json, 0).is_ok() {
-            derived.push((derived_tf, agg.len()));
-        }
-    }
-    derived
-}
-
 async fn store_json_bars_in_cache(
     cache_handle: Option<std::sync::Arc<SqliteCache>>,
     cache_key: String,
@@ -773,7 +627,7 @@ async fn store_json_bars_in_cache(
             // scheduler doesn't spend a separate rate-limited request on each — the
             // only real speedup against fixed provider rate walls. Assist-priority
             // and no-op for native crypto lanes / non-base timeframes.
-            let _derived = derive_and_store_higher_tfs(&cache, &cache_key);
+            let _derived = cache.derive_and_store_higher_tfs(&cache_key);
         }
         Ok::<usize, String>(count)
     })
@@ -1045,6 +899,9 @@ pub async fn run_kraken_futures_fetch_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::cache::{
+        aggregate_raw_to_rollup, source_derives_higher_tfs, tf_derivations, Rollup,
+    };
 
     #[test]
     fn tf_derivation_eligibility_is_assist_lanes_and_base_timeframes_only() {

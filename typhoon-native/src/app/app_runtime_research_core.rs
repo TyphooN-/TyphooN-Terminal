@@ -257,7 +257,9 @@ impl TyphooNApp {
                             &conn, &sym_u, &rows,
                         );
                     }
-                    if stock_splits_need_bar_cache_invalidation(&existing, &rows) {
+                    if typhoon_engine::core::research::stock_splits_need_bar_cache_invalidation(
+                        &existing, &rows,
+                    ) {
                         match cache.delete_equity_bar_cache_for_symbol(&sym_u) {
                             Ok(deleted) if deleted > 0 => {
                                 self.log.push_back(LogEntry::warn(format!(
@@ -425,22 +427,6 @@ impl TyphooNApp {
     }
 }
 
-fn stock_splits_need_bar_cache_invalidation(
-    existing: &[typhoon_engine::core::research::StockSplit],
-    incoming: &[typhoon_engine::core::research::StockSplit],
-) -> bool {
-    incoming.iter().any(|split| {
-        split.numerator > 0.0
-            && split.denominator > 0.0
-            && (split.denominator / split.numerator) >= 2.0
-            && !existing.iter().any(|old| {
-                old.date == split.date
-                    && (old.numerator - split.numerator).abs() < 1e-9
-                    && (old.denominator - split.denominator).abs() < 1e-9
-            })
-    })
-}
-
 fn stock_split_chart_symbol_matches(chart_symbol: &str, split_symbol: &str) -> bool {
     let chart = normalize_market_data_symbol(chart_symbol)
         .replace('/', "")
@@ -456,38 +442,10 @@ fn stock_split_chart_symbol_matches(chart_symbol: &str, split_symbol: &str) -> b
 
 #[cfg(test)]
 mod tests {
-    use super::{stock_split_chart_symbol_matches, stock_splits_need_bar_cache_invalidation};
-    use typhoon_engine::core::research::StockSplit;
+    use super::stock_split_chart_symbol_matches;
 
-    fn split(date: &str, numerator: f64, denominator: f64) -> StockSplit {
-        StockSplit {
-            date: date.to_string(),
-            label: format!("{numerator}:{denominator}"),
-            numerator,
-            denominator,
-        }
-    }
-
-    #[test]
-    fn new_reverse_split_invalidates_bar_cache() {
-        assert!(stock_splits_need_bar_cache_invalidation(
-            &[],
-            &[split("2026-06-19", 1.0, 100.0)]
-        ));
-    }
-
-    #[test]
-    fn existing_or_forward_splits_do_not_invalidate() {
-        let existing = [split("2026-06-19", 1.0, 100.0)];
-        assert!(!stock_splits_need_bar_cache_invalidation(
-            &existing,
-            &[split("2026-06-19", 1.0, 100.0)]
-        ));
-        assert!(!stock_splits_need_bar_cache_invalidation(
-            &[],
-            &[split("2026-06-19", 2.0, 1.0)]
-        ));
-    }
+    // Split-invalidation semantics (symmetric, recency-gated) live with the
+    // predicate in typhoon_engine::core::research and are tested there.
 
     #[test]
     fn split_symbol_match_normalizes_equity_suffixes() {

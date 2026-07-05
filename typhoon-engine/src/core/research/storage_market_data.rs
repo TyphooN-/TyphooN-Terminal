@@ -292,6 +292,65 @@ pub fn get_stock_splits(
     }
 }
 
+/// Days a split's ex-date may lie in the past and still warrant a bar-cache
+/// purge. An action older than this is already baked into every provider's
+/// adjusted history (Alpaca `adjustment=all`, Yahoo adjclose), so discovering
+/// it during a bulk scrape must NOT trigger a pointless delete+refetch of the
+/// whole equity cache. Recent actions are the ones whose pre-split rows can
+/// still be stale or carry-poisoned in the cache.
+pub const SPLIT_INVALIDATION_MAX_AGE_DAYS: i64 = 730;
+
+/// Whether a freshly-fetched split set contains a material corporate action —
+/// cumulative price factor ≥ 2× in EITHER direction (reverse or forward) — with
+/// a recent ex-date that the previously-stored set did not already know. Such a
+/// discovery means the cached bars may predate the provider's restatement and
+/// must be rebuilt cleanly rather than incrementally merged (incremental merge
+/// keeps stale pre-split rows and can retain ex-date carry poison forever).
+///
+/// Already-known splits, sub-2× actions, and actions whose ex-date is older
+/// than [`SPLIT_INVALIDATION_MAX_AGE_DAYS`] (or in the future) do not qualify —
+/// the first so re-scrapes are idempotent, the last so a bulk scrape populating
+/// years of historical splits doesn't purge the entire cache.
+pub fn stock_splits_need_bar_cache_invalidation(
+    existing: &[StockSplit],
+    incoming: &[StockSplit],
+) -> bool {
+    stock_splits_need_bar_cache_invalidation_at(existing, incoming, chrono::Utc::now())
+}
+
+fn stock_splits_need_bar_cache_invalidation_at(
+    existing: &[StockSplit],
+    incoming: &[StockSplit],
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    incoming.iter().any(|split| {
+        if split.numerator <= 0.0 || split.denominator <= 0.0 {
+            return false;
+        }
+        let factor =
+            (split.denominator / split.numerator).max(split.numerator / split.denominator);
+        if factor < 2.0 {
+            return false;
+        }
+        let Some(ex) = chrono::NaiveDate::parse_from_str(split.date.trim(), "%Y-%m-%d")
+            .ok()
+            .and_then(|d| d.and_hms_opt(0, 0, 0))
+            .map(|dt| dt.and_utc())
+        else {
+            return false;
+        };
+        let age_days = now.signed_duration_since(ex).num_days();
+        if !(0..=SPLIT_INVALIDATION_MAX_AGE_DAYS).contains(&age_days) {
+            return false;
+        }
+        !existing.iter().any(|old| {
+            old.date == split.date
+                && (old.numerator - split.numerator).abs() < 1e-9
+                && (old.denominator - split.denominator).abs() < 1e-9
+        })
+    })
+}
+
 pub fn upsert_etf_holdings(
     conn: &Connection,
     symbol: &str,
@@ -657,5 +716,74 @@ pub fn get_earnings_surprises(
         Ok(Some(serde_json::from_str(&json).unwrap_or_default()))
     } else {
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod split_invalidation_tests {
+    use super::*;
+
+    fn split(date: &str, numerator: f64, denominator: f64) -> StockSplit {
+        StockSplit {
+            date: date.to_string(),
+            label: format!("{numerator}:{denominator}"),
+            numerator,
+            denominator,
+        }
+    }
+
+    fn now() -> chrono::DateTime<chrono::Utc> {
+        chrono::NaiveDate::from_ymd_opt(2026, 7, 5)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+    }
+
+    fn needs(existing: &[StockSplit], incoming: &[StockSplit]) -> bool {
+        stock_splits_need_bar_cache_invalidation_at(existing, incoming, now())
+    }
+
+    #[test]
+    fn recent_reverse_split_newly_discovered_invalidates() {
+        assert!(needs(&[], &[split("2026-06-19", 1.0, 40.0)]));
+    }
+
+    #[test]
+    fn recent_forward_split_invalidates_symmetrically() {
+        // 4-for-1 forward split (BFOR-class) drops price 4× — the raw cache is
+        // just as stale as after a reverse split, so it must invalidate too.
+        assert!(needs(&[], &[split("2026-07-01", 4.0, 1.0)]));
+    }
+
+    #[test]
+    fn already_known_split_is_idempotent() {
+        let existing = [split("2026-06-19", 1.0, 40.0)];
+        assert!(!needs(&existing, &[split("2026-06-19", 1.0, 40.0)]));
+    }
+
+    #[test]
+    fn sub_two_times_action_does_not_invalidate() {
+        // 3-for-2 (1.5×) is below the material threshold.
+        assert!(!needs(&[], &[split("2026-06-19", 3.0, 2.0)]));
+    }
+
+    #[test]
+    fn old_split_does_not_invalidate() {
+        // Already reflected in every provider's adjusted history — discovering
+        // it in a bulk scrape must not purge the cache.
+        assert!(!needs(&[], &[split("2020-01-15", 1.0, 10.0)]));
+    }
+
+    #[test]
+    fn future_dated_split_does_not_invalidate_yet() {
+        assert!(!needs(&[], &[split("2026-12-31", 1.0, 10.0)]));
+    }
+
+    #[test]
+    fn degenerate_split_ratios_ignored() {
+        assert!(!needs(&[], &[split("2026-06-19", 0.0, 10.0)]));
+        assert!(!needs(&[], &[split("2026-06-19", 1.0, 0.0)]));
+        assert!(!needs(&[], &[split("bad-date", 1.0, 40.0)]));
     }
 }

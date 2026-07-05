@@ -317,6 +317,9 @@ pub struct BarCacheRepairOutcome {
     pub legacy_rows_converted: usize,
     pub bars_dropped: usize,
     pub rows_deleted: usize,
+    /// Higher-timeframe rows re-derived from a rewritten base (e.g. cleaned
+    /// daily → 1Week/1Month) so a poisoned native rollup is overwritten.
+    pub higher_tfs_rederived: usize,
     pub cancelled: bool,
     pub duration_ms: u64,
     /// Per-key failures (capped) — a failed row never aborts the pass.
@@ -329,13 +332,14 @@ impl BarCacheRepairOutcome {
     pub fn summary_line(&self) -> String {
         let cancelled = if self.cancelled { " [CANCELLED]" } else { "" };
         format!(
-            "Cache repair: {} rows scanned — {} metadata fixed, {} rewritten ({} legacy converted, {} bars dropped), {} deleted, {} errors ({:.1}s){cancelled}",
+            "Cache repair: {} rows scanned — {} metadata fixed, {} rewritten ({} legacy converted, {} bars dropped), {} deleted, {} higher-TF re-derived, {} errors ({:.1}s){cancelled}",
             self.rows_scanned,
             self.metadata_fixed,
             self.rows_rewritten,
             self.legacy_rows_converted,
             self.bars_dropped,
             self.rows_deleted,
+            self.higher_tfs_rederived,
             self.errors.len(),
             self.duration_ms as f64 / 1000.0,
         )
@@ -568,6 +572,191 @@ fn pack_bars(json_data: &str) -> Result<Vec<u8>, String> {
     pack_bars_for_key("", json_data)
 }
 
+/// Equity-lane cache keys whose bars can carry fabricated zero-volume "carry"
+/// candles that must be scrubbed at pack time. Alpaca's IEX feed repeats the
+/// last print on a no-trade day; the carry that lands on a split ex-date keeps
+/// the pre-split price and Alpaca's `adjustment=all` never rescales it, so a
+/// single bar reads ~40× off its neighbors and poisons every higher timeframe
+/// rolled up or derived from it. Crypto keys (symbol contains '/', e.g.
+/// `alpaca:BTC/USD:1Day`) trade continuously and never carry, so they are
+/// exempt — dropping a legitimate flat crypto bar would punch a hole.
+fn key_is_carry_prone_equity(key: &str) -> bool {
+    let mut parts = key.splitn(2, ':');
+    let source = parts.next().unwrap_or("");
+    let rest = parts.next().unwrap_or("");
+    matches!(
+        source,
+        "alpaca" | "yahoo-chart" | "kraken-equities" | "merged" | "default"
+    ) && !rest.contains('/')
+}
+
+/// Multiplicative gap at which a zero-volume carry bar is treated as ex-date
+/// poison rather than a benign no-trade repeat. Matches the cross-source audit
+/// mismatch threshold (a genuine corporate action / real move carries volume
+/// and so is never a candidate here).
+const CARRY_POISON_RATIO: f64 = 1.5;
+
+/// Per-bar drop mask marking degenerate zero-volume carry-poison bars, over a
+/// series ascending by ts. `ohlcv[i]` is `(open, high, low, close, volume)`.
+///
+/// A bar is a drop candidate only when it is degenerate — zero volume and
+/// open==high==low==close (a single repeated price, no real trade) — and only
+/// maximal runs of such bars whose price sits ≥`CARRY_POISON_RATIO`× away from
+/// BOTH the nearest non-degenerate bar before and after the run are marked.
+/// That is the exact signature of an unadjusted ex-date carry (AKTX 2026-03-31:
+/// 0.1229 wedged between 4.916 and 5.25) that no adjustment pass rescaled. A
+/// benign no-trade carry repeats a neighbor's price (ratio ≈ 1, kept); a real
+/// gap leaves the *next* bar near the new level (ratio to next < threshold,
+/// kept); a run missing a neighbor on either side (series edge) is kept because
+/// poison can't be confirmed without both brackets. Zero-volume bars therefore
+/// survive unless they are provably an isolated off-scale spike.
+fn carry_poison_flags(ohlcv: &[(f64, f64, f64, f64, f64)]) -> Vec<bool> {
+    let is_degenerate = |b: &(f64, f64, f64, f64, f64)| {
+        let (o, h, l, c, v) = *b;
+        v == 0.0 && o == c && h == c && l == c && c > 0.0
+    };
+    let off_scale = |run_close: f64, neighbor_close: f64| {
+        neighbor_close > 0.0
+            && run_close > 0.0
+            && (run_close / neighbor_close).max(neighbor_close / run_close) >= CARRY_POISON_RATIO
+    };
+
+    let n = ohlcv.len();
+    let mut drop = vec![false; n];
+    let mut i = 0;
+    while i < n {
+        if !is_degenerate(&ohlcv[i]) {
+            i += 1;
+            continue;
+        }
+        // Maximal run [i, j) of consecutive degenerate bars.
+        let mut j = i;
+        while j < n && is_degenerate(&ohlcv[j]) {
+            j += 1;
+        }
+        // Nearest non-degenerate bar strictly before / after the run (close).
+        let prev = (i > 0).then(|| ohlcv[i - 1].3);
+        let next = (j < n).then(|| ohlcv[j].3);
+        if let (Some(prev_c), Some(next_c)) = (prev, next) {
+            let run_c = ohlcv[i].3; // whole run repeats one price
+            if off_scale(run_c, prev_c) && off_scale(run_c, next_c) {
+                for slot in drop.iter_mut().take(j).skip(i) {
+                    *slot = true;
+                }
+            }
+        }
+        i = j;
+    }
+    drop
+}
+
+/// Drop carry-poison bars in place (see [`carry_poison_flags`]). Input ascending
+/// by ts; `bars[i]` is `(ts, (open, high, low, close, volume))`.
+fn drop_carry_poison_bars(bars: &mut Vec<(i64, (f64, f64, f64, f64, f64))>) {
+    let ohlcv: Vec<(f64, f64, f64, f64, f64)> = bars.iter().map(|b| b.1).collect();
+    let drop = carry_poison_flags(&ohlcv);
+    if drop.iter().any(|&d| d) {
+        let mut keep = drop.into_iter();
+        bars.retain(|_| !keep.next().unwrap_or(false));
+    }
+}
+
+/// How a derived higher timeframe buckets its base bars.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Rollup {
+    /// Fixed-second intraday period: bucket on UTC multiples of `secs`.
+    Fixed(i64),
+    /// Calendar week, Monday 00:00 UTC start.
+    Week,
+    /// Calendar month, 1st 00:00 UTC start.
+    Month,
+}
+
+/// Higher timeframes derivable from a freshly-stored base timeframe by
+/// aggregation instead of a separate rate-limited request. Window-safe: each
+/// base TF's provider window already spans the derived one. 30m←15m and 4h←1h
+/// bucket on fixed UTC periods; 1W and 1M ←1D bucket on calendar boundaries.
+pub(crate) fn tf_derivations(base_tf: &str) -> &'static [(&'static str, Rollup)] {
+    match base_tf {
+        "15Min" => &[("30Min", Rollup::Fixed(1_800))],
+        "1Hour" => &[("4Hour", Rollup::Fixed(14_400))],
+        "1Day" => &[("1Week", Rollup::Week), ("1Month", Rollup::Month)],
+        _ => &[],
+    }
+}
+
+/// Bucket-start epoch (seconds, UTC) for a bar at `ts_ms` under `rollup` — the
+/// timestamp the aggregated bar carries, chosen to land on the same boundary a
+/// native bar of that timeframe would so derived and native rows dedup.
+pub(crate) fn rollup_bucket_start_secs(ts_ms: i64, rollup: Rollup) -> Option<i64> {
+    use chrono::Datelike;
+    let epoch_s = ts_ms.div_euclid(1_000);
+    match rollup {
+        Rollup::Fixed(period) if period > 0 => Some(epoch_s - epoch_s.rem_euclid(period)),
+        Rollup::Fixed(_) => None,
+        Rollup::Week => {
+            let date = chrono::DateTime::from_timestamp(epoch_s, 0)?.date_naive();
+            let back = date.weekday().num_days_from_monday() as u64;
+            let monday = date.checked_sub_days(chrono::Days::new(back))?;
+            Some(monday.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
+        }
+        Rollup::Month => {
+            let date = chrono::DateTime::from_timestamp(epoch_s, 0)?.date_naive();
+            let first = chrono::NaiveDate::from_ymd_opt(date.year(), date.month(), 1)?;
+            Some(first.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
+        }
+    }
+}
+
+/// True for the merged-equity assist lanes where a high-timeframe row is a
+/// separate rate-limited request worth deriving instead of fetching. Native
+/// crypto lanes already return every timeframe directly, so they are not
+/// derived.
+pub(crate) fn source_derives_higher_tfs(source: &str) -> bool {
+    matches!(source, "alpaca" | "yahoo-chart" | "kraken-equities")
+}
+
+/// Aggregate a raw bar series (ts_ms, o, h, l, c, v) into `rollup` buckets,
+/// emitting cache-shaped JSON bars timestamped at each bucket start (RFC3339).
+/// Open = first bar in the bucket, close = last, high/low = extremes, volume =
+/// sum. Bars with non-positive prices or `high < low` are skipped; input order
+/// is irrelevant.
+pub(crate) fn aggregate_raw_to_rollup(
+    raw: &[(i64, f64, f64, f64, f64, f64)],
+    rollup: Rollup,
+) -> Vec<serde_json::Value> {
+    let mut sorted: Vec<&(i64, f64, f64, f64, f64, f64)> = raw.iter().collect();
+    sorted.sort_by_key(|b| b.0);
+    let mut buckets: std::collections::BTreeMap<i64, (f64, f64, f64, f64, f64)> =
+        std::collections::BTreeMap::new();
+    for &(ts_ms, o, h, l, c, v) in sorted {
+        if o <= 0.0 || h <= 0.0 || l <= 0.0 || c <= 0.0 || h < l {
+            continue;
+        }
+        let Some(bucket) = rollup_bucket_start_secs(ts_ms, rollup) else {
+            continue;
+        };
+        let entry = buckets.entry(bucket).or_insert((o, h, l, c, 0.0));
+        if h > entry.1 {
+            entry.1 = h;
+        }
+        if l < entry.2 {
+            entry.2 = l;
+        }
+        entry.3 = c;
+        entry.4 += v;
+    }
+    buckets
+        .into_iter()
+        .filter_map(|(bucket, (o, h, l, c, v))| {
+            let ts = chrono::DateTime::from_timestamp(bucket, 0)?.to_rfc3339();
+            Some(serde_json::json!({
+                "timestamp": ts, "open": o, "high": h, "low": l, "close": c, "volume": v,
+            }))
+        })
+        .collect()
+}
+
 fn pack_bars_for_key(key: &str, json_data: &str) -> Result<Vec<u8>, String> {
     let bars: Vec<serde_json::Value> =
         serde_json::from_str(json_data).map_err(|e| format!("JSON parse failed: {e}"))?;
@@ -605,10 +794,15 @@ fn pack_bars_for_key(key: &str, json_data: &str) -> Result<Vec<u8>, String> {
         by_bucket.insert(ts_ms, (o, h, l, c, v));
     }
 
-    let mut buf = Vec::with_capacity(4 + 4 + by_bucket.len() * BYTES_PER_BAR);
+    let mut ordered: Vec<(i64, (f64, f64, f64, f64, f64))> = by_bucket.into_iter().collect();
+    if key_is_carry_prone_equity(key) {
+        drop_carry_poison_bars(&mut ordered);
+    }
+
+    let mut buf = Vec::with_capacity(4 + 4 + ordered.len() * BYTES_PER_BAR);
     buf.extend_from_slice(BAR_BINARY_MAGIC);
-    buf.extend_from_slice(&(by_bucket.len() as u32).to_le_bytes());
-    for (ts_ms, (o, h, l, c, v)) in by_bucket {
+    buf.extend_from_slice(&(ordered.len() as u32).to_le_bytes());
+    for (ts_ms, (o, h, l, c, v)) in ordered {
         buf.extend_from_slice(&ts_ms.to_le_bytes());
         buf.extend_from_slice(&o.to_le_bytes());
         buf.extend_from_slice(&h.to_le_bytes());
@@ -773,6 +967,11 @@ struct AuditKeyParts {
 struct AuditBar {
     bucket_ts_ms: i64,
     close: f64,
+    /// Period volume. Zero means no real trade printed in the bucket — every
+    /// bar rolled into it was a provider carry — which distinguishes an
+    /// illiquid-staleness cross-source disagreement (context) from a genuine
+    /// scale gap (actionable).
+    volume: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -793,6 +992,68 @@ fn parse_bar_cache_key(key: &str) -> Option<AuditKeyParts> {
         symbol: symbol.trim_end_matches(".EQ").to_ascii_uppercase(),
         timeframe: timeframe.to_string(),
     })
+}
+
+/// Connection-level equity bar-cache purge (see
+/// [`SqliteCache::delete_equity_bar_cache_for_symbol`]). Split out so callers
+/// holding only a `&Connection` — the research scrape/backfill, which run on a
+/// borrowed connection rather than the cache handle — can invalidate on split
+/// discovery too. Returns the number of `bar_cache` rows deleted.
+pub fn delete_equity_bar_cache_for_symbol_conn(
+    conn: &Connection,
+    symbol: &str,
+) -> Result<u64, String> {
+    let trimmed = symbol.trim();
+    if trimmed.is_empty() {
+        return Ok(0);
+    }
+    let raw = trimmed.to_ascii_uppercase();
+    let bare = raw
+        .trim_end_matches(".EQ")
+        .replace('/', "")
+        .to_ascii_uppercase();
+    if bare.is_empty() {
+        return Ok(0);
+    }
+
+    let mut variants = Vec::new();
+    for candidate in [raw.as_str(), bare.as_str()] {
+        if !candidate.is_empty() && !variants.iter().any(|v: &String| v == candidate) {
+            variants.push(candidate.to_string());
+        }
+    }
+    let eq_variant = format!("{bare}.EQ");
+    if !variants.iter().any(|v| v == &eq_variant) {
+        variants.push(eq_variant);
+    }
+
+    let prefixes = [
+        "merged",
+        "kraken-equities",
+        "alpaca",
+        "yahoo-chart",
+        "default",
+    ];
+
+    let mut deleted = 0u64;
+    for prefix in prefixes {
+        for variant in &variants {
+            let pattern = format!("{prefix}:{variant}:%");
+            deleted = deleted.saturating_add(
+                conn.execute(
+                    "DELETE FROM bar_cache WHERE key LIKE ?1 COLLATE NOCASE",
+                    params![pattern],
+                )
+                .map_err(|e| format!("delete bar_cache {pattern}: {e}"))?
+                    as u64,
+            );
+            let _ = conn.execute(
+                "DELETE FROM bar_track WHERE key LIKE ?1 COLLATE NOCASE",
+                params![pattern],
+            );
+        }
+    }
+    Ok(deleted)
 }
 
 fn expected_gap_warn_ms(timeframe: &str) -> Option<i64> {
@@ -868,25 +1129,66 @@ fn load_split_events_for_audit(
     out
 }
 
-/// Test whether known split events fully explain the close disagreement
-/// between two overlapping series: one side split-adjusted, the other raw,
-/// so the expected close ratio at bucket `ts` is the product of
-/// `pre_split_factor` over events with ex-date after `ts`. Stacked splits
-/// compound and forward splits contribute factors < 1 by construction; both
-/// orientations are tried since either source may be the adjusted one.
-/// Returns `(largest cumulative factor, worst residual)` when every
-/// overlapping close lands within the mismatch threshold of its expected
-/// ratio for at least one orientation.
+/// Exclusive end (next bucket's start, epoch ms) of the period a normalized
+/// bar bucket covers. A bucket's close prints at the period's end, so a split
+/// with ex-date strictly before this instant has already taken effect by the
+/// close and must NOT be expected to separate the raw and adjusted series over
+/// that bucket. Calendar-aware for months so a mid-month ex-date lands in the
+/// right bucket.
+fn bucket_end_ms(bucket_start_ms: i64, timeframe: &str) -> i64 {
+    let minute = 60_000i64;
+    let hour = 60 * minute;
+    let day = 24 * hour;
+    match timeframe {
+        "1Min" => bucket_start_ms + minute,
+        "5Min" => bucket_start_ms + 5 * minute,
+        "15Min" => bucket_start_ms + 15 * minute,
+        "30Min" => bucket_start_ms + 30 * minute,
+        "1Hour" => bucket_start_ms + hour,
+        "4Hour" => bucket_start_ms + 4 * hour,
+        "1Day" => bucket_start_ms + day,
+        "1Week" => bucket_start_ms + 7 * day,
+        "1Month" => next_month_start_ms(bucket_start_ms).unwrap_or(bucket_start_ms + 31 * day),
+        _ => bucket_start_ms + day,
+    }
+}
+
+fn next_month_start_ms(ms: i64) -> Option<i64> {
+    use chrono::Datelike;
+    let date = chrono::DateTime::from_timestamp_millis(ms)?.date_naive();
+    let (y, m) = (date.year(), date.month());
+    let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
+    chrono::NaiveDate::from_ymd_opt(ny, nm, 1)?
+        .and_hms_opt(0, 0, 0)
+        .map(|dt| dt.and_utc().timestamp_millis())
+}
+
+/// Test whether known split events explain the close disagreement between two
+/// overlapping series: one side split-adjusted, the other raw, so the expected
+/// close ratio over a bucket is the product of `pre_split_factor` for events
+/// whose ex-date falls after the bucket's *close* (its period end — a split
+/// effective mid-bucket is already in that bucket's settled close, so it must
+/// not be expected there). Stacked splits compound and forward splits
+/// contribute factors < 1 by construction; both orientations are tried since
+/// either source may be the adjusted one.
+///
+/// Tolerates up to `MAX_SPLIT_OUTLIER_BUCKETS` buckets that don't fit the model
+/// (e.g. a single residual carry glitch) as long as the fitting buckets
+/// outnumber them and at least two fit — one poisoned bucket must not veto an
+/// otherwise-clean split explanation. Returns `(largest cumulative factor,
+/// worst fitting residual, outlier bucket count)` for the better orientation.
 fn split_explained_scale(
     a_bars: &[AuditBar],
     b_by_bucket: &std::collections::BTreeMap<i64, AuditBar>,
     events: &[(i64, f64)],
-) -> Option<(f64, f64)> {
+    timeframe: &str,
+) -> Option<(f64, f64, usize)> {
     if events.is_empty() {
         return None;
     }
-    let mut worst_a_adjusted = 1.0f64;
-    let mut worst_b_adjusted = 1.0f64;
+    // (fit_count, outlier_count, worst_fitting_residual) per orientation.
+    let mut a = (0usize, 0usize, 1.0f64);
+    let mut b = (0usize, 0usize, 1.0f64);
     let mut max_factor = 1.0f64;
     let mut split_buckets = 0usize;
     let mut checked = 0usize;
@@ -901,13 +1203,14 @@ fn split_explained_scale(
         {
             continue;
         }
+        let bucket_end = bucket_end_ms(abar.bucket_ts_ms, timeframe);
         let expected: f64 = events
             .iter()
-            .filter(|(ex_ts, _)| *ex_ts > abar.bucket_ts_ms)
+            .filter(|(ex_ts, _)| *ex_ts >= bucket_end)
             .map(|(_, factor)| *factor)
             .product();
         if !(expected.is_finite() && expected > 0.0) {
-            return None;
+            continue;
         }
         checked += 1;
         if (expected - 1.0).abs() > 1e-9 {
@@ -915,15 +1218,35 @@ fn split_explained_scale(
             max_factor = max_factor.max(expected.max(1.0 / expected));
         }
         let observed = abar.close / bbar.close;
-        worst_a_adjusted = worst_a_adjusted.max((observed / expected).max(expected / observed));
+        let a_res = (observed / expected).max(expected / observed);
+        if a_res < 1.5 {
+            a.0 += 1;
+            a.2 = a.2.max(a_res);
+        } else {
+            a.1 += 1;
+        }
         let inverse = 1.0 / observed;
-        worst_b_adjusted = worst_b_adjusted.max((inverse / expected).max(expected / inverse));
+        let b_res = (inverse / expected).max(expected / inverse);
+        if b_res < 1.5 {
+            b.0 += 1;
+            b.2 = b.2.max(b_res);
+        } else {
+            b.1 += 1;
+        }
     }
     if checked < 2 || split_buckets == 0 {
         return None;
     }
-    let residual = worst_a_adjusted.min(worst_b_adjusted);
-    (residual < 1.5).then_some((max_factor, residual))
+    const MAX_SPLIT_OUTLIER_BUCKETS: usize = 2;
+    let ok = |(fit, out, _): (usize, usize, f64)| {
+        fit >= 2 && out <= MAX_SPLIT_OUTLIER_BUCKETS && out < fit
+    };
+    // Prefer the orientation that fits with fewer outliers.
+    [a, b]
+        .into_iter()
+        .filter(|&o| ok(o))
+        .min_by_key(|&(_, out, _)| out)
+        .map(|(_, out, worst)| (max_factor, worst, out))
 }
 
 fn stable_scale_delta(scales: &[f64], threshold: f64, tolerance: f64) -> Option<f64> {
@@ -1301,10 +1624,36 @@ fn audit_bar_row(
             audit_bars.push(AuditBar {
                 bucket_ts_ms: bucket,
                 close: c,
+                volume: v,
             });
         }
     }
     let mut rewrite_repairable = false;
+
+    // Zero-volume carry poison: an unadjusted ex-date carry (or any isolated
+    // off-scale no-trade bar) that survived into an already-stored row. New
+    // writes scrub it at pack time; this flags legacy rows so the rewrite
+    // repair drops it and re-derives clean higher timeframes.
+    if key_is_carry_prone_equity(&key) {
+        let ohlcv: Vec<(f64, f64, f64, f64, f64)> =
+            raw.iter().map(|(_, o, h, l, c, v)| (*o, *h, *l, *c, *v)).collect();
+        let poison = carry_poison_flags(&ohlcv)
+            .into_iter()
+            .filter(|&d| d)
+            .count();
+        if poison > 0 {
+            report.push_issue_n(
+                BarCacheSanitySeverity::Warn,
+                "zero_volume_carry_poison",
+                &key,
+                format!(
+                    "{poison} zero-volume off-scale carry bar(s) — rewrite drops them and re-derives higher timeframes"
+                ),
+                poison,
+            );
+            rewrite_repairable = true;
+        }
+    }
     if let Some((_, detail)) = invalid {
         report.push_issue_n(
             BarCacheSanitySeverity::Error,
@@ -1534,24 +1883,31 @@ fn plan_row_repair(
             }
             by_bucket.insert(bucket, (o, h, l, c, v));
         }
-        let changed = by_bucket.len() != raw.len()
-            || by_bucket
+        // Scrub zero-volume ex-date carry poison on equity lanes (same rule the
+        // write-path packer applies) so a legacy poisoned row is cleaned in
+        // place; the caller re-derives higher timeframes from the cleaned base.
+        let mut ordered: Vec<(i64, (f64, f64, f64, f64, f64))> = by_bucket.into_iter().collect();
+        if key_is_carry_prone_equity(&key) {
+            drop_carry_poison_bars(&mut ordered);
+        }
+        let changed = ordered.len() != raw.len()
+            || ordered
                 .iter()
                 .zip(raw.iter())
                 .any(|((bts, (o, h, l, c, v)), (rts, ro, rh, rl, rc, rv))| {
                     bts != rts || o != ro || h != rh || l != rl || c != rc || v != rv
                 });
         if changed {
-            if by_bucket.is_empty() {
+            if ordered.is_empty() {
                 // Every bar was invalid — nothing worth keeping.
                 return Ok(opts
                     .delete_corrupt_rows
                     .then_some(RowFix::Delete { key }));
             }
-            let mut binary = Vec::with_capacity(8 + by_bucket.len() * BYTES_PER_BAR);
+            let mut binary = Vec::with_capacity(8 + ordered.len() * BYTES_PER_BAR);
             binary.extend_from_slice(BAR_BINARY_MAGIC);
-            binary.extend_from_slice(&(by_bucket.len() as u32).to_le_bytes());
-            for (ts, (o, h, l, c, v)) in &by_bucket {
+            binary.extend_from_slice(&(ordered.len() as u32).to_le_bytes());
+            for (ts, (o, h, l, c, v)) in &ordered {
                 binary.extend_from_slice(&ts.to_le_bytes());
                 binary.extend_from_slice(&o.to_le_bytes());
                 binary.extend_from_slice(&h.to_le_bytes());
@@ -1559,7 +1915,7 @@ fn plan_row_repair(
                 binary.extend_from_slice(&c.to_le_bytes());
                 binary.extend_from_slice(&v.to_le_bytes());
             }
-            let dropped = raw.len().saturating_sub(by_bucket.len());
+            let dropped = raw.len().saturating_sub(ordered.len());
             return build_rewrite_fix(key, binary, dropped, zstd_level, false).map(Some);
         }
     }
@@ -2522,7 +2878,7 @@ impl SqliteCache {
                     let mut recent_overlap = 0usize;
                     let mut recent_worst = 1.0f64;
                     let mut ratios_by_recency = Vec::new();
-                    let mut worst: Option<(f64, i64, f64, f64)> = None;
+                    let mut worst: Option<(f64, i64, f64, f64, f64, f64)> = None;
                     // Compare closes only: a single degenerate high/low on one
                     // provider's candle (carried opens, lagging ranges) would
                     // otherwise report a huge "mismatch" while both sources
@@ -2536,11 +2892,18 @@ impl SqliteCache {
                             continue;
                         };
                         ratios_by_recency.push(ratio);
-                        if worst.map(|(r, _, _, _)| ratio > r).unwrap_or(true) {
-                            worst = Some((ratio, abar.bucket_ts_ms, abar.close, bbar.close));
+                        if worst.map(|(r, ..)| ratio > r).unwrap_or(true) {
+                            worst = Some((
+                                ratio,
+                                abar.bucket_ts_ms,
+                                abar.close,
+                                bbar.close,
+                                abar.volume,
+                                bbar.volume,
+                            ));
                         }
                     }
-                    let Some((ratio, bucket, a_close, b_close)) = worst else {
+                    let Some((ratio, bucket, a_close, b_close, a_vol, b_vol)) = worst else {
                         continue;
                     };
                     if !ratios_by_recency.is_empty() {
@@ -2589,23 +2952,53 @@ impl SqliteCache {
                         }
                         // A raw-vs-adjusted pair straddling known split
                         // ex-dates is EXPECTED to disagree by the cumulative
-                        // split factor. When that explains every overlapping
-                        // close, record context instead of a warning — the
-                        // merge back-adjusts via the known-split path
-                        // (ADR-122), so the chart already paints one scale.
-                        if let Some((factor, residual)) = split_events
+                        // split factor. When that explains the overlapping
+                        // closes (bar a stray outlier bucket), record context
+                        // instead of a warning — the merge back-adjusts via the
+                        // known-split path (ADR-122), so the chart already
+                        // paints one scale.
+                        if let Some((factor, residual, outliers)) = split_events
                             .get(&symbol.to_ascii_uppercase())
                             .and_then(|events| {
-                                split_explained_scale(&a.bars, &b_by_bucket, events)
+                                split_explained_scale(&a.bars, &b_by_bucket, events, &timeframe)
                             })
                         {
+                            let outlier_note = if outliers > 0 {
+                                format!("; {outliers} unexplained outlier bucket(s)")
+                            } else {
+                                String::new()
+                            };
                             report.push_issue(
                                 BarCacheSanitySeverity::Info,
                                 "cross_source_split_adjustment_delta",
                                 format!("{symbol}:{timeframe}"),
                                 format!(
-                                    "{} vs {} overlap={} worst_ratio={ratio:.2} explained by known splits (cumulative factor {factor:.2}, residual {residual:.2})",
+                                    "{} vs {} overlap={} worst_ratio={ratio:.2} explained by known splits (cumulative factor {factor:.2}, residual {residual:.2}{outlier_note})",
                                     a.key, b.key, overlap
+                                ),
+                            );
+                            continue;
+                        }
+                        // The worst-disagreeing bucket printed no real trade on
+                        // at least one side (volume 0 = every bar rolled into it
+                        // was a provider carry). That is illiquid-feed staleness
+                        // — Alpaca's IEX venue repeating a stale last print while
+                        // the consolidated tape moved on — not a scale conflict
+                        // the merge must reconcile. Record as context; the merge
+                        // already prefers the source that actually traded.
+                        if a_vol == 0.0 || b_vol == 0.0 {
+                            report.push_issue(
+                                BarCacheSanitySeverity::Info,
+                                "cross_source_stale_carry_delta",
+                                format!("{symbol}:{timeframe}"),
+                                format!(
+                                    "{} vs {} overlap={} worst_ratio={ratio:.2} at {} close {:.6} (vol {a_vol:.0}) vs {:.6} (vol {b_vol:.0}) (no-trade carry bar)",
+                                    a.key,
+                                    b.key,
+                                    overlap,
+                                    fmt_ts_ms(bucket).unwrap_or_else(|| bucket.to_string()),
+                                    a_close,
+                                    b_close
                                 ),
                             );
                             continue;
@@ -2869,58 +3262,8 @@ impl SqliteCache {
     /// forced through a clean provider rebuild instead of timestamp-preserving
     /// incremental merge.
     pub fn delete_equity_bar_cache_for_symbol(&self, symbol: &str) -> Result<u64, String> {
-        let trimmed = symbol.trim();
-        if trimmed.is_empty() {
-            return Ok(0);
-        }
-        let raw = trimmed.to_ascii_uppercase();
-        let bare = raw
-            .trim_end_matches(".EQ")
-            .replace('/', "")
-            .to_ascii_uppercase();
-        if bare.is_empty() {
-            return Ok(0);
-        }
-
-        let mut variants = Vec::new();
-        for candidate in [raw.as_str(), bare.as_str()] {
-            if !candidate.is_empty() && !variants.iter().any(|v: &String| v == candidate) {
-                variants.push(candidate.to_string());
-            }
-        }
-        let eq_variant = format!("{bare}.EQ");
-        if !variants.iter().any(|v| v == &eq_variant) {
-            variants.push(eq_variant);
-        }
-
-        let prefixes = [
-            "merged",
-            "kraken-equities",
-            "alpaca",
-            "yahoo-chart",
-            "default",
-        ];
-
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let mut deleted = 0u64;
-        for prefix in prefixes {
-            for variant in &variants {
-                let pattern = format!("{prefix}:{variant}:%");
-                deleted = deleted.saturating_add(
-                    conn.execute(
-                        "DELETE FROM bar_cache WHERE key LIKE ?1 COLLATE NOCASE",
-                        params![pattern],
-                    )
-                    .map_err(|e| format!("delete bar_cache {pattern}: {e}"))?
-                        as u64,
-                );
-                let _ = conn.execute(
-                    "DELETE FROM bar_track WHERE key LIKE ?1 COLLATE NOCASE",
-                    params![pattern],
-                );
-            }
-        }
-        Ok(deleted)
+        delete_equity_bar_cache_for_symbol_conn(&conn, symbol)
     }
 
     /// Delete a specific set of bar-cache keys in chunks, then reclaim freed pages.
@@ -3141,6 +3484,54 @@ impl SqliteCache {
         self.put_bars_with_level(key, &merged_json, zstd_level)?;
 
         Ok(merged_json)
+    }
+
+    /// After a base timeframe is stored, derive its window-safe higher
+    /// timeframes from the full cached series and merge them under the same
+    /// source prefix. Used both at fetch time (so the scheduler doesn't spend a
+    /// separate rate-limited request per higher TF) and by the carry-poison
+    /// repair (re-derive W/M from cleaned daily so a poisoned native rollup is
+    /// overwritten). The merge is additive and newer-bucket-wins: a derived bar
+    /// and any existing native bar for the same period collapse to one bucket,
+    /// so this fills timeframes without doubling candles. Because the base row
+    /// was written through `pack_bars_for_key` (carry-poison scrubbed), the
+    /// aggregate is poison-free. Returns the derived `(timeframe, bar_count)`.
+    pub(crate) fn derive_and_store_higher_tfs(
+        &self,
+        cache_key: &str,
+    ) -> Vec<(&'static str, usize)> {
+        let mut parts = cache_key.splitn(3, ':');
+        let (Some(source), Some(symbol), Some(base_tf)) =
+            (parts.next(), parts.next(), parts.next())
+        else {
+            return Vec::new();
+        };
+        if !source_derives_higher_tfs(source) {
+            return Vec::new();
+        }
+        let derivations = tf_derivations(base_tf);
+        if derivations.is_empty() {
+            return Vec::new();
+        }
+        let Some(base_raw) = self.get_bars_raw(cache_key).ok().flatten() else {
+            return Vec::new();
+        };
+        if base_raw.is_empty() {
+            return Vec::new();
+        }
+        let mut derived = Vec::new();
+        for &(derived_tf, rollup) in derivations {
+            let agg = aggregate_raw_to_rollup(&base_raw, rollup);
+            if agg.is_empty() {
+                continue;
+            }
+            let derived_key = format!("{source}:{symbol}:{derived_tf}");
+            let json = serde_json::to_string(&agg).unwrap_or_default();
+            if self.merge_bars(&derived_key, &json, 0).is_ok() {
+                derived.push((derived_tf, agg.len()));
+            }
+        }
+        derived
     }
 
     /// Store bar data with caller-chosen zstd level.
@@ -3923,6 +4314,19 @@ impl SqliteCache {
             }
             if !fixes.is_empty() {
                 self.apply_row_fixes(&fixes, &mut outcome)?;
+                // A rewritten equity base row (carry poison scrubbed, close
+                // clamped, …) must propagate to the higher timeframes derived
+                // from it, or a poisoned native 1Week/1Month rollup would keep
+                // winning the newer-bucket merge. Runs after the write txn
+                // committed so the re-read sees the cleaned base.
+                for fix in &fixes {
+                    if let RowFix::Rewrite { key, .. } = fix
+                        && key_is_carry_prone_equity(key)
+                    {
+                        outcome.higher_tfs_rederived +=
+                            self.derive_and_store_higher_tfs(key).len();
+                    }
+                }
             }
             if let Some(cb) = progress {
                 cb(outcome.rows_scanned, rows_total.max(outcome.rows_scanned));
