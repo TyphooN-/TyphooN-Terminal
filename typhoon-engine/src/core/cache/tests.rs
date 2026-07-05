@@ -1809,17 +1809,20 @@ fn data_sanity_audit_gap_details_have_dates_and_recent_intraday_gaps_warn() {
     let cache = SqliteCache::open(&db_path).unwrap();
     let now = chrono::Utc::now();
     let fmt = |dt: chrono::DateTime<chrono::Utc>| dt.to_rfc3339();
-    // 15Min series with a 40-day hole that ends within the last 30 days.
-    let recent_gap = format!(
-        r#"[
-        {{"timestamp":"{}","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":1.0}},
-        {{"timestamp":"{}","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":1.0}},
-        {{"timestamp":"{}","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":1.0}}
-    ]"#,
-        fmt(now - chrono::Duration::days(40)),
-        fmt(now - chrono::Duration::minutes(60)),
-        fmt(now - chrono::Duration::minutes(45)),
-    );
+    // Dense 15Min series (bars 15 min apart) then a ~40-day hole ending within
+    // the last 30 days — a genuine stalled lane on a normally-active series.
+    let bar = |t: chrono::DateTime<chrono::Utc>| {
+        format!(
+            r#"{{"timestamp":"{}","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":1.0}}"#,
+            fmt(t)
+        )
+    };
+    let mut rows: Vec<String> = (0..60)
+        .map(|i| bar(now - chrono::Duration::days(41) + chrono::Duration::minutes(15 * i)))
+        .collect();
+    rows.push(bar(now - chrono::Duration::minutes(60)));
+    rows.push(bar(now - chrono::Duration::minutes(45)));
+    let recent_gap = format!("[{}]", rows.join(","));
     cache.put_bars("alpaca:GAPNEW:15Min", &recent_gap).unwrap();
     // Daily series whose hole ended years ago.
     let old_gap = r#"[
@@ -2421,6 +2424,62 @@ fn data_sanity_repairs_carry_poison_and_rederives_higher_tfs() {
 
     let report = cache.audit_bar_cache_sanity().unwrap();
     assert!(!report.has_code("zero_volume_carry_poison"), "{report:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn large_time_gap_warns_on_dense_stall_but_not_illiquid_sparse_series() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let now = chrono::Utc::now();
+    let hour = chrono::Duration::hours(1);
+    let day = chrono::Duration::days(1);
+    let bar = |t: chrono::DateTime<chrono::Utc>| {
+        format!(
+            r#"{{"timestamp":"{}","open":10.0,"high":10.0,"low":10.0,"close":10.0,"volume":100.0}}"#,
+            t.to_rfc3339()
+        )
+    };
+
+    // Dense 1Hour lane (one bar/hour for 28 days) then an 11-day hole then a
+    // recent bar — a genuinely stalled fetch lane. Average spacing ≪ the gap
+    // threshold ⇒ actionable Warn.
+    let mut dense: Vec<String> = (0..28 * 24).map(|i| bar(now - day * 40 + hour * i)).collect();
+    dense.push(bar(now - day));
+    cache
+        .put_bars("alpaca:DENSE:1Hour", &format!("[{}]", dense.join(",")))
+        .unwrap();
+
+    // Sparse 1Hour lane: 5 bars over ~180 days, the newest recent, so its
+    // largest gap ends inside the recent window too — but the series is
+    // sparse throughout (illiquid SPAC/warrant), so it is Info context.
+    let sparse: Vec<String> = [180, 140, 100, 60, 1]
+        .into_iter()
+        .map(|d| bar(now - day * d))
+        .collect();
+    cache
+        .put_bars("alpaca:SPARSE:1Hour", &format!("[{}]", sparse.join(",")))
+        .unwrap();
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    let sev = |key: &str| {
+        report
+            .issues
+            .iter()
+            .find(|i| i.key == key && i.code == "large_time_gap")
+            .map(|i| i.severity)
+    };
+    assert_eq!(
+        sev("alpaca:DENSE:1Hour"),
+        Some(BarCacheSanitySeverity::Warn),
+        "dense stall must warn: {report:#?}"
+    );
+    assert_eq!(
+        sev("alpaca:SPARSE:1Hour"),
+        Some(BarCacheSanitySeverity::Info),
+        "illiquid sparse series must be context: {report:#?}"
+    );
 
     let _ = std::fs::remove_file(db_path);
 }

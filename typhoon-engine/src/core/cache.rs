@@ -1724,22 +1724,48 @@ fn audit_bar_row(
         // holiday long-weekend clears the 15Min/30Min gap thresholds on every
         // healthy equity series, while a genuinely stalled lane is missing
         // weeks of bars.
+        //
+        // But a chronically-sparse series — an illiquid SPAC/warrant/unit that
+        // prints only a handful of intraday bars over months (AAAC: 6 1Hour
+        // bars in half a year) — has no fetchable data to recover: IEX simply
+        // has no trades. Its whole history is gaps, so a large recent gap is
+        // not a stall. Distinguish the two by the MEDIAN inter-bar spacing: a
+        // genuinely stalled lane cadences on the order of its timeframe when it
+        // trades (sub-day median) and has one recent hole, while an illiquid
+        // name sits days/weeks apart throughout (median ≥ a day) and stays Info
+        // context. Median (not mean) is used because the large gap itself
+        // skews the mean toward "sparse" and would hide real stalls.
         let day_ms = 24 * 60 * 60 * 1000i64;
         let recent_cutoff_ms = now_ms - 30 * day_ms;
-        let severity = if is_intraday_timeframe(&parts.timeframe)
+        let is_recent_intraday_gap = is_intraday_timeframe(&parts.timeframe)
             && to_ms >= recent_cutoff_ms
-            && gap >= 7 * day_ms
-        {
+            && gap >= 7 * day_ms;
+        let median_spacing_ms = is_recent_intraday_gap.then(|| {
+            let mut diffs: Vec<i64> = raw.windows(2).map(|w| w[1].0 - w[0].0).collect();
+            diffs.sort_unstable();
+            diffs.get(diffs.len() / 2).copied().unwrap_or(i64::MAX)
+        });
+        // Median bar spacing ≥ a day ⇒ the series only prints about daily or
+        // less — illiquid, no fetchable intraday data to recover.
+        let chronically_sparse = median_spacing_ms.is_some_and(|median| median >= day_ms);
+        let severity = if is_recent_intraday_gap && !chronically_sparse {
             BarCacheSanitySeverity::Warn
         } else {
             BarCacheSanitySeverity::Info
+        };
+        let cadence_note = match median_spacing_ms {
+            Some(m) if chronically_sparse => {
+                format!(" (chronically sparse — illiquid, ~{:.1}d between bars)", m as f64 / 86_400_000.0)
+            }
+            Some(m) => format!(" (median bar spacing {:.1}h)", m as f64 / 3_600_000.0),
+            None => String::new(),
         };
         report.push_issue_n(
             severity,
             "large_time_gap",
             &key,
             format!(
-                "idx={idx} max_gap_days={:.1} from={} to={} gaps={gap_count}",
+                "idx={idx} max_gap_days={:.1} from={} to={} gaps={gap_count}{cadence_note}",
                 gap as f64 / 86_400_000.0,
                 fmt_date_ms(from_ms),
                 fmt_date_ms(to_ms),
