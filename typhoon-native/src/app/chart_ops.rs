@@ -192,10 +192,12 @@ pub(super) const MTF_GRID_TIMEFRAMES: [(&str, Timeframe); 9] = [
     ("MN1", Timeframe::MN1),
 ];
 
-/// Max (symbol, timeframe) cells the MTF Grid background fill loads per pass. Active
-/// symbol's cells are filled first; the rest spill to the next throttled pass so one
-/// pass can't flood the runtime with blocking loads.
-const MTF_GRID_FILL_PER_BATCH: usize = 32;
+/// Max (symbol, timeframe) cells the MTF Grid background fill loads per pass. The
+/// right-panel MTF Grid is foreground trading UI, so one pass should cover a normal
+/// open grid instead of visibly dribbling rows over many throttle windows. The work
+/// still runs on one blocking worker, which bounds cache/decompress pressure without
+/// leaving the navbar stagnant.
+const MTF_GRID_FILL_PER_BATCH: usize = 256;
 
 /// The MTF Grid's per-cell indicator values: `(close, sma200, kama, fisher,
 /// fisher_signal)`. `None` means "no value" (not loaded / insufficient history).
@@ -1329,7 +1331,8 @@ impl TyphooNApp {
     /// the last indicator values + bars into the result cache, where the grid render
     /// and chart reopens read them. Replaces the old hidden backing charts with the
     /// same data, cached + TTL-pruned instead of held in persistent ChartStates the
-    /// sync loop had to maintain. Deferred while a heavy full-universe sync runs.
+    /// sync loop had to maintain. This is foreground MTF Grid work: do not defer it
+    /// behind heavy full-universe sync, or visible rows sit half-empty for minutes.
     /// (Name kept for its call sites; `mtf_grid_status_*` are now throttle bookkeeping
     /// read by the navbar pre-block.)
     pub(super) fn compute_mtf_grid_status(&mut self) {
@@ -1340,11 +1343,6 @@ impl TyphooNApp {
         self.mtf_grid_status_symbol = self.symbol_input.trim().to_string();
         self.mtf_grid_status_open_sig = self.mtf_open_chart_signature();
         self.mtf_grid_status_at = Some(std::time::Instant::now());
-        if self.heavy_sync_in_progress {
-            // Don't add cache/indicator loads while full-universe sync saturates the
-            // machine; the throttled refresh retries once sync pressure relaxes.
-            return;
-        }
         let now_ms = chrono::Utc::now().timestamp_millis();
         let active_key = mtf_grid_symbol_key(&self.symbol_input).to_ascii_uppercase();
         // (symbol, tf) cells with no open tab and no fresh cache entry.
@@ -1385,8 +1383,9 @@ impl TyphooNApp {
         if cells.is_empty() {
             return;
         }
-        // Active symbol's cells first so the focused row fills immediately; cap the
-        // batch so one pass can't flood the runtime (remaining cells fill next pass).
+        // Active symbol's cells first so the focused row fills immediately; cap only
+        // pathological cases. A normal open grid (e.g. 15 symbols × 7 TFs) should
+        // finish in one pass, not over repeated six-second windows.
         cells.sort_by_key(|(s, _)| mtf_grid_symbol_key(s).to_ascii_uppercase() != active_key);
         cells.truncate(MTF_GRID_FILL_PER_BATCH);
         let (tx, rx) = std::sync::mpsc::channel();

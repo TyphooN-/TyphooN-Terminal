@@ -40,6 +40,11 @@ impl TyphooNApp {
         //   • a short throttle, so cells the fill loads a batch at a time keep
         //     appearing. Self-terminating: once every cell is warm the fill finds
         //     nothing to load and idles until one of the above changes.
+        if self.right_mtf_grid_open && self.mtf_grid_rx.is_some() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
         if self.right_mtf_grid_open
             && self.cache.is_some()
             && self.mtf_grid_rx.is_none()
@@ -49,7 +54,7 @@ impl TyphooNApp {
             let open_changed = self.mtf_grid_status_open_sig != self.mtf_open_chart_signature();
             let throttle_ok = self
                 .mtf_grid_status_at
-                .map(|t| t.elapsed().as_secs() >= 6)
+                .map(|t| t.elapsed() >= std::time::Duration::from_secs(1))
                 .unwrap_or(true);
             if symbol_changed || open_changed || throttle_ok {
                 self.compute_mtf_grid_status();
