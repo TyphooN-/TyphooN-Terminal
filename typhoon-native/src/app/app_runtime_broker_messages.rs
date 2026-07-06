@@ -1,4 +1,8 @@
 use super::*;
+
+fn crossed_marker_milestone(before: usize, after: usize, interval: usize) -> bool {
+    interval > 0 && after > before && after.is_multiple_of(interval)
+}
 use crate::app::app_runtime_support::{
     broker_msg_kind, is_routine_news_progress, json_result_card_from_text,
     should_emit_alpaca_retry_queue_log,
@@ -967,6 +971,7 @@ impl TyphooNApp {
                     bar_count,
                     target_bars,
                 } => {
+                    let marker_count_before = self.alpaca_backfill_complete_pairs.len();
                     let changed = self.alpaca_backfill_complete_mark(
                         &symbol,
                         &timeframe,
@@ -983,7 +988,7 @@ impl TyphooNApp {
                             target_bars,
                             marker_count
                         );
-                        if marker_count.is_multiple_of(100) {
+                        if crossed_marker_milestone(marker_count_before, marker_count, 100) {
                             self.log.push_back(LogEntry::info(format!(
                                 "Alpaca backfill milestone: {} pairs at provider-window saturation",
                                 marker_count
@@ -1020,5 +1025,18 @@ impl TyphooNApp {
             perf_after_broker_started,
             msgs_drained,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marker_milestone_logs_only_when_count_crosses_interval() {
+        assert!(crossed_marker_milestone(56799, 56800, 100));
+        assert!(!crossed_marker_milestone(56800, 56800, 100));
+        assert!(!crossed_marker_milestone(56800, 56800, 0));
+        assert!(!crossed_marker_milestone(56800, 56801, 100));
     }
 }
