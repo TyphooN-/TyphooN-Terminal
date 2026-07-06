@@ -1012,6 +1012,11 @@ pub struct TyphooNApp {
     /// every bar row.
     pub(crate) storage_sanity_report:
         Option<typhoon_engine::core::cache::BarCacheSanityReport>,
+    /// Symbols worth a split-history fetch from the latest audit: cross-source
+    /// overlap-mismatch Warns whose split history has not been fetched yet.
+    /// Computed once when the audit completes (needs one DB read) so the render
+    /// path and the backfill worker both read it without per-frame queries.
+    pub(crate) storage_sanity_backfill_symbols: Vec<String>,
     /// Live worker channel for the sanity audit / repair / rebuild / export
     /// jobs (one job at a time; buttons are disabled while `Some`).
     pub(crate) storage_sanity_rx: Option<std::sync::mpsc::Receiver<SanityWorkerMsg>>,

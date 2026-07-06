@@ -21,6 +21,18 @@ impl TyphooNApp {
                                 let summary = report.summary_line();
                                 let warn = report.error_count > 0 || report.warn_count > 0;
                                 self.storage_sanity_delta = delta;
+                                // Recompute the "worth backfilling" symbol set
+                                // once per audit (one DB read here, off the
+                                // render path) so the button/count and worker
+                                // read it without per-frame queries.
+                                self.storage_sanity_backfill_symbols = self
+                                    .cache
+                                    .as_ref()
+                                    .map(|cache| {
+                                        let fetched = already_fetched_split_symbols(cache);
+                                        sanity_split_backfill_symbols(&report.issues, &fetched)
+                                    })
+                                    .unwrap_or_default();
                                 self.storage_sanity_report = Some(report);
                                 if warn {
                                     self.log.push_back(LogEntry::warn(summary));
@@ -956,7 +968,7 @@ impl TyphooNApp {
         let corrupt_n = report.corrupt_rows;
         let merged_n = report.merged_mismatch_keys.len();
         let purge_n = report.purgeable_empty_rows;
-        let backfill_n = sanity_split_backfill_symbols(report).len();
+        let backfill_n = self.storage_sanity_backfill_symbols.len();
         let stored_issues = report.issues.len();
         let issue_lines: Vec<(BarCacheSanitySeverity, String)> = report
             .issues
@@ -1340,11 +1352,7 @@ impl TyphooNApp {
         let Some(cache) = self.cache.clone() else {
             return;
         };
-        let symbols: Vec<String> = self
-            .storage_sanity_report
-            .as_ref()
-            .map(sanity_split_backfill_symbols)
-            .unwrap_or_default();
+        let symbols: Vec<String> = self.storage_sanity_backfill_symbols.clone();
         if symbols.is_empty() {
             return;
         }
@@ -1457,28 +1465,89 @@ impl TyphooNApp {
 /// Unique symbols from the last audit whose cross-source/merged scale checks
 /// flagged a disagreement — the set worth fetching split history for.
 /// Split-explained mismatches are excluded: their splits are already known.
+/// Symbols from the latest audit worth a split-history fetch: only the
+/// **overlap-mismatch Warns** (the sole cross-source code `split_explained_scale`
+/// can reclassify), and only those NOT in `already_fetched`. The Info-only scale
+/// deltas were removed because backfilling splits never moves them, and
+/// already-fetched symbols are excluded because re-fetching the same (missing or
+/// non-reconciling) split history can't change the result — those are genuine
+/// upstream residue, not backfill work. This makes the count reflect remaining
+/// work and drop after a backfill instead of restating every flagged symbol.
 fn sanity_split_backfill_symbols(
-    report: &typhoon_engine::core::cache::BarCacheSanityReport,
+    issues: &[typhoon_engine::core::cache::BarCacheSanityIssue],
+    already_fetched: &std::collections::HashSet<String>,
 ) -> Vec<String> {
     const CODES: &[&str] = &[
         "cross_source_overlap_mismatch",
-        "cross_source_historical_scale_delta",
-        "cross_source_scale_blowout",
         "merged_source_overlap_mismatch",
-        "merged_source_historical_scale_delta",
-        "merged_source_stable_scale_delta",
     ];
     let mut symbols = std::collections::BTreeSet::new();
-    for issue in &report.issues {
+    for issue in issues {
         if !CODES.contains(&issue.code.as_str()) {
             continue;
         }
         // Cross-source issue keys are "SYMBOL:TIMEFRAME".
         if let Some(symbol) = issue.key.split(':').next()
             && !symbol.is_empty()
+            && !already_fetched.contains(&symbol.to_ascii_uppercase())
         {
             symbols.insert(symbol.to_string());
         }
     }
     symbols.into_iter().collect()
+}
+
+/// Uppercased symbols that already have a `research_stock_splits` row (fetched
+/// at least once, empty or not) — re-fetching them can't help. One small query,
+/// run off the render path when an audit completes.
+fn already_fetched_split_symbols(cache: &typhoon_engine::core::cache::SqliteCache) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    if let Ok(conn) = cache.connection()
+        && let Ok(mut stmt) = conn.prepare("SELECT symbol FROM research_stock_splits")
+    {
+        if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+            for symbol in rows.flatten() {
+                out.insert(symbol.trim().to_ascii_uppercase());
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod split_backfill_set_tests {
+    use super::sanity_split_backfill_symbols;
+    use typhoon_engine::core::cache::{BarCacheSanityIssue, BarCacheSanitySeverity};
+
+    fn issue(code: &str, symbol: &str) -> BarCacheSanityIssue {
+        BarCacheSanityIssue {
+            severity: BarCacheSanitySeverity::Warn,
+            code: code.to_string(),
+            key: format!("{symbol}:1Month"),
+            detail: String::new(),
+            occurrences: 1,
+        }
+    }
+
+    #[test]
+    fn backfill_set_is_unfetched_overlap_mismatch_only() {
+        let issues = vec![
+            issue("cross_source_overlap_mismatch", "ATON"), // unfetched Warn -> included
+            issue("cross_source_overlap_mismatch", "ABTS"), // fetched already -> excluded
+            issue("cross_source_historical_scale_delta", "FOO"), // Info code, not backfillable
+            issue("cross_source_scale_blowout", "BAR"),     // runaway adjust, not split-explainable
+        ];
+        let fetched = ["ABTS".to_string()].into_iter().collect();
+        assert_eq!(
+            sanity_split_backfill_symbols(&issues, &fetched),
+            vec!["ATON".to_string()]
+        );
+    }
+
+    #[test]
+    fn backfill_set_empty_when_all_overlap_mismatch_already_fetched() {
+        let issues = vec![issue("cross_source_overlap_mismatch", "ABTS")];
+        let fetched = ["ABTS".to_string()].into_iter().collect();
+        assert!(sanity_split_backfill_symbols(&issues, &fetched).is_empty());
+    }
 }

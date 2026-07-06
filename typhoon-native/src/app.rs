@@ -665,6 +665,7 @@ impl TyphooNApp {
             storage_cache_move_result: None,
             storage_cache_move_rx: None,
             storage_sanity_report: None,
+            storage_sanity_backfill_symbols: Vec::new(),
             storage_sanity_rx: None,
             storage_sanity_cancel: None,
             storage_sanity_progress: None,
