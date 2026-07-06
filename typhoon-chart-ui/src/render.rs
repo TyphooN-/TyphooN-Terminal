@@ -1330,6 +1330,10 @@ pub fn draw_chart(
             (chart.prev_monthly_low, "Prev MN Lo", magenta, 3),
         ];
         let chart_rank = chart.timeframe.group_rank();
+        // Match ATR Projection line weight so Previous Candle Levels carry the
+        // same visual priority when both MT5-style level overlays are enabled.
+        let prev_level_stroke_width = 1.5;
+
         // Draw each level line at its true price immediately, but defer the text
         // so labels for levels that sit within a few ticks of each other (e.g.
         // H4 Hi vs D Hi) get spread into separate vertical bands instead of
@@ -1373,7 +1377,7 @@ pub fn draw_chart(
                         egui::pos2(chart_rect.left(), y),
                         egui::pos2(chart_rect.right(), y),
                     ],
-                    egui::Stroke::new(0.5, *first_col),
+                    egui::Stroke::new(prev_level_stroke_width, *first_col),
                 );
             }
 
