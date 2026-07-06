@@ -6,10 +6,22 @@ const ALPACA_BATCH_FETCH_INTRADAY_SYMBOLS: usize = 16;
 const ALPACA_BATCH_FETCH_LOW_TF_SYMBOLS: usize = 8;
 pub(super) const BACKGROUND_RETRY_PENDING_FETCH_CAP: usize = 256;
 
-/// When process RSS exceeds this threshold we pause new background (non-focus)
-/// market data fetches. Focus charts and explicit user actions are still allowed.
-/// 18 GB on a 32 GB system leaves headroom for the rest of the desktop.
-const HEAVY_SYNC_RSS_PAUSE_MB: u64 = 18_000;
+/// Memory pressure levels for broad background market-data sync.
+///
+/// The old fixed 18 GB pause point was too late on 32 GB machines: a cold-start
+/// sweep can already have dozens of full-history response bodies + parsed bar
+/// vectors + cache-write buffers in flight, so RSS can overshoot from ~18 GB to
+/// OOM-kill territory before the next scheduler tick. Use system-RAM percentages
+/// instead: keep full pressure while there is headroom, shrink newly queued broad
+/// work once RSS crosses ~45%, and pause non-focus broad work at ~55%. Focused
+/// chart/MTF/user-demand work still goes through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MarketDataMemoryPressure {
+    Normal,
+    Reduced,
+    PauseBackground,
+}
+
 pub(super) fn current_process_rss_mb() -> u64 {
     // Lightweight /proc/self/status read — no extra dependencies.
     if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
@@ -26,8 +38,54 @@ pub(super) fn current_process_rss_mb() -> u64 {
     0
 }
 
+fn current_system_memory_mb() -> u64 {
+    if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") {
+        for line in meminfo.lines() {
+            if line.starts_with("MemTotal:") {
+                if let Some(kb_str) = line.split_whitespace().nth(1) {
+                    if let Ok(kb) = kb_str.parse::<u64>() {
+                        return kb / 1024;
+                    }
+                }
+            }
+        }
+    }
+    0
+}
+
+fn market_data_memory_pressure_at(rss_mb: u64, total_mb: u64) -> MarketDataMemoryPressure {
+    if rss_mb == 0 {
+        return MarketDataMemoryPressure::Normal;
+    }
+    // Fallback keeps older/no-/proc environments safer than the former 18 GB
+    // fixed tripwire while avoiding accidental throttling on tiny test values.
+    if total_mb == 0 {
+        return if rss_mb >= 18_000 {
+            MarketDataMemoryPressure::PauseBackground
+        } else if rss_mb >= 14_000 {
+            MarketDataMemoryPressure::Reduced
+        } else {
+            MarketDataMemoryPressure::Normal
+        };
+    }
+    let reduced_at = (total_mb.saturating_mul(45) / 100).max(8_000);
+    let pause_at = (total_mb.saturating_mul(55) / 100).max(reduced_at + 1);
+    if rss_mb >= pause_at {
+        MarketDataMemoryPressure::PauseBackground
+    } else if rss_mb >= reduced_at {
+        MarketDataMemoryPressure::Reduced
+    } else {
+        MarketDataMemoryPressure::Normal
+    }
+}
+
+fn current_market_data_memory_pressure() -> MarketDataMemoryPressure {
+    market_data_memory_pressure_at(current_process_rss_mb(), current_system_memory_mb())
+}
+
 pub(super) fn background_retry_dispatch_allowed(pending_fetches: usize) -> bool {
     pending_fetches < BACKGROUND_RETRY_PENDING_FETCH_CAP
+        && current_market_data_memory_pressure() != MarketDataMemoryPressure::PauseBackground
 }
 
 fn background_market_data_fetch_allowed(focus: bool, pending_fetches: usize) -> bool {
@@ -37,13 +95,32 @@ fn background_market_data_fetch_allowed(focus: bool, pending_fetches: usize) -> 
     if pending_fetches >= BACKGROUND_RETRY_PENDING_FETCH_CAP {
         return false;
     }
-    // Memory backpressure: pause broad background work when RSS is already high.
-    // Focus charts and explicit user actions bypass this check.
-    let rss_mb = current_process_rss_mb();
-    if rss_mb > 0 && rss_mb >= HEAVY_SYNC_RSS_PAUSE_MB {
-        return false;
+    current_market_data_memory_pressure() != MarketDataMemoryPressure::PauseBackground
+}
+
+fn memory_bounded_available_slots(
+    queue_window: usize,
+    pending: usize,
+    batch_limit: usize,
+    foreground_reserve: usize,
+) -> usize {
+    let available = queue_window.saturating_sub(pending).min(batch_limit);
+    match current_market_data_memory_pressure() {
+        MarketDataMemoryPressure::Normal => available,
+        // Let broad sync keep moving, but stop feeding hundreds of new full-history
+        // tuples into memory while a previous burst is still being decompressed,
+        // parsed, serialized, and compressed.
+        MarketDataMemoryPressure::Reduced => available.min(foreground_reserve.max(8)),
+        // Selector gets just the foreground reserve; candidates are also filtered
+        // to focus symbols before dispatch below.
+        MarketDataMemoryPressure::PauseBackground => available.min(foreground_reserve.max(1)),
     }
-    true
+}
+
+fn drop_background_candidates_when_paused(candidates: &mut Vec<AlpacaSyncCandidate>) {
+    if current_market_data_memory_pressure() == MarketDataMemoryPressure::PauseBackground {
+        candidates.retain(|candidate| candidate.focus);
+    }
 }
 
 /// Canonical `"<source>:"` cache-key prefix for a source segment, or `None` for
@@ -103,7 +180,9 @@ const REFETCH_BACKOFF_SHIFT_CAP: u32 = 20;
 /// fixed wall-clock ceiling.
 fn refetch_backoff_secs(period_s: i64, streak: u32) -> i64 {
     let base = (period_s / 2).max(30);
-    let ceil = period_s.saturating_mul(REFETCH_BACKOFF_MAX_PERIODS).max(base);
+    let ceil = period_s
+        .saturating_mul(REFETCH_BACKOFF_MAX_PERIODS)
+        .max(base);
     base.saturating_mul(1i64 << streak.min(REFETCH_BACKOFF_SHIFT_CAP))
         .min(ceil)
 }
@@ -1188,14 +1267,15 @@ impl TyphooNApp {
         let mut dispatched = 0usize;
         let now_s = chrono::Utc::now().timestamp();
 
-        let native_available_slots = queue_window
-            .saturating_sub(
-                self.pending_kraken_fetches
-                    .iter()
-                    .filter(|key| key.starts_with("equity:"))
-                    .count(),
-            )
-            .min(batch_limit);
+        let native_available_slots = memory_bounded_available_slots(
+            queue_window,
+            self.pending_kraken_fetches
+                .iter()
+                .filter(|key| key.starts_with("equity:"))
+                .count(),
+            batch_limit,
+            foreground_slots,
+        );
         if native_available_slots > 0 && !native_timeframes.is_empty() {
             let no_data_keys = self
                 .unresolvable_fetch_keys_by_broker
@@ -1217,7 +1297,7 @@ impl TyphooNApp {
                 self.is_fetch_on_cooldown("kraken-equities", &symbol, tf)
             };
             // Tier priority (MTF Grid > Active > Background) + high-TF-first is applied inside the workset selector
-            let candidates = select_alpaca_sync_workset_rotating_with_stale_multiplier(
+            let mut candidates = select_alpaca_sync_workset_rotating_with_stale_multiplier(
                 &native_symbols,
                 &native_timeframes,
                 &self.cached_kraken_equities_sync_state,
@@ -1234,6 +1314,7 @@ impl TyphooNApp {
                 kraken_equities_sync_target_bars,
                 &equities_dispatch_blocked,
             );
+            drop_background_candidates_when_paused(&mut candidates);
             self.kraken_equities_sync_cursor = cursor;
             for candidate in candidates {
                 if self.queue_kraken_equity_fetch(&candidate.symbol, &candidate.timeframe) {
@@ -1266,10 +1347,12 @@ impl TyphooNApp {
                     self.alpaca_backfill_complete_load();
                 }
                 let capacity = self.alpaca_sync_capacity();
-                let available_slots = capacity
-                    .queue_window
-                    .saturating_sub(self.pending_alpaca_fetches.len())
-                    .min(capacity.batch_size);
+                let available_slots = memory_bounded_available_slots(
+                    capacity.queue_window,
+                    self.pending_alpaca_fetches.len(),
+                    capacity.batch_size,
+                    capacity.foreground_reserve,
+                );
                 if available_slots > 0 {
                     let mut no_data: std::collections::HashSet<String> =
                         self.alpaca_no_data_pairs.keys().cloned().collect();
@@ -1288,7 +1371,7 @@ impl TyphooNApp {
                         let symbol = normalize_market_data_symbol(symbol).replace('/', "");
                         self.is_fetch_on_cooldown("alpaca", &symbol, tf)
                     };
-                    let candidates = select_alpaca_sync_workset_rotating(
+                    let mut candidates = select_alpaca_sync_workset_rotating(
                         &fallback_symbols,
                         &alpaca_timeframes,
                         &self.cached_alpaca_sync_state,
@@ -1308,6 +1391,7 @@ impl TyphooNApp {
                         alpaca_sync_target_bars,
                         &alpaca_dispatch_blocked,
                     );
+                    drop_background_candidates_when_paused(&mut candidates);
                     self.kraken_equities_alpaca_sync_cursor = cursor;
                     dispatched += self.queue_alpaca_batch_fetches_from_candidates(candidates);
                 }
@@ -1342,9 +1426,12 @@ impl TyphooNApp {
                 } else {
                     128
                 };
-                let available_slots = yahoo_queue_window
-                    .saturating_sub(self.pending_yahoo_chart_fetches.len())
-                    .min(yahoo_batch_limit);
+                let available_slots = memory_bounded_available_slots(
+                    yahoo_queue_window,
+                    self.pending_yahoo_chart_fetches.len(),
+                    yahoo_batch_limit,
+                    yahoo_foreground_slots,
+                );
                 if available_slots > 0 {
                     if self.cached_yahoo_chart_sync_state_rev != Some(self.bg_rev) {
                         let previous = self.cached_yahoo_chart_sync_state.clone();
@@ -1376,7 +1463,7 @@ impl TyphooNApp {
                     // 1Month) an eternal Backfill candidate and Yahoo re-pulled
                     // the whole catalog's monthly history forever, starving
                     // 1Week/1Day (observed 8.3k 1Month rewrites in one night).
-                    let candidates = select_alpaca_sync_workset_rotating(
+                    let mut candidates = select_alpaca_sync_workset_rotating(
                         &fallback_symbols,
                         &yahoo_timeframes,
                         &self.cached_yahoo_chart_sync_state,
@@ -1392,6 +1479,7 @@ impl TyphooNApp {
                         alpaca_sync_target_bars,
                         &yahoo_dispatch_blocked,
                     );
+                    drop_background_candidates_when_paused(&mut candidates);
                     self.yahoo_chart_sync_cursor = cursor;
                     for candidate in candidates {
                         if self.queue_yahoo_chart_fetch(&candidate.symbol, &candidate.timeframe) {
@@ -1604,7 +1692,11 @@ impl TyphooNApp {
     /// are the normalized keys queued into `fetch_last_queued_ts`.
     pub(super) fn bg_intraday_refetch_backed_off(&self, symbol: &str, timeframe: &str) -> bool {
         let cell_key = alpaca_fetch_key(symbol, timeframe);
-        let streak = self.bg_refetch_empty_streak.get(&cell_key).copied().unwrap_or(0);
+        let streak = self
+            .bg_refetch_empty_streak
+            .get(&cell_key)
+            .copied()
+            .unwrap_or(0);
         if streak == 0 {
             return false;
         }
@@ -2092,10 +2184,12 @@ impl TyphooNApp {
         }
 
         let capacity = self.alpaca_sync_capacity();
-        let available_slots = capacity
-            .queue_window
-            .saturating_sub(self.pending_alpaca_fetches.len())
-            .min(capacity.batch_size);
+        let available_slots = memory_bounded_available_slots(
+            capacity.queue_window,
+            self.pending_alpaca_fetches.len(),
+            capacity.batch_size,
+            capacity.foreground_reserve,
+        );
         if available_slots == 0 {
             return 0;
         }
@@ -2137,7 +2231,7 @@ impl TyphooNApp {
             let symbol = normalize_market_data_symbol(symbol).replace('/', "");
             self.is_fetch_on_cooldown("alpaca", &symbol, tf)
         };
-        let candidates = select_alpaca_sync_workset_rotating(
+        let mut candidates = select_alpaca_sync_workset_rotating(
             symbols,
             &timeframes,
             &self.cached_alpaca_sync_state,
@@ -2153,6 +2247,7 @@ impl TyphooNApp {
             alpaca_sync_target_bars,
             &alpaca_dispatch_blocked,
         );
+        drop_background_candidates_when_paused(&mut candidates);
         self.alpaca_sync_cursor = cursor;
 
         let mut dispatched = 0usize;
@@ -2195,9 +2290,12 @@ impl TyphooNApp {
         } else {
             KRAKEN_SPOT_BACKGROUND_SCAN_LIMIT
         };
-        let available_slots = queue_window
-            .saturating_sub(self.pending_kraken_fetches.len())
-            .min(batch_limit);
+        let available_slots = memory_bounded_available_slots(
+            queue_window,
+            self.pending_kraken_fetches.len(),
+            batch_limit,
+            foreground_slots,
+        );
         if available_slots == 0 {
             return 0;
         }
@@ -2226,7 +2324,7 @@ impl TyphooNApp {
             let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
             self.is_fetch_on_cooldown("kraken", &symbol, tf)
         };
-        let candidates = select_alpaca_sync_workset_rotating(
+        let mut candidates = select_alpaca_sync_workset_rotating(
             symbols,
             &timeframes,
             &self.cached_kraken_sync_state,
@@ -2242,6 +2340,7 @@ impl TyphooNApp {
             kraken_sync_target_bars,
             &kraken_dispatch_blocked,
         );
+        drop_background_candidates_when_paused(&mut candidates);
         self.kraken_spot_sync_cursors[cursor_idx] = cursor;
         let mut dispatched = 0usize;
         for candidate in candidates {
@@ -2287,9 +2386,12 @@ impl TyphooNApp {
         } else {
             KRAKEN_FUTURES_BACKGROUND_SCAN_LIMIT
         };
-        let available_slots = queue_window
-            .saturating_sub(self.pending_kraken_futures_fetches.len())
-            .min(batch_limit);
+        let available_slots = memory_bounded_available_slots(
+            queue_window,
+            self.pending_kraken_futures_fetches.len(),
+            batch_limit,
+            foreground_slots,
+        );
         if available_slots == 0 {
             return 0;
         }
@@ -2318,7 +2420,7 @@ impl TyphooNApp {
             let symbol = typhoon_engine::core::kraken_futures::normalize_futures_symbol(symbol);
             self.is_fetch_on_cooldown("kraken-futures", &symbol, tf)
         };
-        let candidates = select_alpaca_sync_workset_rotating(
+        let mut candidates = select_alpaca_sync_workset_rotating(
             symbols,
             &timeframes,
             &self.cached_kraken_futures_sync_state,
@@ -2334,6 +2436,7 @@ impl TyphooNApp {
             kraken_futures_sync_target_bars,
             &futures_dispatch_blocked,
         );
+        drop_background_candidates_when_paused(&mut candidates);
         self.kraken_futures_sync_cursors[cursor_idx] = cursor;
         let mut dispatched = 0usize;
         for candidate in candidates {
@@ -2428,8 +2531,12 @@ mod tests {
         // Live regular sessions and an unfetched clock read not-idle (backoff
         // bypassed → fast resync).
         assert!(!market_status_is_idle("US equities OPEN · closes in 5h 0m"));
-        assert!(!market_status_is_idle("US equities PRE-MARKET · Core in 55m"));
-        assert!(!market_status_is_idle("US equities AFTER-HOURS · closes in 3h 0m"));
+        assert!(!market_status_is_idle(
+            "US equities PRE-MARKET · Core in 55m"
+        ));
+        assert!(!market_status_is_idle(
+            "US equities AFTER-HOURS · closes in 3h 0m"
+        ));
         assert!(!market_status_is_idle(""));
     }
 
@@ -2621,6 +2728,42 @@ mod tests {
         assert_eq!(
             TyphooNApp::alpaca_batch_topup_limit_bars("15Min", 400 * 86_400),
             TyphooNApp::ALPACA_BATCH_DEEP_HISTORY_BARS
+        );
+    }
+
+    #[test]
+    fn memory_pressure_uses_system_relative_thresholds() {
+        assert_eq!(
+            market_data_memory_pressure_at(13_000, 32_000),
+            MarketDataMemoryPressure::Normal
+        );
+        assert_eq!(
+            market_data_memory_pressure_at(15_000, 32_000),
+            MarketDataMemoryPressure::Reduced
+        );
+        assert_eq!(
+            market_data_memory_pressure_at(18_000, 32_000),
+            MarketDataMemoryPressure::PauseBackground
+        );
+        assert_eq!(
+            market_data_memory_pressure_at(0, 32_000),
+            MarketDataMemoryPressure::Normal
+        );
+    }
+
+    #[test]
+    fn memory_pressure_fallback_without_meminfo_is_still_bounded() {
+        assert_eq!(
+            market_data_memory_pressure_at(13_999, 0),
+            MarketDataMemoryPressure::Normal
+        );
+        assert_eq!(
+            market_data_memory_pressure_at(14_000, 0),
+            MarketDataMemoryPressure::Reduced
+        );
+        assert_eq!(
+            market_data_memory_pressure_at(18_000, 0),
+            MarketDataMemoryPressure::PauseBackground
         );
     }
 

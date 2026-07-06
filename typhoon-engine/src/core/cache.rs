@@ -2164,7 +2164,7 @@ fn open_read_conn_pool(
             ""
         };
         let _ = conn.execute_batch(&format!(
-            "PRAGMA cache_size={cache_size}; PRAGMA temp_store=MEMORY; {mmap}"
+            "PRAGMA cache_size={cache_size}; PRAGMA temp_store=FILE; {mmap}"
         ));
         conns.push(Mutex::new(conn));
     }
@@ -2205,8 +2205,19 @@ impl SqliteCache {
 
     fn reclaim_space_locked(conn: &Connection, db_path: &Path) -> Result<(i64, i64), String> {
         let before = Self::total_disk_usage_bytes(db_path);
-        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
-            .map_err(|e| format!("WAL checkpoint failed: {e}"))?;
+        // Full VACUUM can sort/rebuild large temporary btrees. The cache DB can be
+        // tens of GB; using MEMORY temp storage makes "Reclaim Free Space" compete
+        // with the terminal's hot bar-sync heap and can OOM a 32 GB machine before
+        // any useful work completes. Force file-backed temp storage and a modest
+        // page cache on the maintenance connection for this operation.
+        conn.execute_batch(
+            "
+            PRAGMA temp_store=FILE;
+            PRAGMA cache_size=-16000;
+            PRAGMA wal_checkpoint(TRUNCATE);
+        ",
+        )
+        .map_err(|e| format!("WAL checkpoint failed: {e}"))?;
         conn.execute_batch("VACUUM")
             .map_err(|e| format!("VACUUM failed: {e}"))?;
         conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
@@ -2260,7 +2271,7 @@ impl SqliteCache {
             PRAGMA journal_mode=WAL;
             PRAGMA synchronous=NORMAL;
             PRAGMA cache_size=-64000;
-            PRAGMA temp_store=MEMORY;
+            PRAGMA temp_store=FILE;
             PRAGMA mmap_size=268435456;
             PRAGMA auto_vacuum=INCREMENTAL;
             PRAGMA wal_autocheckpoint=2000;
@@ -2426,7 +2437,7 @@ impl SqliteCache {
         let _ = conn.execute_batch(
             "
             PRAGMA cache_size=-16000;
-            PRAGMA temp_store=MEMORY;
+            PRAGMA temp_store=FILE;
         ",
         );
         // Read-only: use a read-only connection pool for the read path too.
@@ -3956,7 +3967,7 @@ impl SqliteCache {
         let _ = conn.execute_batch(
             "
             PRAGMA cache_size=-32000;
-            PRAGMA temp_store=MEMORY;
+            PRAGMA temp_store=FILE;
             PRAGMA mmap_size=268435456;
         ",
         );
