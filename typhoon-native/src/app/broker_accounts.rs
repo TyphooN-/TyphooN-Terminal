@@ -9,7 +9,35 @@
 
 use super::*;
 
+/// Default number of account slots a fresh install starts with (slot 1 + 3
+/// extras) — Alpaca's free tier of 1 live + 3 paper.
 pub(crate) const MAX_BROKER_ACCOUNT_SLOTS: usize = 4;
+
+/// Hard cap on total account slots per broker (slot 1 + extras). Users with more
+/// paid/paper accounts can grow past the free-tier default via Settings; this
+/// only bounds the UI so the slot Vec can't run away. Keyring keys are per-slot
+/// (`{key}_{slot}`), so any slot number up to the cap is addressable.
+pub(crate) const BROKER_ACCOUNT_SLOT_CAP: usize = 16;
+
+/// Whether another account slot can be added without exceeding the cap (total
+/// slots = slot 1 + `extra_len` extras).
+pub(crate) fn can_add_account_slot(extra_len: usize) -> bool {
+    extra_len + 1 < BROKER_ACCOUNT_SLOT_CAP
+}
+
+/// The primary-account id after removing extra slot `removed_slot` (2-based),
+/// or `None` when the current primary is unaffected. Slots at/above the removed
+/// one shift down, so a primary pointing there no longer names the same account
+/// — fall back to slot 1. A primary on slot 1 (or a lower-numbered slot) is
+/// stable. `prefix` is `"alpaca"` or `"kraken"`.
+pub(crate) fn primary_after_slot_removal(
+    primary_id: &str,
+    prefix: &str,
+    removed_slot: usize,
+) -> Option<String> {
+    let n = primary_id.strip_prefix(prefix)?.parse::<usize>().ok()?;
+    (n >= removed_slot).then(|| format!("{prefix}1"))
+}
 
 pub(crate) fn default_alpaca_extra_accounts() -> Vec<ExtraAccountConfig> {
     (2..=MAX_BROKER_ACCOUNT_SLOTS)
@@ -84,6 +112,80 @@ impl TyphooNApp {
                 }
             }
         });
+    }
+
+    /// Append an empty Alpaca account slot (up to [`BROKER_ACCOUNT_SLOT_CAP`]).
+    /// Metadata (Paper/Live) persists with the session; credentials persist
+    /// per-slot as the user types them. Applies to the roster on the next
+    /// Connect, like credential edits.
+    pub(crate) fn add_alpaca_account(&mut self) {
+        if can_add_account_slot(self.alpaca_extra_accounts.len()) {
+            self.alpaca_extra_accounts.push(ExtraAccountConfig {
+                paper: true,
+                ..Default::default()
+            });
+        }
+    }
+
+    /// Append an empty Kraken account slot (up to [`BROKER_ACCOUNT_SLOT_CAP`]).
+    /// Kraken extras are trading identities only (its market data is public), so
+    /// `paper` is unused.
+    pub(crate) fn add_kraken_account(&mut self) {
+        if can_add_account_slot(self.kraken_extra_accounts.len()) {
+            self.kraken_extra_accounts.push(ExtraAccountConfig::default());
+        }
+    }
+
+    /// Remove Alpaca extra slot `idx` (0-based into extras; slot = `idx + 2`).
+    /// The slots above it shift down, so their in-memory credentials are
+    /// re-written to their new per-slot keyring keys and the vacated top slot is
+    /// tombstoned. A primary pointing at a removed/shifted slot resets to slot 1.
+    pub(crate) fn remove_alpaca_account(&mut self, idx: usize) {
+        if idx >= self.alpaca_extra_accounts.len() {
+            return;
+        }
+        let removed_slot = idx + 2;
+        let old_len = self.alpaca_extra_accounts.len();
+        self.alpaca_extra_accounts.remove(idx);
+        for i in 0..self.alpaca_extra_accounts.len() {
+            let (ak, sk) = alpaca_slot_keyring_keys(i + 2);
+            self.persist_credential_async(ak, self.alpaca_extra_accounts[i].api_key.clone());
+            self.persist_credential_async(sk, self.alpaca_extra_accounts[i].secret.clone());
+        }
+        // Tombstone the now-unused highest slot (old_len extras occupied slots
+        // 2..=old_len+1; the top one no longer exists after the shift down).
+        let (ak, sk) = alpaca_slot_keyring_keys(old_len + 1);
+        self.persist_credential_async(ak, String::new());
+        self.persist_credential_async(sk, String::new());
+        if let Some(id) =
+            primary_after_slot_removal(&self.alpaca_primary_account_id, "alpaca", removed_slot)
+        {
+            self.alpaca_primary_account_id = id;
+        }
+    }
+
+    /// Remove Kraken extra slot `idx` (0-based; slot = `idx + 2`), renumbering
+    /// the keyring the same way as [`Self::remove_alpaca_account`].
+    pub(crate) fn remove_kraken_account(&mut self, idx: usize) {
+        if idx >= self.kraken_extra_accounts.len() {
+            return;
+        }
+        let removed_slot = idx + 2;
+        let old_len = self.kraken_extra_accounts.len();
+        self.kraken_extra_accounts.remove(idx);
+        for i in 0..self.kraken_extra_accounts.len() {
+            let (kk, ks) = kraken_slot_keyring_keys(i + 2);
+            self.persist_credential_async(kk, self.kraken_extra_accounts[i].api_key.clone());
+            self.persist_credential_async(ks, self.kraken_extra_accounts[i].secret.clone());
+        }
+        let (kk, ks) = kraken_slot_keyring_keys(old_len + 1);
+        self.persist_credential_async(kk, String::new());
+        self.persist_credential_async(ks, String::new());
+        if let Some(id) =
+            primary_after_slot_removal(&self.kraken_primary_account_id, "kraken", removed_slot)
+        {
+            self.kraken_primary_account_id = id;
+        }
     }
 
     /// Every configured Alpaca account (slot 1 + populated extras) as connect
@@ -676,5 +778,39 @@ mod tests {
         let kraken = default_kraken_extra_accounts();
         assert_eq!(kraken.len(), 3);
         assert!(kraken.iter().all(|a| !a.paper));
+    }
+
+    #[test]
+    fn can_add_account_slot_stops_at_the_cap() {
+        // Default 3 extras (4 total) is well under the cap.
+        assert!(can_add_account_slot(3));
+        // The last addable extra brings the total to the cap …
+        assert!(can_add_account_slot(BROKER_ACCOUNT_SLOT_CAP - 2));
+        // … and one more would exceed it (extras + slot 1 == cap already).
+        assert!(!can_add_account_slot(BROKER_ACCOUNT_SLOT_CAP - 1));
+    }
+
+    #[test]
+    fn primary_resets_only_when_at_or_above_the_removed_slot() {
+        // Removing slot 3: a primary on slot 3 or 4 is now wrong (shifted/gone).
+        assert_eq!(
+            primary_after_slot_removal("alpaca4", "alpaca", 3),
+            Some("alpaca1".to_string())
+        );
+        assert_eq!(
+            primary_after_slot_removal("alpaca3", "alpaca", 3),
+            Some("alpaca1".to_string())
+        );
+        // A lower-numbered primary (slot 1 or 2) is unaffected by removing slot 3.
+        assert_eq!(primary_after_slot_removal("alpaca2", "alpaca", 3), None);
+        assert_eq!(primary_after_slot_removal("alpaca1", "alpaca", 3), None);
+        // Works for the Kraken prefix too.
+        assert_eq!(
+            primary_after_slot_removal("kraken5", "kraken", 2),
+            Some("kraken1".to_string())
+        );
+        // Unparseable / foreign ids are left alone.
+        assert_eq!(primary_after_slot_removal("", "alpaca", 2), None);
+        assert_eq!(primary_after_slot_removal("alpacaX", "alpaca", 2), None);
     }
 }

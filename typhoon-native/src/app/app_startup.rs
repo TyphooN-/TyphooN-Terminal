@@ -328,7 +328,13 @@ impl TyphooNApp {
                     }
                 };
                 let mut extra_slots_loaded = 0usize;
-                for slot in 2..=super::broker_accounts::MAX_BROKER_ACCOUNT_SLOTS {
+                // Load creds for every persisted slot (dynamic account count) —
+                // the slot Vecs were sized by `sync_preferences_load()` above.
+                let extra_slot_count = self
+                    .alpaca_extra_accounts
+                    .len()
+                    .max(self.kraken_extra_accounts.len());
+                for slot in 2..=(extra_slot_count + 1) {
                     let idx = slot - 2;
                     let (ak, sk) = super::broker_accounts::alpaca_slot_keyring_keys(slot);
                     if let (Some(key), Some(secret)) = (load_credential(&ak), load_credential(&sk))

@@ -11,6 +11,12 @@ impl TyphooNApp {
         if !self.show_settings {
             return settings_save_after;
         }
+        // Dynamic account slots (ADR-130): the grid closure below borrows `self`,
+        // so add/remove clicks are recorded here and applied after it returns.
+        let mut alpaca_add_account = false;
+        let mut alpaca_remove_account: Option<usize> = None;
+        let mut kraken_add_account = false;
+        let mut kraken_remove_account: Option<usize> = None;
         let mut show_settings = self.show_settings;
         egui::Window::new("Settings")
             .open(&mut show_settings)
@@ -87,7 +93,17 @@ impl TyphooNApp {
                                 if a || b {
                                     settings_save_after = true;
                                 }
+                                if ui.button("✕ Remove").on_hover_text("Remove this account slot").clicked() {
+                                    alpaca_remove_account = Some(idx);
+                                }
                             });
+                            ui.end_row();
+                        }
+                        if super::broker_accounts::can_add_account_slot(self.alpaca_extra_accounts.len()) {
+                            ui.label("");
+                            if ui.button("➕ Add Alpaca account").clicked() {
+                                alpaca_add_account = true;
+                            }
                             ui.end_row();
                         }
                     }
@@ -148,6 +164,18 @@ impl TyphooNApp {
                                 self.persist_credential_async(secret_name, self.kraken_extra_accounts[idx].secret.clone());
                                 settings_save_after = true;
                             }
+                            ui.label(format!("Kraken #{slot}:"));
+                            if ui.button("✕ Remove").on_hover_text("Remove this account slot").clicked() {
+                                kraken_remove_account = Some(idx);
+                            }
+                            ui.end_row();
+                        }
+                        if super::broker_accounts::can_add_account_slot(self.kraken_extra_accounts.len()) {
+                            ui.label("");
+                            if ui.button("➕ Add Kraken account").clicked() {
+                                kraken_add_account = true;
+                            }
+                            ui.end_row();
                         }
                     }
                     ui.label("Gemini API Key:");
@@ -675,6 +703,25 @@ impl TyphooNApp {
                 }
                 });
             });
+        // Apply dynamic account add/remove now that the grid closure has released
+        // its borrow of `self`. Remove before add so a same-frame combination is
+        // unambiguous; each mutates the slot Vec + keyring and flags a save.
+        if let Some(idx) = alpaca_remove_account {
+            self.remove_alpaca_account(idx);
+            settings_save_after = true;
+        }
+        if alpaca_add_account {
+            self.add_alpaca_account();
+            settings_save_after = true;
+        }
+        if let Some(idx) = kraken_remove_account {
+            self.remove_kraken_account(idx);
+            settings_save_after = true;
+        }
+        if kraken_add_account {
+            self.add_kraken_account();
+            settings_save_after = true;
+        }
         self.show_settings = show_settings;
         settings_save_after
     }

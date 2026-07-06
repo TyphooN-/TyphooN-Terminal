@@ -96,31 +96,35 @@ impl TyphooNApp {
                 self.kraken_primary_account_id = id.to_string();
             }
         }
-        // Account-slot metadata: merge onto the defaults (creds arrive later
-        // from the keyring; `#[serde(skip)]` keeps them out of this JSON).
+        // Account-slot metadata: rebuild the slot Vec to the *persisted* count
+        // (dynamic accounts — the user may have added or removed slots), keeping
+        // any creds already in memory for slots that still exist. Creds for new
+        // slots arrive right after from the keyring; `#[serde(skip)]` keeps them
+        // out of this JSON. Bounded by the cap so a corrupt value can't run away.
+        let rebuild_slots = |persisted: Vec<ExtraAccountConfig>,
+                             existing: &[ExtraAccountConfig]|
+         -> Vec<ExtraAccountConfig> {
+            let mut rebuilt = persisted;
+            rebuilt.truncate(super::super::broker_accounts::BROKER_ACCOUNT_SLOT_CAP - 1);
+            for (idx, slot) in rebuilt.iter_mut().enumerate() {
+                if let Some(have) = existing.get(idx) {
+                    slot.api_key = have.api_key.clone();
+                    slot.secret = have.secret.clone();
+                }
+            }
+            rebuilt
+        };
         if let Ok(extra) = serde_json::from_value::<Vec<ExtraAccountConfig>>(
             value["alpaca_extra_accounts"].clone(),
         ) {
-            for (idx, loaded) in extra.into_iter().enumerate() {
-                if let Some(slot) = self.alpaca_extra_accounts.get_mut(idx) {
-                    let (api_key, secret) = (slot.api_key.clone(), slot.secret.clone());
-                    *slot = loaded;
-                    slot.api_key = api_key;
-                    slot.secret = secret;
-                }
-            }
+            let rebuilt = rebuild_slots(extra, &self.alpaca_extra_accounts);
+            self.alpaca_extra_accounts = rebuilt;
         }
         if let Ok(extra) = serde_json::from_value::<Vec<ExtraAccountConfig>>(
             value["kraken_extra_accounts"].clone(),
         ) {
-            for (idx, loaded) in extra.into_iter().enumerate() {
-                if let Some(slot) = self.kraken_extra_accounts.get_mut(idx) {
-                    let (api_key, secret) = (slot.api_key.clone(), slot.secret.clone());
-                    *slot = loaded;
-                    slot.api_key = api_key;
-                    slot.secret = secret;
-                }
-            }
+            let rebuilt = rebuild_slots(extra, &self.kraken_extra_accounts);
+            self.kraken_extra_accounts = rebuilt;
         }
         if let Some(enabled) = value["kraken_scrape_xstocks"].as_bool() {
             self.kraken_scrape_xstocks = enabled;
