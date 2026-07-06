@@ -403,7 +403,7 @@ impl TyphooNApp {
                                     } else {
                                         chrono::DateTime::<chrono::Utc>::from_timestamp_millis(next_ms)
                                             .map(|dt| {
-                                                dt.with_timezone(&chrono::Local)
+                                                dt.with_timezone(&chrono::Utc)
                                                     .format("%a %H:%M")
                                                     .to_string()
                                             })

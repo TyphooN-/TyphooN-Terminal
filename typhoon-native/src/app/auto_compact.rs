@@ -7,12 +7,12 @@
 //! Gate (all must hold):
 //! - User has not disabled auto-compact in Storage Manager.
 //! - At least the configured cadence has elapsed since the last successful run.
-//! - Local time is within the configured idle window (default daily 04:00–05:00).
+//! - UTC time is within the configured idle window (default daily 04:00–05:00).
 //! - The engine has been idle for ≥ `IDLE_THRESHOLD` (no UI input, no compact in flight).
 //! - The host is on AC power (best-effort; non-Linux assumes AC).
 //! - At least the configured row threshold is below the target zstd level.
 
-use chrono::{Datelike, TimeZone, Timelike};
+use chrono::{Datelike, Timelike};
 
 /// Target zstd level for periodic compaction.
 pub const TARGET_LEVEL: i32 = 22;
@@ -205,13 +205,13 @@ pub fn evaluate_gate(inputs: &GateInputs) -> GateDecision {
 }
 
 pub fn next_eligible_time_ms(schedule: Schedule, last_run_ms: i64) -> i64 {
-    next_eligible_time_ms_at(schedule, last_run_ms, chrono::Local::now())
+    next_eligible_time_ms_at(schedule, last_run_ms, chrono::Utc::now())
 }
 
 fn next_eligible_time_ms_at(
     schedule: Schedule,
     last_run_ms: i64,
-    now: chrono::DateTime<chrono::Local>,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> i64 {
     let schedule = schedule.sanitized();
     let now_ms = now.timestamp_millis();
@@ -238,11 +238,10 @@ fn next_eligible_time_ms_at(
         if weekday_gated && date.weekday().num_days_from_sunday() != schedule.window_weekday {
             continue;
         }
-        let Some(window_start_ms) = local_window_boundary_ms(date, schedule.window_hour_start)
-        else {
+        let Some(window_start_ms) = utc_window_boundary_ms(date, schedule.window_hour_start) else {
             continue;
         };
-        let Some(window_end_ms) = local_window_boundary_ms(date, schedule.window_hour_end) else {
+        let Some(window_end_ms) = utc_window_boundary_ms(date, schedule.window_hour_end) else {
             continue;
         };
         let candidate_ms = window_start_ms.max(now_ms).max(cadence_ready_ms);
@@ -254,18 +253,13 @@ fn next_eligible_time_ms_at(
     now_ms.max(cadence_ready_ms)
 }
 
-fn local_window_boundary_ms(date: chrono::NaiveDate, hour: u32) -> Option<i64> {
+fn utc_window_boundary_ms(date: chrono::NaiveDate, hour: u32) -> Option<i64> {
     let (date, hour) = if hour >= 24 {
         (date.checked_add_signed(chrono::Duration::days(1))?, 0)
     } else {
         (date, hour)
     };
-    let naive = date.and_hms_opt(hour, 0, 0)?;
-    match chrono::Local.from_local_datetime(&naive) {
-        chrono::LocalResult::Single(dt) => Some(dt.timestamp_millis()),
-        chrono::LocalResult::Ambiguous(a, b) => Some(a.min(b).timestamp_millis()),
-        chrono::LocalResult::None => None,
-    }
+    Some(date.and_hms_opt(hour, 0, 0)?.and_utc().timestamp_millis())
 }
 
 pub fn weekday_label(weekday: u32) -> &'static str {
@@ -408,9 +402,9 @@ fn on_ac_power_windows() -> bool {
     }
 }
 
-/// Compute (local_weekday, local_hour) for the current moment using chrono::Local.
+/// Compute (weekday, hour) for the current moment using UTC.
 pub fn local_weekday_hour_now() -> (u32, u32) {
-    let now = chrono::Local::now();
+    let now = chrono::Utc::now();
     (now.weekday().num_days_from_sunday(), now.hour())
 }
 
@@ -552,24 +546,23 @@ mod tests {
         assert_eq!(s.uncompacted_threshold, 1);
     }
 
-    fn local_dt(
+    fn utc_dt(
         year: i32,
         month: u32,
         day: u32,
         hour: u32,
         min: u32,
-    ) -> chrono::DateTime<chrono::Local> {
-        match chrono::Local.with_ymd_and_hms(year, month, day, hour, min, 0) {
-            chrono::LocalResult::Single(dt) => dt,
-            chrono::LocalResult::Ambiguous(a, b) => a.min(b),
-            chrono::LocalResult::None => panic!("test local datetime does not exist"),
-        }
+    ) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc
+            .with_ymd_and_hms(year, month, day, hour, min, 0)
+            .single()
+            .expect("test UTC datetime should exist")
     }
 
     #[test]
     fn next_eligible_can_be_inside_current_window_after_cadence_wait() {
         let schedule = Schedule::default();
-        let now = local_dt(2026, 5, 3, DEFAULT_WINDOW_HOUR_START, 0);
+        let now = utc_dt(2026, 5, 3, DEFAULT_WINDOW_HOUR_START, 0);
         let last_run_ms = now.timestamp_millis() - schedule.cadence_days * 86_400_000 + 30 * 60_000;
         let next = next_eligible_time_ms_at(schedule, last_run_ms, now);
         assert_eq!(next, now.timestamp_millis() + 30 * 60_000);
@@ -581,7 +574,7 @@ mod tests {
             cadence_days: 7,
             ..Schedule::default()
         };
-        let now = local_dt(2026, 5, 3, DEFAULT_WINDOW_HOUR_START, 0);
+        let now = utc_dt(2026, 5, 3, DEFAULT_WINDOW_HOUR_START, 0);
         let last_run_ms =
             now.timestamp_millis() - schedule.cadence_days * 86_400_000 + 2 * 60 * 60_000;
         let next = next_eligible_time_ms_at(schedule, last_run_ms, now);

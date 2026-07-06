@@ -13,7 +13,7 @@ impl TyphooNApp {
             let screenshot_data: Option<(Vec<u8>, u32, u32, std::path::PathBuf)> = ctx.input(|i| {
                 for event in &i.events {
                     if let egui::Event::Screenshot { image, .. } = event {
-                        let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                        let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S");
                         let pictures_dir = if let Ok(home) = std::env::var("HOME") {
                             let p = std::path::PathBuf::from(home).join("Pictures");
                             let _ = std::fs::create_dir_all(&p);

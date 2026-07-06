@@ -39,7 +39,7 @@ rusqlite = { workspace = true, features = ["bundled"] }
 # System keyring for credential storage (keyring 4.x split crates).
 # The sample test store rides in dev-dependencies only — the shipped
 # binary carries just the Entry/Error API + the Secret Service backend.
-keyring-core = "1"
+keyring-core = { version = "1", default-features = false }
 sha2 = { workspace = true }
 hmac = { workspace = true }
 pbkdf2 = { workspace = true }
@@ -56,4 +56,4 @@ dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] 
 [dev-dependencies]
 tempfile = "3"
 serial_test = "3.5.0"
-keyring-core = { version = "1", features = ["sample"] } # sample store for keyring tests
+keyring-core = { version = "1", default-features = false } # mock store for keyring tests

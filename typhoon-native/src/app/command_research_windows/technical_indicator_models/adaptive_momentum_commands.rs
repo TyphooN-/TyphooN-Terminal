@@ -18,7 +18,7 @@ impl TyphooNApp {
                 }
                 self.show_expcal_win = true;
                 if self.expcal_win_calendar.is_empty() {
-                    let today = chrono::Local::now().date_naive();
+                    let today = chrono::Utc::now().date_naive();
                     self.expcal_win_calendar =
                         typhoon_engine::core::research::compute_market_calendar(
                             today,

@@ -656,7 +656,7 @@ impl TyphooNApp {
                 let default_name = format!(
                     "{}_research_packet_{}.md",
                     Self::packet_export_stem(&syms),
-                    chrono::Local::now().format("%Y%m%d-%H%M%S")
+                    chrono::Utc::now().format("%Y%m%d-%H%M%S")
                 );
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("Markdown", &["md"])

@@ -245,7 +245,7 @@ impl TyphooNApp {
                 self.expcal_win_symbol = chart_sym_research.clone();
             }
             if self.expcal_win_calendar.is_empty() {
-                let today = chrono::Local::now().date_naive();
+                let today = chrono::Utc::now().date_naive();
                 self.expcal_win_calendar = typhoon_engine::core::research::compute_market_calendar(
                     today,
                     self.expcal_win_horizon_days,
@@ -273,7 +273,7 @@ impl TyphooNApp {
                             .changed()
                         {
                             self.expcal_win_horizon_days = h.max(7) as u32;
-                            let today = chrono::Local::now().date_naive();
+                            let today = chrono::Utc::now().date_naive();
                             self.expcal_win_calendar =
                                 typhoon_engine::core::research::compute_market_calendar(
                                     today,
@@ -281,7 +281,7 @@ impl TyphooNApp {
                                 );
                         }
                         if ui.button("Regenerate").clicked() {
-                            let today = chrono::Local::now().date_naive();
+                            let today = chrono::Utc::now().date_naive();
                             self.expcal_win_calendar =
                                 typhoon_engine::core::research::compute_market_calendar(
                                     today,

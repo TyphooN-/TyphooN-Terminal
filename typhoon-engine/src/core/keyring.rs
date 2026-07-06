@@ -128,11 +128,9 @@ mod tests {
 
     #[test]
     fn keyring4_sample_store_roundtrip_and_idempotent_delete() {
-        let sample_store = keyring_core::sample::Store::new_with_configuration(
-            &std::collections::HashMap::from([("persist", "false")]),
-        )
-        .expect("sample store should initialize");
-        keyring_core::set_default_store(sample_store);
+        keyring_core::set_default_store(
+            keyring_core::mock::Store::new().expect("mock store should initialize"),
+        );
         let test_key = "typhoon_test_keyring4_sample_roundtrip";
 
         delete(test_key).expect("pre-clean delete should be idempotent");

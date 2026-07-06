@@ -246,3 +246,18 @@ Direct `wgpu` follow-up after the refresh:
   update --workspace --dry-run --verbose` no longer reports `wgpu` as a direct
   TyphooN update blocker. Future `wgpu` majors should arrive with the egui
   release that adopts them.
+
+Desktop-only Android-surface follow-up:
+
+- Removed TyphooN's direct `chrono` clock/local-timezone requirement and the
+  `keyring-core` sample test-store feature. Runtime scheduling, log labels, and
+  generated filenames now use UTC timestamps; keyring tests use the built-in
+  mock store. This drops the `android_system_properties` lockfile package.
+- Remaining Android-named lockfile packages are upstream transitive target
+  support from `winit`/`eframe` (`android-activity`, `ndk`, `jni`),
+  `webbrowser` via `egui-winit` links, and `rustls-platform-verifier` via
+  `reqwest`'s secure platform verifier. They are absent from the current Linux
+  dependency tree except for `wgpu-core-deps-windows-linux-android`, which is
+  the cross-platform wgpu support crate required on Linux. Do not fork these
+  upstream crates or use reqwest private `__rustls*` features only to scrub
+  lockfile names.

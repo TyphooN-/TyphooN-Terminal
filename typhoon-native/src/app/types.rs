@@ -122,7 +122,7 @@ pub(crate) fn unresolvable_pair_key(broker: &str, symbol: &str, timeframe: &str)
 
 impl LogEntry {
     pub(crate) fn now_ts() -> String {
-        chrono::Local::now().format("%H:%M:%S").to_string()
+        chrono::Utc::now().format("%H:%M:%S").to_string()
     }
     pub(crate) fn new(level: LogLevel, msg: String) -> Self {
         let timestamp = Self::now_ts();

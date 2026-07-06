@@ -432,7 +432,7 @@ pub fn compute_symbol_expirations(
             });
         }
     };
-    let reference = chrono::Local::now().date_naive();
+    let reference = chrono::Utc::now().date_naive();
     let mut expirations: Vec<SymbolExpiration> = Vec::with_capacity(chain.expirations.len());
     let mut next_tw = String::new();
     for e in &chain.expirations {
