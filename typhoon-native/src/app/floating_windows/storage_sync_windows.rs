@@ -1433,6 +1433,21 @@ impl TyphooNApp {
                             Err(e) => {
                                 tracing::debug!("splits backfill {symbol}: {e}");
                                 failed += 1;
+                                // Record the attempt so a symbol whose splits
+                                // fetch persistently fails (ATON-class: a
+                                // borderline 1.5x mismatch with no reachable
+                                // split feed) stops re-listing in the backfill
+                                // count every run. Only when the table has no
+                                // prior entry, so a transient failure can't
+                                // erase known splits; a later scrape re-fetches.
+                                if let Ok(conn) = cache.connection()
+                                    && research::get_stock_splits(&conn, symbol)
+                                        .ok()
+                                        .flatten()
+                                        .is_none()
+                                {
+                                    let _ = research::upsert_stock_splits(&conn, symbol, &[]);
+                                }
                             }
                         }
                         done += 1;
