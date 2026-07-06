@@ -1618,24 +1618,43 @@ pub fn draw_chart(
 
     // ── Volume Profile overlay (volume-at-price with POC + Value Area) ─────
     let live_trade = if chart.live_trade_vol > 0.0 && chart.live_trade_price > 0.0 {
-        Some((chart.live_trade_price, chart.live_trade_vol, chart.live_trade_is_buy))
+        Some((
+            chart.live_trade_price,
+            chart.live_trade_vol,
+            chart.live_trade_is_buy,
+        ))
     } else {
         None
     };
-    draw_volume_profile_overlay(painter, chart_rect, bars, price_min, price_max, flags, live_trade);
+    draw_volume_profile_overlay(
+        painter, chart_rect, bars, price_min, price_max, flags, live_trade,
+    );
 
     // ── Live Depth Profile (binned from L2/L3 book levels) — full book depth
     // Bins live_depth_bids/asks (price, size) into horizontal volume-at-price bars.
     // L3 per-order data (when wired) produces richer bins + explicit "L3" label.
     // Complements historical volume profile.
-    let all_depth: Vec<_> = chart.live_depth_bids.iter().chain(chart.live_depth_asks.iter()).cloned().collect();
+    let all_depth: Vec<_> = chart
+        .live_depth_bids
+        .iter()
+        .chain(chart.live_depth_asks.iter())
+        .cloned()
+        .collect();
     if !all_depth.is_empty() {
-        let max_size = all_depth.iter().map(|(_, s)| *s).fold(0.0_f64, f64::max).max(1.0);
+        let max_size = all_depth
+            .iter()
+            .map(|(_, s)| *s)
+            .fold(0.0_f64, f64::max)
+            .max(1.0);
         let max_w = (chart_rect.width() * 0.15).max(40.0);
         // Heuristic: treat as L3 if many levels (>4) or from recent L3 feed (status wired via orderbook)
         let looks_l3 = all_depth.len() > 4 || (chart.live_bid_size > 0.0 && all_depth.len() > 2);
         let label = if looks_l3 { "L3 depth" } else { "" };
-        let col = if looks_l3 { egui::Color32::from_rgb(80, 200, 120) } else { egui::Color32::from_rgb(160, 160, 80) };
+        let col = if looks_l3 {
+            egui::Color32::from_rgb(80, 200, 120)
+        } else {
+            egui::Color32::from_rgb(160, 160, 80)
+        };
         if !label.is_empty() {
             painter.text(
                 egui::pos2(chart_rect.right() - 2.0, chart_rect.top() + 10.0),
@@ -1647,12 +1666,18 @@ pub fn draw_chart(
         }
         // Simple binning: treat each level as its own 'bucket' for now (full binning by price can expand later)
         for (price, size) in &all_depth {
-            if *size <= 0.0 || *price <= 0.0 { continue; }
+            if *size <= 0.0 || *price <= 0.0 {
+                continue;
+            }
             let y = price_to_y(*price);
-            if y < chart_rect.top() || y > chart_rect.bottom() { continue; }
+            if y < chart_rect.top() || y > chart_rect.bottom() {
+                continue;
+            }
             let frac = (*size / max_size) as f32;
             let w = (frac * max_w as f32).max(2.0);
-            let col = if chart.live_bid > 0.0 && (*price - chart.live_bid).abs() < 1e-9 || chart.live_bid_size > 0.0 && *size == chart.live_bid_size {
+            let col = if chart.live_bid > 0.0 && (*price - chart.live_bid).abs() < 1e-9
+                || chart.live_bid_size > 0.0 && *size == chart.live_bid_size
+            {
                 egui::Color32::from_rgba_premultiplied(0, 180, 60, 160) // bid green
             } else {
                 egui::Color32::from_rgba_premultiplied(200, 40, 40, 160) // ask red
@@ -1671,7 +1696,8 @@ pub fn draw_chart(
         if chart.live_trade_vol > 0.0 && chart.live_trade_price > 0.0 {
             let y = price_to_y(chart.live_trade_price);
             if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                let tw = (chart.live_trade_vol / max_size.max(1.0) * max_w as f64 * 0.6).clamp(3.0, 20.0) as f32;
+                let tw = (chart.live_trade_vol / max_size.max(1.0) * max_w as f64 * 0.6)
+                    .clamp(3.0, 20.0) as f32;
                 let tcol = if chart.live_trade_is_buy {
                     egui::Color32::from_rgba_premultiplied(0, 220, 120, 220) // buy teal
                 } else {
@@ -1847,13 +1873,19 @@ pub fn draw_chart(
             let ask_y = price_to_y(chart.live_ask);
             if bid_y >= chart_rect.top() && bid_y <= chart_rect.bottom() {
                 painter.line_segment(
-                    [egui::pos2(chart_rect.left(), bid_y), egui::pos2(chart_rect.right(), bid_y)],
+                    [
+                        egui::pos2(chart_rect.left(), bid_y),
+                        egui::pos2(chart_rect.right(), bid_y),
+                    ],
                     egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 160, 60)), // faint green for bid
                 );
             }
             if ask_y >= chart_rect.top() && ask_y <= chart_rect.bottom() {
                 painter.line_segment(
-                    [egui::pos2(chart_rect.left(), ask_y), egui::pos2(chart_rect.right(), ask_y)],
+                    [
+                        egui::pos2(chart_rect.left(), ask_y),
+                        egui::pos2(chart_rect.right(), ask_y),
+                    ],
                     egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 40, 40)), // faint red for ask
                 );
             }
@@ -1910,8 +1942,14 @@ mod tests {
                 start_idx: 100,
             };
             // Top of the pane is price_max, bottom is price_min.
-            assert!((g.price_to_y(150.0) - 100.0).abs() < 0.001, "log={log_scale}");
-            assert!((g.price_to_y(50.0) - 500.0).abs() < 0.001, "log={log_scale}");
+            assert!(
+                (g.price_to_y(150.0) - 100.0).abs() < 0.001,
+                "log={log_scale}"
+            );
+            assert!(
+                (g.price_to_y(50.0) - 500.0).abs() < 0.001,
+                "log={log_scale}"
+            );
             for p in [50.0, 75.0, 100.0, 149.0] {
                 let back = g.price_from_y(g.price_to_y(p));
                 // y is f32 pixels, so the round trip carries float error well

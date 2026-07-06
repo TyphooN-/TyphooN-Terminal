@@ -31,7 +31,7 @@ pub struct KrakenWsPublicTrade {
     pub symbol: String,
     pub price: f64,
     pub volume: f64,
-    pub time: f64, // seconds since epoch (Kraken style)
+    pub time: f64,    // seconds since epoch (Kraken style)
     pub side: String, // "buy" or "sell"
     pub is_snapshot: bool,
 }

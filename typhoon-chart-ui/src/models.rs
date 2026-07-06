@@ -118,8 +118,7 @@ impl ChartCamera {
         // empty space to the right so the newest bar can be dragged all the
         // way to the left edge. The left bound stays at right_edge=0, which
         // puts the oldest bar at the right edge with empty space to its left.
-        data_len.saturating_sub(1) as f64
-            + (self.bars_visible - 1.0).max(CHART_RIGHT_MARGIN as f64)
+        data_len.saturating_sub(1) as f64 + (self.bars_visible - 1.0).max(CHART_RIGHT_MARGIN as f64)
     }
 
     /// Convert local x (0 at left of rect) to approximate bar index under mouse.
@@ -135,11 +134,19 @@ impl ChartCamera {
 
     /// Convert local y (0 at top of rect) to price under mouse, using camera or natural.
     /// Matches price_to_y convention: high price at top.
-    pub fn price_from_y(&self, y: f32, rect_height: f32, natural_center: f64, natural_span: f64) -> f64 {
+    pub fn price_from_y(
+        &self,
+        y: f32,
+        rect_height: f32,
+        natural_center: f64,
+        natural_span: f64,
+    ) -> f64 {
         if rect_height <= 0.0 {
             return natural_center;
         }
-        let (c, s) = self.price_center.and_then(|cc| self.price_span.map(|ss| (cc, ss)))
+        let (c, s) = self
+            .price_center
+            .and_then(|cc| self.price_span.map(|ss| (cc, ss)))
             .unwrap_or((natural_center, natural_span));
         let top_p = c + s * 0.5;
         let bot_p = c - s * 0.5;
@@ -202,13 +209,21 @@ impl ChartCamera {
         self.follow_latest = false;
     }
 
-    pub fn scale_price_axis(&mut self, factor: f64, natural_price_center: f64, natural_price_span: f64) {
+    pub fn scale_price_axis(
+        &mut self,
+        factor: f64,
+        natural_price_center: f64,
+        natural_price_span: f64,
+    ) {
         let factor = factor.clamp(0.01, 100.0);
         if self.price_center.is_none() || self.price_span.is_none() {
             self.set_price_view(natural_price_center, natural_price_span);
         }
         let center = self.price_center.unwrap_or(natural_price_center);
-        let span = self.price_span.unwrap_or(natural_price_span).max(f64::EPSILON);
+        let span = self
+            .price_span
+            .unwrap_or(natural_price_span)
+            .max(f64::EPSILON);
         self.set_price_view(center, span / factor);
         self.follow_latest = false;
     }
@@ -246,7 +261,10 @@ impl ChartCamera {
             self.set_price_view(natural_price_center, natural_price_span);
         }
         let current_center = self.price_center.unwrap_or(natural_price_center);
-        let current_span = self.price_span.unwrap_or(natural_price_span).max(f64::EPSILON);
+        let current_span = self
+            .price_span
+            .unwrap_or(natural_price_span)
+            .max(f64::EPSILON);
         let new_span = current_span / factor;
         // Adjust center so that target_price stays at the same relative position in the view.
         let rel = (target_price - current_center) / current_span;

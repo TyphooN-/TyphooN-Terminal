@@ -407,7 +407,6 @@ fn select_alpaca_sync_workset_rotating_bounds_background_scan() {
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
-    
         &|_, _| false,
     );
 
@@ -429,7 +428,6 @@ fn select_alpaca_sync_workset_rotating_bounds_background_scan() {
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
-    
         &|_, _| false,
     );
 
@@ -460,7 +458,6 @@ fn select_alpaca_sync_workset_rotating_prioritizes_focus_before_background_scan(
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
-    
         &|_, _| false,
     );
 
@@ -495,7 +492,6 @@ fn select_alpaca_sync_workset_rotating_walks_all_symbols_mn1_before_lower_timefr
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
-    
         &|_, _| false,
     );
     assert_eq!(
@@ -528,7 +524,6 @@ fn select_alpaca_sync_workset_rotating_walks_all_symbols_mn1_before_lower_timefr
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
-    
         &|_, _| false,
     );
     assert_eq!(
@@ -562,7 +557,6 @@ fn select_alpaca_sync_workset_rotating_walks_all_symbols_mn1_before_lower_timefr
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
-    
         &|_, _| false,
     );
     assert_eq!(
@@ -613,7 +607,6 @@ fn select_alpaca_sync_workset_rotating_advances_cursor_by_actual_tail_window() {
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
-    
         &|_, _| false,
     );
 
@@ -663,7 +656,6 @@ fn select_alpaca_sync_workset_rotating_keeps_global_high_tf_priority_across_slic
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
-    
         &|_, _| false,
     );
 
@@ -703,7 +695,6 @@ fn select_alpaca_sync_workset_rotating_gives_focus_the_full_batch() {
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
-    
         &|_, _| false,
     );
 
@@ -736,7 +727,6 @@ fn select_alpaca_sync_workset_rotating_does_not_foreground_m1_m5() {
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
-    
         &|_, _| false,
     );
 
@@ -812,7 +802,6 @@ fn select_alpaca_sync_workset_rotating_skips_pending_without_advancing_priority(
         &mut cursor,
         now_s,
         alpaca_sync_target_bars,
-    
         &|_, _| false,
     );
 
@@ -868,7 +857,6 @@ fn high_timeframe_backfill_preempts_lower_timeframe_stale_refresh() {
         &mut cursor,
         now_s,
         |_| Some(100),
-    
         &|_, _| false,
     );
 

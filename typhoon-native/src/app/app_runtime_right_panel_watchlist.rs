@@ -397,11 +397,7 @@ impl TyphooNApp {
                             1
                         } else if !show_ext {
                             // No Ext%/Close columns: Chg% | Vol split directly.
-                            if rx < (col_pct + col_vol) * 0.5 {
-                                3
-                            } else {
-                                4
-                            }
+                            if rx < (col_pct + col_vol) * 0.5 { 3 } else { 4 }
                         } else if rx < (col_pct + col_close) * 0.5 {
                             3
                         } else if rx < (col_close + col_ext) * 0.5 {

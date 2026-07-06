@@ -1,5 +1,7 @@
 use super::*;
-use crate::app::app_runtime_support::{is_routine_market_data_status, yahoo_chart_429_backoff_secs};
+use crate::app::app_runtime_support::{
+    is_routine_market_data_status, yahoo_chart_429_backoff_secs,
+};
 
 impl TyphooNApp {
     pub(super) fn handle_broker_error(&mut self, e: String, now: i64) {
@@ -39,7 +41,8 @@ impl TyphooNApp {
             // a 10m ceiling. The counter resets on the first successful Yahoo
             // response (see handle_bars_fetched).
             if self.yahoo_chart_sync_pause_until_ts <= now {
-                self.yahoo_chart_consecutive_429 = self.yahoo_chart_consecutive_429.saturating_add(1);
+                self.yahoo_chart_consecutive_429 =
+                    self.yahoo_chart_consecutive_429.saturating_add(1);
                 let pause = yahoo_chart_429_backoff_secs(self.yahoo_chart_consecutive_429);
                 self.yahoo_chart_sync_pause_until_ts = now + pause;
                 self.yahoo_chart_sync_pause_reason = e.clone();

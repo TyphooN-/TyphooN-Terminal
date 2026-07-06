@@ -69,20 +69,52 @@ impl TyphooNApp {
                             .trim_end_matches(".eq")
                             .to_ascii_uppercase();
                         if let Some(idxs) = self.chart_by_bare.get(&bare) {
-                            let bids: Vec<(f64, f64)> = v["bids"].as_array().map(|arr| {
-                                arr.iter().filter_map(|l| {
-                                    let p = l["price"].as_f64().or_else(|| l["limit_price"].as_f64()).unwrap_or(0.0);
-                                    let s = l["size"].as_f64().or_else(|| l["order_qty"].as_f64()).unwrap_or(0.0);
-                                    if p > 0.0 && s > 0.0 { Some((p, s)) } else { None }
-                                }).take(25).collect()
-                            }).unwrap_or_default();
-                            let asks: Vec<(f64, f64)> = v["asks"].as_array().map(|arr| {
-                                arr.iter().filter_map(|l| {
-                                    let p = l["price"].as_f64().or_else(|| l["limit_price"].as_f64()).unwrap_or(0.0);
-                                    let s = l["size"].as_f64().or_else(|| l["order_qty"].as_f64()).unwrap_or(0.0);
-                                    if p > 0.0 && s > 0.0 { Some((p, s)) } else { None }
-                                }).take(25).collect()
-                            }).unwrap_or_default();
+                            let bids: Vec<(f64, f64)> = v["bids"]
+                                .as_array()
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|l| {
+                                            let p = l["price"]
+                                                .as_f64()
+                                                .or_else(|| l["limit_price"].as_f64())
+                                                .unwrap_or(0.0);
+                                            let s = l["size"]
+                                                .as_f64()
+                                                .or_else(|| l["order_qty"].as_f64())
+                                                .unwrap_or(0.0);
+                                            if p > 0.0 && s > 0.0 {
+                                                Some((p, s))
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .take(25)
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            let asks: Vec<(f64, f64)> = v["asks"]
+                                .as_array()
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|l| {
+                                            let p = l["price"]
+                                                .as_f64()
+                                                .or_else(|| l["limit_price"].as_f64())
+                                                .unwrap_or(0.0);
+                                            let s = l["size"]
+                                                .as_f64()
+                                                .or_else(|| l["order_qty"].as_f64())
+                                                .unwrap_or(0.0);
+                                            if p > 0.0 && s > 0.0 {
+                                                Some((p, s))
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .take(25)
+                                        .collect()
+                                })
+                                .unwrap_or_default();
                             for &i in idxs {
                                 if let Some(chart) = self.charts.get_mut(i) {
                                     chart.live_depth_bids = bids.clone();
@@ -92,7 +124,13 @@ impl TyphooNApp {
                         }
                     }
                 }
-                BrokerMsg::KrakenBookQuoteTick { symbol, bid, ask, bid_size, ask_size } => {
+                BrokerMsg::KrakenBookQuoteTick {
+                    symbol,
+                    bid,
+                    ask,
+                    bid_size,
+                    ask_size,
+                } => {
                     self.handle_kraken_book_quote_tick(symbol, bid, ask, bid_size, ask_size);
                 }
                 BrokerMsg::KrakenWsTicker(t) => {

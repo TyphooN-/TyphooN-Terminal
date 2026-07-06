@@ -2953,4 +2953,3 @@ pub fn render_updgrank_snapshot(ui: &mut egui::Ui, snap: &UpgradeDowngradeRankSn
         }
     }
 }
-

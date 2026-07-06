@@ -34,7 +34,8 @@ pub(crate) fn draw_volume_profile_overlay(
                     max_vol = max_vol.max(buckets[b]);
                 }
             } else {
-                let y_high_frac = ((price_max - bar.high) / (price_max - price_min)).clamp(0.0, 1.0);
+                let y_high_frac =
+                    ((price_max - bar.high) / (price_max - price_min)).clamp(0.0, 1.0);
                 let y_low_frac = ((price_max - bar.low) / (price_max - price_min)).clamp(0.0, 1.0);
                 let b_top = (y_high_frac * num_buckets as f64) as usize;
                 let b_bot = ((y_low_frac * num_buckets as f64) as usize).min(num_buckets - 1);

@@ -11,7 +11,9 @@ pub(super) fn alpaca_quote_symbol_eligible(
     scrape_xstocks: bool,
     xstock_universe: &std::collections::HashSet<String>,
 ) -> Option<String> {
-    let bare = bare_symbol_from_key(raw).replace('/', "").to_ascii_uppercase();
+    let bare = bare_symbol_from_key(raw)
+        .replace('/', "")
+        .to_ascii_uppercase();
     let s = bare.trim_end_matches(".EQ").to_string();
     if bare.ends_with(".EQ") || (scrape_xstocks && xstock_universe.contains(&s)) {
         return None;
@@ -113,9 +115,9 @@ impl TyphooNApp {
         } else {
             2
         };
-        let throttled = self
-            .alpaca_quote_sub_at
-            .is_some_and(|t| now_instant.duration_since(t) < std::time::Duration::from_secs(base_throttle_s));
+        let throttled = self.alpaca_quote_sub_at.is_some_and(|t| {
+            now_instant.duration_since(t) < std::time::Duration::from_secs(base_throttle_s)
+        });
         if throttled {
             return;
         }
@@ -206,13 +208,18 @@ impl TyphooNApp {
             self.kraken_l3_status = msg.clone();
         }
 
-        if msg_lc.contains("limit") || msg_lc.contains("406") || msg_lc.contains("subscription limit") {
+        if msg_lc.contains("limit")
+            || msg_lc.contains("406")
+            || msg_lc.contains("subscription limit")
+        {
             self.alpaca_sub_limit_hit_at = Some(std::time::Instant::now());
         }
         if msg.contains("subscribed") || msg.contains("subscription") {
             // Ack received: assume recovery possible
             if let Some(hit) = self.alpaca_sub_limit_hit_at {
-                if std::time::Instant::now().duration_since(hit) > std::time::Duration::from_secs(30) {
+                if std::time::Instant::now().duration_since(hit)
+                    > std::time::Duration::from_secs(30)
+                {
                     self.alpaca_sub_limit_hit_at = None;
                 }
             }
@@ -280,7 +287,10 @@ mod alpaca_quote_eligibility_tests {
             Some("HKIT".to_string())
         );
         // Kraken xStock chart symbol (.EQ form) ⇒ excluded.
-        assert_eq!(alpaca_quote_symbol_eligible("kraken:WOK.EQ:1Day", true, &universe), None);
+        assert_eq!(
+            alpaca_quote_symbol_eligible("kraken:WOK.EQ:1Day", true, &universe),
+            None
+        );
         // Bare universe member while scraping ⇒ excluded (rides Kraken).
         assert_eq!(alpaca_quote_symbol_eligible("AAPL", true, &universe), None);
         // …but if xStock scraping is off, that ticker is a normal Alpaca equity.
@@ -289,6 +299,9 @@ mod alpaca_quote_eligibility_tests {
             Some("AAPL".to_string())
         );
         // Crypto rides Kraken ⇒ excluded.
-        assert_eq!(alpaca_quote_symbol_eligible("BTCUSD", true, &universe), None);
+        assert_eq!(
+            alpaca_quote_symbol_eligible("BTCUSD", true, &universe),
+            None
+        );
     }
 }

@@ -495,7 +495,12 @@ impl ChartState {
 
     /// Apply a real-time executed trade: update forming price (close/high/low) + accumulate trade volume into the current forming bar.
     /// O(1) per trade. Used for Kraken public trades feed (and MTF cells via chart_by_bare).
-    pub fn apply_forming_trade(&mut self, price: f64, trade_vol: f64, trade_ts_ms: Option<i64>) -> bool {
+    pub fn apply_forming_trade(
+        &mut self,
+        price: f64,
+        trade_vol: f64,
+        trade_ts_ms: Option<i64>,
+    ) -> bool {
         let price_updated = self.apply_forming_price_update(price);
         if price_updated && trade_vol > 0.0 && trade_vol.is_finite() {
             if let Some(bar) = self.bars.last_mut() {
@@ -515,20 +520,35 @@ impl ChartState {
         price_updated
     }
 
-    pub fn apply_live_quote_update(&mut self, bid: f64, ask: f64, bid_size: f64, ask_size: f64, delayed: bool) -> bool {
+    pub fn apply_live_quote_update(
+        &mut self,
+        bid: f64,
+        ask: f64,
+        bid_size: f64,
+        ask_size: f64,
+        delayed: bool,
+    ) -> bool {
         let mid = (bid + ask) * 0.5;
         if bid <= 0.0 || ask <= 0.0 || mid <= 0.0 || !bid.is_finite() || !ask.is_finite() {
             return false;
         }
         self.live_bid = bid;
         self.live_ask = ask;
-        if bid_size > 0.0 { self.live_bid_size = bid_size; }
-        if ask_size > 0.0 { self.live_ask_size = ask_size; }
+        if bid_size > 0.0 {
+            self.live_bid_size = bid_size;
+        }
+        if ask_size > 0.0 {
+            self.live_ask_size = ask_size;
+        }
         // For depth profile binning: seed with top level (full book levels can be pushed from L2/L3 updates)
         self.live_depth_bids.clear();
-        if bid > 0.0 && bid_size > 0.0 { self.live_depth_bids.push((bid, bid_size)); }
+        if bid > 0.0 && bid_size > 0.0 {
+            self.live_depth_bids.push((bid, bid_size));
+        }
         self.live_depth_asks.clear();
-        if ask > 0.0 && ask_size > 0.0 { self.live_depth_asks.push((ask, ask_size)); }
+        if ask > 0.0 && ask_size > 0.0 {
+            self.live_depth_asks.push((ask, ask_size));
+        }
         self.live_quote_at = Some(std::time::Instant::now());
         self.live_quote_delayed = delayed;
         // A delayed quote (Kraken iapi equities is always delayed=true) is stored

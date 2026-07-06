@@ -185,7 +185,10 @@ pub async fn scrape_and_cache_symbol(
                 // recent split (reverse OR forward, ≥2×) can purge the stale
                 // equity cache — an incremental merge keeps pre-split rows and
                 // any ex-date carry poison forever (ADR-122).
-                let existing = get_stock_splits(conn, &sym).ok().flatten().unwrap_or_default();
+                let existing = get_stock_splits(conn, &sym)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
                 let _ = upsert_stock_splits(conn, &sym, &rows);
                 cb(&format!(
                     "research/splits: {} cached ({} rows)",
@@ -199,7 +202,10 @@ pub async fn scrape_and_cache_symbol(
                             sym, n
                         )),
                         Ok(_) => {}
-                        Err(e) => cb(&format!("research/splits {} cache reset failed: {}", sym, e)),
+                        Err(e) => cb(&format!(
+                            "research/splits {} cache reset failed: {}",
+                            sym, e
+                        )),
                     }
                 }
             }

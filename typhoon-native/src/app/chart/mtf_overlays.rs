@@ -154,9 +154,9 @@ pub(crate) struct ChartResultEntry {
 }
 
 #[allow(clippy::type_complexity)]
-fn chart_result_cache()
--> &'static std::sync::RwLock<std::collections::HashMap<(String, String), std::sync::Arc<ChartResultEntry>>>
-{
+fn chart_result_cache() -> &'static std::sync::RwLock<
+    std::collections::HashMap<(String, String), std::sync::Arc<ChartResultEntry>>,
+> {
     static CACHE: std::sync::OnceLock<
         std::sync::RwLock<
             std::collections::HashMap<(String, String), std::sync::Arc<ChartResultEntry>>,
@@ -207,7 +207,13 @@ pub(crate) fn chart_result_cache_put(
 // the last computed value until a fresh one replaces it. Each entry is five Options,
 // so a long retention window is cheap. Written by the fill and by open-tab loads;
 // read by the navbar. `(close, sma200, kama, fisher, fisher_signal)`.
-type MtfGridCellValues = (Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>);
+type MtfGridCellValues = (
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+);
 
 struct MtfGridValueEntry {
     values: MtfGridCellValues,
@@ -231,7 +237,13 @@ pub(crate) fn mtf_grid_value_get(
     symbol_key: &str,
     tf_suffix: &str,
     now_ms: i64,
-) -> Option<(Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)> {
+) -> Option<(
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+)> {
     let guard = mtf_grid_value_store().read().ok()?;
     let entry = guard.get(&(symbol_key.to_string(), tf_suffix.to_string()))?;
     (now_ms.saturating_sub(entry.written_ms) < MTF_GRID_VALUE_TTL_MS).then_some(entry.values)
@@ -242,7 +254,13 @@ pub(crate) fn mtf_grid_value_get(
 pub(crate) fn mtf_grid_value_put(
     symbol_key: &str,
     tf_suffix: &str,
-    values: (Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>),
+    values: (
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+    ),
     now_ms: i64,
 ) {
     if let Ok(mut guard) = mtf_grid_value_store().write() {

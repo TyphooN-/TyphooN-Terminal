@@ -331,12 +331,8 @@ pub(super) fn kraken_xstocks_session_status_at(
         };
     }
 
-    let tomorrow_trades = is_us_market_trading_day(
-        now_et
-            .date()
-            .succ_opt()
-            .unwrap_or(now_et.date()),
-    );
+    let tomorrow_trades =
+        is_us_market_trading_day(now_et.date().succ_opt().unwrap_or(now_et.date()));
     // Next pre-market start, skipping a holiday tomorrow.
     let next_pre_market = || {
         if tomorrow_trades {

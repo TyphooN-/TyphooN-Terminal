@@ -161,8 +161,7 @@ fn cagr_over_quarters(values: &[f64], years: usize) -> Option<f64> {
     let recent = ttm(values)?;
     let past_slice = values.get(years * 4..)?;
     let past = ttm(past_slice)?;
-    (past > 0.0 && recent > 0.0)
-        .then(|| ((recent / past).powf(1.0 / years as f64) - 1.0) * 100.0)
+    (past > 0.0 && recent > 0.0).then(|| ((recent / past).powf(1.0 / years as f64) - 1.0) * 100.0)
 }
 
 /// Build the consolidated snapshot from stored research tables. `fund` is the

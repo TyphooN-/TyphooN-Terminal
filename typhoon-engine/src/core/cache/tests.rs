@@ -59,7 +59,9 @@ fn ws_fast_merge_writes_user_selected_zstd_level() {
     let cache = SqliteCache::open(&db_path).unwrap();
     let bars = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10.0}]"#;
 
-    cache.merge_bars_fast("kraken:BTCUSD:1Hour", bars, 0).unwrap();
+    cache
+        .merge_bars_fast("kraken:BTCUSD:1Hour", bars, 0)
+        .unwrap();
     let level: i32 = cache
         .conn
         .lock()
@@ -90,9 +92,24 @@ fn purge_bars_for_source_timeframes_only_removes_matching_source_and_tf() {
         .unwrap();
     assert_eq!(n, 2); // 15Min + 1Hour existed; 30Min did not
 
-    assert!(cache.get_bars_raw("yahoo-chart:AAPL:15Min").unwrap().is_none());
-    assert!(cache.get_bars_raw("yahoo-chart:AAPL:1Hour").unwrap().is_none());
-    assert!(cache.get_bars_raw("yahoo-chart:AAPL:1Day").unwrap().is_some());
+    assert!(
+        cache
+            .get_bars_raw("yahoo-chart:AAPL:15Min")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        cache
+            .get_bars_raw("yahoo-chart:AAPL:1Hour")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        cache
+            .get_bars_raw("yahoo-chart:AAPL:1Day")
+            .unwrap()
+            .is_some()
+    );
     assert!(cache.get_bars_raw("alpaca:AAPL:15Min").unwrap().is_some());
     let _ = std::fs::remove_file(db_path);
 }
@@ -370,7 +387,10 @@ fn benign_zero_volume_carry_kept() {
         ("2026-03-31", 5.0, 5.0, 5.0, 5.0, 0.0),
         ("2026-04-01", 5.0, 5.2, 4.95, 5.1, 200.0),
     ]);
-    assert_eq!(packed_closes("alpaca:AKTX:1Day", &json), vec![5.0, 5.0, 5.1]);
+    assert_eq!(
+        packed_closes("alpaca:AKTX:1Day", &json),
+        vec![5.0, 5.0, 5.1]
+    );
 }
 
 #[test]
@@ -394,7 +414,10 @@ fn carry_poison_at_series_edge_kept() {
         ("2026-03-31", 5.0, 5.1, 4.9, 5.0, 56.0),
         ("2026-04-01", 5.0, 5.2, 4.95, 5.1, 200.0),
     ]);
-    assert_eq!(packed_closes("alpaca:AKTX:1Day", &json), vec![0.12, 5.0, 5.1]);
+    assert_eq!(
+        packed_closes("alpaca:AKTX:1Day", &json),
+        vec![0.12, 5.0, 5.1]
+    );
 }
 
 #[test]
@@ -1377,7 +1400,10 @@ fn data_sanity_audit_flags_cross_source_recent_overlap_mismatch() {
     cache.put_bars("yahoo-chart:WOK:1Day", depth).unwrap();
 
     let report = cache.audit_bar_cache_sanity().unwrap();
-    assert!(report.has_code("cross_source_overlap_mismatch"), "{report:#?}");
+    assert!(
+        report.has_code("cross_source_overlap_mismatch"),
+        "{report:#?}"
+    );
     assert!(report.warn_count >= 1, "{report:#?}");
 
     let _ = std::fs::remove_file(db_path);
@@ -1399,7 +1425,10 @@ fn data_sanity_audit_flags_merged_source_overlap_mismatch() {
     cache.put_bars("merged:WOK:1Day", merged).unwrap();
 
     let report = cache.audit_bar_cache_sanity().unwrap();
-    assert!(report.has_code("merged_source_overlap_mismatch"), "{report:#?}");
+    assert!(
+        report.has_code("merged_source_overlap_mismatch"),
+        "{report:#?}"
+    );
     assert!(
         report.issue_code_count("merged_source_overlap_mismatch") >= 1,
         "{report:#?}"
@@ -1456,7 +1485,9 @@ fn data_sanity_audit_allows_historical_cross_source_scale_delta_when_recent_agre
         {"timestamp":"2024-01-04T00:00:00+00:00","open":1.0,"high":1.0,"low":1.0,"close":1.0,"volume":100.0}
     ]"#;
     cache.put_bars("alpaca:WOK:1Day", compact).unwrap();
-    cache.put_bars("yahoo-chart:WOK:1Day", split_adjusted).unwrap();
+    cache
+        .put_bars("yahoo-chart:WOK:1Day", split_adjusted)
+        .unwrap();
 
     let report = cache.audit_bar_cache_sanity().unwrap();
     assert_eq!(
@@ -1562,7 +1593,14 @@ fn data_sanity_repair_fixes_metadata_and_preserves_fetch_timestamp() {
         (day, 1.0, 2.0, 0.5, 1.5, 10.0),
         (2 * day, 1.5, 2.5, 1.0, 2.0, 12.0),
     ]);
-    insert_raw_row(&cache, "alpaca:META:1Day", &blob, Some(99), None, Some("wrong"));
+    insert_raw_row(
+        &cache,
+        "alpaca:META:1Day",
+        &blob,
+        Some(99),
+        None,
+        Some("wrong"),
+    );
 
     let report = cache.audit_bar_cache_sanity().unwrap();
     assert!(report.has_code("bar_count_mismatch"), "{report:#?}");
@@ -1607,10 +1645,10 @@ fn data_sanity_repair_rewrites_invalid_duplicate_and_future_bars() {
     let d1 = now_ms - 3 * day;
     let d2 = now_ms - 2 * day;
     let bars = [
-        (d1, 1.0, 2.0, 0.5, 1.5, 10.0),          // valid
-        (d2, 1.5, 2.5, 1.0, 2.0, 12.0),          // valid, superseded by dup below
-        (d2 + 3_600_000, 9.0, 9.5, 8.5, 9.2, 5.0), // same 1Day bucket — later wins
-        (d2 + 7_200_000, 5.0, 4.0, 6.0, 5.0, 5.0), // invalid: high < low
+        (d1, 1.0, 2.0, 0.5, 1.5, 10.0),               // valid
+        (d2, 1.5, 2.5, 1.0, 2.0, 12.0),               // valid, superseded by dup below
+        (d2 + 3_600_000, 9.0, 9.5, 8.5, 9.2, 5.0),    // same 1Day bucket — later wins
+        (d2 + 7_200_000, 5.0, 4.0, 6.0, 5.0, 5.0),    // invalid: high < low
         (now_ms + 10 * day, 1.0, 2.0, 0.5, 1.5, 1.0), // future
     ];
     let blob = ttbr_binary(&bars);
@@ -1784,8 +1822,8 @@ fn data_sanity_audit_aggregates_per_bar_hits_into_one_issue_per_row() {
     let cache = SqliteCache::open(&db_path).unwrap();
     let day = 86_400_000i64;
     let blob = ttbr_binary(&[
-        (day, 5.0, 4.0, 6.0, 5.0, 1.0),     // invalid: high < low
-        (2 * day, 1.0, 2.0, 0.5, 1.5, 1.0), // valid
+        (day, 5.0, 4.0, 6.0, 5.0, 1.0),      // invalid: high < low
+        (2 * day, 1.0, 2.0, 0.5, 1.5, 1.0),  // valid
         (3 * day, -1.0, 2.0, 0.5, 1.5, 1.0), // invalid: open <= 0
         (4 * day, 1.0, 2.0, 0.5, 1.5, -5.0), // invalid: volume < 0
     ]);
@@ -2059,8 +2097,14 @@ fn data_sanity_audit_ignores_single_field_range_noise_across_sources() {
     cache.put_bars("yahoo-chart:DCX:1Day", b).unwrap();
 
     let report = cache.audit_bar_cache_sanity().unwrap();
-    assert!(!report.has_code("cross_source_overlap_mismatch"), "{report:#?}");
-    assert!(!report.has_code("cross_source_scale_blowout"), "{report:#?}");
+    assert!(
+        !report.has_code("cross_source_overlap_mismatch"),
+        "{report:#?}"
+    );
+    assert!(
+        !report.has_code("cross_source_scale_blowout"),
+        "{report:#?}"
+    );
 
     let _ = std::fs::remove_file(db_path);
 }
@@ -2084,7 +2128,10 @@ fn data_sanity_audit_classifies_runaway_scale_blowout_as_info() {
 
     let report = cache.audit_bar_cache_sanity().unwrap();
     assert!(report.has_code("cross_source_scale_blowout"), "{report:#?}");
-    assert!(!report.has_code("cross_source_overlap_mismatch"), "{report:#?}");
+    assert!(
+        !report.has_code("cross_source_overlap_mismatch"),
+        "{report:#?}"
+    );
     let issue = report
         .issues
         .iter()
@@ -2142,8 +2189,7 @@ fn data_sanity_issue_caps_do_not_crowd_out_warnings() {
         report
             .issues
             .iter()
-            .any(|i| i.severity == BarCacheSanitySeverity::Warn
-                && i.key == "alpaca:STALLED:15Min"),
+            .any(|i| i.severity == BarCacheSanitySeverity::Warn && i.key == "alpaca:STALLED:15Min"),
         "warn must be stored despite the info flood on the same code"
     );
     assert_eq!(
@@ -2179,12 +2225,18 @@ fn data_sanity_audit_explains_cross_source_split_adjustment_delta() {
         .put_bars("alpaca:SPLT:1Day", &format!("[{}]", raw_rows.join(",")))
         .unwrap();
     cache
-        .put_bars("yahoo-chart:SPLT:1Day", &format!("[{}]", adj_rows.join(",")))
+        .put_bars(
+            "yahoo-chart:SPLT:1Day",
+            &format!("[{}]", adj_rows.join(",")),
+        )
         .unwrap();
 
     // Without split knowledge the recent-window mismatch is a warning.
     let report = cache.audit_bar_cache_sanity().unwrap();
-    assert!(report.has_code("cross_source_overlap_mismatch"), "{report:#?}");
+    assert!(
+        report.has_code("cross_source_overlap_mismatch"),
+        "{report:#?}"
+    );
 
     // Teach the audit the split; the same disagreement becomes context.
     {
@@ -2245,7 +2297,10 @@ fn data_sanity_split_explains_mid_bucket_ex_date_on_monthly() {
         .put_bars("alpaca:MMID:1Month", &format!("[{}]", raw_rows.join(",")))
         .unwrap();
     cache
-        .put_bars("yahoo-chart:MMID:1Month", &format!("[{}]", adj_rows.join(",")))
+        .put_bars(
+            "yahoo-chart:MMID:1Month",
+            &format!("[{}]", adj_rows.join(",")),
+        )
         .unwrap();
     {
         let conn = cache.conn.lock().unwrap();
@@ -2290,7 +2345,10 @@ fn write_path_clamps_close_outside_range_so_no_bad_row_is_stored() {
         {"timestamp":"2024-01-02T00:00:00+00:00","open":10.0,"high":10.0,"low":10.0,"close":12.0,"volume":100.0}
     ]"#;
     cache.put_bars("yahoo-chart:CLMP:1Day", bars).unwrap();
-    let raw = cache.get_bars_raw("yahoo-chart:CLMP:1Day").unwrap().unwrap();
+    let raw = cache
+        .get_bars_raw("yahoo-chart:CLMP:1Day")
+        .unwrap()
+        .unwrap();
     let bad = raw.iter().find(|b| b.0 == 1_704_153_600_000).unwrap();
     assert_eq!(bad.4, 12.0, "close preserved");
     assert!(bad.2 >= bad.4, "high clamped to contain close: {bad:?}");
@@ -2483,7 +2541,9 @@ fn large_time_gap_warns_on_dense_stall_but_not_illiquid_sparse_series() {
     // Dense 1Hour lane (one bar/hour for 28 days) then an 11-day hole then a
     // recent bar — a genuinely stalled fetch lane. Average spacing ≪ the gap
     // threshold ⇒ actionable Warn.
-    let mut dense: Vec<String> = (0..28 * 24).map(|i| bar(now - day * 40 + hour * i)).collect();
+    let mut dense: Vec<String> = (0..28 * 24)
+        .map(|i| bar(now - day * 40 + hour * i))
+        .collect();
     dense.push(bar(now - day));
     cache
         .put_bars("alpaca:DENSE:1Hour", &format!("[{}]", dense.join(",")))

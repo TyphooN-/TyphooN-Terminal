@@ -172,8 +172,10 @@ pub async fn handle_alpaca_order_command(
                         )));
                     }
                     Err(e) => {
-                        let _ = broker_msg_tx
-                            .send(BrokerMsg::Error(format!("Bracket order failed: {}{tag}", e)));
+                        let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                            "Bracket order failed: {}{tag}",
+                            e
+                        )));
                     }
                 }
             }
@@ -195,7 +197,8 @@ pub async fn handle_alpaca_order_command(
                         }
                     }
                     Err(e) => {
-                        let _ = broker_msg_tx.send(BrokerMsg::Error(format!("Cancel failed: {}", e)));
+                        let _ =
+                            broker_msg_tx.send(BrokerMsg::Error(format!("Cancel failed: {}", e)));
                     }
                 }
             }
@@ -250,7 +253,8 @@ pub async fn handle_alpaca_order_command(
                         }
                     }
                     Err(e) => {
-                        let _ = broker_msg_tx.send(BrokerMsg::Error(format!("Modify failed: {}", e)));
+                        let _ =
+                            broker_msg_tx.send(BrokerMsg::Error(format!("Modify failed: {}", e)));
                     }
                 }
             }
@@ -273,8 +277,10 @@ pub async fn handle_alpaca_order_command(
                         )));
                     }
                     Err(e) => {
-                        let _ = broker_msg_tx
-                            .send(BrokerMsg::Error(format!("Trailing stop failed: {}{tag}", e)));
+                        let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                            "Trailing stop failed: {}{tag}",
+                            e
+                        )));
                     }
                 }
             }
@@ -512,10 +518,7 @@ mod tests {
     use super::*;
 
     fn map(entries: &[(&str, f64)]) -> BTreeMap<String, f64> {
-        entries
-            .iter()
-            .map(|(s, q)| (s.to_string(), *q))
-            .collect()
+        entries.iter().map(|(s, q)| (s.to_string(), *q)).collect()
     }
 
     #[test]

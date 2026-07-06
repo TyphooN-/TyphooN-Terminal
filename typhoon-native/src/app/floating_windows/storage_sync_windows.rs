@@ -44,8 +44,9 @@ impl TyphooNApp {
                                 }
                             }
                             Err(e) => {
-                                self.log
-                                    .push_back(LogEntry::err(format!("Data sanity audit failed: {e}")));
+                                self.log.push_back(LogEntry::err(format!(
+                                    "Data sanity audit failed: {e}"
+                                )));
                             }
                         }
                     }
@@ -83,8 +84,9 @@ impl TyphooNApp {
                             }
                             Err(e) => {
                                 self.storage_sanity_reaudit_after = false;
-                                self.log
-                                    .push_back(LogEntry::err(format!("Merged-row rebuild failed: {e}")));
+                                self.log.push_back(LogEntry::err(format!(
+                                    "Merged-row rebuild failed: {e}"
+                                )));
                             }
                         }
                     }
@@ -97,8 +99,9 @@ impl TyphooNApp {
                                 self.storage_sanity_last_action = Some(line);
                             }
                             Err(e) => {
-                                self.log
-                                    .push_back(LogEntry::err(format!("Sanity report export failed: {e}")));
+                                self.log.push_back(LogEntry::err(format!(
+                                    "Sanity report export failed: {e}"
+                                )));
                             }
                         }
                     }
@@ -111,8 +114,9 @@ impl TyphooNApp {
                             }
                             Err(e) => {
                                 self.storage_sanity_reaudit_after = false;
-                                self.log
-                                    .push_back(LogEntry::err(format!("Splits backfill failed: {e}")));
+                                self.log.push_back(LogEntry::err(format!(
+                                    "Splits backfill failed: {e}"
+                                )));
                             }
                         }
                     }
@@ -1515,7 +1519,9 @@ fn sanity_split_backfill_symbols(
 /// Uppercased symbols that already have a `research_stock_splits` row (fetched
 /// at least once, empty or not) — re-fetching them can't help. One small query,
 /// run off the render path when an audit completes.
-fn already_fetched_split_symbols(cache: &typhoon_engine::core::cache::SqliteCache) -> std::collections::HashSet<String> {
+fn already_fetched_split_symbols(
+    cache: &typhoon_engine::core::cache::SqliteCache,
+) -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
     if let Ok(conn) = cache.connection()
         && let Ok(mut stmt) = conn.prepare("SELECT symbol FROM research_stock_splits")

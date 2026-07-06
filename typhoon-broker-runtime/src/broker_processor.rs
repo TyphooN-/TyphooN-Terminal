@@ -8,10 +8,9 @@ use crate::account_pool::{AlpacaAccountPool, KrakenAccountPool};
 use crate::resources::BrokerRuntimeResources;
 use crate::{
     ai_chat, alpaca_account_data, alpaca_order_ops, alpaca_ws_commands, bar_fetch_commands,
-    connection_commands,
-    external_feeds, fundamentals_commands, kraken_market_commands, kraken_order_ops,
-    kraken_ws_commands, market_data_commands, matrix_commands, misc_commands, news,
-    research_compute, research_fetch, storage, symbol_search, watchlist_quotes,
+    connection_commands, external_feeds, fundamentals_commands, kraken_market_commands,
+    kraken_order_ops, kraken_ws_commands, market_data_commands, matrix_commands, misc_commands,
+    news, research_compute, research_fetch, storage, symbol_search, watchlist_quotes,
 };
 
 pub fn spawn_broker_message_processor(

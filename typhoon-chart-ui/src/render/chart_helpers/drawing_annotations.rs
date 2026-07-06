@@ -225,4 +225,3 @@ pub(crate) fn draw_one_drawing_annotation(
 
     false
 }
-

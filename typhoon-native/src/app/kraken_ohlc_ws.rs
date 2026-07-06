@@ -64,7 +64,11 @@ impl TyphooNApp {
             .kraken_pairs
             .iter()
             .filter(|(pair_name, display)| {
-                let sym = if display.is_empty() { pair_name } else { display };
+                let sym = if display.is_empty() {
+                    pair_name
+                } else {
+                    display
+                };
                 !self.kraken_pair_quote_disabled(sym)
             })
             .cloned()

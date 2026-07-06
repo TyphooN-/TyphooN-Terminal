@@ -385,12 +385,16 @@ fn parse_raw_level(level: &RawValue) -> Option<KrakenWsBookLevel> {
         let qty_raw = obj.qty.or(obj.quantity)?;
         let (price, price_text) = raw_decimal_scalar(obj.price)?;
         let (qty, qty_text) = raw_decimal_scalar(qty_raw)?;
-        Some(KrakenWsBookLevel::from_wire(price, qty, price_text, qty_text))
+        Some(KrakenWsBookLevel::from_wire(
+            price, qty, price_text, qty_text,
+        ))
     } else {
         let arr: Vec<&RawValue> = serde_json::from_str(body).ok()?;
         let (price, price_text) = raw_decimal_scalar(arr.first()?)?;
         let (qty, qty_text) = raw_decimal_scalar(arr.get(1)?)?;
-        Some(KrakenWsBookLevel::from_wire(price, qty, price_text, qty_text))
+        Some(KrakenWsBookLevel::from_wire(
+            price, qty, price_text, qty_text,
+        ))
     }
 }
 

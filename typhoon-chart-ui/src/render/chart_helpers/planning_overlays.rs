@@ -150,10 +150,8 @@ pub(crate) fn draw_planning_and_compare_overlays(
             for a in crate::drawing_interaction::drawing_anchors(drawing) {
                 let p = a.to_screen(price_geometry);
                 if chart_rect.expand(cp_size).contains(p) {
-                    let r = egui::Rect::from_center_size(
-                        p,
-                        egui::vec2(cp_size * 2.0, cp_size * 2.0),
-                    );
+                    let r =
+                        egui::Rect::from_center_size(p, egui::vec2(cp_size * 2.0, cp_size * 2.0));
                     painter.rect_filled(r, 0.0, cp_fill);
                     painter.rect_stroke(r, 0.0, cp_stroke, egui::StrokeKind::Outside);
                 }

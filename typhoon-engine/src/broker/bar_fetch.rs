@@ -900,7 +900,7 @@ pub async fn run_kraken_futures_fetch_task(
 mod tests {
     use super::*;
     use crate::core::cache::{
-        aggregate_raw_to_rollup, source_derives_higher_tfs, tf_derivations, Rollup,
+        Rollup, aggregate_raw_to_rollup, source_derives_higher_tfs, tf_derivations,
     };
 
     #[test]
@@ -927,21 +927,27 @@ mod tests {
         let d = 86_400_000i64;
         let mon1 = 1_704_067_200_000i64; // 2024-01-01 00:00 UTC
         let raw = vec![
-            (mon1, 10.0, 12.0, 9.0, 11.0, 100.0),         // Mon Jan 1
-            (mon1 + d, 11.0, 13.0, 10.0, 12.0, 110.0),    // Tue Jan 2
+            (mon1, 10.0, 12.0, 9.0, 11.0, 100.0),          // Mon Jan 1
+            (mon1 + d, 11.0, 13.0, 10.0, 12.0, 110.0),     // Tue Jan 2
             (mon1 + 2 * d, 12.0, 14.0, 11.0, 13.0, 120.0), // Wed Jan 3
             (mon1 + 7 * d, 20.0, 22.0, 19.0, 21.0, 200.0), // Mon Jan 8
             (mon1 + 8 * d, 21.0, 23.0, 20.0, 22.0, 210.0), // Tue Jan 9
         ];
         let out = aggregate_raw_to_rollup(&raw, Rollup::Week);
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0]["timestamp"].as_str().unwrap(), "2024-01-01T00:00:00+00:00");
+        assert_eq!(
+            out[0]["timestamp"].as_str().unwrap(),
+            "2024-01-01T00:00:00+00:00"
+        );
         assert_eq!(out[0]["open"].as_f64().unwrap(), 10.0);
         assert_eq!(out[0]["high"].as_f64().unwrap(), 14.0);
         assert_eq!(out[0]["low"].as_f64().unwrap(), 9.0);
         assert_eq!(out[0]["close"].as_f64().unwrap(), 13.0);
         assert_eq!(out[0]["volume"].as_f64().unwrap(), 330.0);
-        assert_eq!(out[1]["timestamp"].as_str().unwrap(), "2024-01-08T00:00:00+00:00");
+        assert_eq!(
+            out[1]["timestamp"].as_str().unwrap(),
+            "2024-01-08T00:00:00+00:00"
+        );
         assert_eq!(out[1]["close"].as_f64().unwrap(), 22.0);
         assert_eq!(out[1]["volume"].as_f64().unwrap(), 410.0);
     }
@@ -951,18 +957,24 @@ mod tests {
         let d = 86_400_000i64;
         let jan1 = 1_704_067_200_000i64; // 2024-01-01 00:00 UTC
         let raw = vec![
-            (jan1, 10.0, 12.0, 9.0, 11.0, 100.0),          // Jan 1
+            (jan1, 10.0, 12.0, 9.0, 11.0, 100.0),           // Jan 1
             (jan1 + 30 * d, 15.0, 16.0, 14.0, 15.0, 150.0), // Jan 31
             (jan1 + 31 * d, 20.0, 22.0, 19.0, 21.0, 200.0), // Feb 1
         ];
         let out = aggregate_raw_to_rollup(&raw, Rollup::Month);
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0]["timestamp"].as_str().unwrap(), "2024-01-01T00:00:00+00:00");
+        assert_eq!(
+            out[0]["timestamp"].as_str().unwrap(),
+            "2024-01-01T00:00:00+00:00"
+        );
         assert_eq!(out[0]["open"].as_f64().unwrap(), 10.0);
         assert_eq!(out[0]["high"].as_f64().unwrap(), 16.0);
         assert_eq!(out[0]["close"].as_f64().unwrap(), 15.0);
         assert_eq!(out[0]["volume"].as_f64().unwrap(), 250.0);
-        assert_eq!(out[1]["timestamp"].as_str().unwrap(), "2024-02-01T00:00:00+00:00");
+        assert_eq!(
+            out[1]["timestamp"].as_str().unwrap(),
+            "2024-02-01T00:00:00+00:00"
+        );
         assert_eq!(out[1]["open"].as_f64().unwrap(), 20.0);
     }
 
@@ -971,22 +983,28 @@ mod tests {
         // 2024-01-01 14:00 UTC = 1_704_117_600 s. Four 15m bars -> two 30m bars.
         let s = 1_704_117_600_000i64;
         let raw = vec![
-            (s, 10.0, 12.0, 9.0, 11.0, 100.0),         // 14:00
-            (s + 900_000, 11.0, 13.0, 10.0, 12.0, 150.0), // 14:15
+            (s, 10.0, 12.0, 9.0, 11.0, 100.0),              // 14:00
+            (s + 900_000, 11.0, 13.0, 10.0, 12.0, 150.0),   // 14:15
             (s + 1_800_000, 12.0, 14.0, 11.0, 13.0, 200.0), // 14:30
             (s + 2_700_000, 13.0, 15.0, 12.0, 14.0, 250.0), // 14:45
         ];
         let out = aggregate_raw_to_rollup(&raw, Rollup::Fixed(1_800));
         assert_eq!(out.len(), 2);
         // Bucket 1 (14:00-14:30): open=first, close=last, high/low=extremes, vol=sum.
-        assert_eq!(out[0]["timestamp"].as_str().unwrap(), "2024-01-01T14:00:00+00:00");
+        assert_eq!(
+            out[0]["timestamp"].as_str().unwrap(),
+            "2024-01-01T14:00:00+00:00"
+        );
         assert_eq!(out[0]["open"].as_f64().unwrap(), 10.0);
         assert_eq!(out[0]["high"].as_f64().unwrap(), 13.0);
         assert_eq!(out[0]["low"].as_f64().unwrap(), 9.0);
         assert_eq!(out[0]["close"].as_f64().unwrap(), 12.0);
         assert_eq!(out[0]["volume"].as_f64().unwrap(), 250.0);
         // Bucket 2 (14:30-15:00).
-        assert_eq!(out[1]["timestamp"].as_str().unwrap(), "2024-01-01T14:30:00+00:00");
+        assert_eq!(
+            out[1]["timestamp"].as_str().unwrap(),
+            "2024-01-01T14:30:00+00:00"
+        );
         assert_eq!(out[1]["open"].as_f64().unwrap(), 12.0);
         assert_eq!(out[1]["high"].as_f64().unwrap(), 15.0);
         assert_eq!(out[1]["low"].as_f64().unwrap(), 11.0);
@@ -1039,14 +1057,23 @@ mod tests {
         let day = 86_400i64;
         let now = 1_900_000_000i64;
         // META case: 15Min current, 1H tail 860 days stale ⇒ heal.
-        assert!(intraday_stall_needs_full_pull(Some(now), Some(now - 860 * day)));
+        assert!(intraday_stall_needs_full_pull(
+            Some(now),
+            Some(now - 860 * day)
+        ));
         // Have 15Min but no native 1H/4H at all ⇒ pull the base once.
         assert!(intraday_stall_needs_full_pull(Some(now), None));
         // Healthy: 1H within a normal weekend of the 15Min tail ⇒ no full pull.
-        assert!(!intraday_stall_needs_full_pull(Some(now), Some(now - 3 * day)));
+        assert!(!intraday_stall_needs_full_pull(
+            Some(now),
+            Some(now - 3 * day)
+        ));
         // Moderately stale (< 30d) heals via the cheap incremental walk, not a
         // full pull.
-        assert!(!intraday_stall_needs_full_pull(Some(now), Some(now - 20 * day)));
+        assert!(!intraday_stall_needs_full_pull(
+            Some(now),
+            Some(now - 20 * day)
+        ));
         // No 15Min reference (Alpaca has no recent data) ⇒ never loops.
         assert!(!intraday_stall_needs_full_pull(None, Some(now - 999 * day)));
         assert!(!intraday_stall_needs_full_pull(None, None));

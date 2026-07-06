@@ -2651,7 +2651,7 @@ pub enum BrokerMsg {
         ask_size: f64,
     },
     /// Rich L1 from Kraken WS v2 ticker (bid/ask + sizes + last + 24h stats).
-    KrakenWsTicker( crate::broker::kraken::KrakenWsTicker ),
+    KrakenWsTicker(crate::broker::kraken::KrakenWsTicker),
     /// Bars just committed to cache by the Kraken WS OHLC pipeline.
     /// Each entry is `(typhoon_symbol, tf_label, last_bar_ts_ms)` so the
     /// REST scheduler can mark the (symbol, tf) WS-fresh and skip refetch.

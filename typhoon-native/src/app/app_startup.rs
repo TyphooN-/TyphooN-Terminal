@@ -141,7 +141,8 @@ impl TyphooNApp {
             // the cache. Combined with the chunked delete, the purge then never
             // contends the conn lock against the startup chart reads.
             std::thread::sleep(std::time::Duration::from_secs(45));
-            match cache.purge_bars_for_source_timeframes("yahoo-chart", &["15Min", "30Min", "1Hour"])
+            match cache
+                .purge_bars_for_source_timeframes("yahoo-chart", &["15Min", "30Min", "1Hour"])
             {
                 Ok(n) => {
                     tracing::info!(

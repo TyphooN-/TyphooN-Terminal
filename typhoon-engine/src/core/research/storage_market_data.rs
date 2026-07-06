@@ -327,8 +327,7 @@ fn stock_splits_need_bar_cache_invalidation_at(
         if split.numerator <= 0.0 || split.denominator <= 0.0 {
             return false;
         }
-        let factor =
-            (split.denominator / split.numerator).max(split.numerator / split.denominator);
+        let factor = (split.denominator / split.numerator).max(split.numerator / split.denominator);
         if factor < 2.0 {
             return false;
         }

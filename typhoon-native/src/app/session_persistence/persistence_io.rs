@@ -216,7 +216,8 @@ impl TyphooNApp {
             if acct.api_key.trim().is_empty() || acct.secret.trim().is_empty() {
                 continue;
             }
-            let (key_name, secret_name) = super::super::broker_accounts::alpaca_slot_keyring_keys(idx + 2);
+            let (key_name, secret_name) =
+                super::super::broker_accounts::alpaca_slot_keyring_keys(idx + 2);
             cred_pairs.push((key_name, acct.api_key.clone()));
             cred_pairs.push((secret_name, acct.secret.clone()));
         }
@@ -224,7 +225,8 @@ impl TyphooNApp {
             if acct.api_key.trim().is_empty() || acct.secret.trim().is_empty() {
                 continue;
             }
-            let (key_name, secret_name) = super::super::broker_accounts::kraken_slot_keyring_keys(idx + 2);
+            let (key_name, secret_name) =
+                super::super::broker_accounts::kraken_slot_keyring_keys(idx + 2);
             cred_pairs.push((key_name, acct.api_key.clone()));
             cred_pairs.push((secret_name, acct.secret.clone()));
         }

@@ -307,7 +307,11 @@ mod tests {
         let report = analyze_sma_outfit(&bars_from_closes(&closes), &[10, 200], 0.5, 10);
         assert!(report.insufficient_history);
         assert_eq!(report.legs.len(), 1, "only the 10-period leg fits");
-        assert_eq!(report.stack, OutfitStack::Mixed, "partial outfit never claims a stack");
+        assert_eq!(
+            report.stack,
+            OutfitStack::Mixed,
+            "partial outfit never claims a stack"
+        );
     }
 
     #[test]

@@ -243,7 +243,11 @@ pub(crate) fn draw_right_axis_price_labels(
                 x += dash_len * 2.0;
             }
             let label_y = place_axis_label(trade_y, 8.0);
-            let side = if chart.live_trade_is_buy { "Buy" } else { "Sell" };
+            let side = if chart.live_trade_is_buy {
+                "Buy"
+            } else {
+                "Sell"
+            };
             let label = format!(
                 "{} {} x {}",
                 side,
@@ -342,7 +346,12 @@ fn draw_axis_flag(
         egui::pos2(box_right, center_y + 8.0),
     );
     painter.rect_filled(rect, 2.0, bg);
-    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, col), egui::StrokeKind::Inside);
+    painter.rect_stroke(
+        rect,
+        2.0,
+        egui::Stroke::new(1.0, col),
+        egui::StrokeKind::Inside,
+    );
     painter.galley(
         egui::pos2(rect.left() + pad_x, center_y - galley.rect.height() * 0.5),
         galley,

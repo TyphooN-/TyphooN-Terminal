@@ -442,7 +442,15 @@ pub fn append_social_history(
         "INSERT OR REPLACE INTO research_social_history
          (symbol, source, fetched_at_ts, bullish, bearish, neutral, messages)
          VALUES (?1,?2,?3,?4,?5,?6,?7)",
-        params![symbol, source, now_ts(), bullish, bearish, neutral, messages],
+        params![
+            symbol,
+            source,
+            now_ts(),
+            bullish,
+            bearish,
+            neutral,
+            messages
+        ],
     )
     .map_err(|e| format!("append social history: {e}"))?;
     conn.execute(

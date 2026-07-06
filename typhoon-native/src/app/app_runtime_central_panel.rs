@@ -1,11 +1,11 @@
 use super::*;
 
-use typhoon_chart_ui::drawing_interaction::{
-    drawing_anchors, drawing_hit_distance, drawing_set_anchor, translate_drawing,
-};
 use crate::app::chart_ops::{
     chart_company_name_catalog, low_timeframe_no_data_symbols, mtf_canvas_grid_cols,
     mtf_canvas_grid_rows, mtf_flat_chart_indices, mtf_visible_chart_groups_filtered,
+};
+use typhoon_chart_ui::drawing_interaction::{
+    drawing_anchors, drawing_hit_distance, drawing_set_anchor, translate_drawing,
 };
 
 impl TyphooNApp {
@@ -71,7 +71,8 @@ impl TyphooNApp {
                 if ctrl_held {
                     // Ctrl+scroll on chart → vertical zoom (progressive), mouse-centered
                     if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                        let target_price = chart.price_from_y(body_local_y, chart_body_rect.height());
+                        let target_price =
+                            chart.price_from_y(body_local_y, chart_body_rect.height());
                         let pct = (scroll_delta * 0.002).clamp(-0.08, 0.08);
                         let factor = (1.0 + pct as f64).clamp(0.1, 20.0);
                         chart.zoom_chart_price_around(factor, target_price);
@@ -303,8 +304,7 @@ impl TyphooNApp {
                                         // Anchor handle under the press → resize
                                         // that point; otherwise whole-drawing drag.
                                         if let Some(d) = chart.drawings.get(idx) {
-                                            for (cp_idx, a) in
-                                                drawing_anchors(d).iter().enumerate()
+                                            for (cp_idx, a) in drawing_anchors(d).iter().enumerate()
                                             {
                                                 let sp = a.to_screen(&g);
                                                 let dist = ((press_pos.x - sp.x).powi(2)
@@ -317,7 +317,7 @@ impl TyphooNApp {
                                             }
                                         }
                                         chart.drawing_drag_last = Some((
-                                            g.x_to_bar_f(press_pos.x) ,
+                                            g.x_to_bar_f(press_pos.x),
                                             g.price_from_y(press_pos.y),
                                         ));
                                         grabbed = true;
@@ -636,7 +636,7 @@ impl TyphooNApp {
                     if dy.abs() > 0.0 {
                         let zoom_delta = -dy as f64 * 0.003;
                         let factor = (1.0 + zoom_delta).clamp(0.1, 20.0);
-                        chart.scale_chart_price_axis(factor);  // pure vertical scale, no time shift
+                        chart.scale_chart_price_axis(factor); // pure vertical scale, no time shift
                     }
                 }
                 if cell_scale_resp.double_clicked() {
@@ -737,7 +737,8 @@ impl TyphooNApp {
                     if scroll != 0.0 {
                         // Mouse-centered horizontal zoom for MTF cell
                         let local_x = (hover_pos.x - cell_chart_body_rect.left()).max(0.0);
-                        let target_bar = chart.bar_from_x(local_x as f32, cell_chart_body_rect.width());
+                        let target_bar =
+                            chart.bar_from_x(local_x as f32, cell_chart_body_rect.width());
                         let factor = 1.0 + (scroll as f64 * 0.002).clamp(-0.08, 0.08);
                         chart.zoom_chart_bars_around(factor, target_bar.max(0.0));
                     }
@@ -902,7 +903,7 @@ impl TyphooNApp {
                     if dy.abs() > 0.0 {
                         let zoom_delta = -dy as f64 * 0.003;
                         let factor = (1.0 + zoom_delta).clamp(0.1, 20.0);
-                        chart.scale_chart_price_axis(factor);  // pure vertical scale, no time shift
+                        chart.scale_chart_price_axis(factor); // pure vertical scale, no time shift
                         chart.is_dragging = false;
                     }
                 } else if chart.is_scaling_price {

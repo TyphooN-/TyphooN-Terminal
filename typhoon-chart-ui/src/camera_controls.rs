@@ -45,9 +45,9 @@ impl ChartState {
         self.manual_view_override = false;
         self.price_zoom = 1.0;
         self.price_pan = 0.0;
-        self.visible_bars = 200;  // reasonable default
+        self.visible_bars = 200; // reasonable default
         if !self.bars.is_empty() {
-            self.view_offset = self.bars.len().saturating_sub(1) + 5;  // small right margin
+            self.view_offset = self.bars.len().saturating_sub(1) + 5; // small right margin
         }
         self.camera.on_data_len_changed(0, self.bars.len());
         self.sync_camera_to_legacy();
@@ -147,7 +147,8 @@ impl ChartState {
 
     pub fn zoom_chart_bars_around(&mut self, factor: f64, target_bar: f64) {
         self.manual_view_override = true; // user zoom action -> manual free-look (TV/MT5)
-        self.camera.zoom_bars_around(factor, target_bar, self.bars.len());
+        self.camera
+            .zoom_bars_around(factor, target_bar, self.bars.len());
         self.sync_camera_to_legacy();
         self.mark_view_changed();
     }
@@ -157,8 +158,10 @@ impl ChartState {
     }
 
     pub fn price_from_y(&self, y: f32, rect_height: f32) -> f64 {
-        let (natural_center, natural_span) = self.natural_visible_price_view().unwrap_or((0.0, 1.0));
-        self.camera.price_from_y(y, rect_height, natural_center, natural_span)
+        let (natural_center, natural_span) =
+            self.natural_visible_price_view().unwrap_or((0.0, 1.0));
+        self.camera
+            .price_from_y(y, rect_height, natural_center, natural_span)
     }
 
     pub fn mark_view_changed(&mut self) {

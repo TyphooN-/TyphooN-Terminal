@@ -102,11 +102,11 @@ mod market_data_sync;
 mod platform;
 mod session_persistence;
 mod settings;
+mod ssr_scan;
 mod state;
 mod storage;
 mod strategy_windows;
 mod style_scope;
-mod ssr_scan;
 mod symbol_investigation;
 mod symbol_investigation_global;
 mod symbol_investigation_packet;
@@ -515,7 +515,8 @@ impl TyphooNApp {
             show_orderbook_window: false,
             orderbook_result: String::new(),
             dom_depth: 100,
-            kraken_l3_status: "L3 foundation (sim/demo or auth; full parser/CRC/state/viz active)".to_string(),
+            kraken_l3_status: "L3 foundation (sim/demo or auth; full parser/CRC/state/viz active)"
+                .to_string(),
             kraken_orderbook_ws_symbol: String::new(),
             kraken_chart_l2_ws_symbol: String::new(),
             kraken_chart_l2_last_start_attempt: std::time::Instant::now()

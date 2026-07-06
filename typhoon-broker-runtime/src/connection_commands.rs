@@ -187,9 +187,9 @@ pub async fn handle_connection_command(
                     // The WS-token broker follows the new primary (dedicated WS
                     // override for the first account, REST keys otherwise).
                     if let Some((ws_key, ws_secret)) = kraken_pool.ws_keys_for_primary() {
-                        *kraken_ws_broker = Some(typhoon_engine::broker::kraken::KrakenBroker::new(
-                            ws_key, ws_secret,
-                        ));
+                        *kraken_ws_broker = Some(
+                            typhoon_engine::broker::kraken::KrakenBroker::new(ws_key, ws_secret),
+                        );
                     }
                     let _ = broker_msg_tx.send(BrokerMsg::AccountRoster {
                         broker: OrderBroker::Kraken,
@@ -310,8 +310,7 @@ pub async fn handle_connection_command(
                         if spec.api_key.trim().is_empty() || spec.secret.trim().is_empty() {
                             continue;
                         }
-                        let extra =
-                            KrakenBroker::new(spec.api_key.clone(), spec.secret.clone());
+                        let extra = KrakenBroker::new(spec.api_key.clone(), spec.secret.clone());
                         let (connected, detail) = match extra.get_balance().await {
                             Ok(_) => (true, "Connected".to_string()),
                             Err(e) => {

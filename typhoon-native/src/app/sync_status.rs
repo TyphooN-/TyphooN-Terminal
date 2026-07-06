@@ -369,8 +369,7 @@ pub(super) struct BarSyncInputs {
     /// keys). Used by the Merged classifier to mark a fully-tombstoned cell
     /// Unreachable. `alpaca` folds in both the unresolvable index and the
     /// persisted Alpaca no-data set.
-    no_data_keys_by_source:
-        std::collections::HashMap<String, std::collections::HashSet<String>>,
+    no_data_keys_by_source: std::collections::HashMap<String, std::collections::HashSet<String>>,
 }
 
 /// Result of an off-thread bar-sync recompute, applied by `poll_bar_sync_compute`.
@@ -440,8 +439,7 @@ impl BarSyncInputs {
             .collect();
         rows.retain(|row| {
             row.tf == "Catalog"
-                || normalize_sync_timeframe_key(&row.tf)
-                    .is_some_and(|tf| enabled_tfs.contains(tf))
+                || normalize_sync_timeframe_key(&row.tf).is_some_and(|tf| enabled_tfs.contains(tf))
         });
         sort_sync_stats_rows(&mut rows);
         let (total, healthy) = rows
@@ -901,14 +899,18 @@ mod tests {
         ];
         relabel_kraken_equity_intraday_rows(&mut rows);
 
-        for r in rows.iter().filter(|r| {
-            r.broker == "Kraken Equities" && matches!(r.tf.as_str(), "15Min" | "4Hour")
-        }) {
+        for r in rows
+            .iter()
+            .filter(|r| r.broker == "Kraken Equities" && matches!(r.tf.as_str(), "15Min" | "4Hour"))
+        {
             assert_eq!(r.total, 0, "{r:?}");
             assert_eq!(r.note.as_deref(), Some("WS M1/M5 only"), "{r:?}");
         }
         // D1/W1 native rows and Kraken Spot are untouched.
-        let d1 = rows.iter().find(|r| r.broker == "Kraken Equities" && r.tf == "1Day").unwrap();
+        let d1 = rows
+            .iter()
+            .find(|r| r.broker == "Kraken Equities" && r.tf == "1Day")
+            .unwrap();
         assert_eq!(d1.total, 146);
         assert!(d1.note.is_none());
         let spot = rows.iter().find(|r| r.broker == "Kraken Spot").unwrap();

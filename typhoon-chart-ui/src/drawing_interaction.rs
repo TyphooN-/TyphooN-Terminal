@@ -52,14 +52,20 @@ fn mid(p1: (usize, f64), p2: (usize, f64)) -> (usize, f64) {
 pub fn drawing_anchors(d: &Drawing) -> Vec<AnchorPos> {
     use AnchorPos::*;
     match d {
-        Drawing::HLine { price, .. } | Drawing::MagnetLevel { price, .. } => vec![PriceOnly(*price)],
+        Drawing::HLine { price, .. } | Drawing::MagnetLevel { price, .. } => {
+            vec![PriceOnly(*price)]
+        }
         Drawing::PriceNote { price, .. } => vec![PriceOnly(*price)],
         Drawing::VLine { bar_idx, .. }
         | Drawing::SessionBreak { bar_idx, .. }
         | Drawing::FibTimeZones { bar_idx, .. }
         | Drawing::AnchoredVwapLine { bar_idx, .. } => vec![BarOnly(*bar_idx)],
-        Drawing::CyclicLines { bar_start, bar_end, .. }
-        | Drawing::TimeCycle { bar_start, bar_end, .. } => {
+        Drawing::CyclicLines {
+            bar_start, bar_end, ..
+        }
+        | Drawing::TimeCycle {
+            bar_start, bar_end, ..
+        } => {
             vec![BarOnly(*bar_start), BarOnly(*bar_end)]
         }
         Drawing::TrendLine { p1, p2, .. }
@@ -131,7 +137,12 @@ pub fn drawing_anchors(d: &Drawing) -> Vec<AnchorPos> {
         | Drawing::Comment { bar_idx, price, .. }
         | Drawing::ArrowMarkerLeft { bar_idx, price, .. }
         | Drawing::ArrowMarkerRight { bar_idx, price, .. } => vec![Data(*bar_idx, *price)],
-        Drawing::Callout { anchor, label_pos, .. } | Drawing::Balloon { anchor, label_pos, .. } => {
+        Drawing::Callout {
+            anchor, label_pos, ..
+        }
+        | Drawing::Balloon {
+            anchor, label_pos, ..
+        } => {
             vec![Data(anchor.0, anchor.1), Data(label_pos.0, label_pos.1)]
         }
         Drawing::Pitchfork { pivot, p2, p3, .. }
@@ -182,7 +193,12 @@ pub fn drawing_anchors(d: &Drawing) -> Vec<AnchorPos> {
             Data(entry.0, *stop),
             Data(entry.0, *target),
         ],
-        Drawing::FibCircle { center, radius_pt, .. } | Drawing::FibSpiral { center, radius_pt, .. } => {
+        Drawing::FibCircle {
+            center, radius_pt, ..
+        }
+        | Drawing::FibSpiral {
+            center, radius_pt, ..
+        } => {
             vec![Data(center.0, center.1), Data(radius_pt.0, radius_pt.1)]
         }
         Drawing::Polyline { points, .. }
@@ -221,8 +237,12 @@ pub fn drawing_set_anchor(d: &mut Drawing, idx: usize, bar: usize, price: f64, m
         | Drawing::SessionBreak { bar_idx, .. }
         | Drawing::FibTimeZones { bar_idx, .. }
         | Drawing::AnchoredVwapLine { bar_idx, .. } => *bar_idx = bar,
-        Drawing::CyclicLines { bar_start, bar_end, .. }
-        | Drawing::TimeCycle { bar_start, bar_end, .. } => {
+        Drawing::CyclicLines {
+            bar_start, bar_end, ..
+        }
+        | Drawing::TimeCycle {
+            bar_start, bar_end, ..
+        } => {
             if idx == 0 {
                 *bar_start = bar;
             } else {
@@ -307,26 +327,60 @@ pub fn drawing_set_anchor(d: &mut Drawing, idx: usize, bar: usize, price: f64, m
             1 => set(p2),
             _ => *offset = price - (p1.1 + p2.1) * 0.5,
         },
-        Drawing::HRay { bar_idx, price: p, .. } | Drawing::CrossLine { bar_idx, price: p, .. } => {
+        Drawing::HRay {
+            bar_idx, price: p, ..
+        }
+        | Drawing::CrossLine {
+            bar_idx, price: p, ..
+        } => {
             *bar_idx = bar;
             *p = price;
         }
-        Drawing::TextLabel { bar_idx, price: p, .. }
-        | Drawing::ArrowMarker { bar_idx, price: p, .. }
-        | Drawing::CrossMarker { bar_idx, price: p, .. }
-        | Drawing::PriceLabel { bar_idx, price: p, .. }
-        | Drawing::AnchorNote { bar_idx, price: p, .. }
-        | Drawing::Emoji { bar_idx, price: p, .. }
-        | Drawing::Flag { bar_idx, price: p, .. }
-        | Drawing::Signpost { bar_idx, price: p, .. }
-        | Drawing::AnchoredText { bar_idx, price: p, .. }
-        | Drawing::Comment { bar_idx, price: p, .. }
-        | Drawing::ArrowMarkerLeft { bar_idx, price: p, .. }
-        | Drawing::ArrowMarkerRight { bar_idx, price: p, .. } => {
+        Drawing::TextLabel {
+            bar_idx, price: p, ..
+        }
+        | Drawing::ArrowMarker {
+            bar_idx, price: p, ..
+        }
+        | Drawing::CrossMarker {
+            bar_idx, price: p, ..
+        }
+        | Drawing::PriceLabel {
+            bar_idx, price: p, ..
+        }
+        | Drawing::AnchorNote {
+            bar_idx, price: p, ..
+        }
+        | Drawing::Emoji {
+            bar_idx, price: p, ..
+        }
+        | Drawing::Flag {
+            bar_idx, price: p, ..
+        }
+        | Drawing::Signpost {
+            bar_idx, price: p, ..
+        }
+        | Drawing::AnchoredText {
+            bar_idx, price: p, ..
+        }
+        | Drawing::Comment {
+            bar_idx, price: p, ..
+        }
+        | Drawing::ArrowMarkerLeft {
+            bar_idx, price: p, ..
+        }
+        | Drawing::ArrowMarkerRight {
+            bar_idx, price: p, ..
+        } => {
             *bar_idx = bar;
             *p = price;
         }
-        Drawing::Callout { anchor, label_pos, .. } | Drawing::Balloon { anchor, label_pos, .. } => {
+        Drawing::Callout {
+            anchor, label_pos, ..
+        }
+        | Drawing::Balloon {
+            anchor, label_pos, ..
+        } => {
             if idx == 0 {
                 set(anchor);
             } else {
@@ -388,8 +442,12 @@ pub fn drawing_set_anchor(d: &mut Drawing, idx: usize, bar: usize, price: f64, m
             1 => *stop = price,
             _ => *target = price,
         },
-        Drawing::FibCircle { center, radius_pt, .. }
-        | Drawing::FibSpiral { center, radius_pt, .. } => {
+        Drawing::FibCircle {
+            center, radius_pt, ..
+        }
+        | Drawing::FibSpiral {
+            center, radius_pt, ..
+        } => {
             if idx == 0 {
                 set(center);
             } else {
@@ -437,8 +495,12 @@ pub fn translate_drawing(d: &mut Drawing, bar_delta: i64, price_delta: f64, max_
         | Drawing::SessionBreak { bar_idx, .. }
         | Drawing::FibTimeZones { bar_idx, .. }
         | Drawing::AnchoredVwapLine { bar_idx, .. } => mb(bar_idx),
-        Drawing::CyclicLines { bar_start, bar_end, .. }
-        | Drawing::TimeCycle { bar_start, bar_end, .. } => {
+        Drawing::CyclicLines {
+            bar_start, bar_end, ..
+        }
+        | Drawing::TimeCycle {
+            bar_start, bar_end, ..
+        } => {
             mb(bar_start);
             mb(bar_end);
         }
@@ -503,7 +565,12 @@ pub fn translate_drawing(d: &mut Drawing, bar_delta: i64, price_delta: f64, max_
             mb(bar_idx);
             *price += price_delta;
         }
-        Drawing::Callout { anchor, label_pos, .. } | Drawing::Balloon { anchor, label_pos, .. } => {
+        Drawing::Callout {
+            anchor, label_pos, ..
+        }
+        | Drawing::Balloon {
+            anchor, label_pos, ..
+        } => {
             mv(anchor);
             mv(label_pos);
         }
@@ -559,8 +626,12 @@ pub fn translate_drawing(d: &mut Drawing, bar_delta: i64, price_delta: f64, max_
             *stop += price_delta;
             *target += price_delta;
         }
-        Drawing::FibCircle { center, radius_pt, .. }
-        | Drawing::FibSpiral { center, radius_pt, .. } => {
+        Drawing::FibCircle {
+            center, radius_pt, ..
+        }
+        | Drawing::FibSpiral {
+            center, radius_pt, ..
+        } => {
             mv(center);
             mv(radius_pt);
         }
@@ -619,10 +690,7 @@ fn rect_dist(p: egui::Pos2, r: egui::Rect) -> f32 {
 fn line_across_rect(a: egui::Pos2, b: egui::Pos2, rect: egui::Rect) -> (egui::Pos2, egui::Pos2) {
     let dx = b.x - a.x;
     if dx.abs() < 0.001 {
-        return (
-            egui::pos2(a.x, rect.top()),
-            egui::pos2(a.x, rect.bottom()),
-        );
+        return (egui::pos2(a.x, rect.top()), egui::pos2(a.x, rect.bottom()));
     }
     let m = (b.y - a.y) / dx;
     let y_at = |x: f32| a.y + m * (x - a.x);
@@ -691,8 +759,12 @@ pub fn drawing_hit_distance(d: &Drawing, pos: egui::Pos2, g: &PriceViewGeometry)
             .iter()
             .map(|off| (pos.x - g.bar_to_x(bar_idx + off)).abs())
             .fold(f32::MAX, f32::min),
-        Drawing::CyclicLines { bar_start, bar_end, .. }
-        | Drawing::TimeCycle { bar_start, bar_end, .. } => {
+        Drawing::CyclicLines {
+            bar_start, bar_end, ..
+        }
+        | Drawing::TimeCycle {
+            bar_start, bar_end, ..
+        } => {
             let interval = (*bar_end as i64 - *bar_start as i64).unsigned_abs().max(1) as usize;
             (0..8)
                 .map(|k| (pos.x - g.bar_to_x(bar_start + k * interval)).abs())
@@ -796,7 +868,9 @@ pub fn drawing_hit_distance(d: &Drawing, pos: egui::Pos2, g: &PriceViewGeometry)
             let dc = ((pos.x - c.x).powi(2) + (pos.y - c.y).powi(2)).sqrt();
             (dc - r).abs()
         }
-        Drawing::FibCircle { center, radius_pt, .. } => {
+        Drawing::FibCircle {
+            center, radius_pt, ..
+        } => {
             let c = pt2(center);
             let e = pt2(radius_pt);
             let r = ((c.x - e.x).powi(2) + (c.y - e.y).powi(2)).sqrt();
@@ -806,7 +880,9 @@ pub fn drawing_hit_distance(d: &Drawing, pos: egui::Pos2, g: &PriceViewGeometry)
                 .map(|f| (dc - r * f).abs())
                 .fold(f32::MAX, f32::min)
         }
-        Drawing::FibSpiral { center, radius_pt, .. } => {
+        Drawing::FibSpiral {
+            center, radius_pt, ..
+        } => {
             let c = pt2(center);
             let e = pt2(radius_pt);
             let r = ((c.x - e.x).powi(2) + (c.y - e.y).powi(2)).sqrt();
@@ -841,9 +917,7 @@ pub fn drawing_hit_distance(d: &Drawing, pos: egui::Pos2, g: &PriceViewGeometry)
                 .min(seg_dist(pos, pv, a))
                 .min(seg_dist(pos, pv, b))
         }
-        Drawing::FiboExtension { p1, p2, p3, .. } => {
-            poly_dist(pos, &[pt2(p1), pt2(p2), pt2(p3)])
-        }
+        Drawing::FiboExtension { p1, p2, p3, .. } => poly_dist(pos, &[pt2(p1), pt2(p2), pt2(p3)]),
         Drawing::FibChannel { p1, p2, p3, .. } | Drawing::TrendChannel { p1, p2, p3, .. } => {
             let base = seg_dist(pos, pt2(p1), pt2(p2));
             let off_y = pt2(p3).y - pt2(p1).y;
@@ -941,14 +1015,18 @@ pub fn drawing_hit_distance(d: &Drawing, pos: egui::Pos2, g: &PriceViewGeometry)
             let c = sp(*bar_idx, *price);
             ((pos.x - c.x).powi(2) + (pos.y - c.y).powi(2)).sqrt()
         }
-        Drawing::Callout { anchor, label_pos, .. } | Drawing::Balloon { anchor, label_pos, .. } => {
+        Drawing::Callout {
+            anchor, label_pos, ..
+        }
+        | Drawing::Balloon {
+            anchor, label_pos, ..
+        } => {
             let a = pt2(anchor);
             let l = pt2(label_pos);
-            seg_dist(pos, a, l)
-                .min(rect_dist(
-                    pos,
-                    egui::Rect::from_center_size(l, egui::vec2(80.0, 24.0)),
-                ))
+            seg_dist(pos, a, l).min(rect_dist(
+                pos,
+                egui::Rect::from_center_size(l, egui::vec2(80.0, 24.0)),
+            ))
         }
         Drawing::Polyline { points, .. }
         | Drawing::ElliottWave { points, .. }
@@ -997,7 +1075,10 @@ pub fn preview_drawing(
     Some(match *mode {
         DrawMode::None | DrawMode::Eraser => return None,
         DrawMode::PlacingHLine => Drawing::HLine { price, color: c },
-        DrawMode::PlacingVLine => Drawing::VLine { bar_idx: bar, color: c },
+        DrawMode::PlacingVLine => Drawing::VLine {
+            bar_idx: bar,
+            color: c,
+        },
         DrawMode::PlacingHRay => Drawing::HRay {
             bar_idx: bar,
             price,
@@ -1251,7 +1332,10 @@ pub fn preview_drawing(
             p3: cur,
             color: c,
         },
-        DrawMode::PlacingFibTimeZones => Drawing::FibTimeZones { bar_idx: bar, color: c },
+        DrawMode::PlacingFibTimeZones => Drawing::FibTimeZones {
+            bar_idx: bar,
+            color: c,
+        },
         DrawMode::PlacingPriceLabel => Drawing::PriceLabel {
             bar_idx: bar,
             price,
@@ -1379,7 +1463,10 @@ pub fn preview_drawing(
             text: "Balloon".into(),
             color: c,
         },
-        DrawMode::PlacingSessionBreak => Drawing::SessionBreak { bar_idx: bar, color: c },
+        DrawMode::PlacingSessionBreak => Drawing::SessionBreak {
+            bar_idx: bar,
+            color: c,
+        },
         DrawMode::PlacingMagnetLevel => Drawing::MagnetLevel { price, color: c },
         DrawMode::PlacingRiskRewardP2 { bar1, entry } => Drawing::RiskRewardBox {
             entry: (bar1, entry),
@@ -1525,7 +1612,10 @@ pub fn preview_drawing(
             p3: cur,
             color: c,
         },
-        DrawMode::PlacingAnchoredVwap => Drawing::AnchoredVwapLine { bar_idx: bar, color: c },
+        DrawMode::PlacingAnchoredVwap => Drawing::AnchoredVwapLine {
+            bar_idx: bar,
+            color: c,
+        },
         DrawMode::PlacingTrendChannelP2 { bar1, price1 } => Drawing::TrendLine {
             p1: (bar1, price1),
             p2: cur,
@@ -1725,7 +1815,10 @@ mod tests {
         let mk = |d: Drawing| d;
         let c = egui::Color32::WHITE;
         let samples = vec![
-            mk(Drawing::HLine { price: 100.0, color: c }),
+            mk(Drawing::HLine {
+                price: 100.0,
+                color: c,
+            }),
             mk(Drawing::FiboRetrace {
                 high: 120.0,
                 low: 80.0,

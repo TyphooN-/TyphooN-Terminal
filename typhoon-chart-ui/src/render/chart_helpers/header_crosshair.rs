@@ -149,13 +149,36 @@ pub(crate) fn draw_header_crosshair_and_legend(
                 );
                 // Follow-up: richer L1 in tooltip when live sizes available
                 if chart.live_bid > 0.0 && chart.live_ask > 0.0 {
-                    let bsz = if chart.live_bid_size > 0.0 { format!(" x {:.2}", chart.live_bid_size) } else { String::new() };
-                    let asz = if chart.live_ask_size > 0.0 { format!(" x {:.2}", chart.live_ask_size) } else { String::new() };
-                    tooltip.push_str(&format!("\nBid:{}{}  Ask:{}{}", format_price(chart.live_bid), bsz, format_price(chart.live_ask), asz));
+                    let bsz = if chart.live_bid_size > 0.0 {
+                        format!(" x {:.2}", chart.live_bid_size)
+                    } else {
+                        String::new()
+                    };
+                    let asz = if chart.live_ask_size > 0.0 {
+                        format!(" x {:.2}", chart.live_ask_size)
+                    } else {
+                        String::new()
+                    };
+                    tooltip.push_str(&format!(
+                        "\nBid:{}{}  Ask:{}{}",
+                        format_price(chart.live_bid),
+                        bsz,
+                        format_price(chart.live_ask),
+                        asz
+                    ));
                 }
                 if chart.live_trade_vol > 0.0 {
-                    let side = if chart.live_trade_is_buy { "buy" } else { "sell" };
-                    tooltip.push_str(&format!("\nLast trade {} @ {} vol {:.0}", side, format_price(chart.live_trade_price), chart.live_trade_vol));
+                    let side = if chart.live_trade_is_buy {
+                        "buy"
+                    } else {
+                        "sell"
+                    };
+                    tooltip.push_str(&format!(
+                        "\nLast trade {} @ {} vol {:.0}",
+                        side,
+                        format_price(chart.live_trade_price),
+                        chart.live_trade_vol
+                    ));
                 }
                 // Indicator values on second line
                 let mut ind_parts: Vec<String> = Vec::new();

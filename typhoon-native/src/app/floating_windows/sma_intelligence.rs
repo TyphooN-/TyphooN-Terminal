@@ -7,7 +7,7 @@
 //! deterministic — see `typhoon_chart_ui::sma_outfits`.
 use super::*;
 use typhoon_chart_ui::sma_outfits::{
-    analyze_sma_outfit, outfit_label, parse_outfit_spec, OutfitStack,
+    OutfitStack, analyze_sma_outfit, outfit_label, parse_outfit_spec,
 };
 
 /// ± band (percent of the SMA value) inside which price counts as sitting on

@@ -2824,4 +2824,3 @@ pub fn render_lmom_snapshot(ui: &mut egui::Ui, snap: &LmomSnapshot) {
             });
     }
 }
-

@@ -1186,7 +1186,10 @@ impl TyphooNApp {
         if self.draw_mode != DrawMode::None || !self.trade_lines_active_on(chart_idx) {
             return false;
         }
-        let Some(geometry) = self.charts.get(chart_idx).and_then(|c| c.last_price_geometry)
+        let Some(geometry) = self
+            .charts
+            .get(chart_idx)
+            .and_then(|c| c.last_price_geometry)
         else {
             return false;
         };
@@ -1213,7 +1216,10 @@ impl TyphooNApp {
         if !(self.dragging_sl || self.dragging_tp) || dy.abs() <= 0.0 {
             return false;
         }
-        let Some(geometry) = self.charts.get(chart_idx).and_then(|c| c.last_price_geometry)
+        let Some(geometry) = self
+            .charts
+            .get(chart_idx)
+            .and_then(|c| c.last_price_geometry)
         else {
             return false;
         };
@@ -2474,7 +2480,8 @@ impl TyphooNApp {
                             .speed((total / 200.0).max(0.00000001))
                             .max_decimals(8),
                     );
-                    if qty_resp.changed() || (self.alpaca_close_qty - qty_before).abs() > f64::EPSILON
+                    if qty_resp.changed()
+                        || (self.alpaca_close_qty - qty_before).abs() > f64::EPSILON
                     {
                         self.alpaca_close_qty = self.alpaca_close_qty.clamp(0.0, total);
                         self.alpaca_close_pct = if total > 0.0 {
@@ -2496,7 +2503,8 @@ impl TyphooNApp {
                 });
                 ui.separator();
 
-                let can_submit = self.broker_connected && total > 0.0 && self.alpaca_close_pct > 0.0;
+                let can_submit =
+                    self.broker_connected && total > 0.0 && self.alpaca_close_pct > 0.0;
                 ui.horizontal(|ui| {
                     if ui
                         .add_enabled(

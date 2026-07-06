@@ -99,12 +99,7 @@ impl TyphooNApp {
                 return;
             }
             for (symbol, values) in &symbol_rows {
-                ui.label(
-                    egui::RichText::new(symbol)
-                        .color(ACCENT)
-                        .small()
-                        .strong(),
-                );
+                ui.label(egui::RichText::new(symbol).color(ACCENT).small().strong());
                 if values.is_empty() {
                     // Tab(s) present but bars/cache not loaded yet — the fill warms it.
                     ui.label(egui::RichText::new("loading…").color(AXIS_TEXT).small());

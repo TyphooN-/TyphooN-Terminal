@@ -857,8 +857,9 @@ pub struct TyphooNApp {
     /// ~13k-symbol filter/map/sort/dedup + the Reg SHO refresh ran ~290ms on the
     /// UI thread inside the broker-message drain; now a worker produces the bundle
     /// and `tick_kraken_universe_digest` applies it cheaply (O(1) moves).
-    pub(crate) kraken_universe_digest_rx:
-        Option<std::sync::mpsc::Receiver<crate::app::app_runtime_kraken_market::KrakenUniverseDigest>>,
+    pub(crate) kraken_universe_digest_rx: Option<
+        std::sync::mpsc::Receiver<crate::app::app_runtime_kraken_market::KrakenUniverseDigest>,
+    >,
     pub(crate) show_reg_sho_window: bool,
     /// Floating window listing current trading halts / LULD pauses (parallels the
     /// Reg SHO window). Opened by the HALTS command.
@@ -1010,8 +1011,7 @@ pub struct TyphooNApp {
     /// Latest read-only bar-cache data-sanity audit. Triggered manually from
     /// Storage Manager and computed off the render thread because it decompresses
     /// every bar row.
-    pub(crate) storage_sanity_report:
-        Option<typhoon_engine::core::cache::BarCacheSanityReport>,
+    pub(crate) storage_sanity_report: Option<typhoon_engine::core::cache::BarCacheSanityReport>,
     /// Symbols worth a split-history fetch from the latest audit: cross-source
     /// overlap-mismatch Warns whose split history has not been fetched yet.
     /// Computed once when the audit completes (needs one DB read) so the render

@@ -38,9 +38,16 @@ fn order_price_descriptor(o: &OrderInfo) -> Option<String> {
 /// Role of a bracket leg: a stop level is the stop-loss, a bare limit is the
 /// take-profit. Returns the badge and its colour.
 fn order_leg_role(o: &OrderInfo) -> (&'static str, egui::Color32) {
-    if o.stop_price.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+    if o.stop_price
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty())
+    {
         ("SL", DOWN)
-    } else if o.limit_price.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+    } else if o
+        .limit_price
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty())
+    {
         ("TP", UP)
     } else {
         ("leg", AXIS_TEXT)
@@ -180,15 +187,21 @@ mod order_descriptor_tests {
     #[test]
     fn descriptor_surfaces_tp_sl_levels_and_roles() {
         // Take-profit limit, stop-loss stop, and a stop-limit carry their levels.
-        assert!(order_price_descriptor(&ord("limit", Some("0.35"), None))
-            .unwrap()
-            .starts_with("@ "));
-        assert!(order_price_descriptor(&ord("stop", None, Some("0.25")))
-            .unwrap()
-            .starts_with("stop "));
-        assert!(order_price_descriptor(&ord("stop_limit", Some("0.24"), Some("0.25")))
-            .unwrap()
-            .contains('→'));
+        assert!(
+            order_price_descriptor(&ord("limit", Some("0.35"), None))
+                .unwrap()
+                .starts_with("@ ")
+        );
+        assert!(
+            order_price_descriptor(&ord("stop", None, Some("0.25")))
+                .unwrap()
+                .starts_with("stop ")
+        );
+        assert!(
+            order_price_descriptor(&ord("stop_limit", Some("0.24"), Some("0.25")))
+                .unwrap()
+                .contains('→')
+        );
         // A plain market order has no price to show.
         assert!(order_price_descriptor(&ord("market", None, None)).is_none());
         // Bracket leg roles: stop ⇒ SL, bare limit ⇒ TP.

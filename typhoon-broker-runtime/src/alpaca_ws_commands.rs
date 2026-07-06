@@ -57,7 +57,8 @@ pub async fn handle_alpaca_ws_command(
             }))
         }
         Err(e) => {
-            let _ = broker_msg_tx.send(BrokerMsg::Error(format!("Alpaca trade stream failed: {e}")));
+            let _ =
+                broker_msg_tx.send(BrokerMsg::Error(format!("Alpaca trade stream failed: {e}")));
             None
         }
     }
@@ -73,7 +74,10 @@ fn log_trade_update(v: &serde_json::Value, tx: &tokio::sync::mpsc::UnboundedSend
 
 /// Pure formatter for a `trade_updates` `data` object.
 fn trade_update_log_line(data: &serde_json::Value) -> String {
-    let event = data.get("event").and_then(|e| e.as_str()).unwrap_or("update");
+    let event = data
+        .get("event")
+        .and_then(|e| e.as_str())
+        .unwrap_or("update");
     let order = data.get("order");
     let symbol = order
         .and_then(|o| o.get("symbol"))
@@ -98,7 +102,10 @@ fn trade_update_log_line(data: &serde_json::Value) -> String {
 /// without them a fill that lands mid-session never reaches the Recent Fills
 /// panel or the chart buy/sell arrows (activities were previously fetched only
 /// once at connect).
-async fn refresh_account_state(b: &AlpacaBroker, tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>) {
+async fn refresh_account_state(
+    b: &AlpacaBroker,
+    tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
+) {
     if let Ok(pos) = b.get_positions().await {
         let _ = tx.send(BrokerMsg::Positions(pos));
     }
@@ -130,19 +137,33 @@ pub async fn start_alpaca_quote_stream(
                 while let Some(raw) = rx.recv().await {
                     // Surface control frames (acks, errors) as OrderResult for visibility
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
-                        let items = if let Some(arr) = v.as_array() { arr.clone() } else { vec![v] };
+                        let items = if let Some(arr) = v.as_array() {
+                            arr.clone()
+                        } else {
+                            vec![v]
+                        };
                         for item in &items {
                             if let Some(t) = item.get("T").and_then(|x| x.as_str()) {
                                 if t == "success" {
                                     if let Some(msg) = item.get("msg").and_then(|m| m.as_str()) {
-                                        if msg.contains("subscribed") || msg.contains("authenticated") {
-                                            let _ = tx.send(BrokerMsg::OrderResult(format!("Alpaca data WS: {}", msg)));
+                                        if msg.contains("subscribed")
+                                            || msg.contains("authenticated")
+                                        {
+                                            let _ = tx.send(BrokerMsg::OrderResult(format!(
+                                                "Alpaca data WS: {}",
+                                                msg
+                                            )));
                                         }
                                     }
                                 } else if t == "error" {
-                                    let code = item.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
-                                    let msg = item.get("msg").and_then(|m| m.as_str()).unwrap_or("");
-                                    let note = if code == 406 || msg.to_lowercase().contains("limit") || msg.contains("subscription") {
+                                    let code =
+                                        item.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
+                                    let msg =
+                                        item.get("msg").and_then(|m| m.as_str()).unwrap_or("");
+                                    let note = if code == 406
+                                        || msg.to_lowercase().contains("limit")
+                                        || msg.contains("subscription")
+                                    {
                                         format!("Alpaca WS limit ({}): {}", code, msg)
                                     } else {
                                         format!("Alpaca WS error ({}): {}", code, msg)
@@ -165,8 +186,9 @@ pub async fn start_alpaca_quote_stream(
             Some(control)
         }
         Err(e) => {
-            let _ = broker_msg_tx
-                .send(BrokerMsg::Error(format!("Alpaca market-data stream failed: {e}")));
+            let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                "Alpaca market-data stream failed: {e}"
+            )));
             None
         }
     }
@@ -187,11 +209,26 @@ pub fn parse_market_data_quotes(raw: &str) -> Vec<AlpacaQuoteData> {
     for item in &items {
         match item.get("T").and_then(|t| t.as_str()).unwrap_or("") {
             "q" => {
-                let sym = item.get("S").and_then(|s| s.as_str()).map(|s| s.to_string());
-                let bid = item.get("bp").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
-                let ask = item.get("ap").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
-                let bs = item.get("bs").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
-                let asz = item.get("as").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+                let sym = item
+                    .get("S")
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_string());
+                let bid = item
+                    .get("bp")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0);
+                let ask = item
+                    .get("ap")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0);
+                let bs = item
+                    .get("bs")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0);
+                let asz = item
+                    .get("as")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0);
                 if let Some(sym) = sym {
                     if bid > 0.0 || ask > 0.0 {
                         out.push(AlpacaQuoteData {
@@ -206,9 +243,18 @@ pub fn parse_market_data_quotes(raw: &str) -> Vec<AlpacaQuoteData> {
                 }
             }
             "t" => {
-                let sym = item.get("S").and_then(|s| s.as_str()).map(|s| s.to_string());
-                let price = item.get("p").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
-                let size = item.get("s").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+                let sym = item
+                    .get("S")
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_string());
+                let price = item
+                    .get("p")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0);
+                let size = item
+                    .get("s")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0);
                 if let Some(sym) = sym {
                     if price > 0.0 {
                         out.push(AlpacaQuoteData {
@@ -224,8 +270,14 @@ pub fn parse_market_data_quotes(raw: &str) -> Vec<AlpacaQuoteData> {
             }
             "b" => {
                 // Bars for robustness (OHLC updates from WS; use for confirmation / last)
-                let sym = item.get("S").and_then(|s| s.as_str()).map(|s| s.to_string());
-                let c = item.get("c").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+                let sym = item
+                    .get("S")
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_string());
+                let c = item
+                    .get("c")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0);
                 if let Some(sym) = sym {
                     if c > 0.0 {
                         out.push(AlpacaQuoteData {
@@ -242,8 +294,14 @@ pub fn parse_market_data_quotes(raw: &str) -> Vec<AlpacaQuoteData> {
             "error" => {
                 let code = item.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
                 let msg = item.get("msg").and_then(|m| m.as_str()).unwrap_or("");
-                if code == 406 || msg.to_lowercase().contains("subscription") || msg.contains("limit") {
-                    let note = format!("Alpaca WS subscription limit hit (406 or limit): {} (code={})", msg, code);
+                if code == 406
+                    || msg.to_lowercase().contains("subscription")
+                    || msg.contains("limit")
+                {
+                    let note = format!(
+                        "Alpaca WS subscription limit hit (406 or limit): {} (code={})",
+                        msg, code
+                    );
                     tracing::warn!("{}", note);
                     // UI-visible via OrderResult in handle_order_result detection (limit backoff)
                 } else {
@@ -307,7 +365,7 @@ mod tests {
         assert!(parse_market_data_quotes(r#"[{"T":"success","msg":"authenticated"}]"#).is_empty());
         // Mixed: A has ask>0 so kept (per if bid>0 || ask>0); B good
         let mixed = parse_market_data_quotes(
-            r#"[{"T":"q","S":"A","bp":0,"ap":1.0},{"T":"q","S":"B","bp":2.0,"ap":2.1}]"#
+            r#"[{"T":"q","S":"A","bp":0,"ap":1.0},{"T":"q","S":"B","bp":2.0,"ap":2.1}]"#,
         );
         assert_eq!(mixed.len(), 2);
         assert_eq!(mixed[1].symbol, "B");

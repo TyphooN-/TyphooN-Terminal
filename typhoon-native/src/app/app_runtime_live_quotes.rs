@@ -37,7 +37,10 @@ impl TyphooNApp {
 
     /// Real-time Alpaca market-data L1 (rich with sizes from WS).
     /// Updates charts and watchlist with bid/ask (sizes logged for richer view).
-    pub(super) fn handle_alpaca_quote(&mut self, q: typhoon_engine::broker::protocol::AlpacaQuoteData) {
+    pub(super) fn handle_alpaca_quote(
+        &mut self,
+        q: typhoon_engine::broker::protocol::AlpacaQuoteData,
+    ) {
         if (q.bid <= 0.0 && q.ask <= 0.0) || (!q.bid.is_finite() && !q.ask.is_finite()) {
             return;
         }
@@ -62,13 +65,22 @@ impl TyphooNApp {
             self.log.push_back(LogEntry::info(format!(
                 "Alpaca L1 {}: b{}@{} a{}@{}",
                 wanted,
-                format_price(q.bid_size), format_price(bid),
-                format_price(q.ask_size), format_price(ask)
+                format_price(q.bid_size),
+                format_price(bid),
+                format_price(q.ask_size),
+                format_price(ask)
             )));
         }
     }
 
-    pub(super) fn handle_kraken_book_quote_tick(&mut self, symbol: String, bid: f64, ask: f64, bid_size: f64, ask_size: f64) {
+    pub(super) fn handle_kraken_book_quote_tick(
+        &mut self,
+        symbol: String,
+        bid: f64,
+        ask: f64,
+        bid_size: f64,
+        ask_size: f64,
+    ) {
         if bid <= 0.0 || ask <= 0.0 {
             return;
         }
@@ -84,7 +96,10 @@ impl TyphooNApp {
     }
 
     /// Rich L1 from Kraken WS v2 ticker. Uses bid/ask/sizes/last + 24h for richer view.
-    pub(super) fn handle_kraken_ws_ticker(&mut self, t: typhoon_engine::broker::kraken::KrakenWsTicker) {
+    pub(super) fn handle_kraken_ws_ticker(
+        &mut self,
+        t: typhoon_engine::broker::kraken::KrakenWsTicker,
+    ) {
         let bid = t.bid.unwrap_or(0.0);
         let ask = t.ask.unwrap_or(0.0);
         let last = t.last.unwrap_or((bid + ask) * 0.5);
@@ -98,7 +113,13 @@ impl TyphooNApp {
         if let Some(idxs) = self.chart_by_bare.get(&wanted) {
             for &i in idxs {
                 if let Some(chart) = self.charts.get_mut(i) {
-                    chart.apply_live_quote_update(bid, ask, t.bid_qty.unwrap_or(0.0), t.ask_qty.unwrap_or(0.0), false);
+                    chart.apply_live_quote_update(
+                        bid,
+                        ask,
+                        t.bid_qty.unwrap_or(0.0),
+                        t.ask_qty.unwrap_or(0.0),
+                        false,
+                    );
                     if t.bid.is_none() && t.ask.is_none() && t.volume_24h.unwrap_or(0.0) > 0.0 {
                         // Trade-driven ticker emission (from Kraken public trades): accumulate real volume
                         let vol = t.volume_24h.unwrap_or(0.0);
@@ -137,14 +158,18 @@ impl TyphooNApp {
                         // Use the (possibly trade-advanced) forming bar ts as the freshness anchor.
                         let bar_ts = chart.bars.last().map(|b| b.ts_ms).unwrap_or(0);
                         let ts = t.ts_ms.unwrap_or(now_ms).max(bar_ts);
-                        self.kraken_ws_fresh_until.insert((wanted.clone(), tf.clone()), now_ms.max(ts));
+                        self.kraken_ws_fresh_until
+                            .insert((wanted.clone(), tf.clone()), now_ms.max(ts));
 
                         // Also advance the Kraken sync cache state ts. This lets the candidate
                         // scorer (classify + focus/score) treat the live-updated low-TF MTF bar
                         // as current, giving it effective priority/boost without disturbing the
                         // high-TF-first ring for full-universe.
                         let sync_key = (wanted.clone(), tf);
-                        let entry = self.cached_kraken_sync_state.entry(sync_key).or_insert_with(Default::default);
+                        let entry = self
+                            .cached_kraken_sync_state
+                            .entry(sync_key)
+                            .or_insert_with(Default::default);
                         entry.last_bar_ts_s = (now_ms.max(ts) / 1000) as i64;
                         entry.write_ts_s = (now_ms / 1000) as i64;
                     }
@@ -152,7 +177,13 @@ impl TyphooNApp {
             }
         }
 
-        self.apply_live_quote_to_watchlist(&wanted, bid, ask, t.bid_qty.unwrap_or(0.0), t.ask_qty.unwrap_or(0.0));
+        self.apply_live_quote_to_watchlist(
+            &wanted,
+            bid,
+            ask,
+            t.bid_qty.unwrap_or(0.0),
+            t.ask_qty.unwrap_or(0.0),
+        );
         // Incremental trade volume from public Kraken trades to watchlist row (O(1))
         if t.volume_24h.unwrap_or(0.0) > 0.0 {
             if let Some(&idx) = self.watchlist_by_bare.get(&wanted) {
@@ -165,7 +196,9 @@ impl TyphooNApp {
         if t.volume_24h.unwrap_or(0.0) > 0.0 {
             self.log.push_back(LogEntry::info(format!(
                 "Kraken L1 ticker {}: last {} vol24h {}",
-                wanted, format_price(last), format_price(t.volume_24h.unwrap_or(0.0))
+                wanted,
+                format_price(last),
+                format_price(t.volume_24h.unwrap_or(0.0))
             )));
         }
     }
@@ -207,7 +240,13 @@ impl TyphooNApp {
                             .live_quote_at
                             .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
                     if !weekend_closed && !(ticker.delayed && realtime_fresh) {
-                        chart.apply_live_quote_update(ticker.bid, ticker.ask, 0.0, 0.0, ticker.delayed);
+                        chart.apply_live_quote_update(
+                            ticker.bid,
+                            ticker.ask,
+                            0.0,
+                            0.0,
+                            ticker.delayed,
+                        );
                     }
                 }
             }
@@ -221,7 +260,13 @@ impl TyphooNApp {
                             .live_quote_at
                             .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
                     if !weekend_closed && !(ticker.delayed && realtime_fresh) {
-                        chart.apply_live_quote_update(ticker.bid, ticker.ask, 0.0, 0.0, ticker.delayed);
+                        chart.apply_live_quote_update(
+                            ticker.bid,
+                            ticker.ask,
+                            0.0,
+                            0.0,
+                            ticker.delayed,
+                        );
                     }
                 }
             }
@@ -262,7 +307,14 @@ impl TyphooNApp {
 
     /// Inject fresh live bid/ask (+ optional sizes) into matching watchlist row (O(1) via index).
     /// Rich L1 polish: stores sizes for display in watchlist/tooltip when available.
-    fn apply_live_quote_to_watchlist(&mut self, bare_symbol: &str, bid: f64, ask: f64, bid_size: f64, ask_size: f64) {
+    fn apply_live_quote_to_watchlist(
+        &mut self,
+        bare_symbol: &str,
+        bid: f64,
+        ask: f64,
+        bid_size: f64,
+        ask_size: f64,
+    ) {
         if bid <= 0.0 || ask <= 0.0 {
             return;
         }
@@ -282,8 +334,12 @@ impl TyphooNApp {
                 {
                     row.live_bid = bid;
                     row.live_ask = ask;
-                    if bid_size > 0.0 { row.live_bid_size = bid_size; }
-                    if ask_size > 0.0 { row.live_ask_size = ask_size; }
+                    if bid_size > 0.0 {
+                        row.live_bid_size = bid_size;
+                    }
+                    if ask_size > 0.0 {
+                        row.live_ask_size = ask_size;
+                    }
                     row.live_quote_at = Some(now);
 
                     if row.prev_close > 0.0 {

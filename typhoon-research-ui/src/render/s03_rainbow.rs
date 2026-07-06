@@ -3016,4 +3016,3 @@ pub fn render_burke_snapshot(ui: &mut egui::Ui, snap: &BurkeRatioSnapshot) {
             });
     }
 }
-

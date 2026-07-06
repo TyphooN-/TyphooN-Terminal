@@ -169,8 +169,7 @@ fn kraken_xstocks_session_status_is_holiday_aware() {
     // the holiday name, not a normal CORE session (ADR-110).
     let holiday_noon = kraken_xstocks_session_status_at(at("2026-07-03T16:00:00Z"), true);
     assert!(
-        holiday_noon
-            .starts_with("Kraken xStocks CLOSED · US market holiday (Independence Day)"),
+        holiday_noon.starts_with("Kraken xStocks CLOSED · US market holiday (Independence Day)"),
         "got {holiday_noon}"
     );
     // Labor Day 2026-09-07 (Mon): the weekend Sunday-20:00-ET open must not
@@ -186,8 +185,7 @@ fn kraken_xstocks_session_status_is_holiday_aware() {
     let overnight_into_good_friday =
         kraken_xstocks_session_status_at(at("2026-04-03T01:00:00Z"), true);
     assert!(
-        overnight_into_good_friday
-            .starts_with("Kraken xStocks CLOSED · US market holiday next"),
+        overnight_into_good_friday.starts_with("Kraken xStocks CLOSED · US market holiday next"),
         "got {overnight_into_good_friday}"
     );
     // Thursday afternoon before Good Friday: after-hours counts down to the

@@ -80,16 +80,14 @@ pub(super) fn draw_basic_line_annotation(
             }
         }
         Drawing::VLine { bar_idx, color } => {
-            {
-                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
-                draw_styled_line(
-                    &painter,
-                    egui::pos2(x, chart_rect.top()),
-                    egui::pos2(x, chart_rect.bottom()),
-                    egui::Stroke::new(effective_width, sel_tint(*color)),
-                    d_style,
-                );
-            }
+            let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
+            draw_styled_line(
+                &painter,
+                egui::pos2(x, chart_rect.top()),
+                egui::pos2(x, chart_rect.bottom()),
+                egui::Stroke::new(effective_width, sel_tint(*color)),
+                d_style,
+            );
         }
         Drawing::Rectangle { p1, p2, color } => {
             let x1 = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);
@@ -112,20 +110,18 @@ pub(super) fn draw_basic_line_annotation(
             slope,
             color,
         } => {
-            {
-                let x1 = data_left + ((origin.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
-                let y1 = price_to_y(origin.1);
-                let bars_to_edge = ((chart_rect.right() - x1) / bar_w) as f64;
-                let end_price = origin.1 + slope * bars_to_edge;
-                let y2 = price_to_y(end_price);
-                draw_styled_line(
-                    &painter,
-                    egui::pos2(x1, y1),
-                    egui::pos2(chart_rect.right(), y2),
-                    egui::Stroke::new(effective_width, sel_tint(*color)),
-                    d_style,
-                );
-            }
+            let x1 = data_left + ((origin.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
+            let y1 = price_to_y(origin.1);
+            let bars_to_edge = ((chart_rect.right() - x1) / bar_w) as f64;
+            let end_price = origin.1 + slope * bars_to_edge;
+            let y2 = price_to_y(end_price);
+            draw_styled_line(
+                &painter,
+                egui::pos2(x1, y1),
+                egui::pos2(chart_rect.right(), y2),
+                egui::Stroke::new(effective_width, sel_tint(*color)),
+                d_style,
+            );
         }
         Drawing::Channel {
             p1,
@@ -203,26 +199,24 @@ pub(super) fn draw_basic_line_annotation(
             price,
             color,
         } => {
-            {
-                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
-                let y = price_to_y(*price);
-                let sc = sel_tint(*color);
-                let sw = egui::Stroke::new(effective_width, sc);
-                draw_styled_line(
-                    &painter,
-                    egui::pos2(x, chart_rect.top()),
-                    egui::pos2(x, chart_rect.bottom()),
-                    sw,
-                    d_style,
-                );
-                draw_styled_line(
-                    &painter,
-                    egui::pos2(chart_rect.left(), y),
-                    egui::pos2(chart_rect.right(), y),
-                    sw,
-                    d_style,
-                );
-            }
+            let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
+            let y = price_to_y(*price);
+            let sc = sel_tint(*color);
+            let sw = egui::Stroke::new(effective_width, sc);
+            draw_styled_line(
+                &painter,
+                egui::pos2(x, chart_rect.top()),
+                egui::pos2(x, chart_rect.bottom()),
+                sw,
+                d_style,
+            );
+            draw_styled_line(
+                &painter,
+                egui::pos2(chart_rect.left(), y),
+                egui::pos2(chart_rect.right(), y),
+                sw,
+                d_style,
+            );
         }
         Drawing::ArrowLine { p1, p2, color } => {
             let x1 = Some(data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w);

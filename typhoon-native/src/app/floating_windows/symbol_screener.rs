@@ -105,10 +105,7 @@ impl TyphooNApp {
                                     symbol: f.symbol.clone(),
                                     name: f.company_name.clone(),
                                     asset_class: "stock".into(),
-                                    price: wl
-                                        .map(|w| w.last)
-                                        .or(f.stock_price)
-                                        .unwrap_or(0.0),
+                                    price: wl.map(|w| w.last).or(f.stock_price).unwrap_or(0.0),
                                     volume: wl.map(|w| w.volume).unwrap_or(0.0),
                                     change_pct: wl.map(|w| w.change_pct).unwrap_or(0.0),
                                     tradable: true,
@@ -185,20 +182,17 @@ impl TyphooNApp {
                         .id_salt("fund_screen_results")
                         .max_height(180.0)
                         .show(ui, |ui| {
-                            egui::Grid::new("fund_screen_grid").striped(true).show(
-                                ui,
-                                |ui| {
-                                    for h in
-                                        ["Symbol", "Sector", "MCap", "P/E", "ROE", "Div %", ""]
+                            egui::Grid::new("fund_screen_grid")
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    for h in ["Symbol", "Sector", "MCap", "P/E", "ROE", "Div %", ""]
                                     {
                                         ui.strong(h);
                                     }
                                     ui.end_row();
                                     for f in self.fund_screen_results.iter().take(200) {
                                         ui.label(egui::RichText::new(&f.symbol).monospace());
-                                        ui.label(
-                                            egui::RichText::new(&f.sector).small(),
-                                        );
+                                        ui.label(egui::RichText::new(&f.sector).small());
                                         ui.label(
                                             f.market_cap
                                                 .map(|m| format!("${:.1}B", m / 1e9))
@@ -229,8 +223,7 @@ impl TyphooNApp {
                                         }
                                         ui.end_row();
                                     }
-                                },
-                            );
+                                });
                         });
                 }
             });

@@ -132,7 +132,8 @@ impl TyphooNApp {
     /// `paper` is unused.
     pub(crate) fn add_kraken_account(&mut self) {
         if can_add_account_slot(self.kraken_extra_accounts.len()) {
-            self.kraken_extra_accounts.push(ExtraAccountConfig::default());
+            self.kraken_extra_accounts
+                .push(ExtraAccountConfig::default());
         }
     }
 
@@ -588,12 +589,14 @@ impl TyphooNApp {
                         a.label,
                         if a.paper { "paper" } else { "LIVE" },
                         a.equity,
-                        if live_locked { " — enable live targets below" } else { "" }
+                        if live_locked {
+                            " — enable live targets below"
+                        } else {
+                            ""
+                        }
                     );
-                    let resp = ui.add_enabled(
-                        !live_locked,
-                        egui::Checkbox::new(&mut checked, label),
-                    );
+                    let resp =
+                        ui.add_enabled(!live_locked, egui::Checkbox::new(&mut checked, label));
                     if resp.changed() {
                         if checked {
                             self.tradecopy_target_ids.insert(a.id.clone());
@@ -630,9 +633,7 @@ impl TyphooNApp {
                 if ui
                     .add_enabled(
                         can_copy,
-                        egui::Button::new(
-                            egui::RichText::new("Copy positions now").strong(),
-                        ),
+                        egui::Button::new(egui::RichText::new("Copy positions now").strong()),
                     )
                     .on_hover_text(
                         "Fetches source + target positions and submits market orders for the \

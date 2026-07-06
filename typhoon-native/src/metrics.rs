@@ -296,8 +296,14 @@ mod tests {
                     .expect("write request");
                 let mut resp = String::new();
                 sock.read_to_string(&mut resp).expect("read response");
-                assert!(resp.starts_with("HTTP/1.1 200 OK\r\n"), "bad status: {resp}");
-                assert!(resp.contains("content-type: text/plain"), "bad content type: {resp}");
+                assert!(
+                    resp.starts_with("HTTP/1.1 200 OK\r\n"),
+                    "bad status: {resp}"
+                );
+                assert!(
+                    resp.contains("content-type: text/plain"),
+                    "bad content type: {resp}"
+                );
                 assert!(
                     resp.contains("typhoon_uptime_seconds 42"),
                     "gauge missing from body: {resp}"

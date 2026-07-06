@@ -46,16 +46,13 @@ impl TyphooNApp {
                 if !ssr_equity_cache_key(&row.cache_key) {
                     continue;
                 }
-                if !typhoon_engine::core::regulatory_alerts::ssr_triggered(
-                    row.last,
-                    row.prev_close,
-                ) {
+                if !typhoon_engine::core::regulatory_alerts::ssr_triggered(row.last, row.prev_close)
+                {
                     continue;
                 }
-                let symbol =
-                    typhoon_engine::core::regulatory_alerts::normalize_regulatory_symbol(
-                        &row.symbol,
-                    );
+                let symbol = typhoon_engine::core::regulatory_alerts::normalize_regulatory_symbol(
+                    &row.symbol,
+                );
                 if symbol.is_empty() {
                     continue;
                 }

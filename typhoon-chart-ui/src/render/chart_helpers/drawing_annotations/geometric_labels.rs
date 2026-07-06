@@ -21,17 +21,15 @@ pub(super) fn draw_geometric_label_annotation(
             text,
             color,
         } => {
-            {
-                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
-                let y = price_to_y(*price);
-                painter.text(
-                    egui::pos2(x, y),
-                    egui::Align2::CENTER_CENTER,
-                    text,
-                    egui::FontId::monospace(11.0),
-                    *color,
-                );
-            }
+            let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
+            let y = price_to_y(*price);
+            painter.text(
+                egui::pos2(x, y),
+                egui::Align2::CENTER_CENTER,
+                text,
+                egui::FontId::monospace(11.0),
+                *color,
+            );
         }
         Drawing::ArrowMarker {
             bar_idx,
@@ -39,25 +37,23 @@ pub(super) fn draw_geometric_label_annotation(
             is_up,
             color,
         } => {
-            {
-                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
-                let y = price_to_y(*price);
-                let sz = 8.0_f32;
-                if *is_up {
-                    let pts = vec![
-                        egui::pos2(x, y - sz),
-                        egui::pos2(x - sz * 0.6, y + sz * 0.3),
-                        egui::pos2(x + sz * 0.6, y + sz * 0.3),
-                    ];
-                    painter.add(egui::Shape::convex_polygon(pts, *color, egui::Stroke::NONE));
-                } else {
-                    let pts = vec![
-                        egui::pos2(x, y + sz),
-                        egui::pos2(x - sz * 0.6, y - sz * 0.3),
-                        egui::pos2(x + sz * 0.6, y - sz * 0.3),
-                    ];
-                    painter.add(egui::Shape::convex_polygon(pts, *color, egui::Stroke::NONE));
-                }
+            let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
+            let y = price_to_y(*price);
+            let sz = 8.0_f32;
+            if *is_up {
+                let pts = vec![
+                    egui::pos2(x, y - sz),
+                    egui::pos2(x - sz * 0.6, y + sz * 0.3),
+                    egui::pos2(x + sz * 0.6, y + sz * 0.3),
+                ];
+                painter.add(egui::Shape::convex_polygon(pts, *color, egui::Stroke::NONE));
+            } else {
+                let pts = vec![
+                    egui::pos2(x, y + sz),
+                    egui::pos2(x - sz * 0.6, y - sz * 0.3),
+                    egui::pos2(x + sz * 0.6, y - sz * 0.3),
+                ];
+                painter.add(egui::Shape::convex_polygon(pts, *color, egui::Stroke::NONE));
             }
         }
         Drawing::Ellipse { p1, p2, color } => {

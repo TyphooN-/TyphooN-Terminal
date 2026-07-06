@@ -354,9 +354,14 @@ mod tests {
     #[test]
     fn yahoo_chart_lane_is_daily_and_up_only() {
         for tf in ["1Day", "1Week", "1Month", "D1", "W1", "MN1"] {
-            assert!(yahoo_chart_supports_timeframe(tf), "{tf} should be supported");
+            assert!(
+                yahoo_chart_supports_timeframe(tf),
+                "{tf} should be supported"
+            );
         }
-        for tf in ["15Min", "30Min", "1Hour", "M15", "M30", "H1", "5Min", "1Min"] {
+        for tf in [
+            "15Min", "30Min", "1Hour", "M15", "M30", "H1", "5Min", "1Min",
+        ] {
             assert!(
                 !yahoo_chart_supports_timeframe(tf),
                 "{tf} should NOT be on the Yahoo lane"

@@ -14,11 +14,7 @@ fn fmt_int_commas(n: f64) -> String {
         }
         out.push(c);
     }
-    if v < 0 {
-        format!("-{out}")
-    } else {
-        out
-    }
+    if v < 0 { format!("-{out}") } else { out }
 }
 
 impl TyphooNApp {

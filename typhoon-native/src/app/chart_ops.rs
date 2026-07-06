@@ -14,8 +14,7 @@ const DEFERRED_CHART_SCAN_WINDOW: usize = 16;
 /// In-flight marker is evicted after this long so a hung/deadlocked worker (whose
 /// completion never arrives) can't strand a cell as permanently "loading". Far
 /// longer than any plausible single load, so it never races a healthy worker.
-const DEFERRED_CHART_INFLIGHT_STALE_AFTER: std::time::Duration =
-    std::time::Duration::from_secs(45);
+const DEFERRED_CHART_INFLIGHT_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(45);
 
 fn deferred_chart_load_key(chart: &ChartState) -> String {
     format!(
@@ -630,7 +629,8 @@ impl TyphooNApp {
                         .map(|c| c.bars.is_empty())
                         .unwrap_or(false);
                     if empty {
-                        self.deferred_chart_empty_load_at.insert(load_key, now_instant);
+                        self.deferred_chart_empty_load_at
+                            .insert(load_key, now_instant);
                     } else {
                         self.deferred_chart_empty_load_at.remove(&load_key);
                         if let Some(c) = self.charts.get(idx) {
@@ -681,7 +681,8 @@ impl TyphooNApp {
             if !self.deferred_chart_inflight.contains_key(&key)
                 && self.deferred_chart_inflight.len() < DEFERRED_CHART_MAX_INFLIGHT
             {
-                self.deferred_chart_inflight.insert(key.clone(), now_instant);
+                self.deferred_chart_inflight
+                    .insert(key.clone(), now_instant);
                 self.spawn_deferred_chart_load(&cache, symbol, timeframe, key.0, tf);
             }
             i += 1;
@@ -1024,9 +1025,18 @@ impl TyphooNApp {
 
             // Preserve manual camera on reload / MTF restore for live symbols.
             // User free-look (drag/zoom) should survive sync or tab restore.
-            let prior_manual = self.charts.iter().find(|c| {
-                c.symbol.eq_ignore_ascii_case(symbol) && c.timeframe == tf
-            }).map(|c| (c.manual_view_override, c.camera.clone(), c.view_offset, c.visible_bars));
+            let prior_manual = self
+                .charts
+                .iter()
+                .find(|c| c.symbol.eq_ignore_ascii_case(symbol) && c.timeframe == tf)
+                .map(|c| {
+                    (
+                        c.manual_view_override,
+                        c.camera.clone(),
+                        c.view_offset,
+                        c.visible_bars,
+                    )
+                });
             if let Some((was_manual, cam, vo, vb)) = prior_manual {
                 if was_manual {
                     chart.manual_view_override = true;
@@ -1303,10 +1313,9 @@ impl TyphooNApp {
             // Prefer a live open tab (always current); otherwise the sticky value
             // store, which the fill keeps warm and which outlives the bars TTL so the
             // dot doesn't blink to grey while a slow refill is in flight.
-            let vals = live
-                .get(&tf)
-                .copied()
-                .or_else(|| super::chart::mtf_grid_value_get(symbol_key, tf.cache_suffix(), now_ms));
+            let vals = live.get(&tf).copied().or_else(|| {
+                super::chart::mtf_grid_value_get(symbol_key, tf.cache_suffix(), now_ms)
+            });
             if let Some(v) = vals {
                 out.push((label, v));
             }
@@ -1544,7 +1553,6 @@ impl TyphooNApp {
             }
         }
     }
-
 
     /// Build trade overlay for a chart: broker fills as arrows + open position lines.
     /// Aggregates same-price entries at same bar into single markers.

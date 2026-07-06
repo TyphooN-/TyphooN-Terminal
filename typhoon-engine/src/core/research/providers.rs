@@ -1,7 +1,6 @@
 use super::{
     CompanyProfile, EarningRow, IpoEvent, PressRelease, RedditMentionSnapshot, RedditPost,
-    SocialSentimentRow, StockTwitsMessage, StockTwitsSentimentSnapshot, Transcript,
-    TranscriptMeta,
+    SocialSentimentRow, StockTwitsMessage, StockTwitsSentimentSnapshot, Transcript, TranscriptMeta,
 };
 
 pub async fn fetch_finnhub_profile(

@@ -2911,4 +2911,3 @@ pub fn render_ht_trendline_snapshot(ui: &mut egui::Ui, snap: &HtTrendlineSnapsho
         }
     }
 }
-

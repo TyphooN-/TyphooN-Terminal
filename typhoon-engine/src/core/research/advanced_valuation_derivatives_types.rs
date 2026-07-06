@@ -203,7 +203,10 @@ mod max_pain_tests {
         let expiry = OptionExpiry {
             expiration: "2026-08-21".into(),
             days_to_expiry: 48,
-            calls: vec![contract("CALL", 100.0, 1000.0), contract("CALL", 120.0, 50.0)],
+            calls: vec![
+                contract("CALL", 100.0, 1000.0),
+                contract("CALL", 120.0, 50.0),
+            ],
             puts: vec![contract("PUT", 100.0, 1000.0), contract("PUT", 80.0, 50.0)],
         };
         let (strike, _) = max_pain_strike(&expiry).unwrap();

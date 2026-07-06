@@ -29,17 +29,15 @@ pub(super) fn draw_fallback_annotation(
             price,
             emoji,
         } => {
-            {
-                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
-                let y = price_to_y(*price);
-                painter.text(
-                    egui::pos2(x, y),
-                    egui::Align2::CENTER_CENTER,
-                    emoji,
-                    egui::FontId::proportional(16.0),
-                    egui::Color32::WHITE,
-                );
-            }
+            let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
+            let y = price_to_y(*price);
+            painter.text(
+                egui::pos2(x, y),
+                egui::Align2::CENTER_CENTER,
+                emoji,
+                egui::FontId::proportional(16.0),
+                egui::Color32::WHITE,
+            );
         }
         Drawing::Flag {
             bar_idx,
@@ -220,17 +218,15 @@ pub(super) fn draw_fallback_annotation(
             text,
             color,
         } => {
-            {
-                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
-                let y = price_to_y(*price);
-                painter.text(
-                    egui::pos2(x, y),
-                    egui::Align2::LEFT_BOTTOM,
-                    text,
-                    egui::FontId::monospace(11.0),
-                    sel_tint(*color),
-                );
-            }
+            let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
+            let y = price_to_y(*price);
+            painter.text(
+                egui::pos2(x, y),
+                egui::Align2::LEFT_BOTTOM,
+                text,
+                egui::FontId::monospace(11.0),
+                sel_tint(*color),
+            );
         }
         Drawing::Comment {
             bar_idx,
@@ -238,87 +234,79 @@ pub(super) fn draw_fallback_annotation(
             text,
             color,
         } => {
-            {
-                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
-                let y = price_to_y(*price);
-                let sc = sel_tint(*color);
-                let galley = painter.layout_no_wrap(text.clone(), egui::FontId::monospace(9.0), sc);
-                let tw = galley.rect.width();
-                let th = galley.rect.height();
-                let pad = 3.0_f32;
-                let br = egui::Rect::from_min_size(
-                    egui::pos2(x - pad, y - th - pad * 2.0),
-                    egui::vec2(tw + pad * 2.0, th + pad * 2.0),
-                );
-                painter.rect_filled(
-                    br,
-                    2.0,
-                    egui::Color32::from_rgba_premultiplied(20, 20, 30, 200),
-                );
-                painter.rect_stroke(
-                    br,
-                    2.0,
-                    egui::Stroke::new(1.0, sc),
-                    egui::StrokeKind::Outside,
-                );
-                painter.galley(egui::pos2(x, y - th - pad), galley, sc);
-            }
+            let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
+            let y = price_to_y(*price);
+            let sc = sel_tint(*color);
+            let galley = painter.layout_no_wrap(text.clone(), egui::FontId::monospace(9.0), sc);
+            let tw = galley.rect.width();
+            let th = galley.rect.height();
+            let pad = 3.0_f32;
+            let br = egui::Rect::from_min_size(
+                egui::pos2(x - pad, y - th - pad * 2.0),
+                egui::vec2(tw + pad * 2.0, th + pad * 2.0),
+            );
+            painter.rect_filled(
+                br,
+                2.0,
+                egui::Color32::from_rgba_premultiplied(20, 20, 30, 200),
+            );
+            painter.rect_stroke(
+                br,
+                2.0,
+                egui::Stroke::new(1.0, sc),
+                egui::StrokeKind::Outside,
+            );
+            painter.galley(egui::pos2(x, y - th - pad), galley, sc);
         }
         Drawing::ArrowMarkerLeft {
             bar_idx,
             price,
             color,
         } => {
-            {
-                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
-                let y = price_to_y(*price);
-                let sc = sel_tint(*color);
-                let sz = 8.0_f32;
-                painter.add(egui::Shape::convex_polygon(
-                    vec![
-                        egui::pos2(x - sz, y),
-                        egui::pos2(x + sz * 0.5, y - sz * 0.7),
-                        egui::pos2(x + sz * 0.5, y + sz * 0.7),
-                    ],
-                    sc,
-                    egui::Stroke::NONE,
-                ));
-            }
+            let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
+            let y = price_to_y(*price);
+            let sc = sel_tint(*color);
+            let sz = 8.0_f32;
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(x - sz, y),
+                    egui::pos2(x + sz * 0.5, y - sz * 0.7),
+                    egui::pos2(x + sz * 0.5, y + sz * 0.7),
+                ],
+                sc,
+                egui::Stroke::NONE,
+            ));
         }
         Drawing::ArrowMarkerRight {
             bar_idx,
             price,
             color,
         } => {
-            {
-                let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
-                let y = price_to_y(*price);
-                let sc = sel_tint(*color);
-                let sz = 8.0_f32;
-                painter.add(egui::Shape::convex_polygon(
-                    vec![
-                        egui::pos2(x + sz, y),
-                        egui::pos2(x - sz * 0.5, y - sz * 0.7),
-                        egui::pos2(x - sz * 0.5, y + sz * 0.7),
-                    ],
-                    sc,
-                    egui::Stroke::NONE,
-                ));
-            }
+            let x = data_left + ((*bar_idx as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
+            let y = price_to_y(*price);
+            let sc = sel_tint(*color);
+            let sz = 8.0_f32;
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(x + sz, y),
+                    egui::pos2(x - sz * 0.5, y - sz * 0.7),
+                    egui::pos2(x - sz * 0.5, y + sz * 0.7),
+                ],
+                sc,
+                egui::Stroke::NONE,
+            ));
         }
         Drawing::Circle { p1, p2, color } => {
-            {
-                let cx = data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
-                let cy = price_to_y(p1.1);
-                let rx = data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w;
-                let ry = price_to_y(p2.1);
-                let radius = ((rx - cx).powi(2) + (ry - cy).powi(2)).sqrt();
-                painter.circle_stroke(
-                    egui::pos2(cx, cy),
-                    radius,
-                    egui::Stroke::new(effective_width, sel_tint(*color)),
-                );
-            }
+            let cx = data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
+            let cy = price_to_y(p1.1);
+            let rx = data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w;
+            let ry = price_to_y(p2.1);
+            let radius = ((rx - cx).powi(2) + (ry - cy).powi(2)).sqrt();
+            painter.circle_stroke(
+                egui::pos2(cx, cy),
+                radius,
+                egui::Stroke::new(effective_width, sel_tint(*color)),
+            );
         }
         Drawing::PitchFan { p1, p2, color }
         | Drawing::TrendFibTime { p1, p2, color }
@@ -327,22 +315,20 @@ pub(super) fn draw_fallback_annotation(
         | Drawing::BarsPattern { p1, p2, color }
         | Drawing::Projection { p1, p2, color }
         | Drawing::DoubleCurve { p1, p2, color } => {
-            {
-                let x1 = data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
-                let y1 = price_to_y(p1.1);
-                let x2 = data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w;
-                let y2 = price_to_y(p2.1);
-                let sc = sel_tint(*color);
-                draw_styled_line(
-                    &painter,
-                    egui::pos2(x1, y1),
-                    egui::pos2(x2, y2),
-                    egui::Stroke::new(effective_width, sc),
-                    d_style,
-                );
-                painter.circle_filled(egui::pos2(x1, y1), 3.0, sc);
-                painter.circle_filled(egui::pos2(x2, y2), 3.0, sc);
-            }
+            let x1 = data_left + ((p1.0 as i64 - start_idx as i64) as f32 + 0.5) * bar_w;
+            let y1 = price_to_y(p1.1);
+            let x2 = data_left + ((p2.0 - start_idx) as f32 + 0.5) * bar_w;
+            let y2 = price_to_y(p2.1);
+            let sc = sel_tint(*color);
+            draw_styled_line(
+                &painter,
+                egui::pos2(x1, y1),
+                egui::pos2(x2, y2),
+                egui::Stroke::new(effective_width, sc),
+                d_style,
+            );
+            painter.circle_filled(egui::pos2(x1, y1), 3.0, sc);
+            painter.circle_filled(egui::pos2(x2, y2), 3.0, sc);
         }
         _ => return false,
     }

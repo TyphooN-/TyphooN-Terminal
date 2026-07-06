@@ -81,12 +81,8 @@ pub async fn handle_kraken_trade_copy(
     )));
     // Live catalog as a doomed-order guard; an unreachable catalog degrades to
     // the constructed pair (AddOrder still validates server-side).
-    let catalog: Option<Vec<String>> = source
-        .broker
-        .get_tradeable_pairs()
-        .await
-        .ok()
-        .map(|pairs| {
+    let catalog: Option<Vec<String>> =
+        source.broker.get_tradeable_pairs().await.ok().map(|pairs| {
             pairs
                 .into_iter()
                 .flat_map(|(name, wsname)| [name, wsname])

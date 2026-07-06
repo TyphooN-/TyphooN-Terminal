@@ -151,7 +151,10 @@ impl eframe::App for TyphooNApp {
             "positions_orders_refresh",
             self.tick_positions_orders_refresh(now_instant)
         );
-        timed_tick!("bar_sync_status_refresh", self.tick_bar_sync_status_refresh());
+        timed_tick!(
+            "bar_sync_status_refresh",
+            self.tick_bar_sync_status_refresh()
+        );
         timed_tick!("ssr_scan", self.tick_ssr_scan());
         timed_tick!(
             "kraken_universe_schedulers",
@@ -232,10 +235,7 @@ impl eframe::App for TyphooNApp {
         // snapshot drain — so its `self.bg.regulatory_alerts_by_symbol` write isn't
         // clobbered by a same-frame snapshot replace (the old synchronous handler
         // ran post-drain for the same reason).
-        timed_tick!(
-            "kraken_universe_digest",
-            self.tick_kraken_universe_digest()
-        );
+        timed_tick!("kraken_universe_digest", self.tick_kraken_universe_digest());
         timed_tick!(
             "deferred_chart_loads",
             self.tick_deferred_chart_loads(ctx, now_instant)

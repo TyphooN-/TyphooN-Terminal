@@ -318,7 +318,10 @@ mod tests {
             us_market_holiday(d("2026-01-19")),
             Some("Martin Luther King Jr. Day")
         );
-        assert_eq!(us_market_holiday(d("2026-02-16")), Some("Washington's Birthday"));
+        assert_eq!(
+            us_market_holiday(d("2026-02-16")),
+            Some("Washington's Birthday")
+        );
         assert_eq!(us_market_holiday(d("2026-04-03")), Some("Good Friday"));
         assert_eq!(us_market_holiday(d("2026-05-25")), Some("Memorial Day"));
         assert_eq!(us_market_holiday(d("2026-06-19")), Some("Juneteenth"));
@@ -348,13 +351,25 @@ mod tests {
     #[test]
     fn extended_session_possible_is_weekday_0400_to_2000_et() {
         // 2026-06-08 Mon (EDT, UTC-4). Window is 04:00–20:00 ET.
-        assert!(!us_equities_extended_session_possible(at("2026-06-08T07:59:00Z"))); // 03:59 ET
-        assert!(us_equities_extended_session_possible(at("2026-06-08T08:00:00Z"))); // 04:00 ET
-        assert!(us_equities_extended_session_possible(at("2026-06-08T17:00:00Z"))); // 13:00 ET
-        assert!(!us_equities_extended_session_possible(at("2026-06-09T00:00:00Z"))); // 20:00 ET
+        assert!(!us_equities_extended_session_possible(at(
+            "2026-06-08T07:59:00Z"
+        ))); // 03:59 ET
+        assert!(us_equities_extended_session_possible(at(
+            "2026-06-08T08:00:00Z"
+        ))); // 04:00 ET
+        assert!(us_equities_extended_session_possible(at(
+            "2026-06-08T17:00:00Z"
+        ))); // 13:00 ET
+        assert!(!us_equities_extended_session_possible(at(
+            "2026-06-09T00:00:00Z"
+        ))); // 20:00 ET
         // Saturday/Sunday are always closed regardless of hour.
-        assert!(!us_equities_extended_session_possible(at("2026-06-06T17:00:00Z"))); // Sat 13:00 ET
-        assert!(!us_equities_extended_session_possible(at("2026-06-07T17:00:00Z"))); // Sun 13:00 ET
+        assert!(!us_equities_extended_session_possible(at(
+            "2026-06-06T17:00:00Z"
+        ))); // Sat 13:00 ET
+        assert!(!us_equities_extended_session_possible(at(
+            "2026-06-07T17:00:00Z"
+        ))); // Sun 13:00 ET
     }
 
     #[test]
