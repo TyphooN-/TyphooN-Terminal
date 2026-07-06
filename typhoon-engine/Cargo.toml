@@ -55,5 +55,5 @@ dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] 
 
 [dev-dependencies]
 tempfile = "3"
-serial_test = "3.2.0"
+serial_test = "3.5.0"
 keyring-core = { version = "1", features = ["sample"] } # sample store for keyring tests

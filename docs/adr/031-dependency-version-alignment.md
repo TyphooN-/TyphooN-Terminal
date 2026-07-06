@@ -207,3 +207,29 @@ RustCrypto line; wayland-scanner 0.31.10 still pins quick-xml ^0.39).
   defaults (exactly the `rand::random` requirements), rusqlite
   (`bundled` only), scraper/image/wgpu/eframe/reqwest per-crate sets from
   the first sweep.
+
+## Follow-up alignment (2026-07-06)
+
+Security-first refresh with the same "latest stable, minimum direct feature
+surface, no workspace drift" rule:
+
+- Ran `cargo upgrade`, `cargo update` against every lagging compatible package
+  reported by Cargo, `cargo outdated --workspace --root-deps-only`,
+  `cargo tree -d --workspace`, `cargo audit`, and a manifest drift scan over
+  every workspace `Cargo.toml`.
+- Direct requirement bumps: `zeroize` 1.8 → 1.9 in `[workspace.dependencies]`,
+  `serial_test` 3.2.0 → 3.5.0 for engine tests. No direct dependency now has
+  multiple explicit version requirements across workspace manifests.
+- Lockfile-compatible refreshes: `cc` 1.2.66, `dbus` 0.9.12, `hashlink`
+  0.12.1, `jobserver` 0.1.35, `num-bigint` 0.4.8, `pest`/`pest_derive`/
+  `pest_generator`/`pest_meta` 2.8.7, `pxfm` 0.1.30, `quinn-proto` 0.11.16,
+  `quinn-udp` 0.5.15.
+- Removed the `num-bigint` 0.4.7 yanked-warning surface by moving to 0.4.8.
+  `cargo audit` is clean with only the documented quick-xml advisory
+  acceptances in `.cargo/audit.toml`.
+- Feature surface remained intentionally minimal. No upstream default feature
+  expansions were reintroduced; the lockfile shrink from the `quinn-udp`
+  refresh removed the old `windows-sys 0.60` target package set.
+- Confirmed blockers unchanged: `wgpu` 30 is still blocked by `egui-wgpu`
+  0.35.0's wgpu 29 pairing, and `generic-array` 0.14.7 remains pinned through
+  upstream `dbus-secret-service` / old RustCrypto transitive dependencies.

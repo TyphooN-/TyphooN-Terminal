@@ -21,7 +21,7 @@ rusqlite = "0.40"
 # Cache blobs are modern zstd frames only — the legacy (v0.5–0.7 format)
 # and dictionary-builder default features stay off.
 zstd = { version = "0.13", default-features = false, features = ["arrays"] }
-zeroize = "1.8"
+zeroize = "1.9"
 # Nonces come from rand::random, not the AEAD's rng — getrandom default off.
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
 sha2 = "0.11"

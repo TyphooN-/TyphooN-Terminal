@@ -7,5 +7,5 @@ description = "Research-UI view + interaction layer for TyphooN Terminal (ADR-12
 [dependencies]
 typhoon-engine = { workspace = true }
 chrono = { workspace = true }
-# Same egui as typhoon-native (0.34.3) so egui types unify across the workspace.
+# Same egui as typhoon-native (0.35) so egui types unify across the workspace.
 egui = { version = "0.35", default-features = false }
