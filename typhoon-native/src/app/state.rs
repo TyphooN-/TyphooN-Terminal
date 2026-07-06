@@ -1060,6 +1060,14 @@ pub struct TyphooNApp {
     /// timestamp of the last queued fetch. A re-queue within ~half the TF
     /// period is skipped.
     pub(crate) fetch_last_queued_ts: std::collections::HashMap<String, i64>,
+    /// Adaptive re-probe backoff: consecutive successful Alpaca background fetches
+    /// that wrote no new bars for a `SYMBOL:TF` intraday cell. A caught-up cell in
+    /// an idle market keeps settling empty, so it re-probes at most once per bar
+    /// period (the fastest a new bar could appear) instead of treadmilling on
+    /// `fetch_last_queued_ts`. Any fetch that lands bars drops the entry, so
+    /// out-of-sync cells keep the fast cadence until they catch up. Keys are the
+    /// `SYMBOL:TF` form from `alpaca_fetch_key`.
+    pub(crate) bg_refetch_empty_streak: std::collections::HashMap<String, u32>,
     /// Cursor-limited broad sync rotation. Each refill scans only a bounded slice
     /// of the broker universe in high-timeframe-first order, while the pending
     /// fetch sets keep foreground/manual and background requests deduplicated.

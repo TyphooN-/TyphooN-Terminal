@@ -685,6 +685,7 @@ impl TyphooNApp {
             pending_kraken_futures_fetches: std::collections::HashSet::new(),
             pending_yahoo_chart_fetches: std::collections::HashSet::new(),
             fetch_last_queued_ts: std::collections::HashMap::new(),
+            bg_refetch_empty_streak: std::collections::HashMap::new(),
             alpaca_sync_cursor: 0,
             kraken_spot_sync_cursors: [0; 4],
             kraken_equities_sync_cursor: 0,

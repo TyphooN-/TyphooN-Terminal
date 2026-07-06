@@ -187,12 +187,16 @@ pub fn us_equities_extended_session_possible(now_utc: chrono::DateTime<chrono::U
 }
 
 /// Session-aware status for the regular US-equities market clock (Alpaca
-/// `/v2/clock`). Unlike Kraken xStocks (24/5 with an overnight session), the
-/// regular US market has four states: pre-market (4:00–9:30 ET), core/regular
-/// (9:30–16:00, Alpaca `is_open`), after-hours (16:00–20:00), and CLOSED
-/// (20:00–4:00 ET, weekends, holidays — there is no regular-market overnight
-/// session). Alpaca's `is_open`/`next_open` give holiday and half-day accuracy;
-/// the pre-market and after-hours overlays come from the fixed ET boundaries.
+/// `/v2/clock`). Five states: pre-market (4:00–9:30 ET), core/regular
+/// (9:30–16:00, Alpaca `is_open`), after-hours (16:00–20:00), OVERNIGHT
+/// (20:00–4:00 ET — the Blue Ocean ATS 24/5 session Alpaca shares with the
+/// Kraken xStocks overnight session, which runs only on the nights preceding a
+/// trading day, Sun–Thu → Mon–Fri), and CLOSED (weekends, holidays, and the
+/// overnight gap before a non-trading day). Alpaca's `is_open`/`next_open` give
+/// holiday and half-day accuracy for core hours; the pre-market, after-hours,
+/// and overnight overlays come from fixed ET boundaries plus the local
+/// trading-day calendar (Alpaca's clock can't distinguish overnight from
+/// fully-closed — both read `is_open=false`).
 pub fn us_equities_session_status_at(
     now_utc: chrono::DateTime<chrono::Utc>,
     is_open: bool,
@@ -247,6 +251,31 @@ pub fn us_equities_session_status_at(
         return format!(
             "US equities AFTER-HOURS · closes in {}",
             format_session_countdown(target)
+        );
+    }
+
+    // Overnight (20:00–04:00 ET): Alpaca runs a 24/5 overnight session on the
+    // Blue Ocean ATS — the same venue and hours the Kraken xStocks overnight
+    // session tracks — on the nights preceding a trading day (Sun–Thu → Mon–Fri).
+    // The evening block (20:00–24:00) leads into tomorrow; the early block
+    // (00:00–04:00) leads into today. A weekend or holiday gap (the target day
+    // doesn't trade) stays CLOSED, matching the Kraken path: the Blue Ocean
+    // session pauses with the US venues. Synthesized from ET boundaries and the
+    // local trading-day calendar because `is_open`/`next_open` can't tell
+    // overnight from truly-closed (both read `is_open=false`).
+    let today = now_et.date();
+    let overnight_into_today = minute_of_day < PRE && is_us_market_trading_day(today);
+    let overnight_into_tomorrow =
+        minute_of_day >= CLOSE && today.succ_opt().is_some_and(is_us_market_trading_day);
+    if overnight_into_today || overnight_into_tomorrow {
+        let next_pre_market = if overnight_into_today {
+            day_start + chrono::Duration::minutes(PRE)
+        } else {
+            day_start + chrono::Duration::minutes(PRE) + chrono::Duration::days(1)
+        };
+        return format!(
+            "US equities OVERNIGHT · next pre-market in {}",
+            format_session_countdown(next_pre_market - now_et)
         );
     }
 
@@ -361,11 +390,48 @@ mod tests {
             us_equities_session_status_at(at("2026-06-08T21:00:00Z"), false, open_tomorrow, None),
             "US equities AFTER-HOURS · closes in 3h 0m"
         );
-        // 22:00 ET Monday — overnight = CLOSED for the regular market, reopens
-        // pre-market 04:00 Tue (6h).
+        // 22:00 ET Monday — overnight (Blue Ocean) session, leads into Tuesday's
+        // pre-market at 04:00 ET (6h out).
+        assert_eq!(
+            us_equities_session_status_at(at("2026-06-09T02:00:00Z"), false, open_tomorrow, None),
+            "US equities OVERNIGHT · next pre-market in 6h 0m"
+        );
+    }
+
+    #[test]
+    fn us_equities_session_status_overnight_session_and_weekend_holiday_gaps() {
+        // 2026-06-08 is Monday (EDT, UTC-4): 06-07 Sun, 06-12 Fri, 06-13 Sat.
+        // The overnight branch reads the local trading-day calendar, not
+        // next_open, so None is fine here.
+
+        // Sunday 20:00 ET — the weekly reopen; overnight into Monday's 04:00
+        // pre-market (8h). 06-07 20:00 EDT = 06-08 00:00 UTC.
+        assert_eq!(
+            us_equities_session_status_at(at("2026-06-08T00:00:00Z"), false, None, None),
+            "US equities OVERNIGHT · next pre-market in 8h 0m"
+        );
+        // Tuesday 02:00 ET — early overnight into today's 04:00 pre-market (2h).
+        assert_eq!(
+            us_equities_session_status_at(at("2026-06-09T06:00:00Z"), false, None, None),
+            "US equities OVERNIGHT · next pre-market in 2h 0m"
+        );
+        // Friday 22:00 ET — no Friday-night session (Saturday doesn't trade) ⇒
+        // CLOSED, not OVERNIGHT. 06-12 22:00 EDT = 06-13 02:00 UTC.
         assert!(
-            us_equities_session_status_at(at("2026-06-09T02:00:00Z"), false, open_tomorrow, None)
-                .starts_with("US equities CLOSED · opens in 6h")
+            us_equities_session_status_at(at("2026-06-13T02:00:00Z"), false, None, None)
+                .starts_with("US equities CLOSED")
+        );
+        // Saturday 02:00 ET — no Friday→Saturday session ⇒ CLOSED.
+        assert!(
+            us_equities_session_status_at(at("2026-06-13T06:00:00Z"), false, None, None)
+                .starts_with("US equities CLOSED")
+        );
+        // Holiday eve: Thursday 22:00 ET before observed Independence Day
+        // (Fri 2026-07-03) — the overnight session pauses with the US venues ⇒
+        // CLOSED. 07-02 22:00 EDT = 07-03 02:00 UTC.
+        assert!(
+            us_equities_session_status_at(at("2026-07-03T02:00:00Z"), false, None, None)
+                .starts_with("US equities CLOSED")
         );
     }
 

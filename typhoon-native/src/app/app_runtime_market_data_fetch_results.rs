@@ -190,6 +190,11 @@ impl TyphooNApp {
     ) -> bool {
         self.settle_market_data_fetch("alpaca", &symbol, &timeframe);
         if success {
+            // Adaptive re-probe backoff: grow the empty-streak when this fetch
+            // wrote nothing, reset it when it landed bars (the preceding
+            // BarsFetched already advanced write_ts_s). A failed fetch is left to
+            // the retry machinery and doesn't count as "caught up".
+            self.note_alpaca_refetch_outcome(&symbol, &timeframe);
             self.alpaca_retry_drain(&symbol, &timeframe);
             return true;
         }

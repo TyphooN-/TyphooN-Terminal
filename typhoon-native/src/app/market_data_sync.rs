@@ -67,12 +67,45 @@ pub(super) fn is_intraday_equity_sync_tf(tf: &str) -> bool {
     matches!(tf, "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour")
 }
 
-/// True only when the US equities clock string reports the fully-CLOSED state.
-/// OPEN / PRE-MARKET / AFTER-HOURS can still print (extended-hours) bars, and an
-/// empty/unknown status fails open (not closed), so the gate never wrongly
-/// suppresses a fetch that could land a real bar.
-pub(super) fn market_status_is_closed(status: &str) -> bool {
-    status.contains("CLOSED")
+/// The regular US-equities market is idle — fully CLOSED (weekends, holidays, the
+/// overnight gap before a non-trading day) or in the overnight (Blue Ocean)
+/// session — so no regular session is printing bars for the broad universe. The
+/// adaptive re-probe backoff only applies while idle; during a live regular
+/// session (OPEN / PRE-MARKET / AFTER-HOURS) every cell re-probes at the fast
+/// base cadence so it resyncs immediately at the open. An empty/unknown clock
+/// reads not-idle (fail open). State keywords are mutually exclusive on the phrase
+/// before `·` ("CLOSED" vs "OVERNIGHT"), so a substring test is unambiguous.
+fn market_status_is_idle(status: &str) -> bool {
+    status.contains("CLOSED") || status.contains("OVERNIGHT")
+}
+
+/// Longest a caught-up cell waits between idle re-probes, in whole timeframe
+/// periods. 1 = the bar-formation rate: a completed bar for a timeframe closes
+/// exactly once per period, so re-probing faster provably can't surface a new
+/// bar — this is the most aggressive re-check cadence that isn't pure waste. The
+/// gate is scoped to the bounded demand/watchlist/chart set (not the ~11k
+/// rotation universe), so probing it every period during idle is cheap. Raise it
+/// to trade freshness for idle RPM (2 ⇒ at most every two periods, …).
+const REFETCH_BACKOFF_MAX_PERIODS: i64 = 1;
+/// Shift-overflow guard for the doubling below. The per-period ceiling already
+/// binds long before this, so it only keeps `1 << streak` well-defined once a
+/// cell has settled empty many times over a long idle stretch.
+const REFETCH_BACKOFF_SHIFT_CAP: u32 = 20;
+
+/// Adaptive re-probe backoff window (seconds) for a background intraday cell that
+/// has settled with no new bars `streak` times in a row. `streak` 0 is the base
+/// ~half-period cadence (identical to [`Self::is_fetch_on_cooldown`]) so an
+/// out-of-sync cell that keeps landing bars stays fast; each further empty settle
+/// doubles the window, but it never exceeds [`REFETCH_BACKOFF_MAX_PERIODS`] full
+/// timeframe periods. A caught-up cell can't gain a bar faster than one per
+/// period, so that cap is the theoretical limit of useful re-probing — and it
+/// scales with the timeframe (5Min caps at ~5min, 4Hour at ~4h) rather than a
+/// fixed wall-clock ceiling.
+fn refetch_backoff_secs(period_s: i64, streak: u32) -> i64 {
+    let base = (period_s / 2).max(30);
+    let ceil = period_s.saturating_mul(REFETCH_BACKOFF_MAX_PERIODS).max(base);
+    base.saturating_mul(1i64 << streak.min(REFETCH_BACKOFF_SHIFT_CAP))
+        .min(ceil)
 }
 
 /// Build the per-source `(symbol, timeframe) -> SyncCacheState` maps the sync
@@ -1562,11 +1595,65 @@ impl TyphooNApp {
         dispatched
     }
 
-    /// Whether the regular US equities session (incl. extended hours) is fully
-    /// closed, per the Alpaca market clock. Fails open if the clock hasn't been
-    /// fetched yet. Drives the Lever 1 intraday-equity fetch gate.
-    pub(super) fn us_equities_closed(&self) -> bool {
-        market_status_is_closed(&self.market_clock_status)
+    /// Adaptive re-probe backoff gate for a background intraday cell. `true` when
+    /// the cell is still inside its per-period backoff window — it has repeatedly
+    /// settled with no new bars (caught up, nothing printing), so this re-probe is
+    /// skipped to save Alpaca RPM. A streak-0 cell reduces to the base cadence, so
+    /// out-of-sync cells (which drop their streak the instant a fetch lands bars)
+    /// keep fetching whenever possible until they catch up. `symbol`/`timeframe`
+    /// are the normalized keys queued into `fetch_last_queued_ts`.
+    pub(super) fn bg_intraday_refetch_backed_off(&self, symbol: &str, timeframe: &str) -> bool {
+        let cell_key = alpaca_fetch_key(symbol, timeframe);
+        let streak = self.bg_refetch_empty_streak.get(&cell_key).copied().unwrap_or(0);
+        if streak == 0 {
+            return false;
+        }
+        let Some(period_s) = sync_timeframe_period_secs(timeframe) else {
+            return false;
+        };
+        let window = refetch_backoff_secs(period_s, streak);
+        let Some(last) = self
+            .fetch_last_queued_ts
+            .get(&format!("alpaca:{cell_key}"))
+            .copied()
+        else {
+            return false;
+        };
+        chrono::Utc::now().timestamp().saturating_sub(last) < window
+    }
+
+    /// Adaptive-backoff bookkeeping, run when an Alpaca background fetch settles
+    /// successfully. A fetch that wrote new bars advanced the cell's `write_ts_s`
+    /// past its queue time (`note_cached_sync_success` runs on the preceding
+    /// `BarsFetched`, which the broker emits only for count > 0), so the streak is
+    /// cleared and the cell keeps the fast base cadence. A fetch that wrote nothing
+    /// (caught up / idle market) grows the streak so the cell re-probes at most
+    /// once per timeframe period instead of on the faster base cadence.
+    pub(super) fn note_alpaca_refetch_outcome(&mut self, symbol: &str, timeframe: &str) {
+        let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
+            return;
+        };
+        let sym = normalize_market_data_symbol(symbol).replace('/', "");
+        if sym.is_empty() {
+            return;
+        }
+        let cell_key = alpaca_fetch_key(&sym, tf);
+        let queued = self
+            .fetch_last_queued_ts
+            .get(&format!("alpaca:{cell_key}"))
+            .copied()
+            .unwrap_or(0);
+        let wrote = self
+            .cached_alpaca_sync_state
+            .get(&(sym, tf.to_string()))
+            .map(|s| s.write_ts_s)
+            .unwrap_or(0);
+        if queued > 0 && wrote >= queued {
+            self.bg_refetch_empty_streak.remove(&cell_key);
+        } else {
+            let entry = self.bg_refetch_empty_streak.entry(cell_key).or_insert(0);
+            *entry = entry.saturating_add(1);
+        }
     }
 
     pub(super) fn queue_alpaca_fetch(&mut self, symbol: &str, timeframe: &str) -> bool {
@@ -1636,17 +1723,19 @@ impl TyphooNApp {
         };
         let fetch_key = alpaca_fetch_key(&symbol, tf);
         let backfill_complete = self.alpaca_backfill_complete_pairs.contains_key(&fetch_key);
-        // Lever 1: when US equities are fully CLOSED, a backfill-complete intraday
-        // cell can't gain a newer bar (no session is printing), so re-probing it
-        // only burns Alpaca RPM that an unfinished historical backfill or a 24/7
-        // lane could use. Skip those background refreshes. NOT gated: the focused
-        // chart, daily+ bars (they settle at the close and are worth pulling), and
-        // cells still backfilling history. Crypto rides Kraken, so nothing 24/7 is
-        // affected.
+        // Adaptive re-probe backoff (replaces the old market-closed hard skip):
+        // out-of-sync cells (Missing/behind) fetch whenever possible — the goal is
+        // full bar data across every enabled timeframe for research/charting. Only
+        // a cell that keeps settling empty in an idle market (caught up, nothing
+        // printing) is throttled, and only down to one re-probe per bar period —
+        // the fastest rate a new bar could appear. Overnight-active symbols
+        // self-exempt by producing bars (their streak resets). Bypassed during
+        // live regular sessions for a fast resync at the open; the focused chart,
+        // daily+ bars, and cells still backfilling history are never gated here.
         if !focus
-            && backfill_complete
             && is_intraday_equity_sync_tf(tf)
-            && self.us_equities_closed()
+            && market_status_is_idle(&self.market_clock_status)
+            && self.bg_intraday_refetch_backed_off(&symbol, tf)
         {
             return false;
         }
@@ -2330,15 +2419,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn market_status_is_closed_only_for_fully_closed_state() {
-        assert!(market_status_is_closed("US equities CLOSED · opens in 6h"));
-        assert!(!market_status_is_closed("US equities OPEN · closes in 5h 0m"));
-        assert!(!market_status_is_closed("US equities PRE-MARKET · Core in 55m"));
-        assert!(!market_status_is_closed(
-            "US equities AFTER-HOURS · closes in 3h 0m"
+    fn market_status_is_idle_only_for_closed_and_overnight() {
+        // Idle = no live regular session; adaptive backoff engages only here.
+        assert!(market_status_is_idle("US equities CLOSED · opens in 6h"));
+        assert!(market_status_is_idle(
+            "US equities OVERNIGHT · next pre-market in 5h 44m"
         ));
-        // Fail open before the clock is fetched.
-        assert!(!market_status_is_closed(""));
+        // Live regular sessions and an unfetched clock read not-idle (backoff
+        // bypassed → fast resync).
+        assert!(!market_status_is_idle("US equities OPEN · closes in 5h 0m"));
+        assert!(!market_status_is_idle("US equities PRE-MARKET · Core in 55m"));
+        assert!(!market_status_is_idle("US equities AFTER-HOURS · closes in 3h 0m"));
+        assert!(!market_status_is_idle(""));
+    }
+
+    #[test]
+    fn refetch_backoff_secs_caps_at_one_timeframe_period() {
+        // 15Min: base = 900/2 = 450s. streak 0 keeps the fast catch-up cadence.
+        assert_eq!(refetch_backoff_secs(900, 0), 450);
+        // Any empty streak caps at exactly one period — the bar-formation rate,
+        // the most aggressive re-check that can still surface a new bar.
+        assert_eq!(refetch_backoff_secs(900, 1), 900);
+        assert_eq!(refetch_backoff_secs(900, 2), 900);
+        assert_eq!(refetch_backoff_secs(900, 40), 900);
+        // Scales per-timeframe, not a fixed ceiling: 5Min → 5min, 4Hour → 4h.
+        assert_eq!(refetch_backoff_secs(300, 5), 300);
+        assert_eq!(refetch_backoff_secs(14_400, 5), 14_400);
+        // Base floor: even a tiny period never re-probes faster than 30s.
+        assert_eq!(refetch_backoff_secs(40, 0), 30);
     }
 
     #[test]
