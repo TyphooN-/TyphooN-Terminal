@@ -2403,7 +2403,16 @@ impl TyphooNApp {
 
     /// Open the Alpaca position-close ticket. Closing a long is a SELL, closing a
     /// short is a BUY — the action is opposite the position direction.
-    pub(super) fn open_alpaca_close_dialog(&mut self, symbol: String, side: String, qty: f64) {
+    pub(super) fn open_alpaca_close_dialog(
+        &mut self,
+        account_id: String,
+        account_label: String,
+        symbol: String,
+        side: String,
+        qty: f64,
+    ) {
+        self.alpaca_close_account_id = account_id;
+        self.alpaca_close_account_label = account_label;
         self.alpaca_close_symbol = symbol;
         self.alpaca_close_side = side;
         self.alpaca_close_qty_total = qty.abs();
@@ -2439,7 +2448,11 @@ impl TyphooNApp {
 
         let mut open = self.show_alpaca_close_dialog;
         let mut close_after_submit = false;
-        egui::Window::new(format!("{} {} on Alpaca", action, self.alpaca_close_symbol))
+        let window_title = format!(
+            "{} {} on {}",
+            action, self.alpaca_close_symbol, self.alpaca_close_account_label
+        );
+        egui::Window::new(window_title)
             .open(&mut open)
             .default_size([460.0, 250.0])
             .resizable(false)
@@ -2455,6 +2468,19 @@ impl TyphooNApp {
                     .color(action_color),
                 );
                 ui.separator();
+
+                ui.horizontal(|ui| {
+                    ui.label("Account:");
+                    ui.label(
+                        egui::RichText::new(&self.alpaca_close_account_label)
+                            .monospace()
+                            .strong(),
+                    )
+                    .on_hover_text(format!(
+                        "Alpaca account id: {}",
+                        self.alpaca_close_account_id
+                    ));
+                });
 
                 ui.horizontal(|ui| {
                     ui.label("Position size:");
@@ -2529,20 +2555,26 @@ impl TyphooNApp {
                         // server-side from the live position (robust to a stale
                         // snapshot); a full close uses the dedicated endpoint.
                         if pct >= 99.95 {
-                            let _ = self.broker_tx.send(BrokerCmd::ClosePosition {
+                            let _ = self.broker_tx.send(BrokerCmd::ClosePositionForAccount {
+                                account_id: self.alpaca_close_account_id.clone(),
                                 symbol: symbol.clone(),
                                 qty: None,
                             });
                             self.log.push_back(LogEntry::info(format!(
-                                "Alpaca: closing entire {symbol} position at market"
+                                "Alpaca {}: closing entire {symbol} position at market",
+                                self.alpaca_close_account_label
                             )));
                         } else {
-                            let _ = self.broker_tx.send(BrokerCmd::AlpacaClosePositionPercent {
-                                symbol: symbol.clone(),
-                                percentage: pct,
-                            });
+                            let _ = self.broker_tx.send(
+                                BrokerCmd::AlpacaClosePositionPercentForAccount {
+                                    account_id: self.alpaca_close_account_id.clone(),
+                                    symbol: symbol.clone(),
+                                    percentage: pct,
+                                },
+                            );
                             self.log.push_back(LogEntry::info(format!(
-                                "Alpaca: closing {pct:.1}% of {symbol} at market"
+                                "Alpaca {}: closing {pct:.1}% of {symbol} at market",
+                                self.alpaca_close_account_label
                             )));
                         }
                         close_after_submit = true;

@@ -222,7 +222,9 @@ pub fn spawn_broker_message_processor(
                 }
                 cmd @ (BrokerCmd::CloseAll
                 | BrokerCmd::ClosePosition { .. }
-                | BrokerCmd::AlpacaClosePositionPercent { .. }) => {
+                | BrokerCmd::ClosePositionForAccount { .. }
+                | BrokerCmd::AlpacaClosePositionPercent { .. }
+                | BrokerCmd::AlpacaClosePositionPercentForAccount { .. }) => {
                     alpaca_order_ops::handle_alpaca_order_command(
                         cmd,
                         &alpaca_pool,

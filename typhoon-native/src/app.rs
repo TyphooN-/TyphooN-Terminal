@@ -2797,6 +2797,8 @@ impl TyphooNApp {
             kraken_spot_buy_pct: 25.0,
             kraken_spot_buy_qty: 0.0,
             show_alpaca_close_dialog: false,
+            alpaca_close_account_id: String::new(),
+            alpaca_close_account_label: String::new(),
             alpaca_close_symbol: String::new(),
             alpaca_close_side: String::new(),
             alpaca_close_qty_total: 0.0,

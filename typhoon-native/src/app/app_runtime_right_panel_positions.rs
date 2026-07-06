@@ -120,7 +120,7 @@ impl TyphooNApp {
             if alpaca_position_groups_should_render(show_alpaca_positions, &alpaca_position_groups)
             {
                 has_positions = true;
-                let mut open_close: Option<(String, String, f64)> = None;
+                let mut open_close: Option<(String, String, String, String, f64)> = None;
                 let mut lp_action = SymbolAction::None;
                 for account in &alpaca_position_groups {
                     ui.horizontal(|ui| {
@@ -198,23 +198,21 @@ impl TyphooNApp {
                                 .color(AXIS_TEXT)
                                 .small(),
                             );
-                            if self.broker_connected && account.is_primary {
-                                // Closing is intentionally primary-only. Order
-                                // commands are routed to the primary account;
-                                // showing close buttons on secondary accounts
-                                // would close the wrong account's symbol.
+                            if self.broker_connected {
                                 let is_long = pos.side == "long";
                                 let (label, col) =
                                     if is_long { ("Sell…", DOWN) } else { ("Buy…", UP) };
                                 if ui
                                     .small_button(egui::RichText::new(label).color(col))
                                     .on_hover_text(format!(
-                                        "Close {} on primary account — choose 1–100% with a slider",
-                                        pos.symbol
+                                        "Close {} on {} — choose 1–100% with a slider",
+                                        pos.symbol, account.label
                                     ))
                                     .clicked()
                                 {
                                     open_close = Some((
+                                        account.account_id.clone(),
+                                        account.label.clone(),
                                         pos.symbol.clone(),
                                         pos.side.clone(),
                                         pos.qty.abs(),
@@ -225,8 +223,8 @@ impl TyphooNApp {
                     }
                     ui.separator();
                 }
-                if let Some((sym, side, qty)) = open_close {
-                    self.open_alpaca_close_dialog(sym, side, qty);
+                if let Some((account_id, account_label, sym, side, qty)) = open_close {
+                    self.open_alpaca_close_dialog(account_id, account_label, sym, side, qty);
                 }
                 if !matches!(lp_action, SymbolAction::None) {
                     self.deferred_symbol_action = lp_action;

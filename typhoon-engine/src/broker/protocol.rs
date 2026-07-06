@@ -203,7 +203,17 @@ pub enum BrokerCmd {
         symbol: String,
         qty: Option<f64>,
     },
+    ClosePositionForAccount {
+        account_id: String,
+        symbol: String,
+        qty: Option<f64>,
+    },
     AlpacaClosePositionPercent {
+        symbol: String,
+        percentage: f64,
+    },
+    AlpacaClosePositionPercentForAccount {
+        account_id: String,
         symbol: String,
         percentage: f64,
     },

@@ -60,6 +60,30 @@ pub async fn handle_alpaca_order_command(
                 }
             }
         }
+        BrokerCmd::ClosePositionForAccount {
+            account_id,
+            symbol,
+            qty,
+        } => {
+            if let Some(account) = pool.broker_by_id(&account_id) {
+                let tag = format!(" [{}]", account.spec.label);
+                match account.broker.close_position(&symbol, qty).await {
+                    Ok(r) => {
+                        let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                            "Closed {}: {}{tag}",
+                            symbol, r.status
+                        )));
+                    }
+                    Err(e) => {
+                        let _ = broker_msg_tx.send(BrokerMsg::Error(format!("{e}{tag}")));
+                    }
+                }
+            } else {
+                let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                    "Alpaca close failed: account {account_id} is not connected"
+                )));
+            }
+        }
         BrokerCmd::AlpacaClosePositionPercent { symbol, percentage } => {
             for (tag, b) in order_routes(pool, mirror) {
                 match b.close_position_percent(&symbol, percentage).await {
@@ -73,6 +97,34 @@ pub async fn handle_alpaca_order_command(
                         let _ = broker_msg_tx.send(BrokerMsg::Error(format!("{e}{tag}")));
                     }
                 }
+            }
+        }
+        BrokerCmd::AlpacaClosePositionPercentForAccount {
+            account_id,
+            symbol,
+            percentage,
+        } => {
+            if let Some(account) = pool.broker_by_id(&account_id) {
+                let tag = format!(" [{}]", account.spec.label);
+                match account
+                    .broker
+                    .close_position_percent(&symbol, percentage)
+                    .await
+                {
+                    Ok(r) => {
+                        let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                            "Closed {:.0}% of {}: {}{tag}",
+                            percentage, symbol, r.status
+                        )));
+                    }
+                    Err(e) => {
+                        let _ = broker_msg_tx.send(BrokerMsg::Error(format!("{e}{tag}")));
+                    }
+                }
+            } else {
+                let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                    "Alpaca close failed: account {account_id} is not connected"
+                )));
             }
         }
         BrokerCmd::AlpacaMarketOrder { symbol, qty, side } => {

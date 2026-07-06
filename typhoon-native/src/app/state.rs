@@ -326,6 +326,8 @@ pub struct TyphooNApp {
     // Alpaca position-close ticket (Sell to close a long / Buy to close a short),
     // a sliding-scale 1–100% close mirroring the Kraken spot-sell dialog.
     pub(crate) show_alpaca_close_dialog: bool,
+    pub(crate) alpaca_close_account_id: String,
+    pub(crate) alpaca_close_account_label: String,
     pub(crate) alpaca_close_symbol: String,
     pub(crate) alpaca_close_side: String,
     pub(crate) alpaca_close_qty_total: f64,
