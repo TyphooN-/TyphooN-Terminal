@@ -431,26 +431,56 @@ impl TyphooNApp {
                                     }
                                 });
                                 ui.horizontal(|ui| {
-                                    if ui.button(egui::RichText::new("Reclaim Free Space").small()).clicked() {
+                                    let maintenance_running = self.storage_maintenance_rx.is_some();
+                                    let reclaim_available = self.cache.is_some()
+                                        && !maintenance_running
+                                        && !self.heavy_sync_in_progress
+                                        && !self.auto_compact_in_progress;
+                                    if ui
+                                        .add_enabled(
+                                            reclaim_available,
+                                            egui::Button::new(
+                                                egui::RichText::new("Reclaim Free Space").small(),
+                                            ),
+                                        )
+                                        .on_disabled_hover_text(if maintenance_running {
+                                            "Storage maintenance is already running."
+                                        } else if self.heavy_sync_in_progress {
+                                            "Broad market-data sync is active; wait until catch-up settles so VACUUM does not starve bar writes or OOM."
+                                        } else if self.auto_compact_in_progress {
+                                            "Compaction is already running."
+                                        } else {
+                                            "Cache is not available."
+                                        })
+                                        .clicked()
+                                    {
                                         if let Some(cache) = self.cache.clone() {
-                                            let result = cache.reclaim_space();
-                                            match result {
-                                                Ok((before, after)) => self.log.push_back(LogEntry::info(format!(
-                                                    "Reclaimed SQLite free pages: {} -> {}",
-                                                    format_bytes_human(before),
-                                                    format_bytes_human(after)
-                                                ))),
-                                                Err(e) => self.log.push_back(LogEntry::err(format!(
-                                                    "Reclaim storage failed: {}",
-                                                    e
-                                                ))),
+                                            let (tx, rx) = std::sync::mpsc::channel();
+                                            self.storage_maintenance_rx = Some(rx);
+                                            self.storage_cache_move_result = Some((
+                                                true,
+                                                "Reclaiming SQLite free pages in background... this can take several minutes for large caches".to_string(),
+                                            ));
+                                            let tx_on_spawn_err = tx.clone();
+                                            if let Err(e) = std::thread::Builder::new()
+                                                .name("typhoon-cache-reclaim".into())
+                                                .spawn(move || {
+                                                    let result = cache.reclaim_space();
+                                                    let _ = tx.send(StorageMaintenanceMsg::ReclaimDone(result));
+                                                })
+                                            {
+                                                let _ = tx_on_spawn_err.send(
+                                                    StorageMaintenanceMsg::ReclaimDone(Err(format!(
+                                                        "Reclaim worker failed to start: {}",
+                                                        e
+                                                    ))),
+                                                );
                                             }
-                                            self.refresh_storage_snapshot_after_action("reclaim");
                                         }
                                     }
                                     ui.label(
                                         egui::RichText::new(
-                                            "Run WAL checkpoint + VACUUM after prior deletes to physically shrink the DB file.",
+                                            "Run WAL checkpoint + VACUUM after prior deletes; disabled during heavy sync/compaction and runs off the UI thread.",
                                         )
                                         .color(AXIS_TEXT)
                                         .small(),
@@ -798,14 +828,49 @@ impl TyphooNApp {
                             ui.separator();
 
                             // ─── Cache Location (NAS support) ──────────────────────
-                            // Drain any in-flight VACUUM INTO result from the worker thread.
-                            if let Some(rx) = &self.storage_cache_move_rx {
-                                if let Ok(msg) = rx.try_recv() {
-                                    match msg {
-                                        Ok(s) => { self.storage_cache_move_result = Some((true, s.clone())); self.log.push_back(LogEntry::info(s)); }
-                                        Err(e) => { self.storage_cache_move_result = Some((false, e.clone())); self.log.push_back(LogEntry::err(e)); }
+                            // Drain any in-flight Storage Manager maintenance result from the worker thread.
+                            if let Some(rx) = self.storage_maintenance_rx.take() {
+                                match rx.try_recv() {
+                                    Ok(StorageMaintenanceMsg::ReclaimDone(result)) => {
+                                        match result {
+                                            Ok((before, after)) => {
+                                                let line = format!(
+                                                    "Reclaimed SQLite free pages: {} -> {}",
+                                                    format_bytes_human(before),
+                                                    format_bytes_human(after)
+                                                );
+                                                self.storage_cache_move_result = Some((true, line.clone()));
+                                                self.log.push_back(LogEntry::info(line));
+                                            }
+                                            Err(e) => {
+                                                let line = format!("Reclaim storage failed: {}", e);
+                                                self.storage_cache_move_result = Some((false, line.clone()));
+                                                self.log.push_back(LogEntry::err(line));
+                                            }
+                                        }
+                                        self.refresh_storage_snapshot_after_action("reclaim");
                                     }
-                                    self.storage_cache_move_rx = None;
+                                    Ok(StorageMaintenanceMsg::CacheMoveDone(msg)) => {
+                                        match msg {
+                                            Ok(s) => {
+                                                self.storage_cache_move_result = Some((true, s.clone()));
+                                                self.log.push_back(LogEntry::info(s));
+                                            }
+                                            Err(e) => {
+                                                self.storage_cache_move_result = Some((false, e.clone()));
+                                                self.log.push_back(LogEntry::err(e));
+                                            }
+                                        }
+                                    }
+                                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                                        self.storage_maintenance_rx = Some(rx);
+                                    }
+                                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                        self.storage_cache_move_result = Some((
+                                            false,
+                                            "Storage maintenance worker disconnected".to_string(),
+                                        ));
+                                    }
                                 }
                             }
                             ui.label(egui::RichText::new("CACHE LOCATION").color(AXIS_TEXT).small().strong());
@@ -841,7 +906,7 @@ impl TyphooNApp {
                                         .hint_text("/mnt/nas/typhoon-cache"));
                                 });
 
-                                let in_flight = self.storage_cache_move_rx.is_some();
+                                let in_flight = self.storage_maintenance_rx.is_some();
                                 ui.horizontal(|ui| {
                                     let trimmed = self.storage_cache_path_input.trim().to_string();
                                     let enabled = !trimmed.is_empty() && !in_flight;
@@ -870,7 +935,7 @@ impl TyphooNApp {
                                         let target = PathBuf::from(&trimmed);
                                         let target_db = target.join("typhoon_cache.db");
                                         let (tx, rx) = std::sync::mpsc::channel();
-                                        self.storage_cache_move_rx = Some(rx);
+                                        self.storage_maintenance_rx = Some(rx);
                                         self.storage_cache_move_result = Some((true, format!("Copying cache to {} ... this may take several minutes for large caches", target.display())));
                                         if let Some(cache) = self.cache.clone() {
                                             let tx_on_spawn_err = tx.clone();
@@ -878,29 +943,30 @@ impl TyphooNApp {
                                                 .name("typhoon-cache-vacuum-copy".into())
                                                 .spawn(move || {
                                                     if let Err(e) = std::fs::create_dir_all(&target) {
-                                                        let _ = tx.send(Err(format!("mkdir {} failed: {}", target.display(), e)));
+                                                        let _ = tx.send(StorageMaintenanceMsg::CacheMoveDone(Err(format!("mkdir {} failed: {}", target.display(), e))));
                                                         return;
                                                     }
                                                     if target_db.exists() {
-                                                        let _ = tx.send(Err(format!("{} already exists — delete or pick a different dir", target_db.display())));
+                                                        let _ = tx.send(StorageMaintenanceMsg::CacheMoveDone(Err(format!("{} already exists — delete or pick a different dir", target_db.display()))));
                                                         return;
                                                     }
                                                     // VACUUM INTO is the SQLite-blessed way to snapshot a live DB.
                                                     let dest = target_db.display().to_string().replace('\'', "''");
                                                     let sql = format!("VACUUM INTO '{}'", dest);
-                                                    match cache.connection() {
+                                                    let result = match cache.connection() {
                                                         Ok(conn) => match conn.execute(&sql, []) {
                                                             Ok(_) => match write_custom_cache_dir(Some(&target)) {
-                                                                Ok(_) => { let _ = tx.send(Ok(format!("Cache copied to {}. Restart terminal to use it.", target_db.display()))); }
-                                                                Err(e) => { let _ = tx.send(Err(format!("Copy OK but save-setting failed: {}", e))); }
+                                                                Ok(_) => Ok(format!("Cache copied to {}. Restart terminal to use it.", target_db.display())),
+                                                                Err(e) => Err(format!("Copy OK but save-setting failed: {}", e)),
                                                             },
-                                                            Err(e) => { let _ = tx.send(Err(format!("VACUUM INTO failed: {}", e))); }
+                                                            Err(e) => Err(format!("VACUUM INTO failed: {}", e)),
                                                         },
-                                                        Err(e) => { let _ = tx.send(Err(format!("Could not open cache connection: {}", e))); }
-                                                    }
+                                                        Err(e) => Err(format!("Could not open cache connection: {}", e)),
+                                                    };
+                                                    let _ = tx.send(StorageMaintenanceMsg::CacheMoveDone(result));
                                                 })
                                             {
-                                                let _ = tx_on_spawn_err.send(Err(format!("Cache copy worker failed to start: {}", e)));
+                                                let _ = tx_on_spawn_err.send(StorageMaintenanceMsg::CacheMoveDone(Err(format!("Cache copy worker failed to start: {}", e))));
                                             }
                                         }
                                     }

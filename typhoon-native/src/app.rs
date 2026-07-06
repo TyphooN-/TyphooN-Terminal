@@ -664,7 +664,7 @@ impl TyphooNApp {
             storage_delete_timeframe: "1Min".to_string(),
             storage_cache_path_input: String::new(),
             storage_cache_move_result: None,
-            storage_cache_move_rx: None,
+            storage_maintenance_rx: None,
             storage_sanity_report: None,
             storage_sanity_backfill_symbols: Vec::new(),
             storage_sanity_rx: None,

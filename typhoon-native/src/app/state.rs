@@ -47,6 +47,13 @@ pub(crate) enum SanityWorkerMsg {
     SplitsBackfillDone(Result<String, String>),
 }
 
+/// Messages from Storage Manager maintenance workers. These jobs can block on
+/// large SQLite files, so they must never run on the egui/render thread.
+pub(crate) enum StorageMaintenanceMsg {
+    ReclaimDone(Result<(i64, i64), String>),
+    CacheMoveDone(Result<String, String>),
+}
+
 /// Destructive sanity actions gated behind a second confirming click.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SanityConfirmAction {
@@ -1004,10 +1011,11 @@ pub struct TyphooNApp {
     /// Last result from the Save / Copy / Reset cache-location action. Shown
     /// inline in Storage Manager. `(success, message)`.
     pub(crate) storage_cache_move_result: Option<(bool, String)>,
-    /// Live async result channel for "Copy cache to new location (VACUUM INTO)".
-    /// Produced by a worker thread, consumed once in the render loop to
-    /// populate `storage_cache_move_result`. `None` = no op in flight.
-    pub(crate) storage_cache_move_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// Live async result channel for Storage Manager maintenance jobs
+    /// (reclaim-space VACUUM, cache-location VACUUM INTO). Produced by a worker
+    /// thread, consumed once in the render loop to populate
+    /// `storage_cache_move_result`. `None` = no op in flight.
+    pub(crate) storage_maintenance_rx: Option<std::sync::mpsc::Receiver<StorageMaintenanceMsg>>,
     /// Latest read-only bar-cache data-sanity audit. Triggered manually from
     /// Storage Manager and computed off the render thread because it decompresses
     /// every bar row.
