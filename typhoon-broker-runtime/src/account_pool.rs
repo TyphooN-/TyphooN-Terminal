@@ -132,6 +132,13 @@ impl AlpacaAccountPool {
             .find(|a| a.spec.id == account_id && a.connected)
     }
 
+    pub fn connected_accounts(&self) -> impl Iterator<Item = (usize, &AlpacaAccountHandle)> {
+        self.accounts
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.connected)
+    }
+
     pub fn set_mirror_orders(&mut self, enabled: bool, target_ids: Vec<String>) {
         self.mirror_target_ids = target_ids.into_iter().collect();
         // Enabling with nothing opted in is a no-op kept off for safety.

@@ -25,6 +25,20 @@ impl TyphooNApp {
         self.live_positions = pos;
     }
 
+    pub(super) fn handle_alpaca_account_positions(&mut self, accounts: Vec<AccountPositions>) {
+        if !self.alpaca_enabled {
+            return;
+        }
+        self.positions_last_update_ts = chrono::Utc::now().timestamp();
+        if let Some(primary) = accounts.iter().find(|account| account.is_primary) {
+            if let Ok(json) = serde_json::to_string(&primary.positions) {
+                self.put_kv_dedup("broker:positions", &json);
+            }
+            self.live_positions = primary.positions.clone();
+        }
+        self.alpaca_account_positions = accounts;
+    }
+
     pub(super) fn handle_alpaca_all_assets(&mut self, assets: Vec<AssetRow>) {
         if !self.alpaca_enabled {
             return;

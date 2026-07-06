@@ -9,8 +9,8 @@ pub(crate) use watchlist::{KrakenEquityQuoteMeta, WatchlistRow, watchlist_row_fr
 use super::*;
 
 pub(crate) use broker_messages::{
-    AccountRosterEntry, BrokerAccountSpec, BrokerCmd, BrokerMsg, OrderBroker, QuickTradePlan,
-    TradeAccountSnapshot,
+    AccountPositions, AccountRosterEntry, BrokerAccountSpec, BrokerCmd, BrokerMsg, OrderBroker,
+    QuickTradePlan, TradeAccountSnapshot,
 };
 #[cfg(test)]
 pub(crate) use broker_messages::{
@@ -290,6 +290,9 @@ pub struct TyphooNApp {
     pub(crate) alpaca_primary_account_id: String,
     /// Runtime-reported roster (per-account connect state / equity / primary).
     pub(crate) alpaca_account_roster: Vec<AccountRosterEntry>,
+    /// Latest positions grouped per connected Alpaca account. `live_positions`
+    /// remains the primary-account compatibility view for trading/chart logic.
+    pub(crate) alpaca_account_positions: Vec<AccountPositions>,
     /// Full bar-sync controls are deliberately separate from broker login.
     /// Off = light mode: account/trading plus targeted fetches for open charts,
     /// owned positions, open-order symbols, and the user's watchlist.

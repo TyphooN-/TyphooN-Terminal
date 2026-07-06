@@ -54,6 +54,93 @@ fn order_leg_role(o: &OrderInfo) -> (&'static str, egui::Color32) {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OrderGroupKey {
+    symbol: String,
+    side: String,
+    order_type: String,
+    order_class: Option<String>,
+    price_desc: Option<String>,
+    status: String,
+    /// Non-empty for orders that must stay visually separate. This keeps bracket
+    /// parents / leg-bearing orders from being hidden inside an aggregate row.
+    unique_id: Option<String>,
+}
+
+struct OrderDisplayGroup<'a> {
+    key: OrderGroupKey,
+    orders: Vec<&'a OrderInfo>,
+    total_qty: f64,
+    all_qty_numeric: bool,
+}
+
+impl<'a> OrderDisplayGroup<'a> {
+    fn primary(&self) -> &'a OrderInfo {
+        self.orders[0]
+    }
+}
+
+fn parse_order_qty_value(value: &str) -> Option<f64> {
+    let qty = value.trim().parse::<f64>().ok()?;
+    (qty.is_finite() && qty >= 0.0).then_some(qty)
+}
+
+fn fmt_order_qty_value(qty: f64) -> String {
+    if qty.fract().abs() < 0.000_000_01 {
+        return format!("{qty:.0}");
+    }
+    let mut s = format!("{qty:.8}");
+    while s.contains('.') && s.ends_with('0') {
+        s.pop();
+    }
+    if s.ends_with('.') {
+        s.pop();
+    }
+    s
+}
+
+fn order_group_key(order: &OrderInfo) -> OrderGroupKey {
+    let has_legs = order.legs.as_ref().is_some_and(|legs| !legs.is_empty());
+    OrderGroupKey {
+        symbol: order.symbol.trim().to_ascii_uppercase(),
+        side: order.side.trim().to_ascii_lowercase(),
+        order_type: order.order_type.trim().to_ascii_lowercase(),
+        order_class: order
+            .order_class
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_ascii_lowercase),
+        price_desc: order_price_descriptor(order),
+        status: order.status.trim().to_ascii_lowercase(),
+        unique_id: has_legs.then(|| order.id.clone()),
+    }
+}
+
+fn order_display_groups(orders: &[OrderInfo]) -> Vec<OrderDisplayGroup<'_>> {
+    let mut groups: Vec<OrderDisplayGroup<'_>> = Vec::new();
+    for order in orders {
+        let key = order_group_key(order);
+        let qty = parse_order_qty_value(&order.qty);
+        if let Some(group) = groups.iter_mut().find(|group| group.key == key) {
+            group.orders.push(order);
+            if let Some(qty) = qty {
+                group.total_qty += qty;
+            } else {
+                group.all_qty_numeric = false;
+            }
+        } else {
+            groups.push(OrderDisplayGroup {
+                key,
+                orders: vec![order],
+                total_qty: qty.unwrap_or(0.0),
+                all_qty_numeric: qty.is_some(),
+            });
+        }
+    }
+    groups
+}
+
 #[allow(deprecated)]
 impl TyphooNApp {
     pub(super) fn render_right_panel_orders_section(&mut self, ui: &mut egui::Ui) {
@@ -74,9 +161,10 @@ impl TyphooNApp {
             .default_open(self.right_orders_open)
             .show(ui, |ui| {
                 ui.add_space(4.0);
-                let mut cancel_id: Option<String> = None;
+                let mut cancel_ids: Vec<String> = Vec::new();
                 let mut lo_action = SymbolAction::None;
-                for order in &self.live_orders {
+                for group in order_display_groups(&self.live_orders) {
+                    let order = group.primary();
                     ui.horizontal(|ui| {
                         let (_, act) = symbol_label_with_menu(
                             ui,
@@ -98,18 +186,46 @@ impl TyphooNApp {
                         if let Some(desc) = order_price_descriptor(order) {
                             ui.label(egui::RichText::new(desc).color(ACCENT).small().strong());
                         }
+                        if group.orders.len() > 1 {
+                            ui.label(
+                                egui::RichText::new(format!("×{}", group.orders.len()))
+                                    .color(AXIS_TEXT)
+                                    .small()
+                                    .strong(),
+                            )
+                            .on_hover_text(
+                                "Identical open orders grouped by symbol, side, type, price, and status",
+                            );
+                        }
                         if self.broker_connected {
                             if ui
                                 .small_button(egui::RichText::new("X").color(DOWN))
-                                .on_hover_text("Cancel order")
+                                .on_hover_text(if group.orders.len() > 1 {
+                                    "Cancel all orders in this group"
+                                } else {
+                                    "Cancel order"
+                                })
                                 .clicked()
                             {
-                                cancel_id = Some(order.id.clone());
+                                cancel_ids.extend(group.orders.iter().map(|order| order.id.clone()));
                             }
                         }
                     });
+                    let qty_text = if group.orders.len() > 1 && group.all_qty_numeric {
+                        fmt_order_qty_value(group.total_qty)
+                    } else {
+                        order.qty.clone()
+                    };
+                    let order_count_text = if group.orders.len() > 1 {
+                        format!(" | {} orders", group.orders.len())
+                    } else {
+                        String::new()
+                    };
                     ui.label(
-                        egui::RichText::new(format!("qty: {} | {}", order.qty, order.status))
+                        egui::RichText::new(format!(
+                            "qty: {}{} | {}",
+                            qty_text, order_count_text, order.status
+                        ))
                             .color(ACCENT)
                             .small(),
                     );
@@ -140,7 +256,7 @@ impl TyphooNApp {
                     }
                     ui.separator();
                 }
-                if let Some(oid) = cancel_id {
+                for oid in cancel_ids {
                     let _ = self
                         .broker_tx
                         .send(BrokerCmd::AlpacaCancelOrder { order_id: oid });
@@ -207,5 +323,47 @@ mod order_descriptor_tests {
         // Bracket leg roles: stop ⇒ SL, bare limit ⇒ TP.
         assert_eq!(order_leg_role(&ord("limit", Some("0.35"), None)).0, "TP");
         assert_eq!(order_leg_role(&ord("stop", None, Some("0.25"))).0, "SL");
+    }
+
+    #[test]
+    fn display_groups_identical_simple_orders_and_sums_qty() {
+        let mut a = ord("limit", Some("420.6000"), None);
+        a.id = "a".into();
+        a.symbol = "NXXT".into();
+        a.qty = "10".into();
+        let mut b = a.clone();
+        b.id = "b".into();
+        b.qty = "100".into();
+        let mut c = a.clone();
+        c.id = "c".into();
+        c.qty = "1000".into();
+
+        let orders = [a, b, c];
+        let groups = order_display_groups(&orders);
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].orders.len(), 3);
+        assert_eq!(fmt_order_qty_value(groups[0].total_qty), "1110");
+        assert!(groups[0].all_qty_numeric);
+    }
+
+    #[test]
+    fn display_groups_keep_different_prices_and_leg_orders_separate() {
+        let mut at_420 = ord("limit", Some("420.6000"), None);
+        at_420.id = "420-a".into();
+        let mut at_421 = at_420.clone();
+        at_421.id = "421".into();
+        at_421.limit_price = Some("421.0000".into());
+        let mut bracket_parent_a = at_420.clone();
+        bracket_parent_a.id = "bracket-a".into();
+        bracket_parent_a.legs = Some(vec![ord("stop", None, Some("400.0000"))]);
+        let mut bracket_parent_b = bracket_parent_a.clone();
+        bracket_parent_b.id = "bracket-b".into();
+
+        let orders = [at_420, at_421, bracket_parent_a, bracket_parent_b];
+        let groups = order_display_groups(&orders);
+
+        assert_eq!(groups.len(), 4);
+        assert!(groups.iter().all(|group| group.orders.len() == 1));
     }
 }

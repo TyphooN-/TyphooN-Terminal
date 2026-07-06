@@ -298,6 +298,7 @@ impl TyphooNApp {
             alpaca_extra_accounts: default_alpaca_extra_accounts(),
             alpaca_primary_account_id: "alpaca1".to_string(),
             alpaca_account_roster: Vec::new(),
+            alpaca_account_positions: Vec::new(),
             kraken_extra_accounts: default_kraken_extra_accounts(),
             kraken_primary_account_id: "kraken1".to_string(),
             kraken_account_roster: Vec::new(),

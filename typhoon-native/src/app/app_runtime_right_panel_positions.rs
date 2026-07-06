@@ -1,11 +1,10 @@
 use super::*;
 
-fn alpaca_positions_should_render(
-    _broker_connected: bool,
+fn alpaca_position_groups_should_render(
     show_alpaca_positions: bool,
-    positions: &[PositionInfo],
+    groups: &[AccountPositions],
 ) -> bool {
-    show_alpaca_positions && !positions.is_empty()
+    show_alpaca_positions && !groups.is_empty()
 }
 
 pub(super) fn position_unrealized_pl_from_price(
@@ -55,11 +54,31 @@ impl TyphooNApp {
             .into_iter()
             .filter(|visible| *visible)
             .count();
-        let alpaca_count = if show_alpaca_positions {
-            self.live_positions.len()
+        let alpaca_position_groups: Vec<AccountPositions> = if show_alpaca_positions {
+            if !self.alpaca_account_positions.is_empty() {
+                self.alpaca_account_positions.clone()
+            } else if !self.live_positions.is_empty() {
+                vec![AccountPositions {
+                    account_id: self.alpaca_primary_account_id.clone(),
+                    label: self
+                        .alpaca_account_roster
+                        .iter()
+                        .find(|account| account.is_primary)
+                        .map(|account| account.label.clone())
+                        .unwrap_or_else(|| "Alpaca 1".to_string()),
+                    is_primary: true,
+                    positions: self.live_positions.clone(),
+                }]
+            } else {
+                Vec::new()
+            }
         } else {
-            0
+            Vec::new()
         };
+        let alpaca_count = alpaca_position_groups
+            .iter()
+            .map(|account| account.positions.len())
+            .sum::<usize>();
         let kr_count = if show_kr_positions {
             self.kr_positions.len()
         } else {
@@ -98,92 +117,112 @@ impl TyphooNApp {
             }
             let mut has_positions = false;
             // Live broker positions from Alpaca.
-            if alpaca_positions_should_render(
-                self.broker_connected,
-                show_alpaca_positions,
-                &self.live_positions,
-            ) {
+            if alpaca_position_groups_should_render(show_alpaca_positions, &alpaca_position_groups)
+            {
                 has_positions = true;
                 let mut open_close: Option<(String, String, f64)> = None;
                 let mut lp_action = SymbolAction::None;
-                for pos in &self.live_positions {
-                    let side_c = if pos.side == "long" { UP } else { DOWN };
-                    let side_label = if pos.side == "long" { "Long" } else { "Short" };
-                    let current_price = self
-                        .live_quote_mid_for_symbol(&pos.symbol)
-                        .or_else(|| self.latest_cached_equity_price_for_symbol(&pos.symbol))
-                        .or_else(|| {
-                            if pos.qty.abs() > f64::EPSILON {
-                                Some(pos.market_value.abs() / pos.qty.abs())
-                            } else {
-                                None
+                for account in &alpaca_position_groups {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{}{} ({})",
+                                account.label,
+                                if account.is_primary { " ★" } else { "" },
+                                account.positions.len()
+                            ))
+                            .small()
+                            .strong()
+                            .color(if account.is_primary { ACCENT } else { AXIS_TEXT }),
+                        )
+                        .on_hover_text(format!("Alpaca account id: {}", account.account_id));
+                    });
+                    if account.positions.is_empty() {
+                        ui.label(
+                            egui::RichText::new("no open positions")
+                                .small()
+                                .color(AXIS_TEXT),
+                        );
+                        ui.separator();
+                        continue;
+                    }
+                    for pos in &account.positions {
+                        let side_c = if pos.side == "long" { UP } else { DOWN };
+                        let side_label = if pos.side == "long" { "Long" } else { "Short" };
+                        let current_price = self
+                            .live_quote_mid_for_symbol(&pos.symbol)
+                            .or_else(|| self.latest_cached_equity_price_for_symbol(&pos.symbol))
+                            .or_else(|| {
+                                if pos.qty.abs() > f64::EPSILON {
+                                    Some(pos.market_value.abs() / pos.qty.abs())
+                                } else {
+                                    None
+                                }
+                            });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.add_space(8.0);
+                            let (_, act) = symbol_label_with_menu(
+                                ui,
+                                &pos.symbol,
+                                egui::RichText::new(&pos.symbol).small().strong(),
+                            );
+                            if !matches!(act, SymbolAction::None) {
+                                lp_action = act;
+                            }
+                            ui.label(egui::RichText::new(side_label).color(side_c).small());
+                            ui.label(egui::RichText::new(format!("{:.2}", pos.qty)).small())
+                                .on_hover_text(format!(
+                                    "Alpaca qty available for closing: {:.9}",
+                                    if pos.qty_available > 0.0 {
+                                        pos.qty_available
+                                    } else {
+                                        pos.qty.abs()
+                                    }
+                                ));
+                            let display_pl = position_unrealized_pl_from_price(pos, current_price);
+                            let pl_c = if display_pl >= 0.0 { UP } else { DOWN };
+                            let pl_pct = position_unrealized_pl_pct(pos, display_pl);
+                            ui.label(
+                                egui::RichText::new(format!("${:.2} ({:+.1}%)", display_pl, pl_pct))
+                                    .color(pl_c)
+                                    .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "entry {}  cur {}",
+                                    format_price(pos.avg_entry_price),
+                                    current_price
+                                        .map(format_price)
+                                        .unwrap_or_else(|| "—".to_string())
+                                ))
+                                .color(AXIS_TEXT)
+                                .small(),
+                            );
+                            if self.broker_connected && account.is_primary {
+                                // Closing is intentionally primary-only. Order
+                                // commands are routed to the primary account;
+                                // showing close buttons on secondary accounts
+                                // would close the wrong account's symbol.
+                                let is_long = pos.side == "long";
+                                let (label, col) =
+                                    if is_long { ("Sell…", DOWN) } else { ("Buy…", UP) };
+                                if ui
+                                    .small_button(egui::RichText::new(label).color(col))
+                                    .on_hover_text(format!(
+                                        "Close {} on primary account — choose 1–100% with a slider",
+                                        pos.symbol
+                                    ))
+                                    .clicked()
+                                {
+                                    open_close = Some((
+                                        pos.symbol.clone(),
+                                        pos.side.clone(),
+                                        pos.qty.abs(),
+                                    ));
+                                }
                             }
                         });
-                    ui.horizontal_wrapped(|ui| {
-                        let (_, act) = symbol_label_with_menu(
-                            ui,
-                            &pos.symbol,
-                            egui::RichText::new(&pos.symbol).small().strong(),
-                        );
-                        if !matches!(act, SymbolAction::None) {
-                            lp_action = act;
-                        }
-                        ui.label(
-                            egui::RichText::new(side_label).color(side_c).small(),
-                        );
-                        ui.label(egui::RichText::new(format!("{:.2}", pos.qty)).small())
-                            .on_hover_text(format!(
-                                "Alpaca qty available for closing: {:.9}",
-                                if pos.qty_available > 0.0 {
-                                    pos.qty_available
-                                } else {
-                                    pos.qty.abs()
-                                }
-                            ));
-                        let display_pl = position_unrealized_pl_from_price(pos, current_price);
-                        let pl_c = if display_pl >= 0.0 { UP } else { DOWN };
-                        let pl_pct = position_unrealized_pl_pct(pos, display_pl);
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "${:.2} ({:+.1}%)",
-                                display_pl, pl_pct
-                            ))
-                            .color(pl_c)
-                            .small(),
-                        );
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "entry {}  cur {}",
-                                format_price(pos.avg_entry_price),
-                                current_price
-                                    .map(format_price)
-                                    .unwrap_or_else(|| "—".to_string())
-                            ))
-                            .color(AXIS_TEXT)
-                            .small(),
-                        );
-                        if self.broker_connected {
-                            // Closing a long is a SELL, a short a BUY — one button
-                            // that opens a 1–100% slider ticket (Kraken-style)
-                            // instead of four inline buttons that wrapped to a
-                            // second line.
-                            let is_long = pos.side == "long";
-                            let (label, col) =
-                                if is_long { ("Sell…", DOWN) } else { ("Buy…", UP) };
-                            if ui
-                                .small_button(egui::RichText::new(label).color(col))
-                                .on_hover_text(format!(
-                                    "Close {} {} — choose 1–100% with a slider",
-                                    pos.symbol,
-                                    if is_long { "(sell)" } else { "(buy to cover)" }
-                                ))
-                                .clicked()
-                            {
-                                open_close =
-                                    Some((pos.symbol.clone(), pos.side.clone(), pos.qty.abs()));
-                            }
-                        }
-                    });
+                    }
                     ui.separator();
                 }
                 if let Some((sym, side, qty)) = open_close {
@@ -477,7 +516,14 @@ mod tests {
     fn cached_alpaca_positions_render_even_when_broker_is_temporarily_disconnected() {
         let positions = vec![position("CC"), position("WEN")];
 
-        assert!(alpaca_positions_should_render(false, true, &positions));
+        let groups = vec![AccountPositions {
+            account_id: "alpaca1".to_string(),
+            label: "Alpaca 1".to_string(),
+            is_primary: true,
+            positions,
+        }];
+
+        assert!(alpaca_position_groups_should_render(true, &groups));
     }
 
     #[test]

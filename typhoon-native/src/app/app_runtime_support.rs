@@ -451,6 +451,7 @@ pub(super) fn broker_msg_kind(msg: &BrokerMsg) -> &'static str {
         BrokerMsg::Error(_) => "Error",
         BrokerMsg::Account(_) => "Account",
         BrokerMsg::Positions(_) => "Positions",
+        BrokerMsg::AlpacaAccountPositions(_) => "AlpacaAccountPositions",
         BrokerMsg::Orders(_) => "Orders",
         BrokerMsg::OrderResult(_) => "OrderResult",
         BrokerMsg::KrakenTrades(_) => "KrakenTrades",

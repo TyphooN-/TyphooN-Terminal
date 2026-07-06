@@ -205,13 +205,17 @@ pub fn spawn_broker_message_processor(
                     )
                     .await;
                 }
-                cmd @ (BrokerCmd::GetAccount
-                | BrokerCmd::GetPositions
-                | BrokerCmd::GetOrders
-                | BrokerCmd::GetOrderHistory { .. }) => {
+                cmd @ (BrokerCmd::GetAccount | BrokerCmd::GetOrders | BrokerCmd::GetOrderHistory { .. }) => {
                     alpaca_account_data::handle_alpaca_account_data_command(
                         cmd,
                         alpaca_pool.primary_broker(),
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
+                }
+                BrokerCmd::GetPositions => {
+                    alpaca_account_data::fetch_and_send_all_account_positions(
+                        &alpaca_pool,
                         &broker_msg_tx_clone,
                     )
                     .await;

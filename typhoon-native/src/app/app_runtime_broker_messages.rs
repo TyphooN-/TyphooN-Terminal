@@ -178,6 +178,9 @@ impl TyphooNApp {
                 BrokerMsg::Positions(pos) => {
                     self.handle_alpaca_positions(pos);
                 }
+                BrokerMsg::AlpacaAccountPositions(accounts) => {
+                    self.handle_alpaca_account_positions(accounts);
+                }
                 BrokerMsg::AllAssets(assets) => {
                     self.handle_alpaca_all_assets(assets);
                 }

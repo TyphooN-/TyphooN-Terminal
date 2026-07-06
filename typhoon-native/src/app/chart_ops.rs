@@ -45,6 +45,23 @@ fn alpaca_order_is_working(status: &str) -> bool {
     )
 }
 
+fn push_or_merge_order_line(out: &mut Vec<OrderLine>, line: OrderLine) {
+    if let Some(existing) = out.iter_mut().find(|existing| {
+        existing.is_buy == line.is_buy
+            && existing.source == line.source
+            && (existing.price - line.price).abs() <= line.price.abs().max(1.0) * 1e-9
+    }) {
+        existing.qty += line.qty;
+        existing.notional_delta += line.notional_delta;
+        existing.account_pct_delta = match (existing.account_pct_delta, line.account_pct_delta) {
+            (Some(a), Some(b)) => Some(a + b),
+            _ => None,
+        };
+        return;
+    }
+    out.push(line);
+}
+
 fn collect_alpaca_order_lines_for_symbol(
     orders: &[OrderInfo],
     bare_upper: &str,
@@ -81,20 +98,23 @@ fn collect_alpaca_order_lines_for_symbol(
                     let is_buy = order.side.eq_ignore_ascii_case("buy");
                     let notional = qty * price;
                     let signed_notional = if is_buy { -notional } else { notional };
-                    out.push(OrderLine {
-                        price,
-                        qty,
-                        is_buy,
-                        source: "Alpaca".to_string(),
-                        notional_delta: signed_notional,
-                        account_pct_delta: account_balance
-                            .filter(|balance| *balance > f64::EPSILON)
-                            .map(|balance| signed_notional / balance * 100.0),
-                        pips_from_current: (tick_size > f64::EPSILON
-                            && current_price.is_finite()
-                            && current_price > 0.0)
-                            .then_some((price - current_price) / tick_size),
-                    });
+                    push_or_merge_order_line(
+                        out,
+                        OrderLine {
+                            price,
+                            qty,
+                            is_buy,
+                            source: "Alpaca".to_string(),
+                            notional_delta: signed_notional,
+                            account_pct_delta: account_balance
+                                .filter(|balance| *balance > f64::EPSILON)
+                                .map(|balance| signed_notional / balance * 100.0),
+                            pips_from_current: (tick_size > f64::EPSILON
+                                && current_price.is_finite()
+                                && current_price > 0.0)
+                                .then_some((price - current_price) / tick_size),
+                        },
+                    );
                 }
             }
         }
@@ -163,20 +183,23 @@ fn collect_kraken_order_lines_for_symbol(
         let is_buy = order.r#type.eq_ignore_ascii_case("buy");
         let notional = qty * price;
         let signed_notional = if is_buy { -notional } else { notional };
-        out.push(OrderLine {
-            price,
-            qty,
-            is_buy,
-            source: "Kraken".to_string(),
-            notional_delta: signed_notional,
-            account_pct_delta: account_balance
-                .filter(|balance| *balance > f64::EPSILON)
-                .map(|balance| signed_notional / balance * 100.0),
-            pips_from_current: (tick_size > f64::EPSILON
-                && current_price.is_finite()
-                && current_price > 0.0)
-                .then_some((price - current_price) / tick_size),
-        });
+        push_or_merge_order_line(
+            out,
+            OrderLine {
+                price,
+                qty,
+                is_buy,
+                source: "Kraken".to_string(),
+                notional_delta: signed_notional,
+                account_pct_delta: account_balance
+                    .filter(|balance| *balance > f64::EPSILON)
+                    .map(|balance| signed_notional / balance * 100.0),
+                pips_from_current: (tick_size > f64::EPSILON
+                    && current_price.is_finite()
+                    && current_price > 0.0)
+                    .then_some((price - current_price) / tick_size),
+            },
+        );
     }
 }
 
@@ -2016,6 +2039,32 @@ mod tests {
         assert!((line.notional_delta + 796.0).abs() < 1e-9);
         assert!((line.account_pct_delta.unwrap() + 7.96).abs() < 1e-9);
         assert!((line.pips_from_current.unwrap() + 50.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn alpaca_order_lines_merge_same_side_source_and_price() {
+        let orders = vec![
+            test_order("AAPL", "sell", "10", "0", Some("105.00"), "new"),
+            test_order("AAPL", "sell", "15", "5", Some("105.00"), "new"),
+        ];
+        let mut lines = Vec::new();
+
+        collect_alpaca_order_lines_for_symbol(
+            &orders,
+            "AAPL",
+            100.0,
+            0.01,
+            Some(10_000.0),
+            &mut lines,
+        );
+
+        assert_eq!(lines.len(), 1);
+        let line = &lines[0];
+        assert!(!line.is_buy);
+        assert_eq!(line.qty, 20.0);
+        assert_eq!(line.price, 105.0);
+        assert!((line.notional_delta - 2100.0).abs() < 1e-9);
+        assert!((line.account_pct_delta.unwrap() - 21.0).abs() < 1e-9);
     }
 
     #[test]

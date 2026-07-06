@@ -100,6 +100,17 @@ pub struct AccountRosterEntry {
     pub detail: String,
 }
 
+/// Positions for one connected Alpaca account. The legacy `Positions` message
+/// remains the primary-account snapshot; this lets the UI render every account
+/// explicitly without guessing from the primary-only list.
+#[derive(Clone, Debug)]
+pub struct AccountPositions {
+    pub account_id: String,
+    pub label: String,
+    pub is_primary: bool,
+    pub positions: Vec<PositionInfo>,
+}
+
 pub struct QuickTradePlan {
     pub symbol: String,
     pub last_price: f64,
@@ -2625,6 +2636,7 @@ pub enum BrokerMsg {
         accounts: Vec<AccountRosterEntry>,
     },
     Positions(Vec<PositionInfo>),
+    AlpacaAccountPositions(Vec<AccountPositions>),
     Orders(Vec<OrderInfo>),
     OrderResult(String),
     /// Real-time Alpaca market-data L1 (rich quote with sizes).
