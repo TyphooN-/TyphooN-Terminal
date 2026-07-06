@@ -428,6 +428,7 @@ impl BarSyncInputs {
         self.add_kraken_equities_tradable_catalog_row(&mut rows);
         self.add_expected_kraken_sync_rows(&mut rows);
         self.add_kraken_equities_merged_rows(&mut rows, &checked_or_complete_lookup);
+        relabel_kraken_equity_intraday_rows(&mut rows);
         // Disabled Sync TFs (e.g. M1/M5 unchecked) are skipped by automated
         // sync, so their cached-leftover rows must neither render in the
         // window nor drag down the broker/overall %s (which would otherwise
@@ -842,9 +843,84 @@ fn kraken_equities_merged_timeframe_supported(tf: &str) -> bool {
     kraken_equity_full_universe_timeframe(tf) || kraken_equity_broad_fallback_timeframe(tf)
 }
 
+/// Kraken's WS v2 serves xStock OHLC only at D1/W1 (settled) and M1/M5 (live);
+/// 15Min–4Hour repeatedly return no bars for these illiquid tokens, so a native
+/// "Kraken Equities" intraday row can never become fresh and would show a
+/// misleading 0%. It is not a native lane — intraday breadth is the
+/// Alpaca/Yahoo + Merged lanes' job. Relabel it "WS M1/M5 only" (like the
+/// "no native monthly" Kraken Spot row) and zero the counts so it neither reads
+/// unhealthy nor drags the broker/overall health %.
+fn relabel_kraken_equity_intraday_rows(rows: &mut [SyncStatsRow]) {
+    for row in rows.iter_mut() {
+        if row.broker == "Kraken Equities"
+            && matches!(row.tf.as_str(), "15Min" | "30Min" | "1Hour" | "4Hour")
+        {
+            row.total = 0;
+            row.healthy = 0;
+            row.stale = 0;
+            row.empty = 0;
+            row.settled = 0;
+            row.unreachable = 0;
+            row.pct_healthy = 0.0;
+            row.note = Some("WS M1/M5 only".to_string());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row(broker: &str, tf: &str, healthy: u64, stale: u64) -> SyncStatsRow {
+        SyncStatsRow {
+            broker: broker.to_string(),
+            tf: tf.to_string(),
+            total: healthy + stale,
+            healthy,
+            stale,
+            empty: 0,
+            settled: 0,
+            unreachable: 0,
+            note: None,
+            pct_healthy: if healthy + stale == 0 {
+                0.0
+            } else {
+                healthy as f32 / (healthy + stale) as f32 * 100.0
+            },
+        }
+    }
+
+    #[test]
+    fn kraken_equity_intraday_rows_relabelled_and_dropped_from_health() {
+        let mut rows = vec![
+            row("Kraken Equities", "15Min", 0, 142), // WS can't serve -> relabel
+            row("Kraken Equities", "4Hour", 0, 142), // WS can't serve -> relabel
+            row("Kraken Equities", "1Day", 146, 0),  // native lane -> untouched
+            row("Kraken Equities", "1Week", 147, 0), // native lane -> untouched
+            row("Kraken Spot", "15Min", 755, 104),   // different broker -> untouched
+        ];
+        relabel_kraken_equity_intraday_rows(&mut rows);
+
+        for r in rows.iter().filter(|r| {
+            r.broker == "Kraken Equities" && matches!(r.tf.as_str(), "15Min" | "4Hour")
+        }) {
+            assert_eq!(r.total, 0, "{r:?}");
+            assert_eq!(r.note.as_deref(), Some("WS M1/M5 only"), "{r:?}");
+        }
+        // D1/W1 native rows and Kraken Spot are untouched.
+        let d1 = rows.iter().find(|r| r.broker == "Kraken Equities" && r.tf == "1Day").unwrap();
+        assert_eq!(d1.total, 146);
+        assert!(d1.note.is_none());
+        let spot = rows.iter().find(|r| r.broker == "Kraken Spot").unwrap();
+        assert_eq!(spot.total, 859);
+
+        // Health totals now exclude the un-serveable intraday rows (0 total).
+        let (total, healthy): (u64, u64) = rows
+            .iter()
+            .fold((0, 0), |(t, h), r| (t + r.total, h + r.healthy));
+        assert_eq!(total, 146 + 147 + 859);
+        assert_eq!(healthy, 146 + 147 + 755);
+    }
 
     #[test]
     fn disabled_sync_timeframes_are_dropped_from_rows_and_percentages() {
