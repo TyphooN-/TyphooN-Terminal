@@ -1976,12 +1976,17 @@ fn data_sanity_audit_classifies_carried_open_as_info() {
 fn data_sanity_audit_warns_on_settled_close_outside_range() {
     let db_path = temp_db_path();
     let cache = SqliteCache::open(&db_path).unwrap();
-    // Historical bar whose close is outside its own high/low — malformed.
-    let bars = r#"[
-        {"timestamp":"2015-05-04T00:00:00+00:00","open":10.0,"high":10.2,"low":9.8,"close":10.0,"volume":1.0},
-        {"timestamp":"2015-05-05T00:00:00+00:00","open":10.16,"high":10.16,"low":10.16,"close":10.69,"volume":1.0}
-    ]"#;
-    cache.put_bars("yahoo-chart:SEC:1Day", bars).unwrap();
+    // Legacy historical bar whose close is outside its own high/low —
+    // malformed. Injected raw so it bypasses the write-path clamp (as a
+    // pre-clamp build would have stored it).
+    insert_raw_bars(
+        &cache,
+        "yahoo-chart:SEC:1Day",
+        &[
+            (1_430_697_600_000, 10.0, 10.2, 9.8, 10.0, 1.0),
+            (1_430_784_000_000, 10.16, 10.16, 10.16, 10.69, 1.0),
+        ],
+    );
 
     let report = cache.audit_bar_cache_sanity().unwrap();
     assert!(report.has_code("body_outside_range"), "{report:#?}");
@@ -2009,15 +2014,19 @@ fn data_sanity_audit_treats_forming_candle_close_drift_as_info() {
         .unwrap()
         .and_utc();
     let prev_month = month_start - chrono::Duration::days(15);
-    let bars = format!(
-        r#"[
-        {{"timestamp":"{}","open":30.0,"high":31.0,"low":29.0,"close":30.0,"volume":1.0}},
-        {{"timestamp":"{}","open":29.4,"high":30.6,"low":29.4,"close":25.5,"volume":1.0}}
-    ]"#,
-        prev_month.to_rfc3339(),
-        month_start.to_rfc3339(),
+    // Injected raw: the write path now clamps close-outside-range on every bar
+    // (a candle with close outside its own high/low is malformed regardless of
+    // forming state), so the forming-drift-as-Info classification only applies
+    // to legacy/raw rows. This exercises that the audit still treats a forming
+    // candle's close drift as context, not settled damage.
+    insert_raw_bars(
+        &cache,
+        "yahoo-chart:ACLZ:1Month",
+        &[
+            (prev_month.timestamp_millis(), 30.0, 31.0, 29.0, 30.0, 1.0),
+            (month_start.timestamp_millis(), 29.4, 30.6, 29.4, 25.5, 1.0),
+        ],
     );
-    cache.put_bars("yahoo-chart:ACLZ:1Month", &bars).unwrap();
 
     let report = cache.audit_bar_cache_sanity().unwrap();
     assert!(!report.has_code("body_outside_range"), "{report:#?}");
@@ -2268,16 +2277,45 @@ fn data_sanity_split_explains_mid_bucket_ex_date_on_monthly() {
 }
 
 #[test]
-fn data_sanity_repair_clamps_settled_close_outside_range() {
+fn write_path_clamps_close_outside_range_so_no_bad_row_is_stored() {
     let db_path = temp_db_path();
     let cache = SqliteCache::open(&db_path).unwrap();
-    // Settled candle whose close sits >5% above its own high (the
-    // ATON/SEC-class provider malformation).
+    // Yahoo's malformed illiquid-warrant candle: close 12 above its own high
+    // 10. The write path must clamp the range to contain the close so it is
+    // never stored malformed (no body_outside_range for the audit to flag and
+    // for Yahoo's full-replace sync to keep re-introducing). Open outside range
+    // (carried-open semantics) is left as-is.
     let bars = r#"[
         {"timestamp":"2024-01-01T00:00:00+00:00","open":10.0,"high":11.0,"low":9.0,"close":10.5,"volume":100.0},
         {"timestamp":"2024-01-02T00:00:00+00:00","open":10.0,"high":10.0,"low":10.0,"close":12.0,"volume":100.0}
     ]"#;
     cache.put_bars("yahoo-chart:CLMP:1Day", bars).unwrap();
+    let raw = cache.get_bars_raw("yahoo-chart:CLMP:1Day").unwrap().unwrap();
+    let bad = raw.iter().find(|b| b.0 == 1_704_153_600_000).unwrap();
+    assert_eq!(bad.4, 12.0, "close preserved");
+    assert!(bad.2 >= bad.4, "high clamped to contain close: {bad:?}");
+
+    let report = cache.audit_bar_cache_sanity().unwrap();
+    assert!(!report.has_code("body_outside_range"), "{report:#?}");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn data_sanity_repair_clamps_settled_close_outside_range() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    // A LEGACY settled candle whose close sits >5% above its own high, injected
+    // raw so it bypasses the write-path clamp (as a pre-clamp build would have
+    // stored it). The rewrite repair must clean it in place.
+    insert_raw_bars(
+        &cache,
+        "yahoo-chart:CLMP:1Day",
+        &[
+            (1_704_067_200_000, 10.0, 11.0, 9.0, 10.5, 100.0),
+            (1_704_153_600_000, 10.0, 10.0, 10.0, 12.0, 100.0),
+        ],
+    );
 
     let report = cache.audit_bar_cache_sanity().unwrap();
     assert!(report.has_code("body_outside_range"), "{report:#?}");

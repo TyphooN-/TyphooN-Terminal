@@ -788,6 +788,20 @@ fn pack_bars_for_key(key: &str, json_data: &str) -> Result<Vec<u8>, String> {
         if h < l {
             continue;
         }
+        // The close is by definition within [low, high]. A provider that sends
+        // it outside — Yahoo's malformed monthly candles for illiquid warrants,
+        // e.g. ALFUW close 0.29 with high 0.23 — would otherwise be stored and
+        // re-flagged body_outside_range on every audit until a manual rewrite,
+        // and Yahoo's full-replace sync keeps re-introducing it. Clamp the
+        // range to contain the close at write time (same repair the audit's
+        // rewrite applies, pre-emptive). Open outside the range is carried-open
+        // provider semantics (Info), not damage, and is left untouched. Uses
+        // the audit's 5% slop so only genuinely-flagged candles are touched.
+        let (h, l) = if c > h * 1.05 || c < l * 0.95 {
+            (h.max(c), l.min(c))
+        } else {
+            (h, l)
+        };
         // Later bars for the same merge bucket win. This handles provider
         // refreshes that return an early partial D/W/M candle and then a
         // finalized candle with the same session key.
