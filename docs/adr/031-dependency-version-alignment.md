@@ -233,3 +233,16 @@ surface, no workspace drift" rule:
 - Confirmed blockers unchanged: `wgpu` 30 is still blocked by `egui-wgpu`
   0.35.0's wgpu 29 pairing, and `generic-array` 0.14.7 remains pinned through
   upstream `dbus-secret-service` / old RustCrypto transitive dependencies.
+
+Direct `wgpu` follow-up after the refresh:
+
+- Removed `typhoon-native`'s direct `wgpu` dependency and routed GPU-compute
+  code through `eframe::wgpu`. TyphooN gets its device/queue from eframe's
+  `wgpu_render_state`; carrying a second direct requirement only created a
+  false upgrade knob and kept Linux-native Vulkan/Metal/DX/GLES feature
+  decisions split across two manifests.
+- Result: the `wgpu` tree is now owned only by `eframe`/`egui-wgpu`, the
+  lockfile sheds the unused direct-wgpu backend support crates, and `cargo
+  update --workspace --dry-run --verbose` no longer reports `wgpu` as a direct
+  TyphooN update blocker. Future `wgpu` majors should arrive with the egui
+  release that adopts them.

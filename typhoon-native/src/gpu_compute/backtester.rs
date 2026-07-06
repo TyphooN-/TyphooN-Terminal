@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use super::{
     BACKTEST_EVAL_SHADER, MONTE_CARLO_SHADER, NNFX_EVAL_SHADER, ROBUSTNESS_SHADER,
-    WALK_FORWARD_SHADER, bytemuck_cast_slice, bytemuck_cast_slice_to_f32,
+    WALK_FORWARD_SHADER, bytemuck_cast_slice, bytemuck_cast_slice_to_f32, wgpu,
 };
 
 /// Result of a single parameter combination backtest.

@@ -1,6 +1,6 @@
 //! Bespoke OHLC/midpoint GPU indicator methods.
 
-use super::{GpuCompute, bytemuck_cast_slice, bytemuck_cast_slice_to_f32};
+use super::{GpuCompute, bytemuck_cast_slice, bytemuck_cast_slice_to_f32, wgpu};
 
 impl GpuCompute {
     /// Compute CCI on GPU from OHLC (computes typical price internally). Parallel.

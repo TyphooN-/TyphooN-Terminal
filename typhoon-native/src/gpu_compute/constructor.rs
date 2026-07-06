@@ -15,7 +15,7 @@ use super::{
     ULTOSC_SHADER, VAR_OSCILLATOR_SHADER, WILLIAMS_R_SHADER, WMA_SHADER,
     create_indicator_bind_group_layout, create_indicator_pipeline_layout,
     create_multi_indicator_bind_group_layout, create_multi_indicator_pipeline_layout,
-    make_indicator_pipeline, make_multi_indicator_pipeline,
+    make_indicator_pipeline, make_multi_indicator_pipeline, wgpu,
 };
 
 impl GpuCompute {

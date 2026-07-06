@@ -1,6 +1,6 @@
 //! Legacy SMA/EMA GPU dispatch and readback methods.
 
-use super::{GpuCompute, Indicator, bytemuck_cast_slice, bytemuck_cast_slice_to_f32};
+use super::{GpuCompute, Indicator, bytemuck_cast_slice, bytemuck_cast_slice_to_f32, wgpu};
 
 impl GpuCompute {
     /// Compute SMA on GPU for a bar range (reuses uploaded OHLC buffer).

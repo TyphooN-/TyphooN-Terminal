@@ -8,8 +8,8 @@
 
 #![allow(dead_code)]
 
+pub(crate) use eframe::wgpu;
 use std::sync::Arc;
-use wgpu;
 
 mod advanced_indicators;
 mod backtester;

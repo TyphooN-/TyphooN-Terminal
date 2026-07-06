@@ -1,5 +1,7 @@
 //! Pipeline and bind-group layout bootstrap helpers for `gpu_compute`.
 
+use super::wgpu;
+
 pub(super) fn create_indicator_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("indicator_bgl"),
