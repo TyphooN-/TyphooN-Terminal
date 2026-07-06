@@ -425,7 +425,7 @@ impl BarSyncInputs {
             &checked_or_complete_lookup,
         );
         self.add_kraken_equities_tradable_catalog_row(&mut rows);
-        self.add_expected_kraken_sync_rows(&mut rows);
+        self.add_expected_kraken_sync_rows(&mut rows, &checked_or_complete_lookup);
         self.add_kraken_equities_merged_rows(&mut rows, &checked_or_complete_lookup);
         relabel_kraken_equity_intraday_rows(&mut rows);
         // Disabled Sync TFs (e.g. M1/M5 unchecked) are skipped by automated
@@ -703,7 +703,11 @@ impl BarSyncInputs {
         }
     }
 
-    fn add_expected_kraken_sync_rows(&self, rows: &mut Vec<SyncStatsRow>) {
+    fn add_expected_kraken_sync_rows(
+        &self,
+        rows: &mut Vec<SyncStatsRow>,
+        checked_or_complete_lookup: &dyn Fn(&str) -> bool,
+    ) {
         let timeframes = self.timeframes.clone();
         if timeframes.is_empty() || (!self.cache_stats_present && self.detailed_stats.is_empty()) {
             return;
@@ -780,10 +784,24 @@ impl BarSyncInputs {
                     if existing.contains(&expected_key) {
                         continue;
                     }
+                    let fetch_key = alpaca_fetch_key(&symbol, tf);
+                    let provider_settled = checked_or_complete_lookup(&expected_key);
+                    let provider_unreachable = self
+                        .no_data_keys_by_source
+                        .get(source)
+                        .is_some_and(|keys| keys.contains(&fetch_key));
                     if let Some(&idx) = row_index.get(&row_key) {
                         let row = &mut rows[idx];
                         row.total += 1;
-                        row.empty += 1;
+                        if provider_settled {
+                            row.healthy += 1;
+                            row.settled += 1;
+                        } else {
+                            row.empty += 1;
+                            if provider_unreachable {
+                                row.unreachable += 1;
+                            }
+                        }
                         row.pct_healthy = if row.total == 0 {
                             0.0
                         } else {
@@ -795,13 +813,13 @@ impl BarSyncInputs {
                             broker: row_key.0.clone(),
                             tf: row_key.1.clone(),
                             total: 1,
-                            healthy: 0,
+                            healthy: u64::from(provider_settled),
                             stale: 0,
-                            empty: 1,
-                            settled: 0,
-                            unreachable: 0,
+                            empty: u64::from(!provider_settled),
+                            settled: u64::from(provider_settled),
+                            unreachable: u64::from(!provider_settled && provider_unreachable),
                             note: None,
-                            pct_healthy: 0.0,
+                            pct_healthy: if provider_settled { 100.0 } else { 0.0 },
                         });
                         row_index.insert(row_key.clone(), idx);
                     }
@@ -966,6 +984,50 @@ mod tests {
         // empty 5Min row — so it must be 100%, not dragged down.
         assert_eq!(result.total, 1);
         assert!((result.overall_pct - 100.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn expected_missing_rows_honor_provider_settled_and_no_data_marks() {
+        let mut kraken_backfill_keys = std::collections::HashSet::new();
+        kraken_backfill_keys.insert(alpaca_fetch_key("BTCUSD", "1Day"));
+        let mut kraken_no_data = std::collections::HashSet::new();
+        kraken_no_data.insert(alpaca_fetch_key("ETHUSD", "1Day"));
+        let mut no_data_keys_by_source = std::collections::HashMap::new();
+        no_data_keys_by_source.insert("kraken".to_string(), kraken_no_data);
+
+        let inputs = BarSyncInputs {
+            detailed_stats: Vec::new(),
+            bar_ts_cache: std::collections::HashMap::new(),
+            cache_stats_present: true,
+            catalog_symbol_count: 0,
+            catalog_symbols: Vec::new(),
+            demand_symbols: Vec::new(),
+            ws_sweep_symbols: Vec::new(),
+            spot_symbols: vec!["BTCUSD".to_string(), "ETHUSD".to_string()],
+            futures_symbols: Vec::new(),
+            timeframes: vec!["1Day".to_string()],
+            backfill_alpaca_kraken_equities_enabled: false,
+            backfill_yahoo_chart_enabled: false,
+            kraken_ws_fresh_until: std::collections::HashMap::new(),
+            alpaca_backfill_keys: std::collections::HashSet::new(),
+            kraken_backfill_keys,
+            kraken_futures_backfill_keys: std::collections::HashSet::new(),
+            yahoo_chart_backfill_keys: std::collections::HashSet::new(),
+            no_data_keys_by_source,
+        };
+
+        let result = inputs.compute();
+        let spot_d1 = result
+            .rows
+            .iter()
+            .find(|row| row.broker == "Kraken Spot" && row.tf == "1Day")
+            .unwrap();
+        assert_eq!(spot_d1.total, 2);
+        assert_eq!(spot_d1.healthy, 1);
+        assert_eq!(spot_d1.settled, 1);
+        assert_eq!(spot_d1.empty, 1);
+        assert_eq!(spot_d1.unreachable, 1);
+        assert!((spot_d1.pct_healthy - 50.0).abs() < f32::EPSILON);
     }
 
     #[test]
