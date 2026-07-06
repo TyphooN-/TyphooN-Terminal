@@ -34,8 +34,11 @@ egui_plot = "0.36"
 # news imagery is raster; re-enable a loader only with a concrete need.
 egui_extras = { version = "0.35", default-features = false, features = ["image", "webp", "http"] }
 egui_commonmark = { version = "0.24", default-features = false, features = ["load-images"] }
-# wgpu types come through eframe's re-export. Do not add a direct wgpu dep unless
-# TyphooN needs a different feature surface than eframe's egui-wgpu backend.
+# eframe's `wgpu_no_default_features` deliberately avoids selecting a backend;
+# TyphooN is a desktop app, so enable only the native Linux renderer surface we
+# need here. Code still imports wgpu types through `eframe::wgpu` to keep the
+# API version paired with egui-wgpu.
+wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "vulkan", "wgsl"] }  # Must match egui-wgpu (eframe 0.35 pins wgpu 29)
 
 # Async runtime (shared with engine). net + io-util serve the hand-rolled
 # /metrics HTTP responder (metrics.rs) that replaced axum. No tokio::fs use

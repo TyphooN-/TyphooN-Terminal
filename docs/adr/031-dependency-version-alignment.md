@@ -236,28 +236,30 @@ surface, no workspace drift" rule:
 
 Direct `wgpu` follow-up after the refresh:
 
-- Removed `typhoon-native`'s direct `wgpu` dependency and routed GPU-compute
-  code through `eframe::wgpu`. TyphooN gets its device/queue from eframe's
-  `wgpu_render_state`; carrying a second direct requirement only created a
-  false upgrade knob and kept Linux-native Vulkan/Metal/DX/GLES feature
-  decisions split across two manifests.
-- Result: the `wgpu` tree is now owned only by `eframe`/`egui-wgpu`, the
-  lockfile sheds the unused direct-wgpu backend support crates, and `cargo
-  update --workspace --dry-run --verbose` no longer reports `wgpu` as a direct
-  TyphooN update blocker. Future `wgpu` majors should arrive with the egui
-  release that adopts them.
+- GPU-compute code imports wgpu types through `eframe::wgpu`, because TyphooN
+  gets its device/queue from eframe's `wgpu_render_state` and must stay ABI/API
+  paired with `egui-wgpu`.
+- Kept a direct `wgpu` manifest entry anyway, but only as a feature selector:
+  `eframe`'s `wgpu_no_default_features` path intentionally does not enable any
+  native backend. Without TyphooN selecting at least one backend, release startup
+  panics with `No wgpu backend feature that is implemented for the target
+  platform was enabled`.
+- The direct `wgpu` entry must match the `egui-wgpu` major pinned by eframe and
+  should stay minimal (`std`, `parking_lot`, Linux `vulkan`, `wgsl`) rather than
+  using upstream `wgpu/default`.
 
 Desktop-only Android-surface follow-up:
 
 - Removed TyphooN's direct `chrono` clock/local-timezone requirement and the
   `keyring-core` sample test-store feature. Runtime scheduling, log labels, and
   generated filenames now use UTC timestamps; keyring tests use the built-in
-  mock store. This drops the `android_system_properties` lockfile package.
+  mock store. This removes TyphooN's direct chrono/keyring path to
+  `android_system_properties`.
 - Remaining Android-named lockfile packages are upstream transitive target
   support from `winit`/`eframe` (`android-activity`, `ndk`, `jni`),
   `webbrowser` via `egui-winit` links, and `rustls-platform-verifier` via
   `reqwest`'s secure platform verifier. They are absent from the current Linux
-  dependency tree except for `wgpu-core-deps-windows-linux-android`, which is
-  the cross-platform wgpu support crate required on Linux. Do not fork these
-  upstream crates or use reqwest private `__rustls*` features only to scrub
-  lockfile names.
+  dependency tree except for wgpu's cross-platform Linux support crates
+  (`wgpu-core-deps-windows-linux-android`, `wgpu-hal`, and their target support
+  such as `android_system_properties`). Do not fork these upstream crates or use
+  reqwest private `__rustls*` features only to scrub lockfile names.
