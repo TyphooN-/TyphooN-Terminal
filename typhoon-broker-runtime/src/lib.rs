@@ -21,6 +21,7 @@ pub mod kraken_order_ops;
 pub mod kraken_ws_commands;
 pub mod market_data_commands;
 pub mod matrix_commands;
+pub mod memory_pressure;
 pub mod misc_commands;
 pub mod news;
 pub mod news_ingest;

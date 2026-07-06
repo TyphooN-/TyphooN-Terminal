@@ -185,8 +185,15 @@ pub(super) fn spawn_background_refresh(
                         }
                         last_halt_refresh = Some(std::time::Instant::now());
                     }
-                    // SEC data + cache stats — all via BG's own connection (growing database — no limit)
-                    data.sec_filings = sec_filing::get_all_filings(conn).unwrap_or_default();
+                    // SEC data + cache stats — all via BG's own connection.
+                    // Do NOT hydrate the full `sec_filings` table here. A full-universe
+                    // scrape can leave 1M+ rows; loading and cloning that snapshot during
+                    // startup has repeatedly pushed release/max into the OOM killer before
+                    // market-data backpressure can even engage. Keep the always-on BG
+                    // snapshot to the recent visible set; deeper SEC browsing/search must
+                    // stay on-demand instead of living in every app snapshot.
+                    data.sec_filings = sec_filing::get_recent_filings(conn, None, 1000)
+                        .unwrap_or_default();
                     data.sec_alerts =
                         sec_filing::get_filing_alerts(conn, false).unwrap_or_default();
                     data.sec_content_stats = sec_filing::filing_content_stats(conn);
@@ -198,8 +205,6 @@ pub(super) fn spawn_background_refresh(
                     if let Ok(stats) = cache.stats() {
                         data.cache_stats = Some(stats);
                     }
-                    let _ = bg_tx.send(data.clone());
-
                     // Phase 1c: heavier queries — all use BG's own connection (zero contention with UI)
                     {
                         let t = std::time::Instant::now();
@@ -314,8 +319,6 @@ pub(super) fn spawn_background_refresh(
                         "BG: Phase 1c done in {}ms",
                         phase_start.elapsed().as_millis()
                     );
-                    let _ = bg_tx.send(data.clone());
-
                     // Periodic DB maintenance: incremental_vacuum every 30 minutes.
                     // Reclaims freed pages from DELETEs/compaction without full VACUUM.
                     if last_vacuum.elapsed() >= VACUUM_INTERVAL {

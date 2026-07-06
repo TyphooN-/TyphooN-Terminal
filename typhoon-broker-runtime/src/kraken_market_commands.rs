@@ -3,6 +3,8 @@ use std::sync::Arc;
 use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
 use typhoon_engine::core::cache::SqliteCache;
 
+use crate::memory_pressure::wait_for_broad_fetch_memory_headroom;
+
 pub async fn handle_kraken_market_command(
     cmd: BrokerCmd,
     kraken_broker: Option<&typhoon_engine::broker::kraken::KrakenBroker>,
@@ -41,6 +43,14 @@ pub async fn handle_kraken_market_command(
             let shared_cache = shared_cache_broker.clone();
             let permits = kraken_equity_fetch_permits.clone();
             tokio::spawn(async move {
+                if !wait_for_broad_fetch_memory_headroom("Kraken equities", &msg_tx).await {
+                    let _ = msg_tx.send(BrokerMsg::KrakenEquityHistoryError {
+                        symbol,
+                        timeframe,
+                        error: "skipped while waiting for memory headroom".to_string(),
+                    });
+                    return;
+                }
                 let Ok(_permit) = permits.acquire_owned().await else {
                     let _ = msg_tx.send(BrokerMsg::KrakenEquityHistoryError {
                         symbol,
@@ -140,6 +150,15 @@ pub async fn handle_kraken_market_command(
             let msg_tx = broker_msg_tx.clone();
             let permits = yahoo_chart_fetch_permits.clone();
             tokio::spawn(async move {
+                if !wait_for_broad_fetch_memory_headroom("Yahoo Chart", &msg_tx).await {
+                    let _ = msg_tx.send(BrokerMsg::BarsFetched {
+                        source,
+                        symbol,
+                        timeframe,
+                        count: 0,
+                    });
+                    return;
+                }
                 let Ok(_permit) = permits.acquire_owned().await else {
                     let _ = msg_tx.send(BrokerMsg::BarsFetched {
                         source,

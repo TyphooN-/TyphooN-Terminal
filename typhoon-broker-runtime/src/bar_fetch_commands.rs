@@ -4,6 +4,7 @@ use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
 use typhoon_engine::core::cache::SqliteCache;
 
 use crate::account_pool::AlpacaAccountPool;
+use crate::memory_pressure::wait_for_broad_fetch_memory_headroom;
 
 pub async fn handle_bar_fetch_command(
     cmd: BrokerCmd,
@@ -68,6 +69,16 @@ pub async fn handle_bar_fetch_command(
                 let shared_cache = shared_cache_broker.clone();
                 let permits = alpaca_fetch_permits.clone();
                 tokio::spawn(async move {
+                    if !wait_for_broad_fetch_memory_headroom("Alpaca batch", &msg_tx).await {
+                        for symbol in symbols {
+                            let _ = msg_tx.send(BrokerMsg::AlpacaFetchSettled {
+                                symbol,
+                                timeframe: timeframe.clone(),
+                                success: false,
+                            });
+                        }
+                        return;
+                    }
                     let Ok(_permit) = permits.acquire_owned().await else {
                         for symbol in symbols {
                             let _ = msg_tx.send(BrokerMsg::AlpacaFetchSettled {

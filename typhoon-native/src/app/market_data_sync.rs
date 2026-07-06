@@ -38,41 +38,58 @@ pub(super) fn current_process_rss_mb() -> u64 {
     0
 }
 
-fn current_system_memory_mb() -> u64 {
+fn current_system_memory_mb() -> (u64, u64) {
+    let mut total_mb = 0;
+    let mut available_mb = 0;
     if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") {
         for line in meminfo.lines() {
             if line.starts_with("MemTotal:") {
                 if let Some(kb_str) = line.split_whitespace().nth(1) {
                     if let Ok(kb) = kb_str.parse::<u64>() {
-                        return kb / 1024;
+                        total_mb = kb / 1024;
+                    }
+                }
+            } else if line.starts_with("MemAvailable:") {
+                if let Some(kb_str) = line.split_whitespace().nth(1) {
+                    if let Ok(kb) = kb_str.parse::<u64>() {
+                        available_mb = kb / 1024;
                     }
                 }
             }
         }
     }
-    0
+    (total_mb, available_mb)
 }
 
-fn market_data_memory_pressure_at(rss_mb: u64, total_mb: u64) -> MarketDataMemoryPressure {
+fn market_data_memory_pressure_at(
+    rss_mb: u64,
+    total_mb: u64,
+    available_mb: u64,
+) -> MarketDataMemoryPressure {
     if rss_mb == 0 {
         return MarketDataMemoryPressure::Normal;
     }
-    // Fallback keeps older/no-/proc environments safer than the former 18 GB
-    // fixed tripwire while avoiding accidental throttling on tiny test values.
+    // Fallback keeps older/no-/proc environments bounded while avoiding
+    // accidental throttling on tiny test values.
     if total_mb == 0 {
-        return if rss_mb >= 18_000 {
+        return if rss_mb >= 16_000 {
             MarketDataMemoryPressure::PauseBackground
-        } else if rss_mb >= 14_000 {
+        } else if rss_mb >= 12_000 {
             MarketDataMemoryPressure::Reduced
         } else {
             MarketDataMemoryPressure::Normal
         };
     }
-    let reduced_at = (total_mb.saturating_mul(45) / 100).max(8_000);
-    let pause_at = (total_mb.saturating_mul(55) / 100).max(reduced_at + 1);
-    if rss_mb >= pause_at {
+    // Start backing off before the old 14-18GB band. The screenshots show
+    // ~12.7GB RSS with 300+ pending fetches shortly before a jump to 23GB anon
+    // RSS; waiting until 55% RAM leaves no room for response/parse/write bursts.
+    let reduced_rss = (total_mb.saturating_mul(38) / 100).max(8_000);
+    let pause_rss = (total_mb.saturating_mul(48) / 100).max(reduced_rss + 1);
+    let reduced_available = total_mb.saturating_mul(45) / 100;
+    let pause_available = total_mb.saturating_mul(33) / 100;
+    if rss_mb >= pause_rss || (available_mb > 0 && available_mb <= pause_available) {
         MarketDataMemoryPressure::PauseBackground
-    } else if rss_mb >= reduced_at {
+    } else if rss_mb >= reduced_rss || (available_mb > 0 && available_mb <= reduced_available) {
         MarketDataMemoryPressure::Reduced
     } else {
         MarketDataMemoryPressure::Normal
@@ -80,7 +97,8 @@ fn market_data_memory_pressure_at(rss_mb: u64, total_mb: u64) -> MarketDataMemor
 }
 
 fn current_market_data_memory_pressure() -> MarketDataMemoryPressure {
-    market_data_memory_pressure_at(current_process_rss_mb(), current_system_memory_mb())
+    let (total_mb, available_mb) = current_system_memory_mb();
+    market_data_memory_pressure_at(current_process_rss_mb(), total_mb, available_mb)
 }
 
 pub(super) fn background_retry_dispatch_allowed(pending_fetches: usize) -> bool {
@@ -2732,21 +2750,25 @@ mod tests {
     }
 
     #[test]
-    fn memory_pressure_uses_system_relative_thresholds() {
+    fn memory_pressure_uses_system_relative_rss_and_available_thresholds() {
         assert_eq!(
-            market_data_memory_pressure_at(13_000, 32_000),
+            market_data_memory_pressure_at(11_500, 32_000, 20_000),
             MarketDataMemoryPressure::Normal
         );
         assert_eq!(
-            market_data_memory_pressure_at(15_000, 32_000),
+            market_data_memory_pressure_at(12_500, 32_000, 20_000),
             MarketDataMemoryPressure::Reduced
         );
         assert_eq!(
-            market_data_memory_pressure_at(18_000, 32_000),
+            market_data_memory_pressure_at(15_500, 32_000, 20_000),
             MarketDataMemoryPressure::PauseBackground
         );
         assert_eq!(
-            market_data_memory_pressure_at(0, 32_000),
+            market_data_memory_pressure_at(8_000, 32_000, 10_000),
+            MarketDataMemoryPressure::PauseBackground
+        );
+        assert_eq!(
+            market_data_memory_pressure_at(0, 32_000, 20_000),
             MarketDataMemoryPressure::Normal
         );
     }
@@ -2754,15 +2776,15 @@ mod tests {
     #[test]
     fn memory_pressure_fallback_without_meminfo_is_still_bounded() {
         assert_eq!(
-            market_data_memory_pressure_at(13_999, 0),
+            market_data_memory_pressure_at(11_999, 0, 0),
             MarketDataMemoryPressure::Normal
         );
         assert_eq!(
-            market_data_memory_pressure_at(14_000, 0),
+            market_data_memory_pressure_at(12_000, 0, 0),
             MarketDataMemoryPressure::Reduced
         );
         assert_eq!(
-            market_data_memory_pressure_at(18_000, 0),
+            market_data_memory_pressure_at(16_000, 0, 0),
             MarketDataMemoryPressure::PauseBackground
         );
     }
