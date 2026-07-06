@@ -31,8 +31,10 @@ pub(super) const ALPACA_FULL_TILT_QUEUE_WINDOW: usize = 256;
 pub(super) const ALPACA_FULL_TILT_BATCH_SIZE: usize = 200;
 pub(super) const ALPACA_FULL_TILT_FETCH_PERMITS: usize = 8;
 pub(super) const ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 4_096;
+pub(super) const ALPACA_FULL_TILT_LOW_TF_RESERVE_BATCH: usize = 24;
 pub(super) const KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW: usize = 384;
 pub(super) const KRAKEN_SPOT_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2_048;
+pub(super) const KRAKEN_SPOT_FULL_TILT_LOW_TF_RESERVE_BATCH: usize = 16;
 pub(super) const KRAKEN_EQUITIES_FULL_TILT_QUEUE_WINDOW: usize = 768;
 pub(super) const KRAKEN_EQUITIES_FULL_TILT_BATCH_SIZE: usize = 320;
 // Full-tilt still rotates through the full xStocks catalog, but scanning 8k+

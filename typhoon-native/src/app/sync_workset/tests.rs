@@ -219,6 +219,63 @@ fn select_alpaca_sync_candidates_uses_normalized_pending_keys() {
 }
 
 #[test]
+fn low_timeframe_reserve_selects_low_tf_while_main_lane_stays_high_tf_first() {
+    let now_s = 1_700_000_000i64;
+    let symbols = vec!["AAA".to_string(), "BBB".to_string(), "CCC".to_string()];
+    let timeframes = vec!["15Min".to_string(), "1Day".to_string()];
+    let mut cursor = 0usize;
+    let never_blocked = |_symbol: &str, _tf: &str| false;
+
+    let main = select_alpaca_sync_workset_rotating(
+        &symbols,
+        &timeframes,
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashMap::new(),
+        &HashSet::new(),
+        2,
+        0,
+        3,
+        &mut cursor,
+        now_s,
+        alpaca_sync_target_bars,
+        &never_blocked,
+    );
+    assert_eq!(main.len(), 2);
+    assert!(main.iter().all(|candidate| candidate.timeframe == "1Day"));
+
+    let mut staged_pending = HashSet::new();
+    staged_pending.extend(
+        main.iter()
+            .map(|candidate| alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)),
+    );
+    let reserve = select_low_timeframe_sync_reserve_rotating(
+        &symbols,
+        &timeframes,
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashMap::new(),
+        &staged_pending,
+        2,
+        3,
+        &mut cursor,
+        now_s,
+        24,
+        alpaca_sync_target_bars,
+        &never_blocked,
+    );
+
+    assert_eq!(reserve.len(), 2);
+    assert!(
+        reserve
+            .iter()
+            .all(|candidate| candidate.timeframe == "15Min")
+    );
+}
+
+#[test]
 fn merge_recent_sync_overrides_preserves_settled_fetch_across_bg_rev_rebuild() {
     let now_s = 1_700_000_000i64;
     let mut rebuilt = HashMap::from([(

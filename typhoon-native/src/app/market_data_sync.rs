@@ -6,6 +6,20 @@ const ALPACA_BATCH_FETCH_INTRADAY_SYMBOLS: usize = 16;
 const ALPACA_BATCH_FETCH_LOW_TF_SYMBOLS: usize = 8;
 pub(super) const BACKGROUND_RETRY_PENDING_FETCH_CAP: usize = 256;
 
+fn full_tilt_low_tf_reserve_slots(
+    full_tilt: bool,
+    available_slots: usize,
+    max_reserve: usize,
+) -> usize {
+    if !full_tilt || available_slots < 8 || max_reserve == 0 {
+        return 0;
+    }
+    (available_slots / 8)
+        .max(1)
+        .min(max_reserve)
+        .min(available_slots / 2)
+}
+
 /// Memory pressure levels for broad background market-data sync.
 ///
 /// The old fixed 18 GB pause point was too late on 32 GB machines: a cold-start
@@ -2201,6 +2215,7 @@ impl TyphooNApp {
             return 0;
         }
 
+        let full_tilt = self.full_tilt_sync_enabled();
         let capacity = self.alpaca_sync_capacity();
         let available_slots = memory_bounded_available_slots(
             capacity.queue_window,
@@ -2239,7 +2254,7 @@ impl TyphooNApp {
                 .map(|retry| alpaca_fetch_key(&retry.symbol, &retry.timeframe)),
         );
         let mut cursor = self.alpaca_sync_cursor;
-        let scan_limit = if self.full_tilt_sync_enabled() {
+        let scan_limit = if full_tilt {
             ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT
         } else {
             ALPACA_BACKGROUND_SCAN_LIMIT
@@ -2249,6 +2264,12 @@ impl TyphooNApp {
             let symbol = normalize_market_data_symbol(symbol).replace('/', "");
             self.is_fetch_on_cooldown("alpaca", &symbol, tf)
         };
+        let low_tf_reserve = full_tilt_low_tf_reserve_slots(
+            full_tilt,
+            available_slots,
+            ALPACA_FULL_TILT_LOW_TF_RESERVE_BATCH,
+        );
+        let main_slots = available_slots.saturating_sub(low_tf_reserve);
         let mut candidates = select_alpaca_sync_workset_rotating(
             symbols,
             &timeframes,
@@ -2257,7 +2278,7 @@ impl TyphooNApp {
             &no_data_keys,
             &self.alpaca_backfill_complete_pairs,
             &self.pending_alpaca_fetches,
-            available_slots,
+            main_slots,
             capacity.foreground_reserve,
             scan_limit,
             &mut cursor,
@@ -2265,6 +2286,30 @@ impl TyphooNApp {
             alpaca_sync_target_bars,
             &alpaca_dispatch_blocked,
         );
+        if low_tf_reserve > 0 {
+            let mut staged_pending = self.pending_alpaca_fetches.clone();
+            staged_pending.extend(
+                candidates
+                    .iter()
+                    .map(|candidate| alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)),
+            );
+            candidates.extend(select_low_timeframe_sync_reserve_rotating(
+                symbols,
+                &timeframes,
+                &self.cached_alpaca_sync_state,
+                &focus_symbols,
+                &no_data_keys,
+                &self.alpaca_backfill_complete_pairs,
+                &staged_pending,
+                low_tf_reserve,
+                scan_limit,
+                &mut cursor,
+                now_s,
+                24,
+                alpaca_sync_target_bars,
+                &alpaca_dispatch_blocked,
+            ));
+        }
         drop_background_candidates_when_paused(&mut candidates);
         self.alpaca_sync_cursor = cursor;
 
@@ -2342,6 +2387,12 @@ impl TyphooNApp {
             let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
             self.is_fetch_on_cooldown("kraken", &symbol, tf)
         };
+        let low_tf_reserve = full_tilt_low_tf_reserve_slots(
+            full_tilt,
+            available_slots,
+            KRAKEN_SPOT_FULL_TILT_LOW_TF_RESERVE_BATCH,
+        );
+        let main_slots = available_slots.saturating_sub(low_tf_reserve);
         let mut candidates = select_alpaca_sync_workset_rotating(
             symbols,
             &timeframes,
@@ -2350,7 +2401,7 @@ impl TyphooNApp {
             no_data_keys,
             &self.kraken_backfill_complete_pairs,
             &self.pending_kraken_fetches,
-            available_slots,
+            main_slots,
             foreground_slots,
             scan_limit,
             &mut cursor,
@@ -2358,6 +2409,30 @@ impl TyphooNApp {
             kraken_sync_target_bars,
             &kraken_dispatch_blocked,
         );
+        if low_tf_reserve > 0 {
+            let mut staged_pending = self.pending_kraken_fetches.clone();
+            staged_pending.extend(
+                candidates
+                    .iter()
+                    .map(|candidate| alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)),
+            );
+            candidates.extend(select_low_timeframe_sync_reserve_rotating(
+                symbols,
+                &timeframes,
+                &self.cached_kraken_sync_state,
+                &focus_symbols,
+                no_data_keys,
+                &self.kraken_backfill_complete_pairs,
+                &staged_pending,
+                low_tf_reserve,
+                scan_limit,
+                &mut cursor,
+                now_s,
+                24,
+                kraken_sync_target_bars,
+                &kraken_dispatch_blocked,
+            ));
+        }
         drop_background_candidates_when_paused(&mut candidates);
         self.kraken_spot_sync_cursors[cursor_idx] = cursor;
         let mut dispatched = 0usize;

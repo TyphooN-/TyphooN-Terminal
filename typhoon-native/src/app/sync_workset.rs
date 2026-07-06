@@ -31,6 +31,8 @@ const HIGH_TO_LOW_SYNC_TIMEFRAMES: [&str; 9] = [
     "1Month", "1Week", "1Day", "4Hour", "1Hour", "30Min", "15Min", "5Min", "1Min",
 ];
 
+const LOW_TF_RESERVE_TIMEFRAMES: [&str; 4] = ["1Min", "5Min", "15Min", "30Min"];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum AlpacaSyncBucket {
     Missing,
@@ -763,6 +765,118 @@ pub(super) fn select_alpaca_sync_workset_rotating_with_stale_multiplier(
                 sort_sync_bucket(&mut stale);
                 sort_sync_bucket(&mut backfill);
 
+                take_sync_bucket(&mut selected, &mut missing, batch_size);
+                take_sync_bucket(&mut selected, &mut stale, batch_size);
+                take_sync_bucket(&mut selected, &mut backfill, batch_size);
+                return selected;
+            }
+
+            scanned = scanned.saturating_add(background_scan_limit);
+        }
+    }
+
+    *cursor = (symbol_start + background_scan_limit) % total_symbols;
+    Vec::new()
+}
+
+/// Select a bounded low-timeframe reserve batch in low→high order. The main
+/// broad scheduler remains high-TF-first, but full-tilt catch-up needs a small
+/// side lane so M1/M5/M15/M30 rows don't sit at ~0% for hours while H1+ depth is
+/// still converging. This uses the same tombstone, pending, cooldown, and
+/// backfill-complete gates as the main selector; only timeframe order changes.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn select_low_timeframe_sync_reserve_rotating(
+    symbols: &[String],
+    timeframes: &[String],
+    state_map: &HashMap<(String, String), SyncCacheState>,
+    focus_symbols: &HashSet<String>,
+    no_data_keys: &HashSet<String>,
+    backfill_complete_pairs: &HashMap<String, AlpacaBackfillCompletePair>,
+    pending_fetches: &HashSet<String>,
+    batch_size: usize,
+    background_scan_limit: usize,
+    cursor: &mut usize,
+    now_s: i64,
+    background_stale_periods: i64,
+    target_bars_for_tf: fn(&str) -> Option<u32>,
+    is_dispatch_blocked: &dyn Fn(&str, &str) -> bool,
+) -> Vec<AlpacaSyncCandidate> {
+    if batch_size == 0 || symbols.is_empty() || timeframes.is_empty() {
+        return Vec::new();
+    }
+    let requested: HashSet<&'static str> = timeframes
+        .iter()
+        .filter_map(|tf| normalize_sync_timeframe_key(tf))
+        .collect();
+    let ordered_timeframes: Vec<&'static str> = LOW_TF_RESERVE_TIMEFRAMES
+        .iter()
+        .copied()
+        .filter(|tf| requested.contains(tf))
+        .collect();
+    if ordered_timeframes.is_empty() {
+        return Vec::new();
+    }
+
+    let total_symbols = symbols.len();
+    let background_scan_limit = background_scan_limit.max(batch_size).min(total_symbols);
+    let symbol_start = *cursor % total_symbols;
+
+    for tf in ordered_timeframes {
+        let mut staged_selected = pending_fetches.clone();
+        let mut missing: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
+        let mut stale: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
+        let mut backfill: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
+
+        let mut foreground_symbols: Vec<&str> = focus_symbols.iter().map(String::as_str).collect();
+        foreground_symbols.sort_unstable();
+        for symbol in foreground_symbols {
+            collect_sync_candidate_for_timeframe(
+                symbol,
+                tf,
+                state_map,
+                focus_symbols,
+                no_data_keys,
+                backfill_complete_pairs,
+                &mut staged_selected,
+                now_s,
+                background_stale_periods,
+                target_bars_for_tf,
+                is_dispatch_blocked,
+                &mut missing,
+                &mut stale,
+                &mut backfill,
+            );
+        }
+
+        let mut scanned = 0usize;
+        while scanned < total_symbols {
+            let scan_window = background_scan_limit.min(total_symbols - scanned);
+            for offset in 0..scan_window {
+                let symbol_idx = (symbol_start + scanned + offset) % total_symbols;
+                collect_sync_candidate_for_timeframe(
+                    &symbols[symbol_idx],
+                    tf,
+                    state_map,
+                    focus_symbols,
+                    no_data_keys,
+                    backfill_complete_pairs,
+                    &mut staged_selected,
+                    now_s,
+                    background_stale_periods,
+                    target_bars_for_tf,
+                    is_dispatch_blocked,
+                    &mut missing,
+                    &mut stale,
+                    &mut backfill,
+                );
+            }
+
+            if !(missing.is_empty() && stale.is_empty() && backfill.is_empty()) {
+                *cursor = (symbol_start + scanned + scan_window) % total_symbols;
+                let mut selected: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
+                sort_sync_bucket(&mut missing);
+                sort_sync_bucket(&mut stale);
+                sort_sync_bucket(&mut backfill);
                 take_sync_bucket(&mut selected, &mut missing, batch_size);
                 take_sync_bucket(&mut selected, &mut stale, batch_size);
                 take_sync_bucket(&mut selected, &mut backfill, batch_size);
