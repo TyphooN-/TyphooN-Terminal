@@ -291,6 +291,34 @@ impl TyphooNApp {
             }
         }
 
+        let (weekday, hour) = auto_compact::local_weekday_hour_now();
+        let idle_for = now
+            .saturating_duration_since(self.auto_compact_last_input_at)
+            .as_secs();
+        let schedule = self.auto_compact_schedule.sanitized();
+
+        // `count_uncompacted_bars` scans storage and showed up as 200–370ms
+        // pre-broker stalls while heavy sync was active. Evaluate the cheap gates
+        // first; only count rows once a run is otherwise eligible.
+        let cheap_inputs = auto_compact::GateInputs {
+            enabled: self.auto_compact_enabled,
+            schedule,
+            last_run_ms: self.auto_compact_last_run_ms,
+            now_ms,
+            local_weekday: weekday,
+            local_hour: hour,
+            idle_for_secs: idle_for,
+            on_ac: auto_compact::on_ac_power(),
+            uncompacted_count: i64::MAX,
+            in_progress: self.auto_compact_in_progress,
+            heavy_sync: self.heavy_sync_in_progress,
+        };
+        let cheap_decision = auto_compact::evaluate_gate(&cheap_inputs);
+        if !cheap_decision.run && !cheap_decision.reason.starts_with("only ") {
+            self.auto_compact_last_skip = Some(cheap_decision.reason);
+            return;
+        }
+
         let cache = match self.cache.clone() {
             Some(c) => c,
             None => return,
@@ -299,13 +327,9 @@ impl TyphooNApp {
             .count_uncompacted_bars(auto_compact::TARGET_LEVEL)
             .unwrap_or(0);
 
-        let (weekday, hour) = auto_compact::local_weekday_hour_now();
-        let idle_for = now
-            .saturating_duration_since(self.auto_compact_last_input_at)
-            .as_secs();
         let inputs = auto_compact::GateInputs {
             enabled: self.auto_compact_enabled,
-            schedule: self.auto_compact_schedule,
+            schedule,
             last_run_ms: self.auto_compact_last_run_ms,
             now_ms,
             local_weekday: weekday,

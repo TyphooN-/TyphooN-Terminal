@@ -60,17 +60,9 @@ impl TyphooNApp {
             }
         }
         self.apply_live_quote_to_watchlist(&wanted, bid, ask, q.bid_size, q.ask_size);
-        // Log richer info occasionally
-        if q.bid_size > 0.0 || q.ask_size > 0.0 {
-            self.log.push_back(LogEntry::info(format!(
-                "Alpaca L1 {}: b{}@{} a{}@{}",
-                wanted,
-                format_price(q.bid_size),
-                format_price(bid),
-                format_price(q.ask_size),
-                format_price(ask)
-            )));
-        }
+        // High-volume L1 updates are state, not user-log events. Logging every
+        // quote floods the ring buffer during the open, increases broker-drain
+        // work, and buries real sync/rate-limit signals.
     }
 
     pub(super) fn handle_kraken_book_quote_tick(
