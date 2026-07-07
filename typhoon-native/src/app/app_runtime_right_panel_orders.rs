@@ -432,7 +432,7 @@ impl TyphooNApp {
                     ui.separator();
                 }
             }
-            if self.show_kr_orders && kraken_order_groups.iter().any(|account| !account.orders.is_empty()) {
+            if self.show_kr_orders {
                 let single_kraken_account = kraken_order_groups.len() <= 1;
                 for account in &kraken_order_groups {
                     if account.orders.is_empty() {

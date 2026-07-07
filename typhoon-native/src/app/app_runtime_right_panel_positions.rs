@@ -399,7 +399,7 @@ impl TyphooNApp {
                     self.deferred_symbol_action = lp_action;
                 }
             }
-            if show_kr_positions && kraken_position_groups.iter().any(|account| !account.positions.is_empty()) {
+            if show_kr_positions {
                 let mut close_sym: Option<String> = None;
                 let mut kr_action = SymbolAction::None;
                 let single_kraken_account = kraken_position_groups.len() <= 1;
