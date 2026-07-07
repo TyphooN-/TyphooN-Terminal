@@ -53,14 +53,18 @@ fn push_or_merge_order_line(out: &mut Vec<OrderLine>, line: OrderLine) {
         line.source.clone(),
         (line.price * 1_000_000_000.0).round() as i64,
     );
-    let map: HashMap<_, usize> = out.iter().enumerate().map(|(i, e)| {
-        let k = (
-            e.is_buy,
-            e.source.clone(),
-            (e.price * 1_000_000_000.0).round() as i64,
-        );
-        (k, i)
-    }).collect();
+    let map: HashMap<_, usize> = out
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let k = (
+                e.is_buy,
+                e.source.clone(),
+                (e.price * 1_000_000_000.0).round() as i64,
+            );
+            (k, i)
+        })
+        .collect();
     if let Some(&idx) = map.get(&key) {
         let existing = &mut out[idx];
         existing.qty += line.qty;
@@ -320,9 +324,10 @@ fn kraken_position_covers_balance_asset(positions: &[PositionInfo], asset: &str)
     let display = TyphooNApp::kraken_display_asset(asset);
     let bare_display = display.strip_suffix(".EQ").unwrap_or(display.as_str());
     // O(1) via temp map (small N, but consistent with by_symbol maps elsewhere)
-    let pos_by_sym: std::collections::HashMap<String, &PositionInfo> = positions.iter().map(|p| {
-        (p.symbol.to_ascii_uppercase(), p)
-    }).collect();
+    let pos_by_sym: std::collections::HashMap<String, &PositionInfo> = positions
+        .iter()
+        .map(|p| (p.symbol.to_ascii_uppercase(), p))
+        .collect();
     pos_by_sym.values().any(|pos| {
         if !pos.qty.is_finite() || pos.qty <= 0.0 || !pos.side.eq_ignore_ascii_case("long") {
             return false;
@@ -344,19 +349,6 @@ fn mtf_low_timeframe(tf: Timeframe) -> bool {
 
 fn mtf_empty_low_timeframe_backing_chart(chart: &ChartState) -> bool {
     !chart.show_in_tab_bar && chart.bars.is_empty() && mtf_low_timeframe(chart.timeframe)
-}
-
-fn mtf_symbol_has_empty_low_timeframe(
-    charts: &[ChartState],
-    symbol_key: &str,
-    tf: Timeframe,
-) -> bool {
-    mtf_low_timeframe(tf)
-        && charts.iter().any(|chart| {
-            chart.timeframe == tf
-                && chart.bars.is_empty()
-                && mtf_grid_symbol_key(&chart.symbol).eq_ignore_ascii_case(symbol_key)
-        })
 }
 
 fn low_timeframe_no_data_reason(reason: &str) -> bool {
@@ -432,7 +424,8 @@ pub(super) fn mtf_visible_chart_groups_filtered(
         if symbol.is_empty() || suppressed_symbols.contains(&symbol.to_ascii_uppercase()) {
             continue;
         }
-        if let Some(group) = groups.iter_mut().find(|group| group.symbol == symbol) { // small N, or could map but groups mutable
+        if let Some(group) = groups.iter_mut().find(|group| group.symbol == symbol) {
+            // small N, or could map but groups mutable
             group.indices.push(idx);
         } else {
             groups.push(MtfChartGroup {
@@ -816,8 +809,7 @@ impl TyphooNApp {
 
         if send_alpaca {
             let bare = bare_symbol_from_key(&symbol);
-            if let Some(pos) = self.live_positions_by_symbol.get(&bare)
-            {
+            if let Some(pos) = self.live_positions_by_symbol.get(&bare) {
                 let half_qty = pos.qty.abs() / 2.0;
                 if half_qty > 0.0 {
                     let remaining_qty = (pos.qty.abs() - half_qty).max(0.0);
@@ -848,8 +840,7 @@ impl TyphooNApp {
         }
         if send_kraken {
             let bare = bare_symbol_from_key(&symbol);
-            if let Some(pos) = self.kr_positions_by_symbol.get(&bare)
-            {
+            if let Some(pos) = self.kr_positions_by_symbol.get(&bare) {
                 let half_qty = pos.qty.abs() / 2.0;
                 if half_qty > 0.0 {
                     let remaining_qty = (pos.qty.abs() - half_qty).max(0.0);
@@ -1227,14 +1218,17 @@ impl TyphooNApp {
 
     pub(super) fn news_article_tickers(primary_symbol: &str, tickers: &[String]) -> Vec<String> {
         let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         if let Some(primary) = Self::normalize_news_ticker_for_chart(primary_symbol) {
-            out.push(primary);
+            if seen.insert(primary.clone()) {
+                out.push(primary);
+            }
         }
         for ticker in tickers {
             let Some(ticker) = Self::normalize_news_ticker_for_chart(ticker) else {
                 continue;
             };
-            if !out.contains(&ticker) { // dedup O(1) via Vec for small; could HashSet
+            if seen.insert(ticker.clone()) {
                 out.push(ticker);
             }
         }
@@ -1538,19 +1532,21 @@ impl TyphooNApp {
         if low_timeframe_no_data_symbols(&self.unresolvable_pairs).contains(&symbol_key) {
             return;
         }
-        let existing_chart_by_tf: std::collections::HashMap<Timeframe, usize> = self
-            .charts
-            .iter()
-            .enumerate()
-            .filter(|(_, chart)| {
-                mtf_grid_symbol_key(&chart.symbol).eq_ignore_ascii_case(&symbol_key)
-            })
-            .fold(std::collections::HashMap::new(), |mut acc, (idx, chart)| {
-                acc.entry(chart.timeframe).or_insert(idx);
-                acc
-            });
+        let mut existing_chart_by_tf: std::collections::HashMap<Timeframe, usize> =
+            std::collections::HashMap::new();
+        let mut empty_low_timeframes: std::collections::HashSet<Timeframe> =
+            std::collections::HashSet::new();
+        for (idx, chart) in self.charts.iter().enumerate() {
+            if !mtf_grid_symbol_key(&chart.symbol).eq_ignore_ascii_case(&symbol_key) {
+                continue;
+            }
+            existing_chart_by_tf.entry(chart.timeframe).or_insert(idx);
+            if mtf_empty_low_timeframe_backing_chart(chart) {
+                empty_low_timeframes.insert(chart.timeframe);
+            }
+        }
         for &(label, tf) in &MTF_GRID_TIMEFRAMES {
-            if mtf_symbol_has_empty_low_timeframe(&self.charts, &symbol_key, tf) {
+            if empty_low_timeframes.contains(&tf) {
                 continue;
             }
             let existing_idx = existing_chart_by_tf.get(&tf).copied();

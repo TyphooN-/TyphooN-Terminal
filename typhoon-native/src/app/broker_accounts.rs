@@ -274,8 +274,12 @@ impl TyphooNApp {
     /// True when the current primary Alpaca account is a paper account.
     /// Falls back to the slot-1 flag before the roster arrives.
     pub(crate) fn alpaca_primary_is_paper(&self) -> bool {
-        self.alpaca_roster_by_id.get(&self.alpaca_primary_account_id)
-            .or_else(|| self.alpaca_roster_by_id.get(&self.kraken_primary_account_id))
+        self.alpaca_roster_by_id
+            .get(&self.alpaca_primary_account_id)
+            .or_else(|| {
+                self.alpaca_roster_by_id
+                    .get(&self.kraken_primary_account_id)
+            })
             .map(|a| a.paper)
             .unwrap_or(self.broker_paper)
     }
@@ -290,12 +294,13 @@ impl TyphooNApp {
         let n_total = specs.len();
         let capacity = self.alpaca_sync_capacity();
         let aggregate_rpm = self.alpaca_effective_historical_rpm() as usize * n_data;
-         let spec_ids: std::collections::HashSet<String> = specs.iter().map(|s| s.id.clone()).collect();
-         let primary_id = if spec_ids.contains(&self.alpaca_primary_account_id) {
-             self.alpaca_primary_account_id.clone()
-         } else {
-             specs.get(0).map(|s| s.id.clone()).unwrap_or_default()
-         };
+        let spec_ids: std::collections::HashSet<String> =
+            specs.iter().map(|s| s.id.clone()).collect();
+        let primary_id = if spec_ids.contains(&self.alpaca_primary_account_id) {
+            self.alpaca_primary_account_id.clone()
+        } else {
+            specs.get(0).map(|s| s.id.clone()).unwrap_or_default()
+        };
         let _ = self.broker_tx.send(BrokerCmd::Connect {
             accounts: specs,
             primary_id,
@@ -339,22 +344,30 @@ impl TyphooNApp {
         )));
         match broker {
             OrderBroker::Alpaca => {
-                if let Some(primary) = self.alpaca_roster_by_id.get(&self.alpaca_primary_account_id).or_else(|| accounts.iter().find(|a| (a.id == self.alpaca_primary_account_id || a.is_primary) && a.connected)) {
-                    self.alpaca_primary_account_id = primary.id.clone();
-                } else if let Some(primary) = accounts.iter().find(|a| (a.id == self.alpaca_primary_account_id || a.is_primary) && a.connected) {
+                let roster_by_id: std::collections::HashMap<_, _> =
+                    accounts.iter().map(|a| (a.id.clone(), a.clone())).collect();
+                if let Some(primary) = roster_by_id
+                    .get(&self.alpaca_primary_account_id)
+                    .filter(|a| a.connected)
+                    .or_else(|| accounts.iter().find(|a| a.is_primary && a.connected))
+                {
                     self.alpaca_primary_account_id = primary.id.clone();
                 }
                 self.alpaca_account_roster = accounts.clone();
-                self.alpaca_roster_by_id = accounts.into_iter().map(|a| (a.id.clone(), a)).collect();
+                self.alpaca_roster_by_id = roster_by_id;
             }
             OrderBroker::Kraken => {
-                if let Some(primary) = self.kraken_roster_by_id.get(&self.kraken_primary_account_id).or_else(|| accounts.iter().find(|a| (a.id == self.kraken_primary_account_id || a.is_primary) && a.connected)) {
-                    self.kraken_primary_account_id = primary.id.clone();
-                } else if let Some(primary) = accounts.iter().find(|a| (a.id == self.kraken_primary_account_id || a.is_primary) && a.connected) {
+                let roster_by_id: std::collections::HashMap<_, _> =
+                    accounts.iter().map(|a| (a.id.clone(), a.clone())).collect();
+                if let Some(primary) = roster_by_id
+                    .get(&self.kraken_primary_account_id)
+                    .filter(|a| a.connected)
+                    .or_else(|| accounts.iter().find(|a| a.is_primary && a.connected))
+                {
                     self.kraken_primary_account_id = primary.id.clone();
                 }
                 self.kraken_account_roster = accounts.clone();
-                self.kraken_roster_by_id = accounts.into_iter().map(|a| (a.id.clone(), a)).collect();
+                self.kraken_roster_by_id = roster_by_id;
             }
         }
     }
@@ -528,11 +541,15 @@ impl TyphooNApp {
                     .chain(kraken_connected.iter().filter(|_| kraken_ok))
                     .copied()
                     .collect();
-                let source_ids: std::collections::HashSet<_> = sources.iter().map(|a| a.id.as_str()).collect();
+                let source_ids: std::collections::HashSet<_> =
+                    sources.iter().map(|a| a.id.as_str()).collect();
                 if !source_ids.contains(self.tradecopy_source_id.as_str()) {
                     self.tradecopy_source_id = sources
                         .iter()
-                        .find(|a| a.id == self.alpaca_primary_account_id || a.id == self.kraken_primary_account_id)
+                        .find(|a| {
+                            a.id == self.alpaca_primary_account_id
+                                || a.id == self.kraken_primary_account_id
+                        })
                         .or(sources.first())
                         .map(|a| a.id.clone())
                         .unwrap_or_default();

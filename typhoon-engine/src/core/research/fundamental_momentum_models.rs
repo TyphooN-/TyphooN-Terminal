@@ -389,6 +389,8 @@ pub fn compute_earm_snapshot(
 
     // Assume income_quarterly is newest-first (consistent with other compute fns in this file).
     // quarters[0] = latest, quarters[4] = year ago.
+    let surprises_by_date: std::collections::HashMap<&str, &EarningsSurprise> =
+        surprises.iter().map(|s| (s.date.as_str(), s)).collect();
     let mut rows: Vec<EarmQuarterRow> = Vec::with_capacity(quarters.len());
     for (i, q) in quarters.iter().enumerate() {
         let yoy_pct = if i + 4 < quarters.len() {
@@ -401,7 +403,7 @@ pub fn compute_earm_snapshot(
         } else {
             0.0
         };
-        let surprise = surprises.iter().find(|s| s.date == q.date);
+        let surprise = surprises_by_date.get(q.date.as_str()).copied();
         rows.push(EarmQuarterRow {
             period: q.date.clone(),
             revenue: q.revenue,

@@ -1289,7 +1289,9 @@ fn chart_build_merged_equity_bars_from_cache(
     // Alpaca 4Hour print (WOK, 2026-06) reached the H4 chart while H1, corroborated
     // by Yahoo's 1h series, stayed clean. Synthesize a 4-hour Yahoo series by
     // aggregating cached 1-hour Yahoo bars to restore that corroborator.
-    if timeframe == "4Hour" && !loaded.iter().any(|(src, _)| *src == "yahoo-chart") {
+    let loaded_sources: std::collections::HashSet<&str> =
+        loaded.iter().map(|(src, _)| *src).collect();
+    if timeframe == "4Hour" && !loaded_sources.contains("yahoo-chart") {
         if let Some(hourly) = chart_source_cache_keys("yahoo-chart", symbol, "1Hour")
             .iter()
             .find_map(|key| cache.get_bars_raw(key).ok().flatten())
