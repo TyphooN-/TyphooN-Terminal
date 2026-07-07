@@ -148,6 +148,7 @@ pub async fn fetch_and_send_all_account_positions(
     let primary_id = pool.primary_id().map(str::to_string);
 
     for (_, account) in pool.connected_accounts() {
+        let account_info = account.broker.get_account().await.ok();
         match account.broker.get_positions().await {
             Ok(positions) => {
                 let is_primary = primary_id
@@ -160,6 +161,14 @@ pub async fn fetch_and_send_all_account_positions(
                     account_id: account.spec.id.clone(),
                     label: account.spec.label.clone(),
                     is_primary,
+                    account_equity: account_info
+                        .as_ref()
+                        .map(|acct| acct.equity)
+                        .unwrap_or(account.equity),
+                    account_last_equity: account_info
+                        .as_ref()
+                        .map(|acct| acct.last_equity)
+                        .unwrap_or(0.0),
                     positions,
                 });
             }

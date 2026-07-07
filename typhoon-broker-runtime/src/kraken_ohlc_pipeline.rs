@@ -15,6 +15,8 @@ use typhoon_engine::broker::kraken::{
 };
 use typhoon_engine::core::cache::SqliteCache;
 
+use crate::memory_pressure::{BrokerMemoryPressure, current_broker_memory_pressure};
+
 pub fn format_xstock_ws_symbol(symbol: &str) -> Option<String> {
     let bare = symbol
         .trim()
@@ -277,6 +279,7 @@ async fn run_ws_bar_writer(
     // Kraken's WS uses: each new update for the open bar supersedes the
     // previous one until interval_begin rolls.
     let mut buffer: WsBuffer = HashMap::new();
+    let mut bars_seen_since_memory_check = 0usize;
 
     let mut flush_ticker = tokio::time::interval(WS_BAR_FLUSH_INTERVAL);
     flush_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -287,6 +290,25 @@ async fn run_ws_bar_writer(
             maybe_bar = bar_rx.recv() => {
                 match maybe_bar {
                     Some(bar) => {
+                        bars_seen_since_memory_check += 1;
+                        if bars_seen_since_memory_check >= 1024 {
+                            bars_seen_since_memory_check = 0;
+                            if current_broker_memory_pressure() == BrokerMemoryPressure::PauseBroadFetches {
+                                let now_ms = chrono::Utc::now().timestamp_millis();
+                                let (to_flush, _open_to_drop) =
+                                    partition_closed_bars(std::mem::take(&mut buffer), now_ms);
+                                if !to_flush.is_empty() {
+                                    flush_ws_bars(&shared_cache, &commit_tx, to_flush).await;
+                                }
+                                // Open WS buckets are last-write-wins live state, not durable
+                                // history. Under OOM pressure, drop them and let the next tick
+                                // recreate the current bucket instead of retaining thousands of
+                                // open bars while cache compression catches up.
+                                if !ws_bar_is_closed(bar.interval_min, bar.interval_begin_ms, now_ms) {
+                                    continue;
+                                }
+                            }
+                        }
                         let Some((cache_source, cache_symbol)) = kraken_ws_bar_cache_target(&bar.symbol) else {
                             continue;
                         };

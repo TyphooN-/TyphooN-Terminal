@@ -42,6 +42,22 @@ fn position_unrealized_pl_pct(pos: &PositionInfo, display_pl: f64) -> f64 {
     }
 }
 
+pub(super) fn position_unrealized_pl_pct_of_account(display_pl: f64, account_basis: f64) -> f64 {
+    if account_basis.is_finite() && account_basis.abs() > f64::EPSILON {
+        display_pl / account_basis.abs() * 100.0
+    } else {
+        0.0
+    }
+}
+
+fn alpaca_account_pl_basis(account: &AccountPositions) -> f64 {
+    if account.account_last_equity.is_finite() && account.account_last_equity > f64::EPSILON {
+        account.account_last_equity
+    } else {
+        account.account_equity
+    }
+}
+
 #[allow(deprecated)]
 impl TyphooNApp {
     pub(super) fn render_right_panel_positions_section(&mut self, ui: &mut egui::Ui) {
@@ -67,6 +83,16 @@ impl TyphooNApp {
                         .map(|account| account.label.clone())
                         .unwrap_or_else(|| "Alpaca 1".to_string()),
                     is_primary: true,
+                    account_equity: self
+                        .live_account
+                        .as_ref()
+                        .map(|acct| acct.equity)
+                        .unwrap_or(0.0),
+                    account_last_equity: self
+                        .live_account
+                        .as_ref()
+                        .map(|acct| acct.last_equity)
+                        .unwrap_or(0.0),
                     positions: self.live_positions.clone(),
                 }]
             } else {
@@ -146,6 +172,7 @@ impl TyphooNApp {
                         ui.separator();
                         continue;
                     }
+                    let account_pl_basis = alpaca_account_pl_basis(account);
                     for pos in &account.positions {
                         let side_c = if pos.side == "long" { UP } else { DOWN };
                         let side_label = if pos.side == "long" { "Long" } else { "Short" };
@@ -181,12 +208,18 @@ impl TyphooNApp {
                                 ));
                             let display_pl = position_unrealized_pl_from_price(pos, current_price);
                             let pl_c = if display_pl >= 0.0 { UP } else { DOWN };
-                            let pl_pct = position_unrealized_pl_pct(pos, display_pl);
+                            let pl_pct = position_unrealized_pl_pct_of_account(display_pl, account_pl_basis);
                             ui.label(
                                 egui::RichText::new(format!("${:.2} ({:+.1}%)", display_pl, pl_pct))
                                     .color(pl_c)
                                     .small(),
-                            );
+                            )
+                            .on_hover_text(format!(
+                                "P/L as account impact: ${:.2} / ${:.2}. Cost-basis return: {:+.1}%",
+                                display_pl,
+                                account_pl_basis,
+                                position_unrealized_pl_pct(pos, display_pl)
+                            ));
                             ui.label(
                                 egui::RichText::new(format!(
                                     "entry {}  cur {}",
@@ -518,6 +551,8 @@ mod tests {
             account_id: "alpaca1".to_string(),
             label: "Alpaca 1".to_string(),
             is_primary: true,
+            account_equity: 100_000.0,
+            account_last_equity: 100_000.0,
             positions,
         }];
 
@@ -536,5 +571,16 @@ mod tests {
 
         assert_eq!(display_pl, 5.0);
         assert_eq!(position_unrealized_pl_pct(&pos, display_pl), 25.0);
+    }
+
+    #[test]
+    fn alpaca_position_pl_percent_can_use_account_basis_for_margin_sized_position() {
+        let mut pos = position("WEN");
+        pos.qty = 30_000.0;
+        pos.avg_entry_price = 8.10;
+        let display_pl = -6_900.0;
+
+        assert_eq!(position_unrealized_pl_pct(&pos, display_pl).round(), -3.0);
+        assert!((position_unrealized_pl_pct_of_account(display_pl, 100_000.0) + 6.9).abs() < 1e-9);
     }
 }

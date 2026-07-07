@@ -383,9 +383,9 @@ pub fn draw_chart(
     }
 
     let use_log = chart.log_scale && price_min > 0.0; // log scale requires positive prices
-    // Precompute the log-axis constants once. price_to_y is called once per visible
-    // bar per indicator (~hundreds per frame), so hoisting the two `.ln()` calls out
-    // of the closure turns a per-call cost into a per-frame cost.
+                                                      // Precompute the log-axis constants once. price_to_y is called once per visible
+                                                      // bar per indicator (~hundreds per frame), so hoisting the two `.ln()` calls out
+                                                      // of the closure turns a per-call cost into a per-frame cost.
     let log_max = if use_log { price_max.ln() } else { 0.0 };
     let log_min = if use_log { price_min.ln() } else { 0.0 };
     let log_range = log_max - log_min;
@@ -1332,7 +1332,7 @@ pub fn draw_chart(
         let chart_rank = chart.timeframe.group_rank();
         // Match ATR Projection line weight so Previous Candle Levels carry the
         // same visual priority when both MT5-style level overlays are enabled.
-        let prev_level_stroke_width = 1.5;
+        let prev_level_stroke_width = 3.0;
 
         // Draw each level line at its true price immediately, but defer the text
         // so labels for levels that sit within a few ticks of each other (e.g.
@@ -1596,6 +1596,14 @@ pub fn draw_chart(
         render_step,
     );
 
+    // Previous Candle Levels should sit above candle bodies, matching the ATR
+    // Projection foreground layering. The earlier pass still owns label
+    // de-confliction; this foreground pass guarantees the horizontal levels are
+    // not buried by candle fills/wicks.
+    if flags.prev_levels {
+        draw_previous_candle_level_lines_foreground(painter, chart, chart_rect, price_to_y);
+    }
+
     // ── Extended Hours Candle (magenta, TradingView-style) ─────────────
     draw_extended_hours_candle(
         painter,
@@ -1729,9 +1737,9 @@ pub fn draw_chart(
     // the moving averages). One clipped line primitive per level.
     if flags.atr_proj {
         let atr_yellow = egui::Color32::from_rgb(255, 255, 0); // clrYellow
-        // A timeframe whose ATR band is narrow puts its Hi and Lo labels on top
-        // of each other ("ATR W1 Hi" / "ATR W1 Lo" smearing into "ATR WL HL").
-        // Spread the labels into separate bands; the lines stay at true price.
+                                                               // A timeframe whose ATR band is narrow puts its Hi and Lo labels on top
+                                                               // of each other ("ATR W1 Hi" / "ATR W1 Lo" smearing into "ATR WL HL").
+                                                               // Spread the labels into separate bands; the lines stay at true price.
         let mut label_bands: Vec<(f32, f32)> = Vec::new();
         for &(label, htf_open, atr_val, line_start_idx) in &chart.atr_proj_levels {
             let upper_price = htf_open + atr_val;
@@ -1748,7 +1756,7 @@ pub fn draw_chart(
                 if y >= chart_rect.top() && y <= chart_rect.bottom() {
                     painter.line_segment(
                         [egui::pos2(x_start, y), egui::pos2(x_end, y)],
-                        egui::Stroke::new(1.5, atr_yellow),
+                        egui::Stroke::new(3.0, atr_yellow),
                     );
                     // Label: "ATR D1 Hi 1.2345" — anchored above its line, then
                     // de-conflicted so a tight Hi/Lo pair stays legible.
@@ -1930,6 +1938,53 @@ pub fn draw_chart(
     Some(price_geometry)
 }
 
+fn draw_previous_candle_level_lines_foreground(
+    painter: &egui::Painter,
+    chart: &ChartState,
+    chart_rect: egui::Rect,
+    price_to_y: impl Fn(f64) -> f32,
+) {
+    let white = egui::Color32::WHITE;
+    let magenta = egui::Color32::from_rgb(255, 0, 255);
+    let level_pairs = [
+        (chart.prev_h1_high, white, 0u8),
+        (chart.prev_h1_low, white, 0),
+        (chart.prev_h4_high, white, 0),
+        (chart.prev_h4_low, white, 0),
+        (chart.current_daily_high, white, 2),
+        (chart.current_daily_low, white, 2),
+        (chart.current_weekly_high, white, 2),
+        (chart.current_weekly_low, white, 2),
+        (chart.current_monthly_high, white, 3),
+        (chart.current_monthly_low, white, 3),
+        (chart.prev_daily_high, magenta, 1),
+        (chart.prev_daily_low, magenta, 1),
+        (chart.prev_weekly_high, magenta, 2),
+        (chart.prev_weekly_low, magenta, 2),
+        (chart.prev_monthly_high, magenta, 3),
+        (chart.prev_monthly_low, magenta, 3),
+    ];
+    let chart_rank = chart.timeframe.group_rank();
+    for (price_opt, color, max_rank) in level_pairs {
+        if chart_rank > max_rank {
+            continue;
+        }
+        let Some(price) = price_opt else {
+            continue;
+        };
+        let y = price_to_y(price);
+        if y >= chart_rect.top() && y <= chart_rect.bottom() {
+            painter.line_segment(
+                [
+                    egui::pos2(chart_rect.left(), y),
+                    egui::pos2(chart_rect.right(), y),
+                ],
+                egui::Stroke::new(3.0, color),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -2012,14 +2067,12 @@ mod tests {
     #[test]
     fn indicator_line_clipping_rejects_fully_offscreen_segments() {
         let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 100.0));
-        assert!(
-            super::clip_line_segment_to_rect(
-                egui::pos2(10.0, -50.0),
-                egui::pos2(90.0, -10.0),
-                rect,
-            )
-            .is_none()
-        );
+        assert!(super::clip_line_segment_to_rect(
+            egui::pos2(10.0, -50.0),
+            egui::pos2(90.0, -10.0),
+            rect,
+        )
+        .is_none());
     }
 
     #[test]
@@ -2270,9 +2323,7 @@ mod tests {
         // Sub-hour chart shows every previous + every current level.
         assert_eq!(
             visible(Timeframe::M15),
-            vec![
-                "Prev H1", "Prev H4", "Prev D", "Prev W", "Prev MN", "Cur D", "Cur W", "Cur MN"
-            ]
+            vec!["Prev H1", "Prev H4", "Prev D", "Prev W", "Prev MN", "Cur D", "Cur W", "Cur MN"]
         );
         // Hourly charts drop their own H1/H4 previous; keep daily+ and all current.
         assert_eq!(

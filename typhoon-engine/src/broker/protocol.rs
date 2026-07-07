@@ -108,6 +108,12 @@ pub struct AccountPositions {
     pub account_id: String,
     pub label: String,
     pub is_primary: bool,
+    /// Current account equity for this position snapshot. Used to show position
+    /// P/L as account impact instead of return-on-notional for margin-sized rows.
+    pub account_equity: f64,
+    /// Alpaca previous/last equity (`last_equity`) for this account snapshot.
+    /// This is the paper-account day/start balance basis when available.
+    pub account_last_equity: f64,
     pub positions: Vec<PositionInfo>,
 }
 
@@ -135,7 +141,7 @@ pub struct TradeAccountSnapshot {
 
 /// Messages sent from UI → async broker task.
 #[allow(dead_code)] // All variants are handled in broker task. Some lack dedicated UI buttons but are
-// accessible via console commands or research windows.
+                    // accessible via console commands or research windows.
 pub enum BrokerCmd {
     /// Connect every configured Alpaca account. `primary_id` selects the
     /// trading/account-data account; all accounts with `data_sync_enabled`

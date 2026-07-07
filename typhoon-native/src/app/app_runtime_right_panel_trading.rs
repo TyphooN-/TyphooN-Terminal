@@ -383,7 +383,6 @@ impl TyphooNApp {
                                     None
                                 } else {
                                     let mut total_pl = 0.0;
-                                    let mut total_basis = 0.0;
                                     for pos in &self.live_positions {
                                         let current_price = self
                                             .live_quote_mid_for_symbol(&pos.symbol)
@@ -394,10 +393,24 @@ impl TyphooNApp {
                                             });
                                         let display_pl = super::app_runtime_right_panel_positions::position_unrealized_pl_from_price(pos, current_price);
                                         total_pl += display_pl;
-                                        total_basis += super::app_runtime_right_panel_positions::position_cost_basis(pos);
                                     }
-                                    (total_basis > f64::EPSILON)
-                                        .then_some((total_pl, total_pl / total_basis * 100.0))
+                                    let account_basis = self
+                                        .live_account
+                                        .as_ref()
+                                        .map(|acct| {
+                                            if acct.last_equity.is_finite()
+                                                && acct.last_equity > f64::EPSILON
+                                            {
+                                                acct.last_equity
+                                            } else {
+                                                acct.equity
+                                            }
+                                        })
+                                        .unwrap_or(0.0);
+                                    (account_basis.abs() > f64::EPSILON).then_some((
+                                        total_pl,
+                                        super::app_runtime_right_panel_positions::position_unrealized_pl_pct_of_account(total_pl, account_basis),
+                                    ))
                                 };
                                 for snap in &account_snaps {
                                     let is_alpaca = snap.broker == "Alpaca";
