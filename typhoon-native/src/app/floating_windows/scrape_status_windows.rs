@@ -1019,7 +1019,14 @@ impl TyphooNApp {
                         .iter()
                         .filter(|f| {
                             ev_active.is_empty()
-                                || self.cached_active_symbols_set.contains(f.symbol.as_str())
+                                || {
+                                    let bare = bare_symbol_from_key(&f.symbol).to_uppercase();
+                                    let n = match bare.rsplit_once(".") {
+                                        Some((head, suffix)) if (2..=4).contains(&suffix.len()) && suffix.chars().all(|c| c.is_ascii_uppercase()) => head.to_string(),
+                                        _ => bare,
+                                    }.replace("/", "");
+                                    self.cached_active_symbols_set.contains(&n)
+                                }
                         })
                         .collect();
                     match self.ev_sort.column {

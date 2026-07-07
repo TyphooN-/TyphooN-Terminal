@@ -243,15 +243,13 @@ impl TyphooNApp {
             }
         }
 
-        let watchlist_updates_position = self.kr_positions.iter().any(|pos| {
-            let pos_symbol = normalize_quote_symbol(&pos.symbol);
-            let asset_symbol = normalize_quote_symbol(
-                pos.asset_id
-                    .rsplit(':')
-                    .next()
-                    .unwrap_or(pos.asset_id.as_str()),
-            );
-            row_symbols.contains(&pos_symbol) || row_symbols.contains(&asset_symbol)
+        let watchlist_updates_position = row_symbols.iter().any(|rs| {
+            self.kr_positions_by_symbol.contains_key(rs) || self.kr_positions_by_symbol.values().any(|pos| {
+                let asset = normalize_quote_symbol(
+                    pos.asset_id.rsplit(':').next().unwrap_or(pos.asset_id.as_str()),
+                );
+                rs == &asset
+            })
         });
         self.watchlist_rows = rows;
         self.rebuild_live_indices();

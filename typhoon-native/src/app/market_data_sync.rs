@@ -1827,11 +1827,8 @@ impl TyphooNApp {
             .cached_alpaca_sync_state
             .get(&(symbol.clone(), tf.to_string()))
             .copied();
-        let focus = self.cached_active_symbols.iter().any(|candidate| {
-            normalize_market_data_symbol(candidate)
-                .replace('/', "")
-                .eq_ignore_ascii_case(&symbol)
-        });
+                let norm_sym = normalize_market_data_symbol(&symbol).replace("/", "");
+        let focus = self.cached_active_symbols_set.contains(&norm_sym);
         if !background_market_data_fetch_allowed(focus, self.total_pending_market_data_fetches()) {
             return false;
         }

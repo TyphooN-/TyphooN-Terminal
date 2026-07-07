@@ -108,7 +108,24 @@ impl eframe::App for TyphooNApp {
         let active_symbols_key = self.active_symbols_cache_key();
         if self.cached_active_symbols_key != Some(active_symbols_key) {
             self.cached_active_symbols = self.active_symbols();
-            self.cached_active_symbols_set = self.cached_active_symbols.iter().cloned().collect();
+            // Store normalized (strip .SUFFIX, upper, no /) for O(1) contains in sync/filters.
+            // Matches the normalize + eq used in market_data_sync etc.
+            self.cached_active_symbols_set = self.cached_active_symbols
+                .iter()
+                .map(|s| {
+                    let bare = bare_symbol_from_key(s).to_uppercase();
+                    match bare.rsplit_once(".") {
+                        Some((head, suffix))
+                            if (2..=4).contains(&suffix.len())
+                                && suffix.chars().all(|c| c.is_ascii_uppercase()) =>
+                        {
+                            head.to_string()
+                        }
+                        _ => bare,
+                    }
+                    .replace("/", "")
+                })
+                .collect();
             self.cached_active_symbols_key = Some(active_symbols_key);
         }
         // PERF: Cache scoped_fundamentals_owned() only when bg/scope changes — not per frame.

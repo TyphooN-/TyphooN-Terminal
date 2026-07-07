@@ -264,14 +264,9 @@ impl TyphooNApp {
             }
         }
 
-        let quote_updates_position = self.kr_positions.iter().any(|pos| {
-            let pos_symbol = pos
-                .symbol
-                .replace('/', "")
-                .trim_end_matches(".EQ")
-                .to_ascii_uppercase();
-            pos_symbol == symbol || pos.asset_id.ends_with(&symbol)
-        });
+        let key = bare_symbol_from_key(&symbol).replace("/", "").trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
+        let quote_updates_position = self.kr_positions_by_symbol.contains_key(&key)
+            || self.kr_positions_by_symbol.values().any(|pos| pos.asset_id.ends_with(&symbol));
         if quote_updates_position {
             self.refresh_kraken_position_costs();
             self.positions_last_update_ts = chrono::Utc::now().timestamp();

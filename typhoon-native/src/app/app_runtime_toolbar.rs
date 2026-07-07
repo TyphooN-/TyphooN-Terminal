@@ -346,29 +346,22 @@ impl TyphooNApp {
                                     .small(),
                             );
                             let active_symbol = bare_symbol_from_key(&c.symbol).to_ascii_uppercase();
-                            let active_entry = self
-                                .live_positions
-                                .iter()
-                                .find_map(|pos| {
-                                    let pos_symbol = bare_symbol_from_key(&pos.symbol).to_ascii_uppercase();
-                                    (pos_symbol == active_symbol
-                                        && pos.avg_entry_price.is_finite()
-                                        && pos.avg_entry_price > 0.0)
-                                        .then_some(pos.avg_entry_price)
+                            let key = active_symbol.clone();
+                            let active_entry = self.live_positions_by_symbol.get(&key)
+                                .and_then(|pos| {
+                                    if pos.avg_entry_price.is_finite() && pos.avg_entry_price > 0.0 {
+                                        Some(pos.avg_entry_price)
+                                    } else { None }
                                 })
                                 .or_else(|| {
-                                    self.kr_positions.iter().find_map(|pos| {
-                                        let pos_symbol =
-                                            bare_symbol_from_key(&pos.symbol).to_ascii_uppercase();
-                                        if pos_symbol != active_symbol {
-                                            return None;
-                                        }
-                                        if pos.avg_entry_price.is_finite() && pos.avg_entry_price > 0.0 {
-                                            Some(pos.avg_entry_price)
-                                        } else {
-                                            self.kraken_position_avg_price(&pos.symbol)
-                                        }
-                                    })
+                                    self.kr_positions_by_symbol.get(&key)
+                                        .and_then(|pos| {
+                                            if pos.avg_entry_price.is_finite() && pos.avg_entry_price > 0.0 {
+                                                Some(pos.avg_entry_price)
+                                            } else {
+                                                self.kraken_position_avg_price(&pos.symbol)
+                                            }
+                                        })
                                 });
                             if let Some(entry) = active_entry {
                                 ui.label(

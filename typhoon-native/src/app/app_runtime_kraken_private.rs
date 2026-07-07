@@ -91,6 +91,10 @@ impl TyphooNApp {
             self.put_kv_dedup("broker:kr_positions", &json);
         }
         self.kr_positions = pos;
+        self.kr_positions_by_symbol = self.kr_positions.iter().map(|p| {
+            let key = bare_symbol_from_key(&p.symbol).replace("/", "").trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
+            (key, p.clone())
+        }).collect();
         self.refresh_kraken_position_costs();
         for c in &mut self.charts {
             c.cached_trade_overlay_frame = 0;
@@ -107,6 +111,10 @@ impl TyphooNApp {
         self.positions_last_update_ts = chrono::Utc::now().timestamp();
         if let Some(primary) = accounts.iter().find(|account| account.is_primary) {
             self.kr_positions = primary.positions.clone();
+            self.kr_positions_by_symbol = self.kr_positions.iter().map(|p| {
+                let key = bare_symbol_from_key(&p.symbol).replace("/", "").trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
+                (key, p.clone())
+            }).collect();
         }
         self.kraken_account_positions = accounts;
         self.refresh_kraken_position_costs();

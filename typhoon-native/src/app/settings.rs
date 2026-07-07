@@ -206,8 +206,8 @@ impl TyphooNApp {
                         if alpaca_before && !self.alpaca_enabled {
                             self.broker_connected = false;
                             self.live_account = None;
-                            self.live_positions.clear();
-                            self.live_orders.clear();
+                            self.live_positions.clear(); self.live_positions_by_symbol.clear();
+                            self.live_orders.clear(); self.live_orders_by_id.clear();
                             self.pending_alpaca_fetches.clear();
                             self.alpaca_full_bar_sync_enabled = false;
                             self.log.push_back(LogEntry::info("Alpaca disabled — stopped UI-side login/sync/position/order activity. Existing cache data was not deleted."));
@@ -218,7 +218,7 @@ impl TyphooNApp {
                         settings_save_after = true;
                         if kr_before && !self.kraken_enabled {
                             self.kraken_connected = false;
-                            self.kr_positions.clear();
+                            self.kr_positions.clear(); self.kr_positions_by_symbol.clear();
                             self.kraken_balances.clear();
                             self.kraken_open_orders.clear();
                             self.pending_kraken_fetches.clear();

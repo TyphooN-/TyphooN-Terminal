@@ -441,11 +441,19 @@ impl TyphooNApp {
         if had_balance_equity_positions || has_balance_equity_positions {
             self.positions_last_update_ts = chrono::Utc::now().timestamp();
             self.kr_positions = next_positions;
+            self.kr_positions_by_symbol = self.kr_positions.iter().map(|p| {
+                let key = bare_symbol_from_key(&p.symbol).replace("/", "").trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
+                (key, p.clone())
+            }).collect();
             if let Ok(json) = serde_json::to_string(&self.kr_positions) {
                 self.put_kv_dedup("broker:kr_positions", &json);
             }
         } else {
             self.kr_positions = next_positions;
+            self.kr_positions_by_symbol = self.kr_positions.iter().map(|p| {
+                let key = bare_symbol_from_key(&p.symbol).replace("/", "").trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
+                (key, p.clone())
+            }).collect();
         }
         self.refresh_kraken_position_costs();
         for c in &mut self.charts {
