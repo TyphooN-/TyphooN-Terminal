@@ -464,6 +464,30 @@ impl TyphooNApp {
                     (key, p.clone())
                 })
                 .collect();
+            self.kr_position_asset_tails = self
+                .kr_positions
+                .iter()
+                .flat_map(|p| {
+                    let mut ks = vec![];
+                    let k = bare_symbol_from_key(&p.symbol)
+                        .replace("/", "")
+                        .trim_end_matches(".EQ")
+                        .trim_end_matches(".eq")
+                        .to_ascii_uppercase();
+                    ks.push(k.clone());
+                    if !p.asset_id.is_empty() {
+                        let a = bare_symbol_from_key(&p.asset_id)
+                            .replace("/", "")
+                            .trim_end_matches(".EQ")
+                            .trim_end_matches(".eq")
+                            .to_ascii_uppercase();
+                        if a != k {
+                            ks.push(a);
+                        }
+                    }
+                    ks
+                })
+                .collect();
             if let Ok(json) = serde_json::to_string(&self.kr_positions) {
                 self.put_kv_dedup("broker:kr_positions", &json);
             }
@@ -479,6 +503,30 @@ impl TyphooNApp {
                         .trim_end_matches(".eq")
                         .to_ascii_uppercase();
                     (key, p.clone())
+                })
+                .collect();
+            self.kr_position_asset_tails = self
+                .kr_positions
+                .iter()
+                .flat_map(|p| {
+                    let mut ks = vec![];
+                    let k = bare_symbol_from_key(&p.symbol)
+                        .replace("/", "")
+                        .trim_end_matches(".EQ")
+                        .trim_end_matches(".eq")
+                        .to_ascii_uppercase();
+                    ks.push(k.clone());
+                    if !p.asset_id.is_empty() {
+                        let a = bare_symbol_from_key(&p.asset_id)
+                            .replace("/", "")
+                            .trim_end_matches(".EQ")
+                            .trim_end_matches(".eq")
+                            .to_ascii_uppercase();
+                        if a != k {
+                            ks.push(a);
+                        }
+                    }
+                    ks
                 })
                 .collect();
         }

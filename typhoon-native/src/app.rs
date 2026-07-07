@@ -2858,6 +2858,7 @@ impl TyphooNApp {
             live_positions: Vec::new(),
             live_positions_by_symbol: std::collections::HashMap::new(),
             kr_positions_by_symbol: std::collections::HashMap::new(),
+            kr_position_asset_tails: std::collections::HashSet::new(),
             kr_positions: Vec::new(),
             kraken_equity_quote_meta: std::collections::BTreeMap::new(),
             show_alpaca_positions: true,

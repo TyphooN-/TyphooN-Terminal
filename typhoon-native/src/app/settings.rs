@@ -218,7 +218,7 @@ impl TyphooNApp {
                         settings_save_after = true;
                         if kr_before && !self.kraken_enabled {
                             self.kraken_connected = false;
-                            self.kr_positions.clear(); self.kr_positions_by_symbol.clear();
+                            self.kr_positions.clear(); self.kr_positions_by_symbol.clear(); self.kr_position_asset_tails.clear();
                             self.kraken_balances.clear(); self.kraken_balance_assets_by_display.clear();
                             self.kraken_open_orders.clear();
                             self.pending_kraken_fetches.clear();

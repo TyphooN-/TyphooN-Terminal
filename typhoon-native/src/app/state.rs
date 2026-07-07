@@ -3590,6 +3590,8 @@ pub struct TyphooNApp {
     pub(crate) live_positions_by_symbol: std::collections::HashMap<String, PositionInfo>,
     /// O(1) symbol lookup for Kraken positions.
     pub(crate) kr_positions_by_symbol: std::collections::HashMap<String, PositionInfo>,
+    /// O(1) asset tail/alias lookup for Kraken positions (covers rare fallback cases like asset_id format differences in quote -> position refresh).
+    pub(crate) kr_position_asset_tails: std::collections::HashSet<String>,
     pub(crate) kraken_equity_quote_meta: std::collections::BTreeMap<String, KrakenEquityQuoteMeta>,
     /// Position visibility toggles (still synced, just hidden in UI)
     pub(crate) show_alpaca_positions: bool,
