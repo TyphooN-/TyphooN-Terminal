@@ -68,6 +68,12 @@ fn pct(from: f64, to: f64) -> Option<f64> {
     (from > 0.0 && from.is_finite() && to.is_finite()).then(|| (to / from - 1.0) * 100.0)
 }
 
+fn close_at_or_before(rows: &[HistoricalPriceRow], anchor: chrono::NaiveDate) -> Option<f64> {
+    let anchor = anchor.format("%Y-%m-%d").to_string();
+    let idx = rows.partition_point(|r| r.date.as_str() > anchor.as_str());
+    rows.get(idx).map(|r| r.close)
+}
+
 /// Return over the window ending at the newest close, `days` calendar days
 /// back (closest stored close at or before the anchor date). `rows` are
 /// newest-first, as `get_historical_price` returns them.
@@ -75,19 +81,14 @@ fn window_return(rows: &[HistoricalPriceRow], days: i64) -> Option<f64> {
     let newest = rows.first()?;
     let newest_date = chrono::NaiveDate::parse_from_str(&newest.date, "%Y-%m-%d").ok()?;
     let anchor = newest_date - chrono::Duration::days(days);
-    let base = rows.iter().find(|r| {
-        chrono::NaiveDate::parse_from_str(&r.date, "%Y-%m-%d")
-            .map(|d| d <= anchor)
-            .unwrap_or(false)
-    })?;
-    pct(base.close, newest.close)
+    pct(close_at_or_before(rows, anchor)?, newest.close)
 }
 
 fn ytd_return(rows: &[HistoricalPriceRow]) -> Option<f64> {
     let newest = rows.first()?;
     let year = newest.date.get(0..4)?;
-    let base = rows.iter().find(|r| !r.date.starts_with(year))?;
-    pct(base.close, newest.close)
+    let idx = rows.partition_point(|r| r.date.starts_with(year));
+    pct(rows.get(idx)?.close, newest.close)
 }
 
 /// All perf windows from newest-first daily rows. Windows deeper than the
