@@ -1376,10 +1376,20 @@ impl TyphooNApp {
         self.mtf_grid_status_at = Some(std::time::Instant::now());
         let now_ms = chrono::Utc::now().timestamp_millis();
         let active_key = mtf_grid_symbol_key(&self.symbol_input).to_ascii_uppercase();
+        let mut open_tab_cells = std::collections::HashSet::new();
+        for chart in &self.charts {
+            if chart.show_in_tab_bar && !chart.bars.is_empty() {
+                open_tab_cells.insert((
+                    mtf_grid_symbol_key(&chart.symbol).to_ascii_uppercase(),
+                    chart.timeframe.cache_suffix().to_string(),
+                ));
+            }
+        }
         // (symbol, tf) cells with no open tab and no fresh cache entry.
         let mut cells: Vec<(String, Timeframe)> = Vec::new();
         for symbol in self.mtf_grid_navbar_symbols() {
             let key = mtf_grid_symbol_key(&symbol);
+            let key_upper = key.to_ascii_uppercase();
             for &(_label, tf) in &MTF_GRID_TIMEFRAMES {
                 // Never load a timeframe that's disabled in Sync (e.g. M1/M5) — that
                 // was the source of the "No chart data found for …:1Min" spam and the
@@ -1387,12 +1397,8 @@ impl TyphooNApp {
                 if !self.enabled_sync_timeframes.contains(tf.cache_suffix()) {
                     continue;
                 }
-                let has_tab = self.charts.iter().any(|c| {
-                    c.show_in_tab_bar
-                        && !c.bars.is_empty()
-                        && c.timeframe == tf
-                        && mtf_grid_symbol_key(&c.symbol).eq_ignore_ascii_case(&key)
-                });
+                let has_tab =
+                    open_tab_cells.contains(&(key_upper.clone(), tf.cache_suffix().to_string()));
                 // Skip cells with a live tab (read live in the render) and cells whose
                 // dot value is still fresh in the sticky grid store. This gates on the
                 // 1h value store — what the navbar dots actually read — NOT the 90s
