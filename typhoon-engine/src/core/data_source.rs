@@ -148,21 +148,31 @@ impl DataSourceManager {
     /// Skips unhealthy sources (but includes them at the end as last resort).
     pub fn resolve_candidates(&self, symbol: &str, timeframe: &str) -> Vec<String> {
         let sym_upper = symbol.to_uppercase();
-
         // Check per-symbol overrides first
         let src_by_id: std::collections::HashMap<String, usize> = if self.sources_by_id.is_empty() {
             self.sources.iter().enumerate().map(|(i, s)| (s.id.clone(), i)).collect()
         } else {
             self.sources_by_id.clone()
         };
-        let override_sources = self.overrides.iter().find(|o| {
+
+        // Exact match O(1) style (early break), then prefix for wildcards (small list)
+        let mut override_sources = None;
+        for o in &self.overrides {
             let pat = o.pattern.to_uppercase();
-            if pat.ends_with('*') {
-                sym_upper.starts_with(&pat[..pat.len() - 1])
-            } else {
-                sym_upper == pat
+            if !pat.ends_with('*') && pat == sym_upper {
+                override_sources = Some(o);
+                break;
             }
-        });
+        }
+        if override_sources.is_none() {
+            for o in &self.overrides {
+                let pat = o.pattern.to_uppercase();
+                if pat.ends_with('*') && sym_upper.starts_with(&pat[..pat.len() - 1]) {
+                    override_sources = Some(o);
+                    break;
+                }
+            }
+        }
 
         let ordered: Vec<&DataSourceEntry> = if let Some(ovr) = override_sources {
             // Use override ordering

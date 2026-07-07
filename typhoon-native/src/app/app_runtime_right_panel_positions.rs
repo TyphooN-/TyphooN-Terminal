@@ -89,10 +89,15 @@ impl TyphooNApp {
                 vec![AccountPositions {
                     account_id: self.alpaca_primary_account_id.clone(),
                     label: self
-                        .alpaca_account_roster
-                        .iter()
-                        .find(|account| account.is_primary)
+                        .alpaca_roster_by_id
+                        .get(&self.alpaca_primary_account_id)
                         .map(|account| account.label.clone())
+                        .or_else(|| {
+                            self.alpaca_account_roster
+                                .iter()
+                                .find(|account| account.is_primary)
+                                .map(|account| account.label.clone())
+                        })
                         .unwrap_or_else(|| "Alpaca 1".to_string()),
                     is_primary: true,
                     account_equity: self
@@ -120,10 +125,15 @@ impl TyphooNApp {
                 vec![KrakenAccountPositions {
                     account_id: self.kraken_primary_account_id.clone(),
                     label: self
-                        .kraken_account_roster
-                        .iter()
-                        .find(|account| account.is_primary)
+                        .kraken_roster_by_id
+                        .get(&self.kraken_primary_account_id)
                         .map(|account| account.label.clone())
+                        .or_else(|| {
+                            self.kraken_account_roster
+                                .iter()
+                                .find(|account| account.is_primary)
+                                .map(|account| account.label.clone())
+                        })
                         .unwrap_or_else(|| "Kraken".to_string()),
                     is_primary: true,
                     positions: self.kr_positions.clone(),

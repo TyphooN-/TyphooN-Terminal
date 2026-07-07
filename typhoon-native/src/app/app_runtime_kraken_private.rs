@@ -55,7 +55,7 @@ impl TyphooNApp {
             });
         }
         let acc_map: std::collections::HashMap<_, _> = accounts.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
-        if let Some(primary) = acc_map.get(&self.kraken_primary_account_id).or_else(|| accounts.iter().find(|a| a.is_primary)) {
+        if let Some(primary) = acc_map.get(&self.kraken_primary_account_id).cloned().or_else(|| accounts.iter().find(|a| a.is_primary).cloned()) {
             self.handle_kraken_trades(primary.trades.clone());
         }
         self.kraken_account_trades = accounts;

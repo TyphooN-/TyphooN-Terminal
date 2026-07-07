@@ -290,11 +290,12 @@ impl TyphooNApp {
         let n_total = specs.len();
         let capacity = self.alpaca_sync_capacity();
         let aggregate_rpm = self.alpaca_effective_historical_rpm() as usize * n_data;
-        let primary_id = if specs.iter().any(|s| s.id == self.alpaca_primary_account_id) {
-            self.alpaca_primary_account_id.clone()
-        } else {
-            specs[0].id.clone()
-        }; // TODO: precompute spec ids set for O(1) if grows
+         let spec_ids: std::collections::HashSet<String> = specs.iter().map(|s| s.id.clone()).collect();
+         let primary_id = if spec_ids.contains(&self.alpaca_primary_account_id) {
+             self.alpaca_primary_account_id.clone()
+         } else {
+             specs.get(0).map(|s| s.id.clone()).unwrap_or_default()
+         };
         let _ = self.broker_tx.send(BrokerCmd::Connect {
             accounts: specs,
             primary_id,

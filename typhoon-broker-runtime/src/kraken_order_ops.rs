@@ -200,13 +200,16 @@ pub async fn handle_kraken_order_command(
                 for _ in 0..12 {
                     match kb.get_position_summaries().await {
                         Ok(positions)
-                            if positions.iter().any(|p| {
-                                p.symbol.eq_ignore_ascii_case(&pair)
-                                    && p.qty.abs() > 0.0
-                                    && wait_for_qty_at_most
-                                        .map(|max_qty| p.qty.abs() <= max_qty + 1e-8)
-                                        .unwrap_or(true)
-                            }) =>
+                            if {
+                                let pos_by_sym: std::collections::HashMap<String, f64> = positions
+                                    .iter()
+                                    .map(|p| (p.symbol.to_ascii_uppercase(), p.qty.abs()))
+                                    .collect();
+                                let pair_upper = pair.to_ascii_uppercase();
+                                if let Some(&q) = pos_by_sym.get(&pair_upper) {
+                                    q > 0.0 && wait_for_qty_at_most.map(|max| q <= max + 1e-8).unwrap_or(true)
+                                } else { false }
+                            } =>
                         {
                             found = true;
                             break;

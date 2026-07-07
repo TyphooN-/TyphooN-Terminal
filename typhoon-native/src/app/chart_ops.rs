@@ -319,7 +319,11 @@ pub(super) fn chart_company_name_catalog(
 fn kraken_position_covers_balance_asset(positions: &[PositionInfo], asset: &str) -> bool {
     let display = TyphooNApp::kraken_display_asset(asset);
     let bare_display = display.strip_suffix(".EQ").unwrap_or(display.as_str());
-    positions.iter().any(|pos| { // or use map if by_symbol populated
+    // O(1) via temp map (small N, but consistent with by_symbol maps elsewhere)
+    let pos_by_sym: std::collections::HashMap<String, &PositionInfo> = positions.iter().map(|p| {
+        (p.symbol.to_ascii_uppercase(), p)
+    }).collect();
+    pos_by_sym.values().any(|pos| {
         if !pos.qty.is_finite() || pos.qty <= 0.0 || !pos.side.eq_ignore_ascii_case("long") {
             return false;
         }

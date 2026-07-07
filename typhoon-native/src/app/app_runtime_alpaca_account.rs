@@ -35,7 +35,8 @@ impl TyphooNApp {
         }
         self.positions_last_update_ts = chrono::Utc::now().timestamp();
         let positions_map: std::collections::HashMap<_, _> = accounts.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
-        if let Some(primary) = positions_map.get(&self.alpaca_primary_account_id).or_else(|| accounts.iter().find(|a| a.is_primary)) { // prefer primary_id map; fallback for legacy
+        let pid = self.alpaca_roster_by_id.get(&self.alpaca_primary_account_id).map(|r| r.id.clone()).unwrap_or(self.alpaca_primary_account_id.clone());
+        if let Some(primary) = positions_map.get(&pid).cloned().or_else(|| accounts.iter().find(|a| a.is_primary).cloned()) {
             if let Ok(json) = serde_json::to_string(&primary.positions) {
                 self.put_kv_dedup("broker:positions", &json);
             }

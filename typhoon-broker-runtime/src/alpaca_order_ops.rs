@@ -374,8 +374,13 @@ pub async fn handle_alpaca_order_command(
                     for _ in 0..12 {
                         match b.get_positions().await {
                             Ok(positions) => {
-                                let has_sym = positions.iter().any(|p| p.symbol.eq_ignore_ascii_case(&symbol) && p.qty.abs() > 0.0);
-                                if has_sym && positions.iter().any(|p| p.symbol.eq_ignore_ascii_case(&symbol) && p.qty.abs() <= max_qty + 1e-8) {
+                                let pos_by_sym: std::collections::HashMap<String, f64> = positions
+                                    .iter()
+                                    .map(|p| (p.symbol.to_ascii_uppercase(), p.qty.abs()))
+                                    .collect();
+                                let sym_upper = symbol.to_ascii_uppercase();
+                                let has_sym = pos_by_sym.get(&sym_upper).map_or(false, |&q| q > 0.0);
+                                if has_sym && pos_by_sym.get(&sym_upper).map_or(false, |&q| q <= max_qty + 1e-8) {
                                     ready = true;
                                     break;
                                 }

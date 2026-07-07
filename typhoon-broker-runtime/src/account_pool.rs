@@ -52,11 +52,11 @@ impl AlpacaAccountPool {
         for (i, a) in accounts.iter().enumerate() {
             id_to_idx.insert(a.spec.id.clone(), i);
         }
-        let primary_idx = accounts
-            .iter()
-            .position(|a| a.spec.id == primary_id && a.connected)
-            .or_else(|| accounts.iter().position(|a| a.connected))
-            .unwrap_or(0);
+        let primary_idx = if let Some(&idx) = id_to_idx.get(primary_id) {
+            if accounts[idx].connected { idx } else { accounts.iter().position(|a| a.connected).unwrap_or(0) }
+        } else {
+            accounts.iter().position(|a| a.connected).unwrap_or(0)
+        };
         let mut id_to_idx = HashMap::with_capacity(accounts.len());
         for (i, a) in accounts.iter().enumerate() {
             id_to_idx.insert(a.spec.id.clone(), i);
