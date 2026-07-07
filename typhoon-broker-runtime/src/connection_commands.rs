@@ -291,11 +291,19 @@ pub async fn handle_connection_command(
                         KrakenBroker::new(rest_api_key.clone(), rest_api_secret.clone())
                     });
 
-                    // Build the pool: primary first, then validated extras.
+                    // Build the pool: primary first, then validated extras. A
+                    // lone Kraken account should read as the broker itself;
+                    // only number it when there are actually multiple Kraken
+                    // account slots to distinguish.
+                    let primary_label = if extra_accounts.is_empty() {
+                        "Kraken"
+                    } else {
+                        "Kraken 1"
+                    };
                     let mut handles = vec![KrakenAccountHandle {
                         spec: BrokerAccountSpec {
                             id: "kraken1".into(),
-                            label: "Kraken 1".into(),
+                            label: primary_label.into(),
                             api_key: rest_api_key,
                             secret: rest_api_secret,
                             paper: false,

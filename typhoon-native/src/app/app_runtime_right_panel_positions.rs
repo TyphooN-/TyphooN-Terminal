@@ -58,6 +58,18 @@ fn alpaca_account_pl_basis(account: &AccountPositions) -> f64 {
     }
 }
 
+pub(super) fn single_kraken_account_label(label: &str, single_account: bool) -> &str {
+    if single_account { "Kraken" } else { label }
+}
+
+pub(super) fn primary_marker(is_primary: bool, single_account: bool) -> &'static str {
+    if is_primary && !single_account {
+        " ★"
+    } else {
+        ""
+    }
+}
+
 #[allow(deprecated)]
 impl TyphooNApp {
     pub(super) fn render_right_panel_positions_section(&mut self, ui: &mut egui::Ui) {
@@ -112,7 +124,7 @@ impl TyphooNApp {
                         .iter()
                         .find(|account| account.is_primary)
                         .map(|account| account.label.clone())
-                        .unwrap_or_else(|| "Kraken 1".to_string()),
+                        .unwrap_or_else(|| "Kraken".to_string()),
                     is_primary: true,
                     positions: self.kr_positions.clone(),
                 }]
@@ -221,28 +233,31 @@ impl TyphooNApp {
                     if kr_positions_available && kraken_toggles.len() <= 1 {
                         ui.checkbox(&mut self.show_kr_positions, egui::RichText::new("Kraken").small());
                     }
-                    for (account_id, label, count, is_primary) in kraken_toggles {
-                        let mut shown = self.show_kr_positions
-                            && !self.hidden_kraken_position_account_ids.contains(&account_id);
-                        if ui
-                            .checkbox(
-                                &mut shown,
-                                egui::RichText::new(format!(
-                                    "{}{} ({})",
-                                    label,
-                                    if is_primary { " ★" } else { "" },
-                                    count
-                                ))
-                                .small(),
-                            )
-                            .on_hover_text(format!("Kraken account id: {account_id}"))
-                            .changed()
-                        {
-                            if shown {
-                                self.hidden_kraken_position_account_ids.remove(&account_id);
-                                self.show_kr_positions = true;
-                            } else {
-                                self.hidden_kraken_position_account_ids.insert(account_id);
+                    let single_kraken_account = kraken_toggles.len() <= 1;
+                    if !single_kraken_account {
+                        for (account_id, label, count, is_primary) in kraken_toggles {
+                            let mut shown = self.show_kr_positions
+                                && !self.hidden_kraken_position_account_ids.contains(&account_id);
+                            if ui
+                                .checkbox(
+                                    &mut shown,
+                                    egui::RichText::new(format!(
+                                        "{}{} ({})",
+                                        single_kraken_account_label(&label, single_kraken_account),
+                                        primary_marker(is_primary, single_kraken_account),
+                                        count
+                                    ))
+                                    .small(),
+                                )
+                                .on_hover_text(format!("Kraken account id: {account_id}"))
+                                .changed()
+                            {
+                                if shown {
+                                    self.hidden_kraken_position_account_ids.remove(&account_id);
+                                    self.show_kr_positions = true;
+                                } else {
+                                    self.hidden_kraken_position_account_ids.insert(account_id);
+                                }
                             }
                         }
                     }
@@ -377,6 +392,7 @@ impl TyphooNApp {
             if show_kr_positions && kraken_position_groups.iter().any(|account| !account.positions.is_empty()) {
                 let mut close_sym: Option<String> = None;
                 let mut kr_action = SymbolAction::None;
+                let single_kraken_account = kraken_position_groups.len() <= 1;
                 for account in &kraken_position_groups {
                     if self.hidden_kraken_position_account_ids.contains(&account.account_id) {
                         continue;
@@ -387,8 +403,8 @@ impl TyphooNApp {
                     ui.label(
                         egui::RichText::new(format!(
                             "{}{} ({})",
-                            account.label,
-                            if account.is_primary { " ★" } else { "" },
+                            single_kraken_account_label(&account.label, single_kraken_account),
+                            primary_marker(account.is_primary, single_kraken_account),
                             account.positions.len()
                         ))
                         .small()

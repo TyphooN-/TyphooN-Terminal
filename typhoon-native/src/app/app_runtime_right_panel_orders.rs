@@ -184,7 +184,7 @@ impl TyphooNApp {
                         .iter()
                         .find(|account| account.is_primary)
                         .map(|account| account.label.clone())
-                        .unwrap_or_else(|| "Kraken 1".to_string()),
+                        .unwrap_or_else(|| "Kraken".to_string()),
                     is_primary: true,
                     orders: self.kraken_open_orders.clone(),
                 }]
@@ -315,28 +315,31 @@ impl TyphooNApp {
                     if kr_orders_available && kraken_toggles.len() <= 1 {
                         ui.checkbox(&mut self.show_kr_orders, egui::RichText::new("Kraken").small());
                     }
-                    for (account_id, label, count, is_primary) in kraken_toggles {
-                        let mut shown = self.show_kr_orders
-                            && !self.hidden_kraken_order_account_ids.contains(&account_id);
-                        if ui
-                            .checkbox(
-                                &mut shown,
-                                egui::RichText::new(format!(
-                                    "{}{} ({})",
-                                    label,
-                                    if is_primary { " ★" } else { "" },
-                                    count
-                                ))
-                                .small(),
-                            )
-                            .on_hover_text(format!("Kraken account id: {account_id}"))
-                            .changed()
-                        {
-                            if shown {
-                                self.hidden_kraken_order_account_ids.remove(&account_id);
-                                self.show_kr_orders = true;
-                            } else {
-                                self.hidden_kraken_order_account_ids.insert(account_id);
+                    let single_kraken_account = kraken_toggles.len() <= 1;
+                    if !single_kraken_account {
+                        for (account_id, label, count, is_primary) in kraken_toggles {
+                            let mut shown = self.show_kr_orders
+                                && !self.hidden_kraken_order_account_ids.contains(&account_id);
+                            if ui
+                                .checkbox(
+                                    &mut shown,
+                                    egui::RichText::new(format!(
+                                        "{}{} ({})",
+                                        super::app_runtime_right_panel_positions::single_kraken_account_label(&label, single_kraken_account),
+                                        super::app_runtime_right_panel_positions::primary_marker(is_primary, single_kraken_account),
+                                        count
+                                    ))
+                                    .small(),
+                                )
+                                .on_hover_text(format!("Kraken account id: {account_id}"))
+                                .changed()
+                            {
+                                if shown {
+                                    self.hidden_kraken_order_account_ids.remove(&account_id);
+                                    self.show_kr_orders = true;
+                                } else {
+                                    self.hidden_kraken_order_account_ids.insert(account_id);
+                                }
                             }
                         }
                     }
@@ -430,6 +433,7 @@ impl TyphooNApp {
                 }
             }
             if self.show_kr_orders && kraken_order_groups.iter().any(|account| !account.orders.is_empty()) {
+                let single_kraken_account = kraken_order_groups.len() <= 1;
                 for account in &kraken_order_groups {
                     if account.orders.is_empty() {
                         continue;
@@ -438,8 +442,8 @@ impl TyphooNApp {
                     ui.label(
                         egui::RichText::new(format!(
                             "{}{} ({})",
-                            account.label,
-                            if account.is_primary { " ★" } else { "" },
+                            super::app_runtime_right_panel_positions::single_kraken_account_label(&account.label, single_kraken_account),
+                            super::app_runtime_right_panel_positions::primary_marker(account.is_primary, single_kraken_account),
                             account.orders.len()
                         ))
                         .small()
