@@ -221,6 +221,9 @@ impl TyphooNApp {
                             self.kr_positions.clear(); self.kr_positions_by_symbol.clear(); self.kr_position_asset_tails.clear();
                             self.kraken_balances.clear(); self.kraken_balance_assets_by_display.clear();
                             self.kraken_open_orders.clear();
+                            self.kraken_pairs.clear();
+                            self.kraken_pairs_normalized.clear();
+                            self.kraken_equity_pair_by_base.clear();
                             self.pending_kraken_fetches.clear();
                             self.pending_kraken_futures_fetches.clear();
                             self.kraken_full_bar_sync_enabled = false;

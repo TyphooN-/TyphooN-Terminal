@@ -608,6 +608,7 @@ impl TyphooNApp {
         self.kraken_pairs_normalized.clear();
         self.kraken_pairs_normalized
             .reserve(self.kraken_pairs.len() * 2);
+        self.kraken_equity_pair_by_base.clear();
         for (pair_name, display_name) in &self.kraken_pairs {
             let pair_norm = typhoon_engine::core::kraken::normalize_pair_symbol(pair_name);
             if !pair_norm.is_empty() {
@@ -618,6 +619,17 @@ impl TyphooNApp {
             if !display_norm.is_empty() {
                 self.kraken_pairs_normalized
                     .insert(display_norm.to_ascii_uppercase());
+            }
+            // Build O(1) base -> candidate for kraken_resolved_equity_pair
+            let candidate = if display_name.trim().is_empty() {
+                pair_name
+            } else {
+                display_name
+            };
+            let base = TyphooNApp::kraken_pair_base_ticker(candidate);
+            if !base.is_empty() {
+                self.kraken_equity_pair_by_base
+                    .insert(base, candidate.to_string());
             }
         }
         self.refill_market_data_sync_slots();

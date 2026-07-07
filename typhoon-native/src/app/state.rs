@@ -382,6 +382,10 @@ pub struct TyphooNApp {
     /// on every sync-symbol audit, multiplying with O(n)
     /// `kraken_spot_symbol_scrape_enabled` callers.
     pub(crate) kraken_pairs_normalized: std::collections::HashSet<String>,
+    /// O(1) lookup base ticker -> catalog wsname for Kraken equity pair resolution
+    /// in order placement. Companion to `kraken_pairs` Vec (order preserved for
+    /// other uses) to eliminate linear .find_map over catalog.
+    pub(crate) kraken_equity_pair_by_base: std::collections::HashMap<String, String>,
     pub(crate) kraken_futures_symbols: Vec<String>,
     /// Kraken public market-data scrape universe switches. These gate automated
     /// public OHLC/Futures scheduling so the scrape budget stays on instruments

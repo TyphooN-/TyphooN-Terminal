@@ -1703,14 +1703,10 @@ impl TyphooNApp {
         if bare.is_empty() {
             return None;
         }
-        self.kraken_pairs.iter().find_map(|(name, wsname)| {
-            let candidate = if wsname.trim().is_empty() {
-                name
-            } else {
-                wsname
-            };
-            (Self::kraken_pair_base_ticker(candidate) == bare).then(|| candidate.clone())
-        })
+        if let Some(candidate) = self.kraken_equity_pair_by_base.get(bare) {
+            return Some(candidate.clone());
+        }
+        None
     }
 
     /// Construction fallback for an equity `AddOrder` pair (catalog miss): the app's
@@ -1912,10 +1908,15 @@ impl TyphooNApp {
         if wanted.is_empty() {
             return None;
         }
-        self.watchlist_rows.iter().find_map(|row| {
-            let row_base = Self::kraken_base_asset_for_pair(&row.symbol);
-            (row_base == wanted && row.last > 0.0 && row.last.is_finite()).then_some(row.last)
-        })
+        if let Some(&idx) = self.watchlist_by_bare.get(&wanted) {
+            if let Some(row) = self.watchlist_rows.get(idx) {
+                let row_base = Self::kraken_base_asset_for_pair(&row.symbol);
+                if row_base == wanted && row.last > 0.0 && row.last.is_finite() {
+                    return Some(row.last);
+                }
+            }
+        }
+        None
     }
 
     /// Freshest real-time live quote mid for `symbol` from any open chart whose

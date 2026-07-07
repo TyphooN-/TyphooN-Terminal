@@ -2828,6 +2828,7 @@ impl TyphooNApp {
             kraken_ws_snapshot_attempt: std::collections::HashMap::new(),
             kraken_pairs: Vec::new(),
             kraken_pairs_normalized: std::collections::HashSet::new(),
+            kraken_equity_pair_by_base: std::collections::HashMap::new(),
             kraken_futures_symbols: Vec::new(),
             kraken_scrape_xstocks: true,
             kraken_scrape_usd_crypto: true,
