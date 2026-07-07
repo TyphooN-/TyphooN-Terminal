@@ -517,13 +517,9 @@ impl TyphooNApp {
                                         .collect();
                                     accounts.sort_by(|a, b| a.id.cmp(&b.id));
                                     for account in accounts.into_iter().rev() {
-                                        let primary = if account.is_primary { "*" } else { "" };
                                         let (text, color) = if account.connected {
                                             (
-                                                format!(
-                                                    "[{}{} ${:.0}]",
-                                                    account.label, primary, account.equity
-                                                ),
+                                                format!("[{} ${:.0}]", account.label, account.equity),
                                                 if account.paper { egui::Color32::WHITE } else { UP },
                                             )
                                         } else {
@@ -533,11 +529,15 @@ impl TyphooNApp {
                                                 account.detail.trim()
                                             };
                                             (
-                                                format!("[{}{} {}]", account.label, primary, detail),
+                                                format!("[{} {}]", account.label, detail),
                                                 egui::Color32::from_rgb(255, 80, 80),
                                             )
                                         };
-                                        ui.label(egui::RichText::new(text).color(color).small());
+                                        let mut account_text = egui::RichText::new(text).color(color).small();
+                                        if account.is_primary {
+                                            account_text = account_text.strong();
+                                        }
+                                        ui.label(account_text);
                                     }
                                 } else if let Some(ref acct) = self.live_account {
                                     // Fallback while the pooled roster message is still in flight.
