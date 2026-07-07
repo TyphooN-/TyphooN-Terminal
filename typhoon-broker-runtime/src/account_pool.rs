@@ -9,6 +9,7 @@
 //!   multiply the aggregate historical request budget without any account
 //!   exceeding its individual per-key limit.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -27,8 +28,16 @@ pub struct AlpacaAccountHandle {
 #[derive(Default)]
 pub struct AlpacaAccountPool {
     accounts: Vec<AlpacaAccountHandle>,
+    /// O(1) lookup by account id (vs prior linear .find/.position over Vec).
+    /// Populated at construction; accounts list is immutable after new() so
+    /// map remains valid for the pool lifetime. Filters still respect live
+    /// `connected` flag on the handle.
+    id_to_idx: HashMap<String, usize>,
     primary_idx: usize,
     data_cursor: Arc<AtomicUsize>,
+    /// Precomputed indices of connected data_sync_enabled accounts for O(1)
+    /// round-robin in next_data_broker (avoids per-call filter/collect over Vec).
+    data_indices: Vec<usize>,
     mirror_orders: bool,
     /// Explicit opt-in set for live order mirroring (TradeCopy window
     /// checkboxes). Always starts empty — never persisted.
@@ -42,10 +51,19 @@ impl AlpacaAccountPool {
             .position(|a| a.spec.id == primary_id && a.connected)
             .or_else(|| accounts.iter().position(|a| a.connected))
             .unwrap_or(0);
+        let mut id_to_idx = HashMap::with_capacity(accounts.len());
+        for (i, a) in accounts.iter().enumerate() {
+            id_to_idx.insert(a.spec.id.clone(), i);
+        }
+        let data_indices: Vec<usize> = (0..accounts.len())
+            .filter(|&i| accounts[i].connected && accounts[i].spec.data_sync_enabled)
+            .collect();
         Self {
             accounts,
+            id_to_idx,
             primary_idx,
             data_cursor: Arc::new(AtomicUsize::new(0)),
+            data_indices,
             mirror_orders: false,
             mirror_target_ids: std::collections::BTreeSet::new(),
         }
@@ -72,41 +90,32 @@ impl AlpacaAccountPool {
     /// Switch primary by account id. Returns true when the primary changed to
     /// a connected account.
     pub fn set_primary(&mut self, account_id: &str) -> bool {
-        if let Some(idx) = self
-            .accounts
-            .iter()
-            .position(|a| a.spec.id == account_id && a.connected)
-        {
-            let changed = idx != self.primary_idx;
-            self.primary_idx = idx;
-            changed
-        } else {
-            false
+        if let Some(&idx) = self.id_to_idx.get(account_id) {
+            if let Some(a) = self.accounts.get(idx) {
+                if a.connected {
+                    let changed = idx != self.primary_idx;
+                    self.primary_idx = idx;
+                    return changed;
+                }
+            }
         }
+        false
     }
 
     /// Round-robin data-sync account for the next historical bar fetch.
     /// Falls back to the primary when no account is data-sync enabled.
+    /// O(1) thanks to precomputed data_indices.
     pub fn next_data_broker(&self) -> Option<AlpacaBroker> {
-        let data_accounts: Vec<&AlpacaAccountHandle> = self
-            .accounts
-            .iter()
-            .filter(|a| a.connected && a.spec.data_sync_enabled)
-            .collect();
-        if data_accounts.is_empty() {
+        if self.data_indices.is_empty() {
             return self.primary_broker().cloned();
         }
-        let idx = self.data_cursor.fetch_add(1, Ordering::Relaxed) % data_accounts.len();
-        Some(data_accounts[idx].broker.clone())
+        let idx = self.data_cursor.fetch_add(1, Ordering::Relaxed) % self.data_indices.len();
+        let account_idx = self.data_indices[idx];
+        self.accounts.get(account_idx).map(|a| a.broker.clone())
     }
 
     pub fn data_account_count(&self) -> usize {
-        let n = self
-            .accounts
-            .iter()
-            .filter(|a| a.connected && a.spec.data_sync_enabled)
-            .count();
-        n.max(usize::from(!self.is_empty()))
+        self.data_indices.len().max(usize::from(!self.is_empty()))
     }
 
     /// Explicitly opted-in mirror targets: accounts the user checked in the
@@ -127,9 +136,9 @@ impl AlpacaAccountPool {
     }
 
     pub fn broker_by_id(&self, account_id: &str) -> Option<&AlpacaAccountHandle> {
-        self.accounts
-            .iter()
-            .find(|a| a.spec.id == account_id && a.connected)
+        self.id_to_idx.get(account_id).and_then(|&idx| {
+            self.accounts.get(idx).filter(|a| a.connected)
+        })
     }
 
     pub fn connected_accounts(&self) -> impl Iterator<Item = (usize, &AlpacaAccountHandle)> {
@@ -184,6 +193,8 @@ pub struct KrakenAccountHandle {
 #[derive(Default)]
 pub struct KrakenAccountPool {
     accounts: Vec<KrakenAccountHandle>,
+    /// O(1) lookup by account id (vs prior linear .find/.position over Vec).
+    id_to_idx: HashMap<String, usize>,
     primary_idx: usize,
     /// Dedicated WS-token key pair, if the user configured one. Applies to the
     /// first (kraken1) account only; other accounts authenticate WS with their
@@ -198,8 +209,13 @@ impl KrakenAccountPool {
             .position(|a| a.spec.id == primary_id && a.connected)
             .or_else(|| accounts.iter().position(|a| a.connected))
             .unwrap_or(0);
+        let mut id_to_idx = HashMap::with_capacity(accounts.len());
+        for (i, a) in accounts.iter().enumerate() {
+            id_to_idx.insert(a.spec.id.clone(), i);
+        }
         Self {
             accounts,
+            id_to_idx,
             primary_idx,
             ws_override: None,
         }
@@ -237,9 +253,9 @@ impl KrakenAccountPool {
     }
 
     pub fn broker_by_id(&self, account_id: &str) -> Option<&KrakenAccountHandle> {
-        self.accounts
-            .iter()
-            .find(|a| a.spec.id == account_id && a.connected)
+        self.id_to_idx.get(account_id).and_then(|&idx| {
+            self.accounts.get(idx).filter(|a| a.connected)
+        })
     }
 
     pub fn connected_accounts(&self) -> impl Iterator<Item = (usize, &KrakenAccountHandle)> {
@@ -250,17 +266,16 @@ impl KrakenAccountPool {
     }
 
     pub fn set_primary(&mut self, account_id: &str) -> bool {
-        if let Some(idx) = self
-            .accounts
-            .iter()
-            .position(|a| a.spec.id == account_id && a.connected)
-        {
-            let changed = idx != self.primary_idx;
-            self.primary_idx = idx;
-            changed
-        } else {
-            false
+        if let Some(&idx) = self.id_to_idx.get(account_id) {
+            if let Some(a) = self.accounts.get(idx) {
+                if a.connected {
+                    let changed = idx != self.primary_idx;
+                    self.primary_idx = idx;
+                    return changed;
+                }
+            }
         }
+        false
     }
 
     pub fn roster(&self) -> Vec<AccountRosterEntry> {
