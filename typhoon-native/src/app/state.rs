@@ -302,6 +302,7 @@ pub struct TyphooNApp {
     pub(crate) alpaca_account_fills: Vec<AccountFills>,
     /// O(1) by-account_id lookup for rosters/positions/orders/fills to avoid repeated linear .find on Vecs.
     pub(crate) alpaca_roster_by_id: std::collections::HashMap<String, AccountRosterEntry>,
+    pub(crate) alpaca_primary_roster_entry: Option<AccountRosterEntry>,
     pub(crate) alpaca_account_positions_by_id: std::collections::HashMap<String, AccountPositions>,
     pub(crate) alpaca_account_orders_by_id: std::collections::HashMap<String, AccountOrders>,
     pub(crate) alpaca_account_fills_by_id: std::collections::HashMap<String, AccountFills>,
@@ -327,6 +328,7 @@ pub struct TyphooNApp {
     pub(crate) kraken_account_trades: Vec<KrakenAccountTrades>,
     /// O(1) by-account_id lookup for Kraken per-account data to avoid linear finds.
     pub(crate) kraken_roster_by_id: std::collections::HashMap<String, AccountRosterEntry>,
+    pub(crate) kraken_primary_roster_entry: Option<AccountRosterEntry>,
     pub(crate) kraken_account_positions_by_id:
         std::collections::HashMap<String, KrakenAccountPositions>,
     pub(crate) kraken_account_orders_by_id: std::collections::HashMap<String, KrakenAccountOrders>,

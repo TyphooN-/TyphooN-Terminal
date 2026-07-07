@@ -345,8 +345,12 @@ impl TyphooNApp {
         match broker {
             OrderBroker::Alpaca => {
                 let mut roster_by_id = std::collections::HashMap::with_capacity(accounts.len());
+                let mut primary_entry = None;
                 let mut connected_primary = None;
                 for account in &accounts {
+                    if account.is_primary && primary_entry.is_none() {
+                        primary_entry = Some(account.clone());
+                    }
                     if account.is_primary && account.connected && connected_primary.is_none() {
                         connected_primary = Some(account.clone());
                     }
@@ -362,11 +366,16 @@ impl TyphooNApp {
                 }
                 self.alpaca_account_roster = accounts.clone();
                 self.alpaca_roster_by_id = roster_by_id;
+                self.alpaca_primary_roster_entry = primary_entry;
             }
             OrderBroker::Kraken => {
                 let mut roster_by_id = std::collections::HashMap::with_capacity(accounts.len());
+                let mut primary_entry = None;
                 let mut connected_primary = None;
                 for account in &accounts {
+                    if account.is_primary && primary_entry.is_none() {
+                        primary_entry = Some(account.clone());
+                    }
                     if account.is_primary && account.connected && connected_primary.is_none() {
                         connected_primary = Some(account.clone());
                     }
@@ -382,6 +391,7 @@ impl TyphooNApp {
                 }
                 self.kraken_account_roster = accounts.clone();
                 self.kraken_roster_by_id = roster_by_id;
+                self.kraken_primary_roster_entry = primary_entry;
             }
         }
     }
