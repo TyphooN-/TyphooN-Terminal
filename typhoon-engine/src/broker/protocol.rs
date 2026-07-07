@@ -117,6 +117,33 @@ pub struct AccountPositions {
     pub positions: Vec<PositionInfo>,
 }
 
+/// Open orders for one connected Alpaca account. The legacy `Orders` message
+/// remains the primary-account snapshot; this lets the UI render every account
+/// explicitly without guessing from the primary-only list.
+#[derive(Clone, Debug)]
+pub struct AccountOrders {
+    pub account_id: String,
+    pub label: String,
+    pub is_primary: bool,
+    pub orders: Vec<OrderInfo>,
+}
+
+#[derive(Clone, Debug)]
+pub struct KrakenAccountPositions {
+    pub account_id: String,
+    pub label: String,
+    pub is_primary: bool,
+    pub positions: Vec<PositionInfo>,
+}
+
+#[derive(Clone, Debug)]
+pub struct KrakenAccountOrders {
+    pub account_id: String,
+    pub label: String,
+    pub is_primary: bool,
+    pub orders: Vec<crate::broker::kraken::KrakenOrder>,
+}
+
 pub struct QuickTradePlan {
     pub symbol: String,
     pub last_price: f64,
@@ -141,7 +168,7 @@ pub struct TradeAccountSnapshot {
 
 /// Messages sent from UI → async broker task.
 #[allow(dead_code)] // All variants are handled in broker task. Some lack dedicated UI buttons but are
-                    // accessible via console commands or research windows.
+// accessible via console commands or research windows.
 pub enum BrokerCmd {
     /// Connect every configured Alpaca account. `primary_id` selects the
     /// trading/account-data account; all accounts with `data_sync_enabled`
@@ -2654,6 +2681,7 @@ pub enum BrokerMsg {
     Positions(Vec<PositionInfo>),
     AlpacaAccountPositions(Vec<AccountPositions>),
     Orders(Vec<OrderInfo>),
+    AlpacaAccountOrders(Vec<AccountOrders>),
     OrderResult(String),
     /// Real-time Alpaca market-data L1 (rich quote with sizes).
     /// Trade print sets bid==ask==last (sizes may be 0 or trade size).
@@ -2664,7 +2692,9 @@ pub enum BrokerMsg {
     AlpacaMarketDataFeed(String),
     KrakenTrades(Vec<crate::broker::kraken::KrakenTrade>),
     KrakenLiveTrade(crate::broker::kraken::KrakenTrade),
+    KrakenAccountPositions(Vec<KrakenAccountPositions>),
     KrakenOpenOrders(Vec<crate::broker::kraken::KrakenOrder>),
+    KrakenAccountOpenOrders(Vec<KrakenAccountOrders>),
     KrakenWsStatus {
         status: String,
         message: String,

@@ -68,4 +68,15 @@ impl TyphooNApp {
         }
         self.live_orders = orders;
     }
+
+    pub(super) fn handle_alpaca_account_orders(&mut self, accounts: Vec<AccountOrders>) {
+        if !self.alpaca_enabled {
+            return;
+        }
+        self.orders_last_update_ts = chrono::Utc::now().timestamp();
+        if let Some(primary) = accounts.iter().find(|account| account.is_primary) {
+            self.live_orders = primary.orders.clone();
+        }
+        self.alpaca_account_orders = accounts;
+    }
 }

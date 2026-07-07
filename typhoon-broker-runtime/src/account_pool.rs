@@ -242,6 +242,13 @@ impl KrakenAccountPool {
             .find(|a| a.spec.id == account_id && a.connected)
     }
 
+    pub fn connected_accounts(&self) -> impl Iterator<Item = (usize, &KrakenAccountHandle)> {
+        self.accounts
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.connected)
+    }
+
     pub fn set_primary(&mut self, account_id: &str) -> bool {
         if let Some(idx) = self
             .accounts

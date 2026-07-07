@@ -80,6 +80,24 @@ impl TyphooNApp {
         }
     }
 
+    pub(super) fn handle_kraken_account_positions(
+        &mut self,
+        accounts: Vec<KrakenAccountPositions>,
+    ) {
+        if !self.kraken_enabled {
+            return;
+        }
+        self.positions_last_update_ts = chrono::Utc::now().timestamp();
+        if let Some(primary) = accounts.iter().find(|account| account.is_primary) {
+            self.kr_positions = primary.positions.clone();
+        }
+        self.kraken_account_positions = accounts;
+        self.refresh_kraken_position_costs();
+        for c in &mut self.charts {
+            c.cached_trade_overlay_frame = 0;
+        }
+    }
+
     pub(super) fn handle_kraken_open_orders(&mut self, orders: Vec<KrakenOrder>) {
         if !self.kraken_enabled {
             return;
@@ -110,5 +128,25 @@ impl TyphooNApp {
                 .partial_cmp(&a.opentm)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+    }
+
+    pub(super) fn handle_kraken_account_open_orders(
+        &mut self,
+        mut accounts: Vec<KrakenAccountOrders>,
+    ) {
+        if !self.kraken_enabled {
+            return;
+        }
+        for account in &mut accounts {
+            account.orders.sort_by(|a, b| {
+                b.opentm
+                    .partial_cmp(&a.opentm)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+        if let Some(primary) = accounts.iter().find(|account| account.is_primary) {
+            self.kraken_open_orders = primary.orders.clone();
+        }
+        self.kraken_account_orders = accounts;
     }
 }

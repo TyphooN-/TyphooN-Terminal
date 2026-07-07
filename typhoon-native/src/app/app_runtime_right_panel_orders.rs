@@ -145,25 +145,229 @@ fn order_display_groups(orders: &[OrderInfo]) -> Vec<OrderDisplayGroup<'_>> {
 impl TyphooNApp {
     pub(super) fn render_right_panel_orders_section(&mut self, ui: &mut egui::Ui) {
         // ── Orders Section ────────────────────────────────────
-        let alpaca_live =
-            self.show_alpaca_positions && self.broker_connected && !self.live_orders.is_empty();
-        if alpaca_live {
-            let ord_count = self.live_orders.len();
-            let (ord_stale_lbl, ord_stale_col) = self.staleness_badge(self.orders_last_update_ts);
-            let ord_header = format!("☰ Orders ({})  •  {}", ord_count, ord_stale_lbl);
-            let orders_section = egui::CollapsingHeader::new(
-                egui::RichText::new(ord_header)
-                    .strong()
-                    .small()
-                    .color(ord_stale_col),
-            )
-            .id_salt("orders_section")
-            .default_open(self.right_orders_open)
-            .show(ui, |ui| {
+        let alpaca_orders_available = self.alpaca_enabled;
+        let kr_orders_available = self.kraken_enabled;
+        let mut alpaca_order_groups: Vec<AccountOrders> = if self.show_alpaca_orders {
+            if !self.alpaca_account_orders.is_empty() {
+                self.alpaca_account_orders.clone()
+            } else if !self.live_orders.is_empty() {
+                vec![AccountOrders {
+                    account_id: self.alpaca_primary_account_id.clone(),
+                    label: self
+                        .alpaca_account_roster
+                        .iter()
+                        .find(|account| account.is_primary)
+                        .map(|account| account.label.clone())
+                        .unwrap_or_else(|| "Alpaca 1".to_string()),
+                    is_primary: true,
+                    orders: self.live_orders.clone(),
+                }]
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        alpaca_order_groups.retain(|account| {
+            !self
+                .hidden_alpaca_order_account_ids
+                .contains(&account.account_id)
+        });
+        let mut kraken_order_groups: Vec<KrakenAccountOrders> = if self.show_kr_orders {
+            if !self.kraken_account_orders.is_empty() {
+                self.kraken_account_orders.clone()
+            } else if !self.kraken_open_orders.is_empty() {
+                vec![KrakenAccountOrders {
+                    account_id: self.kraken_primary_account_id.clone(),
+                    label: self
+                        .kraken_account_roster
+                        .iter()
+                        .find(|account| account.is_primary)
+                        .map(|account| account.label.clone())
+                        .unwrap_or_else(|| "Kraken 1".to_string()),
+                    is_primary: true,
+                    orders: self.kraken_open_orders.clone(),
+                }]
+            } else {
+                self.kraken_account_roster
+                    .iter()
+                    .filter(|account| account.connected)
+                    .map(|account| KrakenAccountOrders {
+                        account_id: account.id.clone(),
+                        label: account.label.clone(),
+                        is_primary: account.is_primary,
+                        orders: Vec::new(),
+                    })
+                    .collect()
+            }
+        } else {
+            Vec::new()
+        };
+        kraken_order_groups.retain(|account| {
+            !self
+                .hidden_kraken_order_account_ids
+                .contains(&account.account_id)
+        });
+        let alpaca_count = alpaca_order_groups
+            .iter()
+            .map(|account| account.orders.len())
+            .sum::<usize>();
+        let kr_count = kraken_order_groups
+            .iter()
+            .map(|account| account.orders.len())
+            .sum::<usize>();
+        let ord_count = alpaca_count + kr_count;
+        if !alpaca_orders_available && !kr_orders_available && ord_count == 0 {
+            return;
+        }
+
+        let (ord_stale_lbl, ord_stale_col) = self.staleness_badge(self.orders_last_update_ts);
+        let ord_header = format!("☰ Orders ({})  •  {}", ord_count, ord_stale_lbl);
+        let orders_section = egui::CollapsingHeader::new(
+            egui::RichText::new(ord_header)
+                .strong()
+                .small()
+                .color(ord_stale_col),
+        )
+        .id_salt("orders_section")
+        .default_open(self.right_orders_open)
+        .show(ui, |ui| {
+            let alpaca_toggles: Vec<(String, String, usize, bool)> = if !self.alpaca_account_orders.is_empty() {
+                self.alpaca_account_orders
+                    .iter()
+                    .map(|account| {
+                        (
+                            account.account_id.clone(),
+                            account.label.clone(),
+                            account.orders.len(),
+                            account.is_primary,
+                        )
+                    })
+                    .collect()
+            } else {
+                alpaca_order_groups
+                    .iter()
+                    .map(|account| {
+                        (
+                            account.account_id.clone(),
+                            account.label.clone(),
+                            account.orders.len(),
+                            account.is_primary,
+                        )
+                    })
+                    .collect()
+            };
+            let kraken_toggles: Vec<(String, String, usize, bool)> = if !self.kraken_account_orders.is_empty() {
+                self.kraken_account_orders
+                    .iter()
+                    .map(|account| {
+                        (
+                            account.account_id.clone(),
+                            account.label.clone(),
+                            account.orders.len(),
+                            account.is_primary,
+                        )
+                    })
+                    .collect()
+            } else {
+                kraken_order_groups
+                    .iter()
+                    .map(|account| {
+                        (
+                            account.account_id.clone(),
+                            account.label.clone(),
+                            account.orders.len(),
+                            account.is_primary,
+                        )
+                    })
+                    .collect()
+            };
+            if alpaca_toggles.len() > 1 || kraken_toggles.len() > 1 || [alpaca_orders_available, kr_orders_available].into_iter().filter(|visible| *visible).count() > 1 {
+                ui.horizontal(|ui| {
+                    if alpaca_orders_available && alpaca_toggles.len() <= 1 {
+                        ui.checkbox(&mut self.show_alpaca_orders, egui::RichText::new("Alpaca").small());
+                    }
+                    for (account_id, label, count, is_primary) in alpaca_toggles {
+                        let mut shown = self.show_alpaca_orders
+                            && !self.hidden_alpaca_order_account_ids.contains(&account_id);
+                        if ui
+                            .checkbox(
+                                &mut shown,
+                                egui::RichText::new(format!(
+                                    "{}{} ({})",
+                                    label,
+                                    if is_primary { " ★" } else { "" },
+                                    count
+                                ))
+                                .small(),
+                            )
+                            .on_hover_text(format!("Alpaca account id: {account_id}"))
+                            .changed()
+                        {
+                            if shown {
+                                self.hidden_alpaca_order_account_ids.remove(&account_id);
+                                self.show_alpaca_orders = true;
+                            } else {
+                                self.hidden_alpaca_order_account_ids.insert(account_id);
+                            }
+                        }
+                    }
+                    if kr_orders_available && kraken_toggles.len() <= 1 {
+                        ui.checkbox(&mut self.show_kr_orders, egui::RichText::new("Kraken").small());
+                    }
+                    for (account_id, label, count, is_primary) in kraken_toggles {
+                        let mut shown = self.show_kr_orders
+                            && !self.hidden_kraken_order_account_ids.contains(&account_id);
+                        if ui
+                            .checkbox(
+                                &mut shown,
+                                egui::RichText::new(format!(
+                                    "{}{} ({})",
+                                    label,
+                                    if is_primary { " ★" } else { "" },
+                                    count
+                                ))
+                                .small(),
+                            )
+                            .on_hover_text(format!("Kraken account id: {account_id}"))
+                            .changed()
+                        {
+                            if shown {
+                                self.hidden_kraken_order_account_ids.remove(&account_id);
+                                self.show_kr_orders = true;
+                            } else {
+                                self.hidden_kraken_order_account_ids.insert(account_id);
+                            }
+                        }
+                    }
+                });
                 ui.add_space(4.0);
-                let mut cancel_ids: Vec<String> = Vec::new();
-                let mut lo_action = SymbolAction::None;
-                for group in order_display_groups(&self.live_orders) {
+            }
+
+            let mut cancel_ids: Vec<String> = Vec::new();
+            let mut kr_cancel_ids: Vec<String> = Vec::new();
+            let mut lo_action = SymbolAction::None;
+            let mut has_orders = false;
+            for account in &alpaca_order_groups {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}{} ({})",
+                        account.label,
+                        if account.is_primary { " ★" } else { "" },
+                        account.orders.len()
+                    ))
+                    .small()
+                    .strong()
+                    .color(if account.is_primary { ACCENT } else { AXIS_TEXT }),
+                )
+                .on_hover_text(format!("Alpaca account id: {}", account.account_id));
+                if account.orders.is_empty() {
+                    ui.label(egui::RichText::new("no open orders").small().color(AXIS_TEXT));
+                    ui.separator();
+                    continue;
+                }
+                has_orders = true;
+                for group in order_display_groups(&account.orders) {
                     let order = group.primary();
                     ui.horizontal(|ui| {
                         let (_, act) = symbol_label_with_menu(
@@ -176,35 +380,18 @@ impl TyphooNApp {
                         }
                         let side_c = if order.side == "buy" { UP } else { DOWN };
                         ui.label(egui::RichText::new(&order.side).color(side_c).small());
-                        ui.label(
-                            egui::RichText::new(&order.order_type)
-                                .color(AXIS_TEXT)
-                                .small(),
-                        );
-                        // The TP limit / SL stop level — previously dropped, which
-                        // is why bracket orders looked like bare "sell limit" rows.
+                        ui.label(egui::RichText::new(&order.order_type).color(AXIS_TEXT).small());
                         if let Some(desc) = order_price_descriptor(order) {
                             ui.label(egui::RichText::new(desc).color(ACCENT).small().strong());
                         }
                         if group.orders.len() > 1 {
-                            ui.label(
-                                egui::RichText::new(format!("×{}", group.orders.len()))
-                                    .color(AXIS_TEXT)
-                                    .small()
-                                    .strong(),
-                            )
-                            .on_hover_text(
-                                "Identical open orders grouped by symbol, side, type, price, and status",
-                            );
+                            ui.label(egui::RichText::new(format!("×{}", group.orders.len())).color(AXIS_TEXT).small().strong())
+                                .on_hover_text("Identical open orders grouped by symbol, side, type, price, and status");
                         }
-                        if self.broker_connected {
+                        if account.is_primary && self.broker_connected {
                             if ui
                                 .small_button(egui::RichText::new("X").color(DOWN))
-                                .on_hover_text(if group.orders.len() > 1 {
-                                    "Cancel all orders in this group"
-                                } else {
-                                    "Cancel order"
-                                })
+                                .on_hover_text(if group.orders.len() > 1 { "Cancel all orders in this group" } else { "Cancel order" })
                                 .clicked()
                             {
                                 cancel_ids.extend(group.orders.iter().map(|order| order.id.clone()));
@@ -222,32 +409,17 @@ impl TyphooNApp {
                         String::new()
                     };
                     ui.label(
-                        egui::RichText::new(format!(
-                            "qty: {}{} | {}",
-                            qty_text, order_count_text, order.status
-                        ))
+                        egui::RichText::new(format!("qty: {}{} | {}", qty_text, order_count_text, order.status))
                             .color(ACCENT)
                             .small(),
                     );
-                    // Bracket legs (TP/SL children) are nested under an unfilled
-                    // parent — render them so the SL/TP attached to the entry is
-                    // visible before it fills.
                     if let Some(legs) = order.legs.as_ref() {
                         for leg in legs {
                             let (role, role_c) = order_leg_role(leg);
                             ui.horizontal(|ui| {
                                 ui.add_space(12.0);
-                                ui.label(
-                                    egui::RichText::new(format!("└ {role}"))
-                                        .color(role_c)
-                                        .small()
-                                        .strong(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(&leg.order_type)
-                                        .color(AXIS_TEXT)
-                                        .small(),
-                                );
+                                ui.label(egui::RichText::new(format!("└ {role}")).color(role_c).small().strong());
+                                ui.label(egui::RichText::new(&leg.order_type).color(AXIS_TEXT).small());
                                 if let Some(desc) = order_price_descriptor(leg) {
                                     ui.label(egui::RichText::new(desc).color(role_c).small());
                                 }
@@ -256,22 +428,64 @@ impl TyphooNApp {
                     }
                     ui.separator();
                 }
-                for oid in cancel_ids {
-                    let _ = self
-                        .broker_tx
-                        .send(BrokerCmd::AlpacaCancelOrder { order_id: oid });
+            }
+            if self.show_kr_orders && kraken_order_groups.iter().any(|account| !account.orders.is_empty()) {
+                for account in &kraken_order_groups {
+                    if account.orders.is_empty() {
+                        continue;
+                    }
+                    has_orders = true;
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}{} ({})",
+                            account.label,
+                            if account.is_primary { " ★" } else { "" },
+                            account.orders.len()
+                        ))
+                        .small()
+                        .strong()
+                        .color(if account.is_primary { ACCENT } else { AXIS_TEXT }),
+                    )
+                    .on_hover_text(format!("Kraken account id: {}", account.account_id));
+                for order in &account.orders {
+                    let remain = (order.vol - order.vol_exec).max(0.0);
+                    ui.horizontal(|ui| {
+                        let (_, act) = symbol_label_with_menu(ui, &order.pair, egui::RichText::new(&order.pair).small().strong());
+                        if !matches!(act, SymbolAction::None) {
+                            lo_action = act;
+                        }
+                        let side_c = if order.r#type == "buy" { UP } else { DOWN };
+                        ui.label(egui::RichText::new(&order.r#type).color(side_c).small());
+                        ui.label(egui::RichText::new(&order.ordertype).color(AXIS_TEXT).small());
+                        ui.label(egui::RichText::new(format!("@ {}", format_price(order.price))).color(ACCENT).small().strong());
+                        if account.is_primary && ui.small_button(egui::RichText::new("X").color(DOWN)).on_hover_text("Cancel Kraken order").clicked() {
+                            kr_cancel_ids.push(order.txid.clone());
+                        }
+                    });
+                    ui.label(egui::RichText::new(format!("qty: {} rem {} | {}", format_price(order.vol), format_price(remain), order.status)).color(ACCENT).small());
+                    ui.separator();
                 }
-                if !matches!(lo_action, SymbolAction::None) {
-                    self.deferred_symbol_action = lo_action;
                 }
-            });
-            self.right_orders_open = orders_section.fully_open();
-            self.handle_right_panel_section_drag(
-                ui,
-                RightPanelSectionId::Orders,
-                &orders_section.header_response,
-            );
-        }
+            }
+            for oid in cancel_ids {
+                let _ = self.broker_tx.send(BrokerCmd::AlpacaCancelOrder { order_id: oid });
+            }
+            for txid in kr_cancel_ids {
+                let _ = self.broker_tx.send(BrokerCmd::KrakenCancelOrder { txid });
+            }
+            if !matches!(lo_action, SymbolAction::None) {
+                self.deferred_symbol_action = lo_action;
+            }
+            if !has_orders {
+                ui.label(egui::RichText::new("No open orders.").color(AXIS_TEXT).small());
+            }
+        });
+        self.right_orders_open = orders_section.fully_open();
+        self.handle_right_panel_section_drag(
+            ui,
+            RightPanelSectionId::Orders,
+            &orders_section.header_response,
+        );
     }
 }
 

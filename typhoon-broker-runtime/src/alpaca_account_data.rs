@@ -1,5 +1,5 @@
 use typhoon_engine::broker::alpaca::AlpacaBroker;
-use typhoon_engine::broker::protocol::{AccountPositions, BrokerCmd, BrokerMsg};
+use typhoon_engine::broker::protocol::{AccountOrders, AccountPositions, BrokerCmd, BrokerMsg};
 
 use crate::account_pool::AlpacaAccountPool;
 
@@ -185,5 +185,44 @@ pub async fn fetch_and_send_all_account_positions(
 
     if !snapshots.is_empty() {
         let _ = broker_msg_tx.send(BrokerMsg::AlpacaAccountPositions(snapshots));
+    }
+}
+
+pub async fn fetch_and_send_all_account_orders(
+    pool: &AlpacaAccountPool,
+    broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
+) {
+    let mut snapshots = Vec::new();
+    let primary_id = pool.primary_id().map(str::to_string);
+
+    for (_, account) in pool.connected_accounts() {
+        match account.broker.get_orders("open", 100).await {
+            Ok(orders) => {
+                let is_primary = primary_id
+                    .as_deref()
+                    .is_some_and(|id| id == account.spec.id.as_str());
+                if is_primary {
+                    let _ = broker_msg_tx.send(BrokerMsg::Orders(orders.clone()));
+                }
+                snapshots.push(AccountOrders {
+                    account_id: account.spec.id.clone(),
+                    label: account.spec.label.clone(),
+                    is_primary,
+                    orders,
+                });
+            }
+            Err(e) => {
+                tracing::debug!(
+                    "Orders request failed for {} ({}): {}",
+                    account.spec.label,
+                    account.spec.id,
+                    e
+                );
+            }
+        }
+    }
+
+    if !snapshots.is_empty() {
+        let _ = broker_msg_tx.send(BrokerMsg::AlpacaAccountOrders(snapshots));
     }
 }

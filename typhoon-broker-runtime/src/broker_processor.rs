@@ -205,10 +205,17 @@ pub fn spawn_broker_message_processor(
                     )
                     .await;
                 }
-                cmd @ (BrokerCmd::GetAccount | BrokerCmd::GetOrders | BrokerCmd::GetOrderHistory { .. }) => {
+                cmd @ (BrokerCmd::GetAccount | BrokerCmd::GetOrderHistory { .. }) => {
                     alpaca_account_data::handle_alpaca_account_data_command(
                         cmd,
                         alpaca_pool.primary_broker(),
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
+                }
+                BrokerCmd::GetOrders => {
+                    alpaca_account_data::fetch_and_send_all_account_orders(
+                        &alpaca_pool,
                         &broker_msg_tx_clone,
                     )
                     .await;
@@ -855,17 +862,29 @@ pub fn spawn_broker_message_processor(
                     .await;
                 }
                 cmd @ (BrokerCmd::KrakenGetBalance
-                | BrokerCmd::KrakenGetPositions
                 | BrokerCmd::KrakenPlaceOrder { .. }
                 | BrokerCmd::KrakenPlaceOrderAdvanced { .. }
                 | BrokerCmd::KrakenClosePosition { .. }
                 | BrokerCmd::KrakenCancelOrder { .. }
                 | BrokerCmd::KrakenCancelAll
-                | BrokerCmd::KrakenFetchTrades
-                | BrokerCmd::KrakenFetchOpenOrders) => {
+                | BrokerCmd::KrakenFetchTrades) => {
                     kraken_order_ops::handle_kraken_account_order_command(
                         cmd,
                         kraken_pool.primary_broker(),
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
+                }
+                BrokerCmd::KrakenGetPositions => {
+                    kraken_order_ops::fetch_and_send_all_kraken_account_positions(
+                        &kraken_pool,
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
+                }
+                BrokerCmd::KrakenFetchOpenOrders => {
+                    kraken_order_ops::fetch_and_send_all_kraken_account_orders(
+                        &kraken_pool,
                         &broker_msg_tx_clone,
                     )
                     .await;

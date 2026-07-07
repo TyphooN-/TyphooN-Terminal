@@ -50,6 +50,9 @@ impl TyphooNApp {
                 BrokerMsg::KrakenOpenOrders(orders) => {
                     self.handle_kraken_open_orders(orders);
                 }
+                BrokerMsg::KrakenAccountOpenOrders(accounts) => {
+                    self.handle_kraken_account_open_orders(accounts);
+                }
                 BrokerMsg::KrakenWsStatus { status, message } => {
                     self.handle_kraken_ws_status(status, message);
                 }
@@ -185,6 +188,9 @@ impl TyphooNApp {
                 BrokerMsg::AlpacaAccountPositions(accounts) => {
                     self.handle_alpaca_account_positions(accounts);
                 }
+                BrokerMsg::AlpacaAccountOrders(accounts) => {
+                    self.handle_alpaca_account_orders(accounts);
+                }
                 BrokerMsg::AllAssets(assets) => {
                     self.handle_alpaca_all_assets(assets);
                 }
@@ -203,6 +209,9 @@ impl TyphooNApp {
                 }
                 BrokerMsg::KrakenPositions(pos) => {
                     self.handle_kraken_positions(pos);
+                }
+                BrokerMsg::KrakenAccountPositions(accounts) => {
+                    self.handle_kraken_account_positions(accounts);
                 }
                 BrokerMsg::Orders(orders) => {
                     self.handle_alpaca_orders(orders);

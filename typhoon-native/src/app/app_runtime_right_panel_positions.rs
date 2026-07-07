@@ -101,15 +101,54 @@ impl TyphooNApp {
         } else {
             Vec::new()
         };
+        let kraken_position_groups: Vec<KrakenAccountPositions> = if show_kr_positions {
+            if !self.kraken_account_positions.is_empty() {
+                self.kraken_account_positions.clone()
+            } else if !self.kr_positions.is_empty() {
+                vec![KrakenAccountPositions {
+                    account_id: self.kraken_primary_account_id.clone(),
+                    label: self
+                        .kraken_account_roster
+                        .iter()
+                        .find(|account| account.is_primary)
+                        .map(|account| account.label.clone())
+                        .unwrap_or_else(|| "Kraken 1".to_string()),
+                    is_primary: true,
+                    positions: self.kr_positions.clone(),
+                }]
+            } else {
+                self.kraken_account_roster
+                    .iter()
+                    .filter(|account| account.connected)
+                    .map(|account| KrakenAccountPositions {
+                        account_id: account.id.clone(),
+                        label: account.label.clone(),
+                        is_primary: account.is_primary,
+                        positions: Vec::new(),
+                    })
+                    .collect()
+            }
+        } else {
+            Vec::new()
+        };
         let alpaca_count = alpaca_position_groups
             .iter()
+            .filter(|account| {
+                !self
+                    .hidden_alpaca_position_account_ids
+                    .contains(&account.account_id)
+            })
             .map(|account| account.positions.len())
             .sum::<usize>();
-        let kr_count = if show_kr_positions {
-            self.kr_positions.len()
-        } else {
-            0
-        };
+        let kr_count = kraken_position_groups
+            .iter()
+            .filter(|account| {
+                !self
+                    .hidden_kraken_position_account_ids
+                    .contains(&account.account_id)
+            })
+            .map(|account| account.positions.len())
+            .sum::<usize>();
         let pos_count = alpaca_count + kr_count;
         let (pos_stale_lbl, pos_stale_col) = self.staleness_badge(self.positions_last_update_ts);
         let pos_header = format!("☰ Positions ({})  •  {}", pos_count, pos_stale_lbl);
@@ -124,19 +163,88 @@ impl TyphooNApp {
         .show(ui, |ui| {
             // Visibility toggles only matter when more than one eligible
             // position source exists. Do not show disabled brokers.
-            if position_source_count > 1 {
+            if position_source_count > 1
+                || alpaca_position_groups.len() > 1
+                || kraken_position_groups.len() > 1
+            {
+                let alpaca_toggles: Vec<(String, String, usize, bool)> = alpaca_position_groups
+                    .iter()
+                    .map(|account| {
+                        (
+                            account.account_id.clone(),
+                            account.label.clone(),
+                            account.positions.len(),
+                            account.is_primary,
+                        )
+                    })
+                    .collect();
                 ui.horizontal(|ui| {
-                    if alpaca_positions_available {
-                        ui.checkbox(
-                            &mut self.show_alpaca_positions,
-                            egui::RichText::new("Alpaca").small(),
-                        );
+                    if alpaca_positions_available && alpaca_toggles.len() <= 1 {
+                        ui.checkbox(&mut self.show_alpaca_positions, egui::RichText::new("Alpaca").small());
                     }
-                    if kr_positions_available {
-                        ui.checkbox(
-                            &mut self.show_kr_positions,
-                            egui::RichText::new("Kraken").small(),
-                        );
+                    for (account_id, label, count, is_primary) in alpaca_toggles {
+                        let mut shown = self.show_alpaca_positions
+                            && !self.hidden_alpaca_position_account_ids.contains(&account_id);
+                        if ui
+                            .checkbox(
+                                &mut shown,
+                                egui::RichText::new(format!(
+                                    "{}{} ({})",
+                                    label,
+                                    if is_primary { " ★" } else { "" },
+                                    count
+                                ))
+                                .small(),
+                            )
+                            .on_hover_text(format!("Alpaca account id: {account_id}"))
+                            .changed()
+                        {
+                            if shown {
+                                self.hidden_alpaca_position_account_ids.remove(&account_id);
+                                self.show_alpaca_positions = true;
+                            } else {
+                                self.hidden_alpaca_position_account_ids.insert(account_id);
+                            }
+                        }
+                    }
+                    let kraken_toggles: Vec<(String, String, usize, bool)> = kraken_position_groups
+                        .iter()
+                        .map(|account| {
+                            (
+                                account.account_id.clone(),
+                                account.label.clone(),
+                                account.positions.len(),
+                                account.is_primary,
+                            )
+                        })
+                        .collect();
+                    if kr_positions_available && kraken_toggles.len() <= 1 {
+                        ui.checkbox(&mut self.show_kr_positions, egui::RichText::new("Kraken").small());
+                    }
+                    for (account_id, label, count, is_primary) in kraken_toggles {
+                        let mut shown = self.show_kr_positions
+                            && !self.hidden_kraken_position_account_ids.contains(&account_id);
+                        if ui
+                            .checkbox(
+                                &mut shown,
+                                egui::RichText::new(format!(
+                                    "{}{} ({})",
+                                    label,
+                                    if is_primary { " ★" } else { "" },
+                                    count
+                                ))
+                                .small(),
+                            )
+                            .on_hover_text(format!("Kraken account id: {account_id}"))
+                            .changed()
+                        {
+                            if shown {
+                                self.hidden_kraken_position_account_ids.remove(&account_id);
+                                self.show_kr_positions = true;
+                            } else {
+                                self.hidden_kraken_position_account_ids.insert(account_id);
+                            }
+                        }
                     }
                 });
                 ui.add_space(4.0);
@@ -149,6 +257,9 @@ impl TyphooNApp {
                 let mut open_close: Option<(String, String, String, String, f64)> = None;
                 let mut lp_action = SymbolAction::None;
                 for account in &alpaca_position_groups {
+                    if self.hidden_alpaca_position_account_ids.contains(&account.account_id) {
+                        continue;
+                    }
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(format!(
@@ -263,10 +374,29 @@ impl TyphooNApp {
                     self.deferred_symbol_action = lp_action;
                 }
             }
-            if show_kr_positions && !self.kr_positions.is_empty() {
+            if show_kr_positions && kraken_position_groups.iter().any(|account| !account.positions.is_empty()) {
                 let mut close_sym: Option<String> = None;
                 let mut kr_action = SymbolAction::None;
-                for pos in &self.kr_positions {
+                for account in &kraken_position_groups {
+                    if self.hidden_kraken_position_account_ids.contains(&account.account_id) {
+                        continue;
+                    }
+                    if account.positions.is_empty() {
+                        continue;
+                    }
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}{} ({})",
+                            account.label,
+                            if account.is_primary { " ★" } else { "" },
+                            account.positions.len()
+                        ))
+                        .small()
+                        .strong()
+                        .color(if account.is_primary { ACCENT } else { AXIS_TEXT }),
+                    )
+                    .on_hover_text(format!("Kraken account id: {}", account.account_id));
+                for pos in &account.positions {
                     // Kraken's OpenPositions endpoint also reports spot/funded
                     // trades (leverage=1) whose underlying sits in the wallet.
                     // When the matching balance covers the full position qty,
@@ -334,7 +464,7 @@ impl TyphooNApp {
                             kr_action = act;
                         }
                         ui.label(
-                            egui::RichText::new(format!("[Kraken] {}", side_label))
+                            egui::RichText::new(format!("[{}] {}", account.label, side_label))
                                 .color(side_c)
                                 .small(),
                         );
@@ -385,7 +515,7 @@ impl TyphooNApp {
                         } else {
                             "No Kraken equity quote has landed for this open position yet".to_string()
                         });
-                        if ui
+                        if account.is_primary && ui
                             .small_button("Close")
                             .on_hover_text(format!(
                                 "Close active Kraken position {} at market",
@@ -397,6 +527,7 @@ impl TyphooNApp {
                         }
                     });
                     ui.separator();
+                }
                 }
                 if let Some(sym) = close_sym {
                     let _ = self.broker_tx.send(BrokerCmd::KrakenClosePosition {

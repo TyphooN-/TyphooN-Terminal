@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use typhoon_engine::broker::kraken::KrakenBroker;
-use typhoon_engine::broker::protocol::{BrokerCmd, BrokerMsg};
+use typhoon_engine::broker::protocol::{
+    BrokerCmd, BrokerMsg, KrakenAccountOrders, KrakenAccountPositions,
+};
 
 use crate::account_pool::KrakenAccountPool;
 use crate::alpaca_order_ops::trade_copy_deltas;
@@ -471,5 +473,81 @@ pub async fn handle_kraken_account_order_command(
             }
         }
         _ => unreachable!("non-Kraken account/order command routed to Kraken handler"),
+    }
+}
+
+pub async fn fetch_and_send_all_kraken_account_positions(
+    pool: &KrakenAccountPool,
+    broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
+) {
+    let mut snapshots = Vec::new();
+    let primary_id = pool.primary_id().map(str::to_string);
+
+    for (_, account) in pool.connected_accounts() {
+        match account.broker.get_all_position_summaries().await {
+            Ok(mut positions) => {
+                positions
+                    .retain(|p| p.asset_class != "crypto_spot" && !p.asset_id.starts_with("spot:"));
+                let is_primary = primary_id
+                    .as_deref()
+                    .is_some_and(|id| id == account.spec.id.as_str());
+                if is_primary {
+                    let _ = broker_msg_tx.send(BrokerMsg::KrakenPositions(positions.clone()));
+                }
+                snapshots.push(KrakenAccountPositions {
+                    account_id: account.spec.id.clone(),
+                    label: account.spec.label.clone(),
+                    is_primary,
+                    positions,
+                });
+            }
+            Err(e) => {
+                let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                    "Kraken positions for {}: {}",
+                    account.spec.label, e
+                )));
+            }
+        }
+    }
+
+    if !snapshots.is_empty() {
+        let _ = broker_msg_tx.send(BrokerMsg::KrakenAccountPositions(snapshots));
+    }
+}
+
+pub async fn fetch_and_send_all_kraken_account_orders(
+    pool: &KrakenAccountPool,
+    broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
+) {
+    let mut snapshots = Vec::new();
+    let primary_id = pool.primary_id().map(str::to_string);
+
+    for (_, account) in pool.connected_accounts() {
+        match account.broker.get_open_orders_parsed().await {
+            Ok(orders) => {
+                let is_primary = primary_id
+                    .as_deref()
+                    .is_some_and(|id| id == account.spec.id.as_str());
+                if is_primary {
+                    let _ = broker_msg_tx.send(BrokerMsg::KrakenOpenOrders(orders.clone()));
+                }
+                snapshots.push(KrakenAccountOrders {
+                    account_id: account.spec.id.clone(),
+                    label: account.spec.label.clone(),
+                    is_primary,
+                    orders,
+                });
+            }
+            Err(e) => {
+                let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                    "Kraken open orders for {}: {}",
+                    account.spec.label, e
+                )));
+            }
+        }
+    }
+
+    if !snapshots.is_empty() {
+        let _ = broker_msg_tx.send(BrokerMsg::KrakenAccountOpenOrders(snapshots));
     }
 }
