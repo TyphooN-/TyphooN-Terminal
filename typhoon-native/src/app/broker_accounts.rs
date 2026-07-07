@@ -344,12 +344,19 @@ impl TyphooNApp {
         )));
         match broker {
             OrderBroker::Alpaca => {
-                let roster_by_id: std::collections::HashMap<_, _> =
-                    accounts.iter().map(|a| (a.id.clone(), a.clone())).collect();
+                let mut roster_by_id = std::collections::HashMap::with_capacity(accounts.len());
+                let mut connected_primary = None;
+                for account in &accounts {
+                    if account.is_primary && account.connected && connected_primary.is_none() {
+                        connected_primary = Some(account.clone());
+                    }
+                    roster_by_id.insert(account.id.clone(), account.clone());
+                }
                 if let Some(primary) = roster_by_id
                     .get(&self.alpaca_primary_account_id)
                     .filter(|a| a.connected)
-                    .or_else(|| accounts.iter().find(|a| a.is_primary && a.connected))
+                    .cloned()
+                    .or(connected_primary)
                 {
                     self.alpaca_primary_account_id = primary.id.clone();
                 }
@@ -357,12 +364,19 @@ impl TyphooNApp {
                 self.alpaca_roster_by_id = roster_by_id;
             }
             OrderBroker::Kraken => {
-                let roster_by_id: std::collections::HashMap<_, _> =
-                    accounts.iter().map(|a| (a.id.clone(), a.clone())).collect();
+                let mut roster_by_id = std::collections::HashMap::with_capacity(accounts.len());
+                let mut connected_primary = None;
+                for account in &accounts {
+                    if account.is_primary && account.connected && connected_primary.is_none() {
+                        connected_primary = Some(account.clone());
+                    }
+                    roster_by_id.insert(account.id.clone(), account.clone());
+                }
                 if let Some(primary) = roster_by_id
                     .get(&self.kraken_primary_account_id)
                     .filter(|a| a.connected)
-                    .or_else(|| accounts.iter().find(|a| a.is_primary && a.connected))
+                    .cloned()
+                    .or(connected_primary)
                 {
                     self.kraken_primary_account_id = primary.id.clone();
                 }
