@@ -153,10 +153,12 @@ pub async fn fetch_fmp_rating_changes(
 /// Yahoo batch quote → Treasury yield curve snapshot (no auth).
 pub async fn fetch_treasury_yields(client: &reqwest::Client) -> Result<Vec<TreasuryYield>, String> {
     let tickers: Vec<&str> = TREASURY_TENORS.iter().map(|(t, _)| *t).collect();
+    let tenor_by_ticker: std::collections::HashMap<&str, &str> =
+        TREASURY_TENORS.iter().copied().collect();
     let quotes = fetch_yahoo_quotes(client, &tickers).await?;
     let mut out = Vec::new();
     for (sym, price, change, pct) in quotes {
-        if let Some((_, tenor)) = TREASURY_TENORS.iter().find(|(t, _)| *t == sym.as_str()) {
+        if let Some(tenor) = tenor_by_ticker.get(sym.as_str()) {
             out.push(TreasuryYield {
                 tenor: (*tenor).to_string(),
                 ticker: sym,

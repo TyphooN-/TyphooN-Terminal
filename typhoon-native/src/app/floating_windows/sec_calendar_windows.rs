@@ -1312,7 +1312,7 @@ impl TyphooNApp {
                                 _ => self.econ_filter_holiday,
                             }
                         };
-                        let allow_currency: Option<Vec<String>> =
+                        let allow_currency: Option<std::collections::HashSet<String>> =
                             if self.econ_filter_currencies.trim().is_empty() {
                                 None
                             } else {
@@ -1348,7 +1348,7 @@ impl TyphooNApp {
                                     return false;
                                 }
                                 if let Some(ref set) = allow_currency {
-                                    if !set.iter().any(|c| c == &country.to_ascii_uppercase()) {
+                                    if !set.contains(&country.to_ascii_uppercase()) {
                                         return false;
                                     }
                                 }

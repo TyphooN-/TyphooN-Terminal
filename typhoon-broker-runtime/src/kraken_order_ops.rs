@@ -83,7 +83,7 @@ pub async fn handle_kraken_trade_copy(
     )));
     // Live catalog as a doomed-order guard; an unreachable catalog degrades to
     // the constructed pair (AddOrder still validates server-side).
-    let catalog: Option<Vec<String>> =
+    let catalog: Option<std::collections::HashSet<String>> =
         source.broker.get_tradeable_pairs().await.ok().map(|pairs| {
             pairs
                 .into_iter()
@@ -95,7 +95,7 @@ pub async fn handle_kraken_trade_copy(
         match &catalog {
             Some(entries) if !entries.is_empty() => {
                 let want = pair.to_ascii_uppercase();
-                entries.iter().any(|p| p == &want)
+                entries.contains(&want)
             }
             _ => true,
         }
@@ -207,8 +207,13 @@ pub async fn handle_kraken_order_command(
                                     .collect();
                                 let pair_upper = pair.to_ascii_uppercase();
                                 if let Some(&q) = pos_by_sym.get(&pair_upper) {
-                                    q > 0.0 && wait_for_qty_at_most.map(|max| q <= max + 1e-8).unwrap_or(true)
-                                } else { false }
+                                    q > 0.0
+                                        && wait_for_qty_at_most
+                                            .map(|max| q <= max + 1e-8)
+                                            .unwrap_or(true)
+                                } else {
+                                    false
+                                }
                             } =>
                         {
                             found = true;

@@ -427,9 +427,22 @@ pub fn write_options_chain(p: &mut String, o: &OptionsChainSnapshot) {
                 pcr_vol, pcr_oi, atm_iv, total_call_vol, total_put_vol
             );
             // ATM-zone chain table: 5 strikes below and 5 above underlying, side-by-side calls / puts.
+            let strike_key = |strike: f64| (strike * 1_000_000.0).round() as i64;
+            let call_by_strike: std::collections::HashMap<i64, _> = exp
+                .calls
+                .iter()
+                .map(|c| (strike_key(c.strike), c))
+                .collect();
+            let put_by_strike: std::collections::HashMap<i64, _> = exp
+                .puts
+                .iter()
+                .map(|pt| (strike_key(pt.strike), pt))
+                .collect();
+            let mut seen_strikes: std::collections::HashSet<i64> =
+                call_by_strike.keys().copied().collect();
             let mut strikes: Vec<f64> = exp.calls.iter().map(|c| c.strike).collect();
             for pt in &exp.puts {
-                if !strikes.iter().any(|s| (s - pt.strike).abs() < 1e-6) {
+                if seen_strikes.insert(strike_key(pt.strike)) {
                     strikes.push(pt.strike);
                 }
             }
@@ -454,8 +467,9 @@ pub fn write_options_chain(p: &mut String, o: &OptionsChainSnapshot) {
                 );
                 let _ = writeln!(p, "|---|---|---|---|---|---|---|---|---|");
                 for k in &strikes[lo..=hi] {
-                    let c = exp.calls.iter().find(|c| (c.strike - k).abs() < 1e-6);
-                    let pt = exp.puts.iter().find(|pt| (pt.strike - k).abs() < 1e-6);
+                    let key = strike_key(*k);
+                    let c = call_by_strike.get(&key).copied();
+                    let pt = put_by_strike.get(&key).copied();
                     let atm_mark = if (k - o.underlying_price).abs()
                         < (strikes[atm_idx] - o.underlying_price).abs() + 1e-6
                         && (k - strikes[atm_idx]).abs() < 1e-6

@@ -55,7 +55,9 @@ impl TyphooNApp {
                 self.news_initial_load_done = true;
                 self.news_loading = true;
                 let load_symbol = match SearchFilterMode::parse(&self.news_search_query) {
-                    SearchFilterMode::Symbols(syms) if !syms.is_empty() => syms.join(","),
+                    SearchFilterMode::Symbols { ordered, .. } if !ordered.is_empty() => {
+                        ordered.join(",")
+                    }
                     _ => String::new(),
                 };
                 let _ = self.broker_tx.send(BrokerCmd::LoadCachedNews {
@@ -124,7 +126,7 @@ impl TyphooNApp {
                             .on_hover_text("Read cached articles from SQLite (no fetch). If Search contains symbol CSV, load those symbols directly instead of only the latest global rows.").clicked() {
                             self.news_loading = true;
                             let load_symbol = match SearchFilterMode::parse(&self.news_search_query) {
-                                SearchFilterMode::Symbols(syms) if !syms.is_empty() => syms.join(","),
+                                SearchFilterMode::Symbols { ordered, .. } if !ordered.is_empty() => ordered.join(","),
                                 _ => String::new(),
                             };
                             let _ = self.broker_tx.send(BrokerCmd::LoadCachedNews { symbol: load_symbol, limit: 500 });
@@ -245,9 +247,9 @@ impl TyphooNApp {
                             if !q.is_empty() {
                                 self.news_loading = true;
                                 match SearchFilterMode::parse(&q) {
-                                    SearchFilterMode::Symbols(syms) if !fts_clicked && !syms.is_empty() => {
+                                    SearchFilterMode::Symbols { ordered, .. } if !fts_clicked && !ordered.is_empty() => {
                                         let _ = self.broker_tx.send(BrokerCmd::LoadCachedNews {
-                                            symbol: syms.join(","),
+                                            symbol: ordered.join(","),
                                             limit: 500,
                                         });
                                     }
@@ -369,11 +371,11 @@ impl TyphooNApp {
                                 groups.len(),
                                 self.news_full_articles.len()
                             ),
-                            SearchFilterMode::Symbols(syms) => format!(
+                            SearchFilterMode::Symbols { ordered, .. } => format!(
                                 "{} stories from {} articles · filter: {}",
                                 groups.len(),
                                 visible_indices.len(),
-                                syms.join(", ")
+                                ordered.join(", ")
                             ),
                             SearchFilterMode::Regex { pattern, .. } => format!(
                                 "{} stories from {} articles · /{}/i",

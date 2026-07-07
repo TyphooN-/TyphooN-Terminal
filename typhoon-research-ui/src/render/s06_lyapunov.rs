@@ -1099,17 +1099,28 @@ pub fn render_omon_snapshot(ui: &mut egui::Ui, snap: &OptionsChainSnapshot) {
                                 .strong(),
                         );
                         ui.end_row();
+                        let strike_key = |strike: f64| (strike * 1_000_000.0).round() as i64;
+                        let call_by_strike: std::collections::HashMap<i64, _> = exp
+                            .calls
+                            .iter()
+                            .map(|c| (strike_key(c.strike), c))
+                            .collect();
+                        let put_by_strike: std::collections::HashMap<i64, _> =
+                            exp.puts.iter().map(|p| (strike_key(p.strike), p)).collect();
+                        let mut seen_strikes: std::collections::HashSet<i64> =
+                            call_by_strike.keys().copied().collect();
                         let mut strikes: Vec<f64> = exp.calls.iter().map(|c| c.strike).collect();
                         for p in &exp.puts {
-                            if !strikes.iter().any(|s| (s - p.strike).abs() < 1e-6) {
+                            if seen_strikes.insert(strike_key(p.strike)) {
                                 strikes.push(p.strike);
                             }
                         }
                         strikes
                             .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                         for k in strikes.iter().take(40) {
-                            let call = exp.calls.iter().find(|c| (c.strike - k).abs() < 1e-6);
-                            let put = exp.puts.iter().find(|p| (p.strike - k).abs() < 1e-6);
+                            let key = strike_key(*k);
+                            let call = call_by_strike.get(&key).copied();
+                            let put = put_by_strike.get(&key).copied();
                             ui.label(
                                 egui::RichText::new(format!("{:.2}", k))
                                     .small()

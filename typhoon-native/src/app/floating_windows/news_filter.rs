@@ -12,7 +12,10 @@
 /// literal substring "TNDM" in body text rather than tagging.
 pub(super) enum SearchFilterMode {
     All,
-    Symbols(Vec<String>),
+    Symbols {
+        ordered: Vec<String>,
+        set: std::collections::HashSet<String>,
+    },
     Regex {
         pattern: String,
         compiled: regex::Regex,
@@ -58,8 +61,9 @@ impl SearchFilterMode {
                         .all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '/')
             })
         {
-            let syms: Vec<String> = candidates.iter().map(|s| s.to_ascii_uppercase()).collect();
-            return Self::Symbols(syms);
+            let ordered: Vec<String> = candidates.iter().map(|s| s.to_ascii_uppercase()).collect();
+            let set = ordered.iter().cloned().collect();
+            return Self::Symbols { ordered, set };
         }
         // Bare keyword that isn't a symbol-CSV or regex: show all and
         // wait for the user to press the FTS Search button (which
@@ -73,17 +77,17 @@ impl SearchFilterMode {
     pub(super) fn matches(&self, a: &typhoon_engine::core::news::NewsArticle) -> bool {
         match self {
             Self::All | Self::InvalidRegex(_) => true,
-            Self::Symbols(syms) => {
+            Self::Symbols { set, .. } => {
                 // Match article.symbol OR any tagged ticker, case-
                 // insensitive. The article symbol is already upper in
                 // most providers; we normalise both sides to be safe.
                 let primary = a.symbol.trim().to_ascii_uppercase();
-                if !primary.is_empty() && syms.iter().any(|s| s == &primary) {
+                if !primary.is_empty() && set.contains(&primary) {
                     return true;
                 }
                 for t in &a.tickers {
                     let t_up = t.trim().to_ascii_uppercase();
-                    if !t_up.is_empty() && syms.iter().any(|s| s == &t_up) {
+                    if !t_up.is_empty() && set.contains(&t_up) {
                         return true;
                     }
                 }
