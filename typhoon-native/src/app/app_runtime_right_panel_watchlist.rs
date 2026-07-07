@@ -722,8 +722,14 @@ impl TyphooNApp {
                     });
                 }
                 // Handle reorder — one-step neighbour swap or jump-to-top
+                let watchlist_index_by_symbol: std::collections::HashMap<String, usize> = self
+                    .user_watchlist
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, symbol)| (symbol.clone(), idx))
+                    .collect();
                 if let Some(ref sym) = move_up_sym {
-                    if let Some(idx) = self.user_watchlist.iter().position(|s| s == sym) {
+                    if let Some(&idx) = watchlist_index_by_symbol.get(sym.as_str()) {
                         if idx > 0 {
                             self.user_watchlist.swap(idx, idx - 1);
                             // Also reorder the displayed rows — O(1) via existing watchlist_by_bare map
@@ -740,7 +746,7 @@ impl TyphooNApp {
                     }
                 }
                 if let Some(ref sym) = move_down_sym {
-                    if let Some(idx) = self.user_watchlist.iter().position(|s| s == sym) {
+                    if let Some(&idx) = watchlist_index_by_symbol.get(sym.as_str()) {
                         if idx + 1 < self.user_watchlist.len() {
                             self.user_watchlist.swap(idx, idx + 1);
                             let bare = bare_symbol_from_key(sym)
@@ -756,7 +762,7 @@ impl TyphooNApp {
                     }
                 }
                 if let Some(ref sym) = move_top_sym {
-                    if let Some(idx) = self.user_watchlist.iter().position(|s| s == sym) {
+                    if let Some(&idx) = watchlist_index_by_symbol.get(sym.as_str()) {
                         if idx > 0 {
                             let item = self.user_watchlist.remove(idx);
                             self.user_watchlist.insert(0, item);

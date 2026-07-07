@@ -20,6 +20,11 @@ pub(crate) static COMMANDS_LOWER: std::sync::LazyLock<Vec<(String, String)>> =
             .collect()
     });
 
+/// O(1) lookup by command name for recent-command palette ordering.
+pub(crate) static COMMANDS_BY_NAME: std::sync::LazyLock<
+    std::collections::HashMap<&'static str, &'static Command>,
+> = std::sync::LazyLock::new(|| COMMANDS.iter().map(|c| (c.name, c)).collect());
+
 pub(crate) const COMMANDS: &[Command] = &[
     // Core
     Command {

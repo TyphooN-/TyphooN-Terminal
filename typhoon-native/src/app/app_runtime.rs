@@ -110,7 +110,8 @@ impl eframe::App for TyphooNApp {
             self.cached_active_symbols = self.active_symbols();
             // Store normalized (strip .SUFFIX, upper, no /) for O(1) contains in sync/filters.
             // Matches the normalize + eq used in market_data_sync etc.
-            self.cached_active_symbols_set = self.cached_active_symbols
+            self.cached_active_symbols_set = self
+                .cached_active_symbols
                 .iter()
                 .map(|s| {
                     let bare = bare_symbol_from_key(s).to_uppercase();
@@ -384,7 +385,7 @@ impl eframe::App for TyphooNApp {
                     let mut seen_names: std::collections::HashSet<&'static str> =
                         std::collections::HashSet::with_capacity(COMMANDS.len());
                     for name in &self.recent_commands {
-                        if let Some(c) = COMMANDS.iter().find(|c| c.name == name.as_str()) {
+                        if let Some(c) = COMMANDS_BY_NAME.get(name.as_str()).copied() {
                             if seen_names.insert(c.name) {
                                 cmds.push(c);
                             }

@@ -22,7 +22,7 @@
 
 use crate::ir::*;
 use crate::{CompileResult, DiagLevel, Diagnostic, DrawType, IndicatorMeta, InputParam, PlotDef};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub fn parse_calgo(source: &str) -> CompileResult {
     let (ir_module, meta) = build_ir(source);
@@ -74,7 +74,7 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
     let mut locals: Vec<(String, IrType)> = Vec::new();
     let mut local_names: HashSet<String> = HashSet::new();
     let mut plot_count = 0usize;
-    let mut output_names: Vec<String> = Vec::new();
+    let mut output_name_to_idx: HashMap<String, usize> = HashMap::new();
 
     let cleaned = strip_comments_and_regions(source);
     let lines: Vec<&str> = cleaned.lines().collect();
@@ -171,7 +171,7 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
             }
             if j < lines.len() {
                 if let Some((name, _ty)) = parse_calgo_property(lines[j].trim()) {
-                    output_names.push(name);
+                    output_name_to_idx.insert(name, plot_count);
                     meta.plots.push(PlotDef {
                         index: plot_count,
                         label,
@@ -188,7 +188,7 @@ pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
         }
 
         // Plot assignment: `<OutputName>[index] = expr;` or `Result[index] = expr;`
-        if let Some((plot_idx, rhs)) = try_parse_output_assignment(line, &output_names) {
+        if let Some((plot_idx, rhs)) = try_parse_output_assignment(line, &output_name_to_idx) {
             if let Some(e) = parse_calgo_expr(&rhs) {
                 // Auto-register if user never used [Output]
                 if plot_idx >= meta.plots.len() {
@@ -259,7 +259,10 @@ fn parse_calgo_property(line: &str) -> Option<(String, String)> {
     Some((name, ty_norm))
 }
 
-fn try_parse_output_assignment(line: &str, output_names: &[String]) -> Option<(usize, String)> {
+fn try_parse_output_assignment(
+    line: &str,
+    output_name_to_idx: &HashMap<String, usize>,
+) -> Option<(usize, String)> {
     let line = line.trim().trim_end_matches(';');
     let eq_pos = line.find('=')?;
     let prev = line[..eq_pos].chars().last();
@@ -274,7 +277,7 @@ fn try_parse_output_assignment(line: &str, output_names: &[String]) -> Option<(u
     // Accept known output names, or "Result" (single-output convention)
     let plot_idx = if prefix == "Result" {
         0
-    } else if let Some(idx) = output_names.iter().position(|n| n == prefix) {
+    } else if let Some(&idx) = output_name_to_idx.get(prefix) {
         idx
     } else {
         return None;
