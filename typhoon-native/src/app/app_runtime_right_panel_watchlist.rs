@@ -726,10 +726,13 @@ impl TyphooNApp {
                     if let Some(idx) = self.user_watchlist.iter().position(|s| s == sym) {
                         if idx > 0 {
                             self.user_watchlist.swap(idx, idx - 1);
-                            // Also reorder the displayed rows
-                            if let Some(row_idx) =
-                                self.watchlist_rows.iter().position(|r| &r.symbol == sym)
-                            {
+                            // Also reorder the displayed rows — O(1) via existing watchlist_by_bare map
+                            let bare = bare_symbol_from_key(sym)
+                                .replace("/", "")
+                                .trim_end_matches(".EQ")
+                                .trim_end_matches(".eq")
+                                .to_ascii_uppercase();
+                            if let Some(&row_idx) = self.watchlist_by_bare.get(&bare) {
                                 self.watchlist_rows.swap(row_idx, row_idx - 1);
                                 self.rebuild_live_indices();
                             }
@@ -740,9 +743,12 @@ impl TyphooNApp {
                     if let Some(idx) = self.user_watchlist.iter().position(|s| s == sym) {
                         if idx + 1 < self.user_watchlist.len() {
                             self.user_watchlist.swap(idx, idx + 1);
-                            if let Some(row_idx) =
-                                self.watchlist_rows.iter().position(|r| &r.symbol == sym)
-                            {
+                            let bare = bare_symbol_from_key(sym)
+                                .replace("/", "")
+                                .trim_end_matches(".EQ")
+                                .trim_end_matches(".eq")
+                                .to_ascii_uppercase();
+                            if let Some(&row_idx) = self.watchlist_by_bare.get(&bare) {
                                 self.watchlist_rows.swap(row_idx, row_idx + 1);
                                 self.rebuild_live_indices();
                             }
@@ -754,9 +760,12 @@ impl TyphooNApp {
                         if idx > 0 {
                             let item = self.user_watchlist.remove(idx);
                             self.user_watchlist.insert(0, item);
-                            if let Some(row_idx) =
-                                self.watchlist_rows.iter().position(|r| &r.symbol == sym)
-                            {
+                            let bare = bare_symbol_from_key(sym)
+                                .replace("/", "")
+                                .trim_end_matches(".EQ")
+                                .trim_end_matches(".eq")
+                                .to_ascii_uppercase();
+                            if let Some(&row_idx) = self.watchlist_by_bare.get(&bare) {
                                 let row = self.watchlist_rows.remove(row_idx);
                                 self.watchlist_rows.insert(0, row);
                                 self.rebuild_live_indices();

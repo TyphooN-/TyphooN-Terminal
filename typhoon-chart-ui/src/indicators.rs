@@ -2126,7 +2126,14 @@ pub fn compute_atr_projection_levels(
         };
 
         // Find the bar at or after current_htf_start → that's the HTF candle open
-        let htf_open_bar = bars.iter().position(|b| b.ts_ms >= current_htf_start);
+        // O(log n) binary search (bars sorted by ts_ms asc); replaces prior linear .position
+        let htf_open_bar = {
+            let idx = match bars.binary_search_by_key(&current_htf_start, |b| b.ts_ms) {
+                Ok(i) => i,
+                Err(i) => i,
+            };
+            if idx < bars.len() { Some(idx) } else { None }
+        };
         let htf_open = match htf_open_bar {
             Some(idx) => bars[idx].open,
             None => continue,
@@ -2162,9 +2169,12 @@ pub fn compute_atr_projection_levels(
         // Start bar index for drawing the line (lookback HTF bars → find corresponding chart bar)
         let start_idx = if lookback < htf_bars.len() {
             let htf_start_bar = &htf_bars[htf_bars.len() - lookback - 1];
-            bars.iter()
-                .position(|b| b.ts_ms >= htf_start_bar.ts_ms)
-                .unwrap_or(0)
+            // O(log n) binary search instead of linear .position (bars sorted by ts_ms)
+            let idx = match bars.binary_search_by_key(&htf_start_bar.ts_ms, |b| b.ts_ms) {
+                Ok(i) => i,
+                Err(i) => i,
+            };
+            if idx < bars.len() { idx } else { 0 }
         } else {
             0
         };
