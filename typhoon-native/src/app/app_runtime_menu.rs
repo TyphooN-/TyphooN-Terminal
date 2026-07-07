@@ -380,10 +380,10 @@ impl TyphooNApp {
                         if top_brokers.len() >= 2 {
                         ui.separator();
                         let (scope_lbl, scope_col) = match self.broker_scope {
-                            EventSource::All => ("ALL", egui::Color32::from_rgb(140, 140, 160)),
-                            EventSource::Alpaca => ("ALPACA", egui::Color32::from_rgb(255, 160, 60)),
-                            EventSource::Kraken => ("KRAKEN", egui::Color32::from_rgb(0, 170, 160)),
-                            EventSource::Positions => ("POSITIONS", egui::Color32::from_rgb(80, 220, 120)),
+                            EventSource::All => ("All", egui::Color32::from_rgb(140, 140, 160)),
+                            EventSource::Alpaca => ("Alpaca", egui::Color32::from_rgb(255, 160, 60)),
+                            EventSource::Kraken => ("Kraken", egui::Color32::from_rgb(0, 170, 160)),
+                            EventSource::Positions => ("Positions", egui::Color32::from_rgb(80, 220, 120)),
                         };
                         let scope_btn = egui::Button::new(
                             egui::RichText::new(format!("Scope: {}", scope_lbl))

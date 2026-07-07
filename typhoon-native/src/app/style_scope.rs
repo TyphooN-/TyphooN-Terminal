@@ -778,10 +778,10 @@ impl TyphooNApp {
 
     pub(super) fn broker_scope_label(&self) -> &'static str {
         match self.broker_scope {
-            EventSource::All => "ALL",
-            EventSource::Alpaca => "ALPACA",
-            EventSource::Kraken => "KRAKEN",
-            EventSource::Positions => "POSITIONS",
+            EventSource::All => "All",
+            EventSource::Alpaca => "Alpaca",
+            EventSource::Kraken => "Kraken",
+            EventSource::Positions => "Positions",
         }
     }
 

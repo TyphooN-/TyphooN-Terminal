@@ -28,10 +28,10 @@ impl TyphooNApp {
                         self.cached_scoped_fundamentals.len()
                     };
                     let lbl = match self.broker_scope {
-                        EventSource::All => "ALL",
-                        EventSource::Alpaca => "ALPACA",
-                        EventSource::Kraken => "KRAKEN",
-                        EventSource::Positions => "POSITIONS",
+                        EventSource::All => "All",
+                        EventSource::Alpaca => "Alpaca",
+                        EventSource::Kraken => "Kraken",
+                        EventSource::Positions => "Positions",
                     };
                     let src_note = format!(
                         "Alpaca:{} Kraken:{}",
@@ -49,7 +49,7 @@ impl TyphooNApp {
                     ui.separator();
                     ui.label("Quick presets:");
                     ui.horizontal_wrapped(|ui| {
-                        if ui.button("ALL").clicked() {
+                        if ui.button("All").clicked() {
                             self.fund_source_alpaca = true;
                             self.fund_source_kraken = true;
                             self.broker_scope = EventSource::All;

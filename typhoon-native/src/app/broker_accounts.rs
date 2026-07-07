@@ -371,14 +371,8 @@ impl TyphooNApp {
                     "Alpaca".to_string(),
                 ));
             } else {
-                let multi = connected.len() > 1;
                 for a in connected {
-                    let label = if multi {
-                        format!("Alpaca · {}", a.label)
-                    } else {
-                        "Alpaca".to_string()
-                    };
-                    out.push((OrderBroker::Alpaca, a.id.clone(), label));
+                    out.push((OrderBroker::Alpaca, a.id.clone(), a.label.clone()));
                 }
             }
         }
@@ -395,14 +389,8 @@ impl TyphooNApp {
                     "Kraken".to_string(),
                 ));
             } else {
-                let multi = connected.len() > 1;
                 for a in connected {
-                    let label = if multi {
-                        format!("Kraken · {}", a.label)
-                    } else {
-                        "Kraken".to_string()
-                    };
-                    out.push((OrderBroker::Kraken, a.id.clone(), label));
+                    out.push((OrderBroker::Kraken, a.id.clone(), a.label.clone()));
                 }
             }
         }
