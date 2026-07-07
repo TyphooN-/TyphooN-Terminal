@@ -58,6 +58,19 @@ impl TyphooNApp {
         }
     }
 
+    pub(super) fn handle_alpaca_account_fills(&mut self, accounts: Vec<AccountFills>) {
+        if !self.alpaca_enabled {
+            return;
+        }
+        if let Some(primary) = accounts.iter().find(|account| account.is_primary) {
+            self.recent_fills = primary.fills.clone();
+        }
+        self.alpaca_account_fills = accounts;
+        for c in &mut self.charts {
+            c.cached_trade_overlay_frame = 0;
+        }
+    }
+
     pub(super) fn handle_alpaca_orders(&mut self, orders: Vec<OrderInfo>) {
         if !self.alpaca_enabled {
             return;

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use typhoon_engine::broker::kraken::KrakenBroker;
 use typhoon_engine::broker::protocol::{
-    BrokerCmd, BrokerMsg, KrakenAccountOrders, KrakenAccountPositions,
+    BrokerCmd, BrokerMsg, KrakenAccountOrders, KrakenAccountPositions, KrakenAccountTrades,
 };
 
 use crate::account_pool::KrakenAccountPool;
@@ -549,5 +549,49 @@ pub async fn fetch_and_send_all_kraken_account_orders(
 
     if !snapshots.is_empty() {
         let _ = broker_msg_tx.send(BrokerMsg::KrakenAccountOpenOrders(snapshots));
+    }
+}
+
+pub async fn fetch_and_send_all_kraken_account_trades(
+    pool: &KrakenAccountPool,
+    broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
+) {
+    let mut snapshots = Vec::new();
+    let primary_id = pool.primary_id().map(str::to_string);
+
+    for (_, account) in pool.connected_accounts() {
+        match account
+            .broker
+            .get_trades_history_parsed(None, None, None)
+            .await
+        {
+            Ok(mut trades) => {
+                trades.sort_by(|a, b| {
+                    b.time
+                        .partial_cmp(&a.time)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                trades.truncate(100);
+                let is_primary = primary_id
+                    .as_deref()
+                    .is_some_and(|id| id == account.spec.id.as_str());
+                if is_primary {
+                    let _ = broker_msg_tx.send(BrokerMsg::KrakenTrades(trades.clone()));
+                }
+                snapshots.push(KrakenAccountTrades {
+                    account_id: account.spec.id.clone(),
+                    label: account.spec.label.clone(),
+                    is_primary,
+                    trades,
+                });
+            }
+            Err(e) => {
+                tracing::debug!("Kraken trades for {}: {}", account.spec.label, e);
+            }
+        }
+    }
+
+    if !snapshots.is_empty() {
+        let _ = broker_msg_tx.send(BrokerMsg::KrakenAccountTrades(snapshots));
     }
 }

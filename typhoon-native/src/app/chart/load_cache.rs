@@ -141,6 +141,14 @@ impl ChartDataLoad for ChartState {
         self.reset_camera_from_legacy();
         self.compute_indicators_gpu(gpu);
         self.compute_prev_candle_levels_native(cache);
+        // Eagerly populate MTF overlays (MTF_MA / MultiKAMA projections) right after
+        // the cold deferred restore. This is the primary startup / session-restore
+        // path for MTF grid cells. Previously only base GPU indicators were computed
+        // here; the render-time ensure_mql... was guarded and only ran for focused
+        // cells while heavy_sync was active, so non-focused MTF cells had no overlay
+        // data until the user clicked/focused them.
+        self.compute_mtf_sma(cache);
+        self.compute_multi_kama(cache);
         true
     }
 

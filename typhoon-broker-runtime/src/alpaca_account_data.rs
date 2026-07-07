@@ -1,5 +1,7 @@
 use typhoon_engine::broker::alpaca::AlpacaBroker;
-use typhoon_engine::broker::protocol::{AccountOrders, AccountPositions, BrokerCmd, BrokerMsg};
+use typhoon_engine::broker::protocol::{
+    AccountFills, AccountOrders, AccountPositions, BrokerCmd, BrokerMsg,
+};
 
 use crate::account_pool::AlpacaAccountPool;
 
@@ -224,5 +226,56 @@ pub async fn fetch_and_send_all_account_orders(
 
     if !snapshots.is_empty() {
         let _ = broker_msg_tx.send(BrokerMsg::AlpacaAccountOrders(snapshots));
+    }
+}
+
+pub async fn fetch_and_send_all_account_fills(
+    pool: &AlpacaAccountPool,
+    broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
+    limit: u32,
+) {
+    let mut snapshots = Vec::new();
+    let primary_id = pool.primary_id().map(str::to_string);
+
+    for (_, account) in pool.connected_accounts() {
+        match account.broker.get_account_activities("FILL", limit).await {
+            Ok(activities) => {
+                let is_primary = primary_id
+                    .as_deref()
+                    .is_some_and(|id| id == account.spec.id.as_str());
+                let fills: Vec<(String, String, f64, f64, String)> = activities
+                    .iter()
+                    .filter(|a| a.activity_type == "FILL")
+                    .filter_map(|a| {
+                        let sym = a.symbol.as_deref()?.to_string();
+                        let side = a.side.as_deref()?.to_string();
+                        let qty: f64 = a.qty.as_deref()?.parse().ok()?;
+                        let price: f64 = a.price.as_deref()?.parse().ok()?;
+                        Some((sym, side, qty, price, a.date.clone()))
+                    })
+                    .collect();
+                if is_primary {
+                    let _ = broker_msg_tx.send(BrokerMsg::RecentFills(fills.clone()));
+                }
+                snapshots.push(AccountFills {
+                    account_id: account.spec.id.clone(),
+                    label: account.spec.label.clone(),
+                    is_primary,
+                    fills,
+                });
+            }
+            Err(e) => {
+                tracing::debug!(
+                    "Recent fills request failed for {} ({}): {}",
+                    account.spec.label,
+                    account.spec.id,
+                    e
+                );
+            }
+        }
+    }
+
+    if !snapshots.is_empty() {
+        let _ = broker_msg_tx.send(BrokerMsg::AlpacaAccountFills(snapshots));
     }
 }

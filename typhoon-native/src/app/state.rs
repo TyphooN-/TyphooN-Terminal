@@ -9,8 +9,9 @@ pub(crate) use watchlist::{KrakenEquityQuoteMeta, WatchlistRow, watchlist_row_fr
 use super::*;
 
 pub(crate) use broker_messages::{
-    AccountOrders, AccountPositions, AccountRosterEntry, BrokerAccountSpec, BrokerCmd, BrokerMsg,
-    KrakenAccountOrders, KrakenAccountPositions, OrderBroker, QuickTradePlan, TradeAccountSnapshot,
+    AccountFills, AccountOrders, AccountPositions, AccountRosterEntry, BrokerAccountSpec,
+    BrokerCmd, BrokerMsg, KrakenAccountOrders, KrakenAccountPositions, KrakenAccountTrades,
+    OrderBroker, QuickTradePlan, TradeAccountSnapshot,
 };
 #[cfg(test)]
 pub(crate) use broker_messages::{
@@ -296,6 +297,9 @@ pub struct TyphooNApp {
     /// Latest open orders grouped per connected Alpaca account. `live_orders`
     /// remains the primary-account compatibility view for trading/chart logic.
     pub(crate) alpaca_account_orders: Vec<AccountOrders>,
+    /// Recent fills grouped per connected Alpaca account. `recent_fills`
+    /// remains the primary-account compatibility view for chart overlays.
+    pub(crate) alpaca_account_fills: Vec<AccountFills>,
     /// Full bar-sync controls are deliberately separate from broker login.
     /// Off = light mode: account/trading plus targeted fetches for open charts,
     /// owned positions, open-order symbols, and the user's watchlist.
@@ -315,6 +319,7 @@ pub struct TyphooNApp {
     pub(crate) kraken_account_roster: Vec<AccountRosterEntry>,
     pub(crate) kraken_account_positions: Vec<KrakenAccountPositions>,
     pub(crate) kraken_account_orders: Vec<KrakenAccountOrders>,
+    pub(crate) kraken_account_trades: Vec<KrakenAccountTrades>,
     pub(crate) kraken_enabled: bool,
     pub(crate) kraken_connected: bool,
     pub(crate) kraken_pairs_requested: bool,
@@ -3574,6 +3579,10 @@ pub struct TyphooNApp {
     pub(crate) hidden_alpaca_order_account_ids: std::collections::BTreeSet<String>,
     pub(crate) hidden_kraken_position_account_ids: std::collections::BTreeSet<String>,
     pub(crate) hidden_kraken_order_account_ids: std::collections::BTreeSet<String>,
+    pub(crate) hidden_alpaca_recent_fill_account_ids: std::collections::BTreeSet<String>,
+    pub(crate) hidden_kraken_recent_fill_account_ids: std::collections::BTreeSet<String>,
+    pub(crate) hidden_alpaca_risk_account_ids: std::collections::BTreeSet<String>,
+    pub(crate) hidden_kraken_risk_account_ids: std::collections::BTreeSet<String>,
     pub(crate) show_alpaca_orders: bool,
     pub(crate) show_kr_orders: bool,
     pub(crate) show_kraken_trade_history: bool,

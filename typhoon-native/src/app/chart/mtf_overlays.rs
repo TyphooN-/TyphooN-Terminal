@@ -741,7 +741,19 @@ impl ChartMtfOverlays for ChartState {
         mtf_enabled: bool,
         is_focused: bool,
     ) -> bool {
-        !heavy_sync_in_progress || !mtf_enabled || is_focused
+        // Always ensure overlays for every MTF grid cell (even non-focused) so that
+        // MTF_MA / MultiKAMA / projected indicators are populated right after
+        // deferred chart load at startup/restore. No more "click the chart" to see
+        // indicator data.
+        //
+        // Preserve prior behavior for !mtf cases (unit test asserts true for
+        // (heavy, !mtf, !f)). Force true only for the (heavy, mtf, !f) case.
+        let base = !heavy_sync_in_progress || !mtf_enabled || is_focused;
+        if mtf_enabled && heavy_sync_in_progress && !is_focused {
+            true
+        } else {
+            base
+        }
     }
 
     fn compute_multi_kama(&mut self, cache: &SqliteCache) {

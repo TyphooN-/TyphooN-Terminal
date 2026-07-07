@@ -129,6 +129,14 @@ pub struct AccountOrders {
 }
 
 #[derive(Clone, Debug)]
+pub struct AccountFills {
+    pub account_id: String,
+    pub label: String,
+    pub is_primary: bool,
+    pub fills: Vec<(String, String, f64, f64, String)>,
+}
+
+#[derive(Clone, Debug)]
 pub struct KrakenAccountPositions {
     pub account_id: String,
     pub label: String,
@@ -142,6 +150,14 @@ pub struct KrakenAccountOrders {
     pub label: String,
     pub is_primary: bool,
     pub orders: Vec<crate::broker::kraken::KrakenOrder>,
+}
+
+#[derive(Clone, Debug)]
+pub struct KrakenAccountTrades {
+    pub account_id: String,
+    pub label: String,
+    pub is_primary: bool,
+    pub trades: Vec<crate::broker::kraken::KrakenTrade>,
 }
 
 pub struct QuickTradePlan {
@@ -2843,6 +2859,8 @@ pub enum BrokerMsg {
     AllAssets(Vec<(String, String, String)>),
     /// Structured fills for chart overlay (symbol, side, qty, price, time).
     RecentFills(Vec<(String, String, f64, f64, String)>),
+    /// Recent Alpaca fills grouped by account for navbar filtering.
+    AlpacaAccountFills(Vec<AccountFills>),
     /// Bar sync completed with N keys updated — trigger chart reloads.
     /// Emitted by bulk Alpaca fetches after new bars land.
     BarsSynced(usize),
@@ -2852,6 +2870,8 @@ pub enum BrokerMsg {
     KrakenBalances(Vec<(String, f64)>),
     /// Kraken tradeable pairs (pair_name, display_name).
     KrakenPairs(Vec<(String, String)>),
+    /// Recent Kraken private trades grouped by account for navbar filtering.
+    KrakenAccountTrades(Vec<KrakenAccountTrades>),
     /// Kraken Futures tradeable instrument symbols.
     KrakenFuturesInstruments(Vec<String>),
     // Company events, sentiment, transcripts, commodities, and tape research results

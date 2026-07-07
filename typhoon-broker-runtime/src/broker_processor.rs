@@ -291,9 +291,15 @@ pub fn spawn_broker_message_processor(
                     misc_commands::handle_misc_command(cmd, alpaca_pool.primary_broker(), &broker_msg_tx_clone)
                         .await;
                 }
-                cmd @ (BrokerCmd::GetActivities { .. }
-                | BrokerCmd::GetTopMovers
-                | BrokerCmd::GetAllAssets) => {
+                BrokerCmd::GetActivities { limit } => {
+                    alpaca_account_data::fetch_and_send_all_account_fills(
+                        &alpaca_pool,
+                        &broker_msg_tx_clone,
+                        limit,
+                    )
+                    .await;
+                }
+                cmd @ (BrokerCmd::GetTopMovers | BrokerCmd::GetAllAssets) => {
                     alpaca_account_data::handle_alpaca_account_data_command(
                         cmd,
                         alpaca_pool.primary_broker(),
@@ -866,11 +872,17 @@ pub fn spawn_broker_message_processor(
                 | BrokerCmd::KrakenPlaceOrderAdvanced { .. }
                 | BrokerCmd::KrakenClosePosition { .. }
                 | BrokerCmd::KrakenCancelOrder { .. }
-                | BrokerCmd::KrakenCancelAll
-                | BrokerCmd::KrakenFetchTrades) => {
+                | BrokerCmd::KrakenCancelAll) => {
                     kraken_order_ops::handle_kraken_account_order_command(
                         cmd,
                         kraken_pool.primary_broker(),
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
+                }
+                BrokerCmd::KrakenFetchTrades => {
+                    kraken_order_ops::fetch_and_send_all_kraken_account_trades(
+                        &kraken_pool,
                         &broker_msg_tx_clone,
                     )
                     .await;

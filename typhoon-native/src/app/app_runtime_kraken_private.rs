@@ -43,6 +43,23 @@ impl TyphooNApp {
         }
     }
 
+    pub(super) fn handle_kraken_account_trades(&mut self, mut accounts: Vec<KrakenAccountTrades>) {
+        if !self.kraken_enabled {
+            return;
+        }
+        for account in &mut accounts {
+            account.trades.sort_by(|a, b| {
+                b.time
+                    .partial_cmp(&a.time)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+        if let Some(primary) = accounts.iter().find(|account| account.is_primary) {
+            self.handle_kraken_trades(primary.trades.clone());
+        }
+        self.kraken_account_trades = accounts;
+    }
+
     pub(super) fn handle_kraken_live_trade(&mut self, trade: KrakenTrade) {
         if !self.kraken_enabled {
             return;

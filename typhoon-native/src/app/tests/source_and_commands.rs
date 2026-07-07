@@ -1493,17 +1493,22 @@ fn chart_ensures_mql_mtf_overlays_for_render_from_cache() {
 }
 
 #[test]
-fn heavy_sync_mtf_overlay_render_policy_only_refreshes_focused_cell() {
+fn heavy_sync_mtf_overlay_render_policy_ensures_all_mtf_cells() {
+    // Non-heavy MTF cell (any focus): always ensure
     assert!(ChartState::should_ensure_mql_mtf_overlays_for_render(
         false, true, false
     ));
+    // Heavy, non-MTF: the test previously expected true for this combo (legacy coverage)
     assert!(ChartState::should_ensure_mql_mtf_overlays_for_render(
         true, false, false
     ));
+    // Heavy MTF focused: ensure
     assert!(ChartState::should_ensure_mql_mtf_overlays_for_render(
         true, true, true
     ));
-    assert!(!ChartState::should_ensure_mql_mtf_overlays_for_render(
+    // Heavy MTF *non-focused*: now true (the fix). Overlays must be populated for
+    // background MTF grid cells at launch so users don't have to click each cell.
+    assert!(ChartState::should_ensure_mql_mtf_overlays_for_render(
         true, true, false
     ));
 }

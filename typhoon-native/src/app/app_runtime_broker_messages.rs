@@ -197,6 +197,9 @@ impl TyphooNApp {
                 BrokerMsg::RecentFills(fills) => {
                     self.handle_alpaca_recent_fills(fills);
                 }
+                BrokerMsg::AlpacaAccountFills(accounts) => {
+                    self.handle_alpaca_account_fills(accounts);
+                }
                 BrokerMsg::BarsSynced(changed) => {
                     // Reload every open chart to pick up newly-synced bars. This is
                     // intentionally not gated on MTF mode: inactive top tabs should
@@ -212,6 +215,9 @@ impl TyphooNApp {
                 }
                 BrokerMsg::KrakenAccountPositions(accounts) => {
                     self.handle_kraken_account_positions(accounts);
+                }
+                BrokerMsg::KrakenAccountTrades(accounts) => {
+                    self.handle_kraken_account_trades(accounts);
                 }
                 BrokerMsg::Orders(orders) => {
                     self.handle_alpaca_orders(orders);
