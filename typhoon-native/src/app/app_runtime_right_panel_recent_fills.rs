@@ -11,7 +11,7 @@ impl TyphooNApp {
         if self.kraken_enabled && self.show_kr_positions {
             // Kraken equity header (infographic style)
             let equity = self.kraken_usd_equivalent_balance();
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(egui::RichText::new("Kraken Equity").small().strong());
                 ui.label(
                     egui::RichText::new(format!("${:.2}", equity))
@@ -53,7 +53,7 @@ impl TyphooNApp {
             } else {
                 for (sym, side, qty, price, time) in &visible_recent_fills {
                     let c = if side == "buy" { UP } else { DOWN };
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(egui::RichText::new(sym).small().strong());
                         ui.label(egui::RichText::new(side).color(c).small());
                         ui.label(

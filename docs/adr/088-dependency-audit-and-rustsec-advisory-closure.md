@@ -1,7 +1,7 @@
 # ADR-088: Dependency Audit and RustSec Advisory Closure
 
 **Date:** 2026-04-25
-**Updated:** 2026-07-02
+**Updated:** 2026-07-07
 **Status:** Implemented
 **Related:** `Cargo.toml`, `typhoon-engine/Cargo.toml`, `cli/Cargo.toml`, `typhoon-transpiler/Cargo.toml`, `typhoon-native/Cargo.toml`, `vendor/thirtyfour/Cargo.toml`, `Cargo.lock`, ADR-031 (dependency alignment), ADR-044 (performance security audit)
 
@@ -165,3 +165,16 @@ Validation: `cargo audit` exits clean; full workspace suite 2403 passed /
 0 failed (test count grew from 1932 with the research/test expansion since
 the original pass). Semver-major closures from the same session are recorded
 in ADR-031's 2026-07-02 alignment section.
+
+## Follow-up audit (2026-07-07)
+
+Monthly-cadence security refresh per ADR-031. `cargo audit` exits clean with
+only the documented quick-xml advisory acceptances in `.cargo/audit.toml`; no
+new RustSec advisories were introduced by the lockfile refresh.
+
+Compatible lockfile updates were applied for `crossbeam-utils`, `rustversion`,
+`tendril`, and `zerocopy`/`zerocopy-derive`; the `tendril` update removed the
+old `utf-8` crate from the resolved tree. The remaining update blockers are
+not RustSec findings: `wgpu` 30 is held by the `egui-wgpu` 0.35 pairing rule,
+and `generic-array` 0.14.7 is an upstream old-RustCrypto transitive hold under
+Secret Service / WebSocket dependencies.

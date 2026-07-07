@@ -23,7 +23,7 @@ typhoon-transpiler = { workspace = true }
 
 # Native GPU UI — latest stable egui ecosystem (2026-03-27)
 eframe = { version = "0.35", default-features = false, features = ["default_fonts", "wayland", "wgpu_no_default_features", "x11"] }
-egui = { version = "0.35", default-features = false, features = ["default_fonts"] }
+egui = { workspace = true, features = ["default_fonts"] }
 egui_plot = "0.36"
 # News article rendering: markdown viewer (paragraphs/links/headings/inline images)
 # plus the egui_extras image loader so hero images and inline <img>s decode from URL.

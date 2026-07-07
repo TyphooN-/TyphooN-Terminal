@@ -8,4 +8,4 @@ description = "Chart-UI view + chart-local state layer for TyphooN Terminal (ADR
 typhoon-engine = { workspace = true }
 chrono = { workspace = true }
 # Same egui as typhoon-native (0.35) so egui types unify across the workspace.
-egui = { version = "0.35", default-features = false }
+egui = { workspace = true }

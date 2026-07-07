@@ -20,4 +20,4 @@ serde = { workspace = true }
 tracing = { workspace = true }
 # join_all for concurrent fetch fan-outs — the future combinators live in
 # the alloc feature; no stream/sink/macros needed here.
-futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+futures-util = { workspace = true, features = ["alloc"] }

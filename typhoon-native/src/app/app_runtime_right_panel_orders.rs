@@ -283,7 +283,7 @@ impl TyphooNApp {
                     .collect()
             };
             if alpaca_toggles.len() > 1 || kraken_toggles.len() > 1 || [alpaca_orders_available, kr_orders_available].into_iter().filter(|visible| *visible).count() > 1 {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if alpaca_orders_available && alpaca_toggles.len() <= 1 {
                         ui.checkbox(&mut self.show_alpaca_orders, egui::RichText::new("Alpaca").small());
                     }
@@ -369,7 +369,7 @@ impl TyphooNApp {
                 has_orders = true;
                 for group in order_display_groups(&account.orders) {
                     let order = group.primary();
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let (_, act) = symbol_label_with_menu(
                             ui,
                             &order.symbol,
@@ -416,7 +416,7 @@ impl TyphooNApp {
                     if let Some(legs) = order.legs.as_ref() {
                         for leg in legs {
                             let (role, role_c) = order_leg_role(leg);
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.add_space(12.0);
                                 ui.label(egui::RichText::new(format!("└ {role}")).color(role_c).small().strong());
                                 ui.label(egui::RichText::new(&leg.order_type).color(AXIS_TEXT).small());
@@ -449,7 +449,7 @@ impl TyphooNApp {
                     .on_hover_text(format!("Kraken account id: {}", account.account_id));
                 for order in &account.orders {
                     let remain = (order.vol - order.vol_exec).max(0.0);
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let (_, act) = symbol_label_with_menu(ui, &order.pair, egui::RichText::new(&order.pair).small().strong());
                         if !matches!(act, SymbolAction::None) {
                             lo_action = act;

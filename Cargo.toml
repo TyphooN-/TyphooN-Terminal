@@ -17,6 +17,8 @@ reqwest = { version = "0.13", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde", "now"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+egui = { version = "0.35", default-features = false }
+futures-util = { version = "0.3", default-features = false }
 rusqlite = "0.40"
 # Cache blobs are modern zstd frames only — the legacy (v0.5–0.7 format)
 # and dictionary-builder default features stay off.
@@ -24,6 +26,7 @@ zstd = { version = "0.13", default-features = false, features = ["arrays"] }
 zeroize = "1.9"
 # Nonces come from rand::random, not the AEAD's rng — getrandom default off.
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
+keyring-core = { version = "1", default-features = false }
 sha2 = "0.11"
 hmac = "0.13"
 pbkdf2 = "0.13"

@@ -178,7 +178,7 @@ impl TyphooNApp {
                         )
                     })
                     .collect();
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if alpaca_positions_available && alpaca_toggles.len() <= 1 {
                         ui.checkbox(&mut self.show_alpaca_positions, egui::RichText::new("Alpaca").small());
                     }
@@ -260,7 +260,7 @@ impl TyphooNApp {
                     if self.hidden_alpaca_position_account_ids.contains(&account.account_id) {
                         continue;
                     }
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(
                             egui::RichText::new(format!(
                                 "{}{} ({})",
@@ -571,7 +571,7 @@ impl TyphooNApp {
                     let pl = avg_price
                         .zip(current_price)
                         .map(|(avg, cur)| ((cur - avg) * qty, (cur - avg) / avg * 100.0));
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(
                             egui::RichText::new("Long")
                                 .color(UP)

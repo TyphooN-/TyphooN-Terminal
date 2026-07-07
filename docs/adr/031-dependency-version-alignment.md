@@ -263,3 +263,32 @@ Desktop-only Android-surface follow-up:
   (`wgpu-core-deps-windows-linux-android`, `wgpu-hal`, and their target support
   such as `android_system_properties`). Do not fork these upstream crates or use
   reqwest private `__rustls*` features only to scrub lockfile names.
+
+## Follow-up alignment (2026-07-07)
+
+Security-first refresh with the same governing rules: latest compatible lockfile,
+minimal direct feature declarations, no avoidable direct-version drift, and no
+dual-major dependency trees just to chase a crates.io headline release.
+
+- Lockfile-compatible refreshes: `crossbeam-utils` 0.8.21 → 0.8.22,
+  `rustversion` 1.0.22 → 1.0.23, `tendril` 0.5.0 → 0.5.1, and
+  `zerocopy`/`zerocopy-derive` 0.8.52 → 0.8.53. The `tendril` refresh removed
+  `utf-8` 0.7.6 from the resolved tree.
+- Direct manifest alignment: moved repeated `egui`, `futures-util`, and
+  `keyring-core` declarations into `[workspace.dependencies]`. Member crates now
+  select only the features they actually use (`egui/default_fonts` in the native
+  binary, `futures-util/std+sink` in the engine WebSocket lanes,
+  `futures-util/alloc` in broker-runtime fan-outs, and no `keyring-core` sample
+  feature in the shipped dependency set).
+- `cargo update --workspace --dry-run --verbose` now reports only the two
+  intentional non-upgrades: `generic-array` 0.14.7 and `wgpu` 29.0.4.
+- `wgpu` 30 remains intentionally blocked by the `egui-wgpu` 0.35.0 pairing
+  rule. TyphooN still selects `wgpu` 29 directly only as the minimal native
+  backend feature selector for eframe's `wgpu_no_default_features` path.
+- `generic-array` 0.14.7 remains pinned by upstream old RustCrypto lines under
+  `dbus-secret-service`/`tungstenite`; this is not fixable from TyphooN direct
+  manifests without replacing those upstream crates.
+
+Validation for this pass: `cargo check --workspace`, `cargo audit`, manifest
+drift scan, duplicate tree inspection, and `git diff --check` all pass. Full
+workspace tests were run after the manifest and lockfile changes.
