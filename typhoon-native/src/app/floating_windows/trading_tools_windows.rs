@@ -346,9 +346,16 @@ impl TyphooNApp {
                             }
 
                             // Render depth heatmap from the requested symbol's chart data.
-                            let chart = self.charts.iter().find(|chart| {
-                                normalize_market_data_symbol(&chart.symbol).eq_ignore_ascii_case(&sym)
-                            });
+                            let chart_key = normalize_market_data_symbol(&sym)
+                                .replace('/', "")
+                                .trim_end_matches(".EQ")
+                                .trim_end_matches(".eq")
+                                .to_ascii_uppercase();
+                            let chart = self
+                                .chart_by_bare
+                                .get(&chart_key)
+                                .and_then(|idxs| idxs.first())
+                                .and_then(|&idx| self.charts.get(idx));
                             if let Some(chart) = chart {
                                 let bars = &chart.bars;
                                 let n = bars.len();
