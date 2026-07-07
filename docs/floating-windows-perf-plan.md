@@ -1,6 +1,6 @@
 # Floating Windows Performance Status
 
-Last reviewed: 2026-05-26
+Last reviewed: 2026-07-07
 
 ## Purpose
 
@@ -43,6 +43,7 @@ doc-drift checklist for the authoritative statement) is:
 These are not leftovers from the floating-window performance pass. They are separate roadmap-scale epics and should be tracked in ADRs or feature plans, not as stale checkboxes in this scratchpad.
 
 ### Performance / rendering
+See ADR-098 for the broader O(1) optimization program and companion structures used across runtime and UI.
 
 - More indicator families routed through GPU compute where profiling proves value.
 - Optional table-row caching for extremely large trade/order/history grids if profiling shows formatting dominates frame time.

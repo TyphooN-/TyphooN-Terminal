@@ -4,6 +4,7 @@
 
 **Date:** 2026-05-22
 **Status:** Accepted
+**Last updated:** 2026-07-07 (iterative O(1) sweeps)
 **Related:** ADR-032 (background data + render decoupling),
 `typhoon-native/src/app/technical_analysis.rs`,
 `typhoon-native/src/app/app_runtime.rs`,
@@ -186,3 +187,49 @@ clone, would need Arc-sharing to remove — and the mandatory 60s session-JSON
 serialize + `sync_preferences_save` `put_kv` (small at idle, can spike under SQLite
 write contention). The full-universe WS snapshot-sweep cost noted above is now also
 mitigated separately by the sweep failure-backoff.
+
+
+## Update (2026-07): Iterative broker/runtime/research/UI O(1) membership and index sweeps
+
+The O(1) program continued with targeted passes replacing remaining linear scans over broker catalogs, account rosters, positions, alerts, watchlists, charts, and sorted research data. All followed the established discipline: retain `Vec` order for UI/serde/rendering where required; build companion `HashMap`/`HashSet` or indices during the natural load/invalidate pass; use binary search where data is sorted; prefer one-pass selection or explicit flags over re-scans.
+
+Key patterns added in recent sweeps (see git history for per-sweep commits such as "perf: cache Kraken balance ownership lookups", "perf: use indexed Kraken depth pair membership", "perf: fold broker primary account lookup scans", "perf: fold roster primary selection scans", "perf: avoid regulatory alert re-scans", "perf: index MTF grid open tabs", "perf: track MQL4 rewrite warnings by flag", "perf: index trading-tools chart lookup", "perf: binary-search Finviz perf windows", "perf: index right-panel section reorder", "perf: cache primary roster entries", "perf: O(1) Kraken position asset tails for quote updates", "perf: O(1) watchlist equity price and Kraken equity pair resolve"):
+
+- **Companion HashSets for repeated membership**:
+  - `kraken_balance_assets_by_display`: positive non-cash balance asset tails for "chart or owned" decisions (replaced `kraken_balances.iter().any`).
+  - `kraken_position_asset_tails`: asset_id + symbol tails/aliases for live quote position checks (replaced `.values().any(|pos| pos.asset_id.ends_with(...))`).
+  - `kraken_pairs_normalized` (extended): used for depth/bookmap stream gating.
+  - `kraken_equity_pair_by_base`: base ticker → catalog wsname/name for order resolution (replaced `kraken_pairs.iter().find_map` over full catalog).
+
+- **One-pass map + fallback construction** (Alpaca/Kraken):
+  - Account handlers (positions/orders/fills/trades): build id→account map + primary in single pass.
+  - Broker roster updates: build `roster_by_id` + connected-primary while iterating.
+  - Recent-fills fallback rows now use cached primary roster entries.
+
+- **One-pass selection while building lists**:
+  - Regulatory (Reg SHO / trade halt) windows: matching alert row chosen during list construction; render path receives it directly instead of `alerts.iter().find/any` per symbol.
+  - Pre-scan removal for Kraken order/position groups in right-panel render (render loop is sufficient).
+
+- **Index / precompute tables**:
+  - Watchlist reorder and `latest_watchlist_equity_price_for_symbol`: leverage existing `watchlist_by_bare: HashMap<String, usize>` (O(1) lookup + price check instead of `find_map` over rows).
+  - Trading-tools / Bookmap depth/heatmap: chart resolution via `chart_by_bare` (no `charts.iter().find`).
+  - Right-panel section drag reorder: section→index table built once (replaces two `.iter().position`).
+  - MTF grid open tabs: precompute set of (symbol, tf) cells before fill selection (eliminates repeated `charts.iter().any` inside loops).
+  - Command palette recent ordering and cAlgo output-name assignment: name→index maps.
+
+- **Binary search on sorted data**:
+  - Finviz performance windows (`window_return`, `ytd_return`): `partition_point` over newest-first date rows instead of repeated `rows.iter().find` prefix scans.
+
+- **Explicit flags instead of repeated scans**:
+  - MQL4 transpiler rewrite: `has_ordersend_warning` / `has_orderselect_warning` bools replace `warnings.iter().any(contains("OrderSend"))` etc. during processing and tests.
+
+- **Catalog / pair handling**:
+  - Kraken depth stream support helpers now accept normalized pair `HashSet` + empty-catalog fallback (no per-call linear scan).
+
+All changes were accompanied by:
+- rustfmt + `cargo check -p typhoon-native` (and engine/transpiler where touched).
+- Targeted grep for removed patterns (now zero matches in production paths).
+- `git diff --check`, clean worktree hygiene.
+- Preservation of ordering, fallback (e.g. empty catalog), and serde behavior.
+
+These build directly on the per-frame invariants in this ADR (hoisting, pre-normalized sets, indices over searches, one-pass where possible). No semantics or output changed. The program remains open; next focus areas include further bounded backpressure for full-universe sync and MTF grid data freshness.

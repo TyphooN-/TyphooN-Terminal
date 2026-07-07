@@ -46,10 +46,15 @@ WebSocket trade streams build 1-minute OHLCV bars in-process. Completed bars use
    panel render closures) avoid allocations proportional to dataset size:
    invariant work is hoisted out of inner closures, suffix arrays replace
    per-candidate scans (e.g. FVG fill check), pre-normalized HashSets
-   replace linear `iter().any` audits (Kraken pairs lookup), index-aligned
-   data is paired by `zip()` not by key search, fixed-cardinality enums use
-   bitset membership, and per-frame `trade_overlay` borrows use
-   `std::mem::take` + restore instead of `Clone`. See ADR-098.
+   replace linear `iter().any` audits (Kraken pairs lookup, balance ownership,
+   position asset tails), index-aligned data is paired by `zip()` not by key
+   search, fixed-cardinality enums use bitset membership, and per-frame
+   `trade_overlay` borrows use `std::mem::take` + restore instead of `Clone`.
+   Companion maps/sets (`watchlist_by_bare`, `chart_by_bare`, `roster_by_id`,
+   `kraken_equity_pair_by_base`, primary roster caches) and one-pass selection
+   (regulatory alerts, rosters, MTF open tabs) eliminate repeated lookups and
+   re-scans. Binary search (`partition_point`) for sorted research windows.
+   See ADR-098 for the full ongoing O(1) optimization program.
 
 ### Storage Compact (zstd-22)
 
