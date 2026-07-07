@@ -383,9 +383,9 @@ pub fn draw_chart(
     }
 
     let use_log = chart.log_scale && price_min > 0.0; // log scale requires positive prices
-                                                      // Precompute the log-axis constants once. price_to_y is called once per visible
-                                                      // bar per indicator (~hundreds per frame), so hoisting the two `.ln()` calls out
-                                                      // of the closure turns a per-call cost into a per-frame cost.
+    // Precompute the log-axis constants once. price_to_y is called once per visible
+    // bar per indicator (~hundreds per frame), so hoisting the two `.ln()` calls out
+    // of the closure turns a per-call cost into a per-frame cost.
     let log_max = if use_log { price_max.ln() } else { 0.0 };
     let log_min = if use_log { price_min.ln() } else { 0.0 };
     let log_range = log_max - log_min;
@@ -1737,9 +1737,9 @@ pub fn draw_chart(
     // the moving averages). One clipped line primitive per level.
     if flags.atr_proj {
         let atr_yellow = egui::Color32::from_rgb(255, 255, 0); // clrYellow
-                                                               // A timeframe whose ATR band is narrow puts its Hi and Lo labels on top
-                                                               // of each other ("ATR W1 Hi" / "ATR W1 Lo" smearing into "ATR WL HL").
-                                                               // Spread the labels into separate bands; the lines stay at true price.
+        // A timeframe whose ATR band is narrow puts its Hi and Lo labels on top
+        // of each other ("ATR W1 Hi" / "ATR W1 Lo" smearing into "ATR WL HL").
+        // Spread the labels into separate bands; the lines stay at true price.
         let mut label_bands: Vec<(f32, f32)> = Vec::new();
         for &(label, htf_open, atr_val, line_start_idx) in &chart.atr_proj_levels {
             let upper_price = htf_open + atr_val;
@@ -2067,12 +2067,14 @@ mod tests {
     #[test]
     fn indicator_line_clipping_rejects_fully_offscreen_segments() {
         let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 100.0));
-        assert!(super::clip_line_segment_to_rect(
-            egui::pos2(10.0, -50.0),
-            egui::pos2(90.0, -10.0),
-            rect,
-        )
-        .is_none());
+        assert!(
+            super::clip_line_segment_to_rect(
+                egui::pos2(10.0, -50.0),
+                egui::pos2(90.0, -10.0),
+                rect,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -2323,7 +2325,9 @@ mod tests {
         // Sub-hour chart shows every previous + every current level.
         assert_eq!(
             visible(Timeframe::M15),
-            vec!["Prev H1", "Prev H4", "Prev D", "Prev W", "Prev MN", "Cur D", "Cur W", "Cur MN"]
+            vec![
+                "Prev H1", "Prev H4", "Prev D", "Prev W", "Prev MN", "Cur D", "Cur W", "Cur MN"
+            ]
         );
         // Hourly charts drop their own H1/H4 previous; keep daily+ and all current.
         assert_eq!(

@@ -1058,8 +1058,7 @@ pub fn delete_equity_bar_cache_for_symbol_conn(
                     "DELETE FROM bar_cache WHERE key LIKE ?1 COLLATE NOCASE",
                     params![pattern],
                 )
-                .map_err(|e| format!("delete bar_cache {pattern}: {e}"))?
-                    as u64,
+                .map_err(|e| format!("delete bar_cache {pattern}: {e}"))? as u64,
             );
             let _ = conn.execute(
                 "DELETE FROM bar_track WHERE key LIKE ?1 COLLATE NOCASE",
@@ -1118,8 +1117,7 @@ fn load_split_events_for_audit(
         return out;
     };
     for (symbol, json) in rows.flatten() {
-        let Ok(parsed) =
-            serde_json::from_str::<Vec<crate::core::research::StockSplit>>(&json)
+        let Ok(parsed) = serde_json::from_str::<Vec<crate::core::research::StockSplit>>(&json)
         else {
             continue;
         };
@@ -1343,9 +1341,7 @@ fn cross_check_key_set(keys: &[String]) -> std::collections::HashSet<String> {
         let Some(parts) = parse_bar_cache_key(key) else {
             continue;
         };
-        let entry = groups
-            .entry((parts.symbol, parts.timeframe))
-            .or_default();
+        let entry = groups.entry((parts.symbol, parts.timeframe)).or_default();
         entry.0.insert(parts.source);
         entry.1.push(i);
     }
@@ -1455,8 +1451,7 @@ fn audit_bar_row(
         }
         return;
     }
-    let header_count =
-        u32::from_le_bytes(binary[4..8].try_into().unwrap_or([0u8; 4])) as usize;
+    let header_count = u32::from_le_bytes(binary[4..8].try_into().unwrap_or([0u8; 4])) as usize;
     let expected = match header_count
         .checked_mul(BYTES_PER_BAR)
         .and_then(|n| n.checked_add(8))
@@ -1501,7 +1496,12 @@ fn audit_bar_row(
         } else {
             BarCacheSanitySeverity::Info
         };
-        report.push_issue(severity, "zero_bar_row", key, "bar_cache row contains no bars");
+        report.push_issue(
+            severity,
+            "zero_bar_row",
+            key,
+            "bar_cache row contains no bars",
+        );
         report.metadata_repairable_rows += usize::from(metadata_repairable);
         return;
     }
@@ -1585,7 +1585,10 @@ fn audit_bar_row(
         if invalid_price {
             invalid_count += 1;
             if invalid.is_none() {
-                invalid = Some((idx, format!("idx={idx} ts={ts} o={o} h={h} l={l} c={c} v={v}")));
+                invalid = Some((
+                    idx,
+                    format!("idx={idx} ts={ts} o={o} h={h} l={l} c={c} v={v}"),
+                ));
             }
         }
         if h >= l && l > 0.0 && h > 0.0 {
@@ -1612,7 +1615,10 @@ fn audit_bar_row(
             if future.is_none() {
                 future = Some((
                     idx,
-                    format!("idx={idx} ts={}", fmt_ts_ms(ts).unwrap_or_else(|| ts.to_string())),
+                    format!(
+                        "idx={idx} ts={}",
+                        fmt_ts_ms(ts).unwrap_or_else(|| ts.to_string())
+                    ),
                 ));
             }
         }
@@ -1649,8 +1655,10 @@ fn audit_bar_row(
     // writes scrub it at pack time; this flags legacy rows so the rewrite
     // repair drops it and re-derives clean higher timeframes.
     if key_is_carry_prone_equity(&key) {
-        let ohlcv: Vec<(f64, f64, f64, f64, f64)> =
-            raw.iter().map(|(_, o, h, l, c, v)| (*o, *h, *l, *c, *v)).collect();
+        let ohlcv: Vec<(f64, f64, f64, f64, f64)> = raw
+            .iter()
+            .map(|(_, o, h, l, c, v)| (*o, *h, *l, *c, *v))
+            .collect();
         let poison = carry_poison_flags(&ohlcv)
             .into_iter()
             .filter(|&d| d)
@@ -1769,7 +1777,10 @@ fn audit_bar_row(
         };
         let cadence_note = match median_spacing_ms {
             Some(m) if chronically_sparse => {
-                format!(" (chronically sparse — illiquid, ~{:.1}d between bars)", m as f64 / 86_400_000.0)
+                format!(
+                    " (chronically sparse — illiquid, ~{:.1}d between bars)",
+                    m as f64 / 86_400_000.0
+                )
             }
             Some(m) => format!(" (median bar spacing {:.1}h)", m as f64 / 3_600_000.0),
             None => String::new(),
@@ -1817,9 +1828,7 @@ fn plan_row_repair(
     } = row;
 
     let Ok(bytes) = maybe_decompress(data) else {
-        return Ok(opts
-            .delete_corrupt_rows
-            .then_some(RowFix::Delete { key }));
+        return Ok(opts.delete_corrupt_rows.then_some(RowFix::Delete { key }));
     };
     let is_ttbr = bytes.len() >= 8 && &bytes[0..4] == BAR_BINARY_MAGIC;
     if !is_ttbr {
@@ -1846,9 +1855,7 @@ fn plan_row_repair(
                 .map(Some);
             }
         }
-        return Ok(opts
-            .delete_corrupt_rows
-            .then_some(RowFix::Delete { key }));
+        return Ok(opts.delete_corrupt_rows.then_some(RowFix::Delete { key }));
     }
 
     let header_count = u32::from_le_bytes(bytes[4..8].try_into().unwrap_or([0u8; 4])) as usize;
@@ -1858,14 +1865,10 @@ fn plan_row_repair(
         .map(|expected| bytes.len() >= expected)
         .unwrap_or(false);
     if !decodable {
-        return Ok(opts
-            .delete_corrupt_rows
-            .then_some(RowFix::Delete { key }));
+        return Ok(opts.delete_corrupt_rows.then_some(RowFix::Delete { key }));
     }
     let Ok(raw) = unpack_bars_raw(&bytes) else {
-        return Ok(opts
-            .delete_corrupt_rows
-            .then_some(RowFix::Delete { key }));
+        return Ok(opts.delete_corrupt_rows.then_some(RowFix::Delete { key }));
     };
 
     // Mirror of the audit's Warn-severity zero_bar_row scope: only the
@@ -1931,18 +1934,15 @@ fn plan_row_repair(
             drop_carry_poison_bars(&mut ordered);
         }
         let changed = ordered.len() != raw.len()
-            || ordered
-                .iter()
-                .zip(raw.iter())
-                .any(|((bts, (o, h, l, c, v)), (rts, ro, rh, rl, rc, rv))| {
+            || ordered.iter().zip(raw.iter()).any(
+                |((bts, (o, h, l, c, v)), (rts, ro, rh, rl, rc, rv))| {
                     bts != rts || o != ro || h != rh || l != rl || c != rc || v != rv
-                });
+                },
+            );
         if changed {
             if ordered.is_empty() {
                 // Every bar was invalid — nothing worth keeping.
-                return Ok(opts
-                    .delete_corrupt_rows
-                    .then_some(RowFix::Delete { key }));
+                return Ok(opts.delete_corrupt_rows.then_some(RowFix::Delete { key }));
             }
             let mut binary = Vec::with_capacity(8 + ordered.len() * BYTES_PER_BAR);
             binary.extend_from_slice(BAR_BINARY_MAGIC);
@@ -1963,8 +1963,8 @@ fn plan_row_repair(
     if opts.fix_metadata {
         let (second_last_ts, last_ts) = get_last_two_bar_timestamps(&bytes, raw.len());
         let want_count = raw.len() as i64;
-        let zstd_fix = (!(MIN_ZSTD_LEVEL..=MAX_ZSTD_LEVEL).contains(&zstd_level))
-            .then_some(MIN_ZSTD_LEVEL);
+        let zstd_fix =
+            (!(MIN_ZSTD_LEVEL..=MAX_ZSTD_LEVEL).contains(&zstd_level)).then_some(MIN_ZSTD_LEVEL);
         let count_bad = meta_count != Some(want_count);
         let last_bad = meta_last_ts != last_ts;
         // Mirrors the audit: a 1-bar row has no meaningful second_last_ts, so
@@ -2874,10 +2874,7 @@ impl SqliteCache {
             if let Some(cb) = progress {
                 cb(rows_done, rows_total.max(rows_done));
             }
-            if cancel
-                .map(|c| c.load(Ordering::Relaxed))
-                .unwrap_or(false)
-            {
+            if cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false) {
                 report.cancelled = true;
                 break;
             }
@@ -4374,18 +4371,14 @@ impl SqliteCache {
                     if let RowFix::Rewrite { key, .. } = fix
                         && key_is_carry_prone_equity(key)
                     {
-                        outcome.higher_tfs_rederived +=
-                            self.derive_and_store_higher_tfs(key).len();
+                        outcome.higher_tfs_rederived += self.derive_and_store_higher_tfs(key).len();
                     }
                 }
             }
             if let Some(cb) = progress {
                 cb(outcome.rows_scanned, rows_total.max(outcome.rows_scanned));
             }
-            if cancel
-                .map(|c| c.load(Ordering::Relaxed))
-                .unwrap_or(false)
-            {
+            if cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false) {
                 outcome.cancelled = true;
                 break;
             }
@@ -4452,7 +4445,8 @@ impl SqliteCache {
                 outcome.push_error(format!("apply failed: {e}"));
             }
         }
-        tx.commit().map_err(|e| format!("SQLite commit failed: {e}"))
+        tx.commit()
+            .map_err(|e| format!("SQLite commit failed: {e}"))
     }
 
     /// Bulk-delete bar rows (plus their bar_track rows) WITHOUT the
@@ -4473,9 +4467,9 @@ impl SqliteCache {
                 .collect::<Vec<_>>()
                 .join(",");
             let sql = format!("DELETE FROM bar_cache WHERE key IN ({placeholders})");
-            deleted += tx
-                .execute(&sql, rusqlite::params_from_iter(chunk.iter()))
-                .map_err(|e| format!("SQLite bulk delete failed: {e}"))? as u64;
+            deleted +=
+                tx.execute(&sql, rusqlite::params_from_iter(chunk.iter()))
+                    .map_err(|e| format!("SQLite bulk delete failed: {e}"))? as u64;
             let track_sql = format!("DELETE FROM bar_track WHERE key IN ({placeholders})");
             let _ = tx.execute(&track_sql, rusqlite::params_from_iter(chunk.iter()));
         }
@@ -4487,10 +4481,7 @@ impl SqliteCache {
     /// Append a finished (non-cancelled) audit to the persisted history ring
     /// (kv_cache, capped) so consecutive runs can be diffed. Call from the
     /// audit worker thread — never the render thread (write-lock contention).
-    pub fn record_bar_sanity_history(
-        &self,
-        report: &BarCacheSanityReport,
-    ) -> Result<(), String> {
+    pub fn record_bar_sanity_history(&self, report: &BarCacheSanityReport) -> Result<(), String> {
         if report.cancelled {
             return Ok(());
         }
