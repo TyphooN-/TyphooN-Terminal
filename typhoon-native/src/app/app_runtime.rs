@@ -775,6 +775,8 @@ impl eframe::App for TyphooNApp {
         // per-frame detail warn and the 5s summary). Reading /proc VmRSS is a
         // few microseconds — negligible against the frame budget.
         let rss_mb = crate::app::market_data_sync::current_process_rss_mb();
+        let (mem_total_mb, mem_available_mb) =
+            crate::app::market_data_sync::current_system_memory_mb();
 
         if update_ms >= 250.0 {
             let render_residual_ms = (render_after_broker_ms
@@ -783,7 +785,7 @@ impl eframe::App for TyphooNApp {
                 - perf_floating_windows_ms)
                 .max(0.0);
             tracing::warn!(
-                "UI frame stall detail: update_ms={:.2} pre_broker_ms={:.2} broker_drain_ms={:.2} render_after_broker_ms={:.2} post_broker_setup_ms={:.2} chrome_panels_ms={:.2} floating_windows_ms={:.2} render_residual_ms={:.2} session_save_ms={:.2} msgs_drained={} pending_fetches={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} rss_mb={}",
+                "UI frame stall detail: update_ms={:.2} pre_broker_ms={:.2} broker_drain_ms={:.2} render_after_broker_ms={:.2} post_broker_setup_ms={:.2} chrome_panels_ms={:.2} floating_windows_ms={:.2} render_residual_ms={:.2} session_save_ms={:.2} msgs_drained={} pending_fetches={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} rss_mb={} mem_available_mb={} mem_total_mb={}",
                 update_ms,
                 perf_pre_broker_ms,
                 perf_broker_drain_ms,
@@ -801,6 +803,8 @@ impl eframe::App for TyphooNApp {
                 self.scrape_sec_running,
                 self.auto_compact_in_progress,
                 rss_mb,
+                mem_available_mb,
+                mem_total_mb,
             );
         }
         if update_ms > 16.7 {
@@ -815,13 +819,15 @@ impl eframe::App for TyphooNApp {
                 let pending_fetches = self.total_pending_market_data_fetches();
                 if self.perf_max_update_ms >= 250.0 {
                     tracing::warn!(
-                        "UI frame stall: max_update_ms={:.2} slow_frames={} broker_msgs={} pending_fetches={} deferred_chart_loads={} rss_mb={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} log_entries={}",
+                        "UI frame stall: max_update_ms={:.2} slow_frames={} broker_msgs={} pending_fetches={} deferred_chart_loads={} rss_mb={} mem_available_mb={} mem_total_mb={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} log_entries={}",
                         self.perf_max_update_ms,
                         self.perf_slow_frame_count,
                         self.perf_broker_msgs_drained,
                         pending_fetches,
                         self.deferred_chart_loads.len(),
                         rss_mb,
+                        mem_available_mb,
+                        mem_total_mb,
                         self.heavy_sync_in_progress,
                         self.news_loading,
                         self.scrape_fund_running,

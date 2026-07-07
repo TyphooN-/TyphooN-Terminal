@@ -52,7 +52,7 @@ pub(super) fn current_process_rss_mb() -> u64 {
     0
 }
 
-fn current_system_memory_mb() -> (u64, u64) {
+pub(super) fn current_system_memory_mb() -> (u64, u64) {
     let mut total_mb = 0;
     let mut available_mb = 0;
     if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") {
@@ -73,6 +73,34 @@ fn current_system_memory_mb() -> (u64, u64) {
         }
     }
     (total_mb, available_mb)
+}
+
+fn low_memory_sync_budget_percent(total_mb: u64) -> usize {
+    match total_mb {
+        0 => 100,
+        // Future users may have 16–32 GB machines. Full-tilt queue windows were
+        // tuned on a workstation with enough headroom for many concurrent HTTP
+        // response bodies + JSON vectors + zstd/SQLite write buffers. On smaller
+        // boxes the same pending windows can overshoot the pressure gate between
+        // scheduler ticks and get OOM-killed, so scale newly queued broad work by
+        // installed RAM instead of waiting for RSS to spike.
+        mb if mb <= 24_576 => 35,
+        mb if mb <= 40_960 => 50,
+        mb if mb <= 65_536 => 75,
+        _ => 100,
+    }
+}
+
+fn memory_scaled_sync_budget(value: usize, total_mb: u64, floor: usize) -> usize {
+    let pct = low_memory_sync_budget_percent(total_mb);
+    if pct >= 100 || value <= floor {
+        return value.max(floor);
+    }
+    value
+        .saturating_mul(pct)
+        .div_ceil(100)
+        .max(floor)
+        .min(value)
 }
 
 fn market_data_memory_pressure_at(
@@ -136,6 +164,11 @@ fn memory_bounded_available_slots(
     batch_limit: usize,
     foreground_reserve: usize,
 ) -> usize {
+    let (total_mb, _) = current_system_memory_mb();
+    let queue_floor = foreground_reserve.max(8).min(queue_window.max(1));
+    let batch_floor = foreground_reserve.max(4).min(batch_limit.max(1));
+    let queue_window = memory_scaled_sync_budget(queue_window, total_mb, queue_floor);
+    let batch_limit = memory_scaled_sync_budget(batch_limit, total_mb, batch_floor);
     let available = queue_window.saturating_sub(pending).min(batch_limit);
     match current_market_data_memory_pressure() {
         MarketDataMemoryPressure::Normal => available,
@@ -1590,6 +1623,10 @@ impl TyphooNApp {
             capacity.batch_size = capacity.batch_size.max(ALPACA_FULL_TILT_BATCH_SIZE);
             capacity.foreground_reserve = capacity.foreground_reserve.max(8);
         }
+        let (total_mb, _) = current_system_memory_mb();
+        capacity.fetch_permits = memory_scaled_sync_budget(capacity.fetch_permits, total_mb, 2);
+        capacity.queue_window = memory_scaled_sync_budget(capacity.queue_window, total_mb, 32);
+        capacity.batch_size = memory_scaled_sync_budget(capacity.batch_size, total_mb, 16);
         capacity
     }
 
@@ -2851,6 +2888,19 @@ mod tests {
             market_data_memory_pressure_at(16_000, 0, 0),
             MarketDataMemoryPressure::PauseBackground
         );
+    }
+
+    #[test]
+    fn low_memory_sync_budget_scales_full_tilt_work_before_pressure_spikes() {
+        assert_eq!(low_memory_sync_budget_percent(16_384), 35);
+        assert_eq!(low_memory_sync_budget_percent(32_000), 50);
+        assert_eq!(low_memory_sync_budget_percent(49_152), 75);
+        assert_eq!(low_memory_sync_budget_percent(98_304), 100);
+
+        assert_eq!(memory_scaled_sync_budget(256, 32_000, 32), 128);
+        assert_eq!(memory_scaled_sync_budget(24, 32_000, 6), 12);
+        assert_eq!(memory_scaled_sync_budget(6, 16_384, 6), 6);
+        assert_eq!(memory_scaled_sync_budget(256, 98_304, 32), 256);
     }
 
     #[test]
