@@ -54,12 +54,27 @@ impl TyphooNApp {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
         }
-        let acc_map: std::collections::HashMap<_, _> = accounts.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
-        if let Some(primary) = acc_map.get(&self.kraken_primary_account_id).cloned().or_else(|| accounts.iter().find(|a| a.is_primary).cloned()) {
+        let mut acc_map = std::collections::HashMap::with_capacity(accounts.len());
+        let mut primary_account = None;
+        for account in &accounts {
+            if account.is_primary && primary_account.is_none() {
+                primary_account = Some(account.clone());
+            }
+            acc_map.insert(account.account_id.clone(), account.clone());
+        }
+        if let Some(primary) = acc_map
+            .get(&self.kraken_primary_account_id)
+            .cloned()
+            .or(primary_account)
+        {
             self.handle_kraken_trades(primary.trades.clone());
         }
         self.kraken_account_trades = accounts;
-        self.kraken_account_trades_by_id = self.kraken_account_trades.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
+        self.kraken_account_trades_by_id = self
+            .kraken_account_trades
+            .iter()
+            .map(|a| (a.account_id.clone(), a.clone()))
+            .collect();
     }
 
     pub(super) fn handle_kraken_live_trade(&mut self, trade: KrakenTrade) {
@@ -93,10 +108,18 @@ impl TyphooNApp {
             self.put_kv_dedup("broker:kr_positions", &json);
         }
         self.kr_positions = pos;
-        self.kr_positions_by_symbol = self.kr_positions.iter().map(|p| {
-            let key = bare_symbol_from_key(&p.symbol).replace("/", "").trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
-            (key, p.clone())
-        }).collect();
+        self.kr_positions_by_symbol = self
+            .kr_positions
+            .iter()
+            .map(|p| {
+                let key = bare_symbol_from_key(&p.symbol)
+                    .replace("/", "")
+                    .trim_end_matches(".EQ")
+                    .trim_end_matches(".eq")
+                    .to_ascii_uppercase();
+                (key, p.clone())
+            })
+            .collect();
         self.refresh_kraken_position_costs();
         for c in &mut self.charts {
             c.cached_trade_overlay_frame = 0;
@@ -111,16 +134,39 @@ impl TyphooNApp {
             return;
         }
         self.positions_last_update_ts = chrono::Utc::now().timestamp();
-        let acc_map: std::collections::HashMap<_, _> = accounts.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
-        if let Some(primary) = acc_map.get(&self.kraken_primary_account_id).or_else(|| accounts.iter().find(|a| a.is_primary)) {
+        let mut acc_map = std::collections::HashMap::with_capacity(accounts.len());
+        let mut primary_account = None;
+        for account in &accounts {
+            if account.is_primary && primary_account.is_none() {
+                primary_account = Some(account.clone());
+            }
+            acc_map.insert(account.account_id.clone(), account.clone());
+        }
+        if let Some(primary) = acc_map
+            .get(&self.kraken_primary_account_id)
+            .cloned()
+            .or(primary_account)
+        {
             self.kr_positions = primary.positions.clone();
-            self.kr_positions_by_symbol = self.kr_positions.iter().map(|p| {
-                let key = bare_symbol_from_key(&p.symbol).replace("/", "").trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
-                (key, p.clone())
-            }).collect();
+            self.kr_positions_by_symbol = self
+                .kr_positions
+                .iter()
+                .map(|p| {
+                    let key = bare_symbol_from_key(&p.symbol)
+                        .replace("/", "")
+                        .trim_end_matches(".EQ")
+                        .trim_end_matches(".eq")
+                        .to_ascii_uppercase();
+                    (key, p.clone())
+                })
+                .collect();
         }
         self.kraken_account_positions = accounts;
-        self.kraken_account_positions_by_id = self.kraken_account_positions.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
+        self.kraken_account_positions_by_id = self
+            .kraken_account_positions
+            .iter()
+            .map(|a| (a.account_id.clone(), a.clone()))
+            .collect();
         self.refresh_kraken_position_costs();
         for c in &mut self.charts {
             c.cached_trade_overlay_frame = 0;
@@ -173,11 +219,26 @@ impl TyphooNApp {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
         }
-        let acc_map: std::collections::HashMap<_, _> = accounts.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
-        if let Some(primary) = acc_map.get(&self.kraken_primary_account_id).or_else(|| accounts.iter().find(|a| a.is_primary)) {
-            self.kraken_open_orders = primary.orders.clone();
+        let mut acc_map = std::collections::HashMap::with_capacity(accounts.len());
+        let mut primary_account = None;
+        for account in &accounts {
+            if account.is_primary && primary_account.is_none() {
+                primary_account = Some(account.clone());
+            }
+            acc_map.insert(account.account_id.clone(), account.clone());
+        }
+        if let Some(primary) = acc_map
+            .get(&self.kraken_primary_account_id)
+            .cloned()
+            .or(primary_account)
+        {
+            self.kraken_open_orders = primary.orders;
         }
         self.kraken_account_orders = accounts;
-        self.kraken_account_orders_by_id = self.kraken_account_orders.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
+        self.kraken_account_orders_by_id = self
+            .kraken_account_orders
+            .iter()
+            .map(|a| (a.account_id.clone(), a.clone()))
+            .collect();
     }
 }
