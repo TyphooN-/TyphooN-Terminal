@@ -65,8 +65,11 @@ impl TyphooNApp {
                     // trade halt), which shares the regulatory_alerts map.
                     let mut rows: Vec<_> = alerts_map
                         .iter()
-                        .filter(|(_, alerts)| {
-                            alerts.iter().any(|a| a.kind == "reg_sho_threshold")
+                        .filter_map(|(sym, alerts)| {
+                            alerts
+                                .iter()
+                                .find(|a| a.kind == "reg_sho_threshold")
+                                .map(|alert| (sym, alert))
                         })
                         .collect();
                     rows.sort_by_key(|(sym, _)| *sym);
@@ -144,11 +147,7 @@ impl TyphooNApp {
                         header.col(|ui| { ui.strong("Details"); });
                     })
                     .body(|mut body| {
-                        for (sym, alerts) in rows {
-                            let alert = alerts
-                                .iter()
-                                .find(|a| a.kind == "reg_sho_threshold")
-                                .unwrap_or(&alerts[0]);
+                        for (sym, alert) in rows {
                             // Live watchlist row first (has bid/ask); otherwise the
                             // cache-loaded snapshot so every symbol's columns fill.
                             let quote = regulatory_quote(sym.as_str());
@@ -223,7 +222,12 @@ impl TyphooNApp {
                     let alerts_map = &self.bg.regulatory_alerts_by_symbol;
                     let mut rows: Vec<_> = alerts_map
                         .iter()
-                        .filter(|(_, alerts)| alerts.iter().any(|a| a.kind == "trade_halt"))
+                        .filter_map(|(sym, alerts)| {
+                            alerts
+                                .iter()
+                                .find(|a| a.kind == "trade_halt")
+                                .map(|alert| (sym, alert))
+                        })
                         .collect();
                     if rows.is_empty() {
                         ui.label("No active trading halts.");
@@ -302,11 +306,7 @@ impl TyphooNApp {
                         header.col(|ui| { ui.strong("Halt info"); });
                     })
                     .body(|mut body| {
-                        for (sym, alerts) in rows {
-                            let alert = alerts
-                                .iter()
-                                .find(|a| a.kind == "trade_halt")
-                                .unwrap_or(&alerts[0]);
+                        for (sym, alert) in rows {
                             let quote = regulatory_quote(sym.as_str());
                             body.row(18.0, |mut row| {
                                 row.col(|ui| {
