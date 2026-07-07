@@ -430,6 +430,17 @@ impl TyphooNApp {
             .kr_positions
             .iter()
             .any(|pos| pos.asset_id.starts_with("equity_balance:"));
+        self.kraken_balance_assets_by_display = balances
+            .iter()
+            .filter(|(asset, qty)| {
+                qty.is_finite() && *qty > 0.0 && !Self::kraken_is_cash_balance_asset(asset)
+            })
+            .map(|(asset, _)| {
+                Self::kraken_display_asset(asset)
+                    .trim_end_matches(".EQ")
+                    .to_ascii_uppercase()
+            })
+            .collect();
         self.kraken_balances = balances;
         let next_positions = kraken_positions_with_balance_equities(
             std::mem::take(&mut self.kr_positions),
@@ -441,19 +452,35 @@ impl TyphooNApp {
         if had_balance_equity_positions || has_balance_equity_positions {
             self.positions_last_update_ts = chrono::Utc::now().timestamp();
             self.kr_positions = next_positions;
-            self.kr_positions_by_symbol = self.kr_positions.iter().map(|p| {
-                let key = bare_symbol_from_key(&p.symbol).replace("/", "").trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
-                (key, p.clone())
-            }).collect();
+            self.kr_positions_by_symbol = self
+                .kr_positions
+                .iter()
+                .map(|p| {
+                    let key = bare_symbol_from_key(&p.symbol)
+                        .replace("/", "")
+                        .trim_end_matches(".EQ")
+                        .trim_end_matches(".eq")
+                        .to_ascii_uppercase();
+                    (key, p.clone())
+                })
+                .collect();
             if let Ok(json) = serde_json::to_string(&self.kr_positions) {
                 self.put_kv_dedup("broker:kr_positions", &json);
             }
         } else {
             self.kr_positions = next_positions;
-            self.kr_positions_by_symbol = self.kr_positions.iter().map(|p| {
-                let key = bare_symbol_from_key(&p.symbol).replace("/", "").trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
-                (key, p.clone())
-            }).collect();
+            self.kr_positions_by_symbol = self
+                .kr_positions
+                .iter()
+                .map(|p| {
+                    let key = bare_symbol_from_key(&p.symbol)
+                        .replace("/", "")
+                        .trim_end_matches(".EQ")
+                        .trim_end_matches(".eq")
+                        .to_ascii_uppercase();
+                    (key, p.clone())
+                })
+                .collect();
         }
         self.refresh_kraken_position_costs();
         for c in &mut self.charts {

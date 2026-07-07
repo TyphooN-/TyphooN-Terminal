@@ -327,7 +327,8 @@ pub struct TyphooNApp {
     pub(crate) kraken_account_trades: Vec<KrakenAccountTrades>,
     /// O(1) by-account_id lookup for Kraken per-account data to avoid linear finds.
     pub(crate) kraken_roster_by_id: std::collections::HashMap<String, AccountRosterEntry>,
-    pub(crate) kraken_account_positions_by_id: std::collections::HashMap<String, KrakenAccountPositions>,
+    pub(crate) kraken_account_positions_by_id:
+        std::collections::HashMap<String, KrakenAccountPositions>,
     pub(crate) kraken_account_orders_by_id: std::collections::HashMap<String, KrakenAccountOrders>,
     pub(crate) kraken_account_trades_by_id: std::collections::HashMap<String, KrakenAccountTrades>,
     pub(crate) kraken_enabled: bool,
@@ -335,6 +336,8 @@ pub struct TyphooNApp {
     pub(crate) kraken_pairs_requested: bool,
     pub(crate) kraken_futures_requested: bool,
     pub(crate) kraken_balances: Vec<(String, f64)>,
+    /// O(1) display/base asset membership for positive non-cash Kraken balances.
+    pub(crate) kraken_balance_assets_by_display: std::collections::HashSet<String>,
     pub(crate) show_kraken_spot_sell_dialog: bool,
     pub(crate) kraken_spot_sell_asset: String,
     pub(crate) kraken_spot_sell_pair: String,

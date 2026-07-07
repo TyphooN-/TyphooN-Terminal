@@ -2801,6 +2801,7 @@ impl TyphooNApp {
             kraken_pairs_requested: false,
             kraken_futures_requested: false,
             kraken_balances: Vec::new(),
+            kraken_balance_assets_by_display: std::collections::HashSet::new(),
             show_kraken_spot_sell_dialog: false,
             kraken_spot_sell_asset: String::new(),
             kraken_spot_sell_pair: String::new(),
