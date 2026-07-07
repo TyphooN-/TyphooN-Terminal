@@ -519,13 +519,11 @@ impl TyphooNApp {
                                 }
                                 if self.kraken_connected {
                                     let kraken_balance = self.kraken_usd_equivalent_balance();
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "[Kraken (Live) ${:.0}]",
-                                            kraken_balance
-                                        ))
-                                        .color(UP)
-                                        .small(),
+                                    render_account_chip(
+                                        ui,
+                                        format!("[Kraken (Live) ${:.0}]", kraken_balance),
+                                        UP,
+                                        matches!(self.primary_broker, OrderBroker::Kraken),
                                     );
                                 }
                                 if self.broker_connected && !self.alpaca_account_roster.is_empty() {
@@ -555,7 +553,9 @@ impl TyphooNApp {
                                                 egui::Color32::from_rgb(255, 80, 80),
                                             )
                                         };
-                                        render_account_chip(ui, text, color, account.is_primary);
+                                        let is_selected_primary = account.is_primary
+                                            && matches!(self.primary_broker, OrderBroker::Alpaca);
+                                        render_account_chip(ui, text, color, is_selected_primary);
                                     }
                                 } else if let Some(ref acct) = self.live_account {
                                     // Fallback while the pooled roster message is still in flight.
@@ -566,7 +566,7 @@ impl TyphooNApp {
                                         ui,
                                         format!("[Alpaca 1 ({}) ${:.0}]", mode, acct.equity),
                                         color,
-                                        true,
+                                        matches!(self.primary_broker, OrderBroker::Alpaca),
                                     );
                                 }
                             } else {
