@@ -53,7 +53,7 @@ pub fn compile_mql4(source: &str) -> CompileResult {
 /// Textual MQL4 → MQL5 rewrite. Returns the rewritten source plus any warnings
 /// produced when we detect constructs that cannot be auto-ported.
 pub fn rewrite_mql4_to_mql5(source: &str) -> (String, Vec<String>) {
-    let mut warnings = Vec::new();
+    let mut warnings = Mql4RewriteWarnings::default();
     let mut out = String::with_capacity(source.len() + 128);
 
     // Line-by-line rewrite so we don't mangle string literals or comments that
@@ -118,13 +118,46 @@ pub fn rewrite_mql4_to_mql5(source: &str) -> (String, Vec<String>) {
         out.push('\n');
     }
 
-    (out, warnings)
+    (out, warnings.messages)
+}
+
+#[derive(Default)]
+struct Mql4RewriteWarnings {
+    messages: Vec<String>,
+    order_send: bool,
+    order_select: bool,
+}
+
+impl Mql4RewriteWarnings {
+    fn push_order_send(&mut self) {
+        if self.order_send {
+            return;
+        }
+        self.order_send = true;
+        self.messages.push(
+            "MQL4 OrderSend(...) has no textual 1:1 port to MQL5. \
+             Rewrite to MqlTradeRequest + OrderSend(request, result) manually."
+                .into(),
+        );
+    }
+
+    fn push_order_select(&mut self) {
+        if self.order_select {
+            return;
+        }
+        self.order_select = true;
+        self.messages.push(
+            "MQL4 OrderSelect(...) has no textual 1:1 port to MQL5. \
+             Use PositionGetTicket / HistoryOrderGetTicket manually."
+                .into(),
+        );
+    }
 }
 
 /// Rewrite a single line. Splits the line into alternating code/string/line-comment
 /// spans and only applies the rewrites to the code spans — so user strings
 /// (`Print("Bid is ", Bid);`) and trailing comments are left verbatim.
-fn rewrite_line(line: &str, warnings: &mut Vec<String>) -> String {
+fn rewrite_line(line: &str, warnings: &mut Mql4RewriteWarnings) -> String {
     // Skip lines that are pure whitespace or comments — nothing to rewrite.
     let trimmed = line.trim_start();
     if trimmed.starts_with("//") || trimmed.is_empty() {
@@ -188,7 +221,7 @@ fn rewrite_line(line: &str, warnings: &mut Vec<String>) -> String {
 }
 
 /// Apply all MQL4 → MQL5 word rewrites to a pure-code fragment (no strings/comments inside).
-fn rewrite_code_segment(code: &str, warnings: &mut Vec<String>) -> String {
+fn rewrite_code_segment(code: &str, warnings: &mut Mql4RewriteWarnings) -> String {
     let mut out = code.to_string();
 
     // 1. `extern` → `input` (MQL4 uses extern for chart inputs)
@@ -237,22 +270,11 @@ fn rewrite_code_segment(code: &str, warnings: &mut Vec<String>) -> String {
     out = replace_word_not_followed_by_open_paren(&out, "Bars", "iBars(_Symbol,0)");
 
     // 8. Warn on OrderSend/OrderSelect — no textual port.
-    if out.contains("OrderSend(")
-        && !out.contains("MqlTradeRequest")
-        && !warnings.iter().any(|w| w.contains("OrderSend"))
-    {
-        warnings.push(
-            "MQL4 OrderSend(...) has no textual 1:1 port to MQL5. \
-             Rewrite to MqlTradeRequest + OrderSend(request, result) manually."
-                .into(),
-        );
+    if out.contains("OrderSend(") && !out.contains("MqlTradeRequest") {
+        warnings.push_order_send();
     }
-    if out.contains("OrderSelect(") && !warnings.iter().any(|w| w.contains("OrderSelect")) {
-        warnings.push(
-            "MQL4 OrderSelect(...) has no textual 1:1 port to MQL5. \
-             Use PositionGetTicket / HistoryOrderGetTicket manually."
-                .into(),
-        );
+    if out.contains("OrderSelect(") {
+        warnings.push_order_select();
     }
 
     out
@@ -445,7 +467,25 @@ mod tests {
     fn warns_on_ordersend() {
         let src = "int t = OrderSend(Symbol(),OP_BUY,1.0,Ask,3,0,0,\"x\",0,0,clrGreen);";
         let (_, warnings) = rewrite_mql4_to_mql5(src);
-        assert!(warnings.iter().any(|w| w.contains("OrderSend")));
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("OrderSend"));
+    }
+
+    #[test]
+    fn order_warnings_are_deduped_without_scanning_messages() {
+        let src = "OrderSend(a,b,c,d,e,f,g,h,i,j,k);\nOrderSend(a,b,c,d,e,f,g,h,i,j,k);\nOrderSelect(1, SELECT_BY_POS);\nOrderSelect(2, SELECT_BY_POS);";
+        let (_, warnings) = rewrite_mql4_to_mql5(src);
+        assert_eq!(
+            warnings.iter().filter(|w| w.contains("OrderSend")).count(),
+            1
+        );
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|w| w.contains("OrderSelect"))
+                .count(),
+            1
+        );
     }
 
     #[test]
