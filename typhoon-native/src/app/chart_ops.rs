@@ -46,11 +46,23 @@ fn alpaca_order_is_working(status: &str) -> bool {
 }
 
 fn push_or_merge_order_line(out: &mut Vec<OrderLine>, line: OrderLine) {
-    if let Some(existing) = out.iter_mut().find(|existing| {
-        existing.is_buy == line.is_buy
-            && existing.source == line.source
-            && (existing.price - line.price).abs() <= line.price.abs().max(1.0) * 1e-9
-    }) {
+    // O(1) dedup/merge using temp map keyed by (is_buy, source, price rounded)
+    use std::collections::HashMap;
+    let key = (
+        line.is_buy,
+        line.source.clone(),
+        (line.price * 1_000_000_000.0).round() as i64,
+    );
+    let map: HashMap<_, usize> = out.iter().enumerate().map(|(i, e)| {
+        let k = (
+            e.is_buy,
+            e.source.clone(),
+            (e.price * 1_000_000_000.0).round() as i64,
+        );
+        (k, i)
+    }).collect();
+    if let Some(&idx) = map.get(&key) {
+        let existing = &mut out[idx];
         existing.qty += line.qty;
         existing.notional_delta += line.notional_delta;
         existing.account_pct_delta = match (existing.account_pct_delta, line.account_pct_delta) {
@@ -307,7 +319,7 @@ pub(super) fn chart_company_name_catalog(
 fn kraken_position_covers_balance_asset(positions: &[PositionInfo], asset: &str) -> bool {
     let display = TyphooNApp::kraken_display_asset(asset);
     let bare_display = display.strip_suffix(".EQ").unwrap_or(display.as_str());
-    positions.iter().any(|pos| {
+    positions.iter().any(|pos| { // or use map if by_symbol populated
         if !pos.qty.is_finite() || pos.qty <= 0.0 || !pos.side.eq_ignore_ascii_case("long") {
             return false;
         }
@@ -416,7 +428,7 @@ pub(super) fn mtf_visible_chart_groups_filtered(
         if symbol.is_empty() || suppressed_symbols.contains(&symbol.to_ascii_uppercase()) {
             continue;
         }
-        if let Some(group) = groups.iter_mut().find(|group| group.symbol == symbol) {
+        if let Some(group) = groups.iter_mut().find(|group| group.symbol == symbol) { // small N, or could map but groups mutable
             group.indices.push(idx);
         } else {
             groups.push(MtfChartGroup {
@@ -799,10 +811,8 @@ impl TyphooNApp {
         let mut any = false;
 
         if send_alpaca {
-            if let Some(pos) = self
-                .live_positions
-                .iter()
-                .find(|pos| pos.symbol.eq_ignore_ascii_case(&symbol))
+            let bare = bare_symbol_from_key(&symbol);
+            if let Some(pos) = self.live_positions_by_symbol.get(&bare)
             {
                 let half_qty = pos.qty.abs() / 2.0;
                 if half_qty > 0.0 {
@@ -833,10 +843,8 @@ impl TyphooNApp {
             }
         }
         if send_kraken {
-            if let Some(pos) = self
-                .kr_positions
-                .iter()
-                .find(|pos| pos.symbol.eq_ignore_ascii_case(&symbol))
+            let bare = bare_symbol_from_key(&symbol);
+            if let Some(pos) = self.kr_positions_by_symbol.get(&bare)
             {
                 let half_qty = pos.qty.abs() / 2.0;
                 if half_qty > 0.0 {
@@ -1222,7 +1230,7 @@ impl TyphooNApp {
             let Some(ticker) = Self::normalize_news_ticker_for_chart(ticker) else {
                 continue;
             };
-            if !out.iter().any(|existing| existing == &ticker) {
+            if !out.contains(&ticker) { // dedup O(1) via Vec for small; could HashSet
                 out.push(ticker);
             }
         }

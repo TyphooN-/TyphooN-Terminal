@@ -105,11 +105,8 @@ impl TyphooNApp {
         if self.recent_fills.is_empty() && self.alpaca_account_roster.is_empty() {
             return Vec::new();
         }
-        let primary = self
-            .alpaca_account_roster
-            .iter()
-            .find(|account| account.is_primary)
-            .cloned();
+        let primary = self.alpaca_roster_by_id.get(&self.alpaca_primary_account_id).cloned()
+            .or_else(|| self.alpaca_account_roster.iter().find(|a| a.is_primary).cloned());
         vec![FillAccountRows {
             account_id: primary
                 .as_ref()
@@ -148,11 +145,8 @@ impl TyphooNApp {
         if self.kraken_trades.is_empty() && self.kraken_account_roster.is_empty() {
             return Vec::new();
         }
-        let primary = self
-            .kraken_account_roster
-            .iter()
-            .find(|account| account.is_primary)
-            .cloned();
+        let primary = self.kraken_roster_by_id.get(&self.kraken_primary_account_id).cloned()
+            .or_else(|| self.kraken_account_roster.iter().find(|a| a.is_primary).cloned());
         vec![FillAccountRows {
             account_id: primary
                 .as_ref()

@@ -34,7 +34,8 @@ impl TyphooNApp {
             return;
         }
         self.positions_last_update_ts = chrono::Utc::now().timestamp();
-        if let Some(primary) = accounts.iter().find(|account| account.is_primary) {
+        let positions_map: std::collections::HashMap<_, _> = accounts.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
+        if let Some(primary) = positions_map.get(&self.alpaca_primary_account_id).or_else(|| accounts.iter().find(|a| a.is_primary)) { // prefer primary_id map; fallback for legacy
             if let Ok(json) = serde_json::to_string(&primary.positions) {
                 self.put_kv_dedup("broker:positions", &json);
             }
@@ -45,6 +46,7 @@ impl TyphooNApp {
             }).collect();
         }
         self.alpaca_account_positions = accounts;
+        self.alpaca_account_positions_by_id = self.alpaca_account_positions.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
     }
 
     pub(super) fn handle_alpaca_all_assets(&mut self, assets: Vec<AssetRow>) {
@@ -70,10 +72,12 @@ impl TyphooNApp {
         if !self.alpaca_enabled {
             return;
         }
-        if let Some(primary) = accounts.iter().find(|account| account.is_primary) {
+        let positions_map: std::collections::HashMap<_, _> = accounts.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
+        if let Some(primary) = positions_map.get(&self.alpaca_primary_account_id).or_else(|| accounts.iter().find(|a| a.is_primary)) { // prefer primary_id map; fallback for legacy
             self.recent_fills = primary.fills.clone();
         }
         self.alpaca_account_fills = accounts;
+        self.alpaca_account_fills_by_id = self.alpaca_account_fills.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
         for c in &mut self.charts {
             c.cached_trade_overlay_frame = 0;
         }
@@ -96,10 +100,12 @@ impl TyphooNApp {
             return;
         }
         self.orders_last_update_ts = chrono::Utc::now().timestamp();
-        if let Some(primary) = accounts.iter().find(|account| account.is_primary) {
+        let positions_map: std::collections::HashMap<_, _> = accounts.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
+        if let Some(primary) = positions_map.get(&self.alpaca_primary_account_id).or_else(|| accounts.iter().find(|a| a.is_primary)) { // prefer primary_id map; fallback for legacy
             self.live_orders = primary.orders.clone();
             self.live_orders_by_id = self.live_orders.iter().map(|o| (o.id.clone(), o.clone())).collect();
         }
         self.alpaca_account_orders = accounts;
+        self.alpaca_account_orders_by_id = self.alpaca_account_orders.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
     }
 }

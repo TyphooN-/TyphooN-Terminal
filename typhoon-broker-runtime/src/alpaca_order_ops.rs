@@ -374,11 +374,8 @@ pub async fn handle_alpaca_order_command(
                     for _ in 0..12 {
                         match b.get_positions().await {
                             Ok(positions) => {
-                                if positions.iter().any(|p| {
-                                    p.symbol.eq_ignore_ascii_case(&symbol)
-                                        && p.qty.abs() > 0.0
-                                        && p.qty.abs() <= max_qty + 1e-8
-                                }) {
+                                let has_sym = positions.iter().any(|p| p.symbol.eq_ignore_ascii_case(&symbol) && p.qty.abs() > 0.0);
+                                if has_sym && positions.iter().any(|p| p.symbol.eq_ignore_ascii_case(&symbol) && p.qty.abs() <= max_qty + 1e-8) {
                                     ready = true;
                                     break;
                                 }
