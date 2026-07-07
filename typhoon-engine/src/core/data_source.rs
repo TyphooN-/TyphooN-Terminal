@@ -49,6 +49,10 @@ pub struct SymbolOverride {
 pub struct DataSourceManager {
     /// Registered data sources in default priority order.
     pub sources: Vec<DataSourceEntry>,
+    /// O(1) lookup by source id (replaces repeated linear .find/.position).
+    /// Rebuilt on construction and after structural changes.
+    #[serde(skip)]
+    pub sources_by_id: std::collections::HashMap<String, usize>,
     /// Per-symbol routing overrides (checked before default priority).
     pub overrides: Vec<SymbolOverride>,
     /// Health timeout: source marked unhealthy after this many seconds without data.
@@ -57,56 +61,74 @@ pub struct DataSourceManager {
 
 impl Default for DataSourceManager {
     fn default() -> Self {
-        Self {
-            sources: vec![
-                DataSourceEntry {
-                    id: "kraken".into(),
-                    cache_prefix: "kraken".into(),
-                    label: "Kraken".into(),
-                    priority: 2,
-                    healthy: true,
-                    last_success_ts: 0,
-                    asset_classes: vec!["crypto".into(), "tokenized_equity".into(), "etf".into()],
-                },
-                DataSourceEntry {
-                    id: "kraken-futures".into(),
-                    cache_prefix: "kraken-futures".into(),
-                    label: "Kraken Futures".into(),
-                    priority: 3,
-                    healthy: true,
-                    last_success_ts: 0,
-                    asset_classes: vec!["crypto_futures".into(), "futures".into()],
-                },
-                DataSourceEntry {
-                    id: "alpaca".into(),
-                    cache_prefix: "alpaca".into(),
-                    label: "Alpaca (delayed fallback)".into(),
-                    priority: 6,
-                    healthy: true,
-                    last_success_ts: 0,
-                    asset_classes: vec!["equity".into()],
-                },
-            ],
+        let sources = vec![
+            DataSourceEntry {
+                id: "kraken".into(),
+                cache_prefix: "kraken".into(),
+                label: "Kraken".into(),
+                priority: 2,
+                healthy: true,
+                last_success_ts: 0,
+                asset_classes: vec!["crypto".into(), "tokenized_equity".into(), "etf".into()],
+            },
+            DataSourceEntry {
+                id: "kraken-futures".into(),
+                cache_prefix: "kraken-futures".into(),
+                label: "Kraken Futures".into(),
+                priority: 3,
+                healthy: true,
+                last_success_ts: 0,
+                asset_classes: vec!["crypto_futures".into(), "futures".into()],
+            },
+            DataSourceEntry {
+                id: "alpaca".into(),
+                cache_prefix: "alpaca".into(),
+                label: "Alpaca (delayed fallback)".into(),
+                priority: 6,
+                healthy: true,
+                last_success_ts: 0,
+                asset_classes: vec!["equity".into()],
+            },
+        ];
+        let mut mgr = Self {
+            sources,
+            sources_by_id: std::collections::HashMap::new(),
             overrides: Vec::new(),
             health_timeout_secs: 900, // 15 minutes
-        }
+        };
+        mgr.rebuild_sources_index();
+        mgr
     }
 }
 
 impl DataSourceManager {
+    fn rebuild_sources_index(&mut self) {
+        self.sources_by_id = self.sources
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.id.clone(), i))
+            .collect();
+    }
+
     /// Record a successful data delivery from a source.
     pub fn mark_success(&mut self, source_id: &str) {
         let now = chrono::Utc::now().timestamp();
-        if let Some(s) = self.sources.iter_mut().find(|s| s.id == source_id) {
-            s.healthy = true;
-            s.last_success_ts = now;
+        if self.sources_by_id.is_empty() { self.rebuild_sources_index(); }
+        if let Some(&idx) = self.sources_by_id.get(source_id) {
+            if let Some(s) = self.sources.get_mut(idx) {
+                s.healthy = true;
+                s.last_success_ts = now;
+            }
         }
     }
 
     /// Record a failed data delivery from a source.
     pub fn mark_failure(&mut self, source_id: &str) {
-        if let Some(s) = self.sources.iter_mut().find(|s| s.id == source_id) {
-            s.healthy = false;
+        if self.sources_by_id.is_empty() { self.rebuild_sources_index(); }
+        if let Some(&idx) = self.sources_by_id.get(source_id) {
+            if let Some(s) = self.sources.get_mut(idx) {
+                s.healthy = false;
+            }
         }
     }
 
@@ -128,6 +150,11 @@ impl DataSourceManager {
         let sym_upper = symbol.to_uppercase();
 
         // Check per-symbol overrides first
+        let src_by_id: std::collections::HashMap<String, usize> = if self.sources_by_id.is_empty() {
+            self.sources.iter().enumerate().map(|(i, s)| (s.id.clone(), i)).collect()
+        } else {
+            self.sources_by_id.clone()
+        };
         let override_sources = self.overrides.iter().find(|o| {
             let pat = o.pattern.to_uppercase();
             if pat.ends_with('*') {
@@ -141,7 +168,7 @@ impl DataSourceManager {
             // Use override ordering
             ovr.sources
                 .iter()
-                .filter_map(|id| self.sources.iter().find(|s| s.id == *id))
+                .filter_map(|id| src_by_id.get(id).and_then(|&i| self.sources.get(i)))
                 .collect()
         } else {
             // Default priority ordering

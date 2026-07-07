@@ -54,10 +54,12 @@ impl TyphooNApp {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
         }
-        if let Some(primary) = accounts.iter().find(|account| account.is_primary) {
+        let acc_map: std::collections::HashMap<_, _> = accounts.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
+        if let Some(primary) = acc_map.get(&self.kraken_primary_account_id).or_else(|| accounts.iter().find(|a| a.is_primary)) {
             self.handle_kraken_trades(primary.trades.clone());
         }
         self.kraken_account_trades = accounts;
+        self.kraken_account_trades_by_id = self.kraken_account_trades.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
     }
 
     pub(super) fn handle_kraken_live_trade(&mut self, trade: KrakenTrade) {
@@ -109,7 +111,8 @@ impl TyphooNApp {
             return;
         }
         self.positions_last_update_ts = chrono::Utc::now().timestamp();
-        if let Some(primary) = accounts.iter().find(|account| account.is_primary) {
+        let acc_map: std::collections::HashMap<_, _> = accounts.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
+        if let Some(primary) = acc_map.get(&self.kraken_primary_account_id).or_else(|| accounts.iter().find(|a| a.is_primary)) {
             self.kr_positions = primary.positions.clone();
             self.kr_positions_by_symbol = self.kr_positions.iter().map(|p| {
                 let key = bare_symbol_from_key(&p.symbol).replace("/", "").trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
@@ -117,6 +120,7 @@ impl TyphooNApp {
             }).collect();
         }
         self.kraken_account_positions = accounts;
+        self.kraken_account_positions_by_id = self.kraken_account_positions.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
         self.refresh_kraken_position_costs();
         for c in &mut self.charts {
             c.cached_trade_overlay_frame = 0;
@@ -169,9 +173,11 @@ impl TyphooNApp {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
         }
-        if let Some(primary) = accounts.iter().find(|account| account.is_primary) {
+        let acc_map: std::collections::HashMap<_, _> = accounts.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
+        if let Some(primary) = acc_map.get(&self.kraken_primary_account_id).or_else(|| accounts.iter().find(|a| a.is_primary)) {
             self.kraken_open_orders = primary.orders.clone();
         }
         self.kraken_account_orders = accounts;
+        self.kraken_account_orders_by_id = self.kraken_account_orders.iter().map(|a| (a.account_id.clone(), a.clone())).collect();
     }
 }

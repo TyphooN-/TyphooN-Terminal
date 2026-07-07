@@ -1030,16 +1030,15 @@ pub fn delete_equity_bar_cache_for_symbol_conn(
         return Ok(0);
     }
 
-    let mut variants = Vec::new();
+    let mut variants_set = std::collections::HashSet::new();
     for candidate in [raw.as_str(), bare.as_str()] {
-        if !candidate.is_empty() && !variants.iter().any(|v: &String| v == candidate) {
-            variants.push(candidate.to_string());
+        if !candidate.is_empty() {
+            variants_set.insert(candidate.to_string());
         }
     }
     let eq_variant = format!("{bare}.EQ");
-    if !variants.iter().any(|v| v == &eq_variant) {
-        variants.push(eq_variant);
-    }
+    variants_set.insert(eq_variant);
+    let variants: Vec<String> = variants_set.into_iter().collect();
 
     let prefixes = [
         "merged",

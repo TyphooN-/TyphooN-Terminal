@@ -38,6 +38,8 @@ pub struct AlpacaAccountPool {
     /// Precomputed indices of connected data_sync_enabled accounts for O(1)
     /// round-robin in next_data_broker (avoids per-call filter/collect over Vec).
     data_indices: Vec<usize>,
+    /// Precomputed indices of connected accounts for O(1) is_empty/connected checks.
+    connected_indices: Vec<usize>,
     mirror_orders: bool,
     /// Explicit opt-in set for live order mirroring (TradeCopy window
     /// checkboxes). Always starts empty — never persisted.
@@ -46,6 +48,10 @@ pub struct AlpacaAccountPool {
 
 impl AlpacaAccountPool {
     pub fn new(accounts: Vec<AlpacaAccountHandle>, primary_id: &str) -> Self {
+        let mut id_to_idx = HashMap::with_capacity(accounts.len());
+        for (i, a) in accounts.iter().enumerate() {
+            id_to_idx.insert(a.spec.id.clone(), i);
+        }
         let primary_idx = accounts
             .iter()
             .position(|a| a.spec.id == primary_id && a.connected)
@@ -58,19 +64,23 @@ impl AlpacaAccountPool {
         let data_indices: Vec<usize> = (0..accounts.len())
             .filter(|&i| accounts[i].connected && accounts[i].spec.data_sync_enabled)
             .collect();
+        let connected_indices: Vec<usize> = (0..accounts.len())
+            .filter(|&i| accounts[i].connected)
+            .collect();
         Self {
             accounts,
             id_to_idx,
             primary_idx,
             data_cursor: Arc::new(AtomicUsize::new(0)),
             data_indices,
+            connected_indices,
             mirror_orders: false,
             mirror_target_ids: std::collections::BTreeSet::new(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        !self.accounts.iter().any(|a| a.connected)
+        self.connected_indices.is_empty()
     }
 
     /// Trading / account-data client (the account the UI is "on").
@@ -200,6 +210,8 @@ pub struct KrakenAccountPool {
     /// first (kraken1) account only; other accounts authenticate WS with their
     /// REST keys.
     ws_override: Option<(String, String)>,
+    /// Precomputed indices of connected accounts for O(1) checks.
+    connected_indices: Vec<usize>,
 }
 
 impl KrakenAccountPool {
@@ -213,11 +225,15 @@ impl KrakenAccountPool {
         for (i, a) in accounts.iter().enumerate() {
             id_to_idx.insert(a.spec.id.clone(), i);
         }
+        let connected_indices: Vec<usize> = (0..accounts.len())
+            .filter(|&i| accounts[i].connected)
+            .collect();
         Self {
             accounts,
             id_to_idx,
             primary_idx,
             ws_override: None,
+            connected_indices,
         }
     }
 
@@ -225,6 +241,10 @@ impl KrakenAccountPool {
         if !ws_key.trim().is_empty() && !ws_secret.trim().is_empty() {
             self.ws_override = Some((ws_key, ws_secret));
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.connected_indices.is_empty()
     }
 
     /// Key pair the WS-token broker should use for the current primary: the

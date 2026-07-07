@@ -300,6 +300,11 @@ pub struct TyphooNApp {
     /// Recent fills grouped per connected Alpaca account. `recent_fills`
     /// remains the primary-account compatibility view for chart overlays.
     pub(crate) alpaca_account_fills: Vec<AccountFills>,
+    /// O(1) by-account_id lookup for rosters/positions/orders/fills to avoid repeated linear .find on Vecs.
+    pub(crate) alpaca_roster_by_id: std::collections::HashMap<String, AccountRosterEntry>,
+    pub(crate) alpaca_account_positions_by_id: std::collections::HashMap<String, AccountPositions>,
+    pub(crate) alpaca_account_orders_by_id: std::collections::HashMap<String, AccountOrders>,
+    pub(crate) alpaca_account_fills_by_id: std::collections::HashMap<String, AccountFills>,
     /// Full bar-sync controls are deliberately separate from broker login.
     /// Off = light mode: account/trading plus targeted fetches for open charts,
     /// owned positions, open-order symbols, and the user's watchlist.
@@ -320,6 +325,11 @@ pub struct TyphooNApp {
     pub(crate) kraken_account_positions: Vec<KrakenAccountPositions>,
     pub(crate) kraken_account_orders: Vec<KrakenAccountOrders>,
     pub(crate) kraken_account_trades: Vec<KrakenAccountTrades>,
+    /// O(1) by-account_id lookup for Kraken per-account data to avoid linear finds.
+    pub(crate) kraken_roster_by_id: std::collections::HashMap<String, AccountRosterEntry>,
+    pub(crate) kraken_account_positions_by_id: std::collections::HashMap<String, KrakenAccountPositions>,
+    pub(crate) kraken_account_orders_by_id: std::collections::HashMap<String, KrakenAccountOrders>,
+    pub(crate) kraken_account_trades_by_id: std::collections::HashMap<String, KrakenAccountTrades>,
     pub(crate) kraken_enabled: bool,
     pub(crate) kraken_connected: bool,
     pub(crate) kraken_pairs_requested: bool,
@@ -3571,6 +3581,10 @@ pub struct TyphooNApp {
     /// Live positions.
     pub(crate) live_positions: Vec<PositionInfo>,
     pub(crate) kr_positions: Vec<PositionInfo>,
+    /// O(1) symbol lookup for primary Alpaca positions (maintained alongside Vec for render/iteration order + hot paths).
+    pub(crate) live_positions_by_symbol: std::collections::HashMap<String, PositionInfo>,
+    /// O(1) symbol lookup for Kraken positions.
+    pub(crate) kr_positions_by_symbol: std::collections::HashMap<String, PositionInfo>,
     pub(crate) kraken_equity_quote_meta: std::collections::BTreeMap<String, KrakenEquityQuoteMeta>,
     /// Position visibility toggles (still synced, just hidden in UI)
     pub(crate) show_alpaca_positions: bool,
@@ -3589,6 +3603,8 @@ pub struct TyphooNApp {
     pub(crate) show_kraken_open_orders: bool,
     /// Live orders.
     pub(crate) live_orders: Vec<OrderInfo>,
+    /// O(1) id lookup for live orders.
+    pub(crate) live_orders_by_id: std::collections::HashMap<String, OrderInfo>,
 
     // ── right panel state (WebKit parity) ─────────────────────────────
     /// Active right panel tab (kept for session compat).
