@@ -645,13 +645,19 @@ pub async fn fetch_stock_splits(
 
     match fetch_yahoo_stock_splits(client, symbol).await {
         Ok(yahoo_rows) => {
+            let split_key = |date: &str, numerator: f64, denominator: f64| {
+                (
+                    date.to_string(),
+                    (numerator * 1_000_000_000.0).round() as i64,
+                    (denominator * 1_000_000_000.0).round() as i64,
+                )
+            };
+            let mut seen: std::collections::HashSet<(String, i64, i64)> = rows
+                .iter()
+                .map(|old: &StockSplit| split_key(&old.date, old.numerator, old.denominator))
+                .collect();
             for split in yahoo_rows {
-                let exists = rows.iter().any(|old: &StockSplit| {
-                    old.date == split.date
-                        && (old.numerator - split.numerator).abs() < 1e-9
-                        && (old.denominator - split.denominator).abs() < 1e-9
-                });
-                if !exists {
+                if seen.insert(split_key(&split.date, split.numerator, split.denominator)) {
                     rows.push(split);
                 }
             }

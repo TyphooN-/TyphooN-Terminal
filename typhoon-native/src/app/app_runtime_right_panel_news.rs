@@ -152,15 +152,14 @@ impl TyphooNApp {
                                 a.provider.clone()
                             };
                             let mut tickers = Vec::new();
+                            let mut ticker_seen = std::collections::HashSet::new();
                             let primary = a.symbol.trim().to_uppercase();
-                            if !primary.is_empty() {
+                            if !primary.is_empty() && ticker_seen.insert(primary.clone()) {
                                 tickers.push(primary);
                             }
                             for ticker in &a.tickers {
                                 let ticker = ticker.trim().to_uppercase();
-                                if !ticker.is_empty()
-                                    && !tickers.iter().any(|t| t == &ticker)
-                                {
+                                if !ticker.is_empty() && ticker_seen.insert(ticker.clone()) {
                                     tickers.push(ticker);
                                 }
                             }

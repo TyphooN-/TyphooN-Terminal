@@ -1345,9 +1345,19 @@ impl TyphooNApp {
     pub(super) fn trade_symbol_spec(&self, symbol: &str, last_price: f64) -> risk::SymbolSpec {
         let uses_whole_units = false;
         let upper = symbol.to_ascii_uppercase();
-        let upper_key = bare_symbol_from_key(symbol).replace("/", "").trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
-        let known_crypto = self.live_positions_by_symbol.get(&upper_key).map_or(false, |p| p.asset_class.eq_ignore_ascii_case("crypto"))
-            || self.kr_positions_by_symbol.get(&upper_key).map_or(false, |p| p.asset_class.eq_ignore_ascii_case("crypto"));
+        let upper_key = bare_symbol_from_key(symbol)
+            .replace("/", "")
+            .trim_end_matches(".EQ")
+            .trim_end_matches(".eq")
+            .to_ascii_uppercase();
+        let known_crypto = self
+            .live_positions_by_symbol
+            .get(&upper_key)
+            .map_or(false, |p| p.asset_class.eq_ignore_ascii_case("crypto"))
+            || self
+                .kr_positions_by_symbol
+                .get(&upper_key)
+                .map_or(false, |p| p.asset_class.eq_ignore_ascii_case("crypto"));
         let is_crypto = matches!(self.order_broker, OrderBroker::Kraken)
             || known_crypto
             || (upper.ends_with("USD") && upper.len() > 5 && !uses_whole_units);
@@ -1829,8 +1839,9 @@ impl TyphooNApp {
         let cache = self.cache.as_ref()?;
         let timeframes = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day"];
         let mut symbols = Vec::new();
+        let mut seen_symbols = std::collections::HashSet::new();
         let mut push_symbol = |candidate: String| {
-            if !candidate.is_empty() && !symbols.iter().any(|s| s == &candidate) {
+            if !candidate.is_empty() && seen_symbols.insert(candidate.clone()) {
                 symbols.push(candidate);
             }
         };
@@ -1956,9 +1967,10 @@ impl TyphooNApp {
         ];
         let sources = self.latest_cached_equity_price_sources();
         let mut symbols = Vec::new();
+        let mut seen_symbols = std::collections::HashSet::new();
         let mut push_symbol = |candidate: String| {
             let candidate = candidate.trim().replace('/', "").to_ascii_uppercase();
-            if !candidate.is_empty() && !symbols.iter().any(|s| s == &candidate) {
+            if !candidate.is_empty() && seen_symbols.insert(candidate.clone()) {
                 symbols.push(candidate);
             }
         };
@@ -2662,9 +2674,21 @@ impl TyphooNApp {
                 }
         };
         let (send_alpaca, send_kraken) = self.selected_live_broker_targets();
-        let key = bare_symbol_from_key(symbol).replace("/", "").trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
-        let alpaca_has = send_alpaca && self.live_positions_by_symbol.get(&key).map_or(false, same_side);
-        let kr_has = send_kraken && self.kr_positions_by_symbol.get(&key).map_or(false, same_side);
+        let key = bare_symbol_from_key(symbol)
+            .replace("/", "")
+            .trim_end_matches(".EQ")
+            .trim_end_matches(".eq")
+            .to_ascii_uppercase();
+        let alpaca_has = send_alpaca
+            && self
+                .live_positions_by_symbol
+                .get(&key)
+                .map_or(false, same_side);
+        let kr_has = send_kraken
+            && self
+                .kr_positions_by_symbol
+                .get(&key)
+                .map_or(false, same_side);
         (alpaca_has || kr_has)
             || (send_kraken && wants_long && self.kraken_spot_balance_for_pair(symbol).is_some())
     }
@@ -2687,9 +2711,21 @@ impl TyphooNApp {
                 && (pos.avg_entry_price - sl).abs() <= tick_size * 0.5
         };
         let (send_alpaca, send_kraken) = self.selected_live_broker_targets();
-        let key = bare_symbol_from_key(symbol).replace("/", "").trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
-        let alpaca_be = send_alpaca && self.live_positions_by_symbol.get(&key).map_or(false, at_break_even);
-        let kr_be = send_kraken && self.kr_positions_by_symbol.get(&key).map_or(false, at_break_even);
+        let key = bare_symbol_from_key(symbol)
+            .replace("/", "")
+            .trim_end_matches(".EQ")
+            .trim_end_matches(".eq")
+            .to_ascii_uppercase();
+        let alpaca_be = send_alpaca
+            && self
+                .live_positions_by_symbol
+                .get(&key)
+                .map_or(false, at_break_even);
+        let kr_be = send_kraken
+            && self
+                .kr_positions_by_symbol
+                .get(&key)
+                .map_or(false, at_break_even);
         (alpaca_be || kr_be)
             || (send_kraken
                 && wants_long
@@ -2715,7 +2751,11 @@ impl TyphooNApp {
             return;
         };
         let mut any = false;
-        let key = bare_symbol_from_key(&symbol).replace("/", "").trim_end_matches(".EQ").trim_end_matches(".eq").to_ascii_uppercase();
+        let key = bare_symbol_from_key(&symbol)
+            .replace("/", "")
+            .trim_end_matches(".EQ")
+            .trim_end_matches(".eq")
+            .to_ascii_uppercase();
         if send_alpaca && self.live_positions_by_symbol.contains_key(&key) {
             let _ = self.broker_tx.send(BrokerCmd::ClosePosition {
                 symbol: symbol.clone(),

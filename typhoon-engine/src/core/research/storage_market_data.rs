@@ -323,6 +323,17 @@ fn stock_splits_need_bar_cache_invalidation_at(
     incoming: &[StockSplit],
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
+    let split_key = |date: &str, numerator: f64, denominator: f64| {
+        (
+            date.to_string(),
+            (numerator * 1_000_000_000.0).round() as i64,
+            (denominator * 1_000_000_000.0).round() as i64,
+        )
+    };
+    let existing_keys: std::collections::HashSet<(String, i64, i64)> = existing
+        .iter()
+        .map(|old| split_key(&old.date, old.numerator, old.denominator))
+        .collect();
     incoming.iter().any(|split| {
         if split.numerator <= 0.0 || split.denominator <= 0.0 {
             return false;
@@ -342,11 +353,7 @@ fn stock_splits_need_bar_cache_invalidation_at(
         if !(0..=SPLIT_INVALIDATION_MAX_AGE_DAYS).contains(&age_days) {
             return false;
         }
-        !existing.iter().any(|old| {
-            old.date == split.date
-                && (old.numerator - split.numerator).abs() < 1e-9
-                && (old.denominator - split.denominator).abs() < 1e-9
-        })
+        !existing_keys.contains(&split_key(&split.date, split.numerator, split.denominator))
     })
 }
 

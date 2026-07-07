@@ -52,20 +52,20 @@ impl AlpacaAccountPool {
         for (i, a) in accounts.iter().enumerate() {
             id_to_idx.insert(a.spec.id.clone(), i);
         }
-        let primary_idx = if let Some(&idx) = id_to_idx.get(primary_id) {
-            if accounts[idx].connected { idx } else { accounts.iter().position(|a| a.connected).unwrap_or(0) }
-        } else {
-            accounts.iter().position(|a| a.connected).unwrap_or(0)
-        };
-        let mut id_to_idx = HashMap::with_capacity(accounts.len());
-        for (i, a) in accounts.iter().enumerate() {
-            id_to_idx.insert(a.spec.id.clone(), i);
-        }
-        let data_indices: Vec<usize> = (0..accounts.len())
-            .filter(|&i| accounts[i].connected && accounts[i].spec.data_sync_enabled)
-            .collect();
         let connected_indices: Vec<usize> = (0..accounts.len())
             .filter(|&i| accounts[i].connected)
+            .collect();
+        let primary_idx = if let Some(&idx) = id_to_idx.get(primary_id) {
+            if accounts[idx].connected {
+                idx
+            } else {
+                connected_indices.first().copied().unwrap_or(0)
+            }
+        } else {
+            connected_indices.first().copied().unwrap_or(0)
+        };
+        let data_indices: Vec<usize> = (0..accounts.len())
+            .filter(|&i| accounts[i].connected && accounts[i].spec.data_sync_enabled)
             .collect();
         Self {
             accounts,
@@ -146,9 +146,9 @@ impl AlpacaAccountPool {
     }
 
     pub fn broker_by_id(&self, account_id: &str) -> Option<&AlpacaAccountHandle> {
-        self.id_to_idx.get(account_id).and_then(|&idx| {
-            self.accounts.get(idx).filter(|a| a.connected)
-        })
+        self.id_to_idx
+            .get(account_id)
+            .and_then(|&idx| self.accounts.get(idx).filter(|a| a.connected))
     }
 
     pub fn connected_accounts(&self) -> impl Iterator<Item = (usize, &AlpacaAccountHandle)> {
@@ -216,11 +216,6 @@ pub struct KrakenAccountPool {
 
 impl KrakenAccountPool {
     pub fn new(accounts: Vec<KrakenAccountHandle>, primary_id: &str) -> Self {
-        let primary_idx = accounts
-            .iter()
-            .position(|a| a.spec.id == primary_id && a.connected)
-            .or_else(|| accounts.iter().position(|a| a.connected))
-            .unwrap_or(0);
         let mut id_to_idx = HashMap::with_capacity(accounts.len());
         for (i, a) in accounts.iter().enumerate() {
             id_to_idx.insert(a.spec.id.clone(), i);
@@ -228,6 +223,15 @@ impl KrakenAccountPool {
         let connected_indices: Vec<usize> = (0..accounts.len())
             .filter(|&i| accounts[i].connected)
             .collect();
+        let primary_idx = if let Some(&idx) = id_to_idx.get(primary_id) {
+            if accounts[idx].connected {
+                idx
+            } else {
+                connected_indices.first().copied().unwrap_or(0)
+            }
+        } else {
+            connected_indices.first().copied().unwrap_or(0)
+        };
         Self {
             accounts,
             id_to_idx,
@@ -273,9 +277,9 @@ impl KrakenAccountPool {
     }
 
     pub fn broker_by_id(&self, account_id: &str) -> Option<&KrakenAccountHandle> {
-        self.id_to_idx.get(account_id).and_then(|&idx| {
-            self.accounts.get(idx).filter(|a| a.connected)
-        })
+        self.id_to_idx
+            .get(account_id)
+            .and_then(|&idx| self.accounts.get(idx).filter(|a| a.connected))
     }
 
     pub fn connected_accounts(&self) -> impl Iterator<Item = (usize, &KrakenAccountHandle)> {

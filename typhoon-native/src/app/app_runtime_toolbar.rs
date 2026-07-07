@@ -78,12 +78,14 @@ impl TyphooNApp {
                                 self.symbol_ac_selected = 0;
                                 // Build suggestions from cache keys + fundamentals
                                 let mut suggestions = Vec::new();
+                                let mut suggestion_keys = std::collections::HashSet::new();
                                 // From fundamentals (has company name + sector).
                                 // f.symbol is guaranteed uppercase (parse_yahoo_data), so skip the alloc.
                                 for f in &self.bg.all_fundamentals {
                                     if f.symbol.contains(&query)
                                         || f.company_name.to_uppercase().contains(&query)
                                     {
+                                        suggestion_keys.insert(f.symbol.replace('/', "").to_ascii_uppercase());
                                         suggestions.push((
                                             f.symbol.clone(),
                                             f.company_name.clone(),
@@ -97,9 +99,7 @@ impl TyphooNApp {
                                 for sym in &self.cached_active_symbols {
                                     let sym_norm = sym.replace('/', "").to_uppercase();
                                     if sym_norm.contains(&query_norm)
-                                        && !suggestions
-                                            .iter()
-                                            .any(|(s, _, _)| s.replace('/', "").to_uppercase() == sym_norm)
+                                        && suggestion_keys.insert(sym_norm.clone())
                                     {
                                         let class = if sym_norm.ends_with("USD")
                                             && !sym_norm.contains('.')
@@ -118,11 +118,8 @@ impl TyphooNApp {
                                 // and opening the chart queues on-demand bar sync.
                                 if self.kraken_enabled && self.kraken_scrape_xstocks {
                                     for sym in &self.kraken_equity_universe_symbols {
-                                        if sym.contains(&query)
-                                            && !suggestions
-                                                .iter()
-                                                .any(|(s, _, _)| s.eq_ignore_ascii_case(sym))
-                                        {
+                                        let sym_key = sym.replace('/', "").to_ascii_uppercase();
+                                        if sym.contains(&query) && suggestion_keys.insert(sym_key) {
                                             suggestions.push((
                                                 sym.clone(),
                                                 "Kraken Securities".to_string(),
@@ -136,7 +133,7 @@ impl TyphooNApp {
                                     let pn = pair_name.to_uppercase();
                                     let dn = display_name.to_uppercase();
                                     if pn.contains(&query) || dn.contains(&query) {
-                                        if !suggestions.iter().any(|(s, _, _)| s.to_uppercase() == pn) {
+                                        if suggestion_keys.insert(pn.clone()) {
                                             suggestions.push((
                                                 display_name.clone(),
                                                 pair_name.clone(),

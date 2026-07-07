@@ -243,14 +243,18 @@ impl TyphooNApp {
             }
         }
 
-        let watchlist_updates_position = row_symbols.iter().any(|rs| {
-            self.kr_positions_by_symbol.contains_key(rs) || self.kr_positions_by_symbol.values().any(|pos| {
-                let asset = normalize_quote_symbol(
-                    pos.asset_id.rsplit(':').next().unwrap_or(pos.asset_id.as_str()),
-                );
-                rs == &asset
-            })
-        });
+        let mut held_position_keys: std::collections::HashSet<String> =
+            self.kr_positions_by_symbol.keys().cloned().collect();
+        held_position_keys.extend(self.kr_positions_by_symbol.values().map(|pos| {
+            normalize_quote_symbol(
+                pos.asset_id
+                    .rsplit(':')
+                    .next()
+                    .unwrap_or(pos.asset_id.as_str()),
+            )
+        }));
+        let watchlist_updates_position =
+            row_symbols.iter().any(|rs| held_position_keys.contains(rs));
         self.watchlist_rows = rows;
         self.rebuild_live_indices();
 

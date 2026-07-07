@@ -829,8 +829,10 @@ impl TyphooNApp {
                     });
                 }
                 if !purge.is_empty() {
+                    let purge_set: std::collections::HashSet<&str> =
+                        purge.iter().map(String::as_str).collect();
                     self.news_full_articles
-                        .retain(|a| !purge.contains(&a.url_hash));
+                        .retain(|a| !purge_set.contains(a.url_hash.as_str()));
                     self.news_selected = None;
                     self.news_selected_url_hash.clear();
                 }
