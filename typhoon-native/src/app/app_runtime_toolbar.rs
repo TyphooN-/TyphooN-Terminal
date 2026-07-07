@@ -34,6 +34,28 @@ pub(super) fn session_status_color(session: &str) -> egui::Color32 {
     }
 }
 
+/// egui's default compact monospace font has no visibly distinct bold face, so
+/// `RichText::strong()` alone is effectively invisible in the crowded broker
+/// status row. Paint the primary account a second time with a tiny x-offset to
+/// make the selected account read as genuinely bold without adding marker glyph
+/// clutter.
+fn render_account_chip(ui: &mut egui::Ui, text: String, color: egui::Color32, is_primary: bool) {
+    let mut rich = egui::RichText::new(text.clone()).color(color).small();
+    if is_primary {
+        rich = rich.strong();
+    }
+    let response = ui.label(rich);
+    if is_primary {
+        ui.painter().text(
+            response.rect.left_top() + egui::vec2(0.45, 0.0),
+            egui::Align2::LEFT_TOP,
+            text,
+            egui::FontId::new(10.0, egui::FontFamily::Monospace),
+            color,
+        );
+    }
+}
+
 #[allow(deprecated)]
 impl TyphooNApp {
     pub(super) fn render_symbol_timeframe_toolbar(&mut self, root_ui: &mut egui::Ui) {
@@ -533,21 +555,18 @@ impl TyphooNApp {
                                                 egui::Color32::from_rgb(255, 80, 80),
                                             )
                                         };
-                                        let mut account_text = egui::RichText::new(text).color(color).small();
-                                        if account.is_primary {
-                                            account_text = account_text.strong();
-                                        }
-                                        ui.label(account_text);
+                                        render_account_chip(ui, text, color, account.is_primary);
                                     }
                                 } else if let Some(ref acct) = self.live_account {
                                     // Fallback while the pooled roster message is still in flight.
                                     let primary_paper = self.alpaca_primary_is_paper();
                                     let mode = if primary_paper { "Paper" } else { "Live" };
                                     let color = if primary_paper { egui::Color32::WHITE } else { UP };
-                                    ui.label(
-                                        egui::RichText::new(format!("[Alpaca 1 ({}) ${:.0}]", mode, acct.equity))
-                                            .color(color)
-                                            .small(),
+                                    render_account_chip(
+                                        ui,
+                                        format!("[Alpaca 1 ({}) ${:.0}]", mode, acct.equity),
+                                        color,
+                                        true,
                                     );
                                 }
                             } else {
