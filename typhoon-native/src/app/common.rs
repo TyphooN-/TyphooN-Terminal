@@ -56,12 +56,14 @@ pub(crate) const WL_COLORS: [egui::Color32; 8] = [
 /// (ADR-129 capability model: `OrderBroker::l2_support`), then on the
 /// broker-specific symbol scope. Adding a broker to `OrderBroker` forces a new
 /// arm here, so depth gating can never silently keep a stale single-broker
-/// assumption. `kraken_pairs` is the loaded Kraken pair catalog consumed by the
-/// Kraken arm; it is ignored by brokers whose depth scope is not Kraken's.
+/// assumption. `kraken_pairs_normalized` is the loaded Kraken pair catalog
+/// membership set consumed by the Kraken arm; it is ignored by brokers whose
+/// depth scope is not Kraken's.
 pub(crate) fn depth_stream_supported(
     broker: OrderBroker,
     symbol: &str,
-    kraken_pairs: &[(String, String)],
+    kraken_pairs_normalized: &std::collections::HashSet<String>,
+    kraken_pairs_empty: bool,
 ) -> bool {
     // Only brokers that declare a *streaming* L2 book can start a live depth
     // stream. Alpaca (crypto REST snapshots) and any future snapshot-only
@@ -70,7 +72,9 @@ pub(crate) fn depth_stream_supported(
         return false;
     }
     match broker {
-        OrderBroker::Kraken => kraken_pair_streamable(symbol, kraken_pairs),
+        OrderBroker::Kraken => {
+            kraken_pair_streamable(symbol, kraken_pairs_normalized, kraken_pairs_empty)
+        }
         // Unreachable today (Alpaca L2 is Snapshot, filtered above); listed so a
         // future streaming Alpaca depth feed must opt in explicitly rather than
         // inherit Kraken's pair logic.
@@ -80,7 +84,11 @@ pub(crate) fn depth_stream_supported(
 
 /// Kraken-specific predicate: is `symbol` a Kraken spot/xStock pair whose v2
 /// `book` we can stream? The Kraken arm of [`depth_stream_supported`].
-fn kraken_pair_streamable(symbol: &str, kraken_pairs: &[(String, String)]) -> bool {
+fn kraken_pair_streamable(
+    symbol: &str,
+    kraken_pairs_normalized: &std::collections::HashSet<String>,
+    kraken_pairs_empty: bool,
+) -> bool {
     let trimmed = symbol.trim();
     if trimmed.is_empty() || trimmed.contains(".EQ") {
         return false;
@@ -88,19 +96,12 @@ fn kraken_pair_streamable(symbol: &str, kraken_pairs: &[(String, String)]) -> bo
 
     let symbol_key =
         typhoon_engine::core::kraken::normalize_pair_symbol(&normalize_market_data_symbol(trimmed))
-            .replace('/', "");
+            .replace('/', "")
+            .to_ascii_uppercase();
 
-    kraken_pairs.iter().any(|(pair, display)| {
-        typhoon_engine::core::kraken::normalize_pair_symbol(&normalize_market_data_symbol(pair))
-            .replace('/', "")
-            .eq_ignore_ascii_case(&symbol_key)
-            || typhoon_engine::core::kraken::normalize_pair_symbol(&normalize_market_data_symbol(
-                display,
-            ))
-            .replace('/', "")
-            .eq_ignore_ascii_case(&symbol_key)
-    }) || (kraken_pairs.is_empty()
-        && typhoon_engine::core::kraken::to_kraken_pair_lossy(trimmed).is_some())
+    kraken_pairs_normalized.contains(&symbol_key)
+        || (kraken_pairs_empty
+            && typhoon_engine::core::kraken::to_kraken_pair_lossy(trimmed).is_some())
 }
 
 /// Kraken depth-stream gate used across DOM/Bookmap/toolbar call sites. Thin
@@ -108,7 +109,13 @@ fn kraken_pair_streamable(symbol: &str, kraken_pairs: &[(String, String)]) -> bo
 /// kept as the name the depth/Bookmap surfaces already call.
 pub(crate) fn kraken_depth_stream_supported(
     symbol: &str,
-    kraken_pairs: &[(String, String)],
+    kraken_pairs_normalized: &std::collections::HashSet<String>,
+    kraken_pairs_empty: bool,
 ) -> bool {
-    depth_stream_supported(OrderBroker::Kraken, symbol, kraken_pairs)
+    depth_stream_supported(
+        OrderBroker::Kraken,
+        symbol,
+        kraken_pairs_normalized,
+        kraken_pairs_empty,
+    )
 }

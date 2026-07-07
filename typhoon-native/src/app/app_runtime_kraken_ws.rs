@@ -41,7 +41,11 @@ impl TyphooNApp {
                     .kraken_equity_universe_symbols
                     .binary_search_by(|symbol| symbol.trim_end_matches(".EQ").cmp(&bare))
                     .is_ok();
-            let l2_supported = kraken_depth_stream_supported(&bare, &self.kraken_pairs);
+            let l2_supported = kraken_depth_stream_supported(
+                &bare,
+                &self.kraken_pairs_normalized,
+                self.kraken_pairs.is_empty(),
+            );
             if kraken_chart
                 && l2_supported
                 && !self.kraken_chart_l2_ws_symbol.eq_ignore_ascii_case(&bare)

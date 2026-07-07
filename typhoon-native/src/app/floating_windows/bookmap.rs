@@ -51,9 +51,10 @@ pub(super) fn orderbook_json_is_l3_for_symbol(orderbook_json: &str, symbol: &str
 
 pub(super) fn kraken_bookmap_stream_supported(
     symbol: &str,
-    kraken_pairs: &[(String, String)],
+    kraken_pairs_normalized: &std::collections::HashSet<String>,
+    kraken_pairs_empty: bool,
 ) -> bool {
-    kraken_depth_stream_supported(symbol, kraken_pairs)
+    kraken_depth_stream_supported(symbol, kraken_pairs_normalized, kraken_pairs_empty)
 }
 
 pub(super) fn render_live_orderbook_heatmap(
@@ -466,14 +467,35 @@ mod tests {
 
     #[test]
     fn kraken_bookmap_stream_support_stays_spot_pair_scoped() {
-        let known_pairs = vec![("XBTUSD".to_string(), "BTC/USD".to_string())];
-        assert!(kraken_bookmap_stream_supported("BTC/USD", &known_pairs));
-        assert!(kraken_bookmap_stream_supported("BTCUSD", &known_pairs));
-        assert!(!kraken_bookmap_stream_supported("TNDM", &known_pairs));
-        assert!(!kraken_bookmap_stream_supported("GDC", &known_pairs));
-        assert!(!kraken_bookmap_stream_supported("GDC.EQ", &known_pairs));
+        let known_pairs =
+            std::collections::HashSet::from(["XBTUSD".to_string(), "BTCUSD".to_string()]);
+        assert!(kraken_bookmap_stream_supported(
+            "BTC/USD",
+            &known_pairs,
+            false
+        ));
+        assert!(kraken_bookmap_stream_supported(
+            "BTCUSD",
+            &known_pairs,
+            false
+        ));
+        assert!(!kraken_bookmap_stream_supported(
+            "TNDM",
+            &known_pairs,
+            false
+        ));
+        assert!(!kraken_bookmap_stream_supported("GDC", &known_pairs, false));
+        assert!(!kraken_bookmap_stream_supported(
+            "GDC.EQ",
+            &known_pairs,
+            false
+        ));
 
-        assert!(kraken_bookmap_stream_supported("ETHUSD", &[]));
+        assert!(kraken_bookmap_stream_supported(
+            "ETHUSD",
+            &std::collections::HashSet::new(),
+            true,
+        ));
     }
 
     #[test]

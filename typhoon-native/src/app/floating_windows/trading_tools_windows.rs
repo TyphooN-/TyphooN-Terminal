@@ -68,8 +68,11 @@ impl TyphooNApp {
                         fetch_button.on_hover_text(
                             "Fetch a one-shot L2 snapshot when available; live Kraken streaming remains spot-pair gated.",
                         );
-                        let stream_supported =
-                            kraken_bookmap_stream_supported(&sym, &self.kraken_pairs);
+                        let stream_supported = kraken_bookmap_stream_supported(
+                            &sym,
+                            &self.kraken_pairs_normalized,
+                            self.kraken_pairs.is_empty(),
+                        );
                         let stream_button =
                             ui.add_enabled(stream_supported, egui::Button::new("Stream L2"));
                         if stream_button.clicked() && !sym.is_empty() {
@@ -287,7 +290,11 @@ impl TyphooNApp {
                             let bm_red = egui::Color32::from_rgb(200, 50, 50);
                             let bm_dim = egui::Color32::from_rgb(80, 80, 100);
 
-                            let stream_supported = kraken_bookmap_stream_supported(&sym, &self.kraken_pairs);
+                            let stream_supported = kraken_bookmap_stream_supported(
+                                &sym,
+                                &self.kraken_pairs_normalized,
+                                self.kraken_pairs.is_empty(),
+                            );
                             let live_depth_is_l3 =
                                 orderbook_json_is_l3_for_symbol(&self.orderbook_result, &sym);
                             ui.horizontal(|ui| {
@@ -480,8 +487,11 @@ impl TyphooNApp {
                                     .unwrap_or_default()
                             };
 
-                            let dom_stream_supported =
-                                kraken_bookmap_stream_supported(&dom_sym, &self.kraken_pairs);
+                            let dom_stream_supported = kraken_bookmap_stream_supported(
+                                &dom_sym,
+                                &self.kraken_pairs_normalized,
+                                self.kraken_pairs.is_empty(),
+                            );
 
                             // Follow-up: depth preference slider (session-persisted for L2 DOM)
                             ui.horizontal(|ui| {

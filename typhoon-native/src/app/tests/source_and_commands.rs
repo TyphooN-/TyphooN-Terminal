@@ -145,19 +145,20 @@ fn chart_quote_overlay_rejects_stale_quote_for_newer_bar() {
 
 #[test]
 fn kraken_depth_stream_support_uses_loaded_pair_universe() {
-    let pairs = vec![("XBT/USD".to_string(), "BTC/USD".to_string())];
-    assert!(kraken_depth_stream_supported("BTCUSD", &pairs));
-    assert!(kraken_depth_stream_supported("BTC/USD", &pairs));
-    assert!(kraken_depth_stream_supported("XBTUSD", &pairs));
-    assert!(!kraken_depth_stream_supported("AAPL", &pairs));
-    assert!(!kraken_depth_stream_supported("AAPL.EQ", &pairs));
+    let pairs = std::collections::HashSet::from(["XBTUSD".to_string(), "BTCUSD".to_string()]);
+    assert!(kraken_depth_stream_supported("BTCUSD", &pairs, false));
+    assert!(kraken_depth_stream_supported("BTC/USD", &pairs, false));
+    assert!(kraken_depth_stream_supported("XBTUSD", &pairs, false));
+    assert!(!kraken_depth_stream_supported("AAPL", &pairs, false));
+    assert!(!kraken_depth_stream_supported("AAPL.EQ", &pairs, false));
 }
 
 #[test]
 fn kraken_depth_stream_support_falls_back_only_without_pair_universe() {
-    assert!(kraken_depth_stream_supported("BTCUSD", &[]));
-    assert!(!kraken_depth_stream_supported("", &[]));
-    assert!(!kraken_depth_stream_supported("AAPL.EQ", &[]));
+    let pairs = std::collections::HashSet::new();
+    assert!(kraken_depth_stream_supported("BTCUSD", &pairs, true));
+    assert!(!kraken_depth_stream_supported("", &pairs, true));
+    assert!(!kraken_depth_stream_supported("AAPL.EQ", &pairs, true));
 }
 
 #[test]

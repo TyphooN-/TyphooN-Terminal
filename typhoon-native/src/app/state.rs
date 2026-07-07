@@ -376,8 +376,8 @@ pub struct TyphooNApp {
     pub(crate) kraken_pairs: Vec<(String, String)>,
     /// Normalized pair/display symbols cached as a set so
     /// `kraken_spot_symbol_in_loaded_pairs` is O(1) — the previous linear
-    /// `kraken_pairs.iter().any(...)` ran `normalize_pair_symbol` (allocating)
-    /// twice per element on every sync-symbol audit, multiplying with O(n)
+    /// catalog scans ran `normalize_pair_symbol` (allocating) twice per element
+    /// on every sync-symbol audit, multiplying with O(n)
     /// `kraken_spot_symbol_scrape_enabled` callers.
     pub(crate) kraken_pairs_normalized: std::collections::HashSet<String>,
     pub(crate) kraken_futures_symbols: Vec<String>,

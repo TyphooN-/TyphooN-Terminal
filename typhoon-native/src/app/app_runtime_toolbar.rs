@@ -291,8 +291,11 @@ impl TyphooNApp {
                         let orderbook_symbol = bare_symbol_from_key(&source_state.0)
                             .trim_end_matches(".EQ")
                             .to_ascii_uppercase();
-                        let orderbook_symbol_is_public_kraken =
-                            kraken_depth_stream_supported(&orderbook_symbol, &self.kraken_pairs);
+                        let orderbook_symbol_is_public_kraken = kraken_depth_stream_supported(
+                            &orderbook_symbol,
+                            &self.kraken_pairs_normalized,
+                            self.kraken_pairs.is_empty(),
+                        );
                         let show_kraken_l2 = self.kraken_enabled && orderbook_symbol_is_public_kraken;
                         if show_kraken_l2 {
                             let is_streaming = self
