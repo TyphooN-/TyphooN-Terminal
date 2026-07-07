@@ -10,14 +10,52 @@ pub(super) fn reordered_right_panel_sections(
         return None;
     }
     let mut next = order.to_vec();
-    let from = next.iter().position(|s| *s == dragged)?;
+    let mut index_by_section = [None; RightPanelSectionId::DEFAULT_ORDER.len()];
+    for (idx, section) in next.iter().copied().enumerate() {
+        index_by_section[section as usize] = Some(idx);
+    }
+    let from = index_by_section[dragged as usize]?;
+    let target_idx = index_by_section[target as usize]?;
     let item = next.remove(from);
-    let mut to = next.iter().position(|s| *s == target)?;
+    let mut to = if from < target_idx {
+        target_idx.saturating_sub(1)
+    } else {
+        target_idx
+    };
     if after_target {
         to += 1;
     }
     next.insert(to.min(next.len()), item);
     Some(next)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reordered_right_panel_sections_preserves_drop_semantics() {
+        let order = RightPanelSectionId::DEFAULT_ORDER;
+        let moved_after = reordered_right_panel_sections(
+            &order,
+            RightPanelSectionId::Trading,
+            RightPanelSectionId::Orders,
+            true,
+        )
+        .unwrap();
+        assert_eq!(moved_after[2], RightPanelSectionId::Orders);
+        assert_eq!(moved_after[3], RightPanelSectionId::Trading);
+
+        let moved_before = reordered_right_panel_sections(
+            &order,
+            RightPanelSectionId::MtfGrid,
+            RightPanelSectionId::Positions,
+            false,
+        )
+        .unwrap();
+        assert_eq!(moved_before[1], RightPanelSectionId::MtfGrid);
+        assert_eq!(moved_before[2], RightPanelSectionId::Positions);
+    }
 }
 
 impl TyphooNApp {
