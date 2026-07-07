@@ -361,6 +361,15 @@ impl TyphooNApp {
                                 (p, alts)
                             })
                             .collect();
+                        let group_by_member: std::collections::HashMap<usize, usize> = groups
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(group_idx, (primary, alternates))| {
+                                std::iter::once((*primary, group_idx)).chain(
+                                    alternates.iter().map(move |&alt| (alt, group_idx)),
+                                )
+                            })
+                            .collect();
                         let avail_w = ui.available_width();
                         let list_w = (avail_w * 0.38).clamp(240.0, 420.0);
                         // Filter status line above the panes so the user sees
@@ -421,11 +430,12 @@ impl TyphooNApp {
                                     .min_scrolled_height(pane_h)
                                     .auto_shrink([false, false])
                                     .show(ui, |ui| {
-                                        for (i, alternates) in &groups {
+                                        for (group_idx, (i, alternates)) in groups.iter().enumerate() {
                                             let i = *i;
                                             let a = &self.news_full_articles[i];
-                                            let selected = self.news_selected == Some(i)
-                                                || alternates.iter().any(|&j| self.news_selected == Some(j));
+                                            let selected = self.news_selected
+                                                .and_then(|idx| group_by_member.get(&idx).copied())
+                                                == Some(group_idx);
                                             let source_count = 1 + alternates.len();
                                             let ts = if a.published_at > 0 {
                                                 chrono::DateTime::from_timestamp(a.published_at, 0)
@@ -588,9 +598,9 @@ impl TyphooNApp {
                                     // Find which group (if any) this selected
                                     // article belongs to so we can show the
                                     // Sources switcher when there are siblings.
-                                    let selected_group: Option<&(usize, Vec<usize>)> = groups
-                                        .iter()
-                                        .find(|(p, alts)| *p == idx || alts.iter().any(|&j| j == idx));
+                                    let selected_group: Option<&(usize, Vec<usize>)> = group_by_member
+                                        .get(&idx)
+                                        .and_then(|&group_idx| groups.get(group_idx));
                                     // Sources switcher: one button per article
                                     // in this group, including the currently-
                                     // selected one. Clicking switches which

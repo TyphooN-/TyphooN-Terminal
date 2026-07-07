@@ -1827,7 +1827,7 @@ impl TyphooNApp {
             .cached_alpaca_sync_state
             .get(&(symbol.clone(), tf.to_string()))
             .copied();
-                let norm_sym = normalize_market_data_symbol(&symbol).replace("/", "");
+        let norm_sym = normalize_market_data_symbol(&symbol).replace("/", "");
         let focus = self.cached_active_symbols_set.contains(&norm_sym);
         if !background_market_data_fetch_allowed(focus, self.total_pending_market_data_fetches()) {
             return false;
@@ -2073,16 +2073,12 @@ impl TyphooNApp {
             false
         };
         let yahoo_assist_queued = self.queue_yahoo_chart_fetch(&symbol, tf);
-        let chart_or_owned = self.charts.iter().any(|chart| {
-            normalize_market_data_symbol(&chart.symbol)
-                .replace('/', "")
-                .trim_end_matches(".EQ")
-                .eq_ignore_ascii_case(&symbol)
-        }) || self.kraken_balances.iter().any(|(asset, _)| {
-            Self::kraken_display_asset(asset)
-                .trim_end_matches(".EQ")
-                .eq_ignore_ascii_case(&symbol)
-        });
+        let chart_or_owned = self.chart_by_bare.contains_key(&symbol)
+            || self.kraken_balances.iter().any(|(asset, _)| {
+                Self::kraken_display_asset(asset)
+                    .trim_end_matches(".EQ")
+                    .eq_ignore_ascii_case(&symbol)
+            });
         if chart_or_owned {
             // Multi-TF refills push one line per TF in quick succession
             // (1Hour + 30Min + 15Min + 5Min, etc.). Visible in tracing for

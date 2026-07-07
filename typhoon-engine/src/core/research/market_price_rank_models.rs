@@ -432,7 +432,11 @@ pub fn compute_priceperf_snapshot(
     // YTD: find first bar with date.year == latest.date.year
     let year_prefix = latest.date.get(..4).unwrap_or("");
     let ytd_ret = if !year_prefix.is_empty() {
-        let ytd_start = sorted.iter().find(|r| r.date.starts_with(year_prefix));
+        let ytd_idx = sorted.partition_point(|r| r.date.as_str() < year_prefix);
+        let ytd_start = sorted
+            .get(ytd_idx)
+            .copied()
+            .filter(|r| r.date.starts_with(year_prefix));
         match ytd_start {
             Some(start_bar) if start_bar.close > 0.0 => {
                 (latest_close - start_bar.close) / start_bar.close * 100.0
@@ -912,8 +916,23 @@ pub fn compute_calpb_snapshot(
     let quarter = ((month - 1) / 3) + 1; // 1..=4
     let q_first_month = ((quarter - 1) * 3) + 1;
     // Helpers.
+    let first_with_prefix = |prefix: &str| -> Option<&HistoricalPriceRow> {
+        let idx = sorted.partition_point(|r| r.date.as_str() < prefix);
+        sorted
+            .get(idx)
+            .copied()
+            .filter(|r| r.date.starts_with(prefix))
+    };
+    let last_with_prefix = |prefix: &str| -> Option<&HistoricalPriceRow> {
+        let mut end = prefix.to_string();
+        end.push('\u{10ffff}');
+        let idx = sorted.partition_point(|r| r.date.as_str() < end.as_str());
+        idx.checked_sub(1)
+            .and_then(|last_idx| sorted.get(last_idx).copied())
+            .filter(|r| r.date.starts_with(prefix))
+    };
     let pct_from_first_in = |prefix: &str| -> f64 {
-        if let Some(start) = sorted.iter().find(|r| r.date.starts_with(prefix)) {
+        if let Some(start) = first_with_prefix(prefix) {
             if start.close > 0.0 {
                 return (latest_close - start.close) / start.close * 100.0;
             }
@@ -921,8 +940,8 @@ pub fn compute_calpb_snapshot(
         0.0
     };
     let full_period_return = |start_prefix: &str, end_prefix: &str| -> f64 {
-        let first = sorted.iter().find(|r| r.date.starts_with(start_prefix));
-        let last = sorted.iter().rev().find(|r| r.date.starts_with(end_prefix));
+        let first = first_with_prefix(start_prefix);
+        let last = last_with_prefix(end_prefix);
         match (first, last) {
             (Some(a), Some(b)) if a.close > 0.0 && b.close > 0.0 => {
                 (b.close - a.close) / a.close * 100.0
@@ -939,9 +958,9 @@ pub fn compute_calpb_snapshot(
         let q_prefixes: Vec<String> = (0..3)
             .map(|i| format!("{:04}-{:02}", year, q_first_month + i))
             .collect();
-        let first = sorted
+        let first = q_prefixes
             .iter()
-            .find(|r| q_prefixes.iter().any(|p| r.date.starts_with(p)));
+            .find_map(|prefix| first_with_prefix(prefix));
         match first {
             Some(bar) if bar.close > 0.0 => (latest_close - bar.close) / bar.close * 100.0,
             _ => 0.0,
@@ -961,13 +980,13 @@ pub fn compute_calpb_snapshot(
         .map(|i| format!("{:04}-{:02}", prior_q_year, prior_q_first_month + i))
         .collect();
     let prior_quarter = {
-        let first = sorted
+        let first = prior_q_prefixes
             .iter()
-            .find(|r| prior_q_prefixes.iter().any(|p| r.date.starts_with(p)));
-        let last = sorted
+            .find_map(|prefix| first_with_prefix(prefix));
+        let last = prior_q_prefixes
             .iter()
             .rev()
-            .find(|r| prior_q_prefixes.iter().any(|p| r.date.starts_with(p)));
+            .find_map(|prefix| last_with_prefix(prefix));
         match (first, last) {
             (Some(a), Some(b)) if a.close > 0.0 && b.close > 0.0 => {
                 (b.close - a.close) / a.close * 100.0

@@ -1243,14 +1243,16 @@ impl TyphooNApp {
         // `false`: the explicit focus below selects the D1 tab itself (and works
         // for hidden backing charts too), so ensure must not also move active_tab.
         self.ensure_mtf_grid_for_symbol(&symbol, false);
-        if let Some(existing_idx) = self.charts.iter().position(|chart| {
-            chart.timeframe == Timeframe::D1
-                && mtf_grid_symbol_key(&chart.symbol).eq_ignore_ascii_case(
-                    &symbol
-                        .replace('/', "")
-                        .trim_end_matches(".EQ")
-                        .to_ascii_uppercase(),
-                )
+        let symbol_key = symbol
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .to_ascii_uppercase();
+        if let Some(existing_idx) = self.chart_by_bare.get(&symbol_key).and_then(|indices| {
+            indices.iter().copied().find(|&idx| {
+                self.charts
+                    .get(idx)
+                    .is_some_and(|chart| chart.timeframe == Timeframe::D1)
+            })
         }) {
             self.active_tab = existing_idx;
         }
