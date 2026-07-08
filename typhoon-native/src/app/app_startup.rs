@@ -93,10 +93,10 @@ pub(super) fn spawn_async_cache_open(
             tracing::warn!("Failed to create cache dir {}: {}", parent.display(), e);
         }
         let db_path = cache_db_path();
-        tracing::info!("Cache-open thread: opening {}...", db_path.display());
+        tracing::debug!("Cache-open thread: opening {}...", db_path.display());
         match SqliteCache::open(&db_path) {
             Ok(c) => {
-                tracing::info!("Cache-open thread: opened OK");
+                tracing::debug!("Cache-open thread: opened OK");
                 // Repair bar_count=0 entries (from old versions)
                 match c.repair_bar_counts() {
                     Ok(n) if n > 0 => {
@@ -183,10 +183,10 @@ pub(super) fn spawn_async_cache_open(
                 // Publish to both: RwLock for background thread, channel for UI
                 if let Ok(mut guard) = shared.write() {
                     *guard = Some(arc.clone());
-                    tracing::info!("Cache-open thread: published to RwLock");
+                    tracing::debug!("Cache-open thread: published to RwLock");
                 }
                 let _ = cache_tx.send((arc, preloaded));
-                tracing::info!("Cache-open thread: sent to UI channel (with preloaded marks)");
+                tracing::debug!("Cache-open thread: sent to UI channel (with preloaded marks)");
             }
             Err(e) => {
                 tracing::error!("Cache-open thread: FAILED: {e}");

@@ -95,7 +95,7 @@ impl TyphooNApp {
         }
         let dt = t0.elapsed();
         if dt > std::time::Duration::from_millis(2) {
-            tracing::warn!("KrakenLiveTrade path took {:?} (inserted={})", dt, inserted);
+            tracing::info!("KrakenLiveTrade path took {:?} (inserted={})", dt, inserted);
         }
     }
 

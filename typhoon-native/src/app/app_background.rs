@@ -51,7 +51,7 @@ pub(super) fn spawn_background_refresh(
                     static LOGGED: std::sync::atomic::AtomicBool =
                         std::sync::atomic::AtomicBool::new(false);
                     if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                        tracing::info!("BG thread: waiting for cache to open...");
+                        tracing::debug!("BG thread: waiting for cache to open...");
                     }
                     continue;
                 }
