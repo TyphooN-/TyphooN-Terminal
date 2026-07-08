@@ -281,19 +281,25 @@ pub async fn run_alpaca_batch_fetch_task(
         }
         Err(e) => {
             let is_rate = e.contains("429") || e.to_lowercase().contains("rate limit");
-            for symbol in symbols {
-                if is_rate {
+            if is_rate {
+                for symbol in &symbols {
                     let _ = broker_msg_tx.send(BrokerMsg::AlpacaRetryEnqueue {
                         symbol: symbol.clone(),
                         timeframe: timeframe.clone(),
                         reason: format!("batch_err:{e}"),
                     });
-                } else {
-                    let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
-                        "Alpaca batch fetch failed for {} {}: {}",
-                        symbol, timeframe, e
-                    )));
                 }
+            } else {
+                // One summary error instead of per-symbol spam for transient batch
+                // failures (e.g. "error sending request" during heavy backfill).
+                let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                    "Alpaca batch fetch failed for {} symbols {}: {}",
+                    symbols.len(),
+                    timeframe,
+                    e
+                )));
+            }
+            for symbol in symbols {
                 let _ = broker_msg_tx.send(BrokerMsg::AlpacaFetchSettled {
                     symbol,
                     timeframe: timeframe.clone(),

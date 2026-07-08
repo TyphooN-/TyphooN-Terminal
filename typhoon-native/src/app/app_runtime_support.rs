@@ -29,7 +29,13 @@ pub(super) fn is_routine_market_data_status(msg: &str) -> bool {
                 || msg.contains("connection")
                 || msg.contains("dns error")
                 || msg.contains("tcp connect")
-                || msg.contains("body error")))
+                || msg.contains("body error")
+                || msg.contains("error decoding response body")
+                || msg.contains("read body failed")
+                || msg.contains("decoding")))
+        || msg.contains("Alpaca batch fetch failed")
+        || msg.contains("batch fetch failed for")
+        || (msg.starts_with("Alpaca ") && msg.contains("error sending request"))
 }
 
 pub(super) fn should_emit_alpaca_retry_queue_log(queue_len: usize) -> bool {
